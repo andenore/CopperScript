@@ -23,6 +23,12 @@ Compile a valid design to normalized JSON IR:
 python -m copperscript compile examples/valid_board.copper -o board.json
 ```
 
+Generate a self-contained KiCad 8 schematic:
+
+```console
+python -m copperscript export-kicad examples/valid_board.copper -o valid_board.kicad_sch
+```
+
 For a development installation with the `copper` command:
 
 ```console
@@ -103,6 +109,7 @@ file.
     -> source-aware syntax tree
     -> hierarchical electrical IR
          |-> JSON IR
+         |-> KiCad schematic backend
          `-> derived flat view -> electrical-rules checker
                               `-> power-state analyzer
 ```
@@ -121,8 +128,10 @@ Key modules:
   require a global connectivity view.
 - `pcbir.erc` — reusable electrical-rules passes.
 - `pcbir.power` — explicit steady-state power-domain analysis.
+- `pcbir.backends` — immutable backend artifacts and the KiCad schematic
+  generator.
 - `pcbir.serializer` — versioned JSON IR output.
-- `pcbir.cli` — `check`, `power-check`, and `compile` commands.
+- `pcbir.cli` — `check`, `power-check`, `compile`, and `export-kicad` commands.
 
 Python IR constructions are confined to test fixtures. `.copper` is the only
 user-facing source format accepted by the compiler.
@@ -146,3 +155,15 @@ steady-state analysis, not firmware or transient simulation.
 
 Physical constraints such as maximum placement distance are retained in IR but
 are not enforced in v0.1.
+
+## KiCad schematic backend
+
+The initial backend targets KiCad 8's `20231120` `.kicad_sch` format. It embeds
+deterministic generic symbols derived from part definitions, places symbols on
+a backend-owned grid, and connects pins through short stubs and named labels.
+Generated coordinates and UUIDs never enter the CopperScript IR.
+
+This first revision emits one flat sheet. Hierarchical designs are elaborated
+explicitly and retain their original qualified component paths in hidden
+`CopperScriptPath` properties. Native KiCad hierarchical sheets and mappings to
+standard KiCad symbols are planned follow-up work.

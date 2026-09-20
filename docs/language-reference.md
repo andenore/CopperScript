@@ -330,6 +330,21 @@ constraint max_distance(C1, U1.VDD) {
 
 Known constraint kinds are `max_distance`, `placement_region`, and `note`.
 
+## KiCad schematic export
+
+Generate a KiCad 8 schematic after ERC succeeds:
+
+```console
+python -m copperscript export-kicad board.copper -o board.kicad_sch
+```
+
+The generated schematic is a derived artifact, not CopperScript source. The
+current backend embeds generic symbols generated from each part definition,
+uses named labels for connectivity, and owns all visual placement. It emits a
+single flat sheet; hierarchical component paths are preserved as hidden
+`CopperScriptPath` properties. `--no-check` permits diagnostic fixtures to be
+exported despite ERC errors.
+
 ## Quantities
 
 Quantities have no whitespace between their number and unit.

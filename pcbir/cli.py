@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
+from .backends import KiCadSchematicBackend
 from .erc import check, has_errors
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
@@ -29,12 +30,23 @@ def _parser() -> argparse.ArgumentParser:
     compile_parser.add_argument(
         "--no-check", action="store_true", help="emit IR even when electrical checks fail"
     )
+
+    kicad_parser = subparsers.add_parser(
+        "export-kicad", help="generate a KiCad 8 schematic"
+    )
+    kicad_parser.add_argument("board", type=Path, help="a .copper source file")
+    kicad_parser.add_argument(
+        "-o", "--output", type=Path, help="output .kicad_sch file"
+    )
+    kicad_parser.add_argument(
+        "--no-check", action="store_true", help="generate even when ERC reports errors"
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command in {"check", "power-check", "compile"}:
+    if args.command in {"check", "power-check", "compile", "export-kicad"}:
         try:
             board = load_board(args.board)
         except BoardLoadError as exc:
@@ -57,6 +69,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print(f"OK: {board.name} passed power-state analysis")
             return 1 if has_errors(diagnostics) else 0
+
+        if args.command == "export-kicad":
+            if has_errors(diagnostics) and not args.no_check:
+                for diagnostic in diagnostics:
+                    print(diagnostic)
+                print("KiCad generation stopped because ERC reported errors.")
+                return 1
+            try:
+                manifest = KiCadSchematicBackend().generate(board)
+            except ValueError as exc:
+                print(f"BACKEND ERROR: {exc}")
+                return 2
+            artifact = manifest.artifacts[0]
+            output = args.output or Path(artifact.name)
+            try:
+                output.write_text(artifact.content, encoding="utf-8")
+            except OSError as exc:
+                print(f"OUTPUT ERROR: {exc}")
+                return 2
+            for warning in manifest.warnings:
+                print(f"WARNING: {warning}")
+            print(
+                f"Generated KiCad {manifest.target_version} schematic "
+                f"{board.name} -> {output}"
+            )
+            return 0
 
         if has_errors(diagnostics) and not args.no_check:
             for diagnostic in diagnostics:

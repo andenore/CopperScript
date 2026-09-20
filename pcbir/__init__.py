@@ -1,5 +1,12 @@
 """Public API for the CopperScript v0.1 compiler and PCB IR."""
 
+from .backends import (
+    Artifact,
+    ArtifactManifest,
+    Backend,
+    KiCadSchematicBackend,
+    KiCadSchematicOptions,
+)
 from .compiler import compile_file, compile_source
 from .erc import Diagnostic, Severity, check, has_errors
 from .elaborate import elaborate
@@ -58,6 +65,9 @@ from .power import analyze_power_states
 from .syntax import CopperScriptError, SourceLocation
 
 __all__ = [
+    "Artifact",
+    "ArtifactManifest",
+    "Backend",
     "Board",
     "Capacitance",
     "ComponentInstance",
@@ -75,6 +85,8 @@ __all__ = [
     "InterfaceKind",
     "Inductance",
     "Length",
+    "KiCadSchematicBackend",
+    "KiCadSchematicOptions",
     "ModuleInstance",
     "MuxOption",
     "ModuleDefinition",

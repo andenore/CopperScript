@@ -74,3 +74,49 @@ def test_cli_runs_power_state_analysis() -> None:
     )
     assert result.returncode == 0
     assert "passed power-state analysis" in result.stdout
+
+
+def test_cli_exports_kicad_schematic(tmp_path: Path) -> None:
+    output = tmp_path / "valid.kicad_sch"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "copperscript",
+            "export-kicad",
+            "examples/valid_board.copper",
+            "-o",
+            str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Generated KiCad 8.0 schematic" in result.stdout
+    assert output.read_text(encoding="utf-8").startswith("(kicad_sch")
+
+
+def test_cli_refuses_kicad_export_when_erc_fails(tmp_path: Path) -> None:
+    output = tmp_path / "invalid.kicad_sch"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "copperscript",
+            "export-kicad",
+            "examples/invalid_board.copper",
+            "-o",
+            str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "stopped because ERC reported errors" in result.stdout
+    assert not output.exists()

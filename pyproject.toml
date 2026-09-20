@@ -19,7 +19,7 @@ test = ["pytest>=8"]
 copper = "pcbir.cli:main"
 
 [tool.setuptools]
-packages = ["copperscript", "pcbir"]
+packages = ["copperscript", "pcbir", "pcbir.backends"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

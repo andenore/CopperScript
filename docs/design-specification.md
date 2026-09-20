@@ -386,7 +386,7 @@ source changes produce reviewable diffs.
 
 ### 6.1 KiCad schematic backend
 
-The first external backend will generate a KiCad schematic as an
+The first external backend generates a KiCad schematic as an
 interoperability artifact. Its goals are to:
 
 - validate that CopperScript electrical semantics map to a real EDA tool;
@@ -397,15 +397,24 @@ interoperability artifact. Its goals are to:
 It is not a layout engine and MUST NOT introduce schematic coordinates into the
 electrical IR.
 
-The initial implementation SHOULD:
+The initial implementation:
 
-- target one explicitly named KiCad file-format version;
-- use a separate mapping from CopperScript parts to KiCad symbol and footprint
-  library identifiers;
-- create deterministic UUIDs from stable semantic identity;
-- use a simple backend-local grid arrangement;
-- prefer named net labels over complex aesthetic wire routing; and
-- verify generated artifacts with fixtures and, where available, KiCad tooling.
+- targets KiCad 8 and schematic format `20231120`;
+- creates embedded generic symbols from CopperScript part definitions, with a
+  future adapter layer responsible for mappings to standard KiCad libraries;
+- creates deterministic, version-4-shaped UUIDs from stable semantic identity;
+- uses a simple backend-local grid arrangement;
+- uses short pin stubs and named net labels instead of aesthetic wire routing;
+  and
+- verifies generated artifacts through deterministic fixtures and should also
+  use KiCad tooling when it is available.
+
+The first revision emits one flat sheet by explicitly elaborating the compiled
+hierarchy. Qualified CopperScript instance paths are retained in hidden
+`CopperScriptPath` properties when they cannot be used directly as KiCad
+references. This is an interoperability limitation, not a change to the
+authoritative hierarchical IR. Native KiCad sheets are planned after the basic
+artifact path is proven.
 
 The generated schematic is not the source of truth. Round-trip import and
 back-annotation are outside the first implementation and require a separate
@@ -519,6 +528,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-027 | Accepted | Source-document and revision provenance is optional; production generators should retain it when available. |
 | CS-028 | Accepted | Peripheral selections are exclusive by default; `firmware_managed` suppresses ownership/resource-sharing conflicts but not structural or electrical validation. |
 | CS-029 | Accepted | Power domains and named discrete rail states are explicit IR, analyzed by a separate conservative steady-state pass. |
+| CS-030 | Accepted | The initial schematic backend targets KiCad 8 format `20231120`, owns all presentation geometry, embeds generic symbols, and explicitly derives a flat single-sheet artifact. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same
