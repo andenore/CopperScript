@@ -75,6 +75,11 @@ Device-library authors should use the compact, table-driven
 [device generation workflow](docs/device-generation.md) rather than writing
 large MCU definitions by hand.
 
+The proposed [rich device model](docs/rich-device-model-proposal.md) describes
+how CopperScript can represent flexible Nordic pin routing, mode-dependent FX10
+pins, differential ADC channels, multi-unit op-amps, and package connection
+rules. It is an RFC rather than an accepted language contract.
+
 The [hierarchical example](examples/hierarchical_board.copper) instantiates a
 reusable [5 V to 3.3 V buck supply](examples/packages/power/buck_5v_to_3v3.copper)
 and imports the sensor part from a separate package.
