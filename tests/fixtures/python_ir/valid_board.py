@@ -6,7 +6,6 @@ from pcbir import (
     Constraint,
     ConstraintKind,
     Interface,
-    InterfaceKind,
     Net,
     Supply,
     ep,
@@ -65,7 +64,7 @@ board = Board(
     interfaces=(
         Interface(
             name="SENSOR_I2C",
-            kind=InterfaceKind.I2C,
+            type_name="std.i2c",
             signals={"sda": "I2C_SDA", "scl": "I2C_SCL"},
             bindings={
                 "U2": {"sda": "PB7", "scl": "PB6"},

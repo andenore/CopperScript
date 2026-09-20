@@ -1,0 +1,14 @@
+device OPA2197_DIE {
+    vendor = "Texas Instruments";
+    pad A_INP { domains = "analog"; directions = "input"; }
+    pad A_INN { domains = "analog"; directions = "input"; }
+    pad A_OUT { domains = "analog"; directions = "output"; }
+    pad B_INP { domains = "analog"; directions = "input"; }
+    pad B_INN { domains = "analog"; directions = "input"; }
+    pad B_OUT { domains = "analog"; directions = "output"; }
+    pad VP { domains = "power"; directions = "input"; }
+    pad VN { domains = "power"; directions = "input"; }
+    unit A: std.opamp { INP = A_INP; INN = A_INN; OUT = A_OUT; }
+    unit B: std.opamp { INP = B_INP; INN = B_INN; OUT = B_OUT; }
+    unit POWER: std.power { shared = true; VP = VP; VN = VN; }
+}

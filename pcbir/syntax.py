@@ -121,6 +121,44 @@ class ResourceDecl:
 
 
 @dataclass(frozen=True, slots=True)
+class UnitDecl:
+    location: SourceLocation
+    name: str
+    kind: str
+    terminals: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
+class SignalGroupDecl:
+    location: SourceLocation
+    name: str
+    kind: str
+    attributes: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
+class ModeGroupDecl:
+    location: SourceLocation
+    name: str
+    attributes: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
+class PadSetDecl:
+    location: SourceLocation
+    name: str
+    attributes: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
+class RouteRuleDecl:
+    location: SourceLocation
+    peripheral: str
+    signal: str
+    attributes: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
 class ConfigurationDecl:
     location: SourceLocation
     component: str
@@ -186,6 +224,11 @@ Declaration = (
     | PeripheralDecl
     | MuxDecl
     | ResourceDecl
+    | UnitDecl
+    | SignalGroupDecl
+    | ModeGroupDecl
+    | PadSetDecl
+    | RouteRuleDecl
     | ConfigurationDecl
     | ModuleInstanceDecl
     | NetDecl

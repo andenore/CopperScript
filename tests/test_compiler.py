@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from pcbir import CopperScriptError, compile_file, compile_source
-from pcbir.model import InterfaceKind
 from pcbir.quantities import kiloohms, volts
 
 
@@ -15,7 +14,7 @@ def test_valid_source_compiles_to_typed_ir() -> None:
     assert board.name == "ValidSensorBoard"
     assert board.components[4].value == kiloohms(4.7)
     assert board.supplies[1].voltage == volts(3.3)
-    assert board.interfaces[0].kind is InterfaceKind.I2C
+    assert board.interfaces[0].type_name == "std.i2c"
     assert board.interfaces[0].bindings["U3"]["sda"] == "SDA"
 
 

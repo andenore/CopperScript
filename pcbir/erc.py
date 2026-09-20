@@ -11,19 +11,20 @@ from .elaborate import elaborate
 from .model import (
     Board,
     ComponentInstance,
+    ConnectionPolicy,
+    Direction,
+    DriveMode,
+    ElectricalProfile,
     Endpoint,
     FlatElectricalView,
     Interface,
-    InterfaceKind,
     Net,
     PartDefinition,
-    PartKind,
-    PinCapability,
-    PinDefinition,
-    PinType,
+    PackagePinDefinition,
     PeripheralSelection,
     SelectionUsage,
     Supply,
+    SignalDomain,
 )
 from .quantities import Voltage
 
@@ -55,7 +56,7 @@ class _Context:
 
     def resolve_pin(
         self, endpoint: Endpoint
-    ) -> tuple[ComponentInstance, PartDefinition, PinDefinition] | None:
+    ) -> tuple[ComponentInstance, PartDefinition, PackagePinDefinition] | None:
         component = self.components.get(endpoint.component)
         if component is None:
             return None
@@ -63,38 +64,65 @@ class _Context:
         if part is None:
             return None
         pin = part.pins.get(endpoint.pin)
-        if pin is None:
+        if pin is not None:
+            return component, part, pin
+        unit_name, separator, terminal_name = endpoint.pin.partition(".")
+        device = self.board.devices.get(part.device or "")
+        unit = device.units.get(unit_name) if device and separator else None
+        terminal = unit.terminals.get(terminal_name) if unit else None
+        if terminal is None:
             return None
-        return component, part, pin
+        matches = [
+            package_pin
+            for package_pin in part.pins.values()
+            if terminal.pad in self.active_bonded_pads(component, package_pin)
+        ]
+        return (component, part, matches[0]) if len(matches) == 1 else None
 
-    def pin_capabilities(
-        self, part: PartDefinition, pin: PinDefinition
-    ) -> frozenset[PinCapability]:
-        capabilities = set(pin.capabilities)
+    def canonical_endpoint(self, endpoint: Endpoint) -> Endpoint | None:
+        resolved = self.resolve_pin(endpoint)
+        return Endpoint(endpoint.component, resolved[2].name) if resolved else None
+
+    def active_bonded_pads(
+        self, component: ComponentInstance, pin: PackagePinDefinition
+    ) -> tuple[str, ...]:
+        return tuple(
+            bond.pad
+            for bond in pin.bonds
+            if bond.when is None or bond.when.matches(component.modes)
+        )
+
+    def pin_profile(
+        self, component: ComponentInstance, part: PartDefinition, pin: PackagePinDefinition
+    ) -> ElectricalProfile | None:
+        profiles = [pin.profile] if pin.profile is not None else []
         if part.device is not None:
             device = self.board.devices.get(part.device)
             if device is not None:
-                for pad_name in pin.bonded_pads:
+                for pad_name in self.active_bonded_pads(component, pin):
                     pad = device.pads.get(pad_name)
-                    if pad is not None:
-                        capabilities.update(pad.capabilities)
-        return frozenset(capabilities)
+                    if pad is not None and (pad.when is None or pad.when.matches(component.modes)):
+                        profiles.append(pad.profile)
+        if not profiles:
+            return None
+        voltage = next((profile.voltage for profile in profiles if profile.voltage), None)
+        return ElectricalProfile(
+            frozenset().union(*(profile.domains for profile in profiles)),
+            frozenset().union(*(profile.directions for profile in profiles)),
+            frozenset().union(*(profile.drive_modes for profile in profiles)),
+            frozenset().union(*(profile.traits for profile in profiles)),
+            voltage,
+        )
 
     def pin_voltage_limits(
-        self, part: PartDefinition, pin: PinDefinition
+        self, component: ComponentInstance, part: PartDefinition, pin: PackagePinDefinition
     ) -> tuple[Voltage | None, Voltage | None]:
-        minimum = pin.voltage_min
-        maximum = pin.voltage_max
-        if part.device is not None:
-            device = self.board.devices.get(part.device)
-            if device is not None:
-                for pad_name in pin.bonded_pads:
-                    pad = device.pads.get(pad_name)
-                    if pad is None:
-                        continue
-                    minimum = minimum or pad.voltage_min
-                    maximum = maximum or pad.voltage_max
-        return minimum, maximum
+        profile = self.pin_profile(component, part, pin)
+        voltage = profile.voltage if profile else None
+        return (
+            voltage.minimum if voltage else None,
+            voltage.maximum if voltage else None,
+        )
 
 
 def check(board: Board | FlatElectricalView) -> list[Diagnostic]:
@@ -106,12 +134,10 @@ def check(board: Board | FlatElectricalView) -> list[Diagnostic]:
     components = _first_by(board.components, lambda item: item.ref)
     nets = _first_by(board.nets, lambda item: item.name)
     supplies = _first_by(board.supplies, lambda item: item.name)
-    pin_to_nets: dict[Endpoint, list[str]] = defaultdict(list)
+    context = _Context(board, components, nets, supplies, defaultdict(list))
     for net in board.nets:
         for endpoint in net.endpoints:
-            pin_to_nets[endpoint].append(net.name)
-
-    context = _Context(board, components, nets, supplies, pin_to_nets)
+            context.pin_to_nets[context.canonical_endpoint(endpoint) or endpoint].append(net.name)
 
     diagnostics.extend(_check_duplicates(board))
     diagnostics.extend(_check_references(context))
@@ -121,6 +147,8 @@ def check(board: Board | FlatElectricalView) -> list[Diagnostic]:
     diagnostics.extend(_check_power_inputs(context))
     diagnostics.extend(_check_interfaces(context))
     diagnostics.extend(_check_peripheral_selections(context))
+    diagnostics.extend(_check_package_rules(context))
+    diagnostics.extend(_check_modes_and_groups(context))
     return diagnostics
 
 
@@ -189,7 +217,8 @@ def _check_references(context: _Context) -> list[Diagnostic]:
         elif part.device is not None:
             device = context.board.devices[part.device]
             for pin in part.pins.values():
-                for pad_name in pin.bonded_pads:
+                for bond in pin.bonds:
+                    pad_name = bond.pad
                     if pad_name not in device.pads:
                         diagnostics.append(
                             Diagnostic(
@@ -214,7 +243,7 @@ def _check_references(context: _Context) -> list[Diagnostic]:
                 )
                 continue
             part = context.board.library.get(component.part)
-            if part is not None and endpoint.pin not in part.pins:
+            if part is not None and context.resolve_pin(endpoint) is None:
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
@@ -245,8 +274,8 @@ def _check_references(context: _Context) -> list[Diagnostic]:
                         supply.name,
                     )
                 )
-            elif PinCapability.POWER_OUTPUT not in context.pin_capabilities(
-                resolved_source[1], resolved_source[2]
+            elif not _is_power_output(
+                context.pin_profile(resolved_source[0], resolved_source[1], resolved_source[2])
             ):
                 diagnostics.append(
                     Diagnostic(
@@ -296,20 +325,17 @@ def _check_output_conflicts(context: _Context) -> list[Diagnostic]:
             continue
         for signal_name, chosen in selection.signals.items():
             signal = peripheral.signals.get(signal_name)
-            if signal is not None and signal.pin_type in {PinType.OUTPUT, PinType.POWER_OUT}:
+            if signal is not None and Direction.OUTPUT in signal.profile.directions:
                 selected_outputs.add(Endpoint(selection.component, chosen.pin))
     for net in context.board.nets:
         drivers: list[str] = []
         for endpoint in net.endpoints:
             resolved = context.resolve_pin(endpoint)
             if resolved is not None:
-                capabilities = context.pin_capabilities(resolved[1], resolved[2])
+                profile = context.pin_profile(resolved[0], resolved[1], resolved[2])
                 if (
-                    PinCapability.POWER_OUTPUT in capabilities
-                    or (
-                        PinCapability.PUSH_PULL_OUTPUT in capabilities
-                        and resolved[2].role == "output"
-                    )
+                    _is_power_output(profile)
+                    or _is_push_pull_output(profile)
                     or endpoint in selected_outputs
                 ):
                     drivers.append(str(endpoint))
@@ -336,7 +362,7 @@ def _check_supplies(context: _Context) -> list[Diagnostic]:
             if resolved is None:
                 continue
             pin = resolved[2]
-            voltage_min, voltage_max = context.pin_voltage_limits(resolved[1], pin)
+            voltage_min, voltage_max = context.pin_voltage_limits(resolved[0], resolved[1], pin)
             if voltage_min is not None and supply.voltage < voltage_min:
                 diagnostics.append(
                     Diagnostic(
@@ -355,6 +381,32 @@ def _check_supplies(context: _Context) -> list[Diagnostic]:
                         str(endpoint),
                     )
                 )
+            component, part, pin = resolved
+            device = context.board.devices.get(part.device or "")
+            if device is None:
+                continue
+            for pad_name in context.active_bonded_pads(component, pin):
+                for domain in device.power_domains.values():
+                    if pad_name not in domain.supply_pads or domain.voltage is None:
+                        continue
+                    if domain.voltage.minimum is not None and supply.voltage < domain.voltage.minimum:
+                        diagnostics.append(
+                            Diagnostic(
+                                Severity.ERROR,
+                                "POWER_DOMAIN_VOLTAGE_LOW",
+                                f"{supply.voltage} is below {domain.name} minimum {domain.voltage.minimum}",
+                                str(endpoint),
+                            )
+                        )
+                    if domain.voltage.maximum is not None and domain.voltage.maximum < supply.voltage:
+                        diagnostics.append(
+                            Diagnostic(
+                                Severity.ERROR,
+                                "POWER_DOMAIN_VOLTAGE_HIGH",
+                                f"{supply.voltage} exceeds {domain.name} maximum {domain.voltage.maximum}",
+                                str(endpoint),
+                            )
+                        )
     return diagnostics
 
 
@@ -368,8 +420,9 @@ def _check_power_inputs(context: _Context) -> list[Diagnostic]:
     for net in context.board.nets:
         if any(
             resolved is not None
-            and PinCapability.POWER_OUTPUT
-            in context.pin_capabilities(resolved[1], resolved[2])
+            and _is_power_output(
+                context.pin_profile(resolved[0], resolved[1], resolved[2])
+            )
             for endpoint in net.endpoints
             if (resolved := context.resolve_pin(endpoint)) is not None
         ):
@@ -380,7 +433,8 @@ def _check_power_inputs(context: _Context) -> list[Diagnostic]:
         if part is None:
             continue
         for pin in part.pins.values():
-            if PinCapability.POWER_INPUT not in context.pin_capabilities(part, pin):
+            profile = context.pin_profile(component, part, pin)
+            if not _is_power_input(profile):
                 continue
             endpoint = Endpoint(component.ref, pin.name)
             connected_nets = context.pin_to_nets.get(endpoint, [])
@@ -408,7 +462,7 @@ def _check_power_inputs(context: _Context) -> list[Diagnostic]:
 def _check_interfaces(context: _Context) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     for interface in context.board.interfaces:
-        if interface.kind is InterfaceKind.I2C:
+        if interface.type_name == "std.i2c":
             diagnostics.extend(_check_i2c(context, interface))
     return diagnostics
 
@@ -491,11 +545,13 @@ def _check_i2c(context: _Context, interface: Interface) -> list[Diagnostic]:
                         interface.name,
                     )
                 )
-            capabilities = context.pin_capabilities(resolved[1], resolved[2])
-            if not {
-                PinCapability.DIGITAL_INPUT,
-                PinCapability.OPEN_DRAIN_OUTPUT,
-            } <= capabilities:
+            profile = context.pin_profile(resolved[0], resolved[1], resolved[2])
+            if not (
+                profile
+                and SignalDomain.DIGITAL in profile.domains
+                and Direction.BIDIRECTIONAL in profile.directions
+                and DriveMode.OPEN_DRAIN in profile.drive_modes
+            ):
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
@@ -640,14 +696,26 @@ def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
                     )
                 )
                 continue
+            active_pads = context.active_bonded_pads(component, physical_pin)
             options = [
                 option
                 for option in device.mux_options
-                if option.pad in physical_pin.bonded_pads
+                if option.pad in active_pads
                 and option.peripheral == selection.peripheral
                 and option.signal == signal_name
+                and (option.when is None or option.when.matches(component.modes))
             ]
-            if len(options) != 1:
+            routes = [
+                route
+                for route in device.route_rules
+                if route.peripheral == selection.peripheral
+                and route.signal == signal_name
+                and (route.when is None or route.when.matches(component.modes))
+                and any(
+                    pad in device.pad_sets[route.pad_set].pads for pad in active_pads
+                )
+            ]
+            if len(options) + len(routes) != 1:
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
@@ -657,8 +725,8 @@ def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
                     )
                 )
                 continue
-            option = options[0]
-            if (
+            option = options[0] if options else None
+            if option is not None and (
                 chosen.selector != option.selector
                 or chosen.resource != option.resource
                 or chosen.setting != option.setting
@@ -671,21 +739,21 @@ def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
                         selection.name,
                     )
                 )
-            capabilities = context.pin_capabilities(part, physical_pin)
-            if not _pin_supports_signal(capabilities, signal.pin_type):
+            profile = context.pin_profile(component, part, physical_pin)
+            if profile is None or not profile.satisfies(signal.profile):
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
                         "MUX_INCOMPATIBLE_PIN",
-                        f"pin {chosen.pin} capabilities are incompatible with "
-                        f"{signal.pin_type.value} signal {selection.peripheral}.{signal_name}",
+                        f"pin {chosen.pin} electrical profile is incompatible with "
+                        f"signal {selection.peripheral}.{signal_name}",
                         selection.name,
                     )
                 )
             pin_uses[(selection.component, chosen.pin)].append(
                 (f"{selection.name}.{signal_name}", selection.usage)
             )
-            if option.resource is not None and option.setting is not None:
+            if option is not None and option.resource is not None and option.setting is not None:
                 resource_settings[(selection.component, option.resource)][option.setting].append(
                     (f"{selection.name}.{signal_name}", selection.usage)
                 )
@@ -734,25 +802,107 @@ def _all_firmware_managed(uses: list[tuple[str, SelectionUsage]]) -> bool:
     return all(usage is SelectionUsage.FIRMWARE_MANAGED for _label, usage in uses)
 
 
-def _pin_supports_signal(
-    capabilities: frozenset[PinCapability], signal_type: PinType
-) -> bool:
-    compatible = {
-        PinType.PASSIVE: {PinCapability.PASSIVE},
-        PinType.INPUT: {PinCapability.DIGITAL_INPUT},
-        PinType.OUTPUT: {PinCapability.PUSH_PULL_OUTPUT},
-        PinType.BIDIRECTIONAL: {
-            PinCapability.DIGITAL_INPUT,
-            PinCapability.PUSH_PULL_OUTPUT,
-        },
-        PinType.OPEN_DRAIN: {
-            PinCapability.DIGITAL_INPUT,
-            PinCapability.OPEN_DRAIN_OUTPUT,
-        },
-        PinType.POWER_IN: {PinCapability.POWER_INPUT},
-        PinType.POWER_OUT: {PinCapability.POWER_OUTPUT},
-    }
-    return compatible[signal_type] <= capabilities
+def _is_power_input(profile: ElectricalProfile | None) -> bool:
+    return bool(
+        profile
+        and (SignalDomain.POWER in profile.domains or SignalDomain.GROUND in profile.domains)
+        and Direction.INPUT in profile.directions
+    )
+
+
+def _is_power_output(profile: ElectricalProfile | None) -> bool:
+    return bool(
+        profile
+        and SignalDomain.POWER in profile.domains
+        and Direction.OUTPUT in profile.directions
+    )
+
+
+def _is_push_pull_output(profile: ElectricalProfile | None) -> bool:
+    return bool(
+        profile
+        and Direction.OUTPUT in profile.directions
+        and DriveMode.PUSH_PULL in profile.drive_modes
+    )
+
+
+def _check_package_rules(context: _Context) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    net_by_pin = context.pin_to_nets
+    for component in context.board.components:
+        part = context.board.library.get(component.part)
+        if part is None:
+            continue
+        for pin in part.pins.values():
+            endpoint = Endpoint(component.ref, pin.name)
+            nets = net_by_pin.get(endpoint, [])
+            if pin.connection_policy is ConnectionPolicy.DO_NOT_CONNECT and nets:
+                diagnostics.append(
+                    Diagnostic(Severity.ERROR, "DO_NOT_CONNECT", "do-not-connect pin is connected", str(endpoint))
+                )
+            if pin.connection_policy is ConnectionPolicy.REQUIRED and not nets:
+                diagnostics.append(
+                    Diagnostic(Severity.ERROR, "REQUIRED_PIN_UNCONNECTED", "required package pin is not connected", str(endpoint))
+                )
+            for net_name in nets:
+                traits = _net_traits(context, net_name)
+                missing = pin.required_net_traits - traits
+                if missing:
+                    diagnostics.append(
+                        Diagnostic(
+                            Severity.ERROR,
+                            "REQUIRED_NET_TRAIT",
+                            f"net lacks required traits: {', '.join(sorted(missing))}",
+                            str(endpoint),
+                        )
+                    )
+    return diagnostics
+
+
+def _check_modes_and_groups(context: _Context) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    for component in context.board.components:
+        part = context.board.library.get(component.part)
+        device = context.board.devices.get(part.device or "") if part else None
+        if device is None:
+            continue
+        effective_modes = {
+            name: component.modes.get(name, group.default)
+            for name, group in device.mode_groups.items()
+        }
+        for name in component.modes:
+            if name not in device.mode_groups:
+                diagnostics.append(Diagnostic(Severity.ERROR, "UNKNOWN_MODE_GROUP", f"unknown mode group {name!r}", component.ref))
+        for name, choice in effective_modes.items():
+            group = device.mode_groups[name]
+            if choice is None:
+                diagnostics.append(Diagnostic(Severity.ERROR, "MODE_NOT_SELECTED", f"mode group {name!r} has no selection", component.ref))
+            elif choice not in group.choices:
+                diagnostics.append(Diagnostic(Severity.ERROR, "UNKNOWN_MODE_CHOICE", f"{choice!r} is not a choice of {name}", component.ref))
+        connected_pads = {
+            pad
+            for pin in part.pins.values()
+            if context.pin_to_nets.get(Endpoint(component.ref, pin.name))
+            for pad in context.active_bonded_pads(component, pin)
+        }
+        for group in device.signal_groups.values():
+            if group.when is not None and not group.when.matches(effective_modes):
+                continue
+            if (group.kind == "differential_pair" or getattr(group.kind, "value", None) == "differential_pair"):
+                present = {name for name, pad in group.members.items() if pad in connected_pads}
+                if present and present != {"positive", "negative"}:
+                    diagnostics.append(
+                        Diagnostic(Severity.ERROR, "INCOMPLETE_DIFFERENTIAL_PAIR", f"differential group {group.name} must connect both polarities", component.ref)
+                    )
+    return diagnostics
+
+
+def _net_traits(context: _Context, net_name: str) -> frozenset[str]:
+    traits: set[str] = set()
+    supply = next((item for item in context.board.supplies if item.net == net_name), None)
+    if supply is not None:
+        traits.add("ground" if supply.voltage.base_value == 0 else "power")
+    return frozenset(traits)
 
 
 def _has_resistor_between(context: _Context, net_a: str, net_b: str) -> bool:
@@ -765,7 +915,7 @@ def _has_resistor_between(context: _Context, net_a: str, net_b: str) -> bool:
         if component is None:
             continue
         part = context.board.library.get(component.part)
-        if part is not None and part.kind is PartKind.RESISTOR:
+        if part is not None and part.category == "passive.resistor":
             pins_on_a = {ep.pin for ep in endpoints_a if ep.component == component_ref}
             pins_on_b = {ep.pin for ep in endpoints_b if ep.component == component_ref}
             if pins_on_a and pins_on_b and pins_on_a.isdisjoint(pins_on_b):

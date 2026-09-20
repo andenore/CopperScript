@@ -116,6 +116,7 @@ def _unit_fields(
                 "value": _value(component.value),
                 "footprint": component.footprint,
                 "properties": dict(component.properties),
+                "modes": dict(component.modes),
             }
             for component in components
         ],
@@ -140,7 +141,7 @@ def _unit_fields(
         "interfaces": [
             {
                 "name": interface.name,
-                "kind": interface.kind.value,
+                "type": interface.type_name,
                 "signals": dict(interface.signals),
                 "bindings": {
                     component: dict(bindings)
@@ -169,6 +170,7 @@ def _unit_fields(
                 "signals": {
                     name: {
                         "pin": signal.pin,
+                        "pad": signal.pad,
                         "selector": signal.selector,
                         "resource": signal.resource,
                         "setting": signal.setting,
@@ -191,7 +193,8 @@ def _unit_fields(
 def _part_to_dict(part: PartDefinition) -> dict[str, object]:
     return {
         "name": part.name,
-        "kind": part.kind.value,
+        "category": part.category,
+        "traits": sorted(part.traits),
         "manufacturer": part.manufacturer,
         "device": part.device,
         "source": _source_to_dict(part.source),
@@ -201,11 +204,13 @@ def _part_to_dict(part: PartDefinition) -> dict[str, object]:
             {
                 "name": pin.name,
                 "number": pin.number,
-                "capabilities": sorted(item.value for item in pin.capabilities),
-                "role": pin.role,
-                "bonded_pads": list(pin.bonded_pads),
-                "voltage_min": _value(pin.voltage_min),
-                "voltage_max": _value(pin.voltage_max),
+                "profile": _profile_to_dict(pin.profile),
+                "bonds": [
+                    {"pad": bond.pad, "when": _condition_to_dict(bond.when)}
+                    for bond in pin.bonds
+                ],
+                "connection_policy": pin.connection_policy.value,
+                "required_net_traits": sorted(pin.required_net_traits),
             }
             for pin in part.pins.values()
         ],
@@ -220,17 +225,20 @@ def _device_to_dict(device: DeviceDefinition) -> dict[str, object]:
         "pads": [
             {
                 "name": pad.name,
-                "capabilities": sorted(item.value for item in pad.capabilities),
-                "role": pad.role,
+                "profile": _profile_to_dict(pad.profile),
                 "power_domain": pad.power_domain,
                 "unpowered_behavior": pad.unpowered_behavior.value,
-                "voltage_min": _value(pad.voltage_min),
-                "voltage_max": _value(pad.voltage_max),
+                "when": _condition_to_dict(pad.when),
             }
             for pad in device.pads.values()
         ],
         "power_domains": [
-            {"name": domain.name, "supply_pads": list(domain.supply_pads)}
+            {
+                "name": domain.name,
+                "supply_pads": list(domain.supply_pads),
+                "voltage": _range_to_dict(domain.voltage),
+                "requires": list(domain.requires),
+            }
             for domain in device.power_domains.values()
         ],
         "resources": list(device.resources),
@@ -241,7 +249,7 @@ def _device_to_dict(device: DeviceDefinition) -> dict[str, object]:
                 "signals": [
                     {
                         "name": signal.name,
-                        "type": signal.pin_type.value,
+                        "profile": _profile_to_dict(signal.profile),
                         "required": signal.required,
                     }
                     for signal in peripheral.signals.values()
@@ -257,10 +265,83 @@ def _device_to_dict(device: DeviceDefinition) -> dict[str, object]:
                 "selector": option.selector,
                 "resource": option.resource,
                 "setting": option.setting,
+                "when": _condition_to_dict(option.when),
             }
             for option in device.mux_options
         ],
+        "units": [
+            {
+                "name": unit.name,
+                "kind": unit.kind,
+                "shared": unit.shared,
+                "terminals": {
+                    name: {"pad": terminal.pad, "profile": _profile_to_dict(terminal.profile)}
+                    for name, terminal in unit.terminals.items()
+                },
+            }
+            for unit in device.units.values()
+        ],
+        "signal_groups": [
+            {
+                "name": group.name,
+                "kind": getattr(group.kind, "value", group.kind),
+                "members": dict(group.members),
+                "profile": _profile_to_dict(group.profile),
+                "when": _condition_to_dict(group.when),
+            }
+            for group in device.signal_groups.values()
+        ],
+        "mode_groups": [
+            {"name": group.name, "choices": list(group.choices), "default": group.default}
+            for group in device.mode_groups.values()
+        ],
+        "pad_sets": [
+            {"name": pad_set.name, "pads": list(pad_set.pads)}
+            for pad_set in device.pad_sets.values()
+        ],
+        "route_rules": [
+            {
+                "peripheral": rule.peripheral,
+                "signal": rule.signal,
+                "pad_set": rule.pad_set,
+                "selector": {
+                    "kind": rule.selector.kind,
+                    "parameters": dict(rule.selector.parameters),
+                },
+                "when": _condition_to_dict(rule.when),
+            }
+            for rule in device.route_rules
+        ],
     }
+
+
+def _profile_to_dict(profile) -> object:
+    if profile is None:
+        return None
+    return {
+        "domains": sorted(item.value for item in profile.domains),
+        "directions": sorted(item.value for item in profile.directions),
+        "drive_modes": sorted(item.value for item in profile.drive_modes),
+        "traits": sorted(profile.traits),
+        "voltage": _range_to_dict(profile.voltage),
+        "current": _range_to_dict(profile.current),
+    }
+
+
+def _range_to_dict(value) -> object:
+    if value is None:
+        return None
+    return {
+        "minimum": _value(value.minimum),
+        "typical": _value(value.typical),
+        "maximum": _value(value.maximum),
+        "rating": value.rating,
+        "when": _condition_to_dict(value.when),
+    }
+
+
+def _condition_to_dict(condition) -> object:
+    return dict(condition.selections) if condition is not None else None
 
 
 def _source_to_dict(source: SourceReference | None) -> object:

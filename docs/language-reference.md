@@ -48,32 +48,35 @@ Packages can define electrical parts independently of component instances:
 
 ```copper
 part BME280 {
-    kind = sensor;
+    category = "sensor.environmental";
     manufacturer = "Bosch";
     footprint = "LGA-8";
 
     pin VDD {
         number = "1";
-        capabilities = "power_input";
-        role = digital_supply;
+        domains = "power";
+        directions = "input";
         voltage_min = 1.71V;
         voltage_max = 3.6V;
     }
     pin GND {
         number = "2";
-        capabilities = "power_input";
-        role = ground;
+        domains = "ground";
+        directions = "input";
     }
 }
 ```
 
-Supported part properties are `kind`, `manufacturer`, one `footprint`, and an
+Supported part properties are open `category` and `traits` strings,
+`manufacturer`, one `footprint`, and an
 optional package-independent `device`. Every pin requires a quoted `number`;
 `voltage_min` and `voltage_max` are optional typed voltage quantities.
-Standalone parts declare a comma-separated `capabilities` string. Supported
-capabilities are `passive`, `digital_input`, `push_pull_output`,
-`open_drain_output`, `analog`, `power_input`, and `power_output`. `role` is
-descriptive metadata such as `ground`, `digital_supply`, or `gpio`.
+Standalone parts declare `domains` and `directions`, with optional
+`drive_modes` and `traits`. Domains are `digital`, `analog`, `power`, `ground`,
+`clock`, and `rf`. Directions are `input`, `output`, `bidirectional`, and
+`passive`; drive modes are `push_pull`, `open_drain`, and `high_impedance`.
+Pins may use `connection = required`, `do_not_connect`, `optional`, or `normal`
+and may declare comma-separated `required_net_traits`.
 
 Part and device provenance is optional. Definitions may use
 `source_document`, `source_revision`, `source_location`, `source_url`, and
@@ -91,20 +94,26 @@ device STM32G0B1 {
 
     power_domain VDDIO1 {
         supply_pads = "VDD";
+        voltage_min = 1.7V;
+        voltage_max = 3.6V;
     }
 
     pad VDD {
-        capabilities = "power_input";
-        role = digital_supply;
+        domains = "power";
+        directions = "input";
     }
     pad PB6 {
-        capabilities = "digital_input,push_pull_output,open_drain_output";
+        domains = "digital";
+        directions = "bidirectional";
+        drive_modes = "push_pull,open_drain";
         power_domain = VDDIO1;
         unpowered = clamped;
         voltage_max = 3.6V;
     }
     pad PB7 {
-        capabilities = "digital_input,push_pull_output,open_drain_output";
+        domains = "digital";
+        directions = "bidirectional";
+        drive_modes = "push_pull,open_drain";
         power_domain = VDDIO1;
         unpowered = clamped;
         voltage_max = 3.6V;
@@ -138,20 +147,36 @@ physical pins plus explicit device-pad bonds:
 
 ```copper
 part STM32G0B1CBT6 {
-    kind = mcu;
+    category = "semiconductor.mcu";
     footprint = "LQFP-48";
     device = STM32G0B1;
 
-    pin VDD { number = "24"; bond = VDD; role = digital_supply; }
+    pin VDD { number = "24"; bond = VDD; }
     pin PB6 { number = "45"; bond = PB6; }
     pin PB7 { number = "46"; bond = PB7; }
 }
 ```
 
 `bond` is a comma-separated list when one package pin connects to multiple
-device pads. Multiple package pins may also name the same device pad. A
-device-backed package pin inherits the union of capabilities and voltage limits
-from its bonded pads, and may declare additional package-specific values.
+device pads. A conditional entry uses `PAD@MODE=CHOICE`. Multiple package pins
+may also name the same device pad. A device-backed package pin combines its
+electrical profile with its active bonded pads.
+
+Devices may define functional units, differential groups, finite modes, and
+regular routing rules:
+
+```copper
+unit A: std.opamp { INP = A_INP; INN = A_INN; OUT = A_OUT; }
+group AIN0: differential_pair { positive = AIN0P; negative = AIN0N; }
+mode_group PORT0 { choices = "LVCMOS,LVDS"; default = LVCMOS; }
+pad_set GPIO_PSEL { pads = "P0_00,P0_01"; }
+route UARTE0.TX { pad_set = GPIO_PSEL; selector = nrf_psel; }
+```
+
+Unit terminals may be used as net endpoints, for example `U1.A.OUT`. The
+compiler resolves them to canonical package pins before ERC. Components select
+non-default modes with `modes = "PORT0=LVDS"`. Conditions are comma-separated
+equality selections; general boolean expressions are intentionally unsupported.
 
 Boards and modules explicitly select peripheral pins:
 
@@ -356,6 +381,8 @@ Quantities have no whitespace between their number and unit.
 | Capacitance | `F`, `uF`, `nF`, `pF` |
 | Inductance | `H`, `mH`, `uH`, `nH` |
 | Length | `m`, `mm`, `um` |
+| Current | `A`, `mA`, `uA` |
+| Frequency | `Hz`, `kHz`, `MHz`, `GHz` |
 
 Values are normalized to SI base units in the IR while retaining their source
 display unit.
@@ -365,7 +392,8 @@ display unit.
 ```ebnf
 document       = ("board" | "module" | "part" | "device"), name, "{", item*, "}" ;
 item           = library | package_import | port | pin | pad | power_domain
-               | part_property | peripheral | mux | resource | device_property
+               | part_property | peripheral | mux | route | pad_set | resource
+               | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
                | power_state | interface | constraint ;
 library        = "use", "library", string, ";" ;
@@ -379,16 +407,21 @@ device_property = name, "=", scalar, ";" ;
 peripheral     = "peripheral", name, ":", name, "{", signal+, "}" ;
 signal         = "signal", name, ":", pin_type, (";" | properties) ;
 mux            = "mux", name, ":", name, ".", name, properties ;
+route          = "route", name, ".", name, properties ;
+pad_set        = "pad_set", name, properties ;
+unit           = "unit", name, ":", qualified_name, properties ;
+signal_group   = "group", name, ":", qualified_name, properties ;
+mode_group     = "mode_group", name, properties ;
 resource       = "resource", name, ";" ;
 configuration  = "configure", name, ".", name, "as", name, properties ;
 qualified_name = name, (".", name)* ;
 module_instance = "module", name, ":", qualified_name, ";" ;
 component      = "component", name, ":", qualified_name, (";" | properties) ;
 net            = "net", name, "{", endpoint*, "}" ;
-endpoint       = name, ".", name, ";" ;
+endpoint       = name, ".", qualified_name, ";" ;
 supply         = "supply", name, properties ;
 power_state    = "power_state", name, "{", (name, "=", ("on" | "off" | "unknown"), ";")*, "}" ;
-interface      = "interface", name, ":", "i2c", "{", interface_item*, "}" ;
+interface      = "interface", name, ":", qualified_name, "{", interface_item*, "}" ;
 constraint     = "constraint", name, "(", targets, ")", properties ;
 properties     = "{", (name, "=", scalar, ";")*, "}" ;
 scalar         = string | boolean | name | number, unit ;

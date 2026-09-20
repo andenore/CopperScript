@@ -117,6 +117,30 @@ class Length(Quantity):
     }
 
 
+@dataclass(frozen=True, slots=True)
+class Current(Quantity):
+    UNITS: ClassVar[dict[str, Decimal]] = {
+        "A": Decimal("1"),
+        "mA": Decimal("0.001"),
+        "uA": Decimal("0.000001"),
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class Frequency(Quantity):
+    UNITS: ClassVar[dict[str, Decimal]] = {
+        "Hz": Decimal("1"),
+        "kHz": Decimal("1000"),
+        "MHz": Decimal("1000000"),
+        "GHz": Decimal("1000000000"),
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class Impedance(Quantity):
+    UNITS: ClassVar[dict[str, Decimal]] = Resistance.UNITS
+
+
 def volts(value: Number) -> Voltage:
     return Voltage.of(value, "V")
 

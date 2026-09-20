@@ -1,0 +1,10 @@
+part ICE40UP5K_SG48 {
+    category = "programmable_logic.fpga";
+    manufacturer = "Lattice Semiconductor";
+    footprint = "QFN-48";
+    device = ICE40UP5K_DIE;
+    pin VCC { number = "1"; bond = VCC; }
+    pin GND { number = "2"; bond = GND; }
+    pin IO0 { number = "3"; bond = IO0; }
+    pin IO1 { number = "4"; bond = IO1; }
+}

@@ -63,8 +63,8 @@ artifact derived from the electrical design.
 The electrical IR defines what the circuit is. It MAY contain:
 
 - reusable part and pin definitions;
-- package-independent device pads, power domains, capabilities, peripherals,
-  and pin-mux options;
+- package-independent device pads, electrical profiles, functional units,
+  signal groups, power domains, peripherals, and route rules;
 - component instances and selected footprints;
 - explicit peripheral and pin-mux selections;
 - nets and their endpoints;
@@ -255,12 +255,39 @@ more device pads, and multiple package pins may bond to the same logical pad
 where the package requires it. ERC resolves a selected package pin through its
 declared bonds before validating mux availability.
 
-Physical pins and device pads have sets of electrical capabilities rather than
-one mutually exclusive pin type. Capabilities include input, push-pull output,
-open-drain output, analog, power input, power output, and passive behavior.
-Protocol signal directions remain requirements to be matched against those
-capability sets. Descriptive roles such as `ground`, `digital_supply`, or
-`gpio` are metadata and MUST NOT replace electrical capabilities.
+Physical pins and device pads use an `ElectricalProfile` rather than one pin
+type or capability bag. Signal domains, directions, drive modes, extensible
+traits, and typed ranges are orthogonal. A pad may therefore be analog and
+digital, bidirectional, and support both push-pull and open-drain drive without
+inventing a combined enum value. Protocol signals declare required profiles;
+ERC checks that a selected physical endpoint satisfies them.
+
+Part categories and interface type names are open strings. Standard meanings
+use the `std.` namespace, while dependency packages may define namespaced
+vocabulary. Generic ERC MUST consume typed fields rather than infer behavior
+from an unknown taxonomy string.
+
+Functional units are package-independent semantic views over device pads. A
+unit terminal resolves through its pad and package bonds to one canonical
+physical pin. Source endpoints MAY use paths such as `U1.A.OUT`; connectivity
+and pin-on-multiple-net checks operate on the resolved physical identity. Units
+do not create connectivity and may guide backend presentation without adding
+schematic geometry to IR.
+
+Signal groups describe relationships such as positive and negative members of
+a differential pair. Package pins carry explicit normal, required,
+do-not-connect, or optional connection policy and may require net traits such
+as `ground`. These are structural electrical rules, not name-based heuristics.
+
+Finite mode groups and equality-only conditions control pad, bond, group, or
+route availability. A component makes an explicit choice or uses a declared
+default. General boolean expressions and conditions derived from connectivity
+are not part of the language.
+
+Explicit mux rows remain appropriate for irregular mappings such as STM32
+alternate functions. Regular routing such as Nordic PSEL uses concrete named
+pad sets and a typed selector scheme, avoiding an N-by-M expansion while still
+retaining a deterministic concrete selection in compiled IR.
 
 Optional resource and setting fields express device-wide configuration state.
 Selections are exclusive by default. Exclusive selections requiring different
@@ -554,6 +581,13 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-029 | Accepted | Power domains and named discrete rail states are explicit IR, analyzed by a separate conservative steady-state pass. |
 | CS-030 | Accepted | The initial schematic backend targets KiCad 8 format `20231120`, owns all presentation geometry, embeds generic symbols, and explicitly derives a flat single-sheet artifact. |
 | CS-031 | Accepted | Large device libraries use compact normalized JSON/CSV bundles and deterministic source generation; unresolved values block generation and bounded work packets minimize extraction context. |
+| CS-032 | Accepted | Electrical profiles separate signal domains, directions, drive modes, traits, and typed ranges. |
+| CS-033 | Accepted | Part categories and interface type names are open; generic behavior depends on typed semantics, not taxonomy strings. |
+| CS-034 | Accepted | Functional-unit terminals resolve to canonical physical pins and never create connectivity. |
+| CS-035 | Accepted | Signal groups represent differential and other multi-signal relationships independently of protocols. |
+| CS-036 | Accepted | Package pins have typed connection policies, required net traits, and conditional bonds. |
+| CS-037 | Accepted | Device modes are finite named choices and conditions are conjunctions of equality selections. |
+| CS-038 | Accepted | Regular pin routing uses concrete pad sets and selector schemes; irregular mappings retain explicit mux options. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

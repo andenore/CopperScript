@@ -4,7 +4,6 @@ from pcbir import (
     Board,
     ComponentInstance,
     Interface,
-    InterfaceKind,
     Net,
     Supply,
     ep,
@@ -42,7 +41,7 @@ board = Board(
     interfaces=(
         Interface(
             name="BROKEN_I2C",
-            kind=InterfaceKind.I2C,
+            type_name="std.i2c",
             signals={"sda": "I2C_SDA", "scl": "I2C_SCL"},
             bindings={
                 "U1": {"sda": "PB7", "scl": "PB6"},

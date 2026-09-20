@@ -1,0 +1,10 @@
+part CYUSB4014_FCAXI {
+    category = "controller.usb";
+    manufacturer = "Infineon";
+    footprint = "BGA-121";
+    device = FX10_USB;
+    pin VDD { number = "A1"; bond = VDD; }
+    pin GND { number = "A2"; bond = GND; }
+    pin P0D7P { number = "B1"; bond = "P0D7@PORT0=LVCMOS,P0D7P@PORT0=LVDS"; }
+    pin P0D7N { number = "B2"; bond = "P0D7N@PORT0=LVDS"; connection = optional; }
+}

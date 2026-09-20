@@ -1,0 +1,10 @@
+part NRF52840_QIAA {
+    category = "semiconductor.mcu";
+    manufacturer = "Nordic Semiconductor";
+    footprint = "aQFN-73";
+    device = NRF52840;
+    pin VDD { number = "VDD"; bond = VDD; }
+    pin VSS { number = "VSS"; bond = VSS; }
+    pin P0_00 { number = "P0.00"; bond = P0_00; }
+    pin P0_01 { number = "P0.01"; bond = P0_01; }
+}

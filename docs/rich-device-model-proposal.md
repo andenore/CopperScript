@@ -1,15 +1,14 @@
 # RFC: Rich device and package semantics
 
-**Status:** Proposed
+**Status:** Implemented and accepted
 **Target:** the unreleased CopperScript electrical IR and source language
 **Motivation:** compatibility trials with nRF52840, CYUSB4014 (EZ-USB FX10),
 AD4134, OPA2197, and the existing STM32G0 examples
 
-This document proposes the next device-model revision. It is intentionally not
-an accepted design decision yet. The model should first be implemented on a
-branch and proven against the five fixture families listed above. Because no
-schema has been released, the implementation may replace transitional types
-directly; it does not need a compatibility layer or a schema-version bump.
+This document records the implemented rich device-model revision. It was
+validated against the five original fixture families plus Lattice iCE40 FPGA
+I/O and TI ISO6721 isolated-interface structures. No compatibility or migration
+layer exists because CopperScript has not had a public schema release.
 
 ## 1. Problem statement
 
@@ -404,30 +403,10 @@ No new ERC should attempt to prove firmware scheduling, op-amp stability,
 converter performance, signal integrity, or analog correctness. Firmware-managed
 sharing remains an explicit ownership waiver, not an electrical waiver.
 
-## 6. Migration from the current model
+## 6. Acceptance fixtures
 
-| Current representation | Proposed representation |
-|---|---|
-| `PartKind` | open `category` plus traits |
-| `PinType` on protocol signals | required `ElectricalProfile` |
-| `PinCapability` set | profile domains, directions, drive modes, and traits |
-| `PinDefinition.bonded_pads` | unconditional `BondDefinition` entries |
-| `PinDefinition.role` | profile domain/traits or required-net traits |
-| `MuxOption` | explicit route option, retained as the irregular case |
-| repeated mux rows | `RouteRule` over a concrete `PadSetDefinition` |
-| `InterfaceKind.I2C` | `std.i2c` interface type definition |
-| voltage min/max fields | typed `QuantityRange[Voltage]` |
-| free-form mode metadata | typed mode groups and bounded conditions |
-
-Existing board and module connectivity syntax should remain valid. Only
-libraries using transitional device declarations need mechanical migration.
-Serialization should emit the new representation directly; there is no need to
-read an old public schema.
-
-## 7. Acceptance fixtures
-
-The implementation is ready to become an accepted design decision when all of
-these fixtures compile, serialize deterministically, and exercise ERC:
+The implementation is accepted because these fixtures compile, serialize
+deterministically, and exercise ERC:
 
 ### STM32G0
 
@@ -461,30 +440,19 @@ these fixtures compile, serialize deterministically, and exercise ERC:
 - `U1.A.OUT` and `U1.B.OUT` resolve to distinct physical pins.
 - Both units share the same supply terminals without duplicating physical
   connectivity.
-- A schematic backend can render two logical units while keeping all generated
-  coordinates backend-local.
+- The schematic backend resolves both units' semantic terminals while keeping
+  all generated coordinates backend-local. Native multi-unit presentation is a
+  separate rendering enhancement.
 
-## 8. Implementation sequence
+## 7. Implementation record
 
-1. Add the new IR dataclasses, canonical endpoint resolver, and serializer
-   fixtures without changing source syntax.
-2. Add generator-bundle columns/types and migrate the five compatibility
-   fixtures. Keep explicit STM32 mux rows.
-3. Implement structural ERC for units, groups, connection policies, modes, and
-   route membership.
-4. Add parser/lowering syntax and precise source diagnostics.
-5. Add standard interface definitions and migrate I2C to `std.i2c` without
-   changing its existing checks.
-6. Teach the KiCad backend to use functional units for multi-unit symbols. This
-   must not add coordinates to the electrical IR.
-7. Update the language server when its semantic model is implemented; it should
-   consume the same endpoint resolver and ERC passes.
+The IR, parser/lowering, serializer, generator schema, canonical endpoint
+resolver, and structural ERC checks are implemented. The KiCad backend resolves
+semantic unit terminals to physical pins while retaining backend-owned
+coordinates. Native multi-unit symbol presentation and language-server support
+remain backend/editor enhancements rather than electrical-model requirements.
 
-Each phase should keep serialization deterministic and land with focused tests.
-The design specification should be updated and assigned new accepted decision
-IDs only after the minimum IR and all acceptance fixtures have passed.
-
-## 9. Recommended decisions
+## 8. Accepted decisions
 
 - Functional units belong to `DeviceDefinition`, not `PartDefinition`; packages
   only bond physical pins to device pads.

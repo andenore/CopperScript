@@ -1,7 +1,7 @@
-name,number,bond,capabilities,role,voltage_min,voltage_max
-VDD,24,VDD,,digital_supply,1.7V,3.6V
-VSS,23,VSS,,ground,,
-PA2,10,PA2,,io,,
-PA3,11,PA3,,io,,
-PB6,45,PB6,,io,,
-PB7,46,PB7,,io,,
+name,number,bond,domains,directions,drive_modes,traits,connection,required_net_traits,voltage_min,voltage_max
+VDD,24,VDD,,,,,,,,
+VSS,23,VSS,,,,,,,,
+PA2,10,PA2,,,,,,,,
+PA3,11,PA3,,,,,,,,
+PB6,45,PB6,,,,,,,,
+PB7,46,PB7,,,,,,,,

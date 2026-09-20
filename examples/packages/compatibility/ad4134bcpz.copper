@@ -1,0 +1,12 @@
+part AD4134BCPZ {
+    category = "converter.adc";
+    manufacturer = "Analog Devices";
+    footprint = "LFCSP-56";
+    device = AD4134_DIE;
+    pin AVDD5 { number = "1"; bond = AVDD5; }
+    pin AGND { number = "2"; bond = AGND; }
+    pin AIN0P { number = "3"; bond = AIN0P; }
+    pin AIN0N { number = "4"; bond = AIN0N; }
+    pin DNC1 { number = "5"; connection = do_not_connect; }
+    pin EPAD { number = "EP"; bond = AGND; connection = required; required_net_traits = "ground"; }
+}

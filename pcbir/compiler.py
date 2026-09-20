@@ -9,6 +9,7 @@ from typing import Callable, Mapping
 
 from .library import tiny_library
 from .model import (
+    BondDefinition,
     Board,
     ComponentInstance,
     Constraint,
@@ -17,32 +18,54 @@ from .model import (
     DeviceDefinition,
     DevicePadDefinition,
     Interface,
-    InterfaceKind,
+    Condition,
+    ConnectionPolicy,
+    Direction,
+    DriveMode,
+    ElectricalProfile,
+    FunctionalUnitDefinition,
+    GroupKind,
     ModuleDefinition,
     ModuleInstance,
     MuxOption,
     Net,
     PartDefinition,
-    PartKind,
-    PinCapability,
+    ModeGroupDefinition,
+    PackagePinDefinition,
+    PadSetDefinition,
     PeripheralDefinition,
     PeripheralSelection,
     PeripheralSignalDefinition,
     PeripheralSignalSelection,
-    PinDefinition,
     PinType,
     PowerDomainDefinition,
     PowerRailState,
     PowerState,
+    QuantityRange,
+    RouteRule,
+    SelectorScheme,
     SelectionUsage,
+    SignalDomain,
+    SignalGroupDefinition,
     SourceReference,
     Supply,
+    TerminalBinding,
     UnpoweredBehavior,
     ep,
 )
 from .parser import parse
 from .packages import PackageResolver, ResolvedPackage
-from .quantities import Capacitance, Inductance, Length, Quantity, Resistance, Voltage
+from .quantities import (
+    Capacitance,
+    Current,
+    Frequency,
+    Impedance,
+    Inductance,
+    Length,
+    Quantity,
+    Resistance,
+    Voltage,
+)
 from .syntax import (
     ComponentDecl,
     ConfigurationDecl,
@@ -63,6 +86,11 @@ from .syntax import (
     PinDecl,
     RawQuantity,
     ResourceDecl,
+    UnitDecl,
+    SignalGroupDecl,
+    ModeGroupDecl,
+    PadSetDecl,
+    RouteRuleDecl,
     Scalar,
     SourceLocation,
     SupplyDecl,
@@ -74,7 +102,16 @@ LIBRARIES: dict[str, LibraryFactory] = {"tiny": tiny_library, "standard": tiny_l
 
 QUANTITY_TYPES: dict[str, type[Quantity]] = {
     unit: quantity_type
-    for quantity_type in (Voltage, Resistance, Capacitance, Inductance, Length)
+    for quantity_type in (
+        Voltage,
+        Impedance,
+        Resistance,
+        Capacitance,
+        Inductance,
+        Length,
+        Current,
+        Frequency,
+    )
     for unit in quantity_type.UNITS
 }
 
@@ -585,7 +622,9 @@ def _validate_instances(
 
 
 def _component(declaration: ComponentDecl, part_name: str | None = None) -> ComponentInstance:
-    _reject_unknown_attributes(declaration.attributes, {"value", "footprint"}, declaration.location)
+    _reject_unknown_attributes(
+        declaration.attributes, {"value", "footprint", "modes"}, declaration.location
+    )
     value = declaration.attributes.get("value")
     if isinstance(value, RawQuantity):
         compiled_value: Quantity | str | None = _quantity(value, declaration.location)
@@ -597,11 +636,13 @@ def _component(declaration: ComponentDecl, part_name: str | None = None) -> Comp
     footprint = declaration.attributes.get("footprint")
     if footprint is not None and not isinstance(footprint, str):
         _error("CMP005", "component footprint must be a string", declaration.location)
+    modes = _key_values(declaration.attributes.get("modes", ""), "component modes", declaration.location)
     return ComponentInstance(
         ref=declaration.ref,
         part=part_name or declaration.part,
         value=compiled_value,
         footprint=footprint,
+        modes=modes,
     )
 
 
@@ -612,6 +653,11 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
     peripherals: dict[str, PeripheralDefinition] = {}
     resources: list[str] = []
     mux_options: list[MuxOption] = []
+    units: dict[str, FunctionalUnitDefinition] = {}
+    groups: dict[str, SignalGroupDefinition] = {}
+    mode_groups: dict[str, ModeGroupDefinition] = {}
+    pad_sets: dict[str, PadSetDefinition] = {}
+    route_rules: list[RouteRule] = []
     for declaration in document.declarations:
         if isinstance(declaration, DevicePropertyDecl):
             if declaration.name in properties:
@@ -625,22 +671,19 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
             _reject_unknown_attributes(
                 declaration.attributes,
                 {
-                    "capabilities",
-                    "role",
+                    "domains",
+                    "directions",
+                    "drive_modes",
+                    "traits",
                     "power_domain",
                     "unpowered",
                     "voltage_min",
                     "voltage_max",
+                    "when",
                 },
                 declaration.location,
             )
-            capabilities = _capabilities(
-                _required(declaration.attributes, "capabilities", declaration.location),
-                declaration.location,
-            )
-            role = _string_value(
-                declaration.attributes.get("role", "io"), "pad role", declaration.location
-            )
+            profile = _electrical_profile(declaration.attributes, declaration.location)
             power_domain = _optional_string(
                 declaration.attributes.get("power_domain"), "pad power_domain", declaration.location
             )
@@ -656,22 +699,18 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
                 _error("CMP074", f"unknown unpowered behavior {raw_unpowered!r}; expected: {allowed}", declaration.location)
             pads[declaration.name] = DevicePadDefinition(
                 name=declaration.name,
-                capabilities=capabilities,
-                role=role,
+                profile=profile,
                 power_domain=power_domain,
                 unpowered_behavior=unpowered,
-                voltage_min=_optional_voltage(
-                    declaration.attributes.get("voltage_min"), declaration.location
-                ),
-                voltage_max=_optional_voltage(
-                    declaration.attributes.get("voltage_max"), declaration.location
-                ),
+                when=_condition(declaration.attributes.get("when"), declaration.location),
             )
         elif isinstance(declaration, PowerDomainDecl):
             if declaration.name in power_domains:
                 _error("CMP075", f"duplicate power domain {declaration.name!r}", declaration.location)
             _reject_unknown_attributes(
-                declaration.attributes, {"supply_pads"}, declaration.location
+                declaration.attributes,
+                {"supply_pads", "voltage_min", "voltage_max", "requires"},
+                declaration.location,
             )
             supply_pads = _csv_names(
                 _required(declaration.attributes, "supply_pads", declaration.location),
@@ -679,7 +718,10 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
                 declaration.location,
             )
             power_domains[declaration.name] = PowerDomainDefinition(
-                declaration.name, supply_pads
+                declaration.name,
+                supply_pads,
+                _voltage_range(declaration.attributes, declaration.location),
+                _csv_names(declaration.attributes.get("requires", ""), "domain requirements", declaration.location),
             )
         elif isinstance(declaration, ResourceDecl):
             if declaration.name in resources:
@@ -696,17 +738,8 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
                 required = signal.attributes.get("required", True)
                 if not isinstance(required, bool):
                     _error("CMP059", "signal required property must be true or false", signal.location)
-                try:
-                    signal_type = PinType(signal.pin_type)
-                except ValueError:
-                    allowed = ", ".join(item.value for item in PinType)
-                    _error(
-                        "CMP060",
-                        f"unknown signal type {signal.pin_type!r}; expected one of: {allowed}",
-                        signal.location,
-                    )
                 signals[signal.name] = PeripheralSignalDefinition(
-                    signal.name, signal_type, required
+                    signal.name, _profile_for_pin_type(signal.pin_type, signal.location), required
                 )
             if not signals:
                 _error("CMP061", "peripheral must declare at least one signal", declaration.location)
@@ -715,7 +748,9 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
             )
         elif isinstance(declaration, MuxDecl):
             _reject_unknown_attributes(
-                declaration.attributes, {"selector", "resource", "setting"}, declaration.location
+                declaration.attributes,
+                {"selector", "resource", "setting", "when"},
+                declaration.location,
             )
             selector = _required(declaration.attributes, "selector", declaration.location)
             resource = declaration.attributes.get("resource")
@@ -736,6 +771,70 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
                     selector,
                     resource,
                     setting,
+                    _condition(declaration.attributes.get("when"), declaration.location),
+                )
+            )
+        elif isinstance(declaration, UnitDecl):
+            if declaration.name in units:
+                _error("CMP088", f"duplicate functional unit {declaration.name!r}", declaration.location)
+            raw = dict(declaration.terminals)
+            shared = raw.pop("shared", False)
+            if not isinstance(shared, bool):
+                _error("CMP089", "unit shared property must be true or false", declaration.location)
+            terminals = {
+                name: TerminalBinding(_string_value(value, "terminal pad", declaration.location))
+                for name, value in raw.items()
+            }
+            units[declaration.name] = FunctionalUnitDefinition(
+                declaration.name, declaration.kind, terminals, shared
+            )
+        elif isinstance(declaration, SignalGroupDecl):
+            if declaration.name in groups:
+                _error("CMP090", f"duplicate signal group {declaration.name!r}", declaration.location)
+            raw = dict(declaration.attributes)
+            when = _condition(raw.pop("when", None), declaration.location)
+            members = {
+                name: _string_value(value, "signal-group member", declaration.location)
+                for name, value in raw.items()
+            }
+            groups[declaration.name] = SignalGroupDefinition(
+                declaration.name, declaration.kind, members, when=when
+            )
+        elif isinstance(declaration, ModeGroupDecl):
+            if declaration.name in mode_groups:
+                _error("CMP091", f"duplicate mode group {declaration.name!r}", declaration.location)
+            _reject_unknown_attributes(declaration.attributes, {"choices", "default"}, declaration.location)
+            choices = _csv_names(
+                _required(declaration.attributes, "choices", declaration.location),
+                "mode choices",
+                declaration.location,
+            )
+            default = _optional_string(declaration.attributes.get("default"), "mode default", declaration.location)
+            if default is not None and default not in choices:
+                _error("CMP092", f"mode default {default!r} is not a declared choice", declaration.location)
+            mode_groups[declaration.name] = ModeGroupDefinition(declaration.name, choices, default)
+        elif isinstance(declaration, PadSetDecl):
+            if declaration.name in pad_sets:
+                _error("CMP093", f"duplicate pad set {declaration.name!r}", declaration.location)
+            _reject_unknown_attributes(declaration.attributes, {"pads"}, declaration.location)
+            pad_sets[declaration.name] = PadSetDefinition(
+                declaration.name,
+                _csv_names(_required(declaration.attributes, "pads", declaration.location), "pad set", declaration.location),
+            )
+        elif isinstance(declaration, RouteRuleDecl):
+            _reject_unknown_attributes(
+                declaration.attributes, {"pad_set", "selector", "parameters", "when"}, declaration.location
+            )
+            route_rules.append(
+                RouteRule(
+                    declaration.peripheral,
+                    declaration.signal,
+                    _string_value(_required(declaration.attributes, "pad_set", declaration.location), "route pad_set", declaration.location),
+                    SelectorScheme(
+                        _string_value(_required(declaration.attributes, "selector", declaration.location), "selector scheme", declaration.location),
+                        _key_values(declaration.attributes.get("parameters", ""), "selector parameters", declaration.location),
+                    ),
+                    _condition(declaration.attributes.get("when"), declaration.location),
                 )
             )
         else:
@@ -766,6 +865,26 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
         unknown = sorted(set(domain.supply_pads) - set(pads))
         if unknown:
             _error("CMP078", f"power domain {domain.name!r} references unknown supply pad {unknown[0]!r}", document.location)
+    for unit in units.values():
+        for terminal in unit.terminals.values():
+            if terminal.pad not in pads:
+                _error("CMP094", f"unit {unit.name!r} references unknown pad {terminal.pad!r}", document.location)
+    for group in groups.values():
+        unknown = sorted(set(group.members.values()) - set(pads))
+        if unknown:
+            _error("CMP095", f"signal group {group.name!r} references unknown pad {unknown[0]!r}", document.location)
+        if str(group.kind) == GroupKind.DIFFERENTIAL_PAIR.value and set(group.members) != {"positive", "negative"}:
+            _error("CMP096", f"differential group {group.name!r} requires positive and negative members", document.location)
+    for pad_set in pad_sets.values():
+        unknown = sorted(set(pad_set.pads) - set(pads))
+        if unknown:
+            _error("CMP097", f"pad set {pad_set.name!r} references unknown pad {unknown[0]!r}", document.location)
+    for route in route_rules:
+        peripheral = peripherals.get(route.peripheral)
+        if peripheral is None or route.signal not in peripheral.signals:
+            _error("CMP098", f"route references unknown signal {route.peripheral}.{route.signal}", document.location)
+        if route.pad_set not in pad_sets:
+            _error("CMP099", f"route references unknown pad set {route.pad_set!r}", document.location)
     mux_keys = [(mux.pad, mux.peripheral, mux.signal) for mux in mux_options]
     if len(mux_keys) != len(set(mux_keys)):
         _error("CMP070", "device contains a duplicate mux option", document.location)
@@ -775,6 +894,11 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
         peripherals=peripherals,
         mux_options=tuple(mux_options),
         power_domains=power_domains,
+        units=units,
+        signal_groups=groups,
+        mode_groups=mode_groups,
+        pad_sets=pad_sets,
+        route_rules=tuple(route_rules),
         resources=tuple(resources),
         metadata={
             key: value for key, value in properties.items() if not key.startswith("source_")
@@ -790,7 +914,7 @@ def _compile_part(
     devices: Mapping[str, DeviceDefinition] | None = None,
 ) -> PartDefinition:
     properties: dict[str, Scalar] = {}
-    pins: dict[str, PinDefinition] = {}
+    pins: dict[str, PackagePinDefinition] = {}
     for declaration in document.declarations:
         if isinstance(declaration, PartPropertyDecl):
             if declaration.name in properties:
@@ -803,40 +927,71 @@ def _compile_part(
                 declaration.attributes,
                 {
                     "number",
-                    "capabilities",
-                    "role",
+                    "domains",
+                    "directions",
+                    "drive_modes",
+                    "traits",
                     "bond",
                     "voltage_min",
                     "voltage_max",
+                    "connection",
+                    "required_net_traits",
+                    "when",
                 },
                 declaration.location,
             )
             number = _required(declaration.attributes, "number", declaration.location)
             if not isinstance(number, str):
                 _error("CMP044", "pin number must be a string", declaration.location)
-            capabilities = _capabilities(
-                declaration.attributes.get("capabilities", ""), declaration.location
-            )
-            role = _string_value(
-                declaration.attributes.get("role", "io"), "pin role", declaration.location
-            )
             bonds = _csv_names(
                 declaration.attributes.get("bond", ""), "pin bond", declaration.location
             )
-            voltage_min = _optional_voltage(
-                declaration.attributes.get("voltage_min"), declaration.location
+            try:
+                policy = ConnectionPolicy(
+                    _string_value(
+                        declaration.attributes.get("connection", ConnectionPolicy.NORMAL.value),
+                        "connection policy",
+                        declaration.location,
+                    )
+                )
+            except ValueError:
+                _error("CMP100", "unknown package-pin connection policy", declaration.location)
+            profile = (
+                _electrical_profile(declaration.attributes, declaration.location)
+                if any(
+                    name in declaration.attributes
+                    for name in (
+                        "domains", "directions", "drive_modes", "traits",
+                        "voltage_min", "voltage_max",
+                    )
+                )
+                else None
             )
-            voltage_max = _optional_voltage(
-                declaration.attributes.get("voltage_max"), declaration.location
-            )
-            pins[declaration.name] = PinDefinition(
-                declaration.name,
-                number,
-                capabilities,
-                role,
-                bonds,
-                voltage_min,
-                voltage_max,
+            bond_condition = _condition(declaration.attributes.get("when"), declaration.location)
+            compiled_bonds: list[BondDefinition] = []
+            for bond in bonds:
+                pad, separator, raw_condition = bond.partition("@")
+                compiled_bonds.append(
+                    BondDefinition(
+                        pad,
+                        _condition(raw_condition, declaration.location)
+                        if separator
+                        else bond_condition,
+                    )
+                )
+            pins[declaration.name] = PackagePinDefinition(
+                name=declaration.name,
+                number=number,
+                profile=profile,
+                bonds=tuple(compiled_bonds),
+                connection_policy=policy,
+                required_net_traits=frozenset(
+                    _csv_names(
+                        declaration.attributes.get("required_net_traits", ""),
+                        "required net traits",
+                        declaration.location,
+                    )
+                ),
             )
         else:
             _error("CMP046", "part files may only contain properties and pins", document.location)
@@ -844,7 +999,8 @@ def _compile_part(
     _reject_unknown_attributes(
         properties,
         {
-            "kind",
+            "category",
+            "traits",
             "manufacturer",
             "footprint",
             "device",
@@ -856,14 +1012,12 @@ def _compile_part(
         },
         document.location,
     )
-    raw_kind = properties.get("kind", PartKind.GENERIC.value)
-    if not isinstance(raw_kind, str):
-        _error("CMP047", "part kind must be an identifier", document.location)
-    try:
-        kind = PartKind(raw_kind)
-    except ValueError:
-        allowed = ", ".join(item.value for item in PartKind)
-        _error("CMP047", f"unknown part kind {raw_kind!r}; expected one of: {allowed}", document.location)
+    category = _string_value(
+        properties.get("category", "component.generic"), "part category", document.location
+    )
+    traits = frozenset(
+        _csv_names(properties.get("traits", ""), "part traits", document.location)
+    )
     manufacturer = properties.get("manufacturer")
     if manufacturer is not None and not isinstance(manufacturer, str):
         _error("CMP048", "part manufacturer must be a string", document.location)
@@ -876,12 +1030,12 @@ def _compile_part(
     resolved_device = resolve_device(device) if device else None
     device_definition = (devices or {}).get(resolved_device or "")
     for pin in pins.values():
-        if resolved_device and not pin.bonded_pads:
+        if resolved_device and not pin.bonds and pin.connection_policy is not ConnectionPolicy.DO_NOT_CONNECT:
             _error("CMP079", f"device-backed pin {pin.name!r} must declare bond", document.location)
-        if not resolved_device and not pin.capabilities:
-            _error("CMP080", f"standalone pin {pin.name!r} must declare capabilities", document.location)
+        if not resolved_device and pin.profile is None and pin.connection_policy is not ConnectionPolicy.DO_NOT_CONNECT:
+            _error("CMP080", f"standalone pin {pin.name!r} must declare an electrical profile", document.location)
         if device_definition is not None:
-            unknown = sorted(set(pin.bonded_pads) - set(device_definition.pads))
+            unknown = sorted({bond.pad for bond in pin.bonds} - set(device_definition.pads))
             if unknown:
                 _error("CMP081", f"pin {pin.name!r} bonds unknown device pad {unknown[0]!r}", document.location)
     if not pins:
@@ -892,7 +1046,8 @@ def _compile_part(
     return PartDefinition(
         name=qualified_name,
         pins=pins,
-        kind=kind,
+        category=category,
+        traits=traits,
         footprints=(footprint,) if footprint else (),
         manufacturer=manufacturer,
         device=resolved_device,
@@ -925,7 +1080,15 @@ def _configuration(
     signals: dict[str, PeripheralSignalSelection] = {}
     for signal, pin in raw_signals.items():
         package_pin = part.pins.get(pin) if part is not None else None
-        bonded_pads = package_pin.bonded_pads if package_pin is not None else ()
+        bonded_pads = (
+            tuple(
+                bond.pad
+                for bond in package_pin.bonds
+                if bond.when is None or bond.when.matches(component.modes if component else {})
+            )
+            if package_pin is not None
+            else ()
+        )
         options = (
             [
                 option
@@ -938,9 +1101,26 @@ def _configuration(
             else []
         )
         option = options[0] if len(options) == 1 else None
+        selected_pad = bonded_pads[0] if len(bonded_pads) == 1 else None
+        route = (
+            next(
+                (
+                    rule
+                    for rule in device.route_rules
+                    if rule.peripheral == declaration.peripheral
+                    and rule.signal == signal
+                    and selected_pad in device.pad_sets[rule.pad_set].pads
+                    and (rule.when is None or rule.when.matches(component.modes))
+                ),
+                None,
+            )
+            if device is not None and selected_pad is not None
+            else None
+        )
         signals[signal] = PeripheralSignalSelection(
             pin=pin,
-            selector=option.selector if option else None,
+            pad=selected_pad,
+            selector=option.selector if option else _derive_selector(route, selected_pad),
             resource=option.resource if option else None,
             setting=option.setting if option else None,
         )
@@ -964,16 +1144,109 @@ def _power_state(declaration: PowerStateDecl) -> PowerState:
     return PowerState(declaration.name, rails)
 
 
-def _capabilities(value: Scalar, location: SourceLocation) -> frozenset[PinCapability]:
-    names = _csv_names(value, "capabilities", location)
-    capabilities: set[PinCapability] = set()
-    for name in names:
-        try:
-            capabilities.add(PinCapability(name))
-        except ValueError:
-            allowed = ", ".join(item.value for item in PinCapability)
-            _error("CMP084", f"unknown pin capability {name!r}; expected: {allowed}", location)
-    return frozenset(capabilities)
+def _profile_for_pin_type(value: str, location: SourceLocation) -> ElectricalProfile:
+    profiles = {
+        PinType.PASSIVE.value: ElectricalProfile(
+            frozenset({SignalDomain.ANALOG}), frozenset({Direction.PASSIVE})
+        ),
+        PinType.INPUT.value: ElectricalProfile(
+            frozenset({SignalDomain.DIGITAL}), frozenset({Direction.INPUT})
+        ),
+        PinType.OUTPUT.value: ElectricalProfile(
+            frozenset({SignalDomain.DIGITAL}),
+            frozenset({Direction.OUTPUT}),
+            frozenset({DriveMode.PUSH_PULL}),
+        ),
+        PinType.BIDIRECTIONAL.value: ElectricalProfile(
+            frozenset({SignalDomain.DIGITAL}),
+            frozenset({Direction.BIDIRECTIONAL}),
+            frozenset({DriveMode.PUSH_PULL}),
+        ),
+        PinType.OPEN_DRAIN.value: ElectricalProfile(
+            frozenset({SignalDomain.DIGITAL}),
+            frozenset({Direction.BIDIRECTIONAL}),
+            frozenset({DriveMode.OPEN_DRAIN}),
+        ),
+        PinType.POWER_IN.value: ElectricalProfile(
+            frozenset({SignalDomain.POWER}), frozenset({Direction.INPUT})
+        ),
+        PinType.POWER_OUT.value: ElectricalProfile(
+            frozenset({SignalDomain.POWER}), frozenset({Direction.OUTPUT})
+        ),
+    }
+    try:
+        return profiles[value]
+    except KeyError:
+        _error("CMP060", f"unknown signal electrical profile {value!r}", location)
+
+
+def _electrical_profile(
+    attributes: Mapping[str, Scalar], location: SourceLocation
+) -> ElectricalProfile:
+    try:
+        domains = frozenset(
+            SignalDomain(name)
+            for name in _csv_names(
+                _required(dict(attributes), "domains", location), "signal domains", location
+            )
+        )
+        directions = frozenset(
+            Direction(name)
+            for name in _csv_names(
+                _required(dict(attributes), "directions", location), "directions", location
+            )
+        )
+        drive_modes = frozenset(
+            DriveMode(name)
+            for name in _csv_names(attributes.get("drive_modes", ""), "drive modes", location)
+        )
+    except ValueError as exc:
+        _error("CMP084", str(exc), location)
+    return ElectricalProfile(
+        domains,
+        directions,
+        drive_modes,
+        frozenset(_csv_names(attributes.get("traits", ""), "electrical traits", location)),
+        _voltage_range(attributes, location),
+    )
+
+
+def _voltage_range(
+    attributes: Mapping[str, Scalar], location: SourceLocation
+) -> QuantityRange[Voltage] | None:
+    minimum = _optional_voltage(attributes.get("voltage_min"), location)
+    maximum = _optional_voltage(attributes.get("voltage_max"), location)
+    return QuantityRange(minimum=minimum, maximum=maximum) if minimum or maximum else None
+
+
+def _key_values(value: Scalar, label: str, location: SourceLocation) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in _csv_names(value, label, location):
+        key, separator, selected = item.partition("=")
+        if not separator or not key or not selected:
+            _error("CMP101", f"{label} entries must use NAME=VALUE", location)
+        if key in result:
+            _error("CMP101", f"{label} contains duplicate key {key!r}", location)
+        result[key] = selected
+    return result
+
+
+def _condition(value: Scalar | None, location: SourceLocation) -> Condition | None:
+    return None if value is None else Condition(_key_values(value, "condition", location))
+
+
+def _derive_selector(rule: RouteRule | None, pad: str | None) -> str | None:
+    if rule is None or pad is None:
+        return None
+    if rule.selector.kind == "pad_name":
+        return pad
+    if rule.selector.kind == "nrf_psel":
+        # P0_13 -> 13, P1_02 -> 34; deterministic and sufficient for PSEL data.
+        if "_" in pad and pad[1:2].isdigit():
+            port, pin = pad[1:].split("_", 1)
+            if port.isdigit() and pin.isdigit():
+                return str(int(port) * 32 + int(pin))
+    return f"{rule.selector.kind}:{pad}"
 
 
 def _csv_names(value: Scalar, label: str, location: SourceLocation) -> tuple[str, ...]:
@@ -1052,24 +1325,25 @@ def _supply(declaration: SupplyDecl) -> Supply:
 
 
 def _interface(declaration: InterfaceDecl) -> Interface:
-    if declaration.kind != InterfaceKind.I2C.value:
-        _error("CMP010", f"unsupported interface kind {declaration.kind!r}", declaration.location)
-    _reject_unknown_attributes(
-        declaration.attributes, {"sda", "scl", "pullup"}, declaration.location
-    )
+    type_name = declaration.kind if "." in declaration.kind else f"std.{declaration.kind}"
+    known_attributes = {"pullup"}
     signals: dict[str, str] = {}
-    for signal in ("sda", "scl"):
-        value = _required(declaration.attributes, signal, declaration.location)
+    for name, value in declaration.attributes.items():
+        if name == "pullup":
+            continue
         if not isinstance(value, str):
-            _error("CMP011", f"I2C {signal} must be a net name", declaration.location)
-        signals[signal] = value
+            _error("CMP011", f"interface signal {name} must be a net name", declaration.location)
+        signals[name] = value
+        known_attributes.add(name)
+    if type_name == "std.i2c" and not {"sda", "scl"} <= set(signals):
+        _error("CMP011", "std.i2c requires sda and scl net mappings", declaration.location)
     pullup = declaration.attributes.get("pullup")
     if pullup is not None and not isinstance(pullup, str):
         _error("CMP012", "I2C pullup must be a supply name", declaration.location)
     bindings = {binding.component: binding.signals for binding in declaration.bindings}
     return Interface(
         name=declaration.name,
-        kind=InterfaceKind.I2C,
+        type_name=type_name,
         signals=signals,
         bindings=bindings,
         pullup_supply=pullup,

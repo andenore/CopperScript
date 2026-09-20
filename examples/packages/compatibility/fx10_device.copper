@@ -1,0 +1,10 @@
+device FX10_USB {
+    vendor = "Infineon";
+    mode_group PORT0 { choices = "LVCMOS,LVDS"; default = LVCMOS; }
+    pad VDD { domains = "power"; directions = "input"; }
+    pad GND { domains = "ground"; directions = "input"; }
+    pad P0D7 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; when = "PORT0=LVCMOS"; }
+    pad P0D7P { domains = "digital"; directions = "input"; traits = "differential_positive"; when = "PORT0=LVDS"; }
+    pad P0D7N { domains = "digital"; directions = "input"; traits = "differential_negative"; when = "PORT0=LVDS"; }
+    group P0D7_LVDS: differential_pair { positive = P0D7P; negative = P0D7N; when = "PORT0=LVDS"; }
+}

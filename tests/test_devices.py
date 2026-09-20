@@ -14,7 +14,7 @@ def test_explicit_mcu_mux_selection_is_typed_and_serialized() -> None:
     part = board.library["stm32.STM32G0B1CBT6"]
     assert part.device == "stm32.STM32G0B1"
     device = board.devices[part.device]
-    assert part.pins["PB6"].bonded_pads == ("PB6",)
+    assert tuple(bond.pad for bond in part.pins["PB6"].bonds) == ("PB6",)
     assert device.pads["PB6"].power_domain == "VDDIO1"
     assert device.source is not None
     assert device.source.revision == "illustrative-v0.1"

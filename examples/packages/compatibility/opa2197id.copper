@@ -1,0 +1,14 @@
+part OPA2197ID {
+    category = "amplifier.opamp";
+    manufacturer = "Texas Instruments";
+    footprint = "SOIC-8";
+    device = OPA2197_DIE;
+    pin OUTA { number = "1"; bond = A_OUT; }
+    pin INA_N { number = "2"; bond = A_INN; }
+    pin INA_P { number = "3"; bond = A_INP; }
+    pin VN { number = "4"; bond = VN; }
+    pin INB_P { number = "5"; bond = B_INP; }
+    pin INB_N { number = "6"; bond = B_INN; }
+    pin OUTB { number = "7"; bond = B_OUT; }
+    pin VP { number = "8"; bond = VP; }
+}

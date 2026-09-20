@@ -26,16 +26,17 @@ files are reviewable build artifacts and must not be edited by hand.
 ```text
 device-data/stm32g0b1/
   device.json                 device metadata, provenance, domains, resources
-  pads.csv                    silicon pads and electrical capabilities
+  pads.csv                    silicon pads and orthogonal electrical profiles
   peripherals.csv             peripheral signals and required directions
-  mux.csv                     pad-to-peripheral mux choices
+  mux.csv                     irregular pad-to-peripheral mux choices
   parts/
     stm32g0b1cbt6/
       part.json               orderable package metadata
-      pins.csv                physical pins and device-pad bonds
+      pins.csv                physical pins, policies, and device-pad bonds
 ```
 
-Capabilities and bonds use `|` inside CSV cells. Optional source provenance is
+Profile fields and bonds use `|` inside CSV cells. Part manifests use an open
+`category` string rather than a closed kind enum. Optional source provenance is
 stored in `device.json` or `part.json`; it remains optional to the language and
 generator.
 

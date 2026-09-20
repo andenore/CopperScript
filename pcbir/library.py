@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from .model import PartDefinition, PartKind, PinCapability, PinDefinition, PinType
+from .model import (
+    Direction,
+    DriveMode,
+    ElectricalProfile,
+    PackagePinDefinition,
+    PartDefinition,
+    PinType,
+    QuantityRange,
+    SignalDomain,
+)
 from .quantities import volts
 
 
@@ -12,42 +21,47 @@ def _pin(
     pin_type: PinType,
     voltage_min: float | None = None,
     voltage_max: float | None = None,
-) -> PinDefinition:
-    capability_map = {
-        PinType.PASSIVE: {PinCapability.PASSIVE},
-        PinType.INPUT: {PinCapability.DIGITAL_INPUT},
-        PinType.OUTPUT: {PinCapability.PUSH_PULL_OUTPUT},
-        PinType.BIDIRECTIONAL: {
-            PinCapability.DIGITAL_INPUT,
-            PinCapability.PUSH_PULL_OUTPUT,
-            PinCapability.OPEN_DRAIN_OUTPUT,
-        },
-        PinType.OPEN_DRAIN: {
-            PinCapability.DIGITAL_INPUT,
-            PinCapability.OPEN_DRAIN_OUTPUT,
-        },
-        PinType.POWER_IN: {PinCapability.POWER_INPUT},
-        PinType.POWER_OUT: {PinCapability.POWER_OUTPUT},
+) -> PackagePinDefinition:
+    domain = (
+        SignalDomain.GROUND
+        if name in {"GND", "VSS"}
+        else SignalDomain.POWER
+        if pin_type in {PinType.POWER_IN, PinType.POWER_OUT}
+        else SignalDomain.DIGITAL
+        if pin_type is not PinType.PASSIVE
+        else SignalDomain.ANALOG
+    )
+    direction_map = {
+        PinType.PASSIVE: {Direction.PASSIVE},
+        PinType.INPUT: {Direction.INPUT},
+        PinType.OUTPUT: {Direction.OUTPUT},
+        PinType.BIDIRECTIONAL: {Direction.BIDIRECTIONAL},
+        PinType.OPEN_DRAIN: {Direction.BIDIRECTIONAL},
+        PinType.POWER_IN: {Direction.INPUT},
+        PinType.POWER_OUT: {Direction.OUTPUT},
     }
-    return PinDefinition(
+    drive_map = {
+        PinType.OUTPUT: {DriveMode.PUSH_PULL},
+        PinType.BIDIRECTIONAL: {DriveMode.PUSH_PULL, DriveMode.OPEN_DRAIN},
+        PinType.OPEN_DRAIN: {DriveMode.OPEN_DRAIN},
+    }
+    limits = (
+        QuantityRange(
+            minimum=volts(voltage_min) if voltage_min is not None else None,
+            maximum=volts(voltage_max) if voltage_max is not None else None,
+        )
+        if voltage_min is not None or voltage_max is not None
+        else None
+    )
+    return PackagePinDefinition(
         name=name,
         number=number,
-        capabilities=frozenset(capability_map[pin_type]),
-        role=(
-            "ground"
-            if name in {"GND", "VSS"}
-            else "power"
-            if pin_type in {PinType.POWER_IN, PinType.POWER_OUT}
-            else "output"
-            if pin_type is PinType.OUTPUT
-            else "input"
-            if pin_type is PinType.INPUT
-            else "gpio"
-            if pin_type in {PinType.BIDIRECTIONAL, PinType.OPEN_DRAIN}
-            else "passive"
+        profile=ElectricalProfile(
+            domains=frozenset({domain}),
+            directions=frozenset(direction_map[pin_type]),
+            drive_modes=frozenset(drive_map.get(pin_type, set())),
+            voltage=limits,
         ),
-        voltage_min=volts(voltage_min) if voltage_min is not None else None,
-        voltage_max=volts(voltage_max) if voltage_max is not None else None,
     )
 
 
@@ -57,7 +71,7 @@ def tiny_library() -> dict[str, PartDefinition]:
     parts = (
         PartDefinition(
             name="RESISTOR",
-            kind=PartKind.RESISTOR,
+            category="passive.resistor",
             pins={
                 "1": _pin("1", "1", PinType.PASSIVE),
                 "2": _pin("2", "2", PinType.PASSIVE),
@@ -66,7 +80,7 @@ def tiny_library() -> dict[str, PartDefinition]:
         ),
         PartDefinition(
             name="CAPACITOR",
-            kind=PartKind.CAPACITOR,
+            category="passive.capacitor",
             pins={
                 "1": _pin("1", "1", PinType.PASSIVE),
                 "2": _pin("2", "2", PinType.PASSIVE),
@@ -75,7 +89,7 @@ def tiny_library() -> dict[str, PartDefinition]:
         ),
         PartDefinition(
             name="INDUCTOR",
-            kind=PartKind.GENERIC,
+            category="passive.inductor",
             pins={
                 "1": _pin("1", "1", PinType.PASSIVE),
                 "2": _pin("2", "2", PinType.PASSIVE),
@@ -84,7 +98,7 @@ def tiny_library() -> dict[str, PartDefinition]:
         ),
         PartDefinition(
             name="SCHOTTKY_DIODE",
-            kind=PartKind.GENERIC,
+            category="semiconductor.diode",
             pins={
                 "A": _pin("A", "1", PinType.PASSIVE),
                 "K": _pin("K", "2", PinType.PASSIVE),
@@ -93,7 +107,7 @@ def tiny_library() -> dict[str, PartDefinition]:
         ),
         PartDefinition(
             name="VOLTAGE_SOURCE",
-            kind=PartKind.POWER_SOURCE,
+            category="power.source",
             pins={
                 "OUT": _pin("OUT", "1", PinType.POWER_OUT),
                 "GND": _pin("GND", "2", PinType.PASSIVE),
@@ -101,7 +115,7 @@ def tiny_library() -> dict[str, PartDefinition]:
         ),
         PartDefinition(
             name="REGULATOR_3V3",
-            kind=PartKind.REGULATOR,
+            category="power.regulator",
             pins={
                 "IN": _pin("IN", "1", PinType.POWER_IN, 3.6, 12.0),
                 "GND": _pin("GND", "2", PinType.POWER_IN),
@@ -111,7 +125,7 @@ def tiny_library() -> dict[str, PartDefinition]:
         ),
         PartDefinition(
             name="BUCK_REGULATOR",
-            kind=PartKind.REGULATOR,
+            category="power.regulator.buck",
             pins={
                 "VIN": _pin("VIN", "1", PinType.POWER_IN, 4.5, 18.0),
                 "GND": _pin("GND", "2", PinType.POWER_IN),
@@ -123,7 +137,7 @@ def tiny_library() -> dict[str, PartDefinition]:
         ),
         PartDefinition(
             name="STM32_LIKE",
-            kind=PartKind.MCU,
+            category="semiconductor.mcu",
             manufacturer="Example Semiconductor",
             pins={
                 "VDD": _pin("VDD", "1", PinType.POWER_IN, 1.8, 3.6),
@@ -137,7 +151,7 @@ def tiny_library() -> dict[str, PartDefinition]:
         ),
         PartDefinition(
             name="BME280_LIKE",
-            kind=PartKind.SENSOR,
+            category="sensor.environmental",
             manufacturer="Example Sensors",
             pins={
                 "VDD": _pin("VDD", "1", PinType.POWER_IN, 1.71, 3.6),

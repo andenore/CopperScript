@@ -16,7 +16,7 @@ from pathlib import Path
 import re
 from typing import Mapping, Sequence
 
-from .model import PartKind, PinCapability, PinType, UnpoweredBehavior
+from .model import Direction, DriveMode, PinType, SignalDomain, UnpoweredBehavior
 
 
 BUNDLE_SCHEMA = "copperscript-device-bundle/v0.1"
@@ -25,8 +25,10 @@ UNKNOWN = "?"
 
 PAD_FIELDS = (
     "name",
-    "capabilities",
-    "role",
+    "domains",
+    "directions",
+    "drive_modes",
+    "traits",
     "power_domain",
     "unpowered",
     "voltage_min",
@@ -38,8 +40,12 @@ PIN_FIELDS = (
     "name",
     "number",
     "bond",
-    "capabilities",
-    "role",
+    "domains",
+    "directions",
+    "drive_modes",
+    "traits",
+    "connection",
+    "required_net_traits",
     "voltage_min",
     "voltage_max",
 )
@@ -134,17 +140,18 @@ def validate_bundle(bundle: DeviceBundle) -> tuple[str, ...]:
             domain_names.add(name)
             domain_supply_pads[name] = tuple(pads)
 
-    capability_values = {item.value for item in PinCapability}
+    domain_values = {item.value for item in SignalDomain}
+    direction_values = {item.value for item in Direction}
+    drive_values = {item.value for item in DriveMode}
     unpowered_values = {item.value for item in UnpoweredBehavior}
     pad_names: set[str] = set()
     for index, row in enumerate(bundle.pads, 2):
         label = f"pads.csv:{index}"
         _reject_unknown_marker(row, label, errors)
         name = _required_cell(row, "name", label, errors)
-        capabilities = _pipe_values(
-            _required_cell(row, "capabilities", label, errors)
-        )
-        _validate_choices(capabilities, capability_values, f"{label}: capabilities", errors)
+        _validate_choices(_pipe_values(_required_cell(row, "domains", label, errors)), domain_values, f"{label}: domains", errors)
+        _validate_choices(_pipe_values(_required_cell(row, "directions", label, errors)), direction_values, f"{label}: directions", errors)
+        _validate_choices(_pipe_values(row.get("drive_modes", "")), drive_values, f"{label}: drive_modes", errors)
         if name in pad_names:
             errors.append(f"{label}: duplicate pad {name!r}")
         pad_names.add(name)
@@ -161,6 +168,21 @@ def validate_bundle(bundle: DeviceBundle) -> tuple[str, ...]:
         for pad in supplies:
             if pad not in pad_names:
                 errors.append(f"power domain {domain!r} references unknown pad {pad!r}")
+
+    mode_names: set[str] = set()
+    for index, mode in enumerate(device.get("mode_groups", [])):
+        label = f"device.mode_groups[{index}]"
+        if not isinstance(mode, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        name = _required_json_string(mode, "name", label, errors)
+        choices = _string_list(mode.get("choices", []), f"{label}.choices", errors)
+        default = mode.get("default")
+        if default is not None and default not in choices:
+            errors.append(f"{label}.default must be one of its choices")
+        if name in mode_names:
+            errors.append(f"duplicate mode group {name!r}")
+        mode_names.add(name)
 
     signal_types = {item.value for item in PinType}
     peripheral_signals: set[tuple[str, str]] = set()
@@ -183,6 +205,50 @@ def validate_bundle(bundle: DeviceBundle) -> tuple[str, ...]:
         previous_kind = peripheral_kinds.setdefault(peripheral, kind)
         if previous_kind != kind:
             errors.append(f"{label}: peripheral {peripheral!r} has inconsistent kinds")
+
+    pad_set_names: set[str] = set()
+    for index, pad_set in enumerate(device.get("pad_sets", [])):
+        label = f"device.pad_sets[{index}]"
+        if not isinstance(pad_set, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        name = _required_json_string(pad_set, "name", label, errors)
+        members = _string_list(pad_set.get("pads", []), f"{label}.pads", errors)
+        for pad in members:
+            if pad not in pad_names:
+                errors.append(f"{label}: unknown pad {pad!r}")
+        if name in pad_set_names:
+            errors.append(f"duplicate pad set {name!r}")
+        pad_set_names.add(name)
+
+    for collection, terminal_key in (("units", "terminals"), ("signal_groups", "members")):
+        for index, entry in enumerate(device.get(collection, [])):
+            label = f"device.{collection}[{index}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{label} must be an object")
+                continue
+            _required_json_string(entry, "name", label, errors)
+            _required_json_string(entry, "kind", label, errors)
+            values = entry.get(terminal_key, {})
+            _validate_string_map(values, f"{label}.{terminal_key}", errors)
+            if isinstance(values, dict):
+                for pad in values.values():
+                    if pad not in pad_names:
+                        errors.append(f"{label}: unknown pad {pad!r}")
+
+    for index, route in enumerate(device.get("route_rules", [])):
+        label = f"device.route_rules[{index}]"
+        if not isinstance(route, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        peripheral = _required_json_string(route, "peripheral", label, errors)
+        signal = _required_json_string(route, "signal", label, errors)
+        pad_set = _required_json_string(route, "pad_set", label, errors)
+        _required_json_string(route, "selector", label, errors)
+        if (peripheral, signal) not in peripheral_signals:
+            errors.append(f"{label}: unknown peripheral signal {peripheral}.{signal}")
+        if pad_set not in pad_set_names:
+            errors.append(f"{label}: unknown pad set {pad_set!r}")
 
     mux_keys: set[tuple[str, str, str]] = set()
     for index, row in enumerate(bundle.mux, 2):
@@ -210,7 +276,16 @@ def validate_bundle(bundle: DeviceBundle) -> tuple[str, ...]:
     part_names: list[str] = []
     output_names = [device.get("output")]
     for part in bundle.parts:
-        errors.extend(_validate_part(part, device_name, pad_names, capability_values))
+        errors.extend(
+            _validate_part(
+                part,
+                device_name,
+                pad_names,
+                domain_values,
+                direction_values,
+                drive_values,
+            )
+        )
         name = part.manifest.get("name")
         if isinstance(name, str):
             part_names.append(name)
@@ -296,7 +371,9 @@ def build_work_packet(
     if section == "pads":
         fields, rows = PAD_FIELDS, bundle.pads
         allowed = {
-            "capabilities": [item.value for item in PinCapability],
+            "domains": [item.value for item in SignalDomain],
+            "directions": [item.value for item in Direction],
+            "drive_modes": [item.value for item in DriveMode],
             "unpowered": [item.value for item in UnpoweredBehavior],
         }
     elif section == "peripherals":
@@ -314,7 +391,11 @@ def build_work_packet(
         if selected is None:
             raise DeviceGenerationError(f"unknown part {part_name!r}")
         fields, rows = PIN_FIELDS, selected.pins
-        allowed = {"capabilities": [item.value for item in PinCapability]}
+        allowed = {
+            "domains": [item.value for item in SignalDomain],
+            "directions": [item.value for item in Direction],
+            "drive_modes": [item.value for item in DriveMode],
+        }
     else:
         raise DeviceGenerationError(f"unknown packet section {section!r}")
 
@@ -349,15 +430,15 @@ def _validate_part(
     part: PartBundle,
     device_name: str,
     pad_names: set[str],
-    capability_values: set[str],
+    domain_values: set[str],
+    direction_values: set[str],
+    drive_values: set[str],
 ) -> tuple[str, ...]:
     errors: list[str] = []
     manifest = part.manifest
     label = f"{part.directory.name}/part.json"
     _required_json_string(manifest, "name", label, errors)
-    kind = _required_json_string(manifest, "kind", label, errors)
-    if kind and kind not in {item.value for item in PartKind}:
-        errors.append(f"{label}: unknown part kind {kind!r}")
+    _required_json_string(manifest, "category", label, errors)
     declared_device = _required_json_string(manifest, "device", label, errors)
     if declared_device and declared_device != device_name:
         errors.append(
@@ -383,10 +464,9 @@ def _validate_part(
         for bond in bonds:
             if bond not in pad_names:
                 errors.append(f"{row_label}: bond references unknown pad {bond!r}")
-        capabilities = _pipe_values(row.get("capabilities", ""))
-        _validate_choices(
-            capabilities, capability_values, f"{row_label}: capabilities", errors
-        )
+        _validate_choices(_pipe_values(row.get("domains", "")), domain_values, f"{row_label}: domains", errors)
+        _validate_choices(_pipe_values(row.get("directions", "")), direction_values, f"{row_label}: directions", errors)
+        _validate_choices(_pipe_values(row.get("drive_modes", "")), drive_values, f"{row_label}: drive_modes", errors)
         _validate_voltage(row.get("voltage_min", ""), f"{row_label}: voltage_min", errors)
         _validate_voltage(row.get("voltage_max", ""), f"{row_label}: voltage_max", errors)
     if not part.pins:
@@ -413,14 +493,34 @@ def _render_device(bundle: DeviceBundle) -> str:
                 "",
             ]
         )
+    for mode in device.get("mode_groups", []):
+        lines.append(f"    mode_group {mode['name']} {{")
+        lines.append(f"        choices = {_quote(','.join(mode['choices']))};")
+        _append_if(lines, "default", str(mode.get("default", "")), 8)
+        lines.extend(["    }", ""])
     for row in bundle.pads:
         lines.append(f"    pad {row['name']} {{")
-        _append_if(lines, "capabilities", row.get("capabilities", "").replace("|", ","), 8, quoted=True)
-        _append_if(lines, "role", row.get("role", ""), 8)
+        _append_if(lines, "domains", row.get("domains", "").replace("|", ","), 8, quoted=True)
+        _append_if(lines, "directions", row.get("directions", "").replace("|", ","), 8, quoted=True)
+        _append_if(lines, "drive_modes", row.get("drive_modes", "").replace("|", ","), 8, quoted=True)
+        _append_if(lines, "traits", row.get("traits", "").replace("|", ","), 8, quoted=True)
         _append_if(lines, "power_domain", row.get("power_domain", ""), 8)
         _append_if(lines, "unpowered", row.get("unpowered", ""), 8)
         _append_if(lines, "voltage_min", row.get("voltage_min", ""), 8)
         _append_if(lines, "voltage_max", row.get("voltage_max", ""), 8)
+        lines.extend(["    }", ""])
+    for unit in device.get("units", []):
+        lines.append(f"    unit {unit['name']}: {unit['kind']} {{")
+        if unit.get("shared"):
+            lines.append("        shared = true;")
+        for terminal, pad in unit.get("terminals", {}).items():
+            lines.append(f"        {terminal} = {pad};")
+        lines.extend(["    }", ""])
+    for group in device.get("signal_groups", []):
+        lines.append(f"    group {group['name']}: {group['kind']} {{")
+        for member, pad in group.get("members", {}).items():
+            lines.append(f"        {member} = {pad};")
+        _append_if(lines, "when", str(group.get("when", "")), 8, quoted=True)
         lines.extend(["    }", ""])
     peripheral_order: list[str] = []
     grouped: dict[str, list[Mapping[str, str]]] = {}
@@ -441,6 +541,26 @@ def _render_device(bundle: DeviceBundle) -> str:
         lines.append(f"    resource {resource};")
     if device.get("resources"):
         lines.append("")
+    for pad_set in device.get("pad_sets", []):
+        lines.extend(
+            [
+                f"    pad_set {pad_set['name']} {{",
+                f"        pads = {_quote(','.join(pad_set['pads']))};",
+                "    }",
+                "",
+            ]
+        )
+    for route in device.get("route_rules", []):
+        lines.append(f"    route {route['peripheral']}.{route['signal']} {{")
+        lines.append(f"        pad_set = {route['pad_set']};")
+        lines.append(f"        selector = {route['selector']};")
+        if route.get("parameters"):
+            parameters = ",".join(
+                f"{name}={value}" for name, value in route["parameters"].items()
+            )
+            lines.append(f"        parameters = {_quote(parameters)};")
+        _append_if(lines, "when", str(route.get("when", "")), 8, quoted=True)
+        lines.extend(["    }", ""])
     for row in bundle.mux:
         prefix = f"    mux {row['pad']}: {row['peripheral']}.{row['signal']}"
         if row.get("resource"):
@@ -465,7 +585,7 @@ def _render_part(bundle: DeviceBundle, part: PartBundle) -> str:
     lines.extend(
         [
             f"part {manifest['name']} {{",
-            f"    kind = {manifest['kind']};",
+            f"    category = {_quote(str(manifest['category']))};",
         ]
     )
     if manifest.get("manufacturer"):
@@ -482,8 +602,12 @@ def _render_part(bundle: DeviceBundle, part: PartBundle) -> str:
         lines.append(f"    pin {row['name']} {{")
         lines.append(f"        number = {_quote(row['number'])};")
         _append_if(lines, "bond", row.get("bond", "").replace("|", ","), 8)
-        _append_if(lines, "capabilities", row.get("capabilities", "").replace("|", ","), 8, quoted=True)
-        _append_if(lines, "role", row.get("role", ""), 8)
+        _append_if(lines, "domains", row.get("domains", "").replace("|", ","), 8, quoted=True)
+        _append_if(lines, "directions", row.get("directions", "").replace("|", ","), 8, quoted=True)
+        _append_if(lines, "drive_modes", row.get("drive_modes", "").replace("|", ","), 8, quoted=True)
+        _append_if(lines, "traits", row.get("traits", "").replace("|", ","), 8, quoted=True)
+        _append_if(lines, "connection", row.get("connection", ""), 8)
+        _append_if(lines, "required_net_traits", row.get("required_net_traits", "").replace("|", ","), 8, quoted=True)
         _append_if(lines, "voltage_min", row.get("voltage_min", ""), 8)
         _append_if(lines, "voltage_max", row.get("voltage_max", ""), 8)
         lines.extend(["    }", ""])

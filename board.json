@@ -2,27 +2,39 @@
   "components": [
     {
       "footprint": null,
+      "modes": {},
       "part": "VOLTAGE_SOURCE",
       "properties": {},
       "ref": "PS1",
       "value": null
     },
     {
-      "footprint": "LQFP-48",
-      "part": "stm32.STM32G0B1CBT6",
+      "footprint": "SOT-23-3",
+      "modes": {},
+      "part": "REGULATOR_3V3",
       "properties": {},
       "ref": "U1",
       "value": null
     },
     {
-      "footprint": "LGA-8",
-      "part": "sensors.BME280",
+      "footprint": "LQFP-48",
+      "modes": {},
+      "part": "stm32.STM32G0B1CBT6",
       "properties": {},
       "ref": "U2",
       "value": null
     },
     {
+      "footprint": "LGA-8",
+      "modes": {},
+      "part": "sensors.BME280",
+      "properties": {},
+      "ref": "U3",
+      "value": null
+    },
+    {
       "footprint": "0402",
+      "modes": {},
       "part": "RESISTOR",
       "properties": {},
       "ref": "R1",
@@ -34,6 +46,7 @@
     },
     {
       "footprint": "0402",
+      "modes": {},
       "part": "RESISTOR",
       "properties": {},
       "ref": "R2",
@@ -45,6 +58,7 @@
     },
     {
       "footprint": "0402",
+      "modes": {},
       "part": "CAPACITOR",
       "properties": {},
       "ref": "C1",
@@ -67,25 +81,19 @@
       },
       "targets": [
         "C1",
-        "U1.VDD"
+        "U2.VDD"
       ]
     }
   ],
   "dependencies": [
     {
-      "checksum": "sha256:42b4e79134ab2578803f0f6767457c3988133b05de360903ec4246a3794e9287",
-      "import_path": "github.com/copperscript/examples/power",
-      "module_path": "github.com/copperscript/examples",
-      "version": "v0.1.0"
-    },
-    {
-      "checksum": "sha256:42b4e79134ab2578803f0f6767457c3988133b05de360903ec4246a3794e9287",
+      "checksum": "sha256:6f51c6cf5529ab55b92a1fb776f86e596044d6879a00bd8e34eead2a1dcfc561",
       "import_path": "github.com/copperscript/examples/sensors",
       "module_path": "github.com/copperscript/examples",
       "version": "v0.1.0"
     },
     {
-      "checksum": "sha256:42b4e79134ab2578803f0f6767457c3988133b05de360903ec4246a3794e9287",
+      "checksum": "sha256:6f51c6cf5529ab55b92a1fb776f86e596044d6879a00bd8e34eead2a1dcfc561",
       "import_path": "github.com/copperscript/examples/stm32",
       "module_path": "github.com/copperscript/examples",
       "version": "v0.1.0"
@@ -97,6 +105,7 @@
         "family": "STM32G0",
         "vendor": "STMicroelectronics"
       },
+      "mode_groups": [],
       "mux_options": [
         {
           "pad": "PB7",
@@ -104,7 +113,8 @@
           "resource": null,
           "selector": "AF6",
           "setting": null,
-          "signal": "SDA"
+          "signal": "SDA",
+          "when": null
         },
         {
           "pad": "PB6",
@@ -112,7 +122,8 @@
           "resource": null,
           "selector": "AF6",
           "setting": null,
-          "signal": "SCL"
+          "signal": "SCL",
+          "when": null
         },
         {
           "pad": "PA2",
@@ -120,7 +131,8 @@
           "resource": "USART2_REMAP",
           "selector": "AF1",
           "setting": "default",
-          "signal": "TX"
+          "signal": "TX",
+          "when": null
         },
         {
           "pad": "PA3",
@@ -128,7 +140,8 @@
           "resource": "USART2_REMAP",
           "selector": "AF1",
           "setting": "default",
-          "signal": "RX"
+          "signal": "RX",
+          "when": null
         },
         {
           "pad": "PB6",
@@ -136,7 +149,8 @@
           "resource": "USART2_REMAP",
           "selector": "AF0",
           "setting": "remapped",
-          "signal": "TX"
+          "signal": "TX",
+          "when": null
         },
         {
           "pad": "PB7",
@@ -144,100 +158,180 @@
           "resource": "USART2_REMAP",
           "selector": "AF0",
           "setting": "remapped",
-          "signal": "RX"
+          "signal": "RX",
+          "when": null
         }
       ],
       "name": "stm32.STM32G0B1",
+      "pad_sets": [],
       "pads": [
         {
-          "capabilities": [
-            "power_input"
-          ],
           "name": "VDD",
           "power_domain": null,
-          "role": "digital_supply",
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
           "unpowered_behavior": "unknown",
-          "voltage_max": null,
-          "voltage_min": null
+          "when": null
         },
         {
-          "capabilities": [
-            "power_input"
-          ],
           "name": "VSS",
           "power_domain": null,
-          "role": "ground",
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "ground"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
           "unpowered_behavior": "unknown",
-          "voltage_max": null,
-          "voltage_min": null
+          "when": null
         },
         {
-          "capabilities": [
-            "digital_input",
-            "open_drain_output",
-            "push_pull_output"
-          ],
           "name": "PA2",
           "power_domain": "VDDIO1",
-          "role": "io",
-          "unpowered_behavior": "clamped",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain",
+              "push_pull"
+            ],
+            "traits": [
+              "gpio"
+            ],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": null,
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": null
+          "unpowered_behavior": "clamped",
+          "when": null
         },
         {
-          "capabilities": [
-            "digital_input",
-            "open_drain_output",
-            "push_pull_output"
-          ],
           "name": "PA3",
           "power_domain": "VDDIO1",
-          "role": "io",
-          "unpowered_behavior": "clamped",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain",
+              "push_pull"
+            ],
+            "traits": [
+              "gpio"
+            ],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": null,
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": null
+          "unpowered_behavior": "clamped",
+          "when": null
         },
         {
-          "capabilities": [
-            "digital_input",
-            "open_drain_output",
-            "push_pull_output"
-          ],
           "name": "PB6",
           "power_domain": "VDDIO1",
-          "role": "io",
-          "unpowered_behavior": "clamped",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain",
+              "push_pull"
+            ],
+            "traits": [
+              "gpio"
+            ],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": null,
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": null
+          "unpowered_behavior": "clamped",
+          "when": null
         },
         {
-          "capabilities": [
-            "digital_input",
-            "open_drain_output",
-            "push_pull_output"
-          ],
           "name": "PB7",
           "power_domain": "VDDIO1",
-          "role": "io",
-          "unpowered_behavior": "clamped",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain",
+              "push_pull"
+            ],
+            "traits": [
+              "gpio"
+            ],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": null,
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": null
+          "unpowered_behavior": "clamped",
+          "when": null
         }
       ],
       "peripherals": [
@@ -247,13 +341,39 @@
           "signals": [
             {
               "name": "SDA",
-              "required": true,
-              "type": "open_drain"
+              "profile": {
+                "current": null,
+                "directions": [
+                  "bidirectional"
+                ],
+                "domains": [
+                  "digital"
+                ],
+                "drive_modes": [
+                  "open_drain"
+                ],
+                "traits": [],
+                "voltage": null
+              },
+              "required": true
             },
             {
               "name": "SCL",
-              "required": true,
-              "type": "open_drain"
+              "profile": {
+                "current": null,
+                "directions": [
+                  "bidirectional"
+                ],
+                "domains": [
+                  "digital"
+                ],
+                "drive_modes": [
+                  "open_drain"
+                ],
+                "traits": [],
+                "voltage": null
+              },
+              "required": true
             }
           ]
         },
@@ -263,18 +383,55 @@
           "signals": [
             {
               "name": "TX",
-              "required": true,
-              "type": "output"
+              "profile": {
+                "current": null,
+                "directions": [
+                  "output"
+                ],
+                "domains": [
+                  "digital"
+                ],
+                "drive_modes": [
+                  "push_pull"
+                ],
+                "traits": [],
+                "voltage": null
+              },
+              "required": true
             },
             {
               "name": "RX",
-              "required": true,
-              "type": "input"
+              "profile": {
+                "current": null,
+                "directions": [
+                  "input"
+                ],
+                "domains": [
+                  "digital"
+                ],
+                "drive_modes": [],
+                "traits": [],
+                "voltage": null
+              },
+              "required": true
             },
             {
               "name": "CK",
-              "required": false,
-              "type": "output"
+              "profile": {
+                "current": null,
+                "directions": [
+                  "output"
+                ],
+                "domains": [
+                  "digital"
+                ],
+                "drive_modes": [
+                  "push_pull"
+                ],
+                "traits": [],
+                "voltage": null
+              },
+              "required": false
             }
           ]
         }
@@ -282,811 +439,76 @@
       "power_domains": [
         {
           "name": "VDDIO1",
+          "requires": [],
           "supply_pads": [
             "VDD"
-          ]
+          ],
+          "voltage": null
         }
       ],
       "resources": [
         "USART2_REMAP"
       ],
+      "route_rules": [],
+      "signal_groups": [],
       "source": {
         "checksum": null,
         "document": null,
         "location": null,
         "revision": "illustrative-v0.1",
         "url": null
-      }
+      },
+      "units": []
     }
   ],
   "interfaces": [
     {
       "bindings": {
-        "U1": {
+        "U2": {
           "scl": "PB6",
           "sda": "PB7"
         },
-        "U2": {
+        "U3": {
           "scl": "SCL",
           "sda": "SDA"
         }
       },
-      "kind": "i2c",
       "name": "SENSOR_I2C",
       "pullup_supply": "V3V3",
       "signals": {
         "scl": "I2C_SCL",
         "sda": "I2C_SDA"
-      }
+      },
+      "type": "std.i2c"
     }
   ],
   "kind": "board",
-  "module_definitions": [
-    {
-      "components": [
-        {
-          "footprint": "SOT-23-5",
-          "part": "BUCK_REGULATOR",
-          "properties": {},
-          "ref": "U1",
-          "value": "5 V to 3.3 V buck"
-        },
-        {
-          "footprint": "L_4x4mm",
-          "part": "INDUCTOR",
-          "properties": {},
-          "ref": "L1",
-          "value": {
-            "base_value": "0.00001",
-            "unit": "uH",
-            "value": "1E+1"
-          }
-        },
-        {
-          "footprint": "SOD-123",
-          "part": "SCHOTTKY_DIODE",
-          "properties": {},
-          "ref": "D1",
-          "value": "40 V Schottky"
-        },
-        {
-          "footprint": "0603",
-          "part": "CAPACITOR",
-          "properties": {},
-          "ref": "C_IN",
-          "value": {
-            "base_value": "0.00001",
-            "unit": "uF",
-            "value": "1E+1"
-          }
-        },
-        {
-          "footprint": "0603",
-          "part": "CAPACITOR",
-          "properties": {},
-          "ref": "C_OUT",
-          "value": {
-            "base_value": "0.000022",
-            "unit": "uF",
-            "value": "22"
-          }
-        },
-        {
-          "footprint": "0402",
-          "part": "RESISTOR",
-          "properties": {},
-          "ref": "R_TOP",
-          "value": {
-            "base_value": "1E+5",
-            "unit": "kohm",
-            "value": "1E+2"
-          }
-        },
-        {
-          "footprint": "0402",
-          "part": "RESISTOR",
-          "properties": {},
-          "ref": "R_BOTTOM",
-          "value": {
-            "base_value": "3.16E+4",
-            "unit": "kohm",
-            "value": "31.6"
-          }
-        }
-      ],
-      "constraints": [
-        {
-          "kind": "max_distance",
-          "parameters": {
-            "distance": {
-              "base_value": "0.003",
-              "unit": "mm",
-              "value": "3"
-            }
-          },
-          "targets": [
-            "C_IN",
-            "U1.VIN"
-          ]
-        },
-        {
-          "kind": "max_distance",
-          "parameters": {
-            "distance": {
-              "base_value": "0.004",
-              "unit": "mm",
-              "value": "4"
-            }
-          },
-          "targets": [
-            "C_OUT",
-            "L1.2"
-          ]
-        }
-      ],
-      "devices": [],
-      "interfaces": [],
-      "kind": "module",
-      "module_instances": [],
-      "name": "power.Buck5VTo3V3",
-      "nets": [
-        {
-          "endpoints": [
-            "port.VIN",
-            "U1.VIN",
-            "U1.EN",
-            "C_IN.1"
-          ],
-          "name": "VIN"
-        },
-        {
-          "endpoints": [
-            "port.GND",
-            "U1.GND",
-            "C_IN.2",
-            "C_OUT.2",
-            "D1.A",
-            "R_BOTTOM.2"
-          ],
-          "name": "GND"
-        },
-        {
-          "endpoints": [
-            "U1.SW",
-            "L1.1",
-            "D1.K"
-          ],
-          "name": "SWITCH"
-        },
-        {
-          "endpoints": [
-            "port.VOUT",
-            "L1.2",
-            "C_OUT.1",
-            "R_TOP.1"
-          ],
-          "name": "VOUT"
-        },
-        {
-          "endpoints": [
-            "U1.FB",
-            "R_TOP.2",
-            "R_BOTTOM.1"
-          ],
-          "name": "FEEDBACK"
-        }
-      ],
-      "parts": [
-        {
-          "device": null,
-          "footprints": [
-            "LGA-8"
-          ],
-          "kind": "sensor",
-          "manufacturer": "Example Sensors",
-          "metadata": {},
-          "name": "BME280_LIKE",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_input"
-              ],
-              "name": "VDD",
-              "number": "1",
-              "role": "power",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "1.71",
-                "unit": "V",
-                "value": "1.71"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_input"
-              ],
-              "name": "GND",
-              "number": "2",
-              "role": "ground",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "digital_input",
-                "open_drain_output"
-              ],
-              "name": "SCL",
-              "number": "3",
-              "role": "gpio",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "digital_input",
-                "open_drain_output"
-              ],
-              "name": "SDA",
-              "number": "4",
-              "role": "gpio",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            }
-          ],
-          "source": null
-        },
-        {
-          "device": null,
-          "footprints": [
-            "SOT-23-5"
-          ],
-          "kind": "regulator",
-          "manufacturer": null,
-          "metadata": {},
-          "name": "BUCK_REGULATOR",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_input"
-              ],
-              "name": "VIN",
-              "number": "1",
-              "role": "power",
-              "voltage_max": {
-                "base_value": "18",
-                "unit": "V",
-                "value": "18"
-              },
-              "voltage_min": {
-                "base_value": "4.5",
-                "unit": "V",
-                "value": "4.5"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_input"
-              ],
-              "name": "GND",
-              "number": "2",
-              "role": "ground",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_output"
-              ],
-              "name": "SW",
-              "number": "3",
-              "role": "power",
-              "voltage_max": {
-                "base_value": "18",
-                "unit": "V",
-                "value": "18"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "digital_input"
-              ],
-              "name": "FB",
-              "number": "4",
-              "role": "input",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "digital_input"
-              ],
-              "name": "EN",
-              "number": "5",
-              "role": "input",
-              "voltage_max": {
-                "base_value": "18",
-                "unit": "V",
-                "value": "18"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            }
-          ],
-          "source": null
-        },
-        {
-          "device": null,
-          "footprints": [
-            "0402",
-            "0603"
-          ],
-          "kind": "capacitor",
-          "manufacturer": null,
-          "metadata": {},
-          "name": "CAPACITOR",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "1",
-              "number": "1",
-              "role": "passive",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "2",
-              "number": "2",
-              "role": "passive",
-              "voltage_max": null,
-              "voltage_min": null
-            }
-          ],
-          "source": null
-        },
-        {
-          "device": null,
-          "footprints": [
-            "L_4x4mm"
-          ],
-          "kind": "generic",
-          "manufacturer": null,
-          "metadata": {},
-          "name": "INDUCTOR",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "1",
-              "number": "1",
-              "role": "passive",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "2",
-              "number": "2",
-              "role": "passive",
-              "voltage_max": null,
-              "voltage_min": null
-            }
-          ],
-          "source": null
-        },
-        {
-          "device": null,
-          "footprints": [
-            "SOT-23-3"
-          ],
-          "kind": "regulator",
-          "manufacturer": null,
-          "metadata": {},
-          "name": "REGULATOR_3V3",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_input"
-              ],
-              "name": "IN",
-              "number": "1",
-              "role": "power",
-              "voltage_max": {
-                "base_value": "12",
-                "unit": "V",
-                "value": "12"
-              },
-              "voltage_min": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_input"
-              ],
-              "name": "GND",
-              "number": "2",
-              "role": "ground",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_output"
-              ],
-              "name": "OUT",
-              "number": "3",
-              "role": "power",
-              "voltage_max": null,
-              "voltage_min": null
-            }
-          ],
-          "source": null
-        },
-        {
-          "device": null,
-          "footprints": [
-            "0402",
-            "0603"
-          ],
-          "kind": "resistor",
-          "manufacturer": null,
-          "metadata": {},
-          "name": "RESISTOR",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "1",
-              "number": "1",
-              "role": "passive",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "2",
-              "number": "2",
-              "role": "passive",
-              "voltage_max": null,
-              "voltage_min": null
-            }
-          ],
-          "source": null
-        },
-        {
-          "device": null,
-          "footprints": [
-            "SOD-123"
-          ],
-          "kind": "generic",
-          "manufacturer": null,
-          "metadata": {},
-          "name": "SCHOTTKY_DIODE",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "A",
-              "number": "1",
-              "role": "passive",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "K",
-              "number": "2",
-              "role": "passive",
-              "voltage_max": null,
-              "voltage_min": null
-            }
-          ],
-          "source": null
-        },
-        {
-          "device": null,
-          "footprints": [
-            "LQFP-32"
-          ],
-          "kind": "mcu",
-          "manufacturer": "Example Semiconductor",
-          "metadata": {},
-          "name": "STM32_LIKE",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_input"
-              ],
-              "name": "VDD",
-              "number": "1",
-              "role": "power",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "1.8",
-                "unit": "V",
-                "value": "1.8"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_input"
-              ],
-              "name": "VSS",
-              "number": "2",
-              "role": "ground",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "digital_input",
-                "open_drain_output"
-              ],
-              "name": "PB6",
-              "number": "3",
-              "role": "gpio",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "digital_input",
-                "open_drain_output"
-              ],
-              "name": "PB7",
-              "number": "4",
-              "role": "gpio",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "digital_input",
-                "open_drain_output",
-                "push_pull_output"
-              ],
-              "name": "PA0",
-              "number": "5",
-              "role": "gpio",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "push_pull_output"
-              ],
-              "name": "TX",
-              "number": "6",
-              "role": "output",
-              "voltage_max": {
-                "base_value": "3.6",
-                "unit": "V",
-                "value": "3.6"
-              },
-              "voltage_min": {
-                "base_value": "0",
-                "unit": "V",
-                "value": "0"
-              }
-            }
-          ],
-          "source": null
-        },
-        {
-          "device": null,
-          "footprints": [],
-          "kind": "power_source",
-          "manufacturer": null,
-          "metadata": {},
-          "name": "VOLTAGE_SOURCE",
-          "pins": [
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "power_output"
-              ],
-              "name": "OUT",
-              "number": "1",
-              "role": "power",
-              "voltage_max": null,
-              "voltage_min": null
-            },
-            {
-              "bonded_pads": [],
-              "capabilities": [
-                "passive"
-              ],
-              "name": "GND",
-              "number": "2",
-              "role": "ground",
-              "voltage_max": null,
-              "voltage_min": null
-            }
-          ],
-          "source": null
-        }
-      ],
-      "peripheral_selections": [],
-      "ports": {
-        "GND": "power_in",
-        "VIN": "power_in",
-        "VOUT": "power_out"
-      },
-      "power_states": [],
-      "supplies": [
-        {
-          "externally_driven": true,
-          "name": "INPUT_RAIL",
-          "net": "VIN",
-          "source": null,
-          "voltage": {
-            "base_value": "5",
-            "unit": "V",
-            "value": "5"
-          }
-        },
-        {
-          "externally_driven": true,
-          "name": "OUTPUT_RAIL",
-          "net": "VOUT",
-          "source": null,
-          "voltage": {
-            "base_value": "3.3",
-            "unit": "V",
-            "value": "3.3"
-          }
-        },
-        {
-          "externally_driven": true,
-          "name": "GROUND_RAIL",
-          "net": "GND",
-          "source": null,
-          "voltage": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
-        }
-      ]
-    }
-  ],
-  "module_instances": [
-    {
-      "module": "power.Buck5VTo3V3",
-      "ref": "PWR"
-    }
-  ],
-  "name": "HierarchicalSensorBoard",
+  "module_definitions": [],
+  "module_instances": [],
+  "name": "ValidSensorBoard",
   "nets": [
     {
       "endpoints": [
         "PS1.OUT",
-        "PWR.VIN"
+        "U1.IN"
       ],
       "name": "VBUS"
     },
     {
       "endpoints": [
         "PS1.GND",
-        "PWR.GND",
-        "U1.VSS",
-        "U2.GND",
+        "U1.GND",
+        "U2.VSS",
+        "U3.GND",
         "C1.2"
       ],
       "name": "GND"
     },
     {
       "endpoints": [
-        "PWR.VOUT",
-        "U1.VDD",
+        "U1.OUT",
         "U2.VDD",
+        "U3.VDD",
         "R1.1",
         "R2.1",
         "C1.1"
@@ -1095,16 +517,16 @@
     },
     {
       "endpoints": [
-        "U1.PB7",
-        "U2.SDA",
+        "U2.PB7",
+        "U3.SDA",
         "R1.2"
       ],
       "name": "I2C_SDA"
     },
     {
       "endpoints": [
-        "U1.PB6",
-        "U2.SCL",
+        "U2.PB6",
+        "U3.SCL",
         "R2.2"
       ],
       "name": "I2C_SCL"
@@ -1112,724 +534,1102 @@
   ],
   "parts": [
     {
+      "category": "sensor.environmental",
       "device": null,
       "footprints": [
         "LGA-8"
       ],
-      "kind": "sensor",
       "manufacturer": "Example Sensors",
       "metadata": {},
       "name": "BME280_LIKE",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "VDD",
           "number": "1",
-          "role": "power",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "1.71",
+                "unit": "V",
+                "value": "1.71"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "1.71",
-            "unit": "V",
-            "value": "1.71"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "GND",
           "number": "2",
-          "role": "ground",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "ground"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input",
-            "open_drain_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "SCL",
           "number": "3",
-          "role": "gpio",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain"
+            ],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input",
-            "open_drain_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "SDA",
           "number": "4",
-          "role": "gpio",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain"
+            ],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "power.regulator.buck",
       "device": null,
       "footprints": [
         "SOT-23-5"
       ],
-      "kind": "regulator",
       "manufacturer": null,
       "metadata": {},
       "name": "BUCK_REGULATOR",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "VIN",
           "number": "1",
-          "role": "power",
-          "voltage_max": {
-            "base_value": "18",
-            "unit": "V",
-            "value": "18"
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "18",
+                "unit": "V",
+                "value": "18"
+              },
+              "minimum": {
+                "base_value": "4.5",
+                "unit": "V",
+                "value": "4.5"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "4.5",
-            "unit": "V",
-            "value": "4.5"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "GND",
           "number": "2",
-          "role": "ground",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "ground"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "SW",
           "number": "3",
-          "role": "power",
-          "voltage_max": {
-            "base_value": "18",
-            "unit": "V",
-            "value": "18"
+          "profile": {
+            "current": null,
+            "directions": [
+              "output"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "18",
+                "unit": "V",
+                "value": "18"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "FB",
           "number": "4",
-          "role": "input",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "EN",
           "number": "5",
-          "role": "input",
-          "voltage_max": {
-            "base_value": "18",
-            "unit": "V",
-            "value": "18"
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "18",
+                "unit": "V",
+                "value": "18"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "passive.capacitor",
       "device": null,
       "footprints": [
         "0402",
         "0603"
       ],
-      "kind": "capacitor",
       "manufacturer": null,
       "metadata": {},
       "name": "CAPACITOR",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "1",
           "number": "1",
-          "role": "passive",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "analog"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "2",
           "number": "2",
-          "role": "passive",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "analog"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "passive.inductor",
       "device": null,
       "footprints": [
         "L_4x4mm"
       ],
-      "kind": "generic",
       "manufacturer": null,
       "metadata": {},
       "name": "INDUCTOR",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "1",
           "number": "1",
-          "role": "passive",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "analog"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "2",
           "number": "2",
-          "role": "passive",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "analog"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "power.regulator",
       "device": null,
       "footprints": [
         "SOT-23-3"
       ],
-      "kind": "regulator",
       "manufacturer": null,
       "metadata": {},
       "name": "REGULATOR_3V3",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "IN",
           "number": "1",
-          "role": "power",
-          "voltage_max": {
-            "base_value": "12",
-            "unit": "V",
-            "value": "12"
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "12",
+                "unit": "V",
+                "value": "12"
+              },
+              "minimum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "GND",
           "number": "2",
-          "role": "ground",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "ground"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "OUT",
           "number": "3",
-          "role": "power",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "output"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "passive.resistor",
       "device": null,
       "footprints": [
         "0402",
         "0603"
       ],
-      "kind": "resistor",
       "manufacturer": null,
       "metadata": {},
       "name": "RESISTOR",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "1",
           "number": "1",
-          "role": "passive",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "analog"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "2",
           "number": "2",
-          "role": "passive",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "analog"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "semiconductor.diode",
       "device": null,
       "footprints": [
         "SOD-123"
       ],
-      "kind": "generic",
       "manufacturer": null,
       "metadata": {},
       "name": "SCHOTTKY_DIODE",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "A",
           "number": "1",
-          "role": "passive",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "analog"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "K",
           "number": "2",
-          "role": "passive",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "analog"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "semiconductor.mcu",
       "device": null,
       "footprints": [
         "LQFP-32"
       ],
-      "kind": "mcu",
       "manufacturer": "Example Semiconductor",
       "metadata": {},
       "name": "STM32_LIKE",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "VDD",
           "number": "1",
-          "role": "power",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "1.8",
+                "unit": "V",
+                "value": "1.8"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "1.8",
-            "unit": "V",
-            "value": "1.8"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "VSS",
           "number": "2",
-          "role": "ground",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "ground"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input",
-            "open_drain_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "PB6",
           "number": "3",
-          "role": "gpio",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain"
+            ],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input",
-            "open_drain_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "PB7",
           "number": "4",
-          "role": "gpio",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain"
+            ],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input",
-            "open_drain_output",
-            "push_pull_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "PA0",
           "number": "5",
-          "role": "gpio",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain",
+              "push_pull"
+            ],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "push_pull_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "TX",
           "number": "6",
-          "role": "output",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "output"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "push_pull"
+            ],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "power.source",
       "device": null,
       "footprints": [],
-      "kind": "power_source",
       "manufacturer": null,
       "metadata": {},
       "name": "VOLTAGE_SOURCE",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "OUT",
           "number": "1",
-          "role": "power",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "output"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "passive"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "GND",
           "number": "2",
-          "role": "ground",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "passive"
+            ],
+            "domains": [
+              "ground"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "sensor.environmental",
       "device": null,
       "footprints": [
         "LGA-8"
       ],
-      "kind": "sensor",
       "manufacturer": "Example Sensors",
       "metadata": {},
       "name": "sensors.BME280",
       "pins": [
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "VDD",
           "number": "1",
-          "role": "digital_supply",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "power"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "1.71",
+                "unit": "V",
+                "value": "1.71"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "1.71",
-            "unit": "V",
-            "value": "1.71"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "power_input"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "GND",
           "number": "2",
-          "role": "ground",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": {
+            "current": null,
+            "directions": [
+              "input"
+            ],
+            "domains": [
+              "ground"
+            ],
+            "drive_modes": [],
+            "traits": [],
+            "voltage": null
+          },
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input",
-            "open_drain_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "SCL",
           "number": "3",
-          "role": "io",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain"
+            ],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [],
-          "capabilities": [
-            "digital_input",
-            "open_drain_output"
-          ],
+          "bonds": [],
+          "connection_policy": "normal",
           "name": "SDA",
           "number": "4",
-          "role": "io",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
+          "profile": {
+            "current": null,
+            "directions": [
+              "bidirectional"
+            ],
+            "domains": [
+              "digital"
+            ],
+            "drive_modes": [
+              "open_drain"
+            ],
+            "traits": [],
+            "voltage": {
+              "maximum": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "minimum": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              },
+              "rating": "operating",
+              "typical": null,
+              "when": null
+            }
           },
-          "voltage_min": {
-            "base_value": "0",
-            "unit": "V",
-            "value": "0"
-          }
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     },
     {
+      "category": "semiconductor.mcu",
       "device": "stm32.STM32G0B1",
       "footprints": [
         "LQFP-48"
       ],
-      "kind": "mcu",
       "manufacturer": "STMicroelectronics",
       "metadata": {},
       "name": "stm32.STM32G0B1CBT6",
       "pins": [
         {
-          "bonded_pads": [
-            "VDD"
+          "bonds": [
+            {
+              "pad": "VDD",
+              "when": null
+            }
           ],
-          "capabilities": [],
+          "connection_policy": "normal",
           "name": "VDD",
           "number": "24",
-          "role": "digital_supply",
-          "voltage_max": {
-            "base_value": "3.6",
-            "unit": "V",
-            "value": "3.6"
-          },
-          "voltage_min": {
-            "base_value": "1.7",
-            "unit": "V",
-            "value": "1.7"
-          }
+          "profile": null,
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [
-            "VSS"
+          "bonds": [
+            {
+              "pad": "VSS",
+              "when": null
+            }
           ],
-          "capabilities": [],
+          "connection_policy": "normal",
           "name": "VSS",
           "number": "23",
-          "role": "ground",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": null,
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [
-            "PA2"
+          "bonds": [
+            {
+              "pad": "PA2",
+              "when": null
+            }
           ],
-          "capabilities": [],
+          "connection_policy": "normal",
           "name": "PA2",
           "number": "10",
-          "role": "io",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": null,
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [
-            "PA3"
+          "bonds": [
+            {
+              "pad": "PA3",
+              "when": null
+            }
           ],
-          "capabilities": [],
+          "connection_policy": "normal",
           "name": "PA3",
           "number": "11",
-          "role": "io",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": null,
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [
-            "PB6"
+          "bonds": [
+            {
+              "pad": "PB6",
+              "when": null
+            }
           ],
-          "capabilities": [],
+          "connection_policy": "normal",
           "name": "PB6",
           "number": "45",
-          "role": "io",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": null,
+          "required_net_traits": []
         },
         {
-          "bonded_pads": [
-            "PB7"
+          "bonds": [
+            {
+              "pad": "PB7",
+              "when": null
+            }
           ],
-          "capabilities": [],
+          "connection_policy": "normal",
           "name": "PB7",
           "number": "46",
-          "role": "io",
-          "voltage_max": null,
-          "voltage_min": null
+          "profile": null,
+          "required_net_traits": []
         }
       ],
-      "source": null
+      "source": null,
+      "traits": []
     }
   ],
   "peripheral_selections": [
     {
-      "component": "U1",
+      "component": "U2",
       "name": "SENSOR_BUS",
       "peripheral": "I2C1",
       "signals": {
         "SCL": {
+          "pad": "PB6",
           "pin": "PB6",
           "resource": null,
           "selector": "AF6",
           "setting": null
         },
         "SDA": {
+          "pad": "PB7",
           "pin": "PB7",
           "resource": null,
           "selector": "AF6",
@@ -1839,7 +1639,24 @@
       "usage": "exclusive"
     }
   ],
-  "power_states": [],
+  "power_states": [
+    {
+      "name": "NORMAL",
+      "rails": {
+        "GND": "on",
+        "V3V3": "on",
+        "VBUS": "on"
+      }
+    },
+    {
+      "name": "OFF",
+      "rails": {
+        "GND": "on",
+        "V3V3": "off",
+        "VBUS": "off"
+      }
+    }
+  ],
   "schema": "copperscript-ir/v0.1",
   "supplies": [
     {
@@ -1854,10 +1671,10 @@
       }
     },
     {
-      "externally_driven": true,
+      "externally_driven": false,
       "name": "V3V3",
       "net": "V3V3",
-      "source": null,
+      "source": "U1.OUT",
       "voltage": {
         "base_value": "3.3",
         "unit": "V",

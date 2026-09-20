@@ -19,11 +19,13 @@ from ..model import (
     Board,
     ComponentInstance,
     DeviceDefinition,
+    Direction,
+    DriveMode,
     Endpoint,
     FlatElectricalView,
     PartDefinition,
-    PinCapability,
-    PinDefinition,
+    PackagePinDefinition,
+    SignalDomain,
 )
 from ..quantities import Quantity
 from .base import Artifact, ArtifactManifest
@@ -46,7 +48,7 @@ class KiCadSchematicOptions:
 
 @dataclass(frozen=True, slots=True)
 class _PinLayout:
-    pin: PinDefinition
+    pin: PackagePinDefinition
     electrical_type: str
     x: float
     y: float
@@ -108,9 +110,20 @@ def _render(
     }
     placements = _place_components(components, symbols, options.columns)
     root_uuid = _stable_uuid(board.name, "root")
-    endpoint_nets = {
-        endpoint: net.name for net in flat.nets for endpoint in net.endpoints
-    }
+    component_index = {component.ref: component for component in components}
+    endpoint_nets: dict[Endpoint, str] = {}
+    for net in flat.nets:
+        for endpoint in net.endpoints:
+            component = component_index.get(endpoint.component)
+            part = library.get(component.part) if component else None
+            physical_name = (
+                _physical_pin_name(component, part, flat.devices, endpoint.pin)
+                if component and part
+                else None
+            )
+            endpoint_nets[
+                Endpoint(endpoint.component, physical_name or endpoint.pin)
+            ] = net.name
 
     lines = [
         "(kicad_sch",
@@ -181,6 +194,32 @@ def _render(
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def _physical_pin_name(
+    component: ComponentInstance,
+    part: PartDefinition,
+    devices: Mapping[str, DeviceDefinition],
+    endpoint_name: str,
+) -> str | None:
+    if endpoint_name in part.pins:
+        return endpoint_name
+    unit_name, separator, terminal_name = endpoint_name.partition(".")
+    device = devices.get(part.device or "")
+    unit = device.units.get(unit_name) if device is not None and separator else None
+    terminal = unit.terminals.get(terminal_name) if unit is not None else None
+    if terminal is None:
+        return None
+    matches = [
+        pin.name
+        for pin in part.pins.values()
+        if any(
+            bond.pad == terminal.pad
+            and (bond.when is None or bond.when.matches(component.modes))
+            for bond in pin.bonds
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _part_symbol(
@@ -465,34 +504,34 @@ def _place_components(
 
 def _pin_electrical_type(
     part: PartDefinition,
-    pin: PinDefinition,
+    pin: PackagePinDefinition,
     devices: Mapping[str, DeviceDefinition],
 ) -> str:
-    capabilities = set(pin.capabilities)
+    profiles = [pin.profile] if pin.profile else []
     device = devices.get(part.device or "")
     if device is not None:
-        for pad_name in pin.bonded_pads:
-            pad = device.pads.get(pad_name)
+        for bond in pin.bonds:
+            pad = device.pads.get(bond.pad)
             if pad is not None:
-                capabilities.update(pad.capabilities)
-    if PinCapability.POWER_OUTPUT in capabilities:
+                profiles.append(pad.profile)
+    domains = frozenset().union(*(profile.domains for profile in profiles))
+    directions = frozenset().union(*(profile.directions for profile in profiles))
+    drive_modes = frozenset().union(*(profile.drive_modes for profile in profiles))
+    if SignalDomain.POWER in domains and Direction.OUTPUT in directions:
         return "power_out"
-    if PinCapability.POWER_INPUT in capabilities:
+    if (SignalDomain.POWER in domains or SignalDomain.GROUND in domains) and Direction.INPUT in directions:
         return "power_in"
-    if {
-        PinCapability.DIGITAL_INPUT,
-        PinCapability.PUSH_PULL_OUTPUT,
-    } <= capabilities:
+    if Direction.BIDIRECTIONAL in directions:
         return "bidirectional"
-    if PinCapability.OPEN_DRAIN_OUTPUT in capabilities:
+    if DriveMode.OPEN_DRAIN in drive_modes:
         return "open_collector"
-    if PinCapability.PUSH_PULL_OUTPUT in capabilities:
+    if Direction.OUTPUT in directions:
         return "output"
-    if PinCapability.DIGITAL_INPUT in capabilities:
+    if Direction.INPUT in directions:
         return "input"
-    if PinCapability.ANALOG in capabilities:
+    if SignalDomain.ANALOG in domains:
         return "bidirectional"
-    if PinCapability.PASSIVE in capabilities:
+    if Direction.PASSIVE in directions:
         return "passive"
     return "unspecified"
 
@@ -507,10 +546,10 @@ def _component_value(component: ComponentInstance, part: PartDefinition) -> str:
 
 def _reference_prefix(part: PartDefinition) -> str:
     return {
-        "resistor": "R",
-        "capacitor": "C",
-        "power_source": "PS",
-    }.get(part.kind.value, "U")
+        "passive.resistor": "R",
+        "passive.capacitor": "C",
+        "power.source": "PS",
+    }.get(part.category, "U")
 
 
 def _kicad_reference(reference: str) -> str:
@@ -532,7 +571,7 @@ def _stable_uuid(*parts: str) -> str:
     return str(uuid.UUID(bytes=bytes(digest)))
 
 
-def _pin_sort_key(pin: PinDefinition) -> tuple[tuple[int, object], ...]:
+def _pin_sort_key(pin: PackagePinDefinition) -> tuple[tuple[int, object], ...]:
     return tuple(
         (0, int(piece)) if piece.isdigit() else (1, piece.casefold())
         for piece in re.split(r"(\d+)", pin.number)

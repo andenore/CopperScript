@@ -1,0 +1,10 @@
+device AD4134_DIE {
+    vendor = "Analog Devices";
+    power_domain AVDD5 { supply_pads = "AVDD5"; voltage_min = 4.5V; voltage_max = 5.5V; }
+    pad AVDD5 { domains = "power"; directions = "input"; }
+    pad AGND { domains = "ground"; directions = "input"; }
+    pad AIN0P { domains = "analog"; directions = "input"; traits = "differential_positive"; }
+    pad AIN0N { domains = "analog"; directions = "input"; traits = "differential_negative"; }
+    group AIN0: differential_pair { positive = AIN0P; negative = AIN0N; }
+    unit CH0: std.adc_channel { positive = AIN0P; negative = AIN0N; }
+}

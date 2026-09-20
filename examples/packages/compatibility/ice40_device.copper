@@ -1,0 +1,8 @@
+device ICE40UP5K_DIE {
+    vendor = "Lattice Semiconductor";
+    pad VCC { domains = "power"; directions = "input"; }
+    pad GND { domains = "ground"; directions = "input"; }
+    pad IO0 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,high_impedance"; traits = "fpga_io"; }
+    pad IO1 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,high_impedance"; traits = "fpga_io"; }
+    pad_set FABRIC_IO { pads = "IO0,IO1"; }
+}

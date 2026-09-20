@@ -167,7 +167,7 @@ def _expand_one(
         interfaces.append(
             Interface(
                 name=_qualify(instance_ref, interface.name),
-                kind=interface.kind,
+                type_name=interface.type_name,
                 signals={
                     signal: child_net_map.get(net, _qualify(instance_ref, net))
                     for signal, net in interface.signals.items()

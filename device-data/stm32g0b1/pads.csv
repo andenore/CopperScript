@@ -1,7 +1,7 @@
-name,capabilities,role,power_domain,unpowered,voltage_min,voltage_max
-VDD,power_input,digital_supply,,,,
-VSS,power_input,ground,,,,
-PA2,digital_input|push_pull_output|open_drain_output,io,VDDIO1,clamped,,3.6V
-PA3,digital_input|push_pull_output|open_drain_output,io,VDDIO1,clamped,,3.6V
-PB6,digital_input|push_pull_output|open_drain_output,io,VDDIO1,clamped,,3.6V
-PB7,digital_input|push_pull_output|open_drain_output,io,VDDIO1,clamped,,3.6V
+name,domains,directions,drive_modes,traits,power_domain,unpowered,voltage_min,voltage_max
+VDD,power,input,,,,,,
+VSS,ground,input,,,,,,
+PA2,digital,bidirectional,push_pull|open_drain,gpio,VDDIO1,clamped,,3.6V
+PA3,digital,bidirectional,push_pull|open_drain,gpio,VDDIO1,clamped,,3.6V
+PB6,digital,bidirectional,push_pull|open_drain,gpio,VDDIO1,clamped,,3.6V
+PB7,digital,bidirectional,push_pull|open_drain,gpio,VDDIO1,clamped,,3.6V

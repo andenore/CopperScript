@@ -1,0 +1,10 @@
+device ISO6721_DIE {
+    vendor = "Texas Instruments";
+    pad VCC1 { domains = "power"; directions = "input"; }
+    pad GND1 { domains = "ground"; directions = "input"; }
+    pad INA { domains = "digital"; directions = "input"; traits = "isolation_side_1"; }
+    pad OUTB { domains = "digital"; directions = "output"; drive_modes = "push_pull"; traits = "isolation_side_2"; }
+    pad VCC2 { domains = "power"; directions = "input"; }
+    pad GND2 { domains = "ground"; directions = "input"; }
+    unit CHANNEL_A: std.digital_isolator { IN = INA; OUT = OUTB; }
+}

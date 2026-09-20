@@ -75,10 +75,10 @@ Device-library authors should use the compact, table-driven
 [device generation workflow](docs/device-generation.md) rather than writing
 large MCU definitions by hand.
 
-The proposed [rich device model](docs/rich-device-model-proposal.md) describes
+The implemented [rich device model](docs/rich-device-model-proposal.md) describes
 how CopperScript can represent flexible Nordic pin routing, mode-dependent FX10
 pins, differential ADC channels, multi-unit op-amps, and package connection
-rules. It is an RFC rather than an accepted language contract.
+rules and the cross-vendor acceptance fixtures used to validate them.
 
 The [hierarchical example](examples/hierarchical_board.copper) instantiates a
 reusable [5 V to 3.3 V buck supply](examples/packages/power/buck_5v_to_3v3.copper)
@@ -159,6 +159,10 @@ user-facing source format accepted by the compiler.
 - I²C signal bindings, pin compatibility, and SDA/SCL pull-ups
 - MCU peripheral completeness, package-pin availability, and mux validity
 - Duplicate exclusive peripheral/pin selections and incompatible mux-resource settings
+- Package DNC/required-pin rules and required net traits
+- Functional-unit endpoint resolution to canonical physical pins
+- Differential-pair completeness and finite device-mode selections
+- Parametric route-rule pad membership and power-domain operating ranges
 
 `power-check` separately evaluates named rail states and warns when a driven net
 may back-power an I/O domain declared off. It is intentionally a conservative

@@ -12,13 +12,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Mapping
+from typing import Generic, Mapping, TypeVar
 
-from .quantities import Quantity, Voltage
+from .quantities import Current, Quantity, Voltage
 
 
 class PinType(str, Enum):
-    """Electrical direction of ports and peripheral signals."""
+    """Boundary-port shorthand. Device pins use :class:`ElectricalProfile`."""
 
     PASSIVE = "passive"
     INPUT = "input"
@@ -29,14 +29,26 @@ class PinType(str, Enum):
     POWER_OUT = "power_out"
 
 
-class PinCapability(str, Enum):
-    PASSIVE = "passive"
-    DIGITAL_INPUT = "digital_input"
-    PUSH_PULL_OUTPUT = "push_pull_output"
-    OPEN_DRAIN_OUTPUT = "open_drain_output"
+class SignalDomain(str, Enum):
+    DIGITAL = "digital"
     ANALOG = "analog"
-    POWER_INPUT = "power_input"
-    POWER_OUTPUT = "power_output"
+    POWER = "power"
+    GROUND = "ground"
+    CLOCK = "clock"
+    RF = "rf"
+
+
+class Direction(str, Enum):
+    INPUT = "input"
+    OUTPUT = "output"
+    BIDIRECTIONAL = "bidirectional"
+    PASSIVE = "passive"
+
+
+class DriveMode(str, Enum):
+    PUSH_PULL = "push_pull"
+    OPEN_DRAIN = "open_drain"
+    HIGH_IMPEDANCE = "high_impedance"
 
 
 class UnpoweredBehavior(str, Enum):
@@ -57,18 +69,65 @@ class PowerRailState(str, Enum):
     UNKNOWN = "unknown"
 
 
-class PartKind(str, Enum):
-    GENERIC = "generic"
-    RESISTOR = "resistor"
-    CAPACITOR = "capacitor"
-    POWER_SOURCE = "power_source"
-    REGULATOR = "regulator"
-    MCU = "mcu"
-    SENSOR = "sensor"
+class ConnectionPolicy(str, Enum):
+    NORMAL = "normal"
+    REQUIRED = "required"
+    DO_NOT_CONNECT = "do_not_connect"
+    OPTIONAL = "optional"
 
 
-class InterfaceKind(str, Enum):
-    I2C = "i2c"
+class GroupKind(str, Enum):
+    DIFFERENTIAL_PAIR = "differential_pair"
+
+
+Q = TypeVar("Q", bound=Quantity)
+
+
+@dataclass(frozen=True, slots=True)
+class QuantityRange(Generic[Q]):
+    minimum: Q | None = None
+    typical: Q | None = None
+    maximum: Q | None = None
+    rating: str = "operating"
+    when: "Condition | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class ElectricalProfile:
+    domains: frozenset[SignalDomain]
+    directions: frozenset[Direction]
+    drive_modes: frozenset[DriveMode] = frozenset()
+    traits: frozenset[str] = frozenset()
+    voltage: QuantityRange[Voltage] | None = None
+    current: QuantityRange[Current] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "domains", frozenset(self.domains))
+        object.__setattr__(self, "directions", frozenset(self.directions))
+        object.__setattr__(self, "drive_modes", frozenset(self.drive_modes))
+        object.__setattr__(self, "traits", frozenset(self.traits))
+
+    def satisfies(self, required: "ElectricalProfile") -> bool:
+        provided_directions = set(self.directions)
+        if Direction.BIDIRECTIONAL in provided_directions:
+            provided_directions.update({Direction.INPUT, Direction.OUTPUT})
+        return (
+            required.domains <= self.domains
+            and required.directions <= provided_directions
+            and required.drive_modes <= self.drive_modes
+            and required.traits <= self.traits
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Condition:
+    selections: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "selections", MappingProxyType(dict(self.selections)))
+
+    def matches(self, selected: Mapping[str, str]) -> bool:
+        return all(selected.get(group) == choice for group, choice in self.selections.items())
 
 
 class ConstraintKind(str, Enum):
@@ -91,43 +150,46 @@ class SourceReference:
 @dataclass(frozen=True, slots=True)
 class DevicePadDefinition:
     name: str
-    capabilities: frozenset[PinCapability]
-    role: str = "io"
+    profile: ElectricalProfile
     power_domain: str | None = None
     unpowered_behavior: UnpoweredBehavior = UnpoweredBehavior.UNKNOWN
-    voltage_min: Voltage | None = None
-    voltage_max: Voltage | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "capabilities", frozenset(self.capabilities))
+    when: Condition | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class PinDefinition:
-    """One physical package pin, optionally bonded to device pads."""
+class BondDefinition:
+    pad: str
+    when: Condition | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PackagePinDefinition:
+    """One physical package pin with explicit bonds and connection policy."""
 
     name: str
     number: str
-    capabilities: frozenset[PinCapability] = frozenset()
-    role: str = "io"
-    bonded_pads: tuple[str, ...] = ()
-    voltage_min: Voltage | None = None
-    voltage_max: Voltage | None = None
+    profile: ElectricalProfile | None = None
+    bonds: tuple[BondDefinition, ...] = ()
+    connection_policy: ConnectionPolicy = ConnectionPolicy.NORMAL
+    required_net_traits: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "capabilities", frozenset(self.capabilities))
+        object.__setattr__(self, "bonds", tuple(self.bonds))
+        object.__setattr__(self, "required_net_traits", frozenset(self.required_net_traits))
 
 
 @dataclass(frozen=True, slots=True)
 class PowerDomainDefinition:
     name: str
     supply_pads: tuple[str, ...]
+    voltage: QuantityRange[Voltage] | None = None
+    requires: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class PeripheralSignalDefinition:
     name: str
-    pin_type: PinType
+    profile: ElectricalProfile
     required: bool = True
 
 
@@ -149,6 +211,67 @@ class MuxOption:
     selector: str
     resource: str | None = None
     setting: str | None = None
+    when: Condition | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalBinding:
+    pad: str
+    profile: ElectricalProfile | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionalUnitDefinition:
+    name: str
+    kind: str
+    terminals: Mapping[str, TerminalBinding]
+    shared: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "terminals", MappingProxyType(dict(self.terminals)))
+
+
+@dataclass(frozen=True, slots=True)
+class SignalGroupDefinition:
+    name: str
+    kind: GroupKind | str
+    members: Mapping[str, str]
+    profile: ElectricalProfile | None = None
+    when: Condition | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "members", MappingProxyType(dict(self.members)))
+
+
+@dataclass(frozen=True, slots=True)
+class ModeGroupDefinition:
+    name: str
+    choices: tuple[str, ...]
+    default: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PadSetDefinition:
+    name: str
+    pads: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SelectorScheme:
+    kind: str
+    parameters: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
+
+
+@dataclass(frozen=True, slots=True)
+class RouteRule:
+    peripheral: str
+    signal: str
+    pad_set: str
+    selector: SelectorScheme
+    when: Condition | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +283,11 @@ class DeviceDefinition:
     peripherals: Mapping[str, PeripheralDefinition]
     mux_options: tuple[MuxOption, ...]
     power_domains: Mapping[str, PowerDomainDefinition] = field(default_factory=dict)
+    units: Mapping[str, FunctionalUnitDefinition] = field(default_factory=dict)
+    signal_groups: Mapping[str, SignalGroupDefinition] = field(default_factory=dict)
+    mode_groups: Mapping[str, ModeGroupDefinition] = field(default_factory=dict)
+    pad_sets: Mapping[str, PadSetDefinition] = field(default_factory=dict)
+    route_rules: tuple[RouteRule, ...] = ()
     resources: tuple[str, ...] = ()
     metadata: Mapping[str, str] = field(default_factory=dict)
     source: SourceReference | None = None
@@ -170,14 +298,19 @@ class DeviceDefinition:
         object.__setattr__(
             self, "power_domains", MappingProxyType(dict(self.power_domains))
         )
+        object.__setattr__(self, "units", MappingProxyType(dict(self.units)))
+        object.__setattr__(self, "signal_groups", MappingProxyType(dict(self.signal_groups)))
+        object.__setattr__(self, "mode_groups", MappingProxyType(dict(self.mode_groups)))
+        object.__setattr__(self, "pad_sets", MappingProxyType(dict(self.pad_sets)))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
 @dataclass(frozen=True, slots=True)
 class PartDefinition:
     name: str
-    pins: Mapping[str, PinDefinition]
-    kind: PartKind = PartKind.GENERIC
+    pins: Mapping[str, PackagePinDefinition]
+    category: str = "component.generic"
+    traits: frozenset[str] = frozenset()
     footprints: tuple[str, ...] = ()
     manufacturer: str | None = None
     device: str | None = None
@@ -188,6 +321,7 @@ class PartDefinition:
         # Defensive copies keep an otherwise frozen IR from being mutated via a
         # caller-owned dictionary.
         object.__setattr__(self, "pins", MappingProxyType(dict(self.pins)))
+        object.__setattr__(self, "traits", frozenset(self.traits))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
@@ -198,9 +332,11 @@ class ComponentInstance:
     value: Quantity | str | None = None
     footprint: str | None = None
     properties: Mapping[str, str] = field(default_factory=dict)
+    modes: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "properties", MappingProxyType(dict(self.properties)))
+        object.__setattr__(self, "modes", MappingProxyType(dict(self.modes)))
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -243,7 +379,7 @@ class Supply:
 @dataclass(frozen=True, slots=True)
 class Interface:
     name: str
-    kind: InterfaceKind
+    type_name: str
     signals: Mapping[str, str]
     bindings: Mapping[str, Mapping[str, str]]
     pullup_supply: str | None = None
@@ -278,6 +414,7 @@ class ModuleInstance:
 @dataclass(frozen=True, slots=True)
 class PeripheralSignalSelection:
     pin: str
+    pad: str | None = None
     selector: str | None = None
     resource: str | None = None
     setting: str | None = None
@@ -292,6 +429,17 @@ class PeripheralSelection:
     name: str
     signals: Mapping[str, PeripheralSignalSelection]
     usage: SelectionUsage = SelectionUsage.EXCLUSIVE
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "signals", MappingProxyType(dict(self.signals)))
+
+
+@dataclass(frozen=True, slots=True)
+class InterfaceTypeDefinition:
+    name: str
+    signals: Mapping[str, ElectricalProfile]
+    groups: tuple[SignalGroupDefinition, ...] = ()
+    validator: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "signals", MappingProxyType(dict(self.signals)))

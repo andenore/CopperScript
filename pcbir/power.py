@@ -11,13 +11,13 @@ from .model import (
     Board,
     ComponentInstance,
     DevicePadDefinition,
+    Direction,
     Endpoint,
     FlatElectricalView,
     PartDefinition,
-    PinCapability,
-    PinDefinition,
-    PinType,
+    PackagePinDefinition,
     PowerRailState,
+    SignalDomain,
     UnpoweredBehavior,
 )
 
@@ -74,8 +74,7 @@ def analyze_power_states(board: Board | FlatElectricalView) -> list[Diagnostic]:
                 if resolved is None:
                     continue
                 part, pin = resolved
-                capabilities = _pin_capabilities(board, part, pin)
-                if PinCapability.POWER_OUTPUT in capabilities:
+                if _is_power_output(board, components[endpoint.component], part, pin):
                     has_active_driver = True
                 if endpoint in active_output_pins:
                     has_active_driver = True
@@ -87,10 +86,9 @@ def analyze_power_states(board: Board | FlatElectricalView) -> list[Diagnostic]:
                 if resolved is None:
                     continue
                 part, pin = resolved
-                capabilities = _pin_capabilities(board, part, pin)
-                if PinCapability.POWER_INPUT in capabilities:
+                if _is_power_input(board, components[endpoint.component], part, pin):
                     continue
-                for pad in _bonded_pads(board, part, pin):
+                for pad in _bonded_pads(board, components[endpoint.component], part, pin):
                     if pad.power_domain is None:
                         continue
                     if domain_states.get((endpoint.component, pad.power_domain)) is not PowerRailState.OFF:
@@ -126,7 +124,7 @@ def _component_domain_states(
         for domain in device.power_domains.values():
             states: list[PowerRailState] = []
             for pin in part.pins.values():
-                if not set(pin.bonded_pads) & set(domain.supply_pads):
+                if not {bond.pad for bond in pin.bonds if bond.when is None or bond.when.matches(component.modes)} & set(domain.supply_pads):
                     continue
                 endpoint = Endpoint(component.ref, pin.name)
                 for net_name in pin_nets.get(endpoint, []):
@@ -160,9 +158,9 @@ def _active_peripheral_outputs(
             pin = part.pins.get(chosen.pin)
             if signal is None or pin is None:
                 continue
-            if signal.pin_type not in {PinType.OUTPUT, PinType.POWER_OUT}:
+            if Direction.OUTPUT not in signal.profile.directions:
                 continue
-            pads = _bonded_pads(board, part, pin)
+            pads = _bonded_pads(board, component, part, pin)
             if any(
                 pad.power_domain is not None
                 and domain_states.get((component.ref, pad.power_domain)) is PowerRailState.OFF
@@ -177,7 +175,7 @@ def _resolve_pin(
     board: FlatElectricalView,
     components: dict[str, ComponentInstance],
     endpoint: Endpoint,
-) -> tuple[PartDefinition, PinDefinition] | None:
+) -> tuple[PartDefinition, PackagePinDefinition] | None:
     component = components.get(endpoint.component)
     part = board.library.get(component.part) if component else None
     pin = part.pins.get(endpoint.pin) if part else None
@@ -185,18 +183,38 @@ def _resolve_pin(
 
 
 def _bonded_pads(
-    board: FlatElectricalView, part: PartDefinition, pin: PinDefinition
+    board: FlatElectricalView,
+    component: ComponentInstance,
+    part: PartDefinition,
+    pin: PackagePinDefinition,
 ) -> tuple[DevicePadDefinition, ...]:
     device = board.devices.get(part.device or "")
     if device is None:
         return ()
-    return tuple(device.pads[name] for name in pin.bonded_pads if name in device.pads)
+    return tuple(
+        device.pads[bond.pad]
+        for bond in pin.bonds
+        if bond.pad in device.pads
+        and (bond.when is None or bond.when.matches(component.modes))
+    )
 
 
-def _pin_capabilities(
-    board: FlatElectricalView, part: PartDefinition, pin: PinDefinition
-) -> frozenset[PinCapability]:
-    result = set(pin.capabilities)
-    for pad in _bonded_pads(board, part, pin):
-        result.update(pad.capabilities)
-    return frozenset(result)
+def _profiles(board, component, part, pin):
+    result = [pin.profile] if pin.profile else []
+    result.extend(pad.profile for pad in _bonded_pads(board, component, part, pin))
+    return result
+
+
+def _is_power_input(board, component, part, pin) -> bool:
+    return any(
+        (SignalDomain.POWER in profile.domains or SignalDomain.GROUND in profile.domains)
+        and Direction.INPUT in profile.directions
+        for profile in _profiles(board, component, part, pin)
+    )
+
+
+def _is_power_output(board, component, part, pin) -> bool:
+    return any(
+        SignalDomain.POWER in profile.domains and Direction.OUTPUT in profile.directions
+        for profile in _profiles(board, component, part, pin)
+    )

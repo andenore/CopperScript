@@ -1,0 +1,37 @@
+board DeviceModelShowcase {
+    import parts "github.com/copperscript/examples/compatibility";
+    component NRF: parts.NRF52840_QIAA;
+    component FX: parts.CYUSB4014_FCAXI { modes = "PORT0=LVDS"; }
+    component ADC: parts.AD4134BCPZ;
+    component OP: parts.OPA2197ID;
+    component FPGA: parts.ICE40UP5K_SG48;
+    component ISO: parts.ISO6721D;
+
+    configure NRF.UARTE0 as DEBUG_UART { TX = P0_00; RX = P0_01; }
+
+    net VDD { NRF.VDD; FX.VDD; FPGA.VCC; ISO.VCC1; ISO.VCC2; }
+    net V5 { ADC.AVDD5; OP.VP; }
+    net VN { OP.VN; }
+    net GND { NRF.VSS; FX.GND; ADC.AGND; ADC.EPAD; FPGA.GND; ISO.GND1; ISO.GND2; }
+    net UART_TX { NRF.P0_00; }
+    net UART_RX { NRF.P0_01; }
+    net LVDS_P { FX.P0D7P; }
+    net LVDS_N { FX.P0D7N; }
+    net ADC_P { ADC.CH0.positive; }
+    net ADC_N { ADC.CH0.negative; }
+    net OP_A_OUT { OP.A.OUT; }
+    net OP_A_INP { OP.A.INP; }
+    net OP_A_INN { OP.A.INN; }
+    net OP_B_OUT { OP.B.OUT; }
+    net OP_B_INP { OP.B.INP; }
+    net OP_B_INN { OP.B.INN; }
+    net FPGA_IO0 { FPGA.IO0; }
+    net FPGA_IO1 { FPGA.IO1; }
+    net ISO_IN { ISO.CHANNEL_A.IN; }
+    net ISO_OUT { ISO.CHANNEL_A.OUT; }
+
+    supply VDD { voltage = 3.3V; external = true; }
+    supply V5 { voltage = 5V; external = true; }
+    supply VN { voltage = 0V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+}

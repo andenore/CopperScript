@@ -27,6 +27,11 @@ from .syntax import (
     PortDecl,
     RawQuantity,
     ResourceDecl,
+    UnitDecl,
+    SignalGroupDecl,
+    ModeGroupDecl,
+    PadSetDecl,
+    RouteRuleDecl,
     Scalar,
     SupplyDecl,
 )
@@ -98,6 +103,16 @@ class Parser:
                 resource_location = self.tokens[self.index - 1].location
                 declarations.append(ResourceDecl(resource_location, self._name("resource name")))
                 self._expect_symbol(";")
+            elif root.text == "device" and keyword == "unit":
+                declarations.append(self._unit())
+            elif root.text == "device" and keyword == "group":
+                declarations.append(self._signal_group())
+            elif root.text == "device" and keyword == "mode_group":
+                declarations.append(self._mode_group())
+            elif root.text == "device" and keyword == "pad_set":
+                declarations.append(self._pad_set())
+            elif root.text == "device" and keyword == "route":
+                declarations.append(self._route_rule())
             elif root.text == "device":
                 property_location = self.tokens[self.index - 1].location
                 self._expect_symbol("=")
@@ -217,6 +232,37 @@ class Parser:
         signal = self._name("peripheral signal")
         return MuxDecl(location, pad, peripheral, signal, self._assignment_block())
 
+    def _unit(self) -> UnitDecl:
+        location = self.current.location
+        name = self._name("functional unit name")
+        self._expect_symbol(":")
+        kind = self._qualified_name("functional unit kind")
+        return UnitDecl(location, name, kind, self._assignment_block())
+
+    def _signal_group(self) -> SignalGroupDecl:
+        location = self.current.location
+        name = self._name("signal group name")
+        self._expect_symbol(":")
+        kind = self._qualified_name("signal group kind")
+        return SignalGroupDecl(location, name, kind, self._assignment_block())
+
+    def _mode_group(self) -> ModeGroupDecl:
+        location = self.current.location
+        name = self._name("mode group name")
+        return ModeGroupDecl(location, name, self._assignment_block())
+
+    def _pad_set(self) -> PadSetDecl:
+        location = self.current.location
+        name = self._name("pad set name")
+        return PadSetDecl(location, name, self._assignment_block())
+
+    def _route_rule(self) -> RouteRuleDecl:
+        location = self.current.location
+        peripheral = self._name("peripheral name")
+        self._expect_symbol(".")
+        signal = self._name("peripheral signal")
+        return RouteRuleDecl(location, peripheral, signal, self._assignment_block())
+
     def _configuration(self) -> ConfigurationDecl:
         location = self.current.location
         component = self._name("component reference")
@@ -324,7 +370,7 @@ class Parser:
     def _endpoint(self) -> str:
         component = self._name("component reference")
         self._expect_symbol(".")
-        return f"{component}.{self._name('pin name')}"
+        return f"{component}.{self._qualified_name('pin or terminal name')}"
 
     def _reference(self) -> str:
         value = self._name("target")

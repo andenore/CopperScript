@@ -1,0 +1,12 @@
+part ISO6721D {
+    category = "interface.digital_isolator";
+    manufacturer = "Texas Instruments";
+    footprint = "SOIC-8";
+    device = ISO6721_DIE;
+    pin VCC1 { number = "1"; bond = VCC1; }
+    pin INA { number = "2"; bond = INA; }
+    pin GND1 { number = "4"; bond = GND1; }
+    pin GND2 { number = "5"; bond = GND2; }
+    pin OUTB { number = "7"; bond = OUTB; }
+    pin VCC2 { number = "8"; bond = VCC2; }
+}

@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from pcbir import Interface, InterfaceKind, check
+from pcbir import Interface, check
 
 from test_erc import load_python_fixture
 
@@ -24,7 +24,7 @@ def test_i2c_binding_must_be_on_declared_signal_net() -> None:
     board = load_python_fixture("valid_board.py")
     broken_interface = Interface(
         name="SENSOR_I2C",
-        kind=InterfaceKind.I2C,
+        type_name="std.i2c",
         signals={"sda": "I2C_SDA", "scl": "I2C_SCL"},
         bindings={
             "U2": {"sda": "PA0", "scl": "PB6"},

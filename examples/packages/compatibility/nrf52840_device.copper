@@ -1,0 +1,15 @@
+device NRF52840 {
+    vendor = "Nordic Semiconductor";
+    power_domain VDDIO { supply_pads = "VDD"; voltage_min = 1.7V; voltage_max = 3.6V; }
+    pad VDD { domains = "power"; directions = "input"; }
+    pad VSS { domains = "ground"; directions = "input"; }
+    pad P0_00 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; }
+    pad P0_01 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; }
+    peripheral UARTE0: uart {
+        signal TX: output;
+        signal RX: input;
+    }
+    pad_set GPIO_PSEL { pads = "P0_00,P0_01"; }
+    route UARTE0.TX { pad_set = GPIO_PSEL; selector = nrf_psel; }
+    route UARTE0.RX { pad_set = GPIO_PSEL; selector = nrf_psel; }
+}

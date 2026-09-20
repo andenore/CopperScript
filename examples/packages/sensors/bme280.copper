@@ -1,30 +1,34 @@
 // An illustrative environmental sensor part supplied by a reusable package.
 part BME280 {
-    kind = sensor;
+    category = "sensor.environmental";
     manufacturer = "Example Sensors";
     footprint = "LGA-8";
 
     pin VDD {
         number = "1";
-        role = digital_supply;
-        capabilities = "power_input";
+        domains = "power";
+        directions = "input";
         voltage_min = 1.71V;
         voltage_max = 3.6V;
     }
     pin GND {
         number = "2";
-        role = ground;
-        capabilities = "power_input";
+        domains = "ground";
+        directions = "input";
     }
     pin SCL {
         number = "3";
-        capabilities = "digital_input,open_drain_output";
+        domains = "digital";
+        directions = "bidirectional";
+        drive_modes = "open_drain";
         voltage_min = 0V;
         voltage_max = 3.6V;
     }
     pin SDA {
         number = "4";
-        capabilities = "digital_input,open_drain_output";
+        domains = "digital";
+        directions = "bidirectional";
+        drive_modes = "open_drain";
         voltage_min = 0V;
         voltage_max = 3.6V;
     }
