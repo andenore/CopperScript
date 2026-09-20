@@ -1,0 +1,39 @@
+// Reusable 5 V to 3.3 V buck-regulator module.
+// Component values are illustrative and must be validated for production.
+module Buck5VTo3V3 {
+    use library "tiny";
+
+    port VIN: power_in;
+    port VOUT: power_out;
+    port GND: power_in;
+
+    component U1: BUCK_REGULATOR {
+        value = "5 V to 3.3 V buck";
+        footprint = "SOT-23-5";
+    }
+    component L1: INDUCTOR {
+        value = 10uH;
+        footprint = "L_4x4mm";
+    }
+    component D1: SCHOTTKY_DIODE {
+        value = "40 V Schottky";
+        footprint = "SOD-123";
+    }
+    component C_IN: CAPACITOR { value = 10uF; footprint = "0603"; }
+    component C_OUT: CAPACITOR { value = 22uF; footprint = "0603"; }
+    component R_TOP: RESISTOR { value = 100kohm; footprint = "0402"; }
+    component R_BOTTOM: RESISTOR { value = 31.6kohm; footprint = "0402"; }
+
+    net VIN { port.VIN; U1.VIN; U1.EN; C_IN.1; }
+    net GND { port.GND; U1.GND; C_IN.2; C_OUT.2; D1.A; R_BOTTOM.2; }
+    net SWITCH { U1.SW; L1.1; D1.K; }
+    net VOUT { port.VOUT; L1.2; C_OUT.1; R_TOP.1; }
+    net FEEDBACK { U1.FB; R_TOP.2; R_BOTTOM.1; }
+
+    supply INPUT_RAIL { voltage = 5V; net = VIN; external = true; }
+    supply OUTPUT_RAIL { voltage = 3.3V; net = VOUT; external = true; }
+    supply GROUND_RAIL { voltage = 0V; net = GND; external = true; }
+
+    constraint max_distance(C_IN, U1.VIN) { distance = 3mm; }
+    constraint max_distance(C_OUT, L1.2) { distance = 4mm; }
+}

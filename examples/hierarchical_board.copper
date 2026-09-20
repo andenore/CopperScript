@@ -1,0 +1,89 @@
+// A board that instantiates the reusable buck supply as one hierarchical unit.
+board HierarchicalSensorBoard {
+    use library "tiny";
+    import power "github.com/copperscript/examples/power";
+    import sensors "github.com/copperscript/examples/sensors";
+    import stm32 "github.com/copperscript/examples/stm32";
+
+    component PS1: VOLTAGE_SOURCE;
+    module PWR: power.Buck5VTo3V3;
+
+    component U1: stm32.STM32G0B1CBT6 {
+        footprint = "LQFP-48";
+    }
+    component U2: sensors.BME280 {
+        footprint = "LGA-8";
+    }
+    component R1: RESISTOR {
+        value = 4.7kohm;
+        footprint = "0402";
+    }
+    component R2: RESISTOR {
+        value = 4.7kohm;
+        footprint = "0402";
+    }
+    component C1: CAPACITOR {
+        value = 100nF;
+        footprint = "0402";
+    }
+
+    configure U1.I2C1 as SENSOR_BUS {
+        SDA = PB7;
+        SCL = PB6;
+    }
+
+    net VBUS {
+        PS1.OUT;
+        PWR.VIN;
+    }
+    net GND {
+        PS1.GND;
+        PWR.GND;
+        U1.VSS;
+        U2.GND;
+        C1.2;
+    }
+    net V3V3 {
+        PWR.VOUT;
+        U1.VDD;
+        U2.VDD;
+        R1.1;
+        R2.1;
+        C1.1;
+    }
+    net I2C_SDA {
+        U1.PB7;
+        U2.SDA;
+        R1.2;
+    }
+    net I2C_SCL {
+        U1.PB6;
+        U2.SCL;
+        R2.2;
+    }
+
+    supply VBUS {
+        voltage = 5V;
+        source = PS1.OUT;
+    }
+    supply V3V3 {
+        voltage = 3.3V;
+        external = true;
+    }
+    supply GND {
+        voltage = 0V;
+        external = true;
+    }
+
+    interface SENSOR_I2C: i2c {
+        sda = I2C_SDA;
+        scl = I2C_SCL;
+        pullup = V3V3;
+        bind U1 { sda = PB7; scl = PB6; }
+        bind U2 { sda = SDA; scl = SCL; }
+    }
+
+    constraint max_distance(C1, U1.VDD) {
+        distance = 3mm;
+    }
+}

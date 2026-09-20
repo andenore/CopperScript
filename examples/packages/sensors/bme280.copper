@@ -1,0 +1,25 @@
+// An illustrative environmental sensor part supplied by a reusable package.
+part BME280 {
+    kind = sensor;
+    manufacturer = "Example Sensors";
+    footprint = "LGA-8";
+
+    pin VDD: power_in {
+        number = "1";
+        voltage_min = 1.71V;
+        voltage_max = 3.6V;
+    }
+    pin GND: power_in {
+        number = "2";
+    }
+    pin SCL: open_drain {
+        number = "3";
+        voltage_min = 0V;
+        voltage_max = 3.6V;
+    }
+    pin SDA: open_drain {
+        number = "4";
+        voltage_min = 0V;
+        voltage_max = 3.6V;
+    }
+}

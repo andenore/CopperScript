@@ -1,0 +1,55 @@
+// Intentionally broken: use this file to see ERC diagnostics.
+board BrokenSensorBoard {
+    use library "tiny";
+
+    component PS1: VOLTAGE_SOURCE;
+    component REG1: REGULATOR_3V3;
+    component U1: STM32_LIKE;
+    component U1: BME280_LIKE;
+    component U2: BME280_LIKE;
+    component X1: DOES_NOT_EXIST;
+
+    net BAD_5V {
+        PS1.OUT;
+        REG1.OUT;
+        U1.VDD;
+    }
+    net GND {
+        PS1.GND;
+        REG1.GND;
+        U1.VSS;
+        U2.GND;
+    }
+    net FLOATING_POWER {
+        U2.VDD;
+    }
+    net I2C_SDA {
+        U1.PB7;
+        U2.SDA;
+    }
+    net I2C_SCL {
+        U1.PB6;
+        U2.SCL;
+    }
+    net OTHER {
+        U1.PB7;
+        MISSING.PIN;
+    }
+
+    supply BAD_5V {
+        voltage = 5V;
+        source = PS1.OUT;
+    }
+    supply GND {
+        voltage = 0V;
+        external = true;
+    }
+
+    interface BROKEN_I2C: i2c {
+        sda = I2C_SDA;
+        scl = I2C_SCL;
+        pullup = BAD_5V;
+        bind U1 { sda = PB7; scl = PB6; }
+        bind U2 { sda = SDA; scl = SCL; }
+    }
+}

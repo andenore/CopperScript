@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "copperscript"
+version = "0.1.0"
+description = "A semantic, strongly typed language for PCB connectivity and electrical intent"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "PCB DSL prototype contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+copper = "pcbir.cli:main"
+
+[tool.setuptools]
+packages = ["copperscript", "pcbir"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

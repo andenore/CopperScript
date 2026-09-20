@@ -1,0 +1,1488 @@
+{
+  "components": [
+    {
+      "footprint": null,
+      "part": "VOLTAGE_SOURCE",
+      "properties": {},
+      "ref": "PS1",
+      "value": null
+    },
+    {
+      "footprint": "LQFP-48",
+      "part": "stm32.STM32G0B1CBT6",
+      "properties": {},
+      "ref": "U1",
+      "value": null
+    },
+    {
+      "footprint": "LGA-8",
+      "part": "sensors.BME280",
+      "properties": {},
+      "ref": "U2",
+      "value": null
+    },
+    {
+      "footprint": "0402",
+      "part": "RESISTOR",
+      "properties": {},
+      "ref": "R1",
+      "value": {
+        "base_value": "4.7E+3",
+        "unit": "kohm",
+        "value": "4.7"
+      }
+    },
+    {
+      "footprint": "0402",
+      "part": "RESISTOR",
+      "properties": {},
+      "ref": "R2",
+      "value": {
+        "base_value": "4.7E+3",
+        "unit": "kohm",
+        "value": "4.7"
+      }
+    },
+    {
+      "footprint": "0402",
+      "part": "CAPACITOR",
+      "properties": {},
+      "ref": "C1",
+      "value": {
+        "base_value": "1E-7",
+        "unit": "nF",
+        "value": "1E+2"
+      }
+    }
+  ],
+  "constraints": [
+    {
+      "kind": "max_distance",
+      "parameters": {
+        "distance": {
+          "base_value": "0.003",
+          "unit": "mm",
+          "value": "3"
+        }
+      },
+      "targets": [
+        "C1",
+        "U1.VDD"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "checksum": "sha256:76b2731570fe714d9b225223fdbe46920c4e8cc4c0ee12e5e3028f9406c85425",
+      "import_path": "github.com/copperscript/examples/power",
+      "module_path": "github.com/copperscript/examples",
+      "version": "v0.1.0"
+    },
+    {
+      "checksum": "sha256:76b2731570fe714d9b225223fdbe46920c4e8cc4c0ee12e5e3028f9406c85425",
+      "import_path": "github.com/copperscript/examples/sensors",
+      "module_path": "github.com/copperscript/examples",
+      "version": "v0.1.0"
+    },
+    {
+      "checksum": "sha256:76b2731570fe714d9b225223fdbe46920c4e8cc4c0ee12e5e3028f9406c85425",
+      "import_path": "github.com/copperscript/examples/stm32",
+      "module_path": "github.com/copperscript/examples",
+      "version": "v0.1.0"
+    }
+  ],
+  "devices": [
+    {
+      "metadata": {
+        "family": "STM32G0",
+        "source_revision": "illustrative-v0.1",
+        "vendor": "STMicroelectronics"
+      },
+      "mux_options": [
+        {
+          "peripheral": "I2C1",
+          "pin": "PB7",
+          "resource": null,
+          "selector": "AF6",
+          "setting": null,
+          "signal": "SDA"
+        },
+        {
+          "peripheral": "I2C1",
+          "pin": "PB6",
+          "resource": null,
+          "selector": "AF6",
+          "setting": null,
+          "signal": "SCL"
+        },
+        {
+          "peripheral": "USART2",
+          "pin": "PA2",
+          "resource": "USART2_REMAP",
+          "selector": "AF1",
+          "setting": "default",
+          "signal": "TX"
+        },
+        {
+          "peripheral": "USART2",
+          "pin": "PA3",
+          "resource": "USART2_REMAP",
+          "selector": "AF1",
+          "setting": "default",
+          "signal": "RX"
+        },
+        {
+          "peripheral": "USART2",
+          "pin": "PB6",
+          "resource": "USART2_REMAP",
+          "selector": "AF0",
+          "setting": "remapped",
+          "signal": "TX"
+        },
+        {
+          "peripheral": "USART2",
+          "pin": "PB7",
+          "resource": "USART2_REMAP",
+          "selector": "AF0",
+          "setting": "remapped",
+          "signal": "RX"
+        }
+      ],
+      "name": "stm32.STM32G0B1",
+      "peripherals": [
+        {
+          "kind": "i2c",
+          "name": "I2C1",
+          "signals": [
+            {
+              "name": "SDA",
+              "required": true,
+              "type": "open_drain"
+            },
+            {
+              "name": "SCL",
+              "required": true,
+              "type": "open_drain"
+            }
+          ]
+        },
+        {
+          "kind": "uart",
+          "name": "USART2",
+          "signals": [
+            {
+              "name": "TX",
+              "required": true,
+              "type": "output"
+            },
+            {
+              "name": "RX",
+              "required": true,
+              "type": "input"
+            },
+            {
+              "name": "CK",
+              "required": false,
+              "type": "output"
+            }
+          ]
+        }
+      ],
+      "resources": [
+        "USART2_REMAP"
+      ]
+    }
+  ],
+  "interfaces": [
+    {
+      "bindings": {
+        "U1": {
+          "scl": "PB6",
+          "sda": "PB7"
+        },
+        "U2": {
+          "scl": "SCL",
+          "sda": "SDA"
+        }
+      },
+      "kind": "i2c",
+      "name": "SENSOR_I2C",
+      "pullup_supply": "V3V3",
+      "signals": {
+        "scl": "I2C_SCL",
+        "sda": "I2C_SDA"
+      }
+    }
+  ],
+  "kind": "board",
+  "module_definitions": [
+    {
+      "components": [
+        {
+          "footprint": "SOT-23-5",
+          "part": "BUCK_REGULATOR",
+          "properties": {},
+          "ref": "U1",
+          "value": "5 V to 3.3 V buck"
+        },
+        {
+          "footprint": "L_4x4mm",
+          "part": "INDUCTOR",
+          "properties": {},
+          "ref": "L1",
+          "value": {
+            "base_value": "0.00001",
+            "unit": "uH",
+            "value": "1E+1"
+          }
+        },
+        {
+          "footprint": "SOD-123",
+          "part": "SCHOTTKY_DIODE",
+          "properties": {},
+          "ref": "D1",
+          "value": "40 V Schottky"
+        },
+        {
+          "footprint": "0603",
+          "part": "CAPACITOR",
+          "properties": {},
+          "ref": "C_IN",
+          "value": {
+            "base_value": "0.00001",
+            "unit": "uF",
+            "value": "1E+1"
+          }
+        },
+        {
+          "footprint": "0603",
+          "part": "CAPACITOR",
+          "properties": {},
+          "ref": "C_OUT",
+          "value": {
+            "base_value": "0.000022",
+            "unit": "uF",
+            "value": "22"
+          }
+        },
+        {
+          "footprint": "0402",
+          "part": "RESISTOR",
+          "properties": {},
+          "ref": "R_TOP",
+          "value": {
+            "base_value": "1E+5",
+            "unit": "kohm",
+            "value": "1E+2"
+          }
+        },
+        {
+          "footprint": "0402",
+          "part": "RESISTOR",
+          "properties": {},
+          "ref": "R_BOTTOM",
+          "value": {
+            "base_value": "3.16E+4",
+            "unit": "kohm",
+            "value": "31.6"
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "max_distance",
+          "parameters": {
+            "distance": {
+              "base_value": "0.003",
+              "unit": "mm",
+              "value": "3"
+            }
+          },
+          "targets": [
+            "C_IN",
+            "U1.VIN"
+          ]
+        },
+        {
+          "kind": "max_distance",
+          "parameters": {
+            "distance": {
+              "base_value": "0.004",
+              "unit": "mm",
+              "value": "4"
+            }
+          },
+          "targets": [
+            "C_OUT",
+            "L1.2"
+          ]
+        }
+      ],
+      "devices": [],
+      "interfaces": [],
+      "kind": "module",
+      "module_instances": [],
+      "name": "power.Buck5VTo3V3",
+      "nets": [
+        {
+          "endpoints": [
+            "port.VIN",
+            "U1.VIN",
+            "U1.EN",
+            "C_IN.1"
+          ],
+          "name": "VIN"
+        },
+        {
+          "endpoints": [
+            "port.GND",
+            "U1.GND",
+            "C_IN.2",
+            "C_OUT.2",
+            "D1.A",
+            "R_BOTTOM.2"
+          ],
+          "name": "GND"
+        },
+        {
+          "endpoints": [
+            "U1.SW",
+            "L1.1",
+            "D1.K"
+          ],
+          "name": "SWITCH"
+        },
+        {
+          "endpoints": [
+            "port.VOUT",
+            "L1.2",
+            "C_OUT.1",
+            "R_TOP.1"
+          ],
+          "name": "VOUT"
+        },
+        {
+          "endpoints": [
+            "U1.FB",
+            "R_TOP.2",
+            "R_BOTTOM.1"
+          ],
+          "name": "FEEDBACK"
+        }
+      ],
+      "parts": [
+        {
+          "device": null,
+          "footprints": [
+            "LGA-8"
+          ],
+          "kind": "sensor",
+          "manufacturer": "Example Sensors",
+          "metadata": {},
+          "name": "BME280_LIKE",
+          "pins": [
+            {
+              "name": "VDD",
+              "number": "1",
+              "type": "power_in",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "1.71",
+                "unit": "V",
+                "value": "1.71"
+              }
+            },
+            {
+              "name": "GND",
+              "number": "2",
+              "type": "power_in",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "SCL",
+              "number": "3",
+              "type": "open_drain",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            },
+            {
+              "name": "SDA",
+              "number": "4",
+              "type": "open_drain",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            }
+          ]
+        },
+        {
+          "device": null,
+          "footprints": [
+            "SOT-23-5"
+          ],
+          "kind": "regulator",
+          "manufacturer": null,
+          "metadata": {},
+          "name": "BUCK_REGULATOR",
+          "pins": [
+            {
+              "name": "VIN",
+              "number": "1",
+              "type": "power_in",
+              "voltage_max": {
+                "base_value": "18",
+                "unit": "V",
+                "value": "18"
+              },
+              "voltage_min": {
+                "base_value": "4.5",
+                "unit": "V",
+                "value": "4.5"
+              }
+            },
+            {
+              "name": "GND",
+              "number": "2",
+              "type": "power_in",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "SW",
+              "number": "3",
+              "type": "power_out",
+              "voltage_max": {
+                "base_value": "18",
+                "unit": "V",
+                "value": "18"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            },
+            {
+              "name": "FB",
+              "number": "4",
+              "type": "input",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            },
+            {
+              "name": "EN",
+              "number": "5",
+              "type": "input",
+              "voltage_max": {
+                "base_value": "18",
+                "unit": "V",
+                "value": "18"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            }
+          ]
+        },
+        {
+          "device": null,
+          "footprints": [
+            "0402",
+            "0603"
+          ],
+          "kind": "capacitor",
+          "manufacturer": null,
+          "metadata": {},
+          "name": "CAPACITOR",
+          "pins": [
+            {
+              "name": "1",
+              "number": "1",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "2",
+              "number": "2",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            }
+          ]
+        },
+        {
+          "device": null,
+          "footprints": [
+            "L_4x4mm"
+          ],
+          "kind": "generic",
+          "manufacturer": null,
+          "metadata": {},
+          "name": "INDUCTOR",
+          "pins": [
+            {
+              "name": "1",
+              "number": "1",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "2",
+              "number": "2",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            }
+          ]
+        },
+        {
+          "device": null,
+          "footprints": [
+            "SOT-23-3"
+          ],
+          "kind": "regulator",
+          "manufacturer": null,
+          "metadata": {},
+          "name": "REGULATOR_3V3",
+          "pins": [
+            {
+              "name": "IN",
+              "number": "1",
+              "type": "power_in",
+              "voltage_max": {
+                "base_value": "12",
+                "unit": "V",
+                "value": "12"
+              },
+              "voltage_min": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              }
+            },
+            {
+              "name": "GND",
+              "number": "2",
+              "type": "power_in",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "OUT",
+              "number": "3",
+              "type": "power_out",
+              "voltage_max": null,
+              "voltage_min": null
+            }
+          ]
+        },
+        {
+          "device": null,
+          "footprints": [
+            "0402",
+            "0603"
+          ],
+          "kind": "resistor",
+          "manufacturer": null,
+          "metadata": {},
+          "name": "RESISTOR",
+          "pins": [
+            {
+              "name": "1",
+              "number": "1",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "2",
+              "number": "2",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            }
+          ]
+        },
+        {
+          "device": null,
+          "footprints": [
+            "SOD-123"
+          ],
+          "kind": "generic",
+          "manufacturer": null,
+          "metadata": {},
+          "name": "SCHOTTKY_DIODE",
+          "pins": [
+            {
+              "name": "A",
+              "number": "1",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "K",
+              "number": "2",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            }
+          ]
+        },
+        {
+          "device": null,
+          "footprints": [
+            "LQFP-32"
+          ],
+          "kind": "mcu",
+          "manufacturer": "Example Semiconductor",
+          "metadata": {},
+          "name": "STM32_LIKE",
+          "pins": [
+            {
+              "name": "VDD",
+              "number": "1",
+              "type": "power_in",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "1.8",
+                "unit": "V",
+                "value": "1.8"
+              }
+            },
+            {
+              "name": "VSS",
+              "number": "2",
+              "type": "power_in",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "PB6",
+              "number": "3",
+              "type": "open_drain",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            },
+            {
+              "name": "PB7",
+              "number": "4",
+              "type": "open_drain",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            },
+            {
+              "name": "PA0",
+              "number": "5",
+              "type": "bidirectional",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            },
+            {
+              "name": "TX",
+              "number": "6",
+              "type": "output",
+              "voltage_max": {
+                "base_value": "3.6",
+                "unit": "V",
+                "value": "3.6"
+              },
+              "voltage_min": {
+                "base_value": "0",
+                "unit": "V",
+                "value": "0"
+              }
+            }
+          ]
+        },
+        {
+          "device": null,
+          "footprints": [],
+          "kind": "power_source",
+          "manufacturer": null,
+          "metadata": {},
+          "name": "VOLTAGE_SOURCE",
+          "pins": [
+            {
+              "name": "OUT",
+              "number": "1",
+              "type": "power_out",
+              "voltage_max": null,
+              "voltage_min": null
+            },
+            {
+              "name": "GND",
+              "number": "2",
+              "type": "passive",
+              "voltage_max": null,
+              "voltage_min": null
+            }
+          ]
+        }
+      ],
+      "peripheral_selections": [],
+      "ports": {
+        "GND": "power_in",
+        "VIN": "power_in",
+        "VOUT": "power_out"
+      },
+      "supplies": [
+        {
+          "externally_driven": true,
+          "name": "INPUT_RAIL",
+          "net": "VIN",
+          "source": null,
+          "voltage": {
+            "base_value": "5",
+            "unit": "V",
+            "value": "5"
+          }
+        },
+        {
+          "externally_driven": true,
+          "name": "OUTPUT_RAIL",
+          "net": "VOUT",
+          "source": null,
+          "voltage": {
+            "base_value": "3.3",
+            "unit": "V",
+            "value": "3.3"
+          }
+        },
+        {
+          "externally_driven": true,
+          "name": "GROUND_RAIL",
+          "net": "GND",
+          "source": null,
+          "voltage": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        }
+      ]
+    }
+  ],
+  "module_instances": [
+    {
+      "module": "power.Buck5VTo3V3",
+      "ref": "PWR"
+    }
+  ],
+  "name": "HierarchicalSensorBoard",
+  "nets": [
+    {
+      "endpoints": [
+        "PS1.OUT",
+        "PWR.VIN"
+      ],
+      "name": "VBUS"
+    },
+    {
+      "endpoints": [
+        "PS1.GND",
+        "PWR.GND",
+        "U1.VSS",
+        "U2.GND",
+        "C1.2"
+      ],
+      "name": "GND"
+    },
+    {
+      "endpoints": [
+        "PWR.VOUT",
+        "U1.VDD",
+        "U2.VDD",
+        "R1.1",
+        "R2.1",
+        "C1.1"
+      ],
+      "name": "V3V3"
+    },
+    {
+      "endpoints": [
+        "U1.PB7",
+        "U2.SDA",
+        "R1.2"
+      ],
+      "name": "I2C_SDA"
+    },
+    {
+      "endpoints": [
+        "U1.PB6",
+        "U2.SCL",
+        "R2.2"
+      ],
+      "name": "I2C_SCL"
+    }
+  ],
+  "parts": [
+    {
+      "device": null,
+      "footprints": [
+        "LGA-8"
+      ],
+      "kind": "sensor",
+      "manufacturer": "Example Sensors",
+      "metadata": {},
+      "name": "BME280_LIKE",
+      "pins": [
+        {
+          "name": "VDD",
+          "number": "1",
+          "type": "power_in",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "1.71",
+            "unit": "V",
+            "value": "1.71"
+          }
+        },
+        {
+          "name": "GND",
+          "number": "2",
+          "type": "power_in",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "SCL",
+          "number": "3",
+          "type": "open_drain",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        },
+        {
+          "name": "SDA",
+          "number": "4",
+          "type": "open_drain",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [
+        "SOT-23-5"
+      ],
+      "kind": "regulator",
+      "manufacturer": null,
+      "metadata": {},
+      "name": "BUCK_REGULATOR",
+      "pins": [
+        {
+          "name": "VIN",
+          "number": "1",
+          "type": "power_in",
+          "voltage_max": {
+            "base_value": "18",
+            "unit": "V",
+            "value": "18"
+          },
+          "voltage_min": {
+            "base_value": "4.5",
+            "unit": "V",
+            "value": "4.5"
+          }
+        },
+        {
+          "name": "GND",
+          "number": "2",
+          "type": "power_in",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "SW",
+          "number": "3",
+          "type": "power_out",
+          "voltage_max": {
+            "base_value": "18",
+            "unit": "V",
+            "value": "18"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        },
+        {
+          "name": "FB",
+          "number": "4",
+          "type": "input",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        },
+        {
+          "name": "EN",
+          "number": "5",
+          "type": "input",
+          "voltage_max": {
+            "base_value": "18",
+            "unit": "V",
+            "value": "18"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [
+        "0402",
+        "0603"
+      ],
+      "kind": "capacitor",
+      "manufacturer": null,
+      "metadata": {},
+      "name": "CAPACITOR",
+      "pins": [
+        {
+          "name": "1",
+          "number": "1",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "2",
+          "number": "2",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [
+        "L_4x4mm"
+      ],
+      "kind": "generic",
+      "manufacturer": null,
+      "metadata": {},
+      "name": "INDUCTOR",
+      "pins": [
+        {
+          "name": "1",
+          "number": "1",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "2",
+          "number": "2",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [
+        "SOT-23-3"
+      ],
+      "kind": "regulator",
+      "manufacturer": null,
+      "metadata": {},
+      "name": "REGULATOR_3V3",
+      "pins": [
+        {
+          "name": "IN",
+          "number": "1",
+          "type": "power_in",
+          "voltage_max": {
+            "base_value": "12",
+            "unit": "V",
+            "value": "12"
+          },
+          "voltage_min": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          }
+        },
+        {
+          "name": "GND",
+          "number": "2",
+          "type": "power_in",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "OUT",
+          "number": "3",
+          "type": "power_out",
+          "voltage_max": null,
+          "voltage_min": null
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [
+        "0402",
+        "0603"
+      ],
+      "kind": "resistor",
+      "manufacturer": null,
+      "metadata": {},
+      "name": "RESISTOR",
+      "pins": [
+        {
+          "name": "1",
+          "number": "1",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "2",
+          "number": "2",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [
+        "SOD-123"
+      ],
+      "kind": "generic",
+      "manufacturer": null,
+      "metadata": {},
+      "name": "SCHOTTKY_DIODE",
+      "pins": [
+        {
+          "name": "A",
+          "number": "1",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "K",
+          "number": "2",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [
+        "LQFP-32"
+      ],
+      "kind": "mcu",
+      "manufacturer": "Example Semiconductor",
+      "metadata": {},
+      "name": "STM32_LIKE",
+      "pins": [
+        {
+          "name": "VDD",
+          "number": "1",
+          "type": "power_in",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "1.8",
+            "unit": "V",
+            "value": "1.8"
+          }
+        },
+        {
+          "name": "VSS",
+          "number": "2",
+          "type": "power_in",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "PB6",
+          "number": "3",
+          "type": "open_drain",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        },
+        {
+          "name": "PB7",
+          "number": "4",
+          "type": "open_drain",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        },
+        {
+          "name": "PA0",
+          "number": "5",
+          "type": "bidirectional",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        },
+        {
+          "name": "TX",
+          "number": "6",
+          "type": "output",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [],
+      "kind": "power_source",
+      "manufacturer": null,
+      "metadata": {},
+      "name": "VOLTAGE_SOURCE",
+      "pins": [
+        {
+          "name": "OUT",
+          "number": "1",
+          "type": "power_out",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "GND",
+          "number": "2",
+          "type": "passive",
+          "voltage_max": null,
+          "voltage_min": null
+        }
+      ]
+    },
+    {
+      "device": null,
+      "footprints": [
+        "LGA-8"
+      ],
+      "kind": "sensor",
+      "manufacturer": "Example Sensors",
+      "metadata": {},
+      "name": "sensors.BME280",
+      "pins": [
+        {
+          "name": "VDD",
+          "number": "1",
+          "type": "power_in",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "1.71",
+            "unit": "V",
+            "value": "1.71"
+          }
+        },
+        {
+          "name": "GND",
+          "number": "2",
+          "type": "power_in",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "SCL",
+          "number": "3",
+          "type": "open_drain",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        },
+        {
+          "name": "SDA",
+          "number": "4",
+          "type": "open_drain",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "0",
+            "unit": "V",
+            "value": "0"
+          }
+        }
+      ]
+    },
+    {
+      "device": "stm32.STM32G0B1",
+      "footprints": [
+        "LQFP-48"
+      ],
+      "kind": "mcu",
+      "manufacturer": "STMicroelectronics",
+      "metadata": {},
+      "name": "stm32.STM32G0B1CBT6",
+      "pins": [
+        {
+          "name": "VDD",
+          "number": "24",
+          "type": "power_in",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": {
+            "base_value": "1.7",
+            "unit": "V",
+            "value": "1.7"
+          }
+        },
+        {
+          "name": "VSS",
+          "number": "23",
+          "type": "power_in",
+          "voltage_max": null,
+          "voltage_min": null
+        },
+        {
+          "name": "PA2",
+          "number": "10",
+          "type": "bidirectional",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": null
+        },
+        {
+          "name": "PA3",
+          "number": "11",
+          "type": "bidirectional",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": null
+        },
+        {
+          "name": "PB6",
+          "number": "42",
+          "type": "bidirectional",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": null
+        },
+        {
+          "name": "PB7",
+          "number": "43",
+          "type": "bidirectional",
+          "voltage_max": {
+            "base_value": "3.6",
+            "unit": "V",
+            "value": "3.6"
+          },
+          "voltage_min": null
+        }
+      ]
+    }
+  ],
+  "peripheral_selections": [
+    {
+      "component": "U1",
+      "name": "SENSOR_BUS",
+      "peripheral": "I2C1",
+      "signals": {
+        "SCL": {
+          "pin": "PB6",
+          "resource": null,
+          "selector": "AF6",
+          "setting": null
+        },
+        "SDA": {
+          "pin": "PB7",
+          "resource": null,
+          "selector": "AF6",
+          "setting": null
+        }
+      }
+    }
+  ],
+  "schema": "copperscript-ir/v0.1",
+  "supplies": [
+    {
+      "externally_driven": false,
+      "name": "VBUS",
+      "net": "VBUS",
+      "source": "PS1.OUT",
+      "voltage": {
+        "base_value": "5",
+        "unit": "V",
+        "value": "5"
+      }
+    },
+    {
+      "externally_driven": true,
+      "name": "V3V3",
+      "net": "V3V3",
+      "source": null,
+      "voltage": {
+        "base_value": "3.3",
+        "unit": "V",
+        "value": "3.3"
+      }
+    },
+    {
+      "externally_driven": true,
+      "name": "GND",
+      "net": "GND",
+      "source": null,
+      "voltage": {
+        "base_value": "0",
+        "unit": "V",
+        "value": "0"
+      }
+    }
+  ]
+}

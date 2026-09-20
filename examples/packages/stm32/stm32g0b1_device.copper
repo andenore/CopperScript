@@ -1,0 +1,44 @@
+// Illustrative subset of the STM32G0B1 capability map.
+// A production package should be generated and checked against vendor data.
+device STM32G0B1 {
+    vendor = "STMicroelectronics";
+    family = "STM32G0";
+    source_revision = "illustrative-v0.1";
+
+    peripheral I2C1: i2c {
+        signal SDA: open_drain;
+        signal SCL: open_drain;
+    }
+
+    peripheral USART2: uart {
+        signal TX: output;
+        signal RX: input;
+        signal CK: output { required = false; }
+    }
+
+    resource USART2_REMAP;
+
+    mux PB7: I2C1.SDA { selector = "AF6"; }
+    mux PB6: I2C1.SCL { selector = "AF6"; }
+
+    mux PA2: USART2.TX {
+        selector = "AF1";
+        resource = USART2_REMAP;
+        setting = default;
+    }
+    mux PA3: USART2.RX {
+        selector = "AF1";
+        resource = USART2_REMAP;
+        setting = default;
+    }
+    mux PB6: USART2.TX {
+        selector = "AF0";
+        resource = USART2_REMAP;
+        setting = remapped;
+    }
+    mux PB7: USART2.RX {
+        selector = "AF0";
+        resource = USART2_REMAP;
+        setting = remapped;
+    }
+}

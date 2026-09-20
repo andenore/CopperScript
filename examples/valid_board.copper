@@ -1,0 +1,97 @@
+// A small MCU + environmental sensor board that passes v0.1 ERC.
+board ValidSensorBoard {
+    use library "tiny";
+    import sensors "github.com/copperscript/examples/sensors";
+    import stm32 "github.com/copperscript/examples/stm32";
+
+    component PS1: VOLTAGE_SOURCE;
+    component U1: REGULATOR_3V3 {
+        footprint = "SOT-23-3";
+    }
+    component U2: stm32.STM32G0B1CBT6 {
+        footprint = "LQFP-48";
+    }
+    component U3: sensors.BME280 {
+        footprint = "LGA-8";
+    }
+    component R1: RESISTOR {
+        value = 4.7kohm;
+        footprint = "0402";
+    }
+    component R2: RESISTOR {
+        value = 4.7kohm;
+        footprint = "0402";
+    }
+    component C1: CAPACITOR {
+        value = 100nF;
+        footprint = "0402";
+    }
+
+    configure U2.I2C1 as SENSOR_BUS {
+        SDA = PB7;
+        SCL = PB6;
+    }
+
+    net VBUS {
+        PS1.OUT;
+        U1.IN;
+    }
+    net GND {
+        PS1.GND;
+        U1.GND;
+        U2.VSS;
+        U3.GND;
+        C1.2;
+    }
+    net V3V3 {
+        U1.OUT;
+        U2.VDD;
+        U3.VDD;
+        R1.1;
+        R2.1;
+        C1.1;
+    }
+    net I2C_SDA {
+        U2.PB7;
+        U3.SDA;
+        R1.2;
+    }
+    net I2C_SCL {
+        U2.PB6;
+        U3.SCL;
+        R2.2;
+    }
+
+    supply VBUS {
+        voltage = 5V;
+        source = PS1.OUT;
+    }
+    supply V3V3 {
+        voltage = 3.3V;
+        source = U1.OUT;
+    }
+    supply GND {
+        voltage = 0V;
+        external = true;
+    }
+
+    interface SENSOR_I2C: i2c {
+        sda = I2C_SDA;
+        scl = I2C_SCL;
+        pullup = V3V3;
+
+        bind U2 {
+            sda = PB7;
+            scl = PB6;
+        }
+        bind U3 {
+            sda = SDA;
+            scl = SCL;
+        }
+    }
+
+    // Physical intent is retained in IR but not enforced in v0.1.
+    constraint max_distance(C1, U2.VDD) {
+        distance = 3mm;
+    }
+}
