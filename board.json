@@ -73,19 +73,19 @@
   ],
   "dependencies": [
     {
-      "checksum": "sha256:cd6ebcd1de54e5dc09f655709a9bccf54dec31a838cb8be6a814018ad50dde18",
+      "checksum": "sha256:42b4e79134ab2578803f0f6767457c3988133b05de360903ec4246a3794e9287",
       "import_path": "github.com/copperscript/examples/power",
       "module_path": "github.com/copperscript/examples",
       "version": "v0.1.0"
     },
     {
-      "checksum": "sha256:cd6ebcd1de54e5dc09f655709a9bccf54dec31a838cb8be6a814018ad50dde18",
+      "checksum": "sha256:42b4e79134ab2578803f0f6767457c3988133b05de360903ec4246a3794e9287",
       "import_path": "github.com/copperscript/examples/sensors",
       "module_path": "github.com/copperscript/examples",
       "version": "v0.1.0"
     },
     {
-      "checksum": "sha256:cd6ebcd1de54e5dc09f655709a9bccf54dec31a838cb8be6a814018ad50dde18",
+      "checksum": "sha256:42b4e79134ab2578803f0f6767457c3988133b05de360903ec4246a3794e9287",
       "import_path": "github.com/copperscript/examples/stm32",
       "module_path": "github.com/copperscript/examples",
       "version": "v0.1.0"

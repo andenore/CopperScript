@@ -1,5 +1,8 @@
+// Generated from device-data/stm32g0b1; do not edit by hand.
+// Regenerate with: python tools/devicegen.py generate <bundle> --out-dir <package>
 // Illustrative subset of the STM32G0B1 capability map.
-// A production package should be generated and checked against vendor data.
+// A production bundle should be generated and checked against vendor data.
+
 device STM32G0B1 {
     vendor = "STMicroelectronics";
     family = "STM32G0";
@@ -10,33 +13,42 @@ device STM32G0B1 {
     }
 
     pad VDD {
+        capabilities = "power_input";
         role = digital_supply;
-        capabilities = "power_input";
     }
+
     pad VSS {
-        role = ground;
         capabilities = "power_input";
+        role = ground;
     }
+
     pad PA2 {
         capabilities = "digital_input,push_pull_output,open_drain_output";
+        role = io;
         power_domain = VDDIO1;
         unpowered = clamped;
         voltage_max = 3.6V;
     }
+
     pad PA3 {
         capabilities = "digital_input,push_pull_output,open_drain_output";
+        role = io;
         power_domain = VDDIO1;
         unpowered = clamped;
         voltage_max = 3.6V;
     }
+
     pad PB6 {
         capabilities = "digital_input,push_pull_output,open_drain_output";
+        role = io;
         power_domain = VDDIO1;
         unpowered = clamped;
         voltage_max = 3.6V;
     }
+
     pad PB7 {
         capabilities = "digital_input,push_pull_output,open_drain_output";
+        role = io;
         power_domain = VDDIO1;
         unpowered = clamped;
         voltage_max = 3.6V;
@@ -57,7 +69,6 @@ device STM32G0B1 {
 
     mux PB7: I2C1.SDA { selector = "AF6"; }
     mux PB6: I2C1.SCL { selector = "AF6"; }
-
     mux PA2: USART2.TX {
         selector = "AF1";
         resource = USART2_REMAP;

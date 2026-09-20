@@ -1,0 +1,7 @@
+pad,peripheral,signal,selector,resource,setting
+PB7,I2C1,SDA,AF6,,
+PB6,I2C1,SCL,AF6,,
+PA2,USART2,TX,AF1,USART2_REMAP,default
+PA3,USART2,RX,AF1,USART2_REMAP,default
+PB6,USART2,TX,AF0,USART2_REMAP,remapped
+PB7,USART2,RX,AF0,USART2_REMAP,remapped

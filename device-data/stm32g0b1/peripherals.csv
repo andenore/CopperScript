@@ -1,0 +1,6 @@
+peripheral,kind,signal,type,required
+I2C1,i2c,SDA,open_drain,true
+I2C1,i2c,SCL,open_drain,true
+USART2,uart,TX,output,true
+USART2,uart,RX,input,true
+USART2,uart,CK,output,false

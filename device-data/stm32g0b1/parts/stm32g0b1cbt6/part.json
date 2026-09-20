@@ -1,0 +1,11 @@
+{
+  "name": "STM32G0B1CBT6",
+  "output": "stm32g0b1cbt6.copper",
+  "header": [
+    "Illustrative package-specific bonding for an STM32-like LQFP-48 MCU."
+  ],
+  "kind": "mcu",
+  "manufacturer": "STMicroelectronics",
+  "footprint": "LQFP-48",
+  "device": "STM32G0B1"
+}

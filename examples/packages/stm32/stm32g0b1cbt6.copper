@@ -1,4 +1,7 @@
+// Generated from device-data/stm32g0b1; do not edit by hand.
+// Regenerate with: python tools/devicegen.py generate <bundle> --out-dir <package>
 // Illustrative package-specific bonding for an STM32-like LQFP-48 MCU.
+
 part STM32G0B1CBT6 {
     kind = mcu;
     manufacturer = "STMicroelectronics";
@@ -12,9 +15,34 @@ part STM32G0B1CBT6 {
         voltage_min = 1.7V;
         voltage_max = 3.6V;
     }
-    pin VSS { number = "23"; bond = VSS; role = ground; }
-    pin PA2 { number = "10"; bond = PA2; }
-    pin PA3 { number = "11"; bond = PA3; }
-    pin PB6 { number = "45"; bond = PB6; }
-    pin PB7 { number = "46"; bond = PB7; }
+
+    pin VSS {
+        number = "23";
+        bond = VSS;
+        role = ground;
+    }
+
+    pin PA2 {
+        number = "10";
+        bond = PA2;
+        role = io;
+    }
+
+    pin PA3 {
+        number = "11";
+        bond = PA3;
+        role = io;
+    }
+
+    pin PB6 {
+        number = "45";
+        bond = PB6;
+        role = io;
+    }
+
+    pin PB7 {
+        number = "46";
+        bond = PB7;
+        role = io;
+    }
 }

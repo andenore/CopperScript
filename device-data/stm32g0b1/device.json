@@ -1,0 +1,32 @@
+{
+  "schema": "copperscript-device-bundle/v0.1",
+  "device": {
+    "name": "STM32G0B1",
+    "output": "stm32g0b1_device.copper",
+    "header": [
+      "Illustrative subset of the STM32G0B1 capability map.",
+      "A production bundle should be generated and checked against vendor data."
+    ],
+    "metadata": {
+      "vendor": "STMicroelectronics",
+      "family": "STM32G0"
+    },
+    "source": {
+      "revision": "illustrative-v0.1"
+    },
+    "resources": [
+      "USART2_REMAP"
+    ],
+    "power_domains": [
+      {
+        "name": "VDDIO1",
+        "supply_pads": [
+          "VDD"
+        ]
+      }
+    ]
+  },
+  "parts": [
+    "parts/stm32g0b1cbt6"
+  ]
+}

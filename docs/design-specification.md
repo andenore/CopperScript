@@ -307,6 +307,30 @@ internal behavior of power switches. Later sequencing and transition models
 MUST build on the same explicit domains and states rather than embedding a
 hidden simulator in connectivity checking.
 
+### 3.11 Generated device libraries use compact normalized data
+
+Large devices SHOULD be maintained as normalized metadata and tables rather
+than hand-authored repetitive CopperScript. The repository generation workflow
+uses JSON for device/package metadata and CSV for pads, pins, peripheral
+signals, and mux options. Deterministic tooling validates references and emits
+ordinary `.copper` definitions; generated source remains declarative and is
+compiled through the same frontend as hand-written packages.
+
+The normalized bundle is authoritative library input. Generated CopperScript
+MUST be reproducible and SHOULD carry a generated-file notice. CI SHOULD fail
+when checked-in generated files differ from the bundle.
+
+Unknown or disputed extracted values use an explicit marker and MUST block
+generation. Tooling SHOULD produce small work packets containing only selected
+or unresolved rows plus the relevant enum vocabulary and optional provenance.
+This permits datasheet agents to work on bounded tables without repeatedly
+loading complete devices or emitting repetitive syntax.
+
+Machine-readable vendor data SHOULD be preferred over PDF extraction. Source
+provenance remains optional as required by CS-027, but generators SHOULD retain
+it whenever available. Generation tooling MUST NOT execute dependency-provided
+code.
+
 ## 4. Language and compiler
 
 `.copper` is the only user-facing source format. Executable Python is permitted
@@ -529,6 +553,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-028 | Accepted | Peripheral selections are exclusive by default; `firmware_managed` suppresses ownership/resource-sharing conflicts but not structural or electrical validation. |
 | CS-029 | Accepted | Power domains and named discrete rail states are explicit IR, analyzed by a separate conservative steady-state pass. |
 | CS-030 | Accepted | The initial schematic backend targets KiCad 8 format `20231120`, owns all presentation geometry, embeds generic symbols, and explicitly derives a flat single-sheet artifact. |
+| CS-031 | Accepted | Large device libraries use compact normalized JSON/CSV bundles and deterministic source generation; unresolved values block generation and bounded work packets minimize extraction context. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

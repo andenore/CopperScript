@@ -17,6 +17,7 @@ test = ["pytest>=8"]
 
 [project.scripts]
 copper = "pcbir.cli:main"
+copper-devicegen = "pcbir.devicegen:main"
 
 [tool.setuptools]
 packages = ["copperscript", "pcbir", "pcbir.backends"]

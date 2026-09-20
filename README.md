@@ -71,6 +71,10 @@ See the [design specification](docs/design-specification.md), the
 [language reference](docs/language-reference.md), and the complete [valid
 example](examples/valid_board.copper).
 
+Device-library authors should use the compact, table-driven
+[device generation workflow](docs/device-generation.md) rather than writing
+large MCU definitions by hand.
+
 The [hierarchical example](examples/hierarchical_board.copper) instantiates a
 reusable [5 V to 3.3 V buck supply](examples/packages/power/buck_5v_to_3v3.copper)
 and imports the sensor part from a separate package.
@@ -128,6 +132,8 @@ Key modules:
   require a global connectivity view.
 - `pcbir.erc` — reusable electrical-rules passes.
 - `pcbir.power` — explicit steady-state power-domain analysis.
+- `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work
+  packets, validation, and deterministic library generation.
 - `pcbir.backends` — immutable backend artifacts and the KiCad schematic
   generator.
 - `pcbir.serializer` — versioned JSON IR output.
