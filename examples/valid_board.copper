@@ -75,6 +75,18 @@ board ValidSensorBoard {
         external = true;
     }
 
+    power_state NORMAL {
+        VBUS = on;
+        V3V3 = on;
+        GND = on;
+    }
+
+    power_state OFF {
+        VBUS = off;
+        V3V3 = off;
+        GND = on;
+    }
+
     interface SENSOR_I2C: i2c {
         sda = I2C_SDA;
         scl = I2C_SCL;

@@ -15,6 +15,7 @@ from .model import (
     ConstraintKind,
     Dependency,
     DeviceDefinition,
+    DevicePadDefinition,
     Interface,
     InterfaceKind,
     ModuleDefinition,
@@ -23,13 +24,20 @@ from .model import (
     Net,
     PartDefinition,
     PartKind,
+    PinCapability,
     PeripheralDefinition,
     PeripheralSelection,
     PeripheralSignalDefinition,
     PeripheralSignalSelection,
     PinDefinition,
     PinType,
+    PowerDomainDefinition,
+    PowerRailState,
+    PowerState,
+    SelectionUsage,
+    SourceReference,
     Supply,
+    UnpoweredBehavior,
     ep,
 )
 from .parser import parse
@@ -48,7 +56,10 @@ from .syntax import (
     NetDecl,
     PortDecl,
     PartPropertyDecl,
+    PadDecl,
     PeripheralDecl,
+    PowerDomainDecl,
+    PowerStateDecl,
     PinDecl,
     RawQuantity,
     ResourceDecl,
@@ -217,6 +228,7 @@ def _load_package(
             lambda raw_name: (
                 f"{namespace}.{raw_name}" if raw_name in device_documents else raw_name
             ),
+            devices,
         )
         for name, document in part_documents.items()
     }
@@ -346,6 +358,7 @@ def _compile_board(
         dependencies=dependencies,
         devices=body.devices,
         peripheral_selections=body.peripheral_selections,
+        power_states=body.power_states,
     )
 
 
@@ -366,6 +379,8 @@ def _compile_module(
         imported_devices or {},
     )
     _validate_module_ports(body, ports, document.location)
+    if body.power_states:
+        _error("CMP072", "power states may only be declared on a board", document.location)
     instances = _validate_instances(body, declarations, modules)
     return ModuleDefinition(
         name=name or document.name,
@@ -400,6 +415,7 @@ def _lower_unit(
     interfaces: list[Interface] = []
     constraints: list[Constraint] = []
     configurations: list[ConfigurationDecl] = []
+    power_states: list[PowerState] = []
 
     for declaration in document.declarations:
         if isinstance(declaration, ComponentDecl):
@@ -438,6 +454,8 @@ def _lower_unit(
             constraints.append(_constraint(declaration))
         elif isinstance(declaration, ConfigurationDecl):
             configurations.append(declaration)
+        elif isinstance(declaration, PowerStateDecl):
+            power_states.append(_power_state(declaration))
 
     selections = tuple(
         _configuration(declaration, components, library, devices)
@@ -455,6 +473,7 @@ def _lower_unit(
             constraints=tuple(constraints),
             devices=devices,
             peripheral_selections=selections,
+            power_states=tuple(power_states),
         ),
         ports,
         tuple(module_instances),
@@ -587,17 +606,81 @@ def _component(declaration: ComponentDecl, part_name: str | None = None) -> Comp
 
 
 def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition:
-    metadata: dict[str, str] = {}
+    properties: dict[str, str] = {}
+    pads: dict[str, DevicePadDefinition] = {}
+    power_domains: dict[str, PowerDomainDefinition] = {}
     peripherals: dict[str, PeripheralDefinition] = {}
     resources: list[str] = []
     mux_options: list[MuxOption] = []
     for declaration in document.declarations:
         if isinstance(declaration, DevicePropertyDecl):
-            if declaration.name in metadata:
+            if declaration.name in properties:
                 _error("CMP054", f"duplicate device property {declaration.name!r}", declaration.location)
             if not isinstance(declaration.value, str):
                 _error("CMP055", "device metadata values must be strings or identifiers", declaration.location)
-            metadata[declaration.name] = declaration.value
+            properties[declaration.name] = declaration.value
+        elif isinstance(declaration, PadDecl):
+            if declaration.name in pads:
+                _error("CMP073", f"duplicate device pad {declaration.name!r}", declaration.location)
+            _reject_unknown_attributes(
+                declaration.attributes,
+                {
+                    "capabilities",
+                    "role",
+                    "power_domain",
+                    "unpowered",
+                    "voltage_min",
+                    "voltage_max",
+                },
+                declaration.location,
+            )
+            capabilities = _capabilities(
+                _required(declaration.attributes, "capabilities", declaration.location),
+                declaration.location,
+            )
+            role = _string_value(
+                declaration.attributes.get("role", "io"), "pad role", declaration.location
+            )
+            power_domain = _optional_string(
+                declaration.attributes.get("power_domain"), "pad power_domain", declaration.location
+            )
+            raw_unpowered = _string_value(
+                declaration.attributes.get("unpowered", UnpoweredBehavior.UNKNOWN.value),
+                "pad unpowered behavior",
+                declaration.location,
+            )
+            try:
+                unpowered = UnpoweredBehavior(raw_unpowered)
+            except ValueError:
+                allowed = ", ".join(item.value for item in UnpoweredBehavior)
+                _error("CMP074", f"unknown unpowered behavior {raw_unpowered!r}; expected: {allowed}", declaration.location)
+            pads[declaration.name] = DevicePadDefinition(
+                name=declaration.name,
+                capabilities=capabilities,
+                role=role,
+                power_domain=power_domain,
+                unpowered_behavior=unpowered,
+                voltage_min=_optional_voltage(
+                    declaration.attributes.get("voltage_min"), declaration.location
+                ),
+                voltage_max=_optional_voltage(
+                    declaration.attributes.get("voltage_max"), declaration.location
+                ),
+            )
+        elif isinstance(declaration, PowerDomainDecl):
+            if declaration.name in power_domains:
+                _error("CMP075", f"duplicate power domain {declaration.name!r}", declaration.location)
+            _reject_unknown_attributes(
+                declaration.attributes, {"supply_pads"}, declaration.location
+            )
+            supply_pads = _csv_names(
+                _required(declaration.attributes, "supply_pads", declaration.location),
+                "power-domain supply_pads",
+                declaration.location,
+            )
+            power_domains[declaration.name] = PowerDomainDefinition(
+                declaration.name, supply_pads
+            )
         elif isinstance(declaration, ResourceDecl):
             if declaration.name in resources:
                 _error("CMP056", f"duplicate device resource {declaration.name!r}", declaration.location)
@@ -647,7 +730,7 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
                 _error("CMP065", "mux resource and setting must be specified together", declaration.location)
             mux_options.append(
                 MuxOption(
-                    declaration.pin,
+                    declaration.pad,
                     declaration.peripheral,
                     declaration.signal,
                     selector,
@@ -658,11 +741,13 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
         else:
             _error(
                 "CMP066",
-                "device files may only contain metadata, peripherals, resources, and mux options",
+                "device files may only contain metadata, pads, power domains, peripherals, resources, and mux options",
                 document.location,
             )
 
     for mux in mux_options:
+        if mux.pad not in pads:
+            _error("CMP076", f"mux references unknown device pad {mux.pad!r}", document.location)
         peripheral = peripherals.get(mux.peripheral)
         if peripheral is None:
             _error("CMP067", f"mux references unknown peripheral {mux.peripheral!r}", document.location)
@@ -674,15 +759,27 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
             )
         if mux.resource is not None and mux.resource not in resources:
             _error("CMP069", f"mux references undeclared resource {mux.resource!r}", document.location)
-    mux_keys = [(mux.pin, mux.peripheral, mux.signal) for mux in mux_options]
+    for pad in pads.values():
+        if pad.power_domain is not None and pad.power_domain not in power_domains:
+            _error("CMP077", f"pad {pad.name!r} references unknown power domain {pad.power_domain!r}", document.location)
+    for domain in power_domains.values():
+        unknown = sorted(set(domain.supply_pads) - set(pads))
+        if unknown:
+            _error("CMP078", f"power domain {domain.name!r} references unknown supply pad {unknown[0]!r}", document.location)
+    mux_keys = [(mux.pad, mux.peripheral, mux.signal) for mux in mux_options]
     if len(mux_keys) != len(set(mux_keys)):
         _error("CMP070", "device contains a duplicate mux option", document.location)
     return DeviceDefinition(
-        qualified_name,
-        peripherals,
-        tuple(mux_options),
-        tuple(resources),
-        metadata,
+        name=qualified_name,
+        pads=pads,
+        peripherals=peripherals,
+        mux_options=tuple(mux_options),
+        power_domains=power_domains,
+        resources=tuple(resources),
+        metadata={
+            key: value for key, value in properties.items() if not key.startswith("source_")
+        },
+        source=_source_reference(properties, document.location),
     )
 
 
@@ -690,6 +787,7 @@ def _compile_part(
     document: Document,
     qualified_name: str,
     resolve_device: Callable[[str], str] = lambda value: value,
+    devices: Mapping[str, DeviceDefinition] | None = None,
 ) -> PartDefinition:
     properties: dict[str, Scalar] = {}
     pins: dict[str, PinDefinition] = {}
@@ -703,21 +801,28 @@ def _compile_part(
                 _error("CMP043", f"duplicate pin {declaration.name!r}", declaration.location)
             _reject_unknown_attributes(
                 declaration.attributes,
-                {"number", "voltage_min", "voltage_max"},
+                {
+                    "number",
+                    "capabilities",
+                    "role",
+                    "bond",
+                    "voltage_min",
+                    "voltage_max",
+                },
                 declaration.location,
             )
             number = _required(declaration.attributes, "number", declaration.location)
             if not isinstance(number, str):
                 _error("CMP044", "pin number must be a string", declaration.location)
-            try:
-                pin_type = PinType(declaration.pin_type)
-            except ValueError:
-                allowed = ", ".join(item.value for item in PinType)
-                _error(
-                    "CMP045",
-                    f"unknown pin type {declaration.pin_type!r}; expected one of: {allowed}",
-                    declaration.location,
-                )
+            capabilities = _capabilities(
+                declaration.attributes.get("capabilities", ""), declaration.location
+            )
+            role = _string_value(
+                declaration.attributes.get("role", "io"), "pin role", declaration.location
+            )
+            bonds = _csv_names(
+                declaration.attributes.get("bond", ""), "pin bond", declaration.location
+            )
             voltage_min = _optional_voltage(
                 declaration.attributes.get("voltage_min"), declaration.location
             )
@@ -727,7 +832,9 @@ def _compile_part(
             pins[declaration.name] = PinDefinition(
                 declaration.name,
                 number,
-                pin_type,
+                capabilities,
+                role,
+                bonds,
                 voltage_min,
                 voltage_max,
             )
@@ -735,7 +842,19 @@ def _compile_part(
             _error("CMP046", "part files may only contain properties and pins", document.location)
 
     _reject_unknown_attributes(
-        properties, {"kind", "manufacturer", "footprint", "device"}, document.location
+        properties,
+        {
+            "kind",
+            "manufacturer",
+            "footprint",
+            "device",
+            "source_document",
+            "source_revision",
+            "source_location",
+            "source_url",
+            "source_checksum",
+        },
+        document.location,
     )
     raw_kind = properties.get("kind", PartKind.GENERIC.value)
     if not isinstance(raw_kind, str):
@@ -754,15 +873,30 @@ def _compile_part(
     device = properties.get("device")
     if device is not None and not isinstance(device, str):
         _error("CMP071", "part device must be an identifier", document.location)
+    resolved_device = resolve_device(device) if device else None
+    device_definition = (devices or {}).get(resolved_device or "")
+    for pin in pins.values():
+        if resolved_device and not pin.bonded_pads:
+            _error("CMP079", f"device-backed pin {pin.name!r} must declare bond", document.location)
+        if not resolved_device and not pin.capabilities:
+            _error("CMP080", f"standalone pin {pin.name!r} must declare capabilities", document.location)
+        if device_definition is not None:
+            unknown = sorted(set(pin.bonded_pads) - set(device_definition.pads))
+            if unknown:
+                _error("CMP081", f"pin {pin.name!r} bonds unknown device pad {unknown[0]!r}", document.location)
     if not pins:
         _error("CMP050", "part must declare at least one pin", document.location)
+    pin_numbers = [pin.number for pin in pins.values()]
+    if len(pin_numbers) != len(set(pin_numbers)):
+        _error("CMP087", "part contains duplicate physical pin numbers", document.location)
     return PartDefinition(
         name=qualified_name,
         pins=pins,
         kind=kind,
         footprints=(footprint,) if footprint else (),
         manufacturer=manufacturer,
-        device=resolve_device(device) if device else None,
+        device=resolved_device,
+        source=_source_reference(properties, document.location),
     )
 
 
@@ -774,18 +908,29 @@ def _configuration(
 ) -> PeripheralSelection:
     component = next((item for item in components if item.ref == declaration.component), None)
     device: DeviceDefinition | None = None
+    part: PartDefinition | None = None
     if component is not None:
         part = library.get(component.part)
         if part is not None and part.device is not None:
             device = devices.get(part.device)
 
+    raw_signals = dict(declaration.signals)
+    raw_usage = raw_signals.pop("usage", SelectionUsage.EXCLUSIVE.value)
+    try:
+        usage = SelectionUsage(raw_usage)
+    except ValueError:
+        allowed = ", ".join(item.value for item in SelectionUsage)
+        _error("CMP082", f"unknown configuration usage {raw_usage!r}; expected: {allowed}", declaration.location)
+
     signals: dict[str, PeripheralSignalSelection] = {}
-    for signal, pin in declaration.signals.items():
+    for signal, pin in raw_signals.items():
+        package_pin = part.pins.get(pin) if part is not None else None
+        bonded_pads = package_pin.bonded_pads if package_pin is not None else ()
         options = (
             [
                 option
                 for option in device.mux_options
-                if option.pin == pin
+                if option.pad in bonded_pads
                 and option.peripheral == declaration.peripheral
                 and option.signal == signal
             ]
@@ -804,6 +949,69 @@ def _configuration(
         declaration.peripheral,
         declaration.name,
         signals,
+        usage,
+    )
+
+
+def _power_state(declaration: PowerStateDecl) -> PowerState:
+    rails: dict[str, PowerRailState] = {}
+    for rail, raw_state in declaration.rails.items():
+        try:
+            rails[rail] = PowerRailState(raw_state)
+        except ValueError:
+            allowed = ", ".join(item.value for item in PowerRailState)
+            _error("CMP083", f"unknown power rail state {raw_state!r}; expected: {allowed}", declaration.location)
+    return PowerState(declaration.name, rails)
+
+
+def _capabilities(value: Scalar, location: SourceLocation) -> frozenset[PinCapability]:
+    names = _csv_names(value, "capabilities", location)
+    capabilities: set[PinCapability] = set()
+    for name in names:
+        try:
+            capabilities.add(PinCapability(name))
+        except ValueError:
+            allowed = ", ".join(item.value for item in PinCapability)
+            _error("CMP084", f"unknown pin capability {name!r}; expected: {allowed}", location)
+    return frozenset(capabilities)
+
+
+def _csv_names(value: Scalar, label: str, location: SourceLocation) -> tuple[str, ...]:
+    text = _string_value(value, label, location)
+    if not text.strip():
+        return ()
+    names = tuple(item.strip() for item in text.split(",") if item.strip())
+    if len(names) != len(set(names)):
+        _error("CMP085", f"{label} contains a duplicate name", location)
+    return names
+
+
+def _string_value(value: Scalar, label: str, location: SourceLocation) -> str:
+    if not isinstance(value, str):
+        _error("CMP086", f"{label} must be a string or identifier", location)
+    return value
+
+
+def _optional_string(value: Scalar | None, label: str, location: SourceLocation) -> str | None:
+    return None if value is None else _string_value(value, label, location)
+
+
+def _source_reference(
+    properties: Mapping[str, Scalar], location: SourceLocation
+) -> SourceReference | None:
+    values = {
+        field: properties.get(f"source_{field}")
+        for field in ("document", "revision", "location", "url", "checksum")
+    }
+    if not any(value is not None for value in values.values()):
+        return None
+    return SourceReference(
+        **{
+            name: _string_value(value, f"source_{name}", location)
+            if value is not None
+            else None
+            for name, value in values.items()
+        }
     )
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .model import PartDefinition, PartKind, PinDefinition, PinType
+from .model import PartDefinition, PartKind, PinCapability, PinDefinition, PinType
 from .quantities import volts
 
 
@@ -13,10 +13,39 @@ def _pin(
     voltage_min: float | None = None,
     voltage_max: float | None = None,
 ) -> PinDefinition:
+    capability_map = {
+        PinType.PASSIVE: {PinCapability.PASSIVE},
+        PinType.INPUT: {PinCapability.DIGITAL_INPUT},
+        PinType.OUTPUT: {PinCapability.PUSH_PULL_OUTPUT},
+        PinType.BIDIRECTIONAL: {
+            PinCapability.DIGITAL_INPUT,
+            PinCapability.PUSH_PULL_OUTPUT,
+            PinCapability.OPEN_DRAIN_OUTPUT,
+        },
+        PinType.OPEN_DRAIN: {
+            PinCapability.DIGITAL_INPUT,
+            PinCapability.OPEN_DRAIN_OUTPUT,
+        },
+        PinType.POWER_IN: {PinCapability.POWER_INPUT},
+        PinType.POWER_OUT: {PinCapability.POWER_OUTPUT},
+    }
     return PinDefinition(
         name=name,
         number=number,
-        pin_type=pin_type,
+        capabilities=frozenset(capability_map[pin_type]),
+        role=(
+            "ground"
+            if name in {"GND", "VSS"}
+            else "power"
+            if pin_type in {PinType.POWER_IN, PinType.POWER_OUT}
+            else "output"
+            if pin_type is PinType.OUTPUT
+            else "input"
+            if pin_type is PinType.INPUT
+            else "gpio"
+            if pin_type in {PinType.BIDIRECTIONAL, PinType.OPEN_DRAIN}
+            else "passive"
+        ),
         voltage_min=volts(voltage_min) if voltage_min is not None else None,
         voltage_max=volts(voltage_max) if voltage_max is not None else None,
     )

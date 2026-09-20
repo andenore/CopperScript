@@ -18,6 +18,8 @@ from .quantities import Quantity, Voltage
 
 
 class PinType(str, Enum):
+    """Electrical direction of ports and peripheral signals."""
+
     PASSIVE = "passive"
     INPUT = "input"
     OUTPUT = "output"
@@ -25,6 +27,34 @@ class PinType(str, Enum):
     OPEN_DRAIN = "open_drain"
     POWER_IN = "power_in"
     POWER_OUT = "power_out"
+
+
+class PinCapability(str, Enum):
+    PASSIVE = "passive"
+    DIGITAL_INPUT = "digital_input"
+    PUSH_PULL_OUTPUT = "push_pull_output"
+    OPEN_DRAIN_OUTPUT = "open_drain_output"
+    ANALOG = "analog"
+    POWER_INPUT = "power_input"
+    POWER_OUTPUT = "power_output"
+
+
+class UnpoweredBehavior(str, Enum):
+    UNKNOWN = "unknown"
+    HIGH_IMPEDANCE = "high_impedance"
+    CLAMPED = "clamped"
+    TOLERANT = "tolerant"
+
+
+class SelectionUsage(str, Enum):
+    EXCLUSIVE = "exclusive"
+    FIRMWARE_MANAGED = "firmware_managed"
+
+
+class PowerRailState(str, Enum):
+    ON = "on"
+    OFF = "off"
+    UNKNOWN = "unknown"
 
 
 class PartKind(str, Enum):
@@ -50,12 +80,48 @@ class ConstraintKind(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class PinDefinition:
+class SourceReference:
+    document: str | None = None
+    revision: str | None = None
+    location: str | None = None
+    url: str | None = None
+    checksum: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DevicePadDefinition:
     name: str
-    number: str
-    pin_type: PinType
+    capabilities: frozenset[PinCapability]
+    role: str = "io"
+    power_domain: str | None = None
+    unpowered_behavior: UnpoweredBehavior = UnpoweredBehavior.UNKNOWN
     voltage_min: Voltage | None = None
     voltage_max: Voltage | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "capabilities", frozenset(self.capabilities))
+
+
+@dataclass(frozen=True, slots=True)
+class PinDefinition:
+    """One physical package pin, optionally bonded to device pads."""
+
+    name: str
+    number: str
+    capabilities: frozenset[PinCapability] = frozenset()
+    role: str = "io"
+    bonded_pads: tuple[str, ...] = ()
+    voltage_min: Voltage | None = None
+    voltage_max: Voltage | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "capabilities", frozenset(self.capabilities))
+
+
+@dataclass(frozen=True, slots=True)
+class PowerDomainDefinition:
+    name: str
+    supply_pads: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +143,7 @@ class PeripheralDefinition:
 
 @dataclass(frozen=True, slots=True)
 class MuxOption:
-    pin: str
+    pad: str
     peripheral: str
     signal: str
     selector: str
@@ -90,13 +156,20 @@ class DeviceDefinition:
     """Package-independent silicon capabilities and pin-mux choices."""
 
     name: str
+    pads: Mapping[str, DevicePadDefinition]
     peripherals: Mapping[str, PeripheralDefinition]
     mux_options: tuple[MuxOption, ...]
+    power_domains: Mapping[str, PowerDomainDefinition] = field(default_factory=dict)
     resources: tuple[str, ...] = ()
     metadata: Mapping[str, str] = field(default_factory=dict)
+    source: SourceReference | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "pads", MappingProxyType(dict(self.pads)))
         object.__setattr__(self, "peripherals", MappingProxyType(dict(self.peripherals)))
+        object.__setattr__(
+            self, "power_domains", MappingProxyType(dict(self.power_domains))
+        )
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
@@ -108,6 +181,7 @@ class PartDefinition:
     footprints: tuple[str, ...] = ()
     manufacturer: str | None = None
     device: str | None = None
+    source: SourceReference | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -217,9 +291,19 @@ class PeripheralSelection:
     peripheral: str
     name: str
     signals: Mapping[str, PeripheralSignalSelection]
+    usage: SelectionUsage = SelectionUsage.EXCLUSIVE
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "signals", MappingProxyType(dict(self.signals)))
+
+
+@dataclass(frozen=True, slots=True)
+class PowerState:
+    name: str
+    rails: Mapping[str, PowerRailState]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "rails", MappingProxyType(dict(self.rails)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +368,7 @@ class Board:
     dependencies: tuple[Dependency, ...] = ()
     devices: Mapping[str, DeviceDefinition] = field(default_factory=dict)
     peripheral_selections: tuple[PeripheralSelection, ...] = ()
+    power_states: tuple[PowerState, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "library", MappingProxyType(dict(self.library)))
@@ -307,6 +392,7 @@ class FlatElectricalView:
     module_instances: tuple[ElaboratedModuleInstance, ...] = ()
     devices: Mapping[str, DeviceDefinition] = field(default_factory=dict)
     peripheral_selections: tuple[PeripheralSelection, ...] = ()
+    power_states: tuple[PowerState, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "library", MappingProxyType(dict(self.library)))

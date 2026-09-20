@@ -8,6 +8,7 @@ from typing import Sequence
 
 from .erc import check, has_errors
 from .loader import BoardLoadError, load_board
+from .power import analyze_power_states
 from .serializer import board_to_json, write_json
 
 
@@ -16,6 +17,11 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     check_parser = subparsers.add_parser("check", help="run electrical-rules checks")
     check_parser.add_argument("board", type=Path, help="a .copper source file")
+
+    power_parser = subparsers.add_parser(
+        "power-check", help="analyze explicit steady-state power scenarios"
+    )
+    power_parser.add_argument("board", type=Path, help="a .copper source file")
 
     compile_parser = subparsers.add_parser("compile", help="compile source to JSON IR")
     compile_parser.add_argument("board", type=Path, help="a .copper source file")
@@ -28,19 +34,28 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command in {"check", "compile"}:
+    if args.command in {"check", "power-check", "compile"}:
         try:
             board = load_board(args.board)
         except BoardLoadError as exc:
             print(f"COMPILE ERROR: {exc}")
             return 2
-        diagnostics = check(board)
+        diagnostics = (
+            analyze_power_states(board) if args.command == "power-check" else check(board)
+        )
         if args.command == "check":
             if diagnostics:
                 for diagnostic in diagnostics:
                     print(diagnostic)
             else:
                 print(f"OK: {board.name} passed ERC")
+            return 1 if has_errors(diagnostics) else 0
+        if args.command == "power-check":
+            if diagnostics:
+                for diagnostic in diagnostics:
+                    print(diagnostic)
+            else:
+                print(f"OK: {board.name} passed power-state analysis")
             return 1 if has_errors(diagnostics) else 0
 
         if has_errors(diagnostics) and not args.no_check:

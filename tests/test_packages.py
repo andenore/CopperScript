@@ -13,8 +13,8 @@ def test_manifest_local_replacement_imports_a_part(tmp_path: Path) -> None:
     (package / "sensor.copper").write_text(
         """part Sensor {
     kind = sensor;
-    pin VDD: power_in { number = "1"; voltage_min = 1.8V; voltage_max = 3.6V; }
-    pin GND: power_in { number = "2"; }
+    pin VDD { number = "1"; role = digital_supply; capabilities = "power_input"; voltage_min = 1.8V; voltage_max = 3.6V; }
+    pin GND { number = "2"; role = ground; capabilities = "power_input"; }
 }
 """,
         encoding="utf-8",
@@ -58,7 +58,7 @@ def test_checksum_change_is_rejected(tmp_path: Path) -> None:
     package.mkdir(parents=True)
     part_path = package / "part.copper"
     part_path.write_text(
-        'part R { kind = resistor; pin A: passive { number = "1"; } }',
+        'part R { kind = resistor; pin A { number = "1"; capabilities = "passive"; } }',
         encoding="utf-8",
     )
     (tmp_path / "copper.mod").write_text(
@@ -77,7 +77,7 @@ require github.com/vendor/library v1.0.0
         "github.com/vendor/library v1.0.0 sha256:"
     )
     part_path.write_text(
-        'part R { kind = resistor; manufacturer = "changed"; pin A: passive { number = "1"; } }',
+        'part R { kind = resistor; manufacturer = "changed"; pin A { number = "1"; capabilities = "passive"; } }',
         encoding="utf-8",
     )
 

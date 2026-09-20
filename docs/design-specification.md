@@ -63,11 +63,13 @@ artifact derived from the electrical design.
 The electrical IR defines what the circuit is. It MAY contain:
 
 - reusable part and pin definitions;
-- package-independent device capabilities, peripherals, and pin-mux options;
+- package-independent device pads, power domains, capabilities, peripherals,
+  and pin-mux options;
 - component instances and selected footprints;
 - explicit peripheral and pin-mux selections;
 - nets and their endpoints;
 - supplies, nominal voltages, and power sources;
+- named discrete power states for analysis;
 - protocol interfaces and their signal bindings; and
 - typed electrical properties required for validation or generation.
 
@@ -146,7 +148,8 @@ The compiler MUST reject or diagnose a pin assigned to more than one net.
 ### 3.2 Parts and component instances are distinct
 
 A `PartDefinition` describes reusable facts about a part: pins, electrical pin
-types, limits, manufacturer data, and compatible physical packages.
+capabilities, device-pad bonds, limits, manufacturer data, and compatible
+physical packages.
 
 A `ComponentInstance` describes use of that part in one design: reference,
 value, chosen footprint, and instance properties.
@@ -237,18 +240,38 @@ generalized without changing source import identity.
 
 Complex programmable parts such as MCUs MUST distinguish three concepts:
 
-- a package-independent `DeviceDefinition` describing silicon peripherals,
-  peripheral signals, mux options, and shared configuration resources;
-- a `PartDefinition` describing one orderable/package variant and the physical
-  pins actually bonded out by that package; and
+- a package-independent `DeviceDefinition` describing named silicon pads,
+  power domains, peripherals, peripheral signals, mux options, and shared
+  configuration resources;
+- a `PartDefinition` describing one orderable/package variant, its physical
+  package pins, and explicit bonds from those pins to device pads; and
 - a `PeripheralSelection` describing the explicit mux choices made for one
   component instance.
 
-A mux option maps one physical pin identity to one peripheral signal and
-retains the target-specific selector needed by a backend, such as `AF6`.
+A device pad and a physical package pin are different identities. A mux option
+maps a device pad to one peripheral signal and retains the target-specific
+selector needed by a backend, such as `AF6`. A package pin may bond to one or
+more device pads, and multiple package pins may bond to the same logical pad
+where the package requires it. ERC resolves a selected package pin through its
+declared bonds before validating mux availability.
+
+Physical pins and device pads have sets of electrical capabilities rather than
+one mutually exclusive pin type. Capabilities include input, push-pull output,
+open-drain output, analog, power input, power output, and passive behavior.
+Protocol signal directions remain requirements to be matched against those
+capability sets. Descriptive roles such as `ground`, `digital_supply`, or
+`gpio` are metadata and MUST NOT replace electrical capabilities.
+
 Optional resource and setting fields express device-wide configuration state.
-Selections requiring different settings for the same resource conflict;
-multiple signals requiring the same setting are compatible.
+Selections are exclusive by default. Exclusive selections requiring different
+settings for the same resource conflict; multiple signals requiring the same
+setting are compatible. A selection explicitly marked `firmware_managed` MAY
+share a peripheral, pin, or resource only when every conflicting selection is
+also firmware-managed. This
+waiver suppresses only resource-ownership conflicts: unknown pads, invalid mux
+options, missing required signals, and electrical incompatibilities remain
+errors. A design may omit peripheral configuration and use a pin as ordinary
+GPIO when detailed firmware mode checking is not useful.
 
 Peripheral configuration annotates component behavior and MUST NOT create or
 modify net connectivity. A configured pin is connected only by appearing as a
@@ -258,9 +281,31 @@ connectivity.
 v0.1 requires explicit pin assignments. Automatic pin assignment MAY later be
 implemented as constraint solving, but its result MUST lower to the same
 concrete `PeripheralSelection` IR and retain every selected pin and mux
-selector. Device packages are declarative data and SHOULD be generated from
-traceable manufacturer data where practical; provenance such as source and
-revision SHOULD be retained as device metadata.
+selector. Device packages are declarative data. Source document, revision,
+location, URL, and checksum are optional metadata and MUST NOT be required for
+compilation. Generated production libraries SHOULD retain such provenance when
+available so data can be audited; hand-authored or experimental definitions may
+omit it.
+
+### 3.10 Power domains and discrete power states
+
+Device pads MAY belong to named power domains. Each domain identifies the
+device supply pads that establish its powered state. I/O pads may also declare
+their unpowered behavior as `high_impedance`, `tolerant`, `clamped`, or
+`unknown`.
+
+A board MAY define named power states by assigning each relevant `Supply` the
+state `on`, `off`, or `unknown`. Power states annotate the existing electrical
+design; they MUST NOT create rails, sources, switching connections, or implicit
+net membership. Modules do not own board-level power scenarios in v0.1.
+
+Power-state analysis is a separate IR consumer from ordinary ERC. The v0.1
+analyzer performs conservative steady-state checks, including warning when a
+driven net reaches a clamped or unknown I/O pad whose domain is off. It does not
+simulate firmware, analog transients, ramp timing, regulator dynamics, or the
+internal behavior of power switches. Later sequencing and transition models
+MUST build on the same explicit domains and states rather than embedding a
+hidden simulator in connectivity checking.
 
 ## 4. Language and compiler
 
@@ -301,6 +346,11 @@ I²C rules, and explicit device mux selections. Device checks include package-pi
 availability, required peripheral signals, valid mux choices, exclusive pin and
 peripheral use, electrical compatibility, and shared resource settings. New
 checks SHOULD be independent passes with stable diagnostic codes.
+
+Discrete power-state analysis is also an independent IR pass. It reports
+unknown state rails and possible back-power paths without changing electrical
+validity or connectivity. Firmware-managed sharing waives ownership conflicts,
+not structural or electrical validation.
 
 Constraint validation is distinct from ERC even when both run under `copper
 check`. This separation allows electrical validity, constraint consistency, and
@@ -464,6 +514,11 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-022 | Accepted | Peripheral configuration annotates pin behavior and never creates connectivity; nets remain authoritative. |
 | CS-023 | Accepted | Explicit mux selections lower to typed IR containing concrete pins, selectors, and shared resource settings. |
 | CS-024 | Accepted | Automatic pin assignment is deferred and must eventually lower to the same explicit selection IR. |
+| CS-025 | Accepted | Device pads and physical package pins are distinct identities connected by explicit bonds; mux options name device pads. |
+| CS-026 | Accepted | Physical pins and device pads carry capability sets rather than one mutually exclusive electrical pin type. |
+| CS-027 | Accepted | Source-document and revision provenance is optional; production generators should retain it when available. |
+| CS-028 | Accepted | Peripheral selections are exclusive by default; `firmware_managed` suppresses ownership/resource-sharing conflicts but not structural or electrical validation. |
+| CS-029 | Accepted | Power domains and named discrete rail states are explicit IR, analyzed by a separate conservative steady-state pass. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

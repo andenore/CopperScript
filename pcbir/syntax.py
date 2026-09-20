@@ -51,8 +51,28 @@ class PortDecl:
 class PinDecl:
     location: SourceLocation
     name: str
-    pin_type: str
     attributes: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
+class PadDecl:
+    location: SourceLocation
+    name: str
+    attributes: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
+class PowerDomainDecl:
+    location: SourceLocation
+    name: str
+    attributes: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
+class PowerStateDecl:
+    location: SourceLocation
+    name: str
+    rails: dict[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +108,7 @@ class PeripheralDecl:
 @dataclass(frozen=True, slots=True)
 class MuxDecl:
     location: SourceLocation
-    pin: str
+    pad: str
     peripheral: str
     signal: str
     attributes: dict[str, Scalar]
@@ -158,6 +178,9 @@ Declaration = (
     ComponentDecl
     | PortDecl
     | PinDecl
+    | PadDecl
+    | PowerDomainDecl
+    | PowerStateDecl
     | PartPropertyDecl
     | DevicePropertyDecl
     | PeripheralDecl

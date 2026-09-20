@@ -5,14 +5,16 @@ part STM32G0B1CBT6 {
     footprint = "LQFP-48";
     device = STM32G0B1;
 
-    pin VDD: power_in {
+    pin VDD {
         number = "24";
+        bond = VDD;
+        role = digital_supply;
         voltage_min = 1.7V;
         voltage_max = 3.6V;
     }
-    pin VSS: power_in { number = "23"; }
-    pin PA2: bidirectional { number = "10"; voltage_max = 3.6V; }
-    pin PA3: bidirectional { number = "11"; voltage_max = 3.6V; }
-    pin PB6: bidirectional { number = "42"; voltage_max = 3.6V; }
-    pin PB7: bidirectional { number = "43"; voltage_max = 3.6V; }
+    pin VSS { number = "23"; bond = VSS; role = ground; }
+    pin PA2 { number = "10"; bond = PA2; }
+    pin PA3 { number = "11"; bond = PA3; }
+    pin PB6 { number = "45"; bond = PB6; }
+    pin PB7 { number = "46"; bond = PB7; }
 }

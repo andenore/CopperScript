@@ -18,11 +18,14 @@ from .model import (
     Net,
     PartDefinition,
     PartKind,
+    PinCapability,
     PinDefinition,
     PinType,
     PeripheralSelection,
+    SelectionUsage,
     Supply,
 )
+from .quantities import Voltage
 
 
 class Severity(str, Enum):
@@ -63,6 +66,35 @@ class _Context:
         if pin is None:
             return None
         return component, part, pin
+
+    def pin_capabilities(
+        self, part: PartDefinition, pin: PinDefinition
+    ) -> frozenset[PinCapability]:
+        capabilities = set(pin.capabilities)
+        if part.device is not None:
+            device = self.board.devices.get(part.device)
+            if device is not None:
+                for pad_name in pin.bonded_pads:
+                    pad = device.pads.get(pad_name)
+                    if pad is not None:
+                        capabilities.update(pad.capabilities)
+        return frozenset(capabilities)
+
+    def pin_voltage_limits(
+        self, part: PartDefinition, pin: PinDefinition
+    ) -> tuple[Voltage | None, Voltage | None]:
+        minimum = pin.voltage_min
+        maximum = pin.voltage_max
+        if part.device is not None:
+            device = self.board.devices.get(part.device)
+            if device is not None:
+                for pad_name in pin.bonded_pads:
+                    pad = device.pads.get(pad_name)
+                    if pad is None:
+                        continue
+                    minimum = minimum or pad.voltage_min
+                    maximum = maximum or pad.voltage_max
+        return minimum, maximum
 
 
 def check(board: Board | FlatElectricalView) -> list[Diagnostic]:
@@ -154,6 +186,19 @@ def _check_references(context: _Context) -> list[Diagnostic]:
                     component.ref,
                 )
             )
+        elif part.device is not None:
+            device = context.board.devices[part.device]
+            for pin in part.pins.values():
+                for pad_name in pin.bonded_pads:
+                    if pad_name not in device.pads:
+                        diagnostics.append(
+                            Diagnostic(
+                                Severity.ERROR,
+                                "UNKNOWN_DEVICE_PAD",
+                                f"package pin {pin.name} bonds unknown device pad {pad_name!r}",
+                                f"{component.ref}.{pin.name}",
+                            )
+                        )
 
     for net in context.board.nets:
         for endpoint in net.endpoints:
@@ -200,12 +245,14 @@ def _check_references(context: _Context) -> list[Diagnostic]:
                         supply.name,
                     )
                 )
-            elif resolved_source[2].pin_type is not PinType.POWER_OUT:
+            elif PinCapability.POWER_OUTPUT not in context.pin_capabilities(
+                resolved_source[1], resolved_source[2]
+            ):
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
                         "SUPPLY_SOURCE_NOT_OUTPUT",
-                        f"supply source {supply.source} is {resolved_source[2].pin_type.value}, not power_out",
+                        f"supply source {supply.source} is not power_output capable",
                         supply.name,
                     )
                 )
@@ -239,13 +286,33 @@ def _check_pin_membership(context: _Context) -> list[Diagnostic]:
 
 def _check_output_conflicts(context: _Context) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
-    driving_types = {PinType.OUTPUT, PinType.POWER_OUT}
+    selected_outputs: set[Endpoint] = set()
+    for selection in context.board.peripheral_selections:
+        component = context.components.get(selection.component)
+        part = context.board.library.get(component.part) if component else None
+        device = context.board.devices.get(part.device or "") if part else None
+        peripheral = device.peripherals.get(selection.peripheral) if device else None
+        if peripheral is None:
+            continue
+        for signal_name, chosen in selection.signals.items():
+            signal = peripheral.signals.get(signal_name)
+            if signal is not None and signal.pin_type in {PinType.OUTPUT, PinType.POWER_OUT}:
+                selected_outputs.add(Endpoint(selection.component, chosen.pin))
     for net in context.board.nets:
         drivers: list[str] = []
         for endpoint in net.endpoints:
             resolved = context.resolve_pin(endpoint)
-            if resolved is not None and resolved[2].pin_type in driving_types:
-                drivers.append(str(endpoint))
+            if resolved is not None:
+                capabilities = context.pin_capabilities(resolved[1], resolved[2])
+                if (
+                    PinCapability.POWER_OUTPUT in capabilities
+                    or (
+                        PinCapability.PUSH_PULL_OUTPUT in capabilities
+                        and resolved[2].role == "output"
+                    )
+                    or endpoint in selected_outputs
+                ):
+                    drivers.append(str(endpoint))
         if len(drivers) > 1:
             diagnostics.append(
                 Diagnostic(
@@ -269,21 +336,22 @@ def _check_supplies(context: _Context) -> list[Diagnostic]:
             if resolved is None:
                 continue
             pin = resolved[2]
-            if pin.voltage_min is not None and supply.voltage < pin.voltage_min:
+            voltage_min, voltage_max = context.pin_voltage_limits(resolved[1], pin)
+            if voltage_min is not None and supply.voltage < voltage_min:
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
                         "SUPPLY_VOLTAGE_LOW",
-                        f"{supply.voltage} is below the pin minimum {pin.voltage_min}",
+                        f"{supply.voltage} is below the pin minimum {voltage_min}",
                         str(endpoint),
                     )
                 )
-            if pin.voltage_max is not None and pin.voltage_max < supply.voltage:
+            if voltage_max is not None and voltage_max < supply.voltage:
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
                         "SUPPLY_VOLTAGE_HIGH",
-                        f"{supply.voltage} exceeds the pin maximum {pin.voltage_max}",
+                        f"{supply.voltage} exceeds the pin maximum {voltage_max}",
                         str(endpoint),
                     )
                 )
@@ -299,7 +367,9 @@ def _check_power_inputs(context: _Context) -> list[Diagnostic]:
     }
     for net in context.board.nets:
         if any(
-            resolved is not None and resolved[2].pin_type is PinType.POWER_OUT
+            resolved is not None
+            and PinCapability.POWER_OUTPUT
+            in context.pin_capabilities(resolved[1], resolved[2])
             for endpoint in net.endpoints
             if (resolved := context.resolve_pin(endpoint)) is not None
         ):
@@ -310,7 +380,7 @@ def _check_power_inputs(context: _Context) -> list[Diagnostic]:
         if part is None:
             continue
         for pin in part.pins.values():
-            if pin.pin_type is not PinType.POWER_IN:
+            if PinCapability.POWER_INPUT not in context.pin_capabilities(part, pin):
                 continue
             endpoint = Endpoint(component.ref, pin.name)
             connected_nets = context.pin_to_nets.get(endpoint, [])
@@ -376,7 +446,6 @@ def _check_i2c(context: _Context, interface: Interface) -> list[Diagnostic]:
             )
         )
 
-    allowed_types = {PinType.OPEN_DRAIN, PinType.BIDIRECTIONAL}
     for component_ref, bindings in interface.bindings.items():
         if component_ref not in context.components:
             diagnostics.append(
@@ -422,12 +491,16 @@ def _check_i2c(context: _Context, interface: Interface) -> list[Diagnostic]:
                         interface.name,
                     )
                 )
-            if resolved[2].pin_type not in allowed_types:
+            capabilities = context.pin_capabilities(resolved[1], resolved[2])
+            if not {
+                PinCapability.DIGITAL_INPUT,
+                PinCapability.OPEN_DRAIN_OUTPUT,
+            } <= capabilities:
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
                         "I2C_INCOMPATIBLE_PIN",
-                        f"{endpoint} is {resolved[2].pin_type.value}, expected open_drain or bidirectional",
+                        f"{endpoint} lacks digital_input and open_drain_output capabilities",
                         interface.name,
                     )
                 )
@@ -470,9 +543,11 @@ def _check_i2c(context: _Context, interface: Interface) -> list[Diagnostic]:
 
 def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
-    pin_uses: dict[tuple[str, str], list[str]] = defaultdict(list)
-    peripheral_uses: dict[tuple[str, str], list[str]] = defaultdict(list)
-    resource_settings: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(
+    pin_uses: dict[tuple[str, str], list[tuple[str, SelectionUsage]]] = defaultdict(list)
+    peripheral_uses: dict[tuple[str, str], list[tuple[str, SelectionUsage]]] = defaultdict(list)
+    resource_settings: dict[
+        tuple[str, str], dict[str, list[tuple[str, SelectionUsage]]]
+    ] = defaultdict(
         lambda: defaultdict(list)
     )
 
@@ -524,7 +599,9 @@ def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
             )
             continue
 
-        peripheral_uses[(selection.component, selection.peripheral)].append(selection.name)
+        peripheral_uses[(selection.component, selection.peripheral)].append(
+            (selection.name, selection.usage)
+        )
         missing = sorted(
             signal.name
             for signal in peripheral.signals.values()
@@ -566,7 +643,7 @@ def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
             options = [
                 option
                 for option in device.mux_options
-                if option.pin == chosen.pin
+                if option.pad in physical_pin.bonded_pads
                 and option.peripheral == selection.peripheral
                 and option.signal == signal_name
             ]
@@ -594,48 +671,53 @@ def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
                         selection.name,
                     )
                 )
-            if not _pin_supports_signal(physical_pin.pin_type, signal.pin_type):
+            capabilities = context.pin_capabilities(part, physical_pin)
+            if not _pin_supports_signal(capabilities, signal.pin_type):
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
                         "MUX_INCOMPATIBLE_PIN",
-                        f"pin {chosen.pin} is {physical_pin.pin_type.value}, incompatible with "
+                        f"pin {chosen.pin} capabilities are incompatible with "
                         f"{signal.pin_type.value} signal {selection.peripheral}.{signal_name}",
                         selection.name,
                     )
                 )
             pin_uses[(selection.component, chosen.pin)].append(
-                f"{selection.name}.{signal_name}"
+                (f"{selection.name}.{signal_name}", selection.usage)
             )
             if option.resource is not None and option.setting is not None:
                 resource_settings[(selection.component, option.resource)][option.setting].append(
-                    f"{selection.name}.{signal_name}"
+                    (f"{selection.name}.{signal_name}", selection.usage)
                 )
 
     for (component, peripheral), uses in sorted(peripheral_uses.items()):
-        if len(uses) > 1:
+        if len(uses) > 1 and not _all_firmware_managed(uses):
+            labels = [label for label, _usage in uses]
             diagnostics.append(
                 Diagnostic(
                     Severity.ERROR,
                     "PERIPHERAL_CONFLICT",
-                    f"{component}.{peripheral} is configured more than once: {', '.join(uses)}",
+                    f"{component}.{peripheral} is configured more than once: {', '.join(labels)}",
                     f"{component}.{peripheral}",
                 )
             )
     for (component, pin), uses in sorted(pin_uses.items()):
-        if len(uses) > 1:
+        if len(uses) > 1 and not _all_firmware_managed(uses):
+            labels = [label for label, _usage in uses]
             diagnostics.append(
                 Diagnostic(
                     Severity.ERROR,
                     "PIN_MUX_CONFLICT",
-                    f"physical pin is selected by multiple signals: {', '.join(uses)}",
+                    f"physical pin is selected by multiple signals: {', '.join(labels)}",
                     f"{component}.{pin}",
                 )
             )
     for (component, resource), settings in sorted(resource_settings.items()):
-        if len(settings) > 1:
+        uses = [use for setting_uses in settings.values() for use in setting_uses]
+        if len(settings) > 1 and not _all_firmware_managed(uses):
             details = ", ".join(
-                f"{setting} ({', '.join(uses)})" for setting, uses in sorted(settings.items())
+                f"{setting} ({', '.join(label for label, _usage in setting_uses)})"
+                for setting, setting_uses in sorted(settings.items())
             )
             diagnostics.append(
                 Diagnostic(
@@ -648,17 +730,29 @@ def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
     return diagnostics
 
 
-def _pin_supports_signal(pin_type: PinType, signal_type: PinType) -> bool:
+def _all_firmware_managed(uses: list[tuple[str, SelectionUsage]]) -> bool:
+    return all(usage is SelectionUsage.FIRMWARE_MANAGED for _label, usage in uses)
+
+
+def _pin_supports_signal(
+    capabilities: frozenset[PinCapability], signal_type: PinType
+) -> bool:
     compatible = {
-        PinType.PASSIVE: {PinType.PASSIVE, PinType.BIDIRECTIONAL},
-        PinType.INPUT: {PinType.INPUT, PinType.BIDIRECTIONAL},
-        PinType.OUTPUT: {PinType.OUTPUT, PinType.BIDIRECTIONAL},
-        PinType.BIDIRECTIONAL: {PinType.BIDIRECTIONAL},
-        PinType.OPEN_DRAIN: {PinType.OPEN_DRAIN, PinType.BIDIRECTIONAL},
-        PinType.POWER_IN: {PinType.POWER_IN},
-        PinType.POWER_OUT: {PinType.POWER_OUT},
+        PinType.PASSIVE: {PinCapability.PASSIVE},
+        PinType.INPUT: {PinCapability.DIGITAL_INPUT},
+        PinType.OUTPUT: {PinCapability.PUSH_PULL_OUTPUT},
+        PinType.BIDIRECTIONAL: {
+            PinCapability.DIGITAL_INPUT,
+            PinCapability.PUSH_PULL_OUTPUT,
+        },
+        PinType.OPEN_DRAIN: {
+            PinCapability.DIGITAL_INPUT,
+            PinCapability.OPEN_DRAIN_OUTPUT,
+        },
+        PinType.POWER_IN: {PinCapability.POWER_INPUT},
+        PinType.POWER_OUT: {PinCapability.POWER_OUTPUT},
     }
-    return pin_type in compatible[signal_type]
+    return compatible[signal_type] <= capabilities
 
 
 def _has_resistor_between(context: _Context, net_a: str, net_b: str) -> bool:

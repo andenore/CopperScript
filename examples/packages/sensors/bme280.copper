@@ -4,21 +4,27 @@ part BME280 {
     manufacturer = "Example Sensors";
     footprint = "LGA-8";
 
-    pin VDD: power_in {
+    pin VDD {
         number = "1";
+        role = digital_supply;
+        capabilities = "power_input";
         voltage_min = 1.71V;
         voltage_max = 3.6V;
     }
-    pin GND: power_in {
+    pin GND {
         number = "2";
+        role = ground;
+        capabilities = "power_input";
     }
-    pin SCL: open_drain {
+    pin SCL {
         number = "3";
+        capabilities = "digital_input,open_drain_output";
         voltage_min = 0V;
         voltage_max = 3.6V;
     }
-    pin SDA: open_drain {
+    pin SDA {
         number = "4";
+        capabilities = "digital_input,open_drain_output";
         voltage_min = 0V;
         voltage_max = 3.6V;
     }

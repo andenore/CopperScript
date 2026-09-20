@@ -5,6 +5,43 @@ device STM32G0B1 {
     family = "STM32G0";
     source_revision = "illustrative-v0.1";
 
+    power_domain VDDIO1 {
+        supply_pads = "VDD";
+    }
+
+    pad VDD {
+        role = digital_supply;
+        capabilities = "power_input";
+    }
+    pad VSS {
+        role = ground;
+        capabilities = "power_input";
+    }
+    pad PA2 {
+        capabilities = "digital_input,push_pull_output,open_drain_output";
+        power_domain = VDDIO1;
+        unpowered = clamped;
+        voltage_max = 3.6V;
+    }
+    pad PA3 {
+        capabilities = "digital_input,push_pull_output,open_drain_output";
+        power_domain = VDDIO1;
+        unpowered = clamped;
+        voltage_max = 3.6V;
+    }
+    pad PB6 {
+        capabilities = "digital_input,push_pull_output,open_drain_output";
+        power_domain = VDDIO1;
+        unpowered = clamped;
+        voltage_max = 3.6V;
+    }
+    pad PB7 {
+        capabilities = "digital_input,push_pull_output,open_drain_output";
+        power_domain = VDDIO1;
+        unpowered = clamped;
+        voltage_max = 3.6V;
+    }
+
     peripheral I2C1: i2c {
         signal SDA: open_drain;
         signal SCL: open_drain;

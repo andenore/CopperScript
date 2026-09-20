@@ -18,6 +18,8 @@ from .model import (
     Net,
     PartDefinition,
     PeripheralSelection,
+    PowerState,
+    SourceReference,
     Supply,
 )
 from .quantities import Quantity
@@ -38,6 +40,7 @@ def board_to_dict(board: Board) -> dict[str, object]:
             board.constraints,
             board.devices,
             board.peripheral_selections,
+            board.power_states,
         ),
         "module_definitions": [
             _module_to_dict(definition)
@@ -83,6 +86,7 @@ def _module_to_dict(definition: ModuleDefinition) -> dict[str, object]:
             definition.constraints,
             definition.devices,
             definition.peripheral_selections,
+            (),
         ),
     }
 
@@ -97,6 +101,7 @@ def _unit_fields(
     constraints: tuple[Constraint, ...],
     devices: Mapping[str, DeviceDefinition],
     peripheral_selections: tuple[PeripheralSelection, ...],
+    power_states: tuple[PowerState, ...],
 ) -> dict[str, object]:
     return {
         "devices": [
@@ -160,6 +165,7 @@ def _unit_fields(
                 "name": selection.name,
                 "component": selection.component,
                 "peripheral": selection.peripheral,
+                "usage": selection.usage.value,
                 "signals": {
                     name: {
                         "pin": signal.pin,
@@ -172,6 +178,13 @@ def _unit_fields(
             }
             for selection in peripheral_selections
         ],
+        "power_states": [
+            {
+                "name": state.name,
+                "rails": {name: value.value for name, value in state.rails.items()},
+            }
+            for state in power_states
+        ],
     }
 
 
@@ -181,13 +194,16 @@ def _part_to_dict(part: PartDefinition) -> dict[str, object]:
         "kind": part.kind.value,
         "manufacturer": part.manufacturer,
         "device": part.device,
+        "source": _source_to_dict(part.source),
         "footprints": list(part.footprints),
         "metadata": dict(part.metadata),
         "pins": [
             {
                 "name": pin.name,
                 "number": pin.number,
-                "type": pin.pin_type.value,
+                "capabilities": sorted(item.value for item in pin.capabilities),
+                "role": pin.role,
+                "bonded_pads": list(pin.bonded_pads),
                 "voltage_min": _value(pin.voltage_min),
                 "voltage_max": _value(pin.voltage_max),
             }
@@ -200,6 +216,23 @@ def _device_to_dict(device: DeviceDefinition) -> dict[str, object]:
     return {
         "name": device.name,
         "metadata": dict(device.metadata),
+        "source": _source_to_dict(device.source),
+        "pads": [
+            {
+                "name": pad.name,
+                "capabilities": sorted(item.value for item in pad.capabilities),
+                "role": pad.role,
+                "power_domain": pad.power_domain,
+                "unpowered_behavior": pad.unpowered_behavior.value,
+                "voltage_min": _value(pad.voltage_min),
+                "voltage_max": _value(pad.voltage_max),
+            }
+            for pad in device.pads.values()
+        ],
+        "power_domains": [
+            {"name": domain.name, "supply_pads": list(domain.supply_pads)}
+            for domain in device.power_domains.values()
+        ],
         "resources": list(device.resources),
         "peripherals": [
             {
@@ -218,7 +251,7 @@ def _device_to_dict(device: DeviceDefinition) -> dict[str, object]:
         ],
         "mux_options": [
             {
-                "pin": option.pin,
+                "pad": option.pad,
                 "peripheral": option.peripheral,
                 "signal": option.signal,
                 "selector": option.selector,
@@ -227,6 +260,18 @@ def _device_to_dict(device: DeviceDefinition) -> dict[str, object]:
             }
             for option in device.mux_options
         ],
+    }
+
+
+def _source_to_dict(source: SourceReference | None) -> object:
+    if source is None:
+        return None
+    return {
+        "document": source.document,
+        "revision": source.revision,
+        "location": source.location,
+        "url": source.url,
+        "checksum": source.checksum,
     }
 
 

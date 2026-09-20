@@ -14,6 +14,7 @@ Python 3.11 or newer is required. From the repository root:
 ```console
 python -m copperscript check examples/valid_board.copper
 python -m copperscript check examples/invalid_board.copper
+python -m copperscript power-check examples/valid_board.copper
 ```
 
 Compile a valid design to normalized JSON IR:
@@ -103,6 +104,7 @@ file.
     -> hierarchical electrical IR
          |-> JSON IR
          `-> derived flat view -> electrical-rules checker
+                              `-> power-state analyzer
 ```
 
 The stages are intentionally separate so editor tooling and a future language
@@ -118,8 +120,9 @@ Key modules:
 - `pcbir.elaborate` — explicit hierarchy-to-flat derivation for consumers that
   require a global connectivity view.
 - `pcbir.erc` — reusable electrical-rules passes.
+- `pcbir.power` — explicit steady-state power-domain analysis.
 - `pcbir.serializer` — versioned JSON IR output.
-- `pcbir.cli` — `check` and `compile` commands.
+- `pcbir.cli` — `check`, `power-check`, and `compile` commands.
 
 Python IR constructions are confined to test fixtures. `.copper` is the only
 user-facing source format accepted by the compiler.
@@ -135,7 +138,11 @@ user-facing source format accepted by the compiler.
 - Disconnected and unsourced power inputs
 - I²C signal bindings, pin compatibility, and SDA/SCL pull-ups
 - MCU peripheral completeness, package-pin availability, and mux validity
-- Duplicate peripheral/pin selections and incompatible mux-resource settings
+- Duplicate exclusive peripheral/pin selections and incompatible mux-resource settings
+
+`power-check` separately evaluates named rail states and warns when a driven net
+may back-power an I/O domain declared off. It is intentionally a conservative
+steady-state analysis, not firmware or transient simulation.
 
 Physical constraints such as maximum placement distance are retained in IR but
 are not enforced in v0.1.

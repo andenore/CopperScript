@@ -18,8 +18,11 @@ from .syntax import (
     MuxDecl,
     NetDecl,
     PartPropertyDecl,
+    PadDecl,
     PeripheralDecl,
     PeripheralSignalDecl,
+    PowerDomainDecl,
+    PowerStateDecl,
     PinDecl,
     PortDecl,
     RawQuantity,
@@ -85,6 +88,10 @@ class Parser:
                 self._expect_symbol(";")
             elif root.text == "device" and keyword == "peripheral":
                 declarations.append(self._peripheral())
+            elif root.text == "device" and keyword == "pad":
+                declarations.append(self._pad())
+            elif root.text == "device" and keyword == "power_domain":
+                declarations.append(self._power_domain())
             elif root.text == "device" and keyword == "mux":
                 declarations.append(self._mux())
             elif root.text == "device" and keyword == "resource":
@@ -114,6 +121,8 @@ class Parser:
                 declarations.append(self._constraint())
             elif keyword == "configure":
                 declarations.append(self._configuration())
+            elif keyword == "power_state":
+                declarations.append(self._power_state())
             else:
                 self._error("PAR002", f"unknown declaration {keyword!r}", self.tokens[self.index - 1])
         self._expect_symbol("}")
@@ -148,9 +157,28 @@ class Parser:
     def _pin(self) -> PinDecl:
         location = self.current.location
         name = self._name("pin name")
-        self._expect_symbol(":")
-        pin_type = self._name("pin electrical type")
-        return PinDecl(location, name, pin_type, self._assignment_block())
+        return PinDecl(location, name, self._assignment_block())
+
+    def _pad(self) -> PadDecl:
+        location = self.current.location
+        name = self._name("device pad name")
+        return PadDecl(location, name, self._assignment_block())
+
+    def _power_domain(self) -> PowerDomainDecl:
+        location = self.current.location
+        name = self._name("power domain name")
+        return PowerDomainDecl(location, name, self._assignment_block())
+
+    def _power_state(self) -> PowerStateDecl:
+        location = self.current.location
+        name = self._name("power state name")
+        raw_rails = self._assignment_block()
+        rails: dict[str, str] = {}
+        for rail, value in raw_rails.items():
+            if not isinstance(value, str):
+                self._error("PAR013", "power state value must be on, off, or unknown")
+            rails[rail] = value
+        return PowerStateDecl(location, name, rails)
 
     def _module_instance(self) -> ModuleInstanceDecl:
         location = self.current.location
@@ -182,12 +210,12 @@ class Parser:
 
     def _mux(self) -> MuxDecl:
         location = self.current.location
-        pin = self._name("device pin")
+        pad = self._name("device pad")
         self._expect_symbol(":")
         peripheral = self._name("peripheral name")
         self._expect_symbol(".")
         signal = self._name("peripheral signal")
-        return MuxDecl(location, pin, peripheral, signal, self._assignment_block())
+        return MuxDecl(location, pad, peripheral, signal, self._assignment_block())
 
     def _configuration(self) -> ConfigurationDecl:
         location = self.current.location

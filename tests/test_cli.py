@@ -62,3 +62,15 @@ def test_cli_rejects_python_board_sources() -> None:
     result = run_cli("../tests/fixtures/python_ir/valid_board.py")
     assert result.returncode == 2
     assert "expected .copper" in result.stdout
+
+
+def test_cli_runs_power_state_analysis() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "copperscript", "power-check", "examples/valid_board.copper"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "passed power-state analysis" in result.stdout

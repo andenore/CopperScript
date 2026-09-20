@@ -43,6 +43,7 @@ def elaborate(board: Board) -> FlatElectricalView:
         constraints=board.constraints,
         devices=board.devices,
         peripheral_selections=board.peripheral_selections,
+        power_states=board.power_states,
     )
     cache: dict[str, _Template] = {}
     for instance in board.module_instances:
@@ -203,6 +204,7 @@ def _expand_one(
             peripheral=selection.peripheral,
             name=_qualify(instance_ref, selection.name),
             signals=selection.signals,
+            usage=selection.usage,
         )
         for selection in template.body.peripheral_selections
     )
@@ -235,6 +237,7 @@ def _expand_one(
         module_instances=tuple(module_instances),
         devices=devices,
         peripheral_selections=tuple(peripheral_selections),
+        power_states=parent.power_states,
     )
 
 

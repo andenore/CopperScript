@@ -52,28 +52,63 @@ part BME280 {
     manufacturer = "Bosch";
     footprint = "LGA-8";
 
-    pin VDD: power_in {
+    pin VDD {
         number = "1";
+        capabilities = "power_input";
+        role = digital_supply;
         voltage_min = 1.71V;
         voltage_max = 3.6V;
     }
-    pin GND: power_in { number = "2"; }
+    pin GND {
+        number = "2";
+        capabilities = "power_input";
+        role = ground;
+    }
 }
 ```
 
 Supported part properties are `kind`, `manufacturer`, one `footprint`, and an
 optional package-independent `device`. Every pin requires a quoted `number`;
 `voltage_min` and `voltage_max` are optional typed voltage quantities.
+Standalone parts declare a comma-separated `capabilities` string. Supported
+capabilities are `passive`, `digital_input`, `push_pull_output`,
+`open_drain_output`, `analog`, `power_input`, and `power_output`. `role` is
+descriptive metadata such as `ground`, `digital_supply`, or `gpio`.
+
+Part and device provenance is optional. Definitions may use
+`source_document`, `source_revision`, `source_location`, `source_url`, and
+`source_checksum`; none is required to compile.
 
 ## Devices and peripheral selection
 
-A `device` describes package-independent silicon capabilities. Peripheral
-signals are typed, required by default, and mapped to physical pin identities
-through mux options:
+A `device` describes package-independent silicon capabilities. Device pads are
+separate from package pins. Peripheral signals are typed, required by default,
+and mux options map them to device pads:
 
 ```copper
 device STM32G0B1 {
     vendor = "STMicroelectronics";
+
+    power_domain VDDIO1 {
+        supply_pads = "VDD";
+    }
+
+    pad VDD {
+        capabilities = "power_input";
+        role = digital_supply;
+    }
+    pad PB6 {
+        capabilities = "digital_input,push_pull_output,open_drain_output";
+        power_domain = VDDIO1;
+        unpowered = clamped;
+        voltage_max = 3.6V;
+    }
+    pad PB7 {
+        capabilities = "digital_input,push_pull_output,open_drain_output";
+        power_domain = VDDIO1;
+        unpowered = clamped;
+        voltage_max = 3.6V;
+    }
 
     peripheral I2C1: i2c {
         signal SDA: open_drain;
@@ -98,8 +133,8 @@ device STM32G0B1 {
 }
 ```
 
-A package-specific MCU part refers to its underlying device and declares only
-the pins bonded out in that package:
+A package-specific MCU part refers to its underlying device and declares its
+physical pins plus explicit device-pad bonds:
 
 ```copper
 part STM32G0B1CBT6 {
@@ -107,10 +142,16 @@ part STM32G0B1CBT6 {
     footprint = "LQFP-48";
     device = STM32G0B1;
 
-    pin PB6: bidirectional { number = "42"; }
-    pin PB7: bidirectional { number = "43"; }
+    pin VDD { number = "24"; bond = VDD; role = digital_supply; }
+    pin PB6 { number = "45"; bond = PB6; }
+    pin PB7 { number = "46"; bond = PB7; }
 }
 ```
+
+`bond` is a comma-separated list when one package pin connects to multiple
+device pads. Multiple package pins may also name the same device pad. A
+device-backed package pin inherits the union of capabilities and voltage limits
+from its bonded pads, and may declare additional package-specific values.
 
 Boards and modules explicitly select peripheral pins:
 
@@ -131,6 +172,37 @@ choice to a concrete selector such as `AF6` in IR. ERC checks required signals,
 package pin availability, valid mux mappings, duplicate peripheral or pin use,
 electrical compatibility, and incompatible settings of shared resources.
 Automatic pin assignment is intentionally not part of v0.1.
+
+Selections are exclusive by default. For hardware modes that firmware switches
+at runtime, add `usage = firmware_managed;` inside each relevant `configure`
+block. This permits sharing of peripherals, pins, and resource settings between
+those modes, while invalid muxes, missing signals, and electrical mismatches
+remain errors. If no peripheral-level validation is wanted, omit `configure`
+and treat the connection as ordinary GPIO.
+
+## Power states
+
+Boards may describe named steady-state rail scenarios:
+
+```copper
+power_state NORMAL {
+    VBUS = on;
+    V3V3 = on;
+    GND = on;
+}
+
+power_state STANDBY {
+    VBUS = on;
+    V3V3 = off;
+    GND = on;
+}
+```
+
+Each name must refer to a declared supply and each value is `on`, `off`, or
+`unknown`. Run `python -m copperscript power-check board.copper` to validate
+these scenarios. The current analysis warns about possible back-power into an
+off device domain; it is not transient or firmware simulation. Power states are
+board-level declarations in v0.1.
 
 ## Hierarchical modules
 
@@ -243,7 +315,7 @@ interface SENSOR_I2C: i2c {
 }
 ```
 
-The checker verifies both bindings, compatible pin types, and one pull-up
+The checker verifies both bindings, compatible pin capabilities, and one pull-up
 resistor from each signal to the named supply.
 
 ## Constraints
@@ -277,13 +349,16 @@ display unit.
 
 ```ebnf
 document       = ("board" | "module" | "part" | "device"), name, "{", item*, "}" ;
-item           = library | package_import | port | pin | part_property
-               | peripheral | mux | resource | device_property | configuration
-               | module_instance | component | net | supply | interface | constraint ;
+item           = library | package_import | port | pin | pad | power_domain
+               | part_property | peripheral | mux | resource | device_property
+               | configuration | module_instance | component | net | supply
+               | power_state | interface | constraint ;
 library        = "use", "library", string, ";" ;
 package_import = "import", name, string, ";" ;
 port           = "port", name, ":", pin_type, ";" ;
-pin            = "pin", name, ":", pin_type, properties ;
+pin            = "pin", name, properties ;
+pad            = "pad", name, properties ;
+power_domain   = "power_domain", name, properties ;
 part_property  = name, "=", scalar, ";" ;
 device_property = name, "=", scalar, ";" ;
 peripheral     = "peripheral", name, ":", name, "{", signal+, "}" ;
@@ -297,6 +372,7 @@ component      = "component", name, ":", qualified_name, (";" | properties) ;
 net            = "net", name, "{", endpoint*, "}" ;
 endpoint       = name, ".", name, ";" ;
 supply         = "supply", name, properties ;
+power_state    = "power_state", name, "{", (name, "=", ("on" | "off" | "unknown"), ";")*, "}" ;
 interface      = "interface", name, ":", "i2c", "{", interface_item*, "}" ;
 constraint     = "constraint", name, "(", targets, ")", properties ;
 properties     = "{", (name, "=", scalar, ";")*, "}" ;
