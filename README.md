@@ -29,6 +29,16 @@ Generate a self-contained KiCad 8 schematic:
 python -m copperscript export-kicad examples/valid_board.copper -o valid_board.kicad_sch
 ```
 
+Generate an inspectable KiCad 8 PCB draft:
+
+```console
+python -m copperscript export-kicad-pcb examples/valid_board.copper -o valid_board.kicad_pcb
+```
+
+The PCB draft uses deterministic grid placement and generated proxy footprints.
+It is intended to exercise and inspect the new physical pipeline, not for
+fabrication. The command prints warnings to make that distinction explicit.
+
 For a development installation with the `copper` command:
 
 ```console
@@ -121,6 +131,9 @@ file.
          |-> KiCad schematic backend
          `-> derived flat view -> electrical-rules checker
                               `-> power-state analyzer
+                              `-> prototype physicalizer
+                                      `-> physical IR
+                                              `-> KiCad PCB backend
 ```
 
 The stages are intentionally separate so editor tooling and a future language
@@ -137,12 +150,17 @@ Key modules:
   require a global connectivity view.
 - `pcbir.erc` — reusable electrical-rules passes.
 - `pcbir.power` — explicit steady-state power-domain analysis.
+- `pcbir.physical` — immutable, backend-neutral board geometry, footprints,
+  placements, nets, tracks, vias, stackup, and design rules.
+- `pcbir.physicalize` — temporary deterministic proxy-footprint and grid-placement
+  lowering used to exercise physical backends from current examples.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work
   packets, validation, and deterministic library generation.
-- `pcbir.backends` — immutable backend artifacts and the KiCad schematic
-  generator.
+- `pcbir.backends` — immutable backend artifacts and the KiCad schematic and
+  PCB generators.
 - `pcbir.serializer` — versioned JSON IR output.
-- `pcbir.cli` — `check`, `power-check`, `compile`, and `export-kicad` commands.
+- `pcbir.cli` — `check`, `power-check`, `compile`, `export-kicad`, and
+  `export-kicad-pcb` commands.
 
 Python IR constructions are confined to test fixtures. `.copper` is the only
 user-facing source format accepted by the compiler.
@@ -182,3 +200,23 @@ This first revision emits one flat sheet. Hierarchical designs are elaborated
 explicitly and retain their original qualified component paths in hidden
 `CopperScriptPath` properties. Native KiCad hierarchical sheets and mappings to
 standard KiCad symbols are planned follow-up work.
+
+## Physical IR and KiCad PCB backend
+
+The physical IR is separate from the electrical IR and stores exact geometry
+as integer nanometres. It currently models polygonal board outlines, two-layer
+stackups, basic design rules, embedded footprint pads and bodies, component
+placement, physical net-to-pad assignments, track segments, and vias. It
+validates cross-references when constructed.
+
+The KiCad PCB backend targets KiCad 8's `20240108` board format. It emits a
+self-contained board with deterministic UUIDs, embedded footprints, net
+assignments, copper tracks and vias when present, and a closed `Edge.Cuts`
+outline. Backend tests include a completely routed synthetic physical board.
+
+The current `.copper` frontend does not yet define board geometry, placement,
+or routing. `export-kicad-pcb` therefore uses a deliberately marked prototype
+physicalizer: components with selected footprints are arranged on a grid and
+their package pins receive generic proxy pad geometry. These drafts must not be
+sent for fabrication. Resolving verified footprint geometry and adding explicit
+physical constraints are the next steps.

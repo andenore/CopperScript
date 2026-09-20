@@ -125,6 +125,18 @@ The physical IR MUST retain traceable references to the electrical objects it
 implements. A track, pad, or zone may identify a net; it must not redefine that
 net's logical membership.
 
+The initial physical IR uses integer nanometres for coordinates and dimensions
+so backend output is deterministic and does not accumulate binary floating
+point error. It contains a closed polygonal board outline, stackup, basic design
+rules, resolved footprint geometry, placements, physical net-to-pad mappings,
+track segments, and vias. Physical objects use stable electrical component and
+net names for traceability.
+
+The model validates its internal references independently of any backend. A
+placement must resolve a footprint, a net endpoint must resolve an existing
+placement and pad, and copper geometry must resolve a physical net and stackup
+layer. This structural validation is not a substitute for geometric DRC.
+
 ### 2.4 Presentation and tool artifacts
 
 Backends MAY generate coordinates and other presentation data required by a
@@ -471,15 +483,33 @@ The generated schematic is not the source of truth. Round-trip import and
 back-annotation are outside the first implementation and require a separate
 design decision.
 
-### 6.2 Future KiCad PCB backend
+### 6.2 KiCad PCB backend
 
-A KiCad PCB backend should consume the physical IR, not schematic drawing data.
-It will serialize placement and routing decisions while preserving references
-to electrical nets and components.
+A KiCad PCB backend consumes the physical IR, not schematic drawing data. It
+serializes placement and routing decisions while preserving references to
+electrical nets and components.
 
 Generating an unrouted board skeleton directly from the electrical IR MAY be a
 useful intermediate feature, but any automatically chosen placement belongs to
 backend output or physical IR, never to the electrical IR.
+
+The initial implementation:
+
+- targets KiCad 8 board format `20240108`;
+- emits embedded footprint pads and simple body outlines rather than relying on
+  the receiving installation's footprint libraries;
+- emits physical net assignments, track segments, vias, and a closed
+  `Edge.Cuts` outline;
+- uses deterministic, version-4-shaped UUIDs derived from stable object
+  identity; and
+- accepts only `PhysicalBoard`, making the electrical/physical boundary
+  explicit in its public API.
+
+The temporary `prototype_physicalize` adapter is not a placement engine or a
+footprint resolver. It creates deterministic grid placement and generic proxy
+pads only so current `.copper` examples can exercise the backend. Its output
+MUST be marked as not fabrication-ready, and the backend MUST report this as a
+warning. Verified footprint resolution is required before production output.
 
 ## 7. Serialization and versioning
 
@@ -501,8 +531,8 @@ target format provides such a field.
 
 The following are deliberately outside the current scope:
 
-- automatic PCB placement and routing;
-- copper pours, vias, stackups, and fabrication output;
+- production-ready automatic PCB placement and routing;
+- copper pours and direct fabrication output;
 - schematic beautification beyond a deterministic basic rendering;
 - importing arbitrary KiCad projects into CopperScript;
 - lossless round trips through external EDA tools;
@@ -540,7 +570,7 @@ These questions are intentionally unresolved:
 - Should stable hierarchical identities remain path-derived if instances are
   renamed, or should source-level persistent IDs be introduced?
 - Can separate constraint-profile files override or extend inline constraints?
-- What is the serialized schema for the future physical IR?
+- What is the serialized schema for the physical IR?
 - Which external-tool edits, if any, are safe to back-annotate?
 - How are multiple footprint candidates selected before layout?
 
@@ -588,6 +618,8 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-036 | Accepted | Package pins have typed connection policies, required net traits, and conditional bonds. |
 | CS-037 | Accepted | Device modes are finite named choices and conditions are conjunctions of equality selections. |
 | CS-038 | Accepted | Regular pin routing uses concrete pad sets and selector schemes; irregular mappings retain explicit mux options. |
+| CS-039 | Accepted | The physical IR is a backend-neutral immutable model using integer nanometres, validated references, and traceability to electrical component and net identities. |
+| CS-040 | Accepted | The KiCad PCB backend consumes only physical IR and initially targets KiCad 8 format `20240108`; prototype proxy footprints are explicitly non-fabrication-ready. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

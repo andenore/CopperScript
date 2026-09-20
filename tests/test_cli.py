@@ -120,3 +120,27 @@ def test_cli_refuses_kicad_export_when_erc_fails(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "stopped because ERC reported errors" in result.stdout
     assert not output.exists()
+
+
+def test_cli_exports_prototype_kicad_pcb(tmp_path: Path) -> None:
+    output = tmp_path / "valid.kicad_pcb"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "copperscript",
+            "export-kicad-pcb",
+            "examples/valid_board.copper",
+            "-o",
+            str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Generated KiCad 8.0 PCB" in result.stdout
+    assert "proxy footprints" in result.stdout
+    assert output.read_text(encoding="utf-8").startswith("(kicad_pcb")

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from ..model import Board
+from ..physical import PhysicalBoard
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,3 +32,7 @@ class Backend(Protocol):
     def generate(self, board: Board) -> ArtifactManifest:
         """Generate target artifacts without modifying ``board``."""
 
+
+class PhysicalBackend(Protocol):
+    def generate(self, board: PhysicalBoard) -> ArtifactManifest:
+        """Generate target artifacts from immutable physical IR."""

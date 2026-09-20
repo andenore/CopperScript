@@ -6,10 +6,11 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
-from .backends import KiCadSchematicBackend
+from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .erc import check, has_errors
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
+from .physicalize import prototype_physicalize
 from .serializer import board_to_json, write_json
 
 
@@ -41,12 +42,28 @@ def _parser() -> argparse.ArgumentParser:
     kicad_parser.add_argument(
         "--no-check", action="store_true", help="generate even when ERC reports errors"
     )
+
+    pcb_parser = subparsers.add_parser(
+        "export-kicad-pcb",
+        help="generate a prototype KiCad 8 PCB using proxy footprints",
+    )
+    pcb_parser.add_argument("board", type=Path, help="a .copper source file")
+    pcb_parser.add_argument("-o", "--output", type=Path, help="output .kicad_pcb file")
+    pcb_parser.add_argument(
+        "--no-check", action="store_true", help="generate even when ERC reports errors"
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command in {"check", "power-check", "compile", "export-kicad"}:
+    if args.command in {
+        "check",
+        "power-check",
+        "compile",
+        "export-kicad",
+        "export-kicad-pcb",
+    }:
         try:
             board = load_board(args.board)
         except BoardLoadError as exc:
@@ -70,14 +87,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"OK: {board.name} passed power-state analysis")
             return 1 if has_errors(diagnostics) else 0
 
-        if args.command == "export-kicad":
+        if args.command in {"export-kicad", "export-kicad-pcb"}:
             if has_errors(diagnostics) and not args.no_check:
                 for diagnostic in diagnostics:
                     print(diagnostic)
                 print("KiCad generation stopped because ERC reported errors.")
                 return 1
             try:
-                manifest = KiCadSchematicBackend().generate(board)
+                if args.command == "export-kicad-pcb":
+                    physical_board = prototype_physicalize(board)
+                    manifest = KiCadPcbBackend().generate(physical_board)
+                    artifact_kind = "PCB"
+                else:
+                    manifest = KiCadSchematicBackend().generate(board)
+                    artifact_kind = "schematic"
             except ValueError as exc:
                 print(f"BACKEND ERROR: {exc}")
                 return 2
@@ -91,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for warning in manifest.warnings:
                 print(f"WARNING: {warning}")
             print(
-                f"Generated KiCad {manifest.target_version} schematic "
+                f"Generated KiCad {manifest.target_version} {artifact_kind} "
                 f"{board.name} -> {output}"
             )
             return 0

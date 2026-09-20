@@ -1,7 +1,8 @@
 """Artifact backends for compiled CopperScript designs."""
 
-from .base import Artifact, ArtifactManifest, Backend
+from .base import Artifact, ArtifactManifest, Backend, PhysicalBackend
 from .kicad import KiCadSchematicBackend, KiCadSchematicOptions
+from .kicad_pcb import KiCadPcbBackend
 
 __all__ = [
     "Artifact",
@@ -9,4 +10,6 @@ __all__ = [
     "Backend",
     "KiCadSchematicBackend",
     "KiCadSchematicOptions",
+    "KiCadPcbBackend",
+    "PhysicalBackend",
 ]
