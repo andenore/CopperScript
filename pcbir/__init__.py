@@ -119,6 +119,18 @@ from .physicalize import (
     prototype_physicalize,
     resolved_physicalize,
 )
+from .layout import (
+    GateStatus,
+    LayoutFinding,
+    LayoutGate,
+    LayoutReport,
+    LayoutStage,
+    PlacementMetrics,
+    PlacementPlan,
+    PlacementPlannerOptions,
+    PlacementPlanningError,
+    plan_placement,
+)
 from .syntax import CopperScriptError, SourceLocation
 
 __all__ = [
@@ -157,6 +169,7 @@ __all__ = [
     "FootprintRectangle",
     "FootprintResolutionError",
     "FootprintResolver",
+    "GateStatus",
     "Interface",
     "InterfaceTypeDefinition",
     "Inductance",
@@ -165,6 +178,10 @@ __all__ = [
     "KiCadSchematicOptions",
     "KiCadPcbBackend",
     "KiCadModImportError",
+    "LayoutFinding",
+    "LayoutGate",
+    "LayoutReport",
+    "LayoutStage",
     "ModuleInstance",
     "ModeGroupDefinition",
     "MuxOption",
@@ -189,6 +206,10 @@ __all__ = [
     "PhysicalFootprint",
     "PhysicalNet",
     "Placement",
+    "PlacementMetrics",
+    "PlacementPlan",
+    "PlacementPlannerOptions",
+    "PlacementPlanningError",
     "Point",
     "PrototypePhysicalOptions",
     "QuantityRange",
@@ -233,6 +254,7 @@ __all__ = [
     "nm_from_mm",
     "ohms",
     "parse_kicad_mod",
+    "plan_placement",
     "prototype_physicalize",
     "resolved_physicalize",
     "volts",

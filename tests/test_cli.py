@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import json
 from pathlib import Path
 
 
@@ -195,6 +196,37 @@ def test_cli_does_not_silently_fall_back_to_proxy_footprints(
     assert result.returncode == 2
     assert "cannot resolve footprint" in result.stdout
     assert not output.exists()
+
+
+def test_cli_plans_layout_and_writes_readiness_report(tmp_path: Path) -> None:
+    output = tmp_path / "planned.kicad_pcb"
+    report = tmp_path / "layout-report.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "copperscript",
+            "plan-layout",
+            "examples/valid_board.copper",
+            "-o",
+            str(output),
+            "--report",
+            str(report),
+            "--allow-proxy-footprints",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert output.read_text(encoding="utf-8").startswith("(kicad_pcb")
+    document = json.loads(report.read_text(encoding="utf-8"))
+    assert document["schema"] == "copperscript-layout-report/v0.1"
+    assert "PLACE:" in result.stdout
+    assert "ROUTE: not_run" in result.stdout
+    assert "VERIFY: blocked" in result.stdout
 
 
 def test_cli_checks_kicad_mod_footprint() -> None:

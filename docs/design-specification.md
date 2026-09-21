@@ -520,7 +520,29 @@ caller explicitly requests that development fallback. Both outputs MUST be
 marked as not fabrication-ready, and the backend MUST report the remaining
 placement/routing limitations as warnings.
 
-### 6.3 Footprint importers
+### 6.3 Physical-design workflow
+
+The user-visible physical-design workflow has exactly four gates: Prepare,
+Place, Route, and Verify. Detailed activities such as floorplanning, global
+placement, legalization, local refinement, and routability estimation are
+internal Place substeps rather than independent public phases. Global corridor
+and layer assignment, detailed routing, rip-up/reroute, and tuning are Route
+substeps. DRC, electrical/thermal/RF analysis, DFX, and CAM inspection are
+independently reportable Verify checks.
+
+A completed Place gate MUST mean that all represented components are inside the
+board and satisfy represented component-clearance constraints. It SHOULD include
+a coarse global-routing estimate so congestion can feed back into placement.
+Such an estimate MUST NOT be represented as routed copper. Route remains not run
+until geometrically valid tracks and vias exist, and Verify MUST remain blocked
+until required sign-off checks have passed.
+
+Automated placement and routing artifacts MUST retain their algorithm identity,
+gate state, metrics, and non-fabrication-ready status. See
+`docs/layout-workflow.md` for the researched algorithm choices and implemented
+scope.
+
+### 6.4 Footprint importers
 
 External footprint formats are adapters into `PhysicalFootprint`; they are not
 alternate physical IRs. Importers MUST normalize exact geometry, retain source
@@ -664,6 +686,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-041 | Accepted | Footprint importers normalize external files into physical IR, retain checksum provenance, and fail instead of silently losing unsupported fabrication geometry. |
 | CS-042 | Accepted | Footprint resolution is explicit and deterministic: board-relative files or caller-provided library roots only; ambiguity and electrical pad mismatches are errors. |
 | CS-043 | Accepted | CopperLib is the canonical project for new reusable part, device, footprint, and circuit-module definitions; product examples import them rather than duplicating them in the compiler repository. |
+| CS-044 | Accepted | Physical design exposes four gates—Prepare, Place, Route, Verify. Placement includes legalization and routability feedback; estimates never masquerade as routed copper, and release remains blocked until routing and sign-off pass. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

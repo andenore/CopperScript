@@ -10,6 +10,7 @@ from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .erc import check, has_errors
 from .footprints import FootprintResolver
 from .importers import KiCadModImportError, load_kicad_mod
+from .layout import plan_placement
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
 from .physicalize import prototype_physicalize, resolved_physicalize
@@ -67,6 +68,31 @@ def _parser() -> argparse.ArgumentParser:
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
 
+    layout_parser = subparsers.add_parser(
+        "plan-layout",
+        help="produce a legal placement candidate and coarse routability report",
+    )
+    layout_parser.add_argument("board", type=Path, help="a .copper source file")
+    layout_parser.add_argument("-o", "--output", type=Path, help="output .kicad_pcb file")
+    layout_parser.add_argument(
+        "--report", type=Path, help="write the layout readiness report as JSON"
+    )
+    layout_parser.add_argument(
+        "--no-check", action="store_true", help="generate even when ERC reports errors"
+    )
+    layout_parser.add_argument(
+        "--footprint-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="explicit KiCad footprint search root (repeatable)",
+    )
+    layout_parser.add_argument(
+        "--allow-proxy-footprints",
+        action="store_true",
+        help="use generated inspection-only pads instead of resolving .kicad_mod files",
+    )
+
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
     )
@@ -99,6 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "compile",
         "export-kicad",
         "export-kicad-pcb",
+        "plan-layout",
     }:
         try:
             board = load_board(args.board)
@@ -123,14 +150,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"OK: {board.name} passed power-state analysis")
             return 1 if has_errors(diagnostics) else 0
 
-        if args.command in {"export-kicad", "export-kicad-pcb"}:
+        if args.command in {"export-kicad", "export-kicad-pcb", "plan-layout"}:
             if has_errors(diagnostics) and not args.no_check:
                 for diagnostic in diagnostics:
                     print(diagnostic)
                 print("KiCad generation stopped because ERC reported errors.")
                 return 1
             try:
-                if args.command == "export-kicad-pcb":
+                if args.command in {"export-kicad-pcb", "plan-layout"}:
                     if args.allow_proxy_footprints:
                         physical_board = prototype_physicalize(board)
                     else:
@@ -141,6 +168,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                             ),
                         )
                         physical_board = resolved_physicalize(board, resolver)
+                    layout_report = None
+                    if args.command == "plan-layout":
+                        plan = plan_placement(physical_board)
+                        physical_board = plan.board
+                        layout_report = plan.report
                     manifest = KiCadPcbBackend().generate(physical_board)
                     artifact_kind = "PCB"
                 else:
@@ -153,11 +185,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             output = args.output or Path(artifact.name)
             try:
                 output.write_text(artifact.content, encoding="utf-8")
+                if args.command == "plan-layout" and args.report:
+                    args.report.write_text(layout_report.to_json(), encoding="utf-8")
             except OSError as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2
             for warning in manifest.warnings:
                 print(f"WARNING: {warning}")
+            if args.command == "plan-layout":
+                for gate in layout_report.gates:
+                    print(f"{gate.stage.value.upper()}: {gate.status.value} - {gate.summary}")
+                metrics = layout_report.metrics
+                print(
+                    "Placement estimate: "
+                    f"HPWL={metrics.half_perimeter_wire_length_nm / 1_000_000:.1f} mm, "
+                    f"congestion overflow={metrics.congestion_overflow}, "
+                    "routing=not run"
+                )
             print(
                 f"Generated KiCad {manifest.target_version} {artifact_kind} "
                 f"{board.name} -> {output}"

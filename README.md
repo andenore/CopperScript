@@ -5,7 +5,8 @@ connectivity, electrical intent, and design constraints.
 
 The v0.1 compiler parses `.copper` source into a typed intermediate
 representation and runs electrical-rules checks (ERC). It deliberately does not
-perform placement or routing yet.
+perform detailed routing yet; its first physical workflow can produce a legal,
+routability-estimated placement candidate without claiming fabrication readiness.
 
 ## Quick start
 
@@ -49,6 +50,18 @@ available for backend development through explicit opt-in:
 ```console
 python -m copperscript export-kicad-pcb examples/valid_board.copper --allow-proxy-footprints
 ```
+
+Produce a deterministic legal placement candidate and a four-gate readiness
+report:
+
+```console
+python -m copperscript plan-layout examples/valid_board.copper --allow-proxy-footprints -o planned.kicad_pcb --report layout-report.json
+```
+
+The planner estimates global routing congestion but does not generate copper.
+Its report therefore marks Route as not run and Verify as blocked. See the
+[physical layout workflow](docs/layout-workflow.md) for the research,
+consolidated stages, algorithms, and limitations.
 
 Validate and inspect a KiCad footprint before resolving it into a physical
 design:
@@ -151,7 +164,8 @@ file.
                               `-> power-state analyzer
                               `-> footprint resolver + draft physicalizer
                                       `-> physical IR
-                                              `-> KiCad PCB backend
+                                          |-> legal placement + routability estimate
+                                          `-> KiCad PCB backend
 ```
 
 The stages are intentionally separate so editor tooling and a future language
@@ -174,6 +188,8 @@ Key modules:
   board-relative paths or explicit KiCad library roots.
 - `pcbir.physicalize` — resolved-footprint lowering plus temporary deterministic
   grid placement; proxy geometry is an explicit development fallback.
+- `pcbir.layout` — four-gate readiness model, deterministic legal placement,
+  local refinement, and coarse routing-congestion estimation.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work
@@ -244,11 +260,15 @@ assignments, copper tracks and vias when present, and a closed `Edge.Cuts`
 outline. Backend tests include a completely routed synthetic physical board.
 
 The current `.copper` frontend does not yet define board geometry, placement,
-or routing. `export-kicad-pcb` resolves selected `.kicad_mod` files into
+or routing constraints. `export-kicad-pcb` resolves selected `.kicad_mod` files into
 physical IR, checks that their numbered pads exactly match the electrical part,
 and arranges components on a deterministic grid. These unrouted drafts must not
 be sent for fabrication. Generic proxy geometry is available only with
 `--allow-proxy-footprints` and remains clearly marked in output warnings.
+
+`plan-layout` replaces the inspection grid with a deterministic, clearance-legal
+placement and emits coarse routability metrics. It still creates no tracks and
+explicitly blocks fabrication sign-off.
 
 ## KiCad footprint importer
 

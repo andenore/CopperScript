@@ -60,6 +60,11 @@ class KiCadPcbBackend:
                 "Components use deterministic draft placement; review and constrain "
                 "placement before fabrication."
             )
+        if board.metadata.get("planned_placement") == "true":
+            warnings.append(
+                "Components use an automated placement candidate with coarse "
+                "routability estimation; review constraints before routing."
+            )
         import_warnings = board.metadata.get("footprint_import_warnings")
         if import_warnings:
             warnings.extend(import_warnings.splitlines())
