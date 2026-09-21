@@ -133,6 +133,7 @@ def test_cli_exports_prototype_kicad_pcb(tmp_path: Path) -> None:
             "examples/valid_board.copper",
             "-o",
             str(output),
+            "--allow-proxy-footprints",
         ],
         cwd=ROOT,
         text=True,
@@ -144,6 +145,56 @@ def test_cli_exports_prototype_kicad_pcb(tmp_path: Path) -> None:
     assert "Generated KiCad 8.0 PCB" in result.stdout
     assert "proxy footprints" in result.stdout
     assert output.read_text(encoding="utf-8").startswith("(kicad_pcb")
+
+
+def test_cli_exports_pcb_with_resolved_kicad_mod(tmp_path: Path) -> None:
+    output = tmp_path / "resolved.kicad_pcb"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "copperscript",
+            "export-kicad-pcb",
+            "examples/resolved_footprint_board.copper",
+            "-o",
+            str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "proxy footprints" not in result.stdout
+    content = output.read_text(encoding="utf-8")
+    assert '(footprint "footprints/R_0402_CopperScript.kicad_mod"' in content
+    assert '(fp_rect' in content
+
+
+def test_cli_does_not_silently_fall_back_to_proxy_footprints(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "unresolved.kicad_pcb"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "copperscript",
+            "export-kicad-pcb",
+            "examples/valid_board.copper",
+            "-o",
+            str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "cannot resolve footprint" in result.stdout
+    assert not output.exists()
 
 
 def test_cli_checks_kicad_mod_footprint() -> None:

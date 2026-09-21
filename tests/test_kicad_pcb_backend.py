@@ -60,9 +60,10 @@ def test_kicad_pcb_backend_marks_proxy_board_as_non_fabrication_ready() -> None:
 
     manifest = KiCadPcbBackend().generate(physical)
 
-    assert len(manifest.warnings) == 2
+    assert len(manifest.warnings) == 3
     assert "proxy footprints" in manifest.warnings[0]
-    assert "no routed tracks" in manifest.warnings[1]
+    assert "draft placement" in manifest.warnings[1]
+    assert "no routed tracks" in manifest.warnings[2]
     assert '(property "Reference" "U2"' in manifest.artifacts[0].content
     assert '(net 4 "V3V3")' in manifest.artifacts[0].content
 

@@ -55,6 +55,14 @@ class KiCadPcbBackend:
                 "The board uses generated proxy footprints and is for inspection only; "
                 "resolve verified package footprints before fabrication."
             )
+        if board.metadata.get("prototype_placement") == "true":
+            warnings.append(
+                "Components use deterministic draft placement; review and constrain "
+                "placement before fabrication."
+            )
+        import_warnings = board.metadata.get("footprint_import_warnings")
+        if import_warnings:
+            warnings.extend(import_warnings.splitlines())
         if not board.tracks:
             warnings.append("The board contains no routed tracks.")
         return ArtifactManifest(

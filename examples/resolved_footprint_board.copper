@@ -1,0 +1,12 @@
+// A minimal board using verified geometry from a local KiCad footprint.
+board ResolvedFootprintBoard {
+    use library "tiny";
+
+    component R1: RESISTOR {
+        value = 10kohm;
+        footprint = "footprints/R_0402_CopperScript.kicad_mod";
+    }
+
+    net LEFT { R1.1; }
+    net RIGHT { R1.2; }
+}

@@ -292,6 +292,22 @@ component R1: RESISTOR {
 Supported component properties are `value` and `footprint`. A value can be a
 typed quantity or a quoted string.
 
+A footprint can be a direct KiCad `.kicad_mod` path relative to the board:
+
+```copper
+component R1: RESISTOR {
+    footprint = "footprints/R_0402_1005Metric.kicad_mod";
+}
+```
+
+It can also use KiCad's `Library:Footprint` identifier form. The PCB export
+command resolves that form only within explicit `--footprint-root` directories.
+For example, `Resistor_SMD:R_0402_1005Metric` maps to
+`Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod`. Missing and ambiguous
+references are errors. Imported numbered pads must exactly match the electrical
+part's physical pin numbers; unnumbered non-plated mounting holes do not
+participate in that comparison.
+
 ## Nets
 
 Nets are the single source of truth for connectivity.

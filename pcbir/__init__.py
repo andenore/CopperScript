@@ -12,6 +12,7 @@ from .backends import (
 from .compiler import compile_file, compile_source
 from .erc import Diagnostic, Severity, check, has_errors
 from .elaborate import elaborate
+from .footprints import FootprintResolutionError, FootprintResolver
 from .model import (
     Board,
     BondDefinition,
@@ -113,7 +114,11 @@ from .physical import (
     Via,
     nm_from_mm,
 )
-from .physicalize import PrototypePhysicalOptions, prototype_physicalize
+from .physicalize import (
+    PrototypePhysicalOptions,
+    prototype_physicalize,
+    resolved_physicalize,
+)
 from .syntax import CopperScriptError, SourceLocation
 
 __all__ = [
@@ -150,6 +155,8 @@ __all__ = [
     "FootprintPad",
     "FootprintPolygon",
     "FootprintRectangle",
+    "FootprintResolutionError",
+    "FootprintResolver",
     "Interface",
     "InterfaceTypeDefinition",
     "Inductance",
@@ -227,5 +234,6 @@ __all__ = [
     "ohms",
     "parse_kicad_mod",
     "prototype_physicalize",
+    "resolved_physicalize",
     "volts",
 ]

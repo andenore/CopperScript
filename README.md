@@ -29,15 +29,26 @@ Generate a self-contained KiCad 8 schematic:
 python -m copperscript export-kicad examples/valid_board.copper -o valid_board.kicad_sch
 ```
 
-Generate an inspectable KiCad 8 PCB draft:
+Generate a KiCad 8 PCB draft with resolved footprint geometry:
 
 ```console
-python -m copperscript export-kicad-pcb examples/valid_board.copper -o valid_board.kicad_pcb
+python -m copperscript export-kicad-pcb examples/resolved_footprint_board.copper -o resolved.kicad_pcb
 ```
 
-The PCB draft uses deterministic grid placement and generated proxy footprints.
-It is intended to exercise and inspect the new physical pipeline, not for
-fabrication. The command prints warnings to make that distinction explicit.
+Direct `.kicad_mod` references are resolved relative to the board file. KiCad
+`Library:Footprint` identifiers can be resolved through explicit roots:
+
+```console
+python -m copperscript export-kicad-pcb board.copper --footprint-root path/to/kicad-footprints
+```
+
+Placement remains a deterministic inspection grid and routing is not generated,
+so the output is not yet fabrication-ready. Generated proxy pads remain
+available for backend development through explicit opt-in:
+
+```console
+python -m copperscript export-kicad-pcb examples/valid_board.copper --allow-proxy-footprints
+```
 
 Validate and inspect a KiCad footprint before resolving it into a physical
 design:
@@ -138,7 +149,7 @@ file.
          |-> KiCad schematic backend
          `-> derived flat view -> electrical-rules checker
                               `-> power-state analyzer
-                              `-> prototype physicalizer
+                              `-> footprint resolver + draft physicalizer
                                       `-> physical IR
                                               `-> KiCad PCB backend
 ```
@@ -159,8 +170,10 @@ Key modules:
 - `pcbir.power` — explicit steady-state power-domain analysis.
 - `pcbir.physical` — immutable, backend-neutral board geometry, footprints,
   placements, nets, tracks, vias, stackup, and design rules.
-- `pcbir.physicalize` — temporary deterministic proxy-footprint and grid-placement
-  lowering used to exercise physical backends from current examples.
+- `pcbir.footprints` — deterministic `.kicad_mod` reference resolution from
+  board-relative paths or explicit KiCad library roots.
+- `pcbir.physicalize` — resolved-footprint lowering plus temporary deterministic
+  grid placement; proxy geometry is an explicit development fallback.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work
@@ -224,11 +237,11 @@ assignments, copper tracks and vias when present, and a closed `Edge.Cuts`
 outline. Backend tests include a completely routed synthetic physical board.
 
 The current `.copper` frontend does not yet define board geometry, placement,
-or routing. `export-kicad-pcb` therefore uses a deliberately marked prototype
-physicalizer: components with selected footprints are arranged on a grid and
-their package pins receive generic proxy pad geometry. These drafts must not be
-sent for fabrication. Resolving verified footprint geometry and adding explicit
-physical constraints are the next steps.
+or routing. `export-kicad-pcb` resolves selected `.kicad_mod` files into
+physical IR, checks that their numbered pads exactly match the electrical part,
+and arranges components on a deterministic grid. These unrouted drafts must not
+be sent for fabrication. Generic proxy geometry is available only with
+`--allow-proxy-footprints` and remains clearly marked in output warnings.
 
 ## KiCad footprint importer
 
@@ -244,3 +257,10 @@ graphics, drill offsets, and unrepresented fabrication modifiers are rejected.
 Presentation-only omissions such as 3D models and user text produce explicit
 warnings; `--strict` promotes those warnings to errors. Source format, version,
 generator, path, and SHA-256 checksum are retained as footprint metadata.
+
+Footprint references ending in `.kicad_mod` are paths relative to the board
+source. `Library:Footprint` searches `<root>/Library.pretty/Footprint.kicad_mod`
+and `<root>/Library/Footprint.kicad_mod` for each `--footprint-root`. Resolution
+fails on zero or multiple matches, and the selected name must agree with the
+footprint name declared inside the file. CopperScript never searches an
+installed KiCad library implicitly.

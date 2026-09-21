@@ -8,10 +8,11 @@ from typing import Sequence
 
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .erc import check, has_errors
+from .footprints import FootprintResolver
 from .importers import KiCadModImportError, load_kicad_mod
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
-from .physicalize import prototype_physicalize
+from .physicalize import prototype_physicalize, resolved_physicalize
 from .serializer import board_to_json, write_json
 
 
@@ -46,12 +47,24 @@ def _parser() -> argparse.ArgumentParser:
 
     pcb_parser = subparsers.add_parser(
         "export-kicad-pcb",
-        help="generate a prototype KiCad 8 PCB using proxy footprints",
+        help="generate a KiCad 8 PCB draft using resolved footprints",
     )
     pcb_parser.add_argument("board", type=Path, help="a .copper source file")
     pcb_parser.add_argument("-o", "--output", type=Path, help="output .kicad_pcb file")
     pcb_parser.add_argument(
         "--no-check", action="store_true", help="generate even when ERC reports errors"
+    )
+    pcb_parser.add_argument(
+        "--footprint-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="explicit KiCad footprint search root (repeatable)",
+    )
+    pcb_parser.add_argument(
+        "--allow-proxy-footprints",
+        action="store_true",
+        help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
 
     footprint_parser = subparsers.add_parser(
@@ -118,7 +131,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             try:
                 if args.command == "export-kicad-pcb":
-                    physical_board = prototype_physicalize(board)
+                    if args.allow_proxy_footprints:
+                        physical_board = prototype_physicalize(board)
+                    else:
+                        resolver = FootprintResolver(
+                            base_directory=args.board.resolve().parent,
+                            search_roots=tuple(
+                                root.resolve() for root in args.footprint_root
+                            ),
+                        )
+                        physical_board = resolved_physicalize(board, resolver)
                     manifest = KiCadPcbBackend().generate(physical_board)
                     artifact_kind = "PCB"
                 else:

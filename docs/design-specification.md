@@ -505,11 +505,12 @@ The initial implementation:
 - accepts only `PhysicalBoard`, making the electrical/physical boundary
   explicit in its public API.
 
-The temporary `prototype_physicalize` adapter is not a placement engine or a
-footprint resolver. It creates deterministic grid placement and generic proxy
-pads only so current `.copper` examples can exercise the backend. Its output
-MUST be marked as not fabrication-ready, and the backend MUST report this as a
-warning. Verified footprint resolution is required before production output.
+The temporary physicalization adapters are not placement engines. The normal
+path resolves verified footprints and creates deterministic grid placement;
+`prototype_physicalize` additionally creates generic proxy pads only when the
+caller explicitly requests that development fallback. Both outputs MUST be
+marked as not fabrication-ready, and the backend MUST report the remaining
+placement/routing limitations as warnings.
 
 ### 6.3 Footprint importers
 
@@ -527,6 +528,21 @@ presentation-only constructs produce warnings, and strict mode promotes all
 warnings to errors. Custom pads, copper/mask graphics, drill offsets, and
 unsupported fabrication modifiers are errors until the physical IR can retain
 them losslessly.
+
+Footprint selection and footprint resolution are separate phases. The
+electrical IR retains the user-selected string; physical lowering resolves it
+through a dedicated adapter. A direct `.kicad_mod` path is relative to the
+board source. A KiCad `Library:Footprint` identifier is searched only in
+explicit caller-provided roots. The resolver MUST NOT inspect an installed EDA
+tool's implicit library configuration because that would make builds
+machine-dependent. No match and multiple matches are both errors.
+
+The selected name MUST agree with the name declared inside the footprint file.
+Before placement, the set of non-empty electrical pad numbers MUST exactly
+match the part's physical pin numbers. Duplicate footprint primitives sharing
+one pad number are allowed, and unnumbered non-plated mounting holes are ignored
+for electrical matching. Proxy geometry requires explicit opt-in and MUST
+remain marked as non-fabrication-ready.
 
 ## 7. Serialization and versioning
 
@@ -574,9 +590,9 @@ CompiledDesign
 The current constraint syntax may remain unchanged; the separation is semantic
 and architectural, not necessarily visual in source.
 
-Current footprint strings are demonstrations rather than normalized library
-identifiers. The KiCad backend should introduce an explicit mapping layer
-instead of redefining those strings as implicitly KiCad-specific.
+Footprint strings are opaque selections in electrical IR. The physical
+resolver interprets explicit `.kicad_mod` paths and KiCad library identifiers;
+the KiCad PCB backend itself receives only normalized physical IR.
 
 ## 10. Open design questions
 
@@ -638,6 +654,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-039 | Accepted | The physical IR is a backend-neutral immutable model using integer nanometres, validated references, and traceability to electrical component and net identities. |
 | CS-040 | Accepted | The KiCad PCB backend consumes only physical IR and initially targets KiCad 8 format `20240108`; prototype proxy footprints are explicitly non-fabrication-ready. |
 | CS-041 | Accepted | Footprint importers normalize external files into physical IR, retain checksum provenance, and fail instead of silently losing unsupported fabrication geometry. |
+| CS-042 | Accepted | Footprint resolution is explicit and deterministic: board-relative files or caller-provided library roots only; ambiguity and electrical pad mismatches are errors. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same
