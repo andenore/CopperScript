@@ -1,0 +1,595 @@
+"""Import KiCad ``.kicad_mod`` files into normalized physical IR.
+
+The importer intentionally supports a conservative subset of KiCad 6 through
+8 footprints.  Fabrication-relevant constructs that cannot yet be represented
+raise an error instead of being silently discarded.  Presentation-only items
+such as 3D models and user text are reported as warnings and can be promoted to
+errors with ``strict=True``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from hashlib import sha256
+from math import isqrt
+from pathlib import Path
+from typing import Iterator, TypeAlias
+
+from ..physical import (
+    FootprintArc,
+    FootprintCircle,
+    FootprintGraphic,
+    FootprintLayer,
+    FootprintLine,
+    FootprintPad,
+    FootprintPolygon,
+    FootprintRectangle,
+    PadKind,
+    PadShape,
+    PhysicalFootprint,
+    Point,
+    Size,
+    nm_from_mm,
+)
+
+
+SExpr: TypeAlias = str | list["SExpr"]
+
+
+class KiCadModImportError(ValueError):
+    """A malformed or unsupported KiCad footprint construct."""
+
+
+@dataclass(frozen=True, slots=True)
+class FootprintImportResult:
+    footprint: PhysicalFootprint
+    warnings: tuple[str, ...]
+    source_version: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Token:
+    value: str
+    line: int
+    column: int
+
+
+_LAYER_MAP = {
+    "F.SilkS": FootprintLayer.SILKSCREEN,
+    "F.Fab": FootprintLayer.FABRICATION,
+    "F.CrtYd": FootprintLayer.COURTYARD,
+    "F.Adhes": FootprintLayer.ADHESIVE,
+    "Dwgs.User": FootprintLayer.DOCUMENTATION,
+    "User.Drawings": FootprintLayer.DOCUMENTATION,
+}
+
+
+def load_kicad_mod(path: str | Path, *, strict: bool = False) -> FootprintImportResult:
+    """Read and import one KiCad footprint library file."""
+
+    source_path = Path(path)
+    if source_path.suffix.casefold() != ".kicad_mod":
+        raise KiCadModImportError(
+            f"{source_path}: expected a .kicad_mod footprint file"
+        )
+    try:
+        text = source_path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise KiCadModImportError(f"cannot read {source_path}: {exc}") from exc
+    return parse_kicad_mod(text, source=str(source_path), strict=strict)
+
+
+def parse_kicad_mod(
+    text: str,
+    *,
+    source: str = "<memory>",
+    strict: bool = False,
+) -> FootprintImportResult:
+    """Parse one KiCad footprint into backend-neutral physical IR."""
+
+    root = _parse_sexpr(text, source)
+    if _tag(root) not in {"footprint", "module"}:
+        raise KiCadModImportError(
+            f"{source}: root expression must be 'footprint', got {_tag(root)!r}"
+        )
+    name = _required_atom(root, 1, source, "footprint name")
+    footprint_layer_node = _first(root, "layer")
+    if footprint_layer_node is not None:
+        footprint_layer = _required_atom(
+            footprint_layer_node, 1, source, "footprint layer"
+        )
+        if footprint_layer != "F.Cu":
+            raise KiCadModImportError(
+                f"{source}: only front-side footprints are supported; "
+                f"got layer {footprint_layer!r}"
+            )
+    version_node = _first(root, "version")
+    version = _atom(version_node, 1) if version_node is not None else None
+    generator_node = _first(root, "generator")
+    generator = _atom(generator_node, 1) if generator_node is not None else ""
+
+    warnings: list[str] = []
+    pads: list[FootprintPad] = []
+    graphics: list[FootprintGraphic] = []
+    for child in _lists(root[2:]):
+        child_tag = _tag(child)
+        if child_tag == "pad":
+            pads.append(_parse_pad(child, source))
+        elif child_tag in {"fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly"}:
+            graphic = _parse_graphic(child, source, warnings)
+            if graphic is not None:
+                graphics.append(graphic)
+        elif child_tag in {"fp_text", "fp_text_box"}:
+            text_kind = _atom(child, 1) or "user"
+            if text_kind not in {"reference", "value"}:
+                warnings.append(f"ignored footprint text ({text_kind})")
+        elif child_tag == "model":
+            warnings.append("ignored 3D model reference")
+        elif child_tag in {
+            "solder_mask_margin",
+            "solder_paste_margin",
+            "solder_paste_ratio",
+            "clearance",
+            "zone_connect",
+            "thermal_width",
+            "thermal_gap",
+            "private_layers",
+            "net_tie_pad_groups",
+        }:
+            raise KiCadModImportError(
+                f"{source}: unsupported fabrication-critical footprint setting "
+                f"{child_tag!r}"
+            )
+        elif child_tag in {
+            "version",
+            "generator",
+            "generator_version",
+            "layer",
+            "descr",
+            "tags",
+            "property",
+            "attr",
+            "uuid",
+            "tedit",
+        }:
+            continue
+        elif child_tag:
+            warnings.append(f"ignored unsupported footprint item {child_tag!r}")
+
+    if not pads:
+        warnings.append("footprint contains no pads")
+    warnings = list(dict.fromkeys(warnings))
+    if strict and warnings:
+        raise KiCadModImportError(f"{source}: {warnings[0]}")
+
+    metadata = {
+        "source_format": "kicad_mod",
+        "source_path": source,
+        "source_sha256": sha256(text.encode("utf-8")).hexdigest(),
+    }
+    if version:
+        metadata["source_version"] = version
+    if generator:
+        metadata["source_generator"] = generator
+    if warnings:
+        metadata["import_warnings"] = " | ".join(warnings)
+
+    footprint = PhysicalFootprint(
+        name=name,
+        pads=tuple(pads),
+        body_size=_bounding_size(pads, graphics),
+        source_library_id=name,
+        graphics=tuple(graphics),
+        metadata=metadata,
+    )
+    return FootprintImportResult(footprint, tuple(warnings), version)
+
+
+def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
+    number = _required_atom(node, 1, source, "pad number")
+    kind_text = _required_atom(node, 2, source, "pad kind")
+    shape_text = _required_atom(node, 3, source, "pad shape")
+    try:
+        kind = {
+            "smd": PadKind.SMD,
+            "thru_hole": PadKind.THROUGH_HOLE,
+            "np_thru_hole": PadKind.NON_PLATED_THROUGH_HOLE,
+        }[kind_text]
+    except KeyError as exc:
+        raise KiCadModImportError(f"{source}: unsupported pad kind {kind_text!r}") from exc
+    try:
+        shape = {
+            "circle": PadShape.CIRCLE,
+            "oval": PadShape.OVAL,
+            "rect": PadShape.RECTANGLE,
+            "roundrect": PadShape.ROUNDRECT,
+        }[shape_text]
+    except KeyError as exc:
+        raise KiCadModImportError(
+            f"{source}: unsupported fabrication-critical pad shape {shape_text!r}"
+        ) from exc
+
+    at = _required_child(node, "at", source, "pad position")
+    position = _point(at, source)
+    rotation = _decimal(_atom(at, 3) or "0", source, "pad rotation")
+    size_node = _required_child(node, "size", source, "pad size")
+    size = _size(size_node, source)
+    layers_node = _required_child(node, "layers", source, "pad layers")
+    layers = tuple(item for item in layers_node[1:] if isinstance(item, str))
+    has_mask, has_paste = _validate_pad_layers(kind, layers, source)
+    drill = _parse_drill(_first(node, "drill"), kind, source)
+
+    ratio_node = _first(node, "roundrect_rratio")
+    ratio_ppm = 250_000
+    if ratio_node is not None:
+        ratio = _decimal(
+            _required_atom(ratio_node, 1, source, "roundrect ratio"),
+            source,
+            "roundrect ratio",
+        )
+        ratio_ppm = int(
+            (ratio * Decimal(1_000_000)).to_integral_value(rounding=ROUND_HALF_UP)
+        )
+
+    allowed_children = {
+        "at",
+        "size",
+        "layers",
+        "roundrect_rratio",
+        "drill",
+        "uuid",
+        "tstamp",
+        "pinfunction",
+        "pintype",
+    }
+    for child in _lists(node[4:]):
+        if _tag(child) not in allowed_children:
+            raise KiCadModImportError(
+                f"{source}: pad {number!r} uses unsupported fabrication modifier "
+                f"{_tag(child)!r}"
+            )
+
+    return FootprintPad(
+        number=number,
+        position=position,
+        size=size,
+        kind=kind,
+        shape=shape,
+        rotation_degrees=rotation,
+        drill=drill,
+        roundrect_ratio_ppm=ratio_ppm,
+        has_solder_mask=has_mask,
+        has_solder_paste=has_paste,
+    )
+
+
+def _validate_pad_layers(
+    kind: PadKind, layers: tuple[str, ...], source: str
+) -> tuple[bool, bool]:
+    layer_set = set(layers)
+    if kind is PadKind.SMD:
+        allowed = {"F.Cu", "F.Mask", "F.Paste"}
+        if "F.Cu" not in layer_set or not layer_set <= allowed:
+            raise KiCadModImportError(
+                f"{source}: unsupported SMD pad layers {layers!r}; expected front-side copper"
+            )
+        return "F.Mask" in layer_set, "F.Paste" in layer_set
+    allowed = {"*.Cu", "*.Mask"}
+    if "*.Cu" not in layer_set or not layer_set <= allowed:
+        raise KiCadModImportError(
+            f"{source}: unsupported through-hole pad layers {layers!r}"
+        )
+    return "*.Mask" in layer_set, False
+
+
+def _parse_drill(
+    node: list[SExpr] | None, kind: PadKind, source: str
+) -> Size | None:
+    if node is None:
+        if kind is PadKind.SMD:
+            return None
+        raise KiCadModImportError(f"{source}: through-hole pad is missing a drill")
+    if kind is PadKind.SMD:
+        raise KiCadModImportError(f"{source}: SMD pad unexpectedly contains a drill")
+    if any(isinstance(item, list) for item in node[1:]):
+        raise KiCadModImportError(
+            f"{source}: offset or compound drill definitions are not supported"
+        )
+    values = [item for item in node[1:] if isinstance(item, str)]
+    if not values:
+        raise KiCadModImportError(f"{source}: empty drill definition")
+    if values[0] == "oval":
+        if len(values) != 3:
+            raise KiCadModImportError(f"{source}: oval drill requires width and height")
+        return Size(
+            _number_nm(values[1], source, "drill width"),
+            _number_nm(values[2], source, "drill height"),
+        )
+    if len(values) != 1:
+        raise KiCadModImportError(f"{source}: unsupported drill definition {values!r}")
+    diameter = _number_nm(values[0], source, "drill diameter")
+    return Size(diameter, diameter)
+
+
+def _parse_graphic(
+    node: list[SExpr], source: str, warnings: list[str]
+) -> FootprintGraphic | None:
+    layer_node = _required_child(node, "layer", source, "graphic layer")
+    layer_name = _required_atom(layer_node, 1, source, "graphic layer")
+    layer = _LAYER_MAP.get(layer_name)
+    if layer is None:
+        if layer_name in {"F.Cu", "F.Mask", "F.Paste", "Edge.Cuts"}:
+            raise KiCadModImportError(
+                f"{source}: unsupported fabrication-critical graphic layer {layer_name!r}"
+            )
+        warnings.append(f"ignored graphic on unsupported layer {layer_name!r}")
+        return None
+    width = _graphic_width(node, source)
+    filled = _graphic_filled(node, source)
+    tag = _tag(node)
+    if tag == "fp_line":
+        return FootprintLine(
+            _point(_required_child(node, "start", source, "line start"), source),
+            _point(_required_child(node, "end", source, "line end"), source),
+            width,
+            layer,
+        )
+    if tag == "fp_rect":
+        return FootprintRectangle(
+            _point(_required_child(node, "start", source, "rectangle start"), source),
+            _point(_required_child(node, "end", source, "rectangle end"), source),
+            width,
+            layer,
+            filled,
+        )
+    if tag == "fp_circle":
+        return FootprintCircle(
+            _point(_required_child(node, "center", source, "circle center"), source),
+            _point(_required_child(node, "end", source, "circle end"), source),
+            width,
+            layer,
+            filled,
+        )
+    if tag == "fp_arc":
+        if filled:
+            raise KiCadModImportError(f"{source}: filled arcs are not supported")
+        mid = _first(node, "mid")
+        if mid is None:
+            raise KiCadModImportError(
+                f"{source}: legacy angle-based arcs are not supported yet"
+            )
+        return FootprintArc(
+            _point(_required_child(node, "start", source, "arc start"), source),
+            _point(mid, source),
+            _point(_required_child(node, "end", source, "arc end"), source),
+            width,
+            layer,
+        )
+    if tag == "fp_poly":
+        pts = _required_child(node, "pts", source, "polygon points")
+        points = tuple(_point(item, source) for item in _children(pts, "xy"))
+        return FootprintPolygon(points, width, layer, filled)
+    raise KiCadModImportError(f"{source}: unsupported footprint graphic {tag!r}")
+
+
+def _graphic_width(node: list[SExpr], source: str) -> int:
+    stroke = _first(node, "stroke")
+    width = _first(stroke, "width") if stroke is not None else _first(node, "width")
+    if width is None:
+        raise KiCadModImportError(f"{source}: footprint graphic is missing stroke width")
+    return _number_nm(
+        _required_atom(width, 1, source, "stroke width"), source, "stroke width"
+    )
+
+
+def _graphic_filled(node: list[SExpr], source: str) -> bool:
+    fill = _first(node, "fill")
+    if fill is None:
+        return False
+    value = _required_atom(fill, 1, source, "graphic fill")
+    if value not in {"none", "solid"}:
+        raise KiCadModImportError(f"{source}: unsupported graphic fill {value!r}")
+    return value == "solid"
+
+
+def _bounding_size(
+    pads: list[FootprintPad], graphics: list[FootprintGraphic]
+) -> Size:
+    points: list[Point] = []
+    for pad in pads:
+        half_width = pad.size.width_nm // 2
+        half_height = pad.size.height_nm // 2
+        points.extend(
+            (
+                Point(pad.position.x_nm - half_width, pad.position.y_nm - half_height),
+                Point(pad.position.x_nm + half_width, pad.position.y_nm + half_height),
+            )
+        )
+    for graphic in graphics:
+        if isinstance(graphic, (FootprintLine, FootprintRectangle, FootprintArc)):
+            points.extend((graphic.start, graphic.end))
+            if isinstance(graphic, FootprintArc):
+                points.append(graphic.midpoint)
+        elif isinstance(graphic, FootprintCircle):
+            dx = graphic.end.x_nm - graphic.center.x_nm
+            dy = graphic.end.y_nm - graphic.center.y_nm
+            squared = dx * dx + dy * dy
+            radius = isqrt(squared)
+            if radius * radius != squared:
+                radius += 1
+            points.extend(
+                (
+                    Point(graphic.center.x_nm - radius, graphic.center.y_nm - radius),
+                    Point(graphic.center.x_nm + radius, graphic.center.y_nm + radius),
+                )
+            )
+        elif isinstance(graphic, FootprintPolygon):
+            points.extend(graphic.points)
+    if not points:
+        return Size.mm(1, 1)
+    width = max(point.x_nm for point in points) - min(point.x_nm for point in points)
+    height = max(point.y_nm for point in points) - min(point.y_nm for point in points)
+    return Size(max(width, 1), max(height, 1))
+
+
+def _parse_sexpr(text: str, source: str) -> list[SExpr]:
+    tokens = list(_tokenize(text, source))
+    index = 0
+
+    def parse_list() -> list[SExpr]:
+        nonlocal index
+        result: list[SExpr] = []
+        while index < len(tokens):
+            token = tokens[index]
+            index += 1
+            if token.value == "(":
+                result.append(parse_list())
+            elif token.value == ")":
+                return result
+            else:
+                result.append(token.value)
+        raise KiCadModImportError(f"{source}: unclosed '(' expression")
+
+    if not tokens or tokens[0].value != "(":
+        raise KiCadModImportError(f"{source}: expected '(' at start of footprint")
+    index = 1
+    root = parse_list()
+    if index != len(tokens):
+        token = tokens[index]
+        raise KiCadModImportError(
+            f"{source}:{token.line}:{token.column}: unexpected token after footprint"
+        )
+    return root
+
+
+def _tokenize(text: str, source: str) -> Iterator[_Token]:
+    index = 0
+    line = 1
+    column = 1
+    while index < len(text):
+        character = text[index]
+        if character.isspace():
+            if character == "\n":
+                line += 1
+                column = 1
+            else:
+                column += 1
+            index += 1
+            continue
+        if character == "#":
+            while index < len(text) and text[index] != "\n":
+                index += 1
+                column += 1
+            continue
+        if character in "()":
+            yield _Token(character, line, column)
+            index += 1
+            column += 1
+            continue
+        token_line, token_column = line, column
+        if character == '"':
+            index += 1
+            column += 1
+            value: list[str] = []
+            while index < len(text) and text[index] != '"':
+                current = text[index]
+                if current == "\\":
+                    index += 1
+                    column += 1
+                    if index >= len(text):
+                        break
+                    current = text[index]
+                    current = {"n": "\n", "r": "\r", "t": "\t"}.get(
+                        current, current
+                    )
+                value.append(current)
+                if current == "\n":
+                    line += 1
+                    column = 1
+                else:
+                    column += 1
+                index += 1
+            if index >= len(text):
+                raise KiCadModImportError(
+                    f"{source}:{token_line}:{token_column}: unterminated string"
+                )
+            index += 1
+            column += 1
+            yield _Token("".join(value), token_line, token_column)
+            continue
+        start = index
+        while index < len(text) and not text[index].isspace() and text[index] not in "()":
+            index += 1
+            column += 1
+        yield _Token(text[start:index], token_line, token_column)
+
+
+def _tag(node: list[SExpr] | None) -> str | None:
+    return node[0] if node and isinstance(node[0], str) else None
+
+
+def _lists(items: list[SExpr]) -> Iterator[list[SExpr]]:
+    return (item for item in items if isinstance(item, list))
+
+
+def _children(node: list[SExpr], tag: str) -> list[list[SExpr]]:
+    return [child for child in _lists(node[1:]) if _tag(child) == tag]
+
+
+def _first(node: list[SExpr] | None, tag: str) -> list[SExpr] | None:
+    if node is None:
+        return None
+    return next((child for child in _lists(node[1:]) if _tag(child) == tag), None)
+
+
+def _required_child(
+    node: list[SExpr], tag: str, source: str, description: str
+) -> list[SExpr]:
+    child = _first(node, tag)
+    if child is None:
+        raise KiCadModImportError(f"{source}: missing {description}")
+    return child
+
+
+def _atom(node: list[SExpr] | None, index: int) -> str | None:
+    if node is None or len(node) <= index or not isinstance(node[index], str):
+        return None
+    return node[index]
+
+
+def _required_atom(
+    node: list[SExpr], index: int, source: str, description: str
+) -> str:
+    value = _atom(node, index)
+    if value is None:
+        raise KiCadModImportError(f"{source}: missing {description}")
+    return value
+
+
+def _point(node: list[SExpr], source: str) -> Point:
+    return Point(
+        _number_nm(_required_atom(node, 1, source, "x coordinate"), source, "x"),
+        _number_nm(_required_atom(node, 2, source, "y coordinate"), source, "y"),
+    )
+
+
+def _size(node: list[SExpr], source: str) -> Size:
+    return Size(
+        _number_nm(_required_atom(node, 1, source, "width"), source, "width"),
+        _number_nm(_required_atom(node, 2, source, "height"), source, "height"),
+    )
+
+
+def _number_nm(value: str, source: str, description: str) -> int:
+    number = _decimal(value, source, description)
+    return nm_from_mm(number)
+
+
+def _decimal(value: str, source: str, description: str) -> Decimal:
+    try:
+        return Decimal(value)
+    except InvalidOperation as exc:
+        raise KiCadModImportError(
+            f"{source}: invalid {description} value {value!r}"
+        ) from exc

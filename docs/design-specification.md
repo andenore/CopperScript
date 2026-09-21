@@ -511,6 +511,23 @@ pads only so current `.copper` examples can exercise the backend. Its output
 MUST be marked as not fabrication-ready, and the backend MUST report this as a
 warning. Verified footprint resolution is required before production output.
 
+### 6.3 Footprint importers
+
+External footprint formats are adapters into `PhysicalFootprint`; they are not
+alternate physical IRs. Importers MUST normalize exact geometry, retain source
+identity and checksum metadata, and report every unsupported construct. They
+MUST reject fabrication-relevant geometry that cannot be represented rather
+than silently approximating or dropping it.
+
+The initial KiCad `.kicad_mod` importer parses KiCad 6–8 S-expressions without
+executing code or requiring KiCad. It supports ordinary SMD and through-hole
+pads, circular and slotted drills, pad rotations, mask and paste layer presence,
+round-rectangle ratios, and common footprint drawing primitives. Ignored
+presentation-only constructs produce warnings, and strict mode promotes all
+warnings to errors. Custom pads, copper/mask graphics, drill offsets, and
+unsupported fabrication modifiers are errors until the physical IR can retain
+them losslessly.
+
 ## 7. Serialization and versioning
 
 Serialized IR MUST declare a schema identifier and version. Readers MUST reject
@@ -620,6 +637,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-038 | Accepted | Regular pin routing uses concrete pad sets and selector schemes; irregular mappings retain explicit mux options. |
 | CS-039 | Accepted | The physical IR is a backend-neutral immutable model using integer nanometres, validated references, and traceability to electrical component and net identities. |
 | CS-040 | Accepted | The KiCad PCB backend consumes only physical IR and initially targets KiCad 8 format `20240108`; prototype proxy footprints are explicitly non-fabrication-ready. |
+| CS-041 | Accepted | Footprint importers normalize external files into physical IR, retain checksum provenance, and fail instead of silently losing unsupported fabrication geometry. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

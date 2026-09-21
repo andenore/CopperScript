@@ -144,3 +144,23 @@ def test_cli_exports_prototype_kicad_pcb(tmp_path: Path) -> None:
     assert "Generated KiCad 8.0 PCB" in result.stdout
     assert "proxy footprints" in result.stdout
     assert output.read_text(encoding="utf-8").startswith("(kicad_pcb")
+
+
+def test_cli_checks_kicad_mod_footprint() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "copperscript",
+            "check-footprint",
+            "tests/fixtures/footprints/R_0402_Test.kicad_mod",
+            "--strict",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "R_0402_Test: 2 pads, 6 graphics" in result.stdout

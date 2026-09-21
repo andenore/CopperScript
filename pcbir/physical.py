@@ -55,6 +55,16 @@ class PadShape(str, Enum):
     ROUNDRECT = "roundrect"
 
 
+class FootprintLayer(str, Enum):
+    """Placement-relative non-copper footprint drawing layers."""
+
+    SILKSCREEN = "silkscreen"
+    FABRICATION = "fabrication"
+    COURTYARD = "courtyard"
+    ADHESIVE = "adhesive"
+    DOCUMENTATION = "documentation"
+
+
 @dataclass(frozen=True, slots=True)
 class Point:
     x_nm: Nanometres
@@ -160,18 +170,115 @@ class FootprintPad:
     size: Size
     kind: PadKind = PadKind.SMD
     shape: PadShape = PadShape.ROUNDRECT
-    drill_nm: Nanometres | None = None
+    rotation_degrees: Decimal | int | float | str = Decimal(0)
+    drill: Size | None = None
+    roundrect_ratio_ppm: int = 250_000
+    has_solder_mask: bool = True
+    has_solder_paste: bool = True
 
     def __post_init__(self) -> None:
-        if not self.number:
-            raise ValueError("footprint pad number cannot be empty")
-        if self.kind is PadKind.SMD and self.drill_nm is not None:
+        if not self.number and self.kind is not PadKind.NON_PLATED_THROUGH_HOLE:
+            raise ValueError("electrical footprint pad number cannot be empty")
+        object.__setattr__(
+            self,
+            "rotation_degrees",
+            Decimal(str(self.rotation_degrees)) % Decimal(360),
+        )
+        if self.kind is PadKind.SMD and self.drill is not None:
             raise ValueError("SMD pads cannot have a drill")
         if self.kind is not PadKind.SMD:
-            if self.drill_nm is None or self.drill_nm <= 0:
-                raise ValueError("through-hole pads require a positive drill")
-            if self.drill_nm >= min(self.size.width_nm, self.size.height_nm):
+            if self.drill is None:
+                raise ValueError("through-hole pads require a drill")
+            if (
+                self.drill.width_nm >= self.size.width_nm
+                or self.drill.height_nm >= self.size.height_nm
+            ):
                 raise ValueError("pad drill must be smaller than pad size")
+        if not 0 <= self.roundrect_ratio_ppm <= 500_000:
+            raise ValueError("roundrect pad ratio must be between 0 and 0.5")
+
+
+@dataclass(frozen=True, slots=True)
+class FootprintLine:
+    start: Point
+    end: Point
+    width_nm: Nanometres
+    layer: FootprintLayer
+
+    def __post_init__(self) -> None:
+        if self.start == self.end:
+            raise ValueError("footprint line cannot have zero length")
+        if self.width_nm < 0:
+            raise ValueError("footprint line width cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class FootprintRectangle:
+    start: Point
+    end: Point
+    width_nm: Nanometres
+    layer: FootprintLayer
+    filled: bool = False
+
+    def __post_init__(self) -> None:
+        if self.start == self.end:
+            raise ValueError("footprint rectangle cannot have zero size")
+        if self.width_nm < 0:
+            raise ValueError("footprint rectangle width cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class FootprintCircle:
+    center: Point
+    end: Point
+    width_nm: Nanometres
+    layer: FootprintLayer
+    filled: bool = False
+
+    def __post_init__(self) -> None:
+        if self.center == self.end:
+            raise ValueError("footprint circle must have a positive radius")
+        if self.width_nm < 0:
+            raise ValueError("footprint circle width cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class FootprintArc:
+    start: Point
+    midpoint: Point
+    end: Point
+    width_nm: Nanometres
+    layer: FootprintLayer
+
+    def __post_init__(self) -> None:
+        if len({self.start, self.midpoint, self.end}) < 3:
+            raise ValueError("footprint arc requires three distinct points")
+        if self.width_nm < 0:
+            raise ValueError("footprint arc width cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class FootprintPolygon:
+    points: tuple[Point, ...]
+    width_nm: Nanometres
+    layer: FootprintLayer
+    filled: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "points", tuple(self.points))
+        if len(self.points) < 3:
+            raise ValueError("footprint polygon requires at least three points")
+        if self.width_nm < 0:
+            raise ValueError("footprint polygon width cannot be negative")
+
+
+FootprintGraphic = (
+    FootprintLine
+    | FootprintRectangle
+    | FootprintCircle
+    | FootprintArc
+    | FootprintPolygon
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,14 +287,15 @@ class PhysicalFootprint:
     pads: tuple[FootprintPad, ...]
     body_size: Size
     source_library_id: str | None = None
+    graphics: tuple[FootprintGraphic, ...] = ()
+    metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pads", tuple(self.pads))
+        object.__setattr__(self, "graphics", tuple(self.graphics))
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
         if not self.name:
             raise ValueError("footprint name cannot be empty")
-        numbers = [pad.number for pad in self.pads]
-        if len(numbers) != len(set(numbers)):
-            raise ValueError(f"footprint {self.name!r} has duplicate pad numbers")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +303,7 @@ class Placement:
     reference: str
     footprint: str
     position: Point
-    rotation_degrees: int = 0
+    rotation_degrees: Decimal | int | float | str = Decimal(0)
     side: BoardSide = BoardSide.FRONT
     value: str = ""
     source_path: str | None = None
@@ -203,7 +311,11 @@ class Placement:
     def __post_init__(self) -> None:
         if not self.reference:
             raise ValueError("placement reference cannot be empty")
-        object.__setattr__(self, "rotation_degrees", self.rotation_degrees % 360)
+        object.__setattr__(
+            self,
+            "rotation_degrees",
+            Decimal(str(self.rotation_degrees)) % Decimal(360),
+        )
 
 
 @dataclass(frozen=True, slots=True, order=True)

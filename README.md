@@ -39,6 +39,13 @@ The PCB draft uses deterministic grid placement and generated proxy footprints.
 It is intended to exercise and inspect the new physical pipeline, not for
 fabrication. The command prints warnings to make that distinction explicit.
 
+Validate and inspect a KiCad footprint before resolving it into a physical
+design:
+
+```console
+python -m copperscript check-footprint path/to/package.kicad_mod --strict
+```
+
 For a development installation with the `copper` command:
 
 ```console
@@ -154,13 +161,15 @@ Key modules:
   placements, nets, tracks, vias, stackup, and design rules.
 - `pcbir.physicalize` — temporary deterministic proxy-footprint and grid-placement
   lowering used to exercise physical backends from current examples.
+- `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
+  parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work
   packets, validation, and deterministic library generation.
 - `pcbir.backends` — immutable backend artifacts and the KiCad schematic and
   PCB generators.
 - `pcbir.serializer` — versioned JSON IR output.
-- `pcbir.cli` — `check`, `power-check`, `compile`, `export-kicad`, and
-  `export-kicad-pcb` commands.
+- `pcbir.cli` — checking, compilation, KiCad export, and footprint inspection
+  commands.
 
 Python IR constructions are confined to test fixtures. `.copper` is the only
 user-facing source format accepted by the compiler.
@@ -220,3 +229,18 @@ physicalizer: components with selected footprints are arranged on a grid and
 their package pins receive generic proxy pad geometry. These drafts must not be
 sent for fabrication. Resolving verified footprint geometry and adding explicit
 physical constraints are the next steps.
+
+## KiCad footprint importer
+
+`load_kicad_mod()` and `parse_kicad_mod()` convert KiCad 6–8 footprint files
+into `PhysicalFootprint`. The initial importer covers common SMD, plated and
+non-plated through-hole pads, circular and oval drills, rotations, independent
+mask/paste presence, round-rectangle ratios, and the usual line, rectangle,
+circle, arc, and polygon graphics. Imported geometry can be emitted directly by
+the KiCad PCB backend.
+
+The importer is intentionally fail-safe. Custom/trapezoid pads, copper or mask
+graphics, drill offsets, and unrepresented fabrication modifiers are rejected.
+Presentation-only omissions such as 3D models and user text produce explicit
+warnings; `--strict` promotes those warnings to errors. Source format, version,
+generator, path, and SHA-256 checksum are retained as footprint metadata.

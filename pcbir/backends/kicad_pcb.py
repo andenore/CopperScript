@@ -10,7 +10,14 @@ import uuid
 from ..physical import (
     BoardSide,
     CopperLayer,
+    FootprintArc,
+    FootprintCircle,
+    FootprintGraphic,
+    FootprintLayer,
+    FootprintLine,
     FootprintPad,
+    FootprintPolygon,
+    FootprintRectangle,
     PadKind,
     PadReference,
     PadShape,
@@ -165,7 +172,7 @@ def _footprint_lines(
         f"  (footprint {_quote(footprint.name)}",
         f"    (layer {_quote(side_layer)})",
         f'    (uuid "{footprint_uuid}")',
-        f"    (at {_point(placement.position)} {placement.rotation_degrees})",
+        f"    (at {_point(placement.position)} {_decimal(placement.rotation_degrees)})",
     ]
     lines.extend(
         _property_lines(
@@ -209,24 +216,30 @@ def _footprint_lines(
         else "through_hole"
     )
     lines.append(f"    (attr {attribute})")
-    half_width = footprint.body_size.width_nm // 2
-    half_height = footprint.body_size.height_nm // 2
-    lines.extend(
-        [
-            "    (fp_rect",
-            f"      (start {_relative_point(-half_width, -half_height)})",
-            f"      (end {_relative_point(half_width, half_height)})",
-            "      (stroke (width 0.15) (type default))",
-            "      (fill none)",
-            f"      (layer {_quote(silk_layer)})",
-            f'      (uuid "{_stable_uuid(board.name, "body", placement.reference)}")',
-            "    )",
-        ]
-    )
-    for pad in footprint.pads:
+    if footprint.graphics:
+        for index, graphic in enumerate(footprint.graphics):
+            lines.extend(
+                _graphic_lines(board.name, placement, graphic, index)
+            )
+    else:
+        half_width = footprint.body_size.width_nm // 2
+        half_height = footprint.body_size.height_nm // 2
+        lines.extend(
+            [
+                "    (fp_rect",
+                f"      (start {_relative_point(-half_width, -half_height)})",
+                f"      (end {_relative_point(half_width, half_height)})",
+                "      (stroke (width 0.15) (type default))",
+                "      (fill none)",
+                f"      (layer {_quote(silk_layer)})",
+                f'      (uuid "{_stable_uuid(board.name, "body", placement.reference)}")',
+                "    )",
+            ]
+        )
+    for index, pad in enumerate(footprint.pads):
         net_name = pad_nets.get(PadReference(placement.reference, pad.number))
         lines.extend(
-            _pad_lines(board.name, placement, pad, net_name, net_codes)
+            _pad_lines(board.name, placement, pad, index, net_name, net_codes)
         )
     lines.append("  )")
     return lines
@@ -264,6 +277,7 @@ def _pad_lines(
     board_name: str,
     placement: Placement,
     pad: FootprintPad,
+    index: int,
     net_name: str | None,
     net_codes: dict[str, int],
 ) -> list[str]:
@@ -280,29 +294,130 @@ def _pad_lines(
     }[pad.shape]
     if pad.kind is PadKind.SMD:
         side = "F" if placement.side is BoardSide.FRONT else "B"
-        layers = f'"{side}.Cu" "{side}.Paste" "{side}.Mask"'
+        pad_layers = [f"{side}.Cu"]
+        if pad.has_solder_paste:
+            pad_layers.append(f"{side}.Paste")
+        if pad.has_solder_mask:
+            pad_layers.append(f"{side}.Mask")
     else:
-        layers = '"*.Cu" "*.Mask"'
+        pad_layers = ["*.Cu"]
+        if pad.has_solder_mask:
+            pad_layers.append("*.Mask")
+    layers = " ".join(_quote(layer) for layer in pad_layers)
     lines = [
         f"    (pad {_quote(pad.number)} {kind} {shape}",
-        f"      (at {_point(pad.position)})",
+        f"      (at {_point(pad.position)} {_decimal(pad.rotation_degrees)})",
         f"      (size {_mm(pad.size.width_nm)} {_mm(pad.size.height_nm)})",
     ]
-    if pad.drill_nm is not None:
-        lines.append(f"      (drill {_mm(pad.drill_nm)})")
+    if pad.drill is not None:
+        if pad.drill.width_nm == pad.drill.height_nm:
+            lines.append(f"      (drill {_mm(pad.drill.width_nm)})")
+        else:
+            lines.append(
+                f"      (drill oval {_mm(pad.drill.width_nm)} "
+                f"{_mm(pad.drill.height_nm)})"
+            )
     lines.append(f"      (layers {layers})")
     if pad.shape is PadShape.ROUNDRECT:
-        lines.append("      (roundrect_rratio 0.25)")
+        lines.append(
+            f"      (roundrect_rratio {_ratio(pad.roundrect_ratio_ppm)})"
+        )
     if net_name is not None and pad.kind is not PadKind.NON_PLATED_THROUGH_HOLE:
         lines.append(f"      (net {net_codes[net_name]} {_quote(net_name)})")
     lines.extend(
         [
             '      (pintype "passive")',
-            f'      (uuid "{_stable_uuid(board_name, "pad", placement.reference, pad.number)}")',
+            f'      (uuid "{_stable_uuid(board_name, "pad", placement.reference, str(index), pad.number)}")',
             "    )",
         ]
     )
     return lines
+
+
+def _graphic_lines(
+    board_name: str,
+    placement: Placement,
+    graphic: FootprintGraphic,
+    index: int,
+) -> list[str]:
+    layer = _footprint_layer(graphic.layer, placement.side)
+    item_uuid = _stable_uuid(
+        board_name,
+        "footprint-graphic",
+        placement.reference,
+        str(index),
+        graphic.__class__.__name__,
+    )
+    common = [
+        f"      (stroke (width {_mm(graphic.width_nm)}) (type default))",
+    ]
+    if isinstance(graphic, FootprintLine):
+        return [
+            "    (fp_line",
+            f"      (start {_point(graphic.start)})",
+            f"      (end {_point(graphic.end)})",
+            *common,
+            f"      (layer {_quote(layer)})",
+            f'      (uuid "{item_uuid}")',
+            "    )",
+        ]
+    if isinstance(graphic, FootprintRectangle):
+        return [
+            "    (fp_rect",
+            f"      (start {_point(graphic.start)})",
+            f"      (end {_point(graphic.end)})",
+            *common,
+            f"      (fill {'solid' if graphic.filled else 'none'})",
+            f"      (layer {_quote(layer)})",
+            f'      (uuid "{item_uuid}")',
+            "    )",
+        ]
+    if isinstance(graphic, FootprintCircle):
+        return [
+            "    (fp_circle",
+            f"      (center {_point(graphic.center)})",
+            f"      (end {_point(graphic.end)})",
+            *common,
+            f"      (fill {'solid' if graphic.filled else 'none'})",
+            f"      (layer {_quote(layer)})",
+            f'      (uuid "{item_uuid}")',
+            "    )",
+        ]
+    if isinstance(graphic, FootprintArc):
+        return [
+            "    (fp_arc",
+            f"      (start {_point(graphic.start)})",
+            f"      (mid {_point(graphic.midpoint)})",
+            f"      (end {_point(graphic.end)})",
+            *common,
+            f"      (fill none)",
+            f"      (layer {_quote(layer)})",
+            f'      (uuid "{item_uuid}")',
+            "    )",
+        ]
+    if isinstance(graphic, FootprintPolygon):
+        points = " ".join(f"(xy {_point(point)})" for point in graphic.points)
+        return [
+            "    (fp_poly",
+            f"      (pts {points})",
+            *common,
+            f"      (fill {'solid' if graphic.filled else 'none'})",
+            f"      (layer {_quote(layer)})",
+            f'      (uuid "{item_uuid}")',
+            "    )",
+        ]
+    raise TypeError(f"unsupported footprint graphic {type(graphic).__name__}")
+
+
+def _footprint_layer(layer: FootprintLayer, side: BoardSide) -> str:
+    prefix = "F" if side is BoardSide.FRONT else "B"
+    return {
+        FootprintLayer.SILKSCREEN: f"{prefix}.SilkS",
+        FootprintLayer.FABRICATION: f"{prefix}.Fab",
+        FootprintLayer.COURTYARD: f"{prefix}.CrtYd",
+        FootprintLayer.ADHESIVE: f"{prefix}.Adhes",
+        FootprintLayer.DOCUMENTATION: "Dwgs.User",
+    }[layer]
 
 
 def _point(point: Point) -> str:
@@ -319,6 +434,20 @@ def _mm(value_nm: int) -> str:
     if not fractional:
         return f"{sign}{whole}"
     return f"{sign}{whole}.{fractional:06d}".rstrip("0")
+
+
+def _ratio(value_ppm: int) -> str:
+    whole, fractional = divmod(value_ppm, 1_000_000)
+    if not fractional:
+        return str(whole)
+    return f"{whole}.{fractional:06d}".rstrip("0")
+
+
+def _decimal(value) -> str:
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _quote(value: str) -> str:

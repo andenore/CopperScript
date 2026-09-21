@@ -8,6 +8,7 @@ from typing import Sequence
 
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .erc import check, has_errors
+from .importers import KiCadModImportError, load_kicad_mod
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
 from .physicalize import prototype_physicalize
@@ -52,11 +53,33 @@ def _parser() -> argparse.ArgumentParser:
     pcb_parser.add_argument(
         "--no-check", action="store_true", help="generate even when ERC reports errors"
     )
+
+    footprint_parser = subparsers.add_parser(
+        "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
+    )
+    footprint_parser.add_argument("footprint", type=Path, help="a .kicad_mod file")
+    footprint_parser.add_argument(
+        "--strict", action="store_true", help="treat lossy-import warnings as errors"
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "check-footprint":
+        try:
+            result = load_kicad_mod(args.footprint, strict=args.strict)
+        except KiCadModImportError as exc:
+            print(f"FOOTPRINT ERROR: {exc}")
+            return 2
+        for warning in result.warnings:
+            print(f"WARNING: {warning}")
+        footprint = result.footprint
+        print(
+            f"Imported KiCad footprint {footprint.name}: "
+            f"{len(footprint.pads)} pads, {len(footprint.graphics)} graphics"
+        )
+        return 0
     if args.command in {
         "check",
         "power-check",

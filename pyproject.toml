@@ -20,7 +20,7 @@ copper = "pcbir.cli:main"
 copper-devicegen = "pcbir.devicegen:main"
 
 [tool.setuptools]
-packages = ["copperscript", "pcbir", "pcbir.backends"]
+packages = ["copperscript", "pcbir", "pcbir.backends", "pcbir.importers"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
