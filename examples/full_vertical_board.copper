@@ -1,0 +1,244 @@
+// Full-vertical acceptance design: source language -> electrical IR/ERC ->
+// physical IR -> KiCad PCB -> manufacturing outputs. Values and RF networks
+// remain subject to schematic/layout review before fabrication.
+board FullVerticalTracker {
+    use library "tiny";
+    import vertical "github.com/copperscript/examples/vertical";
+
+    component PS5: VOLTAGE_SOURCE;
+    module PWR: vertical.FullVerticalPowerTree;
+
+    component U_MCU: vertical.STM32G0C1RET6;
+    component U_CAN: vertical.TCAN334G;
+    component U_MODEM: vertical.EG800G_EU;
+    component U_MODEM_LEVEL: vertical.DUAL_UART_LEVEL_SHIFTER;
+    component U_MODEM_KEY: vertical.OPEN_DRAIN_DRIVER;
+    component U_NRF: vertical.NRF52832_QFAA;
+    component U_ACCEL: vertical.LIS2DW12;
+    component U_GNSS: vertical.MAX_M10S_00B;
+    component FL_USB: vertical.USB_COMMON_MODE_CHOKE;
+
+    component J_CAN: vertical.CAN_CONNECTOR;
+    component J_CELL: vertical.RF_CONNECTOR;
+    component J_GNSS: vertical.RF_CONNECTOR;
+    component J_SIM: vertical.NANO_SIM_SOCKET;
+    component J_DEBUG: vertical.DEBUG_UART_HEADER;
+    component J_SWD_MCU: vertical.SWD_HEADER;
+    component J_SWD_NRF: vertical.SWD_HEADER;
+    component ANT_BT: vertical.RF_ANTENNA;
+    component SW_USER: vertical.BUTTON;
+    component LED_1: vertical.LED;
+    component LED_2: vertical.LED;
+
+    component R_I2C_SDA: RESISTOR { value = 4.7kohm; footprint = "0402"; }
+    component R_I2C_SCL: RESISTOR { value = 4.7kohm; footprint = "0402"; }
+    component R_LED_1: RESISTOR { value = 1kohm; footprint = "0402"; }
+    component R_LED_2: RESISTOR { value = 1kohm; footprint = "0402"; }
+    component R_RESET_MCU: RESISTOR { value = 10kohm; footprint = "0402"; }
+    component R_RESET_NRF: RESISTOR { value = 10kohm; footprint = "0402"; }
+    component R_CAN_TERM: RESISTOR { value = 120ohm; footprint = "0603"; }
+    component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "0402"; }
+    component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "0402"; }
+    component C_MCU: CAPACITOR { value = 100nF; footprint = "0402"; }
+    component C_NRF: CAPACITOR { value = 4.7uF; footprint = "0603"; }
+    component C_ACCEL: CAPACITOR { value = 100nF; footprint = "0402"; }
+    component C_GNSS: CAPACITOR { value = 1uF; footprint = "0603"; }
+    component C_MODEM_BULK: CAPACITOR { value = 100uF; footprint = "0603"; }
+
+    configure U_MCU.USART1 as MODEM_UART {
+        TX = PB6;
+        RX = PB7;
+    }
+    configure U_MCU.USART2 as GNSS_UART {
+        TX = PA2;
+        RX = PA3;
+    }
+    configure U_MCU.USART3 as NRF_UART {
+        TX = PB8;
+        RX = PB9;
+    }
+    configure U_MCU.USART6 as DEBUG_UART {
+        TX = PA4;
+        RX = PA5;
+    }
+    configure U_MCU.I2C2 as MOTION_I2C {
+        SDA = PA6;
+        SCL = PA7;
+    }
+    configure U_MCU.FDCAN1 as VEHICLE_CAN {
+        TX = PC5;
+        RX = PC4;
+    }
+    configure U_MCU.USB_FS as MODEM_USB {
+        DP = PA12;
+        DM = PA11;
+    }
+    configure U_NRF.UARTE0 as HOST_UART {
+        TX = P0_06;
+        RX = P0_08;
+    }
+
+    net V5 {
+        PS5.OUT;
+        PWR.VIN5;
+        U_MODEM.USB_VBUS;
+    }
+    net V3V3 {
+        PWR.V3V3;
+        U_MCU.VDD;
+        U_CAN.VCC;
+        U_MODEM_LEVEL.VCCA;
+        U_MODEM_LEVEL.OE;
+        U_NRF.VDD_1;
+        U_NRF.VDD_2;
+        U_NRF.VDD_3;
+        U_ACCEL.VDD;
+        U_ACCEL.VDD_IO;
+        U_ACCEL.CS;
+        U_GNSS.VCC;
+        U_GNSS.V_IO;
+        U_GNSS.V_BCKP;
+        J_DEBUG.VREF;
+        J_SWD_MCU.VREF;
+        J_SWD_NRF.VREF;
+        R_I2C_SDA.1;
+        R_I2C_SCL.1;
+        R_RESET_MCU.1;
+        R_RESET_NRF.1;
+        C_MCU.1;
+        C_NRF.1;
+        C_ACCEL.1;
+        C_GNSS.1;
+    }
+    net V3V8 {
+        PWR.V3V8;
+        U_MODEM.VBAT_1;
+        U_MODEM.VBAT_2;
+        C_MODEM_BULK.1;
+    }
+    net V1V8_MODEM {
+        U_MODEM.VDD_EXT;
+        U_MODEM_LEVEL.VCCB;
+    }
+    net GND {
+        PS5.GND;
+        PWR.GND;
+        U_MCU.VSS;
+        U_CAN.GND;
+        U_CAN.SHDN;
+        U_CAN.STB;
+        U_MODEM.GND;
+        U_MODEM_LEVEL.GND;
+        U_MODEM_KEY.GND;
+        U_NRF.VSS_1;
+        U_NRF.VSS_2;
+        U_NRF.VSS_EP;
+        U_ACCEL.SDO_SA0;
+        U_ACCEL.GND_1;
+        U_ACCEL.RES;
+        U_ACCEL.GND_2;
+        U_GNSS.GND_1;
+        U_GNSS.GND_2;
+        U_GNSS.GND_3;
+        J_CAN.GND;
+        J_CELL.GND;
+        J_GNSS.GND;
+        J_SIM.GND;
+        J_DEBUG.GND;
+        J_SWD_MCU.GND;
+        J_SWD_NRF.GND;
+        ANT_BT.GND;
+        SW_USER.B;
+        LED_1.K;
+        LED_2.K;
+        C_BT_MATCH.2;
+        C_MCU.2;
+        C_NRF.2;
+        C_ACCEL.2;
+        C_GNSS.2;
+        C_MODEM_BULK.2;
+    }
+
+    net CAN_TX { U_MCU.PC5; U_CAN.TXD; }
+    net CAN_RX { U_MCU.PC4; U_CAN.RXD; }
+    net CAN_H { U_CAN.CANH; J_CAN.CANH; R_CAN_TERM.1; }
+    net CAN_L { U_CAN.CANL; J_CAN.CANL; R_CAN_TERM.2; }
+
+    net MCU_MODEM_TX { U_MCU.PB6; U_MODEM_LEVEL.A_TX; }
+    net MCU_MODEM_RX { U_MCU.PB7; U_MODEM_LEVEL.A_RX; }
+    net MODEM_UART_RX { U_MODEM_LEVEL.B_RX; U_MODEM.MAIN_RXD; }
+    net MODEM_UART_TX { U_MODEM_LEVEL.B_TX; U_MODEM.MAIN_TXD; }
+    net MODEM_PWRKEY_CTL { U_MCU.PC0; U_MODEM_KEY.IN; }
+    net MODEM_PWRKEY { U_MODEM_KEY.OUT; U_MODEM.PWRKEY; }
+    net MODEM_STATUS { U_MODEM.STATUS; U_MCU.PC1; }
+    net USB_DP_MCU { U_MCU.PA12; FL_USB.DP_IN; }
+    net USB_DM_MCU { U_MCU.PA11; FL_USB.DM_IN; }
+    net USB_DP_MODEM { FL_USB.DP_OUT; U_MODEM.USB_DP; }
+    net USB_DM_MODEM { FL_USB.DM_OUT; U_MODEM.USB_DM; }
+    net CELL_RF { U_MODEM.ANT_MAIN; J_CELL.SIGNAL; }
+    net SIM_VCC { U_MODEM.USIM_VDD; J_SIM.VCC; }
+    net SIM_RST { U_MODEM.USIM_RST; J_SIM.RST; }
+    net SIM_CLK { U_MODEM.USIM_CLK; J_SIM.CLK; }
+    net SIM_IO { U_MODEM.USIM_DATA; J_SIM.IO; }
+
+    net MCU_NRF_TX { U_MCU.PB8; U_NRF.P0_08; }
+    net MCU_NRF_RX { U_MCU.PB9; U_NRF.P0_06; }
+    net NRF_RESET { U_NRF.P0_21_NRESET; J_SWD_NRF.RESET; R_RESET_NRF.2; }
+    net NRF_SWDIO { U_NRF.SWDIO; J_SWD_NRF.SWDIO; }
+    net NRF_SWDCLK { U_NRF.SWDCLK; J_SWD_NRF.SWDCLK; }
+    net NRF_RF_RAW { U_NRF.ANT; L_BT_MATCH.1; }
+    net NRF_RF_ANT { L_BT_MATCH.2; C_BT_MATCH.1; ANT_BT.FEED; }
+
+    net GNSS_TX { U_GNSS.TXD; U_MCU.PA3; }
+    net GNSS_RX { U_GNSS.RXD; U_MCU.PA2; }
+    net GNSS_TIMEPULSE { U_GNSS.TIMEPULSE; U_MCU.PC3; }
+    net GNSS_RF { U_GNSS.RF_IN; J_GNSS.SIGNAL; }
+
+    net I2C_SDA { U_MCU.PA6; U_ACCEL.SDA; R_I2C_SDA.2; }
+    net I2C_SCL { U_MCU.PA7; U_ACCEL.SCL; R_I2C_SCL.2; }
+    net ACCEL_INT { U_ACCEL.INT1; U_MCU.PC2; }
+
+    net USER_BUTTON { U_MCU.PC13; SW_USER.A; }
+    net USER_LED_1 { U_MCU.PC6; R_LED_1.1; }
+    net USER_LED_1_A { R_LED_1.2; LED_1.A; }
+    net USER_LED_2 { U_MCU.PC7; R_LED_2.1; }
+    net USER_LED_2_A { R_LED_2.2; LED_2.A; }
+
+    net DEBUG_TX { U_MCU.PA4; J_DEBUG.TX; }
+    net DEBUG_RX { U_MCU.PA5; J_DEBUG.RX; }
+    net MCU_RESET { U_MCU.NRST; J_SWD_MCU.RESET; R_RESET_MCU.2; }
+    net MCU_SWDIO { U_MCU.PA13; J_SWD_MCU.SWDIO; }
+    net MCU_SWDCLK { U_MCU.PA14; J_SWD_MCU.SWDCLK; }
+
+    supply V5 { voltage = 5V; source = PS5.OUT; }
+    supply V3V3 { voltage = 3.3V; external = true; }
+    supply V3V8 { voltage = 3.8V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+
+    power_state NORMAL {
+        V5 = on;
+        V3V3 = on;
+        V3V8 = on;
+        GND = on;
+    }
+    power_state LOGIC_ONLY {
+        V5 = on;
+        V3V3 = on;
+        V3V8 = off;
+        GND = on;
+    }
+
+    interface MOTION_BUS: i2c {
+        sda = I2C_SDA;
+        scl = I2C_SCL;
+        pullup = V3V3;
+        bind U_MCU { sda = PA6; scl = PA7; }
+        bind U_ACCEL { sda = SDA; scl = SCL; }
+    }
+
+    constraint max_distance(C_MCU, U_MCU.VDD) { distance = 3mm; }
+    constraint max_distance(C_NRF, U_NRF.VDD_1) { distance = 3mm; }
+    constraint max_distance(C_ACCEL, U_ACCEL.VDD) { distance = 3mm; }
+    constraint max_distance(C_GNSS, U_GNSS.VCC) { distance = 3mm; }
+    constraint max_distance(C_MODEM_BULK, U_MODEM.VBAT_1) { distance = 5mm; }
+}

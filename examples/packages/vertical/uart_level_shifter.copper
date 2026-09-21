@@ -1,0 +1,12 @@
+part DUAL_UART_LEVEL_SHIFTER {
+    category = "interface.level_shifter";
+    footprint = "Package_SO:TSSOP-8_3x3mm_P0.65mm";
+    pin VCCA { number = "1"; domains = "power"; directions = "input"; voltage_min = 1.65V; voltage_max = 3.6V; }
+    pin A_TX { number = "2"; domains = "digital"; directions = "input"; voltage_max = 3.6V; }
+    pin A_RX { number = "3"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; voltage_max = 3.6V; }
+    pin GND { number = "4"; domains = "ground"; directions = "input"; }
+    pin B_RX { number = "5"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; voltage_max = 1.9V; }
+    pin B_TX { number = "6"; domains = "digital"; directions = "input"; voltage_max = 1.9V; }
+    pin OE { number = "7"; domains = "digital"; directions = "input"; voltage_max = 3.6V; }
+    pin VCCB { number = "8"; domains = "power"; directions = "input"; voltage_min = 1.65V; voltage_max = 1.95V; }
+}

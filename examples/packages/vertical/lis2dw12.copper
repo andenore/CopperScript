@@ -1,0 +1,20 @@
+part LIS2DW12 {
+    category = "sensor.accelerometer";
+    manufacturer = "STMicroelectronics";
+    footprint = "Package_LGA:LGA-12_2x2mm_P0.5mm";
+    source_document = "LIS2DW12 datasheet";
+    source_revision = "DS11811 Rev 8";
+    source_url = "https://www.st.com/resource/en/datasheet/lis2dw12.pdf";
+    pin SCL { number = "1"; domains = "digital"; directions = "bidirectional"; drive_modes = "open_drain"; voltage_max = 3.6V; }
+    pin CS { number = "2"; domains = "digital"; directions = "input"; voltage_max = 3.6V; }
+    pin SDO_SA0 { number = "3"; domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; voltage_max = 3.6V; }
+    pin SDA { number = "4"; domains = "digital"; directions = "bidirectional"; drive_modes = "open_drain"; voltage_max = 3.6V; }
+    pin NC { number = "5"; domains = "digital"; directions = "passive"; connection = do_not_connect; }
+    pin GND_1 { number = "6"; domains = "ground"; directions = "input"; }
+    pin RES { number = "7"; domains = "ground"; directions = "input"; }
+    pin GND_2 { number = "8"; domains = "ground"; directions = "input"; }
+    pin VDD { number = "9"; domains = "power"; directions = "input"; voltage_min = 1.62V; voltage_max = 3.6V; }
+    pin VDD_IO { number = "10"; domains = "power"; directions = "input"; voltage_min = 1.62V; voltage_max = 3.6V; }
+    pin INT2 { number = "11"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; voltage_max = 3.6V; connection = optional; }
+    pin INT1 { number = "12"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; voltage_max = 3.6V; }
+}

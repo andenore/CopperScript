@@ -1,0 +1,16 @@
+part TCAN334G {
+    category = "interface.can.transceiver";
+    manufacturer = "Texas Instruments";
+    footprint = "Package_SO:VSSOP-8_3.0x3.0mm_P0.65mm";
+    source_document = "TCAN33x 3.3-V CAN Transceivers datasheet";
+    source_revision = "SLLSEV1G";
+    source_url = "https://www.ti.com/lit/ds/symlink/tcan332.pdf";
+    pin TXD { number = "1"; domains = "digital"; directions = "input"; voltage_max = 3.6V; }
+    pin GND { number = "2"; domains = "ground"; directions = "input"; }
+    pin VCC { number = "3"; domains = "power"; directions = "input"; voltage_min = 3V; voltage_max = 3.6V; }
+    pin RXD { number = "4"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; voltage_max = 3.6V; }
+    pin SHDN { number = "5"; domains = "digital"; directions = "input"; voltage_max = 3.6V; }
+    pin CANL { number = "6"; domains = "analog"; directions = "bidirectional"; traits = "can_bus"; }
+    pin CANH { number = "7"; domains = "analog"; directions = "bidirectional"; traits = "can_bus"; }
+    pin STB { number = "8"; domains = "digital"; directions = "input"; voltage_max = 3.6V; }
+}

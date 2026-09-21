@@ -1,0 +1,8 @@
+part DEBUG_UART_HEADER {
+    category = "connector.debug.uart";
+    footprint = "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical";
+    pin VREF { number = "1"; domains = "power"; directions = "input"; }
+    pin TX { number = "2"; domains = "digital"; directions = "passive"; }
+    pin RX { number = "3"; domains = "digital"; directions = "passive"; }
+    pin GND { number = "4"; domains = "ground"; directions = "input"; }
+}

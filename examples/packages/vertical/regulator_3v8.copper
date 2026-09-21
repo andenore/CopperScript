@@ -1,0 +1,8 @@
+part REGULATOR_3V8_2A {
+    category = "power.regulator.buck";
+    footprint = "Package_DFN_QFN:WSON-8-1EP_2x2mm_P0.5mm_EP0.7x1.6mm";
+    pin VIN { number = "1"; domains = "power"; directions = "input"; voltage_min = 4.5V; voltage_max = 5.5V; }
+    pin GND { number = "2"; domains = "ground"; directions = "input"; }
+    pin EN { number = "3"; domains = "digital"; directions = "input"; voltage_max = 5.5V; }
+    pin OUT { number = "4"; domains = "power"; directions = "output"; }
+}

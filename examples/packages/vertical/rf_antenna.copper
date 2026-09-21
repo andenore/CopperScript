@@ -1,0 +1,6 @@
+part RF_ANTENNA {
+    category = "rf.antenna";
+    footprint = "RF_Antenna:Johanson_2450AT18A100";
+    pin FEED { number = "1"; domains = "rf"; directions = "passive"; traits = "antenna"; }
+    pin GND { number = "2"; domains = "ground"; directions = "input"; }
+}

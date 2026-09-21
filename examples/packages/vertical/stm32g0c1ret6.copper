@@ -1,0 +1,36 @@
+part STM32G0C1RET6 {
+    category = "semiconductor.mcu";
+    manufacturer = "STMicroelectronics";
+    footprint = "Package_QFP:LQFP-64_10x10mm_P0.5mm";
+    device = STM32G0C1;
+    source_document = "STM32G0C1xC/xE datasheet";
+    source_revision = "DS13564 Rev 5";
+    source_url = "https://www.st.com/resource/en/datasheet/stm32g0c1re.pdf";
+
+    pin VDD { number = "8"; bond = VDD; }
+    pin VSS { number = "9"; bond = VSS; }
+    pin NRST { number = "12"; bond = NRST; }
+    pin PA2 { number = "19"; bond = PA2; }
+    pin PA3 { number = "20"; bond = PA3; }
+    pin PA4 { number = "21"; bond = PA4; }
+    pin PA5 { number = "22"; bond = PA5; }
+    pin PA6 { number = "23"; bond = PA6; }
+    pin PA7 { number = "24"; bond = PA7; }
+    pin PC4 { number = "25"; bond = PC4; }
+    pin PC5 { number = "26"; bond = PC5; }
+    pin PA11 { number = "43"; bond = PA11; }
+    pin PA12 { number = "44"; bond = PA12; }
+    pin PA13 { number = "45"; bond = PA13; }
+    pin PA14 { number = "46"; bond = PA14; }
+    pin PB6 { number = "60"; bond = PB6; }
+    pin PB7 { number = "61"; bond = PB7; }
+    pin PB8 { number = "62"; bond = PB8; }
+    pin PB9 { number = "63"; bond = PB9; }
+    pin PC0 { number = "13"; bond = PC0; }
+    pin PC1 { number = "14"; bond = PC1; }
+    pin PC2 { number = "15"; bond = PC2; }
+    pin PC3 { number = "16"; bond = PC3; }
+    pin PC6 { number = "38"; bond = PC6; }
+    pin PC7 { number = "39"; bond = PC7; }
+    pin PC13 { number = "3"; bond = PC13; }
+}

@@ -187,6 +187,13 @@ Key modules:
 Python IR constructions are confined to test fixtures. `.copper` is the only
 user-facing source format accepted by the compiler.
 
+The [full-vertical acceptance design](docs/full-vertical-example.md) combines
+an STM32G0C1, CAN, an EG800G cellular modem over UART and USB, an nRF52832
+Bluetooth slave, low-power motion sensing, GNSS, user I/O, and two SWD ports.
+It is the integration fixture for progressing from CopperScript source toward
+reviewed manufacturing outputs; its documentation distinguishes implemented
+checks from the remaining production-layout work.
+
 ## Current ERC checks
 
 - Unknown parts, components, pins, nets, and supply sources

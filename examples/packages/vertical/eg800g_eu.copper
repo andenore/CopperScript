@@ -1,0 +1,28 @@
+// Electrical subset for the board architecture. The production footprint must
+// include every ground/reserved pad from the official land-pattern document.
+part EG800G_EU {
+    category = "module.cellular.lte_cat1bis";
+    manufacturer = "Quectel";
+    footprint = "RF_Module:Quectel_EG800G";
+    source_document = "EG800G Series Hardware Design";
+    source_revision = "V1.2";
+    source_url = "https://developer.quectel.com/modules-cat/eg800g-series";
+    pin PWRKEY { number = "7"; domains = "digital"; directions = "input"; voltage_max = 1.9V; }
+    pin GND { number = "10"; domains = "ground"; directions = "input"; }
+    pin USIM_DATA { number = "11"; domains = "digital"; directions = "bidirectional"; }
+    pin USIM_RST { number = "12"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; }
+    pin USIM_CLK { number = "13"; domains = "digital,clock"; directions = "output"; drive_modes = "push_pull"; }
+    pin USIM_VDD { number = "14"; domains = "power"; directions = "output"; }
+    pin RESET_N { number = "15"; domains = "digital"; directions = "input"; voltage_max = 1.9V; connection = optional; }
+    pin NET_STATUS { number = "16"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; connection = optional; }
+    pin MAIN_RXD { number = "17"; domains = "digital"; directions = "input"; voltage_max = 1.9V; }
+    pin MAIN_TXD { number = "18"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; voltage_max = 1.9V; }
+    pin VDD_EXT { number = "24"; domains = "power"; directions = "output"; voltage_min = 1.7V; voltage_max = 1.9V; }
+    pin STATUS { number = "25"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; voltage_max = 1.9V; }
+    pin ANT_MAIN { number = "35"; domains = "rf"; directions = "bidirectional"; traits = "cellular_rf"; }
+    pin VBAT_1 { number = "42"; domains = "power"; directions = "input"; voltage_min = 3.3V; voltage_max = 4.3V; }
+    pin VBAT_2 { number = "43"; domains = "power"; directions = "input"; voltage_min = 3.3V; voltage_max = 4.3V; }
+    pin USB_DP { number = "59"; domains = "digital"; directions = "bidirectional"; traits = "usb_dp"; }
+    pin USB_DM { number = "60"; domains = "digital"; directions = "bidirectional"; traits = "usb_dm"; }
+    pin USB_VBUS { number = "61"; domains = "power"; directions = "input"; voltage_min = 4.4V; voltage_max = 5.25V; }
+}

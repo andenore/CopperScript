@@ -1,0 +1,62 @@
+// STM32G0C1 capability subset used by the full-vertical acceptance design.
+// Pin mappings are from STM32G0C1xC/xE datasheet DS13564.
+device STM32G0C1 {
+    vendor = "STMicroelectronics";
+    family = "STM32G0";
+    source_document = "STM32G0C1xC/xE datasheet";
+    source_revision = "DS13564 Rev 5";
+    source_url = "https://www.st.com/resource/en/datasheet/stm32g0c1re.pdf";
+
+    power_domain VDDIO1 { supply_pads = "VDD"; voltage_min = 1.7V; voltage_max = 3.6V; }
+
+    pad VDD { domains = "power"; directions = "input"; voltage_min = 1.7V; voltage_max = 3.6V; }
+    pad VSS { domains = "ground"; directions = "input"; }
+    pad NRST { domains = "digital"; directions = "input"; traits = "reset"; power_domain = VDDIO1; }
+
+    pad PA2 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA3 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA4 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA5 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA6 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA7 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA11 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; traits = "gpio,usb"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA12 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; traits = "gpio,usb"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA13 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; traits = "gpio,swdio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PA14 { domains = "digital,clock"; directions = "input"; traits = "gpio,swdclk"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PB6 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PB7 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PB8 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PB9 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC0 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC1 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC2 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC3 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC4 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC5 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC6 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC7 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+    pad PC13 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO1; voltage_max = 3.6V; }
+
+    peripheral USART1: uart { signal TX: output; signal RX: input; }
+    peripheral USART2: uart { signal TX: output; signal RX: input; }
+    peripheral USART3: uart { signal TX: output; signal RX: input; }
+    peripheral USART6: uart { signal TX: output; signal RX: input; }
+    peripheral I2C2: i2c { signal SDA: open_drain; signal SCL: open_drain; }
+    peripheral FDCAN1: can { signal TX: output; signal RX: input; }
+    peripheral USB_FS: usb { signal DP: bidirectional; signal DM: bidirectional; }
+
+    mux PB6: USART1.TX { selector = "AF0"; }
+    mux PB7: USART1.RX { selector = "AF0"; }
+    mux PA2: USART2.TX { selector = "AF1"; }
+    mux PA3: USART2.RX { selector = "AF1"; }
+    mux PB8: USART3.TX { selector = "AF4"; }
+    mux PB9: USART3.RX { selector = "AF4"; }
+    mux PA4: USART6.TX { selector = "AF3"; }
+    mux PA5: USART6.RX { selector = "AF3"; }
+    mux PA6: I2C2.SDA { selector = "AF6"; }
+    mux PA7: I2C2.SCL { selector = "AF6"; }
+    mux PC5: FDCAN1.TX { selector = "AF3"; }
+    mux PC4: FDCAN1.RX { selector = "AF3"; }
+    mux PA12: USB_FS.DP { selector = "AF10"; }
+    mux PA11: USB_FS.DM { selector = "AF10"; }
+}

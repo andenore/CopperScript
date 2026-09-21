@@ -1,0 +1,8 @@
+part USB_COMMON_MODE_CHOKE {
+    category = "filter.common_mode";
+    footprint = "Package_SON:Texas_DQA0004A_WSON-4_1x1mm_P0.5mm";
+    pin DP_IN { number = "1"; domains = "digital"; directions = "passive"; traits = "usb_dp"; }
+    pin DM_IN { number = "2"; domains = "digital"; directions = "passive"; traits = "usb_dm"; }
+    pin DM_OUT { number = "3"; domains = "digital"; directions = "passive"; traits = "usb_dm"; }
+    pin DP_OUT { number = "4"; domains = "digital"; directions = "passive"; traits = "usb_dp"; }
+}
