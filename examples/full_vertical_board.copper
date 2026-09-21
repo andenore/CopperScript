@@ -3,7 +3,7 @@
 // remain subject to schematic/layout review before fabrication.
 board FullVerticalTracker {
     use library "tiny";
-    import vertical "github.com/copperscript/examples/vertical";
+    import vertical "github.com/andenore/CopperLib/packages/full_vertical";
 
     component PS5: VOLTAGE_SOURCE;
     module PWR: vertical.FullVerticalPowerTree;

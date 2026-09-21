@@ -1,9 +1,0 @@
-part SWD_HEADER {
-    category = "connector.debug.swd";
-    footprint = "Connector_ARM:ARM_Cortex_Debug_Connector_10pin";
-    pin VREF { number = "1"; domains = "power"; directions = "input"; }
-    pin SWDIO { number = "2"; domains = "digital"; directions = "passive"; }
-    pin GND { number = "3"; domains = "ground"; directions = "input"; }
-    pin SWDCLK { number = "4"; domains = "digital,clock"; directions = "passive"; }
-    pin RESET { number = "10"; domains = "digital"; directions = "passive"; }
-}

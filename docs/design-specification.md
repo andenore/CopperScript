@@ -248,6 +248,14 @@ Resolution uses the longest required module-path prefix. v0.1 supports GitHub
 Git repositories and explicit local `replace` directives; this may later be
 generalized without changing source import identity.
 
+Reusable production part, device, footprint, and circuit-module definitions
+MUST be maintained in the separate CopperLib project, whose stable module path
+is `github.com/andenore/CopperLib`. The CopperScript compiler repository MAY
+contain deliberately tiny built-in fixtures and compiler tests, but product
+examples MUST consume newly created reusable definitions from CopperLib rather
+than duplicate them locally. Local development uses an explicit `copper.mod`
+replacement for the sibling CopperLib checkout.
+
 ### 3.9 Complex devices separate capabilities from packages
 
 Complex programmable parts such as MCUs MUST distinguish three concepts:
@@ -655,6 +663,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-040 | Accepted | The KiCad PCB backend consumes only physical IR and initially targets KiCad 8 format `20240108`; prototype proxy footprints are explicitly non-fabrication-ready. |
 | CS-041 | Accepted | Footprint importers normalize external files into physical IR, retain checksum provenance, and fail instead of silently losing unsupported fabrication geometry. |
 | CS-042 | Accepted | Footprint resolution is explicit and deterministic: board-relative files or caller-provided library roots only; ambiguity and electrical pad mismatches are errors. |
+| CS-043 | Accepted | CopperLib is the canonical project for new reusable part, device, footprint, and circuit-module definitions; product examples import them rather than duplicating them in the compiler repository. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

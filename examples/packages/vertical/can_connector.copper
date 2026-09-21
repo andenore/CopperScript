@@ -1,7 +1,0 @@
-part CAN_CONNECTOR {
-    category = "connector.bus.can";
-    footprint = "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-3_1x03_P5.00mm_Horizontal";
-    pin CANH { number = "1"; domains = "analog"; directions = "passive"; traits = "can_bus"; }
-    pin CANL { number = "2"; domains = "analog"; directions = "passive"; traits = "can_bus"; }
-    pin GND { number = "3"; domains = "ground"; directions = "input"; }
-}

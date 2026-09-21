@@ -1,6 +1,0 @@
-part LED {
-    category = "optoelectronics.led";
-    footprint = "LED_SMD:LED_0603_1608Metric";
-    pin A { number = "1"; domains = "analog"; directions = "passive"; }
-    pin K { number = "2"; domains = "analog"; directions = "passive"; }
-}

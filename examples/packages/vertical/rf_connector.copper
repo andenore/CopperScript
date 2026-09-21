@@ -1,6 +1,0 @@
-part RF_CONNECTOR {
-    category = "connector.coaxial";
-    footprint = "Connector_Coaxial:U.FL_Hirose_U.FL-R-SMT-1_Vertical";
-    pin SIGNAL { number = "1"; domains = "rf"; directions = "passive"; }
-    pin GND { number = "2"; domains = "ground"; directions = "input"; }
-}

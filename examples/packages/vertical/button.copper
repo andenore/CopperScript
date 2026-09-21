@@ -1,6 +1,0 @@
-part BUTTON {
-    category = "switch.momentary";
-    footprint = "Button_Switch_SMD:SW_SPST_TL3342";
-    pin A { number = "1"; domains = "digital"; directions = "passive"; }
-    pin B { number = "2"; domains = "digital"; directions = "passive"; }
-}

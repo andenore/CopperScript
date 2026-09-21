@@ -16,6 +16,9 @@ def test_full_vertical_example_compiles_and_passes_erc() -> None:
     assert check(board) == []
     assert analyze_power_states(board) == []
     assert {instance.ref for instance in board.module_instances} == {"PWR"}
+    assert {
+        dependency.import_path for dependency in board.dependencies
+    } == {"github.com/andenore/CopperLib/packages/full_vertical"}
 
 
 def test_full_vertical_example_exercises_required_subsystems() -> None:

@@ -1,9 +1,0 @@
-part NANO_SIM_SOCKET {
-    category = "connector.card.sim";
-    footprint = "Connector_Card:SIM_Card_Wurth_693072010801";
-    pin VCC { number = "1"; domains = "power"; directions = "input"; }
-    pin RST { number = "2"; domains = "digital"; directions = "input"; }
-    pin CLK { number = "3"; domains = "digital,clock"; directions = "input"; }
-    pin GND { number = "5"; domains = "ground"; directions = "input"; }
-    pin IO { number = "6"; domains = "digital"; directions = "bidirectional"; }
-}
