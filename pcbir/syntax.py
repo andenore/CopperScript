@@ -22,7 +22,7 @@ class RawQuantity:
     unit: str
 
 
-Scalar = str | bool | RawQuantity
+Scalar = str | bool | int | float | RawQuantity
 
 
 @dataclass(frozen=True, slots=True)

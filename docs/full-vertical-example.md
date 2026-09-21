@@ -98,9 +98,9 @@ physical design.
 - USB VBUS switching/current limiting, USB ESD, CAN protection, SIM ESD, input
   protection, programming-header conventions, crystals and complete vendor
   decoupling/reference circuits must be finalized.
-- The present physicalizer creates an unrouted inspection draft. It is not a
-  layout engine and must not produce fabrication outputs without routing and
-  manufacturing validation stages.
+- `plan-layout` creates a legal, routability-estimated placement candidate, but
+  it still produces an unrouted inspection draft. It must not produce
+  fabrication outputs without routing and manufacturing validation stages.
 
 ## Running the example
 
@@ -109,4 +109,5 @@ python -m copperscript check examples/full_vertical_board.copper
 python -m copperscript power-check examples/full_vertical_board.copper
 python -m copperscript compile examples/full_vertical_board.copper -o board.json
 python -m copperscript export-kicad examples/full_vertical_board.copper -o full_vertical_board.kicad_sch
+python -m copperscript plan-layout examples/full_vertical_board.copper --allow-proxy-footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
 ```

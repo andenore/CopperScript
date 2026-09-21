@@ -55,7 +55,7 @@ Produce a deterministic legal placement candidate and a four-gate readiness
 report:
 
 ```console
-python -m copperscript plan-layout examples/valid_board.copper --allow-proxy-footprints -o planned.kicad_pcb --report layout-report.json
+python -m copperscript plan-layout examples/valid_board.copper --allow-proxy-footprints --candidates 3 -o planned.kicad_pcb --report layout-report.json
 ```
 
 The planner estimates global routing congestion but does not generate copper.
@@ -186,10 +186,12 @@ Key modules:
   placements, nets, tracks, vias, stackup, and design rules.
 - `pcbir.footprints` — deterministic `.kicad_mod` reference resolution from
   board-relative paths or explicit KiCad library roots.
-- `pcbir.physicalize` — resolved-footprint lowering plus temporary deterministic
-  grid placement; proxy geometry is an explicit development fallback.
-- `pcbir.layout` — four-gate readiness model, deterministic legal placement,
-  local refinement, and coarse routing-congestion estimation.
+- `pcbir.physicalize` — resolved-footprint and typed placement-constraint
+  lowering; proxy geometry is an explicit development fallback.
+- `pcbir.placement` — hierarchy-aware analytical placement, hybrid
+  legalization, route-aware detailed refinement, and deterministic Pareto
+  candidate generation.
+- `pcbir.layout` — four-gate readiness orchestration and placement reporting.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work
@@ -231,8 +233,11 @@ checks from the remaining production-layout work.
 may back-power an I/O domain declared off. It is intentionally a conservative
 steady-state analysis, not firmware or transient simulation.
 
-Physical constraints such as maximum placement distance are retained in IR but
-are not enforced in v0.1.
+Physical constraints are separate from connectivity. During physical lowering,
+placement regions, keepouts, fixed locations, legal orientations, alignment,
+minimum/maximum distance, and explicit placement groups become typed physical
+IR and are enforced by `plan-layout`. Hierarchy, interfaces, and proximity
+constraints also produce soft semantic placement groups.
 
 ## KiCad schematic backend
 
@@ -250,9 +255,10 @@ standard KiCad symbols are planned follow-up work.
 
 The physical IR is separate from the electrical IR and stores exact geometry
 as integer nanometres. It currently models polygonal board outlines, two-layer
-stackups, basic design rules, embedded footprint pads and bodies, component
-placement, physical net-to-pad assignments, track segments, and vias. It
-validates cross-references when constructed.
+stackups, basic design rules, footprint bodies, pads and courtyards, component
+placement, regions, keepouts, fixed/relative rules, semantic groups, physical
+net-to-pad assignments, track segments, and vias. It validates cross-references
+when constructed.
 
 The KiCad PCB backend targets KiCad 8's `20240108` board format. It emits a
 self-contained board with deterministic UUIDs, embedded footprints, net

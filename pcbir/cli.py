@@ -10,7 +10,7 @@ from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .erc import check, has_errors
 from .footprints import FootprintResolver
 from .importers import KiCadModImportError, load_kicad_mod
-from .layout import plan_placement
+from .layout import PlacementPlannerOptions, plan_placement
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
 from .physicalize import prototype_physicalize, resolved_physicalize
@@ -92,6 +92,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
+    layout_parser.add_argument(
+        "--candidates",
+        type=int,
+        default=3,
+        help="maximum number of deterministic Pareto candidates to retain",
+    )
 
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
@@ -170,7 +176,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         physical_board = resolved_physicalize(board, resolver)
                     layout_report = None
                     if args.command == "plan-layout":
-                        plan = plan_placement(physical_board)
+                        try:
+                            planner_options = PlacementPlannerOptions(
+                                candidate_count=args.candidates
+                            )
+                        except ValueError as exc:
+                            print(f"LAYOUT ERROR: {exc}")
+                            return 2
+                        plan = plan_placement(physical_board, planner_options)
                         physical_board = plan.board
                         layout_report = plan.report
                     manifest = KiCadPcbBackend().generate(physical_board)
@@ -201,6 +214,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"HPWL={metrics.half_perimeter_wire_length_nm / 1_000_000:.1f} mm, "
                     f"congestion overflow={metrics.congestion_overflow}, "
                     "routing=not run"
+                )
+                print(
+                    f"Selected {layout_report.selected_candidate} from "
+                    f"{len(layout_report.candidates)} Pareto candidate(s)"
                 )
             print(
                 f"Generated KiCad {manifest.target_version} {artifact_kind} "

@@ -131,10 +131,16 @@ class Condition:
 
 
 class ConstraintKind(str, Enum):
-    """Known constraints; physical constraints are stored but not checked yet."""
+    """Known semantic constraints retained for dedicated compiler passes."""
 
     MAX_DISTANCE = "max_distance"
+    MIN_DISTANCE = "min_distance"
     PLACEMENT_REGION = "placement_region"
+    FIXED_PLACEMENT = "fixed_placement"
+    ALLOWED_ORIENTATIONS = "allowed_orientations"
+    ALIGN = "align"
+    PLACEMENT_GROUP = "placement_group"
+    KEEPOUT = "keepout"
     NOTE = "note"
 
 

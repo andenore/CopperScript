@@ -65,6 +65,17 @@ class FootprintLayer(str, Enum):
     DOCUMENTATION = "documentation"
 
 
+class AlignmentAxis(str, Enum):
+    X = "x"
+    Y = "y"
+
+
+class RelativePlacementKind(str, Enum):
+    MAX_DISTANCE = "max_distance"
+    MIN_DISTANCE = "min_distance"
+    ALIGN = "align"
+
+
 @dataclass(frozen=True, slots=True)
 class Point:
     x_nm: Nanometres
@@ -289,13 +300,20 @@ class PhysicalFootprint:
     source_library_id: str | None = None
     graphics: tuple[FootprintGraphic, ...] = ()
     metadata: Mapping[str, str] = field(default_factory=dict)
+    courtyard: tuple[Point, ...] = ()
+    height_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pads", tuple(self.pads))
         object.__setattr__(self, "graphics", tuple(self.graphics))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "courtyard", tuple(self.courtyard))
         if not self.name:
             raise ValueError("footprint name cannot be empty")
+        if self.courtyard and len(self.courtyard) < 3:
+            raise ValueError("a footprint courtyard requires at least three points")
+        if self.height_nm is not None and self.height_nm <= 0:
+            raise ValueError("footprint height must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +351,111 @@ class PhysicalNet:
         object.__setattr__(self, "pads", tuple(self.pads))
         if not self.name:
             raise ValueError("physical net name cannot be empty")
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class PlacementTarget:
+    reference: str
+    pad: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementRegion:
+    name: str
+    outline: BoardOutline
+    side: BoardSide | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("placement region name cannot be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementKeepout:
+    name: str
+    outline: BoardOutline
+    side: BoardSide | None = None
+    maximum_component_height_nm: Nanometres | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("placement keepout name cannot be empty")
+        if (
+            self.maximum_component_height_nm is not None
+            and self.maximum_component_height_nm < 0
+        ):
+            raise ValueError("keepout maximum component height cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentPlacementRule:
+    reference: str
+    region: str | None = None
+    allowed_orientations: tuple[Decimal | int | float | str, ...] = (
+        Decimal(0),
+        Decimal(90),
+        Decimal(180),
+        Decimal(270),
+    )
+    fixed_position: Point | None = None
+    fixed_rotation_degrees: Decimal | int | float | str | None = None
+    side: BoardSide | None = None
+    priority: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.reference:
+            raise ValueError("component placement rule requires a reference")
+        orientations = tuple(
+            sorted({Decimal(str(value)) % Decimal(360) for value in self.allowed_orientations})
+        )
+        if not orientations:
+            raise ValueError("component placement rule requires a legal orientation")
+        object.__setattr__(self, "allowed_orientations", orientations)
+        if self.fixed_rotation_degrees is not None:
+            rotation = Decimal(str(self.fixed_rotation_degrees)) % Decimal(360)
+            if rotation not in orientations:
+                raise ValueError("fixed rotation must be one of the allowed orientations")
+            object.__setattr__(self, "fixed_rotation_degrees", rotation)
+
+
+@dataclass(frozen=True, slots=True)
+class RelativePlacementRule:
+    kind: RelativePlacementKind
+    targets: tuple[PlacementTarget, ...]
+    distance_nm: Nanometres | None = None
+    axis: AlignmentAxis | None = None
+    tolerance_nm: Nanometres = 0
+    weight: int = 1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "targets", tuple(self.targets))
+        if len(self.targets) < 2:
+            raise ValueError("relative placement rule requires at least two targets")
+        if self.kind in {
+            RelativePlacementKind.MAX_DISTANCE,
+            RelativePlacementKind.MIN_DISTANCE,
+        } and (self.distance_nm is None or self.distance_nm <= 0):
+            raise ValueError("distance placement rule requires a positive distance")
+        if self.kind is RelativePlacementKind.ALIGN and self.axis is None:
+            raise ValueError("alignment placement rule requires an axis")
+        if self.tolerance_nm < 0 or self.weight <= 0:
+            raise ValueError("relative placement tolerance and weight are invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementGroup:
+    name: str
+    references: tuple[str, ...]
+    anchor: str | None = None
+    priority: int = 0
+    source: str = "explicit"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "references", tuple(dict.fromkeys(self.references)))
+        if not self.name or not self.references:
+            raise ValueError("placement group requires a name and members")
+        if self.anchor is not None and self.anchor not in self.references:
+            raise ValueError("placement group anchor must be a member")
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +505,11 @@ class PhysicalBoard:
     tracks: tuple[TrackSegment, ...] = ()
     vias: tuple[Via, ...] = ()
     metadata: Mapping[str, str] = field(default_factory=dict)
+    regions: tuple[PlacementRegion, ...] = ()
+    keepouts: tuple[PlacementKeepout, ...] = ()
+    placement_rules: tuple[ComponentPlacementRule, ...] = ()
+    relative_rules: tuple[RelativePlacementRule, ...] = ()
+    placement_groups: tuple[PlacementGroup, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -390,6 +518,11 @@ class PhysicalBoard:
         object.__setattr__(self, "tracks", tuple(self.tracks))
         object.__setattr__(self, "vias", tuple(self.vias))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "regions", tuple(self.regions))
+        object.__setattr__(self, "keepouts", tuple(self.keepouts))
+        object.__setattr__(self, "placement_rules", tuple(self.placement_rules))
+        object.__setattr__(self, "relative_rules", tuple(self.relative_rules))
+        object.__setattr__(self, "placement_groups", tuple(self.placement_groups))
         self._validate_references()
 
     def _validate_references(self) -> None:
@@ -452,3 +585,49 @@ class PhysicalBoard:
                 raise ValueError(f"via references unknown net {via.net!r}")
             if via.from_layer not in layers or via.to_layer not in layers:
                 raise ValueError("via uses a layer not present in the stackup")
+
+        region_names = [region.name for region in self.regions]
+        if len(region_names) != len(set(region_names)):
+            raise ValueError("physical placement region names must be unique")
+        keepout_names = [keepout.name for keepout in self.keepouts]
+        if len(keepout_names) != len(set(keepout_names)):
+            raise ValueError("physical placement keepout names must be unique")
+        known_references = set(placement_refs)
+        known_regions = set(region_names)
+        ruled_references: set[str] = set()
+        for rule in self.placement_rules:
+            if rule.reference not in known_references:
+                raise ValueError(
+                    f"placement rule references unknown component {rule.reference!r}"
+                )
+            if rule.reference in ruled_references:
+                raise ValueError(
+                    f"component {rule.reference!r} has multiple placement rules"
+                )
+            ruled_references.add(rule.reference)
+            if rule.region is not None and rule.region not in known_regions:
+                raise ValueError(
+                    f"placement rule references unknown region {rule.region!r}"
+                )
+        for rule in self.relative_rules:
+            for target in rule.targets:
+                if target.reference not in known_references:
+                    raise ValueError(
+                        f"relative placement rule references unknown component "
+                        f"{target.reference!r}"
+                    )
+                if target.pad is not None and target.pad not in pads_by_component[target.reference]:
+                    raise ValueError(
+                        f"relative placement rule references unknown pad "
+                        f"{target.reference}.{target.pad}"
+                    )
+        group_names = [group.name for group in self.placement_groups]
+        if len(group_names) != len(set(group_names)):
+            raise ValueError("physical placement group names must be unique")
+        for group in self.placement_groups:
+            unknown = set(group.references) - known_references
+            if unknown:
+                raise ValueError(
+                    f"placement group {group.name!r} references unknown component "
+                    f"{min(unknown)!r}"
+                )

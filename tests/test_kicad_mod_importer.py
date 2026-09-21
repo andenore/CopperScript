@@ -54,6 +54,7 @@ def test_imports_common_kicad_8_footprint_geometry() -> None:
         graphic.layer is FootprintLayer.COURTYARD
         for graphic in footprint.graphics
     )
+    assert len(footprint.courtyard) == 4
 
 
 def test_imported_footprint_round_trips_through_kicad_pcb_backend() -> None:

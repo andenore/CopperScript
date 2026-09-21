@@ -7,7 +7,8 @@ paths use deterministic grid placement and mark the result as a draft.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import re
 from typing import Callable, Mapping
@@ -15,19 +16,35 @@ from typing import Callable, Mapping
 from .elaborate import elaborate
 from .footprints import FootprintResolver
 from .importers import FootprintImportResult
-from .model import Board, ComponentInstance, DeviceDefinition, PartDefinition
+from .model import (
+    Board,
+    ComponentInstance,
+    ConstraintKind,
+    DeviceDefinition,
+    FlatElectricalView,
+    PartDefinition,
+)
 from .physical import (
+    AlignmentAxis,
     BoardOutline,
+    BoardSide,
+    ComponentPlacementRule,
     FootprintPad,
     PadReference,
     PhysicalBoard,
     PhysicalFootprint,
     PhysicalNet,
     Placement,
+    PlacementGroup,
+    PlacementKeepout,
+    PlacementRegion,
+    PlacementTarget,
     Point,
+    RelativePlacementKind,
+    RelativePlacementRule,
     Size,
 )
-from .quantities import Quantity
+from .quantities import Length, Quantity
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +222,13 @@ def _physicalize(
         if _selected_footprint(component, flat.library[component.part]) is None
     )
     metadata["omitted_components"] = ",".join(omitted)
+    (
+        regions,
+        keepouts,
+        placement_rules,
+        relative_rules,
+        placement_groups,
+    ) = _lower_physical_constraints(flat, component_index, metadata)
     return PhysicalBoard(
         name=board.name,
         outline=BoardOutline.rectangle(
@@ -214,7 +238,259 @@ def _physicalize(
         placements=tuple(placements),
         nets=tuple(nets),
         metadata=metadata,
+        regions=regions,
+        keepouts=keepouts,
+        placement_rules=placement_rules,
+        relative_rules=relative_rules,
+        placement_groups=placement_groups,
     )
+
+
+def _lower_physical_constraints(
+    flat: FlatElectricalView,
+    components: Mapping[str, ComponentInstance],
+    metadata: dict[str, str],
+) -> tuple[
+    tuple[PlacementRegion, ...],
+    tuple[PlacementKeepout, ...],
+    tuple[ComponentPlacementRule, ...],
+    tuple[RelativePlacementRule, ...],
+    tuple[PlacementGroup, ...],
+]:
+    regions: list[PlacementRegion] = []
+    keepouts: list[PlacementKeepout] = []
+    rules: dict[str, ComponentPlacementRule] = {}
+    relative: list[RelativePlacementRule] = []
+    groups: list[PlacementGroup] = []
+    skipped: list[str] = []
+
+    def targets(values: tuple[str, ...]) -> tuple[PlacementTarget, ...] | None:
+        lowered: list[PlacementTarget] = []
+        for value in values:
+            reference, separator, pin = value.partition(".")
+            component = components.get(reference)
+            if component is None:
+                skipped.append(value)
+                return None
+            physical_pad = None
+            if separator:
+                part = flat.library[component.part]
+                physical_pad = _physical_pin_number(
+                    component, part, flat.devices, pin
+                )
+                if physical_pad is None:
+                    raise ValueError(
+                        f"placement constraint target {value!r} has no physical pad"
+                    )
+            lowered.append(PlacementTarget(reference, physical_pad))
+        return tuple(lowered)
+
+    for index, constraint in enumerate(flat.constraints):
+        lowered_targets = targets(constraint.targets)
+        if lowered_targets is None:
+            continue
+        parameters = constraint.parameters
+        if constraint.kind in {ConstraintKind.MAX_DISTANCE, ConstraintKind.MIN_DISTANCE}:
+            distance = _constraint_length(parameters, "distance")
+            relative.append(
+                RelativePlacementRule(
+                    RelativePlacementKind(constraint.kind.value),
+                    lowered_targets,
+                    distance_nm=distance,
+                    weight=_constraint_int(parameters, "weight", 10),
+                )
+            )
+            groups.append(
+                PlacementGroup(
+                    f"proximity:{index}",
+                    tuple(target.reference for target in lowered_targets),
+                    anchor=lowered_targets[-1].reference,
+                    priority=_constraint_int(parameters, "priority", 50),
+                    source="constraint",
+                )
+            )
+        elif constraint.kind is ConstraintKind.PLACEMENT_REGION:
+            name = str(parameters.get("name", f"region:{index}"))
+            region = PlacementRegion(
+                name,
+                BoardOutline.rectangle(
+                    _constraint_length(parameters, "width") / 1_000_000,
+                    _constraint_length(parameters, "height") / 1_000_000,
+                    origin=Point(
+                        _constraint_length(parameters, "x"),
+                        _constraint_length(parameters, "y"),
+                    ),
+                ),
+                _constraint_side(parameters.get("side")),
+            )
+            regions.append(region)
+            for target in lowered_targets:
+                rules[target.reference] = _merge_rule(
+                    rules.get(target.reference), target.reference, region=name
+                )
+        elif constraint.kind is ConstraintKind.KEEPOUT:
+            keepouts.append(
+                PlacementKeepout(
+                    str(parameters.get("name", f"keepout:{index}")),
+                    BoardOutline.rectangle(
+                        _constraint_length(parameters, "width") / 1_000_000,
+                        _constraint_length(parameters, "height") / 1_000_000,
+                        origin=Point(
+                            _constraint_length(parameters, "x"),
+                            _constraint_length(parameters, "y"),
+                        ),
+                    ),
+                    _constraint_side(parameters.get("side")),
+                    (
+                        _constraint_length(parameters, "maximum_height")
+                        if "maximum_height" in parameters
+                        else None
+                    ),
+                )
+            )
+        elif constraint.kind is ConstraintKind.FIXED_PLACEMENT:
+            if len(lowered_targets) != 1:
+                raise ValueError("fixed_placement requires exactly one component")
+            target = lowered_targets[0]
+            rotation = Decimal(str(parameters.get("rotation", 0)))
+            rules[target.reference] = _merge_rule(
+                rules.get(target.reference),
+                target.reference,
+                fixed_position=Point(
+                    _constraint_length(parameters, "x"),
+                    _constraint_length(parameters, "y"),
+                ),
+                fixed_rotation_degrees=rotation,
+                side=_constraint_side(parameters.get("side")),
+                priority=_constraint_int(parameters, "priority", 1000),
+            )
+        elif constraint.kind is ConstraintKind.ALLOWED_ORIENTATIONS:
+            orientations = _constraint_orientations(parameters.get("values"))
+            for target in lowered_targets:
+                rules[target.reference] = _merge_rule(
+                    rules.get(target.reference),
+                    target.reference,
+                    allowed_orientations=orientations,
+                )
+        elif constraint.kind is ConstraintKind.ALIGN:
+            relative.append(
+                RelativePlacementRule(
+                    RelativePlacementKind.ALIGN,
+                    lowered_targets,
+                    axis=AlignmentAxis(str(parameters.get("axis", "x"))),
+                    tolerance_nm=(
+                        _constraint_length(parameters, "tolerance")
+                        if "tolerance" in parameters
+                        else 0
+                    ),
+                    weight=_constraint_int(parameters, "weight", 5),
+                )
+            )
+        elif constraint.kind is ConstraintKind.PLACEMENT_GROUP:
+            references = tuple(target.reference for target in lowered_targets)
+            groups.append(
+                PlacementGroup(
+                    str(parameters.get("name", f"group:{index}")),
+                    references,
+                    anchor=str(parameters.get("anchor", references[0])),
+                    priority=_constraint_int(parameters, "priority", 0),
+                    source="constraint",
+                )
+            )
+
+    for module in flat.module_instances:
+        members = tuple(
+            sorted(
+                reference
+                for reference in components
+                if reference.startswith(f"{module.path}/")
+            )
+        )
+        if members:
+            groups.append(
+                PlacementGroup(
+                    f"module:{module.path}",
+                    members,
+                    anchor=max(members, key=lambda item: len(flat.library[components[item].part].pins)),
+                    priority=100,
+                    source="hierarchy",
+                )
+            )
+
+    for interface in flat.interfaces:
+        members = tuple(sorted(reference for reference in interface.bindings if reference in components))
+        if len(members) >= 2:
+            groups.append(
+                PlacementGroup(
+                    f"interface:{interface.name}",
+                    members,
+                    anchor=max(members, key=lambda item: len(flat.library[components[item].part].pins)),
+                    priority=25,
+                    source="interface",
+                )
+            )
+
+    if skipped:
+        metadata["omitted_constraint_targets"] = ",".join(sorted(set(skipped)))
+    return (
+        tuple(regions),
+        tuple(keepouts),
+        tuple(rules[reference] for reference in sorted(rules)),
+        tuple(relative),
+        _unique_groups(groups),
+    )
+
+
+def _merge_rule(
+    existing: ComponentPlacementRule | None,
+    reference: str,
+    **changes: object,
+) -> ComponentPlacementRule:
+    return ComponentPlacementRule(reference, **changes) if existing is None else replace(existing, **changes)
+
+
+def _constraint_length(parameters: Mapping[str, object], name: str) -> int:
+    value = parameters.get(name)
+    if not isinstance(value, Length):
+        raise ValueError(f"placement constraint parameter {name!r} must be a length")
+    return int(value.in_unit("mm") * Decimal(1_000_000))
+
+
+def _constraint_int(parameters: Mapping[str, object], name: str, default: int) -> int:
+    value = parameters.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"placement constraint parameter {name!r} must be numeric")
+    return int(value)
+
+
+def _constraint_side(value: object) -> BoardSide | None:
+    if value is None or value == "both":
+        return None
+    if not isinstance(value, str):
+        raise ValueError("placement constraint side must be front, back, or both")
+    return BoardSide(value)
+
+
+def _constraint_orientations(value: object) -> tuple[Decimal, ...]:
+    if not isinstance(value, str):
+        raise ValueError("allowed orientations must be a comma-separated string")
+    try:
+        result = tuple(Decimal(item.strip()) for item in value.split(",") if item.strip())
+    except InvalidOperation as exc:
+        raise ValueError("allowed orientations contain a non-numeric value") from exc
+    if not result:
+        raise ValueError("allowed orientations cannot be empty")
+    return result
+
+
+def _unique_groups(groups: list[PlacementGroup]) -> tuple[PlacementGroup, ...]:
+    names: dict[str, int] = {}
+    result: list[PlacementGroup] = []
+    for group in groups:
+        count = names.get(group.name, 0)
+        names[group.name] = count + 1
+        result.append(group if count == 0 else replace(group, name=f"{group.name}:{count}"))
+    return tuple(result)
 
 
 def _proxy_footprint(

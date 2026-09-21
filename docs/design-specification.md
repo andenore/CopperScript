@@ -537,6 +537,21 @@ Such an estimate MUST NOT be represented as routed copper. Route remains not run
 until geometrically valid tracks and vias exist, and Verify MUST remain blocked
 until required sign-off checks have passed.
 
+Placement MUST consume typed physical constraints rather than interpreting
+source text. The physical IR represents courtyard geometry, keepouts, placement
+regions, fixed placement, legal orientations, minimum/maximum distance,
+alignment, and semantic groups. Groups derived from preserved module hierarchy,
+interfaces, and proximity constraints provide soft clustering intent without
+changing electrical connectivity.
+
+The initial placement engine uses deterministic multi-seed analytical global
+placement, hybrid discrete legalization, hard relative-rule repair, and legal
+local refinement with coarse per-layer routing feedback. Wirelength and
+routability metrics use transformed footprint pads. Multiple legal results are
+Pareto-filtered and deterministically ranked; reports MUST retain both the
+selected result and candidate metrics. Proxy crossings, vias, pin escape, and
+congestion are estimates only and MUST NOT be serialized as routed copper.
+
 Automated placement and routing artifacts MUST retain their algorithm identity,
 gate state, metrics, and non-fabrication-ready status. See
 `docs/layout-workflow.md` for the researched algorithm choices and implemented
@@ -687,6 +702,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-042 | Accepted | Footprint resolution is explicit and deterministic: board-relative files or caller-provided library roots only; ambiguity and electrical pad mismatches are errors. |
 | CS-043 | Accepted | CopperLib is the canonical project for new reusable part, device, footprint, and circuit-module definitions; product examples import them rather than duplicating them in the compiler repository. |
 | CS-044 | Accepted | Physical design exposes four gates—Prepare, Place, Route, Verify. Placement includes legalization and routability feedback; estimates never masquerade as routed copper, and release remains blocked until routing and sign-off pass. |
+| CS-045 | Accepted | Placement consumes typed physical constraints and preserved semantic hierarchy, then uses deterministic analytical global placement, hybrid legalization, pad-aware route feedback, detailed refinement, and Pareto-ranked candidates. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

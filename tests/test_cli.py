@@ -213,6 +213,8 @@ def test_cli_plans_layout_and_writes_readiness_report(tmp_path: Path) -> None:
             "--report",
             str(report),
             "--allow-proxy-footprints",
+            "--candidates",
+            "2",
         ],
         cwd=ROOT,
         text=True,
@@ -224,9 +226,12 @@ def test_cli_plans_layout_and_writes_readiness_report(tmp_path: Path) -> None:
     assert output.read_text(encoding="utf-8").startswith("(kicad_pcb")
     document = json.loads(report.read_text(encoding="utf-8"))
     assert document["schema"] == "copperscript-layout-report/v0.1"
+    assert 1 <= len(document["candidates"]) <= 2
+    assert document["selected_candidate"].startswith("candidate-")
     assert "PLACE:" in result.stdout
     assert "ROUTE: not_run" in result.stdout
     assert "VERIFY: blocked" in result.stdout
+    assert "Pareto candidate" in result.stdout
 
 
 def test_cli_checks_kicad_mod_footprint() -> None:

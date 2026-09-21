@@ -6,12 +6,27 @@ import json
 import pytest
 
 from pcbir import (
+    BoardOutline,
+    FootprintPad,
     GateStatus,
     LayoutStage,
+    PadReference,
+    PhysicalBoard,
+    PhysicalFootprint,
+    PhysicalNet,
+    Placement,
     PlacementPlannerOptions,
     PlacementPlanningError,
+    PlacementTarget,
+    RelativePlacementKind,
+    RelativePlacementRule,
+    Size,
+    Stackup,
+    compile_source,
+    placement_metrics,
     plan_placement,
     prototype_physicalize,
+    transformed_pad_position,
 )
 from pcbir.loader import load_board
 from pcbir.physical import CopperLayer, Point, TrackSegment, nm_from_mm
@@ -50,8 +65,12 @@ def test_planner_produces_in_bounds_non_overlapping_placement() -> None:
     rectangles: list[tuple[str, int, int, int, int]] = []
     for placement in placements:
         size = plan.board.footprints[placement.footprint].body_size
-        half_width = (size.width_nm + 1) // 2
-        half_height = (size.height_nm + 1) // 2
+        if int(placement.rotation_degrees) % 180:
+            half_width = (size.height_nm + 1) // 2
+            half_height = (size.width_nm + 1) // 2
+        else:
+            half_width = (size.width_nm + 1) // 2
+            half_height = (size.height_nm + 1) // 2
         left = placement.position.x_nm - half_width
         right = placement.position.x_nm + half_width
         top = placement.position.y_nm - half_height
@@ -94,6 +113,10 @@ def test_layout_report_is_machine_readable() -> None:
     assert document["gates"][2]["stage"] == "route"
     assert document["gates"][2]["status"] == "not_run"
     assert document["metrics"]["component_count"] > 0
+    assert "pin_escape_pressure" in document["metrics"]
+    assert "minimum_constraint_margin_nm" in document["metrics"]
+    assert document["candidates"]
+    assert "analytical_iterations" in document["candidates"][0]["statistics"]
     assert report.to_json() == report.to_json()
 
 
@@ -126,7 +149,7 @@ def test_planner_refuses_to_invalidate_existing_routes() -> None:
         plan_placement(routed)
 
 
-def test_planner_rejects_unmodeled_rotated_collision_geometry() -> None:
+def test_planner_normalizes_a_movable_non_orthogonal_seed() -> None:
     physical = _prototype_board()
     rotated = replace(
         physical,
@@ -134,5 +157,248 @@ def test_planner_rejects_unmodeled_rotated_collision_geometry() -> None:
         + physical.placements[1:],
     )
 
-    with pytest.raises(PlacementPlanningError, match="non-orthogonal rotation"):
-        plan_placement(rotated)
+    planned = plan_placement(rotated)
+
+    assert all(item.rotation_degrees % 90 == 0 for item in planned.board.placements)
+
+
+def test_hierarchy_and_interfaces_create_semantic_placement_groups() -> None:
+    physical = prototype_physicalize(load_board("examples/hierarchical_board.copper"))
+
+    module_group = next(
+        group for group in physical.placement_groups if group.name == "module:PWR"
+    )
+
+    assert module_group.source == "hierarchy"
+    assert "PWR/U1" in module_group.references
+    assert module_group.anchor in module_group.references
+
+
+def test_pad_coordinates_and_orientation_drive_wirelength_metrics() -> None:
+    footprint = PhysicalFootprint(
+        "test/two-pad",
+        (
+            FootprintPad("1", Point.mm(-1, 0), Size.mm(1, 1)),
+            FootprintPad("2", Point.mm(1, 0), Size.mm(1, 1)),
+        ),
+        Size.mm(3, 2),
+    )
+    board = PhysicalBoard(
+        "PadAware",
+        BoardOutline.rectangle(30, 20),
+        {footprint.name: footprint},
+        (
+            Placement("R1", footprint.name, Point.mm(5, 10)),
+            Placement("R2", footprint.name, Point.mm(20, 10)),
+        ),
+        (
+            PhysicalNet(
+                "N",
+                (PadReference("R1", "2"), PadReference("R2", "1")),
+            ),
+        ),
+    )
+    placements = {item.reference: item for item in board.placements}
+    options = PlacementPlannerOptions(candidate_count=1)
+
+    assert transformed_pad_position(board, placements["R1"], "2") == Point.mm(6, 10)
+    unrotated = placement_metrics(board, placements, options)
+    rotated = dict(placements)
+    rotated["R1"] = replace(placements["R1"], rotation_degrees=180)
+    rotated_metrics = placement_metrics(board, rotated, options)
+
+    assert unrotated.half_perimeter_wire_length_nm == nm_from_mm(13)
+    assert rotated_metrics.half_perimeter_wire_length_nm == nm_from_mm(15)
+
+
+def test_layer_aware_coarse_router_reports_same_layer_crossings() -> None:
+    footprint = PhysicalFootprint(
+        "test/one-pad",
+        (FootprintPad("1", Point.mm(0, 0), Size.mm(0.5, 0.5)),),
+        Size.mm(1, 1),
+    )
+    board = PhysicalBoard(
+        "CrossingEstimate",
+        BoardOutline.rectangle(30, 30),
+        {footprint.name: footprint},
+        (
+            Placement("L", footprint.name, Point.mm(5, 15)),
+            Placement("R", footprint.name, Point.mm(25, 15)),
+            Placement("T", footprint.name, Point.mm(15, 5)),
+            Placement("B", footprint.name, Point.mm(15, 25)),
+        ),
+        (
+            PhysicalNet("H", (PadReference("L", "1"), PadReference("R", "1"))),
+            PhysicalNet("V", (PadReference("T", "1"), PadReference("B", "1"))),
+        ),
+        stackup=Stackup((CopperLayer.FRONT,)),
+    )
+
+    metrics = placement_metrics(
+        board,
+        {item.reference: item for item in board.placements},
+        PlacementPlannerOptions(candidate_count=1),
+    )
+
+    assert metrics.crossing_count >= 1
+    assert metrics.estimated_via_count >= 1
+
+
+def test_analytical_phase_improves_the_valid_example_seed() -> None:
+    physical = _prototype_board()
+    baseline = plan_placement(
+        physical,
+        PlacementPlannerOptions(
+            candidate_count=1,
+            analytical_iterations=0,
+            refinement_passes=0,
+        ),
+    )
+    analytical = plan_placement(
+        physical,
+        PlacementPlannerOptions(
+            candidate_count=1,
+            analytical_iterations=40,
+            refinement_passes=0,
+        ),
+    )
+
+    assert (
+        analytical.report.metrics.half_perimeter_wire_length_nm
+        < baseline.report.metrics.half_perimeter_wire_length_nm
+    )
+
+
+def test_hybrid_legalizer_records_bounded_exact_repair(monkeypatch) -> None:
+    import pcbir.placement as engine
+
+    original = engine._best_legal_choice
+    forced = 0
+
+    def force_one_repair(*args, **kwargs):
+        nonlocal forced
+        placed = args[3]
+        if not placed:
+            forced += 1
+            return None
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_best_legal_choice", force_one_repair)
+    plan = plan_placement(
+        _prototype_board(),
+        PlacementPlannerOptions(
+            candidate_count=1,
+            analytical_iterations=0,
+            refinement_passes=0,
+        ),
+    )
+
+    assert forced >= 1
+    assert any(candidate.statistics.exact_repair_count for candidate in plan.candidates)
+
+
+def test_candidate_frontier_and_refinement_are_deterministic() -> None:
+    options = PlacementPlannerOptions(
+        candidate_count=3,
+        analytical_iterations=8,
+        refinement_passes=1,
+    )
+
+    first = plan_placement(_prototype_board(), options)
+    second = plan_placement(_prototype_board(), options)
+
+    assert first == second
+    assert 1 <= len(first.candidates) <= 3
+    assert all(
+        candidate.statistics.routing_feedback_passes >= 1
+        for candidate in first.candidates
+    )
+    vectors = [candidate.metrics.quality_vector for candidate in first.candidates]
+    assert all(
+        not (
+            all(left <= right for left, right in zip(other, vector, strict=True))
+            and any(left < right for left, right in zip(other, vector, strict=True))
+        )
+        for index, vector in enumerate(vectors)
+        for other in vectors[:index] + vectors[index + 1 :]
+    )
+
+
+def test_source_regions_keepouts_fixed_positions_and_proximity_are_enforced() -> None:
+    board = compile_source(
+        """
+        board ConstrainedPlacement {
+            use library "tiny";
+            component R1: RESISTOR { footprint = "0402"; }
+            component R2: RESISTOR { footprint = "0402"; }
+            constraint placement_region(R1) {
+                name = "left"; x = 2mm; y = 2mm; width = 16mm; height = 16mm;
+            }
+            constraint fixed_placement(R2) {
+                x = 22mm; y = 10mm; rotation = 0; side = "front";
+            }
+            constraint max_distance(R1, R2.1) { distance = 8mm; }
+            constraint keepout() {
+                name = "hole"; x = 8mm; y = 8mm; width = 3mm; height = 3mm;
+            }
+        }
+        """
+    )
+    physical = prototype_physicalize(
+        board,
+        PrototypePhysicalOptions(board_width_mm=30, board_height_mm=22, margin_mm=3),
+    )
+
+    plan = plan_placement(
+        physical,
+        PlacementPlannerOptions(candidate_count=1, analytical_iterations=10),
+    )
+    placements = {item.reference: item for item in plan.board.placements}
+
+    assert placements["R2"].position == Point.mm(22, 10)
+    assert 2_000_000 <= placements["R1"].position.x_nm <= 18_000_000
+    assert plan.report.metrics.constraint_penalty_nm == 0
+    assert plan.report.metrics.minimum_constraint_margin_nm >= 0
+
+
+def test_relative_repair_uses_exact_pad_coordinates_off_the_placement_grid() -> None:
+    anchor = PhysicalFootprint(
+        "test/anchor",
+        (FootprintPad("1", Point.mm("2.333", "0.222"), Size.mm("0.1", "0.1")),),
+        Size.mm(1, 1),
+    )
+    satellite = PhysicalFootprint(
+        "test/satellite",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.1", "0.1")),),
+        Size.mm("0.2", "0.2"),
+    )
+    board = PhysicalBoard(
+        "OffGridPadConstraint",
+        BoardOutline.rectangle(25, 20),
+        {anchor.name: anchor, satellite.name: satellite},
+        (
+            Placement("U1", anchor.name, Point.mm(10, 10)),
+            Placement("C1", satellite.name, Point.mm(3, 3)),
+        ),
+        (),
+        relative_rules=(
+            RelativePlacementRule(
+                RelativePlacementKind.MAX_DISTANCE,
+                (PlacementTarget("C1"), PlacementTarget("U1", "1")),
+                distance_nm=nm_from_mm("0.1"),
+            ),
+        ),
+    )
+
+    plan = plan_placement(
+        board,
+        PlacementPlannerOptions(
+            candidate_count=1,
+            analytical_iterations=0,
+            refinement_passes=0,
+            fixed_references=frozenset({"U1"}),
+        ),
+    )
+
+    assert plan.report.metrics.constraint_penalty_nm == 0
+    assert plan.report.metrics.minimum_constraint_margin_nm >= 0

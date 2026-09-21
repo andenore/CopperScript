@@ -361,15 +361,69 @@ resistor from each signal to the named supply.
 
 ## Constraints
 
-Physical constraints are parsed and retained in IR, but not enforced in v0.1.
+Constraints remain separate from electrical connectivity. The physicalizer
+lowers the placement kinds below into typed physical IR, and `plan-layout`
+enforces them. A target may be a component (`U1`) or, for distance and
+alignment rules, a component pin (`U1.VDD`), which is resolved to its physical
+pad.
 
 ```copper
 constraint max_distance(C1, U1.VDD) {
     distance = 3mm;
+    weight = 10;
+}
+
+constraint min_distance(U1, J1) {
+    distance = 8mm;
+}
+
+constraint placement_region(U2) {
+    name = "radio";
+    x = 45mm;
+    y = 2mm;
+    width = 20mm;
+    height = 15mm;
+    side = front;
+}
+
+constraint keepout() {
+    name = "antenna-clearance";
+    x = 60mm;
+    y = 0mm;
+    width = 15mm;
+    height = 8mm;
+    side = both;
+}
+
+constraint fixed_placement(J1) {
+    x = 2mm;
+    y = 18mm;
+    rotation = 90;
+    side = front;
+}
+
+constraint allowed_orientations(U1) {
+    values = "0,90,180,270";
+}
+
+constraint align(U1, U2) {
+    axis = y;
+    tolerance = 0.5mm;
+}
+
+constraint placement_group(U1, U2, C1) {
+    name = "controller";
+    anchor = U1;
+    priority = 50;
 }
 ```
 
-Known constraint kinds are `max_distance`, `placement_region`, and `note`.
+Known constraint kinds are `max_distance`, `min_distance`,
+`placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
+`placement_group`, `keepout`, and `note`. Coordinates and rectangle dimensions
+are lengths in the physical board coordinate system; orientation values are
+unitless degrees. The detailed legalizer currently accepts orthogonal
+orientations only. `note` remains metadata and has no placement effect.
 
 ## KiCad schematic export
 
@@ -440,5 +494,5 @@ power_state    = "power_state", name, "{", (name, "=", ("on" | "off" | "unknown"
 interface      = "interface", name, ":", qualified_name, "{", interface_item*, "}" ;
 constraint     = "constraint", name, "(", targets, ")", properties ;
 properties     = "{", (name, "=", scalar, ";")*, "}" ;
-scalar         = string | boolean | name | number, unit ;
+scalar         = string | boolean | name | number, unit? ;
 ```

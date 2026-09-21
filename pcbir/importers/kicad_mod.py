@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from hashlib import sha256
-from math import isqrt
+from math import hypot, isqrt
 from pathlib import Path
 from typing import Iterator, TypeAlias
 
@@ -182,6 +182,7 @@ def parse_kicad_mod(
         source_library_id=name,
         graphics=tuple(graphics),
         metadata=metadata,
+        courtyard=_courtyard_polygon(graphics),
     )
     return FootprintImportResult(footprint, tuple(warnings), version)
 
@@ -431,6 +432,63 @@ def _bounding_size(
     width = max(point.x_nm for point in points) - min(point.x_nm for point in points)
     height = max(point.y_nm for point in points) - min(point.y_nm for point in points)
     return Size(max(width, 1), max(height, 1))
+
+
+def _courtyard_polygon(graphics: list[FootprintGraphic]) -> tuple[Point, ...]:
+    courtyard = [
+        graphic
+        for graphic in graphics
+        if getattr(graphic, "layer", None) is FootprintLayer.COURTYARD
+    ]
+    polygons = [
+        graphic.points for graphic in courtyard if isinstance(graphic, FootprintPolygon)
+    ]
+    if len(polygons) == 1:
+        return polygons[0]
+    rectangles = [
+        graphic for graphic in courtyard if isinstance(graphic, FootprintRectangle)
+    ]
+    if len(rectangles) == 1 and len(courtyard) == 1:
+        rectangle = rectangles[0]
+        return (
+            rectangle.start,
+            Point(rectangle.end.x_nm, rectangle.start.y_nm),
+            rectangle.end,
+            Point(rectangle.start.x_nm, rectangle.end.y_nm),
+        )
+    points: list[Point] = []
+    for graphic in courtyard:
+        if isinstance(graphic, (FootprintLine, FootprintRectangle, FootprintArc)):
+            points.extend((graphic.start, graphic.end))
+            if isinstance(graphic, FootprintArc):
+                points.append(graphic.midpoint)
+        elif isinstance(graphic, FootprintCircle):
+            radius = round(
+                hypot(
+                    graphic.end.x_nm - graphic.center.x_nm,
+                    graphic.end.y_nm - graphic.center.y_nm,
+                )
+            )
+            points.extend(
+                (
+                    Point(graphic.center.x_nm - radius, graphic.center.y_nm - radius),
+                    Point(graphic.center.x_nm + radius, graphic.center.y_nm + radius),
+                )
+            )
+        elif isinstance(graphic, FootprintPolygon):
+            points.extend(graphic.points)
+    if not points:
+        return ()
+    min_x = min(point.x_nm for point in points)
+    min_y = min(point.y_nm for point in points)
+    max_x = max(point.x_nm for point in points)
+    max_y = max(point.y_nm for point in points)
+    return (
+        Point(min_x, min_y),
+        Point(max_x, min_y),
+        Point(max_x, max_y),
+        Point(min_x, max_y),
+    )
 
 
 def _parse_sexpr(text: str, source: str) -> list[SExpr]:

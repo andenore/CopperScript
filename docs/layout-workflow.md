@@ -60,23 +60,32 @@ instead of equating successful file generation with sign-off.
 
 `pcbir.layout.plan_placement()` currently performs:
 
-1. rectangular board-boundary validation;
-2. preservation and validation of caller-selected fixed placements;
-3. connectivity-weighted deterministic greedy global placement;
-4. exact axis-aligned boundary and component-clearance legalization;
-5. bounded deterministic local refinement; and
-6. coarse bin-based routability estimation using Manhattan minimum spanning
-   trees and demand-aware L routes.
+1. validation of polygonal board boundaries, footprint courtyards, placement
+   regions, keepouts, fixed components, legal orientations, relative rules,
+   and semantic groups;
+2. hierarchy-aware clustering from module provenance, interfaces, explicit
+   groups, and proximity constraints;
+3. deterministic multi-seed analytical global placement using smooth,
+   pad-aware wirelength gradients, density spreading, and group cohesion;
+4. orientation selection followed by bounded grid/Hanan-style legalization,
+   with recursive exact repair for small dense conflict tails;
+5. hard relative-constraint repair and legal local moves, swaps, and rotations;
+6. periodic coarse-routing feedback with per-layer capacity, crossing, via,
+   and pin-escape estimates; and
+7. Pareto filtering and deterministic ranking of retained candidates.
 
-The refinement objective combines half-perimeter wirelength with routing-bin
-overflow. It is deliberately deterministic so identical physical IR produces
-identical KiCad output and reports.
+Wirelength is measured from transformed physical pads, not component centers.
+The ranking vector combines hard-constraint penalty and margin, congestion,
+crossings, estimated vias, pin-escape pressure, pad-aware HPWL, and semantic
+group spread. Identical physical IR and options produce identical candidates,
+KiCad output, and reports.
 
 Run it with:
 
 ```console
 python -m copperscript plan-layout examples/valid_board.copper \
   --allow-proxy-footprints \
+  --candidates 3 \
   -o planned.kicad_pcb \
   --report layout-report.json
 ```
@@ -87,24 +96,26 @@ result remains non-fabrication-ready because no detailed routes or sign-off
 checks have run.
 
 The report schema is `copperscript-layout-report/v0.1`. It contains the four
-gate states, actionable findings, HPWL, estimated connection count, routing-bin
-capacity, overflow, and maximum estimated utilization.
+gate states, actionable findings, the selected candidate, the retained Pareto
+frontier, per-phase statistics, pad-aware HPWL, crossings, estimated vias,
+pin-escape pressure, constraint penalty and margin, group spread, and
+routing-bin capacity, overflow, and maximum estimated utilization.
 
 ## Deliberate limitations and next increments
 
-The initial planner supports rectangular boards, orthogonally rotated component
-body boxes, two-sided placements as ordinary occupied rectangles, default design
-rules, and uniform routing-bin capacity. It does not yet model keepouts,
-courtyards, connectors fixed by source constraints, RF antennas, thermal
-regions, layer-specific capacity, via demand, differential pairs, planes, or
-actual pad escape.
+The implemented legalizer accepts polygonal board and region outlines and uses
+orthogonal component orientations. Courtyard polygons are used when present;
+otherwise footprint body bounds are the conservative occupied shape. Routing
+capacity is a coarse uniform-bin model. Crossings, vias, and pad escape are
+placement proxies rather than geometrically valid routes, and the current model
+does not yet understand differential-pair topology, controlled impedance, RF
+keep-in geometry, thermal coupling, planes, or copper zones.
 
-The next Place increment should add source-level physical constraints and
-courtyard/keepout geometry before replacing the greedy global placer. A future
-Route increment should first implement a global routing graph with per-layer
-edge capacity and topology constraints, then a detailed router with negotiated
-rip-up/reroute. Verify should be implemented as independently reportable
-checks, with release blocked unless every required check passes.
+The next major increment belongs to Route: a global routing graph with
+per-layer edge capacity and topology constraints, followed by a detailed router
+with negotiated rip-up/reroute. Verify remains a collection of independently
+reportable sign-off checks, with release blocked unless every required check
+passes.
 
 ## Sources
 

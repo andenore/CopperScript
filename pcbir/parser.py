@@ -355,7 +355,7 @@ class Parser:
             number = self._advance().text
             if self.current.kind is TokenKind.IDENTIFIER:
                 return RawQuantity(number, self._advance().text)
-            self._error("PAR005", "a number must include a unit")
+            return float(number) if "." in number else int(number)
         if self.current.kind is TokenKind.IDENTIFIER:
             value = self._advance().text
             if value == "true":
@@ -365,7 +365,7 @@ class Parser:
             if self._accept_symbol("."):
                 value = f"{value}.{self._name('pin name')}"
             return value
-        self._error("PAR006", "expected a string, identifier, boolean, or quantity")
+        self._error("PAR006", "expected a string, identifier, boolean, number, or quantity")
 
     def _endpoint(self) -> str:
         component = self._name("component reference")
