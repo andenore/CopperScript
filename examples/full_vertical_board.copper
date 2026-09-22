@@ -86,6 +86,8 @@ board FullVerticalTracker {
     net V3V3 {
         PWR.V3V3;
         U_MCU.VDD;
+        U_MCU.VBAT;
+        U_MCU.VREF_PLUS;
         U_CAN.VCC;
         U_MODEM_LEVEL.VCCA;
         U_MODEM_LEVEL.OE;

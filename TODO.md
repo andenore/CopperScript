@@ -148,7 +148,9 @@ where relevant. It does not imply third-party certification.
         concrete syntax and typed physical lowering.
   - [x] Content-addressed package lockfile and whole-board footprint audit.
   - [x] Complete the nRF52832-QFAA QFN48 bond map from the official Nordic
-        pin table; installed KiCad footprint audit now resolves 16/23 assets.
+        pin table.
+  - [x] Complete STM32G0C1RET6 LQFP64-GP bonds from ST DS13564 Table 12 and
+        connect VBAT/VREF+; installed KiCad audit now resolves 17/23 assets.
   - [ ] Resolve the reported real CopperLib/KiCad footprint gaps and complete
         acceptance-board placement, routing, DRC, manufacturing, and CAM closure.
 

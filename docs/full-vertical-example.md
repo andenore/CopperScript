@@ -89,16 +89,16 @@ physical design.
 
 ## Current blockers before fabrication
 
-- The STM32 and EG800G definitions intentionally expose only the pins used by
-  this design. Their production footprints require complete package pin/bond
-  definitions, including all power, ground, exposed and reserved pads. The
-  nRF52832-QFAA now has a complete QFN48 bond map from the Nordic Product
-  Specification v1.9, Table 1; its support circuit remains incomplete.
-- The installed KiCad 10 footprint audit currently resolves 16 of 23 selected
-  assets. The remaining failures are the STM32 sparse pin map and unresolved
-  SWD header, SIM socket, 3.8 V regulator, USB choke, EG800G and MAX-M10S
-  footprints. These are not safe to replace with generic land patterns without
-  an exact orderable part or vendor mechanical drawing.
+- The EG800G definition still exposes only the pins used by this design. Its
+  production footprint needs complete power, ground, exposed, and reserved
+  pad coverage. The nRF52832-QFAA and STM32G0C1RET6 package maps are complete
+  from the Nordic Product Specification v1.9, Table 1 and ST DS13564 Rev 5,
+  Table 12 respectively; their support circuits remain incomplete.
+- The installed KiCad 10 footprint audit currently resolves 17 of 23 selected
+  assets. The remaining failures are the unresolved SWD header, SIM socket,
+  3.8 V regulator, USB choke, EG800G, and MAX-M10S footprints. These are not
+  safe to replace with generic land patterns without an exact orderable part
+  or vendor mechanical drawing.
 - Regulator and level-shifter entries express architectural requirements but
   need concrete orderable manufacturer part numbers and validated support
   components.

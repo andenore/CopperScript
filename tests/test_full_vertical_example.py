@@ -59,3 +59,15 @@ def test_nordic_qfaa_package_has_all_footprint_pad_numbers() -> None:
     }
     assert part.pins["NC_44"].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
     assert all(pin.bonds for pin in part.pins.values() if pin.name != "NC_44")
+
+
+def test_stm32g0c1re_standard_lqfp64_bonds_are_complete() -> None:
+    board = compile_file(EXAMPLE)
+    part = board.library["vertical.STM32G0C1RET6"]
+    assert {pin.number for pin in part.pins.values()} == {
+        str(number) for number in range(1, 65)
+    }
+    assert all(pin.bonds for pin in part.pins.values())
+    assert {pin.name for pin in part.pins.values() if pin.number in {"6", "7", "8", "9"}} == {
+        "VBAT", "VREF_PLUS", "VDD", "VSS"
+    }

@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:cedf0fc0d379fd92dcc2a1cea4d3d31a1000f28a784400d832e1a979eb97a373",
+      "checksum": "sha256:b7fb10f9aa9af304a64228bc44c428b2224abc6b152199b749a9f8a664c7f8bd",
       "files": [
         {
           "path": "copper.mod",
@@ -165,13 +165,13 @@
         },
         {
           "path": "packages/full_vertical/stm32g0c1_device.copper",
-          "sha256": "729a02f4788f091cb7acfbe1cab4df9fa099a991ae1b3ffa3758b2681b93b95b",
-          "size": 5608
+          "sha256": "68e3e11039c33044600b6b596ffd2cbaa1f3adc4eee028bc2235c71c323e853d",
+          "size": 9586
         },
         {
           "path": "packages/full_vertical/stm32g0c1ret6.copper",
-          "sha256": "ad5882f820ac6e7bbbe5bb910eaea8c1424623266765af0fc8eec7228be157a6",
-          "size": 1550
+          "sha256": "c489dc4acd114cff184a20428fbcb7e19e08e2e9d77ab855739aa93b0ca1d927",
+          "size": 3328
         },
         {
           "path": "packages/full_vertical/swd_header.copper",
