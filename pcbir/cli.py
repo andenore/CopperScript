@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -183,6 +184,9 @@ def _parser() -> argparse.ArgumentParser:
     audit_parser.add_argument(
         "--strict", action="store_true", help="treat lossy-import warnings as errors"
     )
+    audit_parser.add_argument(
+        "--json", action="store_true", help="emit deterministic machine-readable audit JSON"
+    )
     return parser
 
 
@@ -241,6 +245,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 strict=args.strict,
             )
             audit = audit_resolved_footprints(board, resolver)
+            if args.json:
+                print(json.dumps({
+                    "schema": "copperscript-footprint-audit/v0.1",
+                    "passed": audit.passed,
+                    "resolved": sum(entry.passed for entry in audit.entries),
+                    "total": len(audit.entries),
+                    "entries": [{
+                        "reference": entry.reference,
+                        "components": list(entry.components),
+                        "source_path": entry.source_path,
+                        "source_sha256": entry.source_sha256,
+                        "warnings": list(entry.warnings),
+                        "errors": list(entry.errors),
+                        "passed": entry.passed,
+                    } for entry in audit.entries],
+                }, indent=2, sort_keys=True))
+                return 0 if audit.passed else 1
             for entry in audit.entries:
                 status = "PASS" if entry.passed else "FAIL"
                 identity = entry.source_sha256 or "unresolved"

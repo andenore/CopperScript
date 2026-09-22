@@ -30,6 +30,18 @@ def test_cli_rejects_invalid_copper_board() -> None:
     assert "I2C_MISSING_PULLUP" in result.stdout
 
 
+def test_cli_footprint_audit_json_is_machine_readable() -> None:
+    command = [sys.executable, "-m", "copperscript", "audit-footprints",
+               "examples/valid_board.copper", "--json"]
+    first = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+    second = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+    assert first.stdout == second.stdout
+    document = json.loads(first.stdout)
+    assert document["schema"] == "copperscript-footprint-audit/v0.1"
+    assert document["total"] == len(document["entries"])
+    assert first.returncode == (0 if document["passed"] else 1)
+
+
 def test_cli_compiles_to_json() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "copperscript", "compile", "examples/valid_board.copper"],

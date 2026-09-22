@@ -117,4 +117,9 @@ python -m copperscript power-check examples/full_vertical_board.copper
 python -m copperscript compile examples/full_vertical_board.copper -o board.json
 python -m copperscript export-kicad examples/full_vertical_board.copper -o full_vertical_board.kicad_sch
 python -m copperscript plan-layout examples/full_vertical_board.copper --allow-proxy-footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
+python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints --json
 ```
+
+The last command emits a deterministic JSON gap list (`passed`, `resolved`,
+`total`, and per-footprint errors) for the separate CopperLib generation
+workflow. It returns a nonzero status while any footprint remains unresolved.
