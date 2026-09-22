@@ -47,6 +47,28 @@ class CopperLayer(str, Enum):
     INTERNAL_6 = "In6.Cu"
     INTERNAL_7 = "In7.Cu"
     INTERNAL_8 = "In8.Cu"
+    INTERNAL_9 = "In9.Cu"
+    INTERNAL_10 = "In10.Cu"
+    INTERNAL_11 = "In11.Cu"
+    INTERNAL_12 = "In12.Cu"
+    INTERNAL_13 = "In13.Cu"
+    INTERNAL_14 = "In14.Cu"
+    INTERNAL_15 = "In15.Cu"
+    INTERNAL_16 = "In16.Cu"
+    INTERNAL_17 = "In17.Cu"
+    INTERNAL_18 = "In18.Cu"
+    INTERNAL_19 = "In19.Cu"
+    INTERNAL_20 = "In20.Cu"
+    INTERNAL_21 = "In21.Cu"
+    INTERNAL_22 = "In22.Cu"
+    INTERNAL_23 = "In23.Cu"
+    INTERNAL_24 = "In24.Cu"
+    INTERNAL_25 = "In25.Cu"
+    INTERNAL_26 = "In26.Cu"
+    INTERNAL_27 = "In27.Cu"
+    INTERNAL_28 = "In28.Cu"
+    INTERNAL_29 = "In29.Cu"
+    INTERNAL_30 = "In30.Cu"
     BACK = "B.Cu"
 
 
@@ -347,6 +369,13 @@ class Stackup:
             raise ValueError("a stackup requires at least one copper layer")
         if len(set(self.copper_layers)) != len(self.copper_layers):
             raise ValueError("stackup copper layers must be unique")
+        if len(self.copper_layers) > 2:
+            expected_internal = tuple(
+                layer for layer in CopperLayer
+                if layer not in {CopperLayer.FRONT, CopperLayer.BACK}
+            )[: len(self.copper_layers) - 2]
+            if self.copper_layers != (CopperLayer.FRONT, *expected_internal, CopperLayer.BACK):
+                raise ValueError("multilayer stackups use contiguous F.Cu/In1.Cu.../B.Cu order")
         if self.thickness_nm <= 0:
             raise ValueError("board thickness must be positive")
         if self.physical_layers:
@@ -986,3 +1015,30 @@ def _via_span_depth(stackup: Stackup, first: CopperLayer, second: CopperLayer) -
     }
     low, high = sorted((positions[first], positions[second]))
     return sum(layer.thickness_nm for layer in stackup.physical_layers[low : high + 1])
+
+
+def select_via_technology(
+    stackup: Stackup,
+    from_layer: CopperLayer,
+    to_layer: CopperLayer,
+    size_nm: int,
+    drill_nm: int,
+) -> str | None:
+    """Choose the first legal technology in stable profile order."""
+    if not stackup.via_technologies:
+        return None
+    depth = _via_span_depth(stackup, from_layer, to_layer)
+    for technology in stackup.via_technologies:
+        if {from_layer, to_layer} != {technology.from_layer, technology.to_layer}:
+            continue
+        if drill_nm < technology.minimum_drill_nm:
+            continue
+        if (size_nm - drill_nm) // 2 < technology.minimum_annular_ring_nm:
+            continue
+        if Decimal(depth) / Decimal(drill_nm) > technology.maximum_aspect_ratio:
+            continue
+        return technology.id
+    raise ValueError(
+        f"no legal via technology for {from_layer.value} to {to_layer.value} "
+        f"with size/drill {size_nm}/{drill_nm} nm"
+    )

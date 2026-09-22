@@ -197,7 +197,7 @@ def _render(board: PhysicalBoard) -> str:
 def _copper_layer_lines(board: PhysicalBoard) -> list[str]:
     result: list[str] = []
     for index, layer in enumerate(board.stackup.copper_layers):
-        number = 0 if layer is CopperLayer.FRONT else 31 if layer is CopperLayer.BACK else index
+        number = 0 if layer is CopperLayer.FRONT else 31 if layer is CopperLayer.BACK else int(layer.value[2:-3])
         result.append(f'    ({number} "{layer.value}" signal)')
     return result
 

@@ -33,6 +33,9 @@ def test_stackup_via_catalog_validates_span_ring_and_aspect_ratio() -> None:
                           stackup=stackup,
                           vias=(Via("N", Point.mm(5, 5), nm_from_mm("0.7"), nm_from_mm("0.4"), CopperLayer.FRONT, CopperLayer.BACK, "TH"),))
     assert board.vias[0].technology == "TH"
+    from pcbir import select_via_technology
+    assert select_via_technology(stackup, CopperLayer.FRONT, CopperLayer.BACK,
+                                 nm_from_mm("0.7"), nm_from_mm("0.4")) == "TH"
     with pytest.raises(ValueError, match="annular ring"):
         replace(board, vias=(replace(board.vias[0], size_nm=nm_from_mm("0.5")),))
 

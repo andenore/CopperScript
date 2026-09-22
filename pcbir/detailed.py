@@ -24,6 +24,7 @@ from .physical import (
     TrackSegment,
     Via,
     nm_from_mm,
+    select_via_technology,
 )
 from .placement import transformed_footprint_polygon, transformed_pad_position
 from .routing import GlobalNetRoute, GlobalRoutingResult
@@ -129,6 +130,7 @@ class DetailedRouterOptions:
     bend_cost: int = 5
     guide_margin_nm: int = nm_from_mm("1")
     allow_guide_deviation: bool = True
+    any_angle_cleanup: bool = True
 
     def __post_init__(self) -> None:
         if self.pitch_nm <= 0 or self.maximum_passes <= 0:
@@ -296,6 +298,7 @@ def _route_net(
     tree = {unique[0]}
     remaining = list(unique[1:])
     route_edges: set[tuple[DetailedNode, DetailedNode]] = set()
+    resource_edges: set[tuple[DetailedNode, DetailedNode]] = set()
     deviations = 0
     while remaining:
         target = min(
@@ -316,9 +319,12 @@ def _route_net(
         if path is None:
             return _failed(name, f"detailed search cannot reach {grid.point(target)}")
         for first, second, outside in path:
-            route_edges.add(_edge_key(first, second))
+            resource_edges.add(_edge_key(first, second))
             tree.update((first, second))
             deviations += outside
+        materialized = _compact_path(path, grid, hard_blocked) if options.any_angle_cleanup else path
+        for first, second, _ in materialized:
+            route_edges.add(_edge_key(first, second))
         remaining.remove(target)
     width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
     tracks: list[TrackSegment] = []
@@ -344,8 +350,16 @@ def _route_net(
                     board.rules.default_via_drill_nm,
                     grid.layers[min(first.layer_index, second.layer_index)],
                     grid.layers[max(first.layer_index, second.layer_index)],
+                    select_via_technology(
+                        board.stackup,
+                        grid.layers[min(first.layer_index, second.layer_index)],
+                        grid.layers[max(first.layer_index, second.layer_index)],
+                        board.rules.default_via_size_nm,
+                        board.rules.default_via_drill_nm,
+                    ),
                 )
             )
+    for first, second in resource_edges:
         resources.update(_edge_resources(first, second))
     for _, pad_position, access in accesses:
         access_position = grid.point(access)
@@ -467,6 +481,63 @@ def _search(
         current = parent
     edges.reverse()
     return tuple(edges)
+
+
+def _compact_path(
+    path: tuple[tuple[DetailedNode, DetailedNode, int], ...],
+    grid: _Grid,
+    hard_blocked: frozenset[DetailedNode],
+) -> tuple[tuple[DetailedNode, DetailedNode, int], ...]:
+    """Greedily apply a Theta*-style line-of-sight shortcut per layer."""
+    if not path:
+        return path
+    nodes = [path[0][0], *(edge[1] for edge in path)]
+    result: list[tuple[DetailedNode, DetailedNode, int]] = []
+    start = 0
+    while start < len(nodes) - 1:
+        end = start + 1
+        if nodes[end].layer_index != nodes[start].layer_index:
+            result.append((nodes[start], nodes[end], path[start][2]))
+            start = end
+            continue
+        farthest = end
+        while end + 1 < len(nodes) and nodes[end + 1].layer_index == nodes[start].layer_index:
+            candidate = end + 1
+            if not _grid_line_clear(grid, nodes[start], nodes[candidate], hard_blocked):
+                break
+            farthest = candidate
+            end = candidate
+        outside = sum(edge[2] for edge in path[start:farthest])
+        result.append((nodes[start], nodes[farthest], outside))
+        start = farthest
+    return tuple(result)
+
+
+def _grid_line_clear(
+    grid: _Grid,
+    start: DetailedNode,
+    end: DetailedNode,
+    hard_blocked: frozenset[DetailedNode],
+) -> bool:
+    """Integer supercover traversal for obstacle-safe line-of-sight."""
+    x0, y0, x1, y1 = start.x_index, start.y_index, end.x_index, end.y_index
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    sx, sy = (1 if x1 > x0 else -1), (1 if y1 > y0 else -1)
+    error = dx - dy
+    x, y = x0, y0
+    while True:
+        node = DetailedNode(start.layer_index, x, y)
+        if node not in {start, end} and (node in grid.blocked or node in hard_blocked):
+            return False
+        if (x, y) == (x1, y1):
+            return True
+        doubled = 2 * error
+        if doubled > -dy:
+            error -= dy
+            x += sx
+        if doubled < dx:
+            error += dx
+            y += sy
 
 
 def _build_grid(board: PhysicalBoard, options: DetailedRouterOptions) -> _Grid:

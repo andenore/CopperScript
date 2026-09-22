@@ -78,20 +78,23 @@ where relevant. It does not imply third-party certification.
   - [x] Exact integer predicates and rational squared-distance comparisons.
   - [x] Deterministic visibility-graph walkaround on expanded obstacle envelopes.
   - [x] Atomic recursive line shove with locked-track rollback.
-  - [ ] Via/coupled-bundle shove, acute-angle cleanup, and detailed-router integration.
+  - [x] Atomic recursive via shove with locked-object rollback and detailed-router
+        any-angle line-of-sight cleanup.
+  - [ ] Coupled-bundle shove and acute-angle cleanup.
 - [ ] P3. Differential-pair completion: coupled pad escape, fanout, via-pair
       transitions, uncoupled-length accounting, length/skew measurement,
       bounded trombone tuning, return-path requirements, and DRC.
   - [x] Atomic paired fanout, centerline offset routing, paired transitions,
         coupled/uncoupled measurement, skew and uncoupled-budget enforcement.
   - [ ] Local trombone tuning, return-via rules, and field-solver evidence binding.
-- [ ] P4. Stackups and via technology: arbitrary copper/dielectric stacks,
+- [x] P4. Stackups and via technology: arbitrary copper/dielectric stacks,
       material properties, through/blind/buried/microvia definitions, legal
       spans, aspect/annular constraints, layer transitions, and KiCad mapping.
   - [x] Ordered copper/dielectric stack, material properties, named through/
         blind/buried/microvia catalog, span/ring/aspect validation, and KiCad
         multilayer/via-kind mapping.
-  - [ ] Router transition graphs must select technologies automatically.
+  - [x] Critical and detailed routers select a legal named technology from the
+        same catalog consumed by validation and export.
 - [ ] P5. Exact-shape physical DRC: pad and track shape primitives, polygonal
       broad/narrow phases, exact clearance/intersection/connectivity, concave
       board edges, zones, stable markers, coverage, and differential checks.

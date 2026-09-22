@@ -22,6 +22,7 @@ from .physical import (
     RouteKind,
     TrackSegment,
     Via,
+    select_via_technology,
 )
 from .routing import GlobalNetRoute, GlobalRoutingResult
 from .geometry import segment_distance_squared
@@ -233,6 +234,8 @@ def _route_single(
             board.rules.default_via_drill_nm,
             item.from_layer,
             item.to_layer,
+            select_via_technology(board.stackup, item.from_layer, item.to_layer,
+                                  board.rules.default_via_size_nm, board.rules.default_via_drill_nm),
         )
         for item in guide.vias
     )
@@ -349,6 +352,8 @@ def _route_pair(
                     board.rules.default_via_drill_nm,
                     item.from_layer,
                     item.to_layer,
+                    select_via_technology(board.stackup, item.from_layer, item.to_layer,
+                                          board.rules.default_via_size_nm, board.rules.default_via_drill_nm),
                 )
             )
     first_length = _track_length(tuple(first_tracks))

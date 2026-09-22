@@ -133,7 +133,7 @@ from .quantities import (
 )
 from .power import analyze_power_states
 from .process_drc import FabricationAssemblyProfile, ProcessCapability, ProcessDrcReport, ProcessFinding, ProcessGateStatus, run_process_drc
-from .shove import ShoveResult, shove_track
+from .shove import ShoveResult, shove_track, shove_via
 from .importers import (
     FootprintImportResult,
     KiCadModImportError,
@@ -189,6 +189,7 @@ from .physical import (
     ZoneFillMode,
     ZoneFillResult,
     nm_from_mm,
+    select_via_technology,
 )
 from .physicalize import (
     PrototypePhysicalOptions,
@@ -449,6 +450,7 @@ __all__ = [
     "millivolts",
     "nanofarads",
     "nm_from_mm",
+    "select_via_technology",
     "ohms",
     "parse_kicad_mod",
     "qualify_cam_artifacts",
@@ -463,6 +465,7 @@ __all__ = [
     "segment_distance_squared",
     "segments_intersect",
     "shove_track",
+    "shove_via",
     "point_in_polygon",
     "run_physical_drc",
     "run_process_drc",

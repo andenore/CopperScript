@@ -60,6 +60,10 @@ def test_detailed_router_materializes_deterministic_exact_copper() -> None:
     assert first.board.tracks
     assert first.board.metadata["detailed_routing"] == "complete"
     assert first.board.vias == ()
+    assert any(
+        track.start.x_nm != track.end.x_nm and track.start.y_nm != track.end.y_nm
+        for track in first.board.tracks
+    ) or len(first.board.tracks) < 28
     assert json.loads(first.to_json())["schema"] == "copperscript-detailed-route/v0.1"
 
 

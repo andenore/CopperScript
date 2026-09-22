@@ -1,4 +1,4 @@
-from pcbir import BoardOutline, CopperLayer, PhysicalBoard, PhysicalNet, Point, PolygonRing, TrackSegment, nm_from_mm, route_any_angle
+from pcbir import BoardOutline, CopperLayer, PhysicalBoard, PhysicalNet, Point, PolygonRing, TrackSegment, Via, nm_from_mm, route_any_angle, shove_via
 from pcbir.geometry import capsules_clear, point_in_polygon, segment_distance_squared, segments_intersect
 from pcbir.shove import shove_track
 
@@ -35,3 +35,14 @@ def test_any_angle_visibility_route_walks_around_expanded_obstacle() -> None:
     assert first == route_any_angle(Point.mm(1, 5), Point.mm(9, 5), (obstacle,))
     assert first is not None and len(first) == 4
     assert first[0] == Point.mm(1, 5) and first[-1] == Point.mm(9, 5)
+
+
+def test_via_shove_moves_a_collision_chain_or_rolls_back() -> None:
+    nets = tuple(PhysicalNet(name, ()) for name in ("A", "B"))
+    board = PhysicalBoard("ViaShove", BoardOutline.rectangle(10, 10), {}, (), nets,
+                          vias=(Via("A", Point.mm(2, 2), nm_from_mm("0.6"), nm_from_mm("0.3")),
+                                Via("B", Point.mm(3, 2), nm_from_mm("0.6"), nm_from_mm("0.3"))))
+    moved = shove_via(board, 0, Point.mm("0.5", 0))
+    assert moved.committed and moved.moved_via_indexes == (0, 1)
+    rejected = shove_via(board, 0, Point.mm("0.5", 0), locked_via_indexes=frozenset({1}))
+    assert not rejected.committed and rejected.board is board
