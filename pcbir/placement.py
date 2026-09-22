@@ -256,6 +256,29 @@ def transformed_footprint_polygon(
     return _placement_polygon(board, placement)
 
 
+def placement_solution_is_legal(
+    board: PhysicalBoard,
+    placements: Mapping[str, Placement],
+    options: PlacementPlannerOptions | None = None,
+) -> bool:
+    """Return whether a complete placement satisfies represented hard rules."""
+
+    options = options or PlacementPlannerOptions()
+    original = {item.reference: item for item in board.placements}
+    if set(placements) != set(original):
+        return False
+    fixed = _fixed_placements(board, original, options)
+    if any(placements[reference] != expected for reference, expected in fixed.items()):
+        return False
+    accepted: dict[str, Placement] = {}
+    for reference in sorted(placements):
+        candidate = placements[reference]
+        if not _legal(candidate, accepted, board, options):
+            return False
+        accepted[reference] = candidate
+    return _relative_penalty(board, placements) == 0
+
+
 def _dominates(left: PlacementMetrics, right: PlacementMetrics) -> bool:
     a = left.quality_vector
     b = right.quality_vector

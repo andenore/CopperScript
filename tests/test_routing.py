@@ -9,6 +9,7 @@ from pcbir import (
     BoardOutline,
     CopperLayer,
     FootprintPad,
+    FeedbackStatus,
     GlobalRouterOptions,
     GlobalRoutingStatus,
     NetRoutingRule,
@@ -18,10 +19,13 @@ from pcbir import (
     PhysicalNet,
     Placement,
     PlacementKeepout,
+    PlacementPlannerOptions,
+    PlacementRoutingFeedbackOptions,
     Point,
     RouteKind,
     Size,
     nm_from_mm,
+    optimize_placement_for_routing,
     route_global,
 )
 
@@ -126,3 +130,61 @@ def test_routing_rules_validate_net_layer_and_partner_references() -> None:
                 ),
             ),
         )
+
+
+def test_real_global_route_certifies_placement_feedback_deterministically() -> None:
+    board = _two_terminal_board()
+    placement_options = PlacementPlannerOptions(
+        candidate_count=2,
+        analytical_iterations=4,
+        refinement_passes=0,
+    )
+    router_options = GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5"))
+
+    first = optimize_placement_for_routing(board, placement_options, router_options)
+    second = optimize_placement_for_routing(board, placement_options, router_options)
+
+    assert first == second
+    assert first.status is FeedbackStatus.PASS
+    assert first.full_route_certified
+    assert first.global_route.status is GlobalRoutingStatus.SUCCESS
+
+
+def test_feedback_rolls_back_when_placement_cannot_relieve_capacity() -> None:
+    board = replace(
+        _two_terminal_board(),
+        net_routing_rules=(
+            NetRoutingRule(
+                "SIGNAL",
+                RouteKind.POWER,
+                width_nm=nm_from_mm("4.8"),
+                clearance_nm=nm_from_mm("0.5"),
+                allowed_layers=(CopperLayer.FRONT,),
+                max_vias=0,
+            ),
+        ),
+    )
+
+    result = optimize_placement_for_routing(
+        board,
+        PlacementPlannerOptions(
+            candidate_count=1,
+            analytical_iterations=0,
+            refinement_passes=0,
+        ),
+        GlobalRouterOptions(tile_size_nm=nm_from_mm("5"), maximum_iterations=2),
+        PlacementRoutingFeedbackOptions(
+            maximum_iterations=2,
+            initial_movement_nm=nm_from_mm("2.5"),
+            minimum_movement_nm=nm_from_mm("0.5"),
+            maximum_trials_per_iteration=4,
+            stagnation_limit=2,
+        ),
+    )
+
+    assert result.status is FeedbackStatus.WARNING
+    assert not result.full_route_certified
+    assert result.global_route.status is GlobalRoutingStatus.OVERFLOW
+    assert result.iterations
+    assert any(not item.accepted for item in result.iterations)
+    assert result.accepted_moves == sum(item.accepted for item in result.iterations)

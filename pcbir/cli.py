@@ -15,7 +15,11 @@ from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
 from .physicalize import prototype_physicalize, resolved_physicalize
 from .physical import nm_from_mm
-from .routing import GlobalRouterOptions, GlobalRoutingStatus, route_global
+from .routing import GlobalRouterOptions, GlobalRoutingStatus
+from .routeflow import (
+    PlacementRoutingFeedbackOptions,
+    optimize_placement_for_routing,
+)
 from .serializer import board_to_json, write_json
 
 
@@ -131,6 +135,12 @@ def _parser() -> argparse.ArgumentParser:
     global_route_parser.add_argument(
         "--tile-size-mm", default="5", help="global-routing tile size in millimetres"
     )
+    global_route_parser.add_argument(
+        "--feedback-iterations",
+        type=int,
+        default=4,
+        help="maximum transactional placement-routing feedback iterations",
+    )
 
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
@@ -205,14 +215,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
                     )
                     physical_board = resolved_physicalize(board, resolver)
-                plan = plan_placement(
+                router_options = GlobalRouterOptions(
+                    tile_size_nm=nm_from_mm(args.tile_size_mm)
+                )
+                flow = optimize_placement_for_routing(
                     physical_board,
                     PlacementPlannerOptions(candidate_count=args.candidates),
+                    router_options,
+                    PlacementRoutingFeedbackOptions(
+                        maximum_iterations=args.feedback_iterations,
+                        initial_movement_nm=router_options.tile_size_nm,
+                    ),
                 )
-                route = route_global(
-                    plan.board,
-                    GlobalRouterOptions(tile_size_nm=nm_from_mm(args.tile_size_mm)),
-                )
+                route = flow.global_route
             except ValueError as exc:
                 print(f"ROUTING ERROR: {exc}")
                 return 2
@@ -220,7 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 output.write_text(route.to_json(), encoding="utf-8")
                 if args.pcb_output:
-                    artifact = KiCadPcbBackend().generate(plan.board).artifacts[0]
+                    artifact = KiCadPcbBackend().generate(flow.board).artifacts[0]
                     args.pcb_output.write_text(artifact.content, encoding="utf-8")
             except OSError as exc:
                 print(f"OUTPUT ERROR: {exc}")
@@ -230,6 +245,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"GLOBAL ROUTE: {route.status.value} - "
                 f"unrouted={metrics.unrouted_net_count}, "
                 f"overflow={metrics.total_overflow}, vias={metrics.proposed_via_count}"
+            )
+            print(
+                f"Placement feedback: {flow.status.value}, "
+                f"accepted_moves={flow.accepted_moves}, "
+                f"full_route_certified={str(flow.full_route_certified).lower()}"
             )
             print(f"Generated routing guides -> {output}")
             return 0 if route.status is GlobalRoutingStatus.SUCCESS else 1

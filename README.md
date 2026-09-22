@@ -63,7 +63,8 @@ Its report therefore marks Route as not run and Verify as blocked. See the
 [physical layout workflow](docs/layout-workflow.md) for the research,
 consolidated stages, algorithms, and limitations.
 
-Produce deterministic multilayer global-routing guides after placement:
+Produce deterministic multilayer global-routing guides after transactional
+placement feedback:
 
 ```console
 python -m copperscript route-global examples/valid_board.copper --allow-proxy-footprints -o global-route.json
@@ -203,6 +204,8 @@ Key modules:
 - `pcbir.layout` — four-gate readiness orchestration and placement reporting.
 - `pcbir.routing` — deterministic multilayer global routing with
   negotiated-congestion guides and explicit overflow diagnostics.
+- `pcbir.routeflow` — full-route candidate selection, bounded legal placement
+  moves, atomic rollback, stagnation control, and fresh-route certification.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work

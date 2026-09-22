@@ -132,6 +132,16 @@ or masquerade as routed copper. Exact geometry remains the responsibility of
 the specialized and general detailed routers, followed by independent physical
 DRC.
 
+`pcbir.routeflow.optimize_placement_for_routing()` wraps placement and global
+routing in a transactional feedback loop. It globally routes every retained
+placement candidate, keeps the best lexicographic checkpoint, and attempts
+bounded legal moves for components contributing to hotspots. A move is accepted
+only when a complete route improves; failed trials leave no history or geometry
+behind. Movement is reduced after rejection, repeated non-improvement stops the
+loop, and the accepted placement is always certified by a fresh full reroute.
+A feedback `pass` therefore means global feasibility, not detailed routing or
+physical signoff.
+
 ## Sources
 
 - [Analytical PCB placement optimization with fine tuning (Integration, 2026)](https://www.sciencedirect.com/science/article/pii/S016792602500224X)
@@ -139,6 +149,7 @@ DRC.
 - [PathFinder negotiated-congestion routing](https://janders.eecg.utoronto.ca/1387_2015/readings/pathfinder.pdf)
 - [FastRoute global routing](https://onlinelibrary.wiley.com/doi/10.1155/2012/608362)
 - [OpenROAD global-router architecture](https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/grt/README.md)
+- [RePlAce routability-driven placement](https://vlsicad.ucsd.edu/Publications/Journals/j126.pdf)
 - [Constraint-graph-based PCB placement legalization (DAC 2025)](https://scholars.lib.ntu.edu.tw/entities/publication/ba17d07b-da5e-4ff4-b3f9-d13ef75303aa)
 - [Negotiated-congestion and rip-up/reroute routing](https://engineering.lehigh.edu/sites/engineering.lehigh.edu/files/_DEPARTMENTS/ise/pdf/tech-papers/08/08t_003.pdf)
 - [Altium PCB routing workflow and constraints](https://www.altium.com/documentation/altium-designer/pcb/routing)
