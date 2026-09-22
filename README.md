@@ -210,6 +210,9 @@ Key modules:
   clock, CAN, RF-feed, power, and length/via-constrained routes.
 - `pcbir.detailed` — guide-aware deterministic general routing with pin access,
   exact tracks/vias, locked critical copper, and negotiated rip-up/reroute.
+- `pcbir.geometry`, `pcbir.any_angle`, and `pcbir.shove` — shared exact integer
+  predicates, deterministic visibility walkaround, and atomic recursive line
+  shove with fail-safe rollback.
 - `pcbir.drc` — fail-closed exact-copper checks, explicit coverage, scoped
   waivers, and content-bound physical signoff tokens.
 - `pcbir.flow` — compatible global/critical/detailed routing and DRC

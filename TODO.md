@@ -75,6 +75,10 @@ where relevant. It does not imply third-party certification.
 - [ ] P2. Arbitrary-angle and push-and-shove routing: exact integer geometry,
       walkaround/hugging, deterministic shove transactions, rollback, acute-
       angle cleanup, locked-object behavior, and detailed-router integration.
+  - [x] Exact integer predicates and rational squared-distance comparisons.
+  - [x] Deterministic visibility-graph walkaround on expanded obstacle envelopes.
+  - [x] Atomic recursive line shove with locked-track rollback.
+  - [ ] Via/coupled-bundle shove, acute-angle cleanup, and detailed-router integration.
 - [ ] P3. Differential-pair completion: coupled pad escape, fanout, via-pair
       transitions, uncoupled-length accounting, length/skew measurement,
       bounded trombone tuning, return-path requirements, and DRC.

@@ -9,6 +9,7 @@ from .backends import (
     KiCadSchematicOptions,
     PhysicalBackend,
 )
+from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source
 from .critical import (
     CriticalNetResult,
@@ -44,6 +45,13 @@ from .erc import Diagnostic, Severity, check, has_errors
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
+from .geometry import (
+    Bounds,
+    capsules_clear,
+    point_in_polygon,
+    segment_distance_squared,
+    segments_intersect,
+)
 from .manufacturing import (
     CamFinding,
     CamVerificationReport,
@@ -121,6 +129,7 @@ from .quantities import (
     volts,
 )
 from .power import analyze_power_states
+from .shove import ShoveResult, shove_track
 from .importers import (
     FootprintImportResult,
     KiCadModImportError,
@@ -229,6 +238,7 @@ __all__ = [
     "Board",
     "BoardOutline",
     "BoardSide",
+    "Bounds",
     "BondDefinition",
     "Capacitance",
     "CamFinding",
@@ -384,10 +394,12 @@ __all__ = [
     "ZoneConnection",
     "ZoneFillMode",
     "ZoneFillResult",
+    "ShoveResult",
     "Current",
     "Frequency",
     "Impedance",
     "check",
+    "capsules_clear",
     "analyze_power_states",
     "compile_file",
     "compile_source",
@@ -412,7 +424,12 @@ __all__ = [
     "optimize_placement_for_routing",
     "route_global",
     "route_critical_nets",
+    "route_any_angle",
     "route_detailed",
+    "segment_distance_squared",
+    "segments_intersect",
+    "shove_track",
+    "point_in_polygon",
     "run_physical_drc",
     "run_routing_pipeline",
     "verify_cam_directory",
