@@ -95,13 +95,15 @@ physical design.
   from the Nordic Product Specification v1.9, Table 1 and ST DS13564 Rev 5,
   Table 12 respectively; their support circuits remain incomplete.
 - The installed KiCad 10 footprint audit currently resolves 17 of 23 selected
-  assets. The remaining failures are the unresolved SWD header, SIM socket,
-  3.8 V regulator, USB choke, EG800G, and MAX-M10S footprints. These are not
+  assets. The remaining failures are the SWD header, SIM socket, RF connector,
+  3.8 V regulator, EG800G, and MAX-M10S footprints. The USB choke is now an
+  orderable Coilcraft 0603USB-601MLC with an imported KiCad land pattern.
+- The SIM socket now identifies an exact GCT part and matching KiCad footprint.
+  Its footprint and the U.FL RF connector footprint contain embedded copper
+  keepouts not yet represented in physical IR; the importer rejects them rather
+  than dropping the routing restrictions. The other unresolved assets are not
   safe to replace with generic land patterns without an exact orderable part
   or vendor mechanical drawing.
-- The SIM socket now identifies an exact GCT part and matching KiCad footprint,
-  but that footprint contains embedded copper keepouts not yet represented in
-  physical IR; the importer rejects it rather than dropping the keepouts.
 - Regulator and level-shifter entries express architectural requirements but
   need concrete orderable manufacturer part numbers and validated support
   components.

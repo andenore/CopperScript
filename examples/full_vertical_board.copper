@@ -16,12 +16,12 @@ board FullVerticalTracker {
     component U_NRF: vertical.NRF52832_QFAA;
     component U_ACCEL: vertical.LIS2DW12;
     component U_GNSS: vertical.MAX_M10S_00B;
-    component FL_USB: vertical.USB_COMMON_MODE_CHOKE;
+    component FL_USB: vertical.COILCRAFT_0603USB_601MLC;
 
     component J_CAN: vertical.CAN_CONNECTOR;
     component J_CELL: vertical.RF_CONNECTOR;
     component J_GNSS: vertical.RF_CONNECTOR;
-    component J_SIM: vertical.NANO_SIM_SOCKET;
+    component J_SIM: vertical.SIM8060_6_0_14_00_A;
     component J_DEBUG: vertical.DEBUG_UART_HEADER;
     component J_SWD_MCU: vertical.SWD_HEADER;
     component J_SWD_NRF: vertical.SWD_HEADER;

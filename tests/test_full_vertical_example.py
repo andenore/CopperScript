@@ -75,7 +75,7 @@ def test_stm32g0c1re_standard_lqfp64_bonds_are_complete() -> None:
 
 def test_gct_nano_sim_socket_uses_c7_for_io_and_connects_shell() -> None:
     board = compile_file(EXAMPLE)
-    part = board.library["vertical.NANO_SIM_SOCKET"]
+    part = board.library["vertical.SIM8060_6_0_14_00_A"]
     assert part.footprints == ("Connector_Card:nanoSIM_GCT_SIM8060-6-0-14-00",)
     assert part.pins["VPP"].number == "6"
     assert part.pins["IO"].number == "7"
@@ -85,3 +85,14 @@ def test_gct_nano_sim_socket_uses_c7_for_io_and_connects_shell() -> None:
         endpoint.component == "J_SIM" and endpoint.pin == "SHIELD"
         for endpoint in ground.endpoints
     )
+
+
+def test_usb_choke_uses_coilcraft_winding_pairs_and_land_pattern() -> None:
+    board = compile_file(EXAMPLE)
+    part = board.library["vertical.COILCRAFT_0603USB_601MLC"]
+    assert part.footprints == (
+        "Inductor_SMD:L_CommonModeChoke_Coilcraft_0603USB",
+    )
+    assert {
+        name: pin.number for name, pin in part.pins.items()
+    } == {"DP_IN": "1", "DM_IN": "2", "DM_OUT": "3", "DP_OUT": "4"}

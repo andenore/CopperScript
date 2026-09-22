@@ -153,6 +153,8 @@ where relevant. It does not imply third-party certification.
         connect VBAT/VREF+; installed KiCad audit now resolves 17/23 assets.
   - [x] Correct the nano-SIM C7 I/O mapping and select an exact GCT connector;
         fail closed on unsupported embedded footprint keepouts.
+  - [x] Replace the placeholder USB choke with orderable Coilcraft
+        0603USB-601MLC and its verified pin-compatible KiCad land pattern.
   - [ ] Preserve embedded footprint keepouts through import, physical IR,
         placement/routing checks, KiCad export, and signoff.
   - [ ] Resolve the reported real CopperLib/KiCad footprint gaps and complete
