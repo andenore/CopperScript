@@ -132,8 +132,17 @@ class TestPoint:
 
 
 @dataclass(frozen=True, slots=True)
+class TestVia:
+    net: str
+    x_nm: int
+    y_nm: int
+    drill_nm: int
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizedTestNet:
     points: tuple[TestPoint, ...]
+    vias: tuple[TestVia, ...] = ()
 
 
 class PyGerberAdapter:
@@ -320,13 +329,36 @@ def run_cam_qualification_matrix(
 def parse_xnc(path: Path, *, plated: bool | None = None) -> NormalizedDrillProgram:
     """Parse the strict decimal metric XNC subset emitted by the release profile."""
     text = path.read_text(encoding="ascii", errors="strict")
-    if "M48" not in text or "M30" not in text or "METRIC" not in text:
-        raise ValueError("XNC requires M48, explicit METRIC units, and M30")
-    tools = {match.group(1): round(float(match.group(2)) * 1_000_000)
-             for match in re.finditer(r"^T(\d+)C([0-9.]+)$", text, re.MULTILINE)}
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or lines[0] != "M48" or lines[-1] != "M30":
+        raise ValueError("XNC requires M48 header and final M30")
+    tools: dict[str, int] = {}
     current: str | None = None
     hits: list[DrillHit] = []
-    for line in text.splitlines():
+    in_header = True
+    metric = False
+    for line in lines[1:-1]:
+        if line.startswith(";"):
+            continue
+        if in_header:
+            if line == "%":
+                in_header = False
+                continue
+            if line.startswith("METRIC") and re.fullmatch(r"METRIC(?:,(?:TZ|LZ))?", line):
+                metric = True
+                continue
+            tool_definition = re.fullmatch(r"T(\d+)C(\d+(?:\.\d+)?)", line)
+            if tool_definition:
+                diameter = round(float(tool_definition.group(2)) * 1_000_000)
+                if diameter <= 0 or tool_definition.group(1) in tools:
+                    raise ValueError(f"invalid or duplicate XNC tool: {line}")
+                tools[tool_definition.group(1)] = diameter
+                continue
+            if line == "FMAT,2":
+                continue
+            raise ValueError(f"unsupported XNC header command: {line}")
+        if line in {"G90", "G05"}:
+            continue
         tool = re.fullmatch(r"T(\d+)", line)
         if tool:
             current = tool.group(1)
@@ -340,6 +372,10 @@ def parse_xnc(path: Path, *, plated: bool | None = None) -> NormalizedDrillProgr
             hits.append(DrillHit(current, tools[current],
                                  round(float(coordinate.group(1)) * 1_000_000),
                                  round(float(coordinate.group(2)) * 1_000_000)))
+            continue
+        raise ValueError(f"unsupported XNC body command: {line}")
+    if in_header or not metric:
+        raise ValueError("XNC requires a closed header and explicit METRIC units")
     return NormalizedDrillProgram(tuple(sorted(hits, key=lambda item: (item.x_nm, item.y_nm,
                                                                         item.diameter_nm, item.tool))), "mm", plated)
 
@@ -365,7 +401,8 @@ def reconcile_drills(board: PhysicalBoard,
     actual: Counter[tuple[int, int, int, bool | None]] = Counter()
     for program in programs:
         for hit in program.hits:
-            actual[(hit.x_nm, hit.y_nm, hit.diameter_nm, program.plated)] += 1
+            # KiCad Excellon uses Cartesian-up Y; board IR uses PCB Y-down.
+            actual[(hit.x_nm, -hit.y_nm, hit.diameter_nm, program.plated)] += 1
     if expected != actual:
         for item, count in sorted((expected - actual).items()):
             findings.append(f"missing drill hit {item} x{count}")
@@ -380,41 +417,92 @@ def parse_ipcd356(path: Path) -> NormalizedTestNet:
         raise ValueError("IPC-D-356 has no 999 end record")
     scale_nm = 2_540 if "P  UNITS CUST 0" in text else 10_000
     points: list[TestPoint] = []
-    pattern = re.compile(
-        r"^327(?P<net>\S+)\s+(?P<component>\S+)\s+-(?P<pad>\S+)"
-        r".*?X(?P<x>[+-]\d+)Y(?P<y>[+-]\d+)", re.MULTILINE
+    vias: list[TestVia] = []
+    pad_pattern = re.compile(
+        r"^(?:317|327)(?P<net>\S+)\s+(?P<component>\S+)\s+-(?P<pad>\S+)"
+        r".*?X(?P<x>[+-]\d+)Y(?P<y>[+-]\d+)"
     )
-    for match in pattern.finditer(text):
-        points.append(TestPoint(match.group("net"), match.group("component"),
-                                match.group("pad"), int(match.group("x")) * scale_nm,
-                                int(match.group("y")) * scale_nm))
-    return NormalizedTestNet(tuple(sorted(points, key=lambda item: (
-        item.net, item.component, item.pad, item.x_nm, item.y_nm))))
+    via_pattern = re.compile(
+        r"^317(?P<net>\S+)\s+VIA\s+MD(?P<drill>\d+)PA\d+"
+        r"X(?P<x>[+-]\d+)Y(?P<y>[+-]\d+)"
+    )
+    for line in text.splitlines():
+        if not line.startswith(("317", "327")):
+            continue
+        via_match = via_pattern.match(line)
+        if via_match:
+            vias.append(TestVia(
+                via_match.group("net"), int(via_match.group("x")) * scale_nm,
+                int(via_match.group("y")) * scale_nm,
+                int(via_match.group("drill")) * scale_nm,
+            ))
+            continue
+        pad_match = pad_pattern.match(line)
+        if pad_match:
+            points.append(TestPoint(
+                pad_match.group("net"), pad_match.group("component"),
+                pad_match.group("pad"), int(pad_match.group("x")) * scale_nm,
+                int(pad_match.group("y")) * scale_nm,
+            ))
+            continue
+        raise ValueError(f"unsupported IPC-D-356 contact record: {line[:24]}")
+    return NormalizedTestNet(
+        tuple(sorted(points, key=lambda item: (
+            item.net, item.component, item.pad, item.x_nm, item.y_nm))),
+        tuple(sorted(vias, key=lambda item: (item.net, item.x_nm, item.y_nm, item.drill_nm))),
+    )
 
 
 def reconcile_test_net(board: PhysicalBoard,
                        parsed: NormalizedTestNet) -> CamReconciliation:
-    expected = {
-        (pad.component, pad.pad): net.name
-        for net in board.nets for pad in net.pads
-    }
-    actual = {(point.component, point.pad): point.net for point in parsed.points}
+    placement_by_ref = {placement.reference: placement for placement in board.placements}
+    expected = {}
+    for net in board.nets:
+        for pad in net.pads:
+            placement = placement_by_ref[pad.component]
+            position = transformed_pad_position(board, placement, pad.pad)
+            expected[(pad.component, pad.pad)] = (net.name, position.x_nm, position.y_nm)
+    # KiCad writes unconnected physical pads as N/C records. They do not
+    # represent source nets, but a connected source pad marked N/C still fails.
+    actual = {(point.component, point.pad): point for point in parsed.points
+              if point.net != "N/C"}
     findings: list[str] = []
-    for identity, net in sorted(expected.items()):
+    if len(actual) != sum(point.net != "N/C" for point in parsed.points):
+        findings.append("duplicate IPC-D-356 component/pad records")
+    for identity, (net, x_nm, y_nm) in sorted(expected.items()):
         if identity not in actual:
             findings.append(f"missing IPC-D-356 point {identity[0]}.{identity[1]}")
-        elif actual[identity] != net:
-            findings.append(f"IPC-D-356 point {identity[0]}.{identity[1]} maps to {actual[identity]!r}, expected {net!r}")
+            continue
+        point = actual[identity]
+        if point.net != net:
+            findings.append(f"IPC-D-356 point {identity[0]}.{identity[1]} maps to {point.net!r}, expected {net!r}")
+        # CUST 0 resolution is 0.0001 inch = 2540 nm. KiCad's IPC Y axis is
+        # Cartesian-up while physical IR/KiCad PCB coordinates are Y-down.
+        if abs(point.x_nm - x_nm) > 1_270 or abs(point.y_nm + y_nm) > 1_270:
+            findings.append(f"IPC-D-356 point {identity[0]}.{identity[1]} has incorrect position")
     for identity in sorted(set(actual) - set(expected)):
         findings.append(f"unexpected IPC-D-356 point {identity[0]}.{identity[1]}")
     # Equivalence-relation check catches merged source nets even when names are truncated.
     grouped: dict[str, set[str]] = {}
-    for identity, parsed_net in actual.items():
+    for identity, point in actual.items():
         if identity in expected:
-            grouped.setdefault(parsed_net, set()).add(expected[identity])
+            grouped.setdefault(point.net, set()).add(expected[identity][0])
     for parsed_net, source_nets in sorted(grouped.items()):
         if len(source_nets) > 1:
             findings.append(f"IPC-D-356 net {parsed_net!r} merges source nets {sorted(source_nets)}")
+    unmatched_vias = list(parsed.vias)
+    for via in board.vias:
+        match = next((point for point in unmatched_vias
+                      if point.net == via.net
+                      and abs(point.x_nm - via.position.x_nm) <= 1_270
+                      and abs(point.y_nm + via.position.y_nm) <= 1_270
+                      and abs(point.drill_nm - via.drill_nm) <= 1_270), None)
+        if match is None:
+            findings.append(f"missing IPC-D-356 via on {via.net} at {via.position.x_nm},{via.position.y_nm}")
+        else:
+            unmatched_vias.remove(match)
+    for via in unmatched_vias:
+        findings.append(f"unexpected IPC-D-356 via on {via.net} at {via.x_nm},{via.y_nm}")
     return CamReconciliation(not findings, tuple(findings))
 
 

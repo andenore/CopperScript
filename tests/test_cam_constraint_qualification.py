@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
+import pytest
 
 from pcbir import (
     CamGateStatus, CamQualificationProfile, ConstraintCheckStatus,
@@ -71,9 +72,15 @@ def test_pinned_pygerber_adapter_and_strict_xnc_parser(tmp_path: Path) -> None:
     assert layer.file_function == "Copper,L1,Top"
     assert layer.units == "mm" and layer.bounds_nm[2] > layer.bounds_nm[0]
     drill = tmp_path / "board.drl"
-    drill.write_text("M48\nMETRIC\nT1C0.300\n%\nT1\nX1.000Y2.000\nM30\n", encoding="ascii")
+    drill.write_text("M48\nMETRIC\nT1C0.300\n%\nT1\nX1.000Y-2.000\nM30\n", encoding="ascii")
     program = parse_xnc(drill)
     assert program.hits[0].diameter_nm == 300_000
+    drill.write_text(
+        "M48\nMETRIC\nT1C0.300\n%\nT1\nG85X1.000Y2.000\nM30\n",
+        encoding="ascii",
+    )
+    with pytest.raises(ValueError, match="unsupported XNC body command"):
+        parse_xnc(drill)
 
 
 def test_committed_cam_corpus_qualifies_pinned_pygerber() -> None:
@@ -145,7 +152,7 @@ def test_drill_multiset_and_ipcd356_partition_reconcile_to_physical_ir(tmp_path:
                           vias=(Via("N", Point.mm(1, 2), nm_from_mm("0.6"),
                                     nm_from_mm("0.3")),))
     drill = tmp_path / "board.drl"
-    drill.write_text("M48\nMETRIC\nT1C0.300\n%\nT1\nX1.000Y2.000\nM30\n", encoding="ascii")
+    drill.write_text("M48\nMETRIC\nT1C0.300\n%\nT1\nX1.000Y-2.000\nM30\n", encoding="ascii")
     assert reconcile_drills(board, (parse_xnc(drill, plated=True),)).passed
 
     from test_manufacturing import _board
@@ -159,3 +166,22 @@ def test_drill_multiset_and_ipcd356_partition_reconcile_to_physical_ir(tmp_path:
     )
     parsed = parse_ipcd356(d356)
     assert reconcile_test_net(electrical, parsed).passed
+
+    with_via = replace(electrical, vias=(
+        Via("SIGNAL", Point.mm(10, 6), nm_from_mm("0.6"), nm_from_mm("0.3")),
+    ))
+    d356.write_text(
+        "P  CODE 00\nP  UNITS CUST 0\n"
+        "317SIGNAL           VIA        MD0118PA00X+003937Y-002362X0236Y0000R000S3\n"
+        "327SIGNAL           J1    -1          A01X+001181Y-002362X0236Y0236R000S2\n"
+        "327SIGNAL           J2    -1          A01X+006693Y-002362X0236Y0236R000S2\n"
+        "999\n", encoding="ascii",
+    )
+    assert reconcile_test_net(with_via, parse_ipcd356(d356)).passed
+    assert not reconcile_test_net(electrical, parse_ipcd356(d356)).passed
+    drill.write_text(
+        "M48\n; #@! TF.FileFunction,Plated,1,2,PTH\nFMAT,2\nMETRIC\n"
+        "T1C0.300\n%\nG90\nG05\nT1\nX10.0Y-6.0\nM30\n",
+        encoding="ascii",
+    )
+    assert reconcile_drills(with_via, (parse_xnc(drill, plated=True),)).passed

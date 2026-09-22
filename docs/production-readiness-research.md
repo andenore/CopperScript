@@ -97,6 +97,13 @@ same PyGerber rendering normalizer as the original file so byte-identical PNG
 encodings from different renderers are not mistaken for geometry agreement.
 The independent parser path and real production export remain unqualified
 until a pinned libgerbv build passes a broader official and adversarial corpus.
+KiCad 10's own exported files were used to validate the coordinate boundary:
+Excellon and IPC-D-356 use Cartesian-up Y, while the PCB/physical IR is
+Y-down. The release gate now reconciles drill hits, pad positions/nets, and
+IPC-D-356 via records to the signed IR; unsupported drill commands fail
+instead of being silently ignored. KiCad's IPC-D-356 exporter distinguishes
+SMD `327` from through-hole `317` records in its
+[source](https://gitlab.com/kicad/code/kicad/-/blob/2bc8c0ace5e927bc7a5bd7a630d436f488e79a38/pcbnew/exporters/export_d356.cpp).
 
 References: [Ucamco format specifications and test files](https://www.ucamco.com/en/gerber/downloads),
 [PyGerber](https://github.com/Argmaster/pygerber),

@@ -11,7 +11,7 @@ from .backends import (
 )
 from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source
-from .cam_qualification import CamCorpusCase, CamGateStatus, CamMatrixCell, CamQualificationEvidence, CamQualificationMatrix, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net, run_cam_qualification_matrix
+from .cam_qualification import CamCorpusCase, CamGateStatus, CamMatrixCell, CamQualificationEvidence, CamQualificationMatrix, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, TestVia, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net, run_cam_qualification_matrix
 from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage, normalize_constraints
 from .critical import (
     CriticalNetResult,
@@ -428,6 +428,7 @@ __all__ = [
     "StackupLayerKind",
     "ThermalReliefSettings",
     "TestPoint",
+    "TestVia",
     "ToolIdentity",
     "Supply",
     "TerminalBinding",

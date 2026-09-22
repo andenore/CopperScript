@@ -22,7 +22,11 @@ from .cam_qualification import (
     CamQualificationEvidence,
     CamQualificationProfile,
     CamToolAdapter,
+    parse_ipcd356,
+    parse_xnc,
     qualify_cam_artifacts,
+    reconcile_drills,
+    reconcile_test_net,
     run_cam_qualification_matrix,
 )
 
@@ -233,6 +237,8 @@ def build_manufacturing_release(
         if profile.require_qualified_cam_evidence:
             if cam_qualification_profile is None:
                 raise RuntimeError("manufacturing profile requires a CAM qualification profile")
+            if not profile.require_ipcd356:
+                raise RuntimeError("CAM qualification requires IPC-D-356 export")
             matrix = run_cam_qualification_matrix(
                 cam_qualification_profile, cam_corpus_cases, cam_adapters
             )
@@ -249,6 +255,24 @@ def build_manufacturing_release(
                 raise RuntimeError(
                     "independent CAM qualification did not pass: "
                     + "; ".join(qualification.findings)
+                )
+            drill_paths = tuple(sorted(drill_directory.glob("*.drl")))
+            programs = []
+            for drill_path in drill_paths:
+                if "-NPTH" in drill_path.stem:
+                    plated = False
+                elif "-PTH" in drill_path.stem:
+                    plated = True
+                else:
+                    raise RuntimeError(f"cannot classify drill plating: {drill_path.name}")
+                programs.append(parse_xnc(drill_path, plated=plated))
+            drill_reconciliation = reconcile_drills(board, tuple(programs))
+            net_reconciliation = reconcile_test_net(board, parse_ipcd356(ipcd_path))
+            if not drill_reconciliation.passed or not net_reconciliation.passed:
+                raise RuntimeError(
+                    "CAM drill/netlist reconciliation failed: "
+                    + "; ".join((*drill_reconciliation.findings,
+                                   *net_reconciliation.findings))
                 )
 
         artifact_paths = tuple(
@@ -290,6 +314,8 @@ def build_manufacturing_release(
                 ],
                 "artifact_hashes": list(qualification.artifact_hashes),
                 "corpus_hashes": list(matrix.corpus_hashes),
+                "drill_reconciliation": "pass",
+                "ipcd356_reconciliation": "pass",
                 "findings": list(qualification.findings),
             },
             "artifacts": [

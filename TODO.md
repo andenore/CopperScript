@@ -133,6 +133,8 @@ where relevant. It does not imply third-party certification.
         publication binding.
   - [x] Reconcile drill multisets and IPC-D-356 net partitions to signed
         physical IR.
+  - [x] Bind drill and IPC-D-356 reconciliation to CAM-required release;
+        verify KiCad 10 Cartesian-up output, pad locations, and via records.
   - [x] Gate CAM-required release on a freshly run, hashed positive/negative
         corpus; record the corpus hashes in the release manifest.
   - [ ] Qualify an installed libgerbv build and expand the official golden

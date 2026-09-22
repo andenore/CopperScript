@@ -93,7 +93,12 @@ def _fake_kicad(command: tuple[str, ...], cwd: Path) -> CommandResult:
         return CommandResult(0)
     if command[1:4] == ("pcb", "export", "ipcd356"):
         output = Path(command[command.index("--output") + 1])
-        output.write_text("P  JOB Manufacturing\n999\n", encoding="ascii")
+        output.write_text(
+            "P  JOB Manufacturing\nP  UNITS CUST 0\n"
+            "327SIGNAL           J1    -1          A01X+001181Y-002362X0236Y0236R000S2\n"
+            "327SIGNAL           J2    -1          A01X+006693Y-002362X0236Y0236R000S2\n"
+            "999\n", encoding="ascii"
+        )
         return CommandResult(0)
     return CommandResult(2, stderr=f"unexpected command: {command}")
 
@@ -208,6 +213,7 @@ def test_release_can_require_version_pinned_independent_cam_evidence(tmp_path: P
     assert release.qualification_evidence.status.value == "pass"
     manifest = json.loads(release.manifest.read_text(encoding="utf-8"))
     assert len(manifest["cam_qualification"]["corpus_hashes"]) == 2
+    assert manifest["cam_qualification"]["ipcd356_reconciliation"] == "pass"
 
     with pytest.raises(RuntimeError, match="corpus qualification"):
         build_manufacturing_release(
@@ -216,3 +222,23 @@ def test_release_can_require_version_pinned_independent_cam_evidence(tmp_path: P
             cam_qualification_profile=qualification, cam_adapters=(first, second),
         )
     assert not (tmp_path / "unqualified").exists()
+
+    def bad_netlist(command: tuple[str, ...], cwd: Path) -> CommandResult:
+        result = _fake_kicad(command, cwd)
+        if command[1:4] == ("pcb", "export", "ipcd356"):
+            output = Path(command[command.index("--output") + 1])
+            output.write_text(
+                output.read_text(encoding="ascii").replace(
+                    "327SIGNAL           J2", "327OTHER            J2"
+                ), encoding="ascii"
+            )
+        return result
+
+    with pytest.raises(RuntimeError, match="reconciliation failed"):
+        build_manufacturing_release(
+            board, run_physical_drc(board).token, tmp_path / "bad-netlist",
+            kicad_cli=Path("kicad-cli"), profile=profile, runner=bad_netlist,
+            cam_qualification_profile=qualification, cam_adapters=(first, second),
+            cam_corpus_cases=corpus,
+        )
+    assert not (tmp_path / "bad-netlist").exists()
