@@ -86,6 +86,23 @@ class RouteKind(str, Enum):
     POWER = "power"
 
 
+class ZoneConnection(str, Enum):
+    THERMAL = "thermal"
+    SOLID = "solid"
+    NONE = "none"
+    THT_THERMAL = "tht_thermal"
+
+
+class IslandPolicy(str, Enum):
+    REMOVE_ALL = "remove_all"
+    KEEP_ALL = "keep_all"
+    REMOVE_BELOW_AREA = "remove_below_area"
+
+
+class ZoneFillMode(str, Enum):
+    SOLID = "solid"
+
+
 @dataclass(frozen=True, slots=True)
 class Point:
     x_nm: Nanometres
@@ -144,6 +161,115 @@ class BoardOutline:
                 Point(start.x_nm, start.y_nm + height),
             )
         )
+
+
+def _signed_area_twice(vertices: tuple[Point, ...]) -> int:
+    return sum(
+        first.x_nm * second.y_nm - second.x_nm * first.y_nm
+        for first, second in zip(vertices, (*vertices[1:], vertices[0]))
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PolygonRing:
+    vertices: tuple[Point, ...]
+
+    def __post_init__(self) -> None:
+        vertices = tuple(self.vertices)
+        if len(vertices) > 1 and vertices[0] == vertices[-1]:
+            vertices = vertices[:-1]
+        if len(vertices) < 3 or len(set(vertices)) < 3:
+            raise ValueError("a polygon ring requires three distinct vertices")
+        if _signed_area_twice(vertices) == 0:
+            raise ValueError("a polygon ring cannot have zero area")
+        object.__setattr__(self, "vertices", vertices)
+
+
+@dataclass(frozen=True, slots=True)
+class PolygonWithHoles:
+    outer: PolygonRing
+    holes: tuple[PolygonRing, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "holes", tuple(self.holes))
+
+
+@dataclass(frozen=True, slots=True)
+class ThermalReliefSettings:
+    gap_nm: Nanometres = nm_from_mm("0.3")
+    spoke_width_nm: Nanometres = nm_from_mm("0.3")
+    spoke_count: int = 4
+
+    def __post_init__(self) -> None:
+        if self.gap_nm <= 0 or self.spoke_width_nm <= 0:
+            raise ValueError("thermal relief gap and spoke width must be positive")
+        if self.spoke_count not in {2, 3, 4}:
+            raise ValueError("thermal relief spoke count must be 2, 3, or 4")
+
+
+@dataclass(frozen=True, slots=True)
+class CopperZone:
+    id: str
+    net: str
+    layers: tuple[CopperLayer, ...]
+    outline: PolygonWithHoles
+    priority: int = 0
+    clearance_nm: Nanometres | None = None
+    minimum_width_nm: Nanometres = nm_from_mm("0.25")
+    pad_connection: ZoneConnection = ZoneConnection.THERMAL
+    thermal: ThermalReliefSettings = ThermalReliefSettings()
+    island_policy: IslandPolicy = IslandPolicy.REMOVE_BELOW_AREA
+    minimum_island_area_nm2: int | None = 10_000_000_000_000
+    fill_mode: ZoneFillMode = ZoneFillMode.SOLID
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "layers", tuple(self.layers))
+        if not self.id or not self.net or not self.layers:
+            raise ValueError("a copper zone requires an id, net, and layer")
+        if len(set(self.layers)) != len(self.layers):
+            raise ValueError("copper zone layers must be unique")
+        if self.priority < 0 or self.minimum_width_nm <= 0:
+            raise ValueError("copper zone priority and minimum width are invalid")
+        if self.clearance_nm is not None and self.clearance_nm <= 0:
+            raise ValueError("copper zone clearance must be positive")
+        if self.island_policy is IslandPolicy.REMOVE_BELOW_AREA:
+            if self.minimum_island_area_nm2 is None or self.minimum_island_area_nm2 <= 0:
+                raise ValueError("area-based island removal requires a positive area")
+
+
+@dataclass(frozen=True, slots=True)
+class CopperKeepout:
+    id: str
+    layers: tuple[CopperLayer, ...]
+    outline: PolygonWithHoles
+    block_tracks: bool = True
+    block_vias: bool = True
+    block_pads: bool = False
+    block_zones: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "layers", tuple(self.layers))
+        if not self.id or not self.layers or len(set(self.layers)) != len(self.layers):
+            raise ValueError("a copper keepout requires an id and unique layers")
+        if not any((self.block_tracks, self.block_vias, self.block_pads, self.block_zones)):
+            raise ValueError("a copper keepout must block at least one object type")
+
+
+@dataclass(frozen=True, slots=True)
+class ZoneFillResult:
+    zone_id: str
+    layer: CopperLayer
+    input_digest: str
+    engine_id: str
+    engine_version: str
+    polygons: tuple[PolygonWithHoles, ...]
+    diagnostics: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "polygons", tuple(self.polygons))
+        object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
+        if not all((self.zone_id, self.input_digest, self.engine_id, self.engine_version)):
+            raise ValueError("zone fill provenance cannot be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -577,6 +703,9 @@ class PhysicalBoard:
     relative_rules: tuple[RelativePlacementRule, ...] = ()
     placement_groups: tuple[PlacementGroup, ...] = ()
     net_routing_rules: tuple[NetRoutingRule, ...] = ()
+    zones: tuple[CopperZone, ...] = ()
+    copper_keepouts: tuple[CopperKeepout, ...] = ()
+    zone_fills: tuple[ZoneFillResult, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -591,6 +720,9 @@ class PhysicalBoard:
         object.__setattr__(self, "relative_rules", tuple(self.relative_rules))
         object.__setattr__(self, "placement_groups", tuple(self.placement_groups))
         object.__setattr__(self, "net_routing_rules", tuple(self.net_routing_rules))
+        object.__setattr__(self, "zones", tuple(self.zones))
+        object.__setattr__(self, "copper_keepouts", tuple(self.copper_keepouts))
+        object.__setattr__(self, "zone_fills", tuple(self.zone_fills))
         self._validate_references()
 
     def _validate_references(self) -> None:
@@ -600,6 +732,31 @@ class PhysicalBoard:
         net_names = [net.name for net in self.nets]
         if len(net_names) != len(set(net_names)):
             raise ValueError("physical net names must be unique")
+        zone_ids = [zone.id for zone in self.zones]
+        if len(zone_ids) != len(set(zone_ids)):
+            raise ValueError("copper zone ids must be unique")
+        keepout_ids = [keepout.id for keepout in self.copper_keepouts]
+        if len(keepout_ids) != len(set(keepout_ids)):
+            raise ValueError("copper keepout ids must be unique")
+        stackup_layers = set(self.stackup.copper_layers)
+        for zone in self.zones:
+            if zone.net not in net_names:
+                raise ValueError(f"copper zone {zone.id!r} references unknown net {zone.net!r}")
+            if not set(zone.layers).issubset(stackup_layers):
+                raise ValueError(f"copper zone {zone.id!r} references a layer outside the stackup")
+        for keepout in self.copper_keepouts:
+            if not set(keepout.layers).issubset(stackup_layers):
+                raise ValueError(f"copper keepout {keepout.id!r} references a layer outside the stackup")
+        fill_keys: set[tuple[str, CopperLayer]] = set()
+        zone_by_id = {zone.id: zone for zone in self.zones}
+        for fill in self.zone_fills:
+            key = (fill.zone_id, fill.layer)
+            if key in fill_keys:
+                raise ValueError("zone fill results must be unique by zone and layer")
+            fill_keys.add(key)
+            zone = zone_by_id.get(fill.zone_id)
+            if zone is None or fill.layer not in zone.layers:
+                raise ValueError("zone fill result does not match a declared zone layer")
 
         pads_by_component: dict[str, dict[str, FootprintPad]] = {}
         for placement in self.placements:

@@ -130,9 +130,7 @@ def build_manufacturing_release(
         board_path = stage / board_artifact.name
         board_path.write_text(board_artifact.content, encoding="utf-8")
         drc_path = stage / "kicad-drc.json"
-        _run(
-            runner,
-            (
+        drc_command = [
                 str(kicad_cli),
                 "pcb",
                 "drc",
@@ -143,7 +141,12 @@ def build_manufacturing_release(
                 "--output",
                 str(drc_path),
                 str(board_path),
-            ),
+        ]
+        if board.zones:
+            drc_command[-1:-1] = ["--refill-zones", "--save-board"]
+        _run(
+            runner,
+            tuple(drc_command),
             stage,
             "run KiCad DRC",
         )
@@ -228,6 +231,12 @@ def build_manufacturing_release(
             "board_digest": signoff.board_digest,
             "signoff_token_digest": signoff.token_digest,
             "signoff_decision": signoff.decision.value,
+            "zone_fill": {
+                "required": bool(board.zones),
+                "engine": "KiCad" if board.zones else None,
+                "engine_version": version if board.zones else None,
+                "saved_refilled_board": bool(board.zones),
+            },
             "artifacts": [
                 {
                     "path": item.relative_to(stage).as_posix(),

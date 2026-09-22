@@ -710,6 +710,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-050 | Accepted | Physical signoff is fail-closed and reports check coverage separately from findings; exact waivers are fingerprint-bound, and every signoff token is content-bound to the complete physical geometry, rules, policy, and report. |
 | CS-051 | Accepted | Manufacturing releases use a qualified KiCad CLI as the geometry exporter, require a matching complete signoff token, generate Gerber X2 plus metric drill and IPC-D-356 data, and publish atomically only after independent CAM parsing, manifesting, and checksums succeed. |
 | CS-052 | Accepted | Routing stages compose in one direction through immutable typed results: global guides, locked critical copper, general exact copper, physical DRC, then manufacturing; a partial or stale result cannot satisfy a later gate. |
+| CS-053 | Accepted | Copper zones and keepouts are typed physical intent. CopperScript owns their deterministic identity, rules, and freshness fingerprint; a pinned KiCad refill is the authoritative manufacturing fill until a native filler passes differential qualification. Stale or missing required fill evidence blocks release. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

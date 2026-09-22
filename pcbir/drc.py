@@ -189,8 +189,17 @@ def run_physical_drc(
     _check_copper_spacing(board, findings)
     coverage.append(DrcCoverage("shorts_and_clearance", DrcCoverageStatus.EXECUTED, True))
 
+    coverage.append(
+        DrcCoverage(
+            "copper_zones",
+            DrcCoverageStatus.UNSUPPORTED if board.zones else DrcCoverageStatus.NOT_APPLICABLE,
+            False,
+            "zone intent is refilled and checked by the pinned KiCad manufacturing stage"
+            if board.zones
+            else "",
+        )
+    )
     for name, detail in (
-        ("copper_zones", "physical IR does not yet model filled copper zones"),
         ("solder_mask", "mask sliver and expansion checks require final artwork"),
         ("silkscreen", "silkscreen-to-mask checks require final artwork"),
         ("creepage", "creepage requires a declared safety profile"),
@@ -286,6 +295,9 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "placement_rules": [repr(item) for item in sorted(board.placement_rules, key=lambda item: item.reference)],
             "relative_rules": [repr(item) for item in board.relative_rules],
             "placement_groups": [repr(item) for item in sorted(board.placement_groups, key=lambda item: item.name)],
+            "zones": [repr(item) for item in sorted(board.zones, key=lambda item: item.id)],
+            "copper_keepouts": [repr(item) for item in sorted(board.copper_keepouts, key=lambda item: item.id)],
+            "zone_fills": [repr(item) for item in sorted(board.zone_fills, key=lambda item: (item.zone_id, item.layer.value))],
             "metadata": tuple(sorted(board.metadata.items())),
         }
     )

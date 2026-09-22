@@ -216,6 +216,9 @@ Key modules:
   orchestration with no proxy-to-copper shortcuts.
 - `pcbir.manufacturing` — gated KiCad 10 Gerber/drill/netlist releases with
   independent structural CAM parsing, manifests, checksums, and atomic publish.
+- `pcbir.physical` — immutable placement, exact copper, typed zone/keepout
+  intent, and content-bound external fill provenance. Manufacturing boards with
+  zones are authoritatively refilled and saved by the pinned KiCad toolchain.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work

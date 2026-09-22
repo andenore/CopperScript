@@ -10,6 +10,8 @@ import uuid
 from ..physical import (
     BoardSide,
     CopperLayer,
+    CopperKeepout,
+    CopperZone,
     FootprintArc,
     FootprintCircle,
     FootprintGraphic,
@@ -23,8 +25,10 @@ from ..physical import (
     PadShape,
     PhysicalBoard,
     PhysicalFootprint,
+    IslandPolicy,
     Placement,
     Point,
+    ZoneConnection,
 )
 from .base import Artifact, ArtifactManifest
 
@@ -163,6 +167,14 @@ def _render(board: PhysicalBoard) -> str:
             ]
         )
 
+    for zone in sorted(board.zones, key=lambda item: (-item.priority, item.id)):
+        for layer in sorted(zone.layers, key=lambda item: item.value):
+            lines.extend(_zone_lines(board, zone, layer, net_codes))
+
+    for keepout in sorted(board.copper_keepouts, key=lambda item: item.id):
+        for layer in sorted(keepout.layers, key=lambda item: item.value):
+            lines.extend(_copper_keepout_lines(board, keepout, layer))
+
     vertices = board.outline.vertices
     for index, start in enumerate(vertices):
         end = vertices[(index + 1) % len(vertices)]
@@ -179,6 +191,103 @@ def _render(board: PhysicalBoard) -> str:
         )
     lines.append(")")
     return "\n".join(lines) + "\n"
+
+
+def _zone_lines(
+    board: PhysicalBoard,
+    zone: CopperZone,
+    layer: CopperLayer,
+    net_codes: dict[str, int],
+) -> list[str]:
+    if zone.outline.holes:
+        raise ValueError(
+            f"KiCad zone backend does not yet support holes in zone {zone.id!r}; "
+            "use an explicit copper keepout"
+        )
+    if zone.thermal.spoke_count != 4:
+        raise ValueError("KiCad zone backend supports four-spoke thermals")
+    connection = {
+        ZoneConnection.THERMAL: "",
+        # KiCad's on-disk spelling is deliberately different from the UI:
+        # `yes` means a solid pad connection and an omitted token means thermal.
+        ZoneConnection.SOLID: " yes",
+        ZoneConnection.NONE: " no",
+        ZoneConnection.THT_THERMAL: " thru_hole_only",
+    }[zone.pad_connection]
+    clearance = zone.clearance_nm or board.rules.minimum_clearance_nm
+    island_mode = {
+        IslandPolicy.REMOVE_ALL: 0,
+        IslandPolicy.KEEP_ALL: 1,
+        IslandPolicy.REMOVE_BELOW_AREA: 2,
+    }[zone.island_policy]
+    fill = (
+        f"    (fill yes (thermal_gap {_mm(zone.thermal.gap_nm)}) "
+        f"(thermal_bridge_width {_mm(zone.thermal.spoke_width_nm)}) "
+        f"(island_removal_mode {island_mode})"
+    )
+    if zone.island_policy is IslandPolicy.REMOVE_BELOW_AREA:
+        assert zone.minimum_island_area_nm2 is not None
+        fill += f" (island_area_min {_area_mm2(zone.minimum_island_area_nm2)})"
+    fill += ")"
+    result = [
+        "  (zone",
+        f"    (net {net_codes[zone.net]})",
+        f"    (net_name {_quote(zone.net)})",
+        f"    (layer {_quote(layer.value)})",
+        f'    (uuid "{_stable_uuid(board.name, "zone", zone.id, layer.value)}")',
+        f"    (name {_quote(zone.id)})",
+        "    (hatch edge 0.5)",
+    ]
+    if zone.priority:
+        result.append(f"    (priority {zone.priority})")
+    result.extend(
+        [
+            f"    (connect_pads{connection} (clearance {_mm(clearance)}))",
+            f"    (min_thickness {_mm(zone.minimum_width_nm)})",
+            fill,
+            "    (polygon",
+            "      (pts",
+            *(f"        (xy {_point(point)})" for point in zone.outline.outer.vertices),
+            "      )",
+            "    )",
+            "  )",
+        ]
+    )
+    return result
+
+
+def _copper_keepout_lines(
+    board: PhysicalBoard,
+    keepout: CopperKeepout,
+    layer: CopperLayer,
+) -> list[str]:
+    if keepout.outline.holes:
+        raise ValueError(
+            f"KiCad zone backend does not support holes in keepout {keepout.id!r}"
+        )
+    setting = lambda blocked: "not_allowed" if blocked else "allowed"
+    return [
+        "  (zone",
+        "    (net 0)",
+        '    (net_name "")',
+        f"    (layer {_quote(layer.value)})",
+        f'    (uuid "{_stable_uuid(board.name, "copper-keepout", keepout.id, layer.value)}")',
+        f"    (name {_quote(keepout.id)})",
+        "    (hatch edge 0.5)",
+        "    (keepout",
+        f"      (tracks {setting(keepout.block_tracks)})",
+        f"      (vias {setting(keepout.block_vias)})",
+        f"      (pads {setting(keepout.block_pads)})",
+        f"      (copperpour {setting(keepout.block_zones)})",
+        "      (footprints allowed)",
+        "    )",
+        "    (polygon",
+        "      (pts",
+        *(f"        (xy {_point(point)})" for point in keepout.outline.outer.vertices),
+        "      )",
+        "    )",
+        "  )",
+    ]
 
 
 def _footprint_lines(
@@ -457,6 +566,13 @@ def _mm(value_nm: int) -> str:
     if not fractional:
         return f"{sign}{whole}"
     return f"{sign}{whole}.{fractional:06d}".rstrip("0")
+
+
+def _area_mm2(value_nm2: int) -> str:
+    whole, fractional = divmod(value_nm2, 1_000_000_000_000)
+    if not fractional:
+        return str(whole)
+    return f"{whole}.{fractional:012d}".rstrip("0")
 
 
 def _ratio(value_ppm: int) -> str:
