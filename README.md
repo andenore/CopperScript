@@ -208,6 +208,8 @@ Key modules:
   moves, atomic rollback, stagnation control, and fresh-route certification.
 - `pcbir.critical` — profile-driven locked copper for critical, differential,
   clock, CAN, RF-feed, power, and length/via-constrained routes.
+- `pcbir.detailed` — guide-aware deterministic general routing with pin access,
+  exact tracks/vias, locked critical copper, and negotiated rip-up/reroute.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work

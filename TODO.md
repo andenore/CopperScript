@@ -53,7 +53,7 @@ expected and do not satisfy the future Route or Verify gates.
       certification.
 - [x] 6. Add profile-driven critical-net routing for differential pairs,
       clocks, buses, RF feeds, and power routes before general routing.
-- [ ] 7. Add a guide-aware general detailed router with pin access, vias,
+- [x] 7. Add a guide-aware general detailed router with pin access, vias,
       exact tracks, deterministic rip-up/reroute, and cleanup.
 - [ ] 8. Add fail-closed physical DRC, coverage reporting, waivers, and signed
       signoff tokens tied to exact manufacturing geometry.

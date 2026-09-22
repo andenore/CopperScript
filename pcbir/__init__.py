@@ -16,6 +16,15 @@ from .critical import (
     CriticalRoutingStatus,
     route_critical_nets,
 )
+from .detailed import (
+    DetailedNetResult,
+    DetailedNode,
+    DetailedRouterOptions,
+    DetailedRoutingMetrics,
+    DetailedRoutingResult,
+    DetailedRoutingStatus,
+    route_detailed,
+)
 from .erc import Diagnostic, Severity, check, has_errors
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
@@ -197,6 +206,12 @@ __all__ = [
     "CriticalNetResult",
     "CriticalRoutingResult",
     "CriticalRoutingStatus",
+    "DetailedNetResult",
+    "DetailedNode",
+    "DetailedRouterOptions",
+    "DetailedRoutingMetrics",
+    "DetailedRoutingResult",
+    "DetailedRoutingStatus",
     "Diagnostic",
     "Dependency",
     "DeviceDefinition",
@@ -335,6 +350,7 @@ __all__ = [
     "optimize_placement_for_routing",
     "route_global",
     "route_critical_nets",
+    "route_detailed",
     "prototype_physicalize",
     "resolved_physicalize",
     "transformed_pad_position",

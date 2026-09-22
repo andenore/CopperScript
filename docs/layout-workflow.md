@@ -150,6 +150,14 @@ RF, current, and thermal qualification. Coupled fanout is always rechecked by
 the authoritative physical DRC; a geometric proxy never constitutes SI/RF or
 thermal signoff.
 
+`pcbir.detailed.route_detailed()` routes the remaining ordinary nets on a fine
+multilayer grid. It derives legal pin-access points, prefers the global-route
+corridors, preserves critical tracks and vias as locked obstacles, and uses
+deterministic A* with PathFinder-style present and historical costs across
+bounded rip-up/reroute passes. Its output is exact `TrackSegment` and `Via`
+geometry in physical IR. A partial result remains explicitly non-fabrication-
+ready, and even a successful result must pass the separate physical DRC gate.
+
 ## Sources
 
 - [Analytical PCB placement optimization with fine tuning (Integration, 2026)](https://www.sciencedirect.com/science/article/pii/S016792602500224X)
