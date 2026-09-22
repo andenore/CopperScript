@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import json
+from hashlib import sha256
 
 import pytest
 
@@ -27,6 +28,9 @@ from pcbir import (
     FabricationAssemblyProfile,
     ProcessCapability,
     run_process_drc,
+    CamQualificationProfile,
+    NormalizedCamLayer,
+    ToolIdentity,
 )
 
 
@@ -167,3 +171,28 @@ def test_release_profile_can_require_separate_process_gates(tmp_path: Path) -> N
         build_manufacturing_release(board, signoff, tmp_path / "release",
                                     kicad_cli=Path("kicad-cli"), profile=profile,
                                     runner=_fake_kicad)
+
+
+def test_release_can_require_version_pinned_independent_cam_evidence(tmp_path: Path) -> None:
+    class Adapter:
+        def __init__(self, name: str):
+            self.identity = ToolIdentity(name, "1", sha256(name.encode()).hexdigest())
+
+        def parse_gerber(self, path: Path) -> NormalizedCamLayer:
+            text = path.read_text(encoding="ascii")
+            function = text.split("%TF.FileFunction,")[1].split("*%")[0]
+            return NormalizedCamLayer(function, "Positive", "mm", (0, 0, 1, 1),
+                                      sha256(function.encode()).hexdigest())
+
+    first, second = Adapter("one"), Adapter("two")
+    qualification = CamQualificationProfile("release", "2026.05", "2021.11",
+                                            (first.identity, second.identity))
+    profile = ManufacturingProfile(require_qualified_cam_evidence=True)
+    board = _board()
+    release = build_manufacturing_release(
+        board, run_physical_drc(board).token, tmp_path / "release",
+        kicad_cli=Path("kicad-cli"), profile=profile, runner=_fake_kicad,
+        cam_qualification_profile=qualification, cam_adapters=(first, second),
+    )
+    assert release.qualification_evidence is not None
+    assert release.qualification_evidence.status.value == "pass"

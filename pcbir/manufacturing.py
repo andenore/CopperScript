@@ -16,6 +16,13 @@ from .backends import KiCadPcbBackend
 from .drc import DrcCompleteness, DrcDecision, SignoffToken, physical_board_digest
 from .physical import PhysicalBoard
 from .process_drc import ProcessDrcReport
+from .cam_qualification import (
+    CamGateStatus,
+    CamQualificationEvidence,
+    CamQualificationProfile,
+    CamToolAdapter,
+    qualify_cam_artifacts,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +58,7 @@ class ManufacturingProfile:
         "Profile",
     )
     require_process_drc: bool = False
+    require_qualified_cam_evidence: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +103,7 @@ class ManufacturingRelease:
     drc_report: Path
     cam_report: CamVerificationReport
     kicad_version: str
+    qualification_evidence: CamQualificationEvidence | None = None
 
 
 def build_manufacturing_release(
@@ -106,6 +115,8 @@ def build_manufacturing_release(
     profile: ManufacturingProfile | None = None,
     runner: CommandRunner | None = None,
     process_report: ProcessDrcReport | None = None,
+    cam_qualification_profile: CamQualificationProfile | None = None,
+    cam_adapters: tuple[CamToolAdapter, ...] = (),
 ) -> ManufacturingRelease:
     """Create a release atomically; no output is published unless every gate passes."""
 
@@ -215,6 +226,16 @@ def build_manufacturing_release(
         if not cam.passed:
             summary = "; ".join(item.message for item in cam.findings)
             raise RuntimeError(f"independent CAM verification failed: {summary}")
+        qualification = None
+        if profile.require_qualified_cam_evidence:
+            if cam_qualification_profile is None:
+                raise RuntimeError("manufacturing profile requires a CAM qualification profile")
+            qualification = qualify_cam_artifacts(stage, cam_qualification_profile, cam_adapters)
+            if qualification.status is not CamGateStatus.PASS:
+                raise RuntimeError(
+                    "independent CAM qualification did not pass: "
+                    + "; ".join(qualification.findings)
+                )
 
         artifact_paths = tuple(
             sorted(
@@ -246,6 +267,16 @@ def build_manufacturing_release(
                 "assembly": process_report.assembly.value,
                 "passed": process_report.passed,
             },
+            "cam_qualification": None if qualification is None else {
+                "status": qualification.status.value,
+                "tools": [
+                    {"name": tool.name, "version": tool.version,
+                     "executable_sha256": tool.executable_sha256}
+                    for tool in qualification.tool_identities
+                ],
+                "artifact_hashes": list(qualification.artifact_hashes),
+                "findings": list(qualification.findings),
+            },
             "artifacts": [
                 {
                     "path": item.relative_to(stage).as_posix(),
@@ -275,6 +306,7 @@ def build_manufacturing_release(
             output_directory / drc_path.name,
             cam,
             version,
+            qualification,
         )
     except Exception:
         if stage.exists():

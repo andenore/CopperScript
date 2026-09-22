@@ -128,8 +128,12 @@ where relevant. It does not imply third-party certification.
   - [x] Fail-closed qualification states, exact tool identities, immutable
         inventory hashes, safe input limits, and independent normalized-parser
         agreement contracts.
-  - [ ] PyGerber/libgerbv adapters, artwork/drill/net semantic reconciliation,
-        qualification corpus/matrix, and publication binding.
+  - [x] Pinned PyGerber 2.4.3 adapter, isolated libgerbv CLI adapter, strict
+        metric-XNC normalization, adversarial fixtures, and optional fail-closed
+        publication binding.
+  - [ ] Qualify an installed libgerbv build, reconcile drill multisets and
+        IPC-D-356 net partitions to signed physical IR, and expand the official
+        golden corpus/matrix.
 - [ ] P9. Frontend and full-board closure: express every new rule in `.copper`,
       lower it into typed IR, resolve real CopperLib footprints, then place,
       route, DRC, export and independently verify the full acceptance board.

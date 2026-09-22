@@ -6,6 +6,7 @@ from pcbir import (
     CamGateStatus, CamQualificationProfile, ConstraintCheckStatus,
     ConstraintMode, NormalizedCamLayer, NormalizedConstraint, ToolIdentity,
     constraint_coverage, qualify_cam_artifacts,
+    PyGerberAdapter, parse_xnc,
 )
 
 
@@ -41,3 +42,19 @@ def test_unconsumed_hard_constraint_blocks_release() -> None:
     )
     result = constraint_coverage(constraints, {})
     assert result[0].status is ConstraintCheckStatus.BLOCKED
+
+
+def test_pinned_pygerber_adapter_and_strict_xnc_parser(tmp_path: Path) -> None:
+    gerber = tmp_path / "top.gbr"
+    gerber.write_text(
+        "G04 fixture*\n%FSLAX46Y46*%\n%MOMM*%\n"
+        "%TF.FileFunction,Copper,L1,Top*%\n%TF.FilePolarity,Positive*%\n"
+        "%ADD10C,1.0*%\nD10*\nX0000000000Y0000000000D02*\n"
+        "X0010000000Y0000000000D01*\nM02*\n", encoding="ascii")
+    layer = PyGerberAdapter().parse_gerber(gerber)
+    assert layer.file_function == "Copper,L1,Top"
+    assert layer.units == "mm" and layer.bounds_nm[2] > layer.bounds_nm[0]
+    drill = tmp_path / "board.drl"
+    drill.write_text("M48\nMETRIC\nT1C0.300\n%\nT1\nX1.000Y2.000\nM30\n", encoding="ascii")
+    program = parse_xnc(drill)
+    assert program.hits[0].diameter_nm == 300_000

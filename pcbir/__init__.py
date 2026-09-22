@@ -11,7 +11,7 @@ from .backends import (
 )
 from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source
-from .cam_qualification import CamGateStatus, CamQualificationEvidence, CamQualificationProfile, CamToolAdapter, NormalizedCamLayer, ToolIdentity, qualify_cam_artifacts
+from .cam_qualification import CamGateStatus, CamQualificationEvidence, CamQualificationProfile, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, PyGerberAdapter, ToolIdentity, parse_xnc, qualify_cam_artifacts
 from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage
 from .critical import (
     CriticalNetResult,
@@ -257,6 +257,8 @@ __all__ = [
     "CamQualificationEvidence",
     "CamQualificationProfile",
     "CamToolAdapter",
+    "DrillHit",
+    "GerbvSubprocessAdapter",
     "CamVerificationReport",
     "ComponentInstance",
     "ComponentPlacementRule",
@@ -344,6 +346,8 @@ __all__ = [
     "ModuleDefinition",
     "NetRoutingRule",
     "NormalizedCamLayer",
+    "NormalizedDrillProgram",
+    "PyGerberAdapter",
     "NormalizedConstraint",
     "Net",
     "PartDefinition",
@@ -462,6 +466,7 @@ __all__ = [
     "select_via_technology",
     "ohms",
     "parse_kicad_mod",
+    "parse_xnc",
     "qualify_cam_artifacts",
     "placement_metrics",
     "placement_solution_is_legal",
