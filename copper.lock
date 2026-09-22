@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:1a7e1c49f2b3813224139725a793abc67942e989a59247767ca4b865f611d002",
+      "checksum": "sha256:cedf0fc0d379fd92dcc2a1cea4d3d31a1000f28a784400d832e1a979eb97a373",
       "files": [
         {
           "path": "copper.mod",
@@ -125,13 +125,13 @@
         },
         {
           "path": "packages/full_vertical/nrf52832_device.copper",
-          "sha256": "40f54c72edc1a694168615c18fbdc696d20b5851ddd653e36808673367ded839",
-          "size": 1602
+          "sha256": "58d5f119cee2a7705a0a07c5ca62e923f68bf07f55fd220b33733ee715fdc7b4",
+          "size": 5285
         },
         {
           "path": "packages/full_vertical/nrf52832_qfaa.copper",
-          "sha256": "980d1ea7a2b354aa58ca92402037159b4db3881e6d12e24d165e7df6050fa8e9",
-          "size": 995
+          "sha256": "5c3973905b9f553dcd860b0a04beb8826458c1cd4e9f548c5b2ee52069f6abfc",
+          "size": 2865
         },
         {
           "path": "packages/full_vertical/open_drain_driver.copper",

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pcbir import check, compile_file
+from pcbir import ConnectionPolicy, check, compile_file
 from pcbir.elaborate import elaborate
 from pcbir.power import analyze_power_states
 
@@ -49,3 +49,13 @@ def test_full_vertical_example_exercises_required_subsystems() -> None:
         ("U_NRF", "UARTE0"),
     } <= configurations
     assert {"NORMAL", "LOGIC_ONLY"} == {state.name for state in board.power_states}
+
+
+def test_nordic_qfaa_package_has_all_footprint_pad_numbers() -> None:
+    board = compile_file(EXAMPLE)
+    part = board.library["vertical.NRF52832_QFAA"]
+    assert {pin.number for pin in part.pins.values()} == {
+        str(number) for number in range(1, 50)
+    }
+    assert part.pins["NC_44"].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
+    assert all(pin.bonds for pin in part.pins.values() if pin.name != "NC_44")
