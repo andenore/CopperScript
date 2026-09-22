@@ -186,6 +186,20 @@ def test_rejects_unsupported_custom_pad_instead_of_losing_geometry() -> None:
         parse_kicad_mod(source)
 
 
+def test_rejects_embedded_keepout_zone_instead_of_losing_routing_rules() -> None:
+    source = """(footprint "Socket"
+      (version 20260206)
+      (layer "F.Cu")
+      (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask"))
+      (zone (layers "F.Cu")
+        (keepout (tracks not_allowed) (vias not_allowed))
+        (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1)))))
+    """
+
+    with pytest.raises(KiCadModImportError, match="footprint setting 'zone'"):
+        parse_kicad_mod(source)
+
+
 def test_strict_mode_promotes_loss_warning_to_error() -> None:
     source = """(footprint "WithModel"
       (version 20240108)

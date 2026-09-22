@@ -71,3 +71,17 @@ def test_stm32g0c1re_standard_lqfp64_bonds_are_complete() -> None:
     assert {pin.name for pin in part.pins.values() if pin.number in {"6", "7", "8", "9"}} == {
         "VBAT", "VREF_PLUS", "VDD", "VSS"
     }
+
+
+def test_gct_nano_sim_socket_uses_c7_for_io_and_connects_shell() -> None:
+    board = compile_file(EXAMPLE)
+    part = board.library["vertical.NANO_SIM_SOCKET"]
+    assert part.footprints == ("Connector_Card:nanoSIM_GCT_SIM8060-6-0-14-00",)
+    assert part.pins["VPP"].number == "6"
+    assert part.pins["IO"].number == "7"
+    assert part.pins["SHIELD"].number == "SH"
+    ground = next(net for net in board.nets if net.name == "GND")
+    assert any(
+        endpoint.component == "J_SIM" and endpoint.pin == "SHIELD"
+        for endpoint in ground.endpoints
+    )

@@ -99,6 +99,9 @@ physical design.
   3.8 V regulator, USB choke, EG800G, and MAX-M10S footprints. These are not
   safe to replace with generic land patterns without an exact orderable part
   or vendor mechanical drawing.
+- The SIM socket now identifies an exact GCT part and matching KiCad footprint,
+  but that footprint contains embedded copper keepouts not yet represented in
+  physical IR; the importer rejects it rather than dropping the keepouts.
 - Regulator and level-shifter entries express architectural requirements but
   need concrete orderable manufacturer part numbers and validated support
   components.

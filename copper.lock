@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:b7fb10f9aa9af304a64228bc44c428b2224abc6b152199b749a9f8a664c7f8bd",
+      "checksum": "sha256:34f111b9e05b701202366db73275f153ba525b386dce691dc9b1ca124adb373d",
       "files": [
         {
           "path": "copper.mod",
@@ -160,8 +160,8 @@
         },
         {
           "path": "packages/full_vertical/sim_socket.copper",
-          "sha256": "478f3275ab27c6c9a3968820cf2a8fa770cebc1b138ab30c88c6a0b42601862c",
-          "size": 580
+          "sha256": "8d5e13cb2b2b01ce623b08fa178e1632e2d8d3a2e03dd4d8759524c32c4156df",
+          "size": 915
         },
         {
           "path": "packages/full_vertical/stm32g0c1_device.copper",

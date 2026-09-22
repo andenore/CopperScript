@@ -146,6 +146,7 @@ board FullVerticalTracker {
         J_CELL.GND;
         J_GNSS.GND;
         J_SIM.GND;
+        J_SIM.SHIELD;
         J_DEBUG.GND;
         J_SWD_MCU.GND;
         J_SWD_NRF.GND;

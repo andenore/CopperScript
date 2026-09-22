@@ -147,6 +147,7 @@ def parse_kicad_mod(
             "thermal_gap",
             "private_layers",
             "net_tie_pad_groups",
+            "zone",
         }:
             raise KiCadModImportError(
                 f"{source}: unsupported fabrication-critical footprint setting "
