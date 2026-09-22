@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from hashlib import sha256
 
 from pcbir import (
     BoardOutline,
     CriticalRoutingStatus,
+    CopperLayer,
     FootprintPad,
     GlobalRouterOptions,
+    GlobalViaProposal,
     NetRoutingRule,
     PadReference,
     PhysicalBoard,
@@ -129,3 +132,52 @@ def test_pair_enforces_measured_uncoupled_budget() -> None:
     result = route_critical_nets(board, guides)
     assert result.status is CriticalRoutingStatus.FAILED
     assert "uncoupled length" in result.nets[0].diagnostics[-1]
+
+
+def test_pair_uses_bounded_local_tuning_and_binds_external_evidence() -> None:
+    board = _pair_board()
+    evidence = sha256(b"field solver report").hexdigest()
+    rules = tuple(
+        replace(rule, max_skew_nm=nm_from_mm("0.1"),
+                maximum_uncoupled_length_nm=nm_from_mm("20"),
+                tuning_amplitude_limit_nm=nm_from_mm("2"),
+                impedance_evidence_digest=evidence)
+        for rule in board.net_routing_rules
+    )
+    board = replace(board, net_routing_rules=rules)
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    result = route_critical_nets(board, guides)
+    pair = result.nets[0]
+    assert pair.connected
+    assert pair.skew_nm <= nm_from_mm("0.1")
+    assert pair.tuned_length_nm > 0
+    assert pair.evidence_digests == (evidence,)
+    assert not any("field-solver" in item for item in pair.assumptions)
+
+
+def test_pair_transition_generates_bounded_return_via() -> None:
+    board = _pair_board()
+    board = replace(
+        board,
+        nets=(*board.nets, PhysicalNet("GND", ())),
+        net_routing_rules=tuple(
+            replace(rule, require_return_vias=True, return_via_net="GND",
+                    maximum_return_via_distance_nm=nm_from_mm("1"))
+            for rule in board.net_routing_rules
+        ),
+    )
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    pair_name = min(rule.net for rule in board.net_routing_rules)
+    routes = tuple(
+        replace(route, vias=(GlobalViaProposal(route.net, Point.mm(20, 12),
+                                               CopperLayer.FRONT,
+                                               CopperLayer.BACK,
+                                               "test-via"),))
+        if route.net == pair_name else route
+        for route in guides.routes
+    )
+    guides = replace(guides, routes=routes)
+    result = route_critical_nets(board, guides)
+    pair = result.nets[0]
+    assert pair.return_via_count == 1
+    assert sum(via.net == "GND" for via in result.locked_vias) == 1

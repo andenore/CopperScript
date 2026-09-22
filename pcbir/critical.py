@@ -47,6 +47,9 @@ class CriticalNetResult:
     coupled_length_nm: int = 0
     uncoupled_lengths_nm: tuple[int, ...] = ()
     paired_via_transitions: int = 0
+    return_via_count: int = 0
+    tuned_length_nm: int = 0
+    evidence_digests: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +81,9 @@ class CriticalRoutingResult:
                     "coupled_length_nm": item.coupled_length_nm,
                     "uncoupled_lengths_nm": list(item.uncoupled_lengths_nm),
                     "paired_via_transitions": item.paired_via_transitions,
+                    "return_via_count": item.return_via_count,
+                    "tuned_length_nm": item.tuned_length_nm,
+                    "evidence_digests": list(item.evidence_digests),
                 }
                 for item in self.nets
             ],
@@ -241,6 +247,7 @@ def _route_single(
     )
     diagnostics = _budget_diagnostics(rule, tuple(tracks), vias)
     assumptions = _external_assumptions(rule)
+    evidence = _external_evidence(rule)
     length = _track_length(tuple(tracks))
     return (
         CriticalNetResult(
@@ -252,6 +259,12 @@ def _route_single(
             0,
             diagnostics,
             assumptions,
+            0,
+            (),
+            0,
+            0,
+            0,
+            evidence,
         ),
         tuple(tracks),
         vias,
@@ -341,7 +354,21 @@ def _route_pair(
             second_width + gap,
         )
     )
+    max_skew = min(
+        value
+        for value in (first.max_skew_nm, second.max_skew_nm)
+        if value is not None
+    ) if first.max_skew_nm is not None or second.max_skew_nm is not None else None
+    tuned_length = 0
+    if max_skew is not None:
+        tuned_length = _tune_pair(first_tracks, second_tracks, max_skew,
+                                  min(value for value in (first.tuning_amplitude_limit_nm,
+                                                          second.tuning_amplitude_limit_nm)
+                                      if value is not None)
+                                  if first.tuning_amplitude_limit_nm is not None or second.tuning_amplitude_limit_nm is not None
+                                  else 0)
     pair_vias: list[Via] = []
+    return_vias: list[Via] = []
     for item in guide.vias:
         for net, sign in ((first.net, 1), (second.net, -1)):
             pair_vias.append(
@@ -355,6 +382,16 @@ def _route_pair(
                     select_via_technology(board.stackup, item.from_layer, item.to_layer,
                                           board.rules.default_via_size_nm, board.rules.default_via_drill_nm),
                 )
+            )
+        if first.require_return_vias or second.require_return_vias:
+            return_net = first.return_via_net or second.return_via_net
+            assert return_net is not None
+            return_vias.append(
+                Via(return_net, item.position, board.rules.default_via_size_nm,
+                    board.rules.default_via_drill_nm, item.from_layer, item.to_layer,
+                    select_via_technology(board.stackup, item.from_layer, item.to_layer,
+                                          board.rules.default_via_size_nm,
+                                          board.rules.default_via_drill_nm))
             )
     first_length = _track_length(tuple(first_tracks))
     second_length = _track_length(tuple(second_tracks))
@@ -371,11 +408,6 @@ def _route_pair(
     diagnostics.extend(
         _budget_diagnostics(second, tuple(second_tracks), tuple(v for v in pair_vias if v.net == second.net))
     )
-    max_skew = min(
-        value
-        for value in (first.max_skew_nm, second.max_skew_nm)
-        if value is not None
-    ) if first.max_skew_nm is not None or second.max_skew_nm is not None else None
     if max_skew is not None and skew > max_skew:
         diagnostics.append(f"pair skew {skew} nm exceeds {max_skew} nm")
     uncoupled_limit = min(
@@ -389,6 +421,15 @@ def _route_pair(
         )
     if len(first_pair_vias) != len(second_pair_vias) or paired_transitions != len(first_pair_vias):
         diagnostics.append("differential via transitions are not geometrically paired")
+    return_limit = min(
+        value for value in (first.maximum_return_via_distance_nm,
+                            second.maximum_return_via_distance_nm)
+        if value is not None
+    ) if first.maximum_return_via_distance_nm is not None or second.maximum_return_via_distance_nm is not None else None
+    if return_vias and return_limit is not None and offset > return_limit:
+        diagnostics.append(
+            f"return via distance {offset} nm exceeds {return_limit} nm"
+        )
     assumptions = tuple(
         dict.fromkeys(
             (
@@ -398,13 +439,14 @@ def _route_pair(
             )
         )
     )
+    evidence = tuple(dict.fromkeys((*_external_evidence(first), *_external_evidence(second))))
     tracks = tuple((*first_tracks, *second_tracks))
     return (
         CriticalNetResult(
             (first.net, second.net),
             not diagnostics,
             len(tracks),
-            len(pair_vias),
+            len(pair_vias) + len(return_vias),
             (first_length, second_length),
             skew,
             tuple(diagnostics),
@@ -412,10 +454,50 @@ def _route_pair(
             coupled_length,
             uncoupled,
             paired_transitions,
+            len(return_vias),
+            tuned_length,
+            evidence,
         ),
         tracks,
-        tuple(pair_vias),
+        tuple((*pair_vias, *return_vias)),
     )
+
+
+def _tune_pair(first: list[TrackSegment], second: list[TrackSegment],
+               max_skew_nm: int, amplitude_limit_nm: int) -> int:
+    first_length, second_length = _track_length(tuple(first)), _track_length(tuple(second))
+    excess = abs(first_length - second_length) - max_skew_nm
+    if excess <= 0 or amplitude_limit_nm <= 0:
+        return 0
+    target = first if first_length < second_length else second
+    candidates = sorted(
+        ((round(hypot(track.end.x_nm - track.start.x_nm,
+                      track.end.y_nm - track.start.y_nm)), index, track)
+         for index, track in enumerate(target)
+         if track.start.x_nm == track.end.x_nm or track.start.y_nm == track.end.y_nm),
+        reverse=True,
+    )
+    if not candidates:
+        return 0
+    _, index, track = candidates[0]
+    amplitude = min(amplitude_limit_nm, (excess + 1) // 2)
+    if amplitude <= 0:
+        return 0
+    dx, dy = track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm
+    first_point = Point(track.start.x_nm + dx // 3, track.start.y_nm + dy // 3)
+    second_point = Point(track.start.x_nm + 2 * dx // 3, track.start.y_nm + 2 * dy // 3)
+    normal = Point(0, amplitude) if dx else Point(amplitude, 0)
+    raised_first = Point(first_point.x_nm + normal.x_nm, first_point.y_nm + normal.y_nm)
+    raised_second = Point(second_point.x_nm + normal.x_nm, second_point.y_nm + normal.y_nm)
+    replacement = (
+        TrackSegment(track.net, track.start, first_point, track.width_nm, track.layer),
+        TrackSegment(track.net, first_point, raised_first, track.width_nm, track.layer),
+        TrackSegment(track.net, raised_first, raised_second, track.width_nm, track.layer),
+        TrackSegment(track.net, raised_second, second_point, track.width_nm, track.layer),
+        TrackSegment(track.net, second_point, track.end, track.width_nm, track.layer),
+    )
+    target[index:index + 1] = replacement
+    return 2 * amplitude
 
 
 def _coupled_length(
@@ -612,7 +694,7 @@ def _budget_diagnostics(
 
 def _external_assumptions(rule: NetRoutingRule) -> tuple[str, ...]:
     assumptions: list[str] = []
-    if rule.target_impedance_ohms is not None:
+    if rule.target_impedance_ohms is not None and rule.impedance_evidence_digest is None:
         assumptions.append(
             f"{rule.target_impedance_ohms} ohm impedance requires external stackup/field-solver qualification"
         )
@@ -621,6 +703,10 @@ def _external_assumptions(rule: NetRoutingRule) -> tuple[str, ...]:
     if rule.kind is RouteKind.POWER:
         assumptions.append("power-route current and thermal capacity require external validation")
     return tuple(assumptions)
+
+
+def _external_evidence(rule: NetRoutingRule) -> tuple[str, ...]:
+    return (rule.impedance_evidence_digest,) if rule.impedance_evidence_digest else ()
 
 
 def _track_length(tracks: tuple[TrackSegment, ...]) -> int:

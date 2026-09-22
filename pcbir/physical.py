@@ -725,6 +725,11 @@ class NetRoutingRule:
     target_impedance_ohms: int | None = None
     maximum_uncoupled_length_nm: Nanometres | None = None
     maximum_stub_length_nm: Nanometres | None = None
+    tuning_amplitude_limit_nm: Nanometres | None = None
+    require_return_vias: bool = False
+    return_via_net: str | None = None
+    maximum_return_via_distance_nm: Nanometres | None = None
+    impedance_evidence_digest: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_layers", tuple(self.allowed_layers))
@@ -740,6 +745,8 @@ class NetRoutingRule:
             ("maximum skew", self.max_skew_nm),
             ("maximum uncoupled length", self.maximum_uncoupled_length_nm),
             ("maximum stub length", self.maximum_stub_length_nm),
+            ("tuning amplitude limit", self.tuning_amplitude_limit_nm),
+            ("maximum return via distance", self.maximum_return_via_distance_nm),
         ):
             if value is not None and value <= 0:
                 raise ValueError(f"routing {name} must be positive")
@@ -754,6 +761,10 @@ class NetRoutingRule:
                 raise ValueError("a differential net cannot partner with itself")
         if self.target_impedance_ohms is not None and self.target_impedance_ohms <= 0:
             raise ValueError("target impedance must be positive")
+        if self.require_return_vias and (not self.return_via_net or self.maximum_return_via_distance_nm is None):
+            raise ValueError("return-via routing requires a net and maximum distance")
+        if self.impedance_evidence_digest is not None and len(self.impedance_evidence_digest) != 64:
+            raise ValueError("impedance evidence digest must be SHA-256")
         if not self.topology:
             raise ValueError("routing topology cannot be empty")
 
@@ -1003,6 +1014,8 @@ class PhysicalBoard:
                     f"routing rule for {rule.net!r} references unknown partner "
                     f"{rule.differential_partner!r}"
                 )
+            if rule.return_via_net is not None and rule.return_via_net not in known_nets:
+                raise ValueError(f"routing rule for {rule.net!r} references unknown return net {rule.return_via_net!r}")
 
 
 def _via_span_depth(stackup: Stackup, first: CopperLayer, second: CopperLayer) -> int:

@@ -589,7 +589,14 @@ def _via_identity(item: Via) -> tuple[object, ...]:
 
 
 def _routing_rule_document(item: NetRoutingRule) -> tuple[object, ...]:
-    return (item.net, item.kind.value, item.priority, item.width_nm, item.clearance_nm, tuple(layer.value for layer in item.allowed_layers), item.max_vias, item.max_length_nm, item.differential_partner, item.pair_gap_nm, item.max_skew_nm, item.topology, item.target_impedance_ohms, item.maximum_uncoupled_length_nm, item.maximum_stub_length_nm)
+    return (item.net, item.kind.value, item.priority, item.width_nm, item.clearance_nm,
+            tuple(layer.value for layer in item.allowed_layers), item.max_vias,
+            item.max_length_nm, item.differential_partner, item.pair_gap_nm,
+            item.max_skew_nm, item.topology, item.target_impedance_ohms,
+            item.maximum_uncoupled_length_nm, item.maximum_stub_length_nm,
+            item.tuning_amplitude_limit_nm, item.require_return_vias,
+            item.return_via_net, item.maximum_return_via_distance_nm,
+            item.impedance_evidence_digest)
 
 
 def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:

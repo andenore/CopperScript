@@ -81,12 +81,13 @@ where relevant. It does not imply third-party certification.
   - [x] Atomic recursive via shove with locked-object rollback and detailed-router
         any-angle line-of-sight cleanup.
   - [x] Coupled-bundle shove and acute-angle cleanup.
-- [ ] P3. Differential-pair completion: coupled pad escape, fanout, via-pair
+- [x] P3. Differential-pair completion: coupled pad escape, fanout, via-pair
       transitions, uncoupled-length accounting, length/skew measurement,
       bounded trombone tuning, return-path requirements, and DRC.
   - [x] Atomic paired fanout, centerline offset routing, paired transitions,
         coupled/uncoupled measurement, skew and uncoupled-budget enforcement.
-  - [ ] Local trombone tuning, return-via rules, and field-solver evidence binding.
+  - [x] Local bounded trombone tuning, return-via rules, and field-solver
+        evidence binding.
 - [x] P4. Stackups and via technology: arbitrary copper/dielectric stacks,
       material properties, through/blind/buried/microvia definitions, legal
       spans, aspect/annular constraints, layer transitions, and KiCad mapping.
