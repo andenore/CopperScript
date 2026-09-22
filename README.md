@@ -212,6 +212,10 @@ Key modules:
   exact tracks/vias, locked critical copper, and negotiated rip-up/reroute.
 - `pcbir.drc` — fail-closed exact-copper checks, explicit coverage, scoped
   waivers, and content-bound physical signoff tokens.
+- `pcbir.flow` — compatible global/critical/detailed routing and DRC
+  orchestration with no proxy-to-copper shortcuts.
+- `pcbir.manufacturing` — gated KiCad 10 Gerber/drill/netlist releases with
+  independent structural CAM parsing, manifests, checksums, and atomic publish.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work

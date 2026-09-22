@@ -45,6 +45,8 @@ def test_kicad_pcb_backend_emits_deterministic_board_geometry() -> None:
     assert '(pad "1" smd roundrect' in pcb
     assert '(segment' in pcb
     assert '(via' in pcb
+    assert '(38 "B.Mask" user)' in pcb
+    assert '(39 "F.Mask" user)' in pcb
     assert pcb.count('(layer "Edge.Cuts")') == 4
     assert _parentheses_are_balanced(pcb)
 

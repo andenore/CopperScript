@@ -14,12 +14,14 @@ from .physical import (
     CopperLayer,
     NetRoutingRule,
     PadKind,
+    PadReference,
     PhysicalBoard,
     Point,
     TrackSegment,
     Via,
 )
 from .placement import transformed_pad_position
+from .placement import placement_solution_is_legal
 
 
 class DrcSeverity(str, Enum):
@@ -139,6 +141,15 @@ class PhysicalDrcReport:
         return json.dumps(_report_document(self, include_token=True), indent=2, sort_keys=True) + "\n"
 
 
+@dataclass(frozen=True, slots=True)
+class _PadCopper:
+    identity: str
+    net: str
+    position: Point
+    radius_nm: int
+    layers: tuple[CopperLayer, ...]
+
+
 def run_physical_drc(
     board: PhysicalBoard,
     waivers: Iterable[DrcWaiver] = (),
@@ -164,6 +175,11 @@ def run_physical_drc(
 
     _check_connectivity(board, findings)
     coverage.append(DrcCoverage("connectivity", DrcCoverageStatus.EXECUTED, True))
+    if not placement_solution_is_legal(
+        board, {item.reference: item for item in board.placements}
+    ):
+        findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR, "component placement violates board, keepout, or courtyard legality"))
+    coverage.append(DrcCoverage("placement_legality", DrcCoverageStatus.EXECUTED, True))
     _check_track_rules(board, findings)
     coverage.append(DrcCoverage("track_width_and_budgets", DrcCoverageStatus.EXECUTED, True))
     _check_vias(board, findings)
@@ -240,7 +256,10 @@ def physical_board_digest(board: PhysicalBoard) -> str:
         {
             "name": board.name,
             "outline": [(p.x_nm, p.y_nm) for p in board.outline.vertices],
-            "layers": [layer.value for layer in board.stackup.copper_layers],
+            "stackup": {
+                "layers": [layer.value for layer in board.stackup.copper_layers],
+                "thickness_nm": board.stackup.thickness_nm,
+            },
             "rules": {
                 "clearance": board.rules.minimum_clearance_nm,
                 "track": board.rules.default_track_width_nm,
@@ -251,6 +270,10 @@ def physical_board_digest(board: PhysicalBoard) -> str:
                 (p.reference, p.footprint, p.position.x_nm, p.position.y_nm, str(p.rotation_degrees), p.side.value)
                 for p in sorted(board.placements, key=lambda item: item.reference)
             ],
+            "footprints": [
+                _footprint_document(name, footprint)
+                for name, footprint in sorted(board.footprints.items())
+            ],
             "nets": [
                 (net.name, [(pad.component, pad.pad) for pad in sorted(net.pads)])
                 for net in sorted(board.nets, key=lambda item: item.name)
@@ -258,6 +281,12 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "tracks": [_track_identity(track) for track in sorted(board.tracks, key=_track_identity)],
             "vias": [_via_identity(via) for via in sorted(board.vias, key=_via_identity)],
             "routing_rules": [_routing_rule_document(rule) for rule in sorted(board.net_routing_rules, key=lambda item: item.net)],
+            "regions": [repr(item) for item in sorted(board.regions, key=lambda item: item.name)],
+            "keepouts": [repr(item) for item in sorted(board.keepouts, key=lambda item: item.name)],
+            "placement_rules": [repr(item) for item in sorted(board.placement_rules, key=lambda item: item.reference)],
+            "relative_rules": [repr(item) for item in board.relative_rules],
+            "placement_groups": [repr(item) for item in sorted(board.placement_groups, key=lambda item: item.name)],
+            "metadata": tuple(sorted(board.metadata.items())),
         }
     )
 
@@ -369,6 +398,10 @@ def _check_board_edge(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
         margin = min(_point_segment_distance(via.position, first, second) for first, second in edges) - via.size_nm / 2
         if not _point_in_polygon_or_edge(via.position, board.outline.vertices) or margin < clearance:
             findings.append(_finding("DRC-BOARD-EDGE", DrcSeverity.ERROR, f"via {index} violates copper-to-board-edge clearance", objects=(f"via:{index}",), nets=(via.net,), required_nm=clearance, measured_nm=max(0, round(margin))))
+    for pad in _copper_pads(board):
+        margin = min(_point_segment_distance(pad.position, first, second) for first, second in edges) - pad.radius_nm
+        if not _point_in_polygon_or_edge(pad.position, board.outline.vertices) or margin < clearance:
+            findings.append(_finding("DRC-BOARD-EDGE", DrcSeverity.ERROR, f"{pad.identity} violates copper-to-board-edge clearance", objects=(pad.identity,), nets=(pad.net,), layers=tuple(layer.value for layer in pad.layers), required_nm=clearance, measured_nm=max(0, round(margin))))
 
 
 def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
@@ -402,6 +435,52 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
             if distance < required:
                 code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
                 findings.append(_finding(code, DrcSeverity.ERROR, f"vias {left_index} and {right_index} violate copper spacing", objects=(f"via:{left_index}", f"via:{right_index}"), nets=tuple(sorted((left.net, right.net))), required_nm=round(required), measured_nm=round(distance)))
+    pads = _copper_pads(board)
+    for track_index, track in tracks:
+        for pad in pads:
+            if track.net == pad.net or track.layer not in pad.layers:
+                continue
+            distance = _point_segment_distance(pad.position, track.start, track.end)
+            required = track.width_nm / 2 + pad.radius_nm + _clearance(board, rules.get(track.net), rules.get(pad.net))
+            if distance < required:
+                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and {pad.identity} violate copper spacing", objects=(f"track:{track_index}", pad.identity), nets=tuple(sorted((track.net, pad.net))), layers=(track.layer.value,), required_nm=round(required), measured_nm=round(distance)))
+    for via_index, via in enumerate(board.vias):
+        for pad in pads:
+            if via.net == pad.net or not any(_via_covers_layer(board, via, layer) for layer in pad.layers):
+                continue
+            distance = hypot(via.position.x_nm - pad.position.x_nm, via.position.y_nm - pad.position.y_nm)
+            required = via.size_nm / 2 + pad.radius_nm + _clearance(board, rules.get(via.net), rules.get(pad.net))
+            if distance < required:
+                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"via {via_index} and {pad.identity} violate copper spacing", objects=(f"via:{via_index}", pad.identity), nets=tuple(sorted((via.net, pad.net))), required_nm=round(required), measured_nm=round(distance)))
+    for left_index, left in enumerate(pads):
+        for right in pads[left_index + 1 :]:
+            if left.net == right.net or not set(left.layers).intersection(right.layers):
+                continue
+            distance = hypot(left.position.x_nm - right.position.x_nm, left.position.y_nm - right.position.y_nm)
+            required = left.radius_nm + right.radius_nm + _clearance(board, rules.get(left.net), rules.get(right.net))
+            if distance < required:
+                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"{left.identity} and {right.identity} violate copper spacing", objects=(left.identity, right.identity), nets=tuple(sorted((left.net, right.net))), layers=tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))), required_nm=round(required), measured_nm=round(distance)))
+
+
+def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
+    pad_nets = {pad: net.name for net in board.nets for pad in net.pads}
+    result: list[_PadCopper] = []
+    for placement in sorted(board.placements, key=lambda item: item.reference):
+        footprint = board.footprints[placement.footprint]
+        for pad in footprint.pads:
+            reference = PadReference(placement.reference, pad.number)
+            net = pad_nets.get(reference)
+            if net is None or pad.kind is PadKind.NON_PLATED_THROUGH_HOLE:
+                continue
+            if pad.kind is PadKind.SMD:
+                layers = (CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK,)
+            else:
+                layers = tuple(board.stackup.copper_layers)
+            result.append(_PadCopper(f"pad:{placement.reference}.{pad.number}", net, transformed_pad_position(board, placement, pad.number), max(pad.size.width_nm, pad.size.height_nm) // 2, layers))
+    return tuple(result)
 
 
 def _clearance(board: PhysicalBoard, first: NetRoutingRule | None, second: NetRoutingRule | None) -> int:
@@ -495,6 +574,36 @@ def _via_identity(item: Via) -> tuple[object, ...]:
 
 def _routing_rule_document(item: NetRoutingRule) -> tuple[object, ...]:
     return (item.net, item.kind.value, item.priority, item.width_nm, item.clearance_nm, tuple(layer.value for layer in item.allowed_layers), item.max_vias, item.max_length_nm, item.differential_partner, item.pair_gap_nm, item.max_skew_nm, item.topology, item.target_impedance_ohms, item.maximum_uncoupled_length_nm, item.maximum_stub_length_nm)
+
+
+def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:
+    pads = getattr(footprint, "pads")
+    return (
+        name,
+        getattr(footprint, "source_library_id"),
+        (getattr(footprint, "body_size").width_nm, getattr(footprint, "body_size").height_nm),
+        tuple(
+            (
+                pad.number,
+                pad.position.x_nm,
+                pad.position.y_nm,
+                pad.size.width_nm,
+                pad.size.height_nm,
+                pad.kind.value,
+                pad.shape.value,
+                str(pad.rotation_degrees),
+                None if pad.drill is None else (pad.drill.width_nm, pad.drill.height_nm),
+                pad.roundrect_ratio_ppm,
+                pad.has_solder_mask,
+                pad.has_solder_paste,
+            )
+            for pad in pads
+        ),
+        tuple(repr(item) for item in getattr(footprint, "graphics")),
+        tuple((point.x_nm, point.y_nm) for point in getattr(footprint, "courtyard")),
+        tuple(sorted(getattr(footprint, "metadata").items())),
+        getattr(footprint, "height_nm"),
+    )
 
 
 def _digest(document: object) -> str:

@@ -43,6 +43,16 @@ from .drc import (
 from .erc import Diagnostic, Severity, check, has_errors
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
+from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
+from .manufacturing import (
+    CamFinding,
+    CamVerificationReport,
+    CommandResult,
+    ManufacturingProfile,
+    ManufacturingRelease,
+    build_manufacturing_release,
+    verify_cam_directory,
+)
 from .model import (
     Board,
     BondDefinition,
@@ -212,8 +222,11 @@ __all__ = [
     "BoardSide",
     "BondDefinition",
     "Capacitance",
+    "CamFinding",
+    "CamVerificationReport",
     "ComponentInstance",
     "ComponentPlacementRule",
+    "CommandResult",
     "Constraint",
     "ConstraintKind",
     "CopperLayer",
@@ -282,6 +295,8 @@ __all__ = [
     "LayoutStage",
     "ModuleInstance",
     "ModeGroupDefinition",
+    "ManufacturingProfile",
+    "ManufacturingRelease",
     "MuxOption",
     "ModuleDefinition",
     "NetRoutingRule",
@@ -304,6 +319,7 @@ __all__ = [
     "PhysicalBoard",
     "PhysicalDrcPolicy",
     "PhysicalDrcReport",
+    "PhysicalFlowStatus",
     "PhysicalFootprint",
     "PhysicalNet",
     "Placement",
@@ -330,6 +346,7 @@ __all__ = [
     "RelativePlacementKind",
     "RelativePlacementRule",
     "RouteKind",
+    "RoutingPipelineResult",
     "RoutingHotspot",
     "Severity",
     "SourceLocation",
@@ -356,6 +373,7 @@ __all__ = [
     "analyze_power_states",
     "compile_file",
     "compile_source",
+    "build_manufacturing_release",
     "ep",
     "elaborate",
     "has_errors",
@@ -378,6 +396,8 @@ __all__ = [
     "route_critical_nets",
     "route_detailed",
     "run_physical_drc",
+    "run_routing_pipeline",
+    "verify_cam_directory",
     "physical_board_digest",
     "prototype_physicalize",
     "resolved_physicalize",

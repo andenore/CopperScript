@@ -708,6 +708,8 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-048 | Accepted | Critical nets route before ordinary nets from explicit physical profiles; coupled bundles and exact locked copper retain external qualification assumptions, and geometric proxies never claim impedance, SI, RF, current, or thermal signoff. |
 | CS-049 | Accepted | General detailed routing consumes global guides, preserves locked critical copper, owns exact tracks and vias, and uses deterministic negotiated rip-up/reroute; routing success never substitutes for physical DRC. |
 | CS-050 | Accepted | Physical signoff is fail-closed and reports check coverage separately from findings; exact waivers are fingerprint-bound, and every signoff token is content-bound to the complete physical geometry, rules, policy, and report. |
+| CS-051 | Accepted | Manufacturing releases use a qualified KiCad CLI as the geometry exporter, require a matching complete signoff token, generate Gerber X2 plus metric drill and IPC-D-356 data, and publish atomically only after independent CAM parsing, manifesting, and checksums succeed. |
+| CS-052 | Accepted | Routing stages compose in one direction through immutable typed results: global guides, locked critical copper, general exact copper, physical DRC, then manufacturing; a partial or stale result cannot satisfy a later gate. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

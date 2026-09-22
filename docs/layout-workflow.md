@@ -170,6 +170,16 @@ fingerprint and retain reason and approver. A SHA-256 signoff token binds the
 decision to exact board geometry, routing rules, policy, and report so any
 subsequent copper change invalidates it.
 
+`pcbir.flow.run_routing_pipeline()` composes placement feedback, global guides,
+critical routing, general routing, and physical DRC without translating through
+a backend format. `pcbir.manufacturing.build_manufacturing_release()` accepts
+only the resulting exact board and matching complete pass token. It invokes a
+qualified KiCad CLI for a second DRC plus explicit Gerber X2, metric Excellon,
+and IPC-D-356 exports; a separate structural CAM parser checks the generated
+files before an atomic publish. The release includes a provenance manifest and
+SHA-256 checksum inventory. See `docs/routing-manufacturing-research.md` for the
+individual research tasks, recommendations, limitations, and sources.
+
 ## Sources
 
 - [Analytical PCB placement optimization with fine tuning (Integration, 2026)](https://www.sciencedirect.com/science/article/pii/S016792602500224X)
