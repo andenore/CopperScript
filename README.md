@@ -210,6 +210,8 @@ Key modules:
   clock, CAN, RF-feed, power, and length/via-constrained routes.
 - `pcbir.detailed` — guide-aware deterministic general routing with pin access,
   exact tracks/vias, locked critical copper, and negotiated rip-up/reroute.
+- `pcbir.drc` — fail-closed exact-copper checks, explicit coverage, scoped
+  waivers, and content-bound physical signoff tokens.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work

@@ -55,7 +55,7 @@ expected and do not satisfy the future Route or Verify gates.
       clocks, buses, RF feeds, and power routes before general routing.
 - [x] 7. Add a guide-aware general detailed router with pin access, vias,
       exact tracks, deterministic rip-up/reroute, and cleanup.
-- [ ] 8. Add fail-closed physical DRC, coverage reporting, waivers, and signed
+- [x] 8. Add fail-closed physical DRC, coverage reporting, waivers, and signed
       signoff tokens tied to exact manufacturing geometry.
 - [ ] 9. Add gated manufacturing export, release manifests, checksums, and an
       independent CAM re-import/verification pass.

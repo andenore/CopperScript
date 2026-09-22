@@ -158,6 +158,18 @@ bounded rip-up/reroute passes. Its output is exact `TrackSegment` and `Via`
 geometry in physical IR. A partial result remains explicitly non-fabrication-
 ready, and even a successful result must pass the separate physical DRC gate.
 
+`pcbir.drc.run_physical_drc()` is that gate for the geometry CopperScript can
+currently represent. It checks completed routing, exact net connectivity,
+cross-net shorts and clearance, track/routing-profile widths, layer/length/via
+budgets, via structure, and copper-to-board-edge clearance. The report keeps
+coverage separate from violations: required checks that cannot execute make
+the result incomplete and fail it, while analyses outside the present model
+(zones, final artwork, creepage, SI and thermal qualification) remain explicit
+non-required unsupported entries. Waivers identify one stable finding
+fingerprint and retain reason and approver. A SHA-256 signoff token binds the
+decision to exact board geometry, routing rules, policy, and report so any
+subsequent copper change invalidates it.
+
 ## Sources
 
 - [Analytical PCB placement optimization with fine tuning (Integration, 2026)](https://www.sciencedirect.com/science/article/pii/S016792602500224X)
