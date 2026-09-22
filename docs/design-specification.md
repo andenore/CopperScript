@@ -565,12 +565,14 @@ identity and checksum metadata, and report every unsupported construct. They
 MUST reject fabrication-relevant geometry that cannot be represented rather
 than silently approximating or dropping it.
 
-The initial KiCad `.kicad_mod` importer parses KiCad 6–8 S-expressions without
+The KiCad `.kicad_mod` importer parses KiCad 6–10 S-expressions without
 executing code or requiring KiCad. It supports ordinary SMD and through-hole
 pads, circular and slotted drills, pad rotations, mask and paste layer presence,
-round-rectangle ratios, and common footprint drawing primitives. Ignored
+paste-only apertures, per-pad zone/heatsink/layer-removal properties,
+footprint-local clearance, round-rectangle ratios, and common footprint drawing
+primitives including mask and paste artwork. Ignored
 presentation-only constructs produce warnings, and strict mode promotes all
-warnings to errors. Custom pads, copper/mask graphics, drill offsets, and
+warnings to errors. Custom pads, copper graphics, drill offsets, and
 unsupported fabrication modifiers are errors until the physical IR can retain
 them losslessly.
 
@@ -726,6 +728,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-066 | Accepted | `copper.lock` content-addresses local replacements and remote modules alike with a canonical per-file asset inventory. Production uses `--locked --offline`; missing entries, byte drift, symlinks, and remote cache misses fail closed. |
 | CS-067 | Accepted | Source `routing` constraints lower directly to `NetRoutingRule`, including critical-net geometry, layers, pair/return-path limits, and content-addressed impedance evidence. Constraint ownership metadata survives semantic and serialized IR. |
 | CS-068 | Accepted | Footprint readiness is an explicit whole-board audit that resolves every selected asset, retains its source SHA-256, validates electrical pad mappings, and reports all gaps in one result. Proxy footprints cannot satisfy it. |
+| CS-069 | Accepted | KiCad fabrication-only pad apertures are distinct from electrical copper pads. The physical IR retains paste/mask apertures, footprint clearance, heatsink/zone behavior, and unused-layer removal; export, process DRC, geometry fingerprints, and audit preserve those distinctions. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

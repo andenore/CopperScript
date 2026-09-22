@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:23c5ef305cbc6b05064b96b14f6431795fef6c46b15832e3605295c8fa1e172d",
+      "checksum": "sha256:1a7e1c49f2b3813224139725a793abc67942e989a59247767ca4b865f611d002",
       "files": [
         {
           "path": "copper.mod",
@@ -20,18 +20,18 @@
         },
         {
           "path": "data/bundles/stm32g0b1/pads.csv",
-          "sha256": "f6fc3d46ef46767127e8be5bafd0bd7d2d411b1c8bbd8451052600033198cd2b",
-          "size": 243
+          "sha256": "20bc01b499e0f5356cb1a971c890e5cb06a5c56a14b7496e3692d44a4831da76",
+          "size": 250
         },
         {
           "path": "data/bundles/stm32g0b1/parts/stm32g0b1cbt6/part.json",
-          "sha256": "569ba3f024fb93a60f83f3c67bfd03fb354d4196b6db8d84bc8211a8d67c354d",
-          "size": 456
+          "sha256": "e61168c64d35933b7b95d3a4adec135aad67e8e9596aa1ba5eebc77bea874d2f",
+          "size": 473
         },
         {
           "path": "data/bundles/stm32g0b1/parts/stm32g0b1cbt6/pins.csv",
-          "sha256": "abeff45b5bac3e3180438498ff65a7f4d8340790c1b3e2d689707eb4b14ddb84",
-          "size": 132
+          "sha256": "e3ebcc3f27085e770166d25f4aec378e0afde297fc0ea4372cc7b19e56a53c23",
+          "size": 298
         },
         {
           "path": "data/bundles/stm32g0b1/peripherals.csv",
@@ -80,13 +80,13 @@
         },
         {
           "path": "generated/stm32g0b1_device.copper",
-          "sha256": "ec43b58990091e746ff91070b93bca85dfe600d0f544e3e30f437de7d6d0e3a4",
-          "size": 1037
+          "sha256": "b3c61d228055b6b74eee17058086ab49381e5fb6c8d482b470b9380ff1f72457",
+          "size": 1141
         },
         {
           "path": "generated/stm32g0b1cbt6.copper",
-          "sha256": "5c6f9be59ce24525adbf4683148f29323e60970bf29bd8a084bccea5a847e6a3",
-          "size": 932
+          "sha256": "6953837209f59d9c6c21b65982a175d27bb2593fed03ca09f5b546aa967eacdc",
+          "size": 1276
         },
         {
           "path": "packages/full_vertical/button.copper",
@@ -140,8 +140,8 @@
         },
         {
           "path": "packages/full_vertical/power_tree.copper",
-          "sha256": "3e23fe2135039a80699d0b452dde0dae08bd38e8e52d0c0112ac3c220972d744",
-          "size": 1230
+          "sha256": "9536edb19e9b84140ed7b1cb1a32a49740caeb89154258a52fc0a31f52126937",
+          "size": 1311
         },
         {
           "path": "packages/full_vertical/regulator_3v8.copper",
@@ -150,7 +150,7 @@
         },
         {
           "path": "packages/full_vertical/rf_antenna.copper",
-          "sha256": "9693e2a2ff05d4fee63176742a1022359cfbec0ee460cc74a9eeef5a3f912e6e",
+          "sha256": "88f0caa5140d67f853e7ff72b74ac53e523da5466ff5b3d479a2515f64581479",
           "size": 349
         },
         {
@@ -180,8 +180,8 @@
         },
         {
           "path": "packages/full_vertical/tcan334g.copper",
-          "sha256": "3dcc141587e8aacdc8d16ea23d6ed7c9d1a044a22598c39273ad2783d816dfd4",
-          "size": 1178
+          "sha256": "97c366dcac21debc335320d9f5ca389545f0470477b9e3150a0c1a1f10725333",
+          "size": 1174
         },
         {
           "path": "packages/full_vertical/uart_level_shifter.copper",

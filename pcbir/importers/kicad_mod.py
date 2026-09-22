@@ -30,6 +30,7 @@ from ..physical import (
     PhysicalFootprint,
     Point,
     Size,
+    ZoneConnection,
     nm_from_mm,
 )
 
@@ -116,6 +117,11 @@ def parse_kicad_mod(
     generator = _atom(generator_node, 1) if generator_node is not None else ""
 
     warnings: list[str] = []
+    clearance_node = _first(root, "clearance")
+    clearance_nm = (
+        _number_nm(_required_atom(clearance_node, 1, source, "footprint clearance"), source, "footprint clearance")
+        if clearance_node is not None else None
+    )
     pads: list[FootprintPad] = []
     graphics: list[FootprintGraphic] = []
     for child in _lists(root[2:]):
@@ -136,7 +142,6 @@ def parse_kicad_mod(
             "solder_mask_margin",
             "solder_paste_margin",
             "solder_paste_ratio",
-            "clearance",
             "zone_connect",
             "thermal_width",
             "thermal_gap",
@@ -152,6 +157,7 @@ def parse_kicad_mod(
             "generator",
             "generator_version",
             "layer",
+            "clearance",
             "descr",
             "tags",
             "property",
@@ -189,6 +195,7 @@ def parse_kicad_mod(
         graphics=tuple(graphics),
         metadata=metadata,
         courtyard=_courtyard_polygon(graphics),
+        clearance_nm=clearance_nm,
     )
     return FootprintImportResult(footprint, tuple(warnings), version)
 
@@ -224,6 +231,8 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
     size = _size(size_node, source)
     layers_node = _required_child(node, "layers", source, "pad layers")
     layers = tuple(item for item in layers_node[1:] if isinstance(item, str))
+    if kind is PadKind.SMD and "F.Cu" not in layers and set(layers) <= {"F.Mask", "F.Paste"}:
+        kind = PadKind.APERTURE
     has_mask, has_paste = _validate_pad_layers(kind, layers, source)
     drill = _parse_drill(_first(node, "drill"), kind, source)
 
@@ -239,6 +248,38 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
             (ratio * Decimal(1_000_000)).to_integral_value(rounding=ROUND_HALF_UP)
         )
 
+    property_node = _first(node, "property")
+    heatsink = False
+    if property_node is not None:
+        property_name = _required_atom(property_node, 1, source, "pad property")
+        if property_name != "pad_prop_heatsink":
+            raise KiCadModImportError(
+                f"{source}: unsupported fabrication-critical pad property {property_name!r}"
+            )
+        heatsink = True
+    zone_node = _first(node, "zone_connect")
+    zone_connection = None
+    if zone_node is not None:
+        zone_value = _required_atom(zone_node, 1, source, "pad zone connection")
+        try:
+            zone_connection = {
+                "1": ZoneConnection.NONE,
+                "2": ZoneConnection.THERMAL,
+                "3": ZoneConnection.SOLID,
+                "4": ZoneConnection.THT_THERMAL,
+            }[zone_value]
+        except KeyError as exc:
+            raise KiCadModImportError(
+                f"{source}: unsupported pad zone connection {zone_value!r}"
+            ) from exc
+    remove_node = _first(node, "remove_unused_layers")
+    remove_unused_layers = False
+    if remove_node is not None:
+        remove_value = _required_atom(remove_node, 1, source, "remove unused layers")
+        if remove_value not in {"yes", "no"}:
+            raise KiCadModImportError(f"{source}: invalid remove_unused_layers value")
+        remove_unused_layers = remove_value == "yes"
+
     allowed_children = {
         "at",
         "size",
@@ -249,6 +290,9 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
         "tstamp",
         "pinfunction",
         "pintype",
+        "property",
+        "zone_connect",
+        "remove_unused_layers",
     }
     for child in _lists(node[4:]):
         if _tag(child) not in allowed_children:
@@ -268,6 +312,9 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
         roundrect_ratio_ppm=ratio_ppm,
         has_solder_mask=has_mask,
         has_solder_paste=has_paste,
+        zone_connection=zone_connection,
+        heatsink=heatsink,
+        remove_unused_layers=remove_unused_layers,
     )
 
 
@@ -275,11 +322,12 @@ def _validate_pad_layers(
     kind: PadKind, layers: tuple[str, ...], source: str
 ) -> tuple[bool, bool]:
     layer_set = set(layers)
-    if kind is PadKind.SMD:
+    if kind in {PadKind.SMD, PadKind.APERTURE}:
         allowed = {"F.Cu", "F.Mask", "F.Paste"}
-        if "F.Cu" not in layer_set or not layer_set <= allowed:
+        expected_copper = kind is PadKind.SMD
+        if ("F.Cu" in layer_set) != expected_copper or not layer_set <= allowed:
             raise KiCadModImportError(
-                f"{source}: unsupported SMD pad layers {layers!r}; expected front-side copper"
+                f"{source}: unsupported {kind.value} pad layers {layers!r}"
             )
         return "F.Mask" in layer_set, "F.Paste" in layer_set
     allowed = {"*.Cu", "*.Mask"}
@@ -294,11 +342,11 @@ def _parse_drill(
     node: list[SExpr] | None, kind: PadKind, source: str
 ) -> Size | None:
     if node is None:
-        if kind is PadKind.SMD:
+        if kind in {PadKind.SMD, PadKind.APERTURE}:
             return None
         raise KiCadModImportError(f"{source}: through-hole pad is missing a drill")
-    if kind is PadKind.SMD:
-        raise KiCadModImportError(f"{source}: SMD pad unexpectedly contains a drill")
+    if kind in {PadKind.SMD, PadKind.APERTURE}:
+        raise KiCadModImportError(f"{source}: non-drilled pad unexpectedly contains a drill")
     if any(isinstance(item, list) for item in node[1:]):
         raise KiCadModImportError(
             f"{source}: offset or compound drill definitions are not supported"

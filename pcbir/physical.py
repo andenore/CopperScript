@@ -86,6 +86,7 @@ class ViaKind(str, Enum):
 
 class PadKind(str, Enum):
     SMD = "smd"
+    APERTURE = "aperture"
     THROUGH_HOLE = "through_hole"
     NON_PLATED_THROUGH_HOLE = "non_plated_through_hole"
 
@@ -432,18 +433,24 @@ class FootprintPad:
     roundrect_ratio_ppm: int = 250_000
     has_solder_mask: bool = True
     has_solder_paste: bool = True
+    zone_connection: ZoneConnection | None = None
+    heatsink: bool = False
+    remove_unused_layers: bool = False
 
     def __post_init__(self) -> None:
-        if not self.number and self.kind is not PadKind.NON_PLATED_THROUGH_HOLE:
+        if not self.number and self.kind not in {
+            PadKind.NON_PLATED_THROUGH_HOLE,
+            PadKind.APERTURE,
+        }:
             raise ValueError("electrical footprint pad number cannot be empty")
         object.__setattr__(
             self,
             "rotation_degrees",
             Decimal(str(self.rotation_degrees)) % Decimal(360),
         )
-        if self.kind is PadKind.SMD and self.drill is not None:
-            raise ValueError("SMD pads cannot have a drill")
-        if self.kind is not PadKind.SMD:
+        if self.kind in {PadKind.SMD, PadKind.APERTURE} and self.drill is not None:
+            raise ValueError("SMD and aperture pads cannot have a drill")
+        if self.kind in {PadKind.THROUGH_HOLE, PadKind.NON_PLATED_THROUGH_HOLE}:
             if self.drill is None:
                 raise ValueError("through-hole pads require a drill")
             if (
@@ -548,6 +555,7 @@ class PhysicalFootprint:
     metadata: Mapping[str, str] = field(default_factory=dict)
     courtyard: tuple[Point, ...] = ()
     height_nm: Nanometres | None = None
+    clearance_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pads", tuple(self.pads))
@@ -560,6 +568,8 @@ class PhysicalFootprint:
             raise ValueError("a footprint courtyard requires at least three points")
         if self.height_nm is not None and self.height_nm <= 0:
             raise ValueError("footprint height must be positive")
+        if self.clearance_nm is not None and self.clearance_nm < 0:
+            raise ValueError("footprint clearance cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -907,9 +917,12 @@ class PhysicalBoard:
                         f"{pad_ref.component}.{pad_ref.pad}"
                     )
                 physical_pad = pads_by_component[pad_ref.component][pad_ref.pad]
-                if physical_pad.kind is PadKind.NON_PLATED_THROUGH_HOLE:
+                if physical_pad.kind in {
+                    PadKind.NON_PLATED_THROUGH_HOLE,
+                    PadKind.APERTURE,
+                }:
                     raise ValueError(
-                        f"non-plated pad {pad_ref.component}.{pad_ref.pad} cannot "
+                        f"non-electrical pad {pad_ref.component}.{pad_ref.pad} cannot "
                         "belong to an electrical net"
                     )
                 previous = assigned_pads.get(pad_ref)

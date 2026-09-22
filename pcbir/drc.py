@@ -160,6 +160,7 @@ class _PadCopper:
     position: Point
     shape: RoundedConvexShape
     layers: tuple[CopperLayer, ...]
+    clearance_nm: int = 0
 
 
 def run_physical_drc(
@@ -534,7 +535,10 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
     pads = _copper_pads(board)
     pad_by_id = {pad.identity: pad for pad in pads}
     pad_index = SpatialIndex(
-        SpatialItem(pad.identity, pad.shape.bounds.expanded(board.rules.minimum_clearance_nm))
+        SpatialItem(
+            pad.identity,
+            pad.shape.bounds.expanded(max(board.rules.minimum_clearance_nm, pad.clearance_nm)),
+        )
         for pad in pads
     )
     for track_index, track in tracks:
@@ -542,7 +546,7 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
         for pad in pads:
             if track.net == pad.net or track.layer not in pad.layers:
                 continue
-            clearance = _clearance(board, rules.get(track.net), rules.get(pad.net))
+            clearance = max(pad.clearance_nm, _clearance(board, rules.get(track.net), rules.get(pad.net)))
             distance_squared = shape_distance_squared(track_shape, pad.shape)
             required = track_shape.radius_nm + pad.shape.radius_nm + clearance
             if distance_squared < required * required:
@@ -553,7 +557,7 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
             if via.net == pad.net or not any(_via_covers_layer(board, via, layer) for layer in pad.layers):
                 continue
             via_shape = RoundedConvexShape((via.position,), via.size_nm // 2)
-            clearance = _clearance(board, rules.get(via.net), rules.get(pad.net))
+            clearance = max(pad.clearance_nm, _clearance(board, rules.get(via.net), rules.get(pad.net)))
             distance_squared = shape_distance_squared(via_shape, pad.shape)
             required = via_shape.radius_nm + pad.shape.radius_nm + clearance
             if distance_squared < required * required:
@@ -561,7 +565,9 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
                 findings.append(_finding(code, DrcSeverity.ERROR, f"via {via_index} and {pad.identity} violate copper spacing", objects=(f"via:{via_index}", pad.identity), nets=tuple(sorted((via.net, pad.net))), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
     visited_pad_pairs: set[tuple[str, str]] = set()
     for left in pads:
-        for right_id in pad_index.query(left.shape.bounds.expanded(board.rules.minimum_clearance_nm)):
+        for right_id in pad_index.query(
+            left.shape.bounds.expanded(max(board.rules.minimum_clearance_nm, left.clearance_nm))
+        ):
             if right_id == left.identity:
                 continue
             pair = tuple(sorted((left.identity, right_id)))
@@ -571,7 +577,7 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
             right = pad_by_id[right_id]
             if left.net == right.net or not set(left.layers).intersection(right.layers):
                 continue
-            clearance = _clearance(board, rules.get(left.net), rules.get(right.net))
+            clearance = max(left.clearance_nm, right.clearance_nm, _clearance(board, rules.get(left.net), rules.get(right.net)))
             distance_squared = shape_distance_squared(left.shape, right.shape)
             required = left.shape.radius_nm + right.shape.radius_nm + clearance
             if distance_squared < required * required:
@@ -587,7 +593,10 @@ def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
         for pad in footprint.pads:
             reference = PadReference(placement.reference, pad.number)
             net = pad_nets.get(reference)
-            if net is None or pad.kind is PadKind.NON_PLATED_THROUGH_HOLE:
+            if net is None or pad.kind in {
+                PadKind.NON_PLATED_THROUGH_HOLE,
+                PadKind.APERTURE,
+            }:
                 continue
             if pad.kind is PadKind.SMD:
                 layers = (CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK,)
@@ -595,7 +604,8 @@ def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
                 layers = tuple(board.stackup.copper_layers)
             position = transformed_pad_position(board, placement, pad.number)
             result.append(_PadCopper(f"pad:{placement.reference}.{pad.number}", net,
-                                     position, placed_pad_shape(position, pad, placement), layers))
+                                     position, placed_pad_shape(position, pad, placement), layers,
+                                     footprint.clearance_nm or 0))
     return tuple(result)
 
 
@@ -630,7 +640,10 @@ def _check_zone_fill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -
             for pad in pads:
                 if pad.net == net or fill.layer not in pad.layers:
                     continue
-                clearance = _clearance(board, rules.get(net), rules.get(pad.net))
+                clearance = max(
+                    pad.clearance_nm,
+                    _clearance(board, rules.get(net), rules.get(pad.net)),
+                )
                 if not _shape_clear_of_region(pad.shape, polygon, clearance):
                     findings.append(_finding("DRC-ZONE-CLEARANCE", DrcSeverity.ERROR,
                                              f"{objects} violates {pad.identity} clearance",
@@ -810,6 +823,9 @@ def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:
                 pad.roundrect_ratio_ppm,
                 pad.has_solder_mask,
                 pad.has_solder_paste,
+                pad.zone_connection.value if pad.zone_connection else None,
+                pad.heatsink,
+                pad.remove_unused_layers,
             )
             for pad in pads
         ),
@@ -817,6 +833,7 @@ def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:
         tuple((point.x_nm, point.y_nm) for point in getattr(footprint, "courtyard")),
         tuple(sorted(getattr(footprint, "metadata").items())),
         getattr(footprint, "height_nm"),
+        getattr(footprint, "clearance_nm"),
     )
 
 

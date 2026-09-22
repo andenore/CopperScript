@@ -353,10 +353,12 @@ def _footprint_lines(
         )
     attribute = (
         "smd"
-        if all(pad.kind is PadKind.SMD for pad in footprint.pads)
+        if all(pad.kind in {PadKind.SMD, PadKind.APERTURE} for pad in footprint.pads)
         else "through_hole"
     )
     lines.append(f"    (attr {attribute})")
+    if footprint.clearance_nm is not None:
+        lines.append(f"    (clearance {_mm(footprint.clearance_nm)})")
     if footprint.graphics:
         for index, graphic in enumerate(footprint.graphics):
             lines.extend(
@@ -424,6 +426,7 @@ def _pad_lines(
 ) -> list[str]:
     kind = {
         PadKind.SMD: "smd",
+        PadKind.APERTURE: "smd",
         PadKind.THROUGH_HOLE: "thru_hole",
         PadKind.NON_PLATED_THROUGH_HOLE: "np_thru_hole",
     }[pad.kind]
@@ -433,9 +436,9 @@ def _pad_lines(
         PadShape.RECTANGLE: "rect",
         PadShape.ROUNDRECT: "roundrect",
     }[pad.shape]
-    if pad.kind is PadKind.SMD:
+    if pad.kind in {PadKind.SMD, PadKind.APERTURE}:
         side = "F" if placement.side is BoardSide.FRONT else "B"
-        pad_layers = [f"{side}.Cu"]
+        pad_layers = [] if pad.kind is PadKind.APERTURE else [f"{side}.Cu"]
         if pad.has_solder_paste:
             pad_layers.append(f"{side}.Paste")
         if pad.has_solder_mask:
@@ -463,7 +466,25 @@ def _pad_lines(
         lines.append(
             f"      (roundrect_rratio {_ratio(pad.roundrect_ratio_ppm)})"
         )
-    if net_name is not None and pad.kind is not PadKind.NON_PLATED_THROUGH_HOLE:
+    if pad.heatsink:
+        lines.append("      (property pad_prop_heatsink)")
+    if pad.zone_connection is not None:
+        lines.append(
+            "      (zone_connect "
+            + {
+                ZoneConnection.NONE: "1",
+                ZoneConnection.THERMAL: "2",
+                ZoneConnection.SOLID: "3",
+                ZoneConnection.THT_THERMAL: "4",
+            }[pad.zone_connection]
+            + ")"
+        )
+    if pad.remove_unused_layers:
+        lines.append("      (remove_unused_layers yes)")
+    if net_name is not None and pad.kind not in {
+        PadKind.NON_PLATED_THROUGH_HOLE,
+        PadKind.APERTURE,
+    }:
         lines.append(f"      (net {net_codes[net_name]} {_quote(net_name)})")
     lines.extend(
         [

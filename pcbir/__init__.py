@@ -218,6 +218,7 @@ from .placement import (
     generate_placement_candidates,
     placement_metrics,
     placement_solution_is_legal,
+    transformed_local_point,
     transformed_pad_position,
     transformed_footprint_polygon,
 )
@@ -505,5 +506,6 @@ __all__ = [
     "resolved_physicalize",
     "transformed_pad_position",
     "transformed_footprint_polygon",
+    "transformed_local_point",
     "volts",
 ]

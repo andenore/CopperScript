@@ -30,20 +30,20 @@ board FullVerticalTracker {
     component LED_1: vertical.LED;
     component LED_2: vertical.LED;
 
-    component R_I2C_SDA: RESISTOR { value = 4.7kohm; footprint = "0402"; }
-    component R_I2C_SCL: RESISTOR { value = 4.7kohm; footprint = "0402"; }
-    component R_LED_1: RESISTOR { value = 1kohm; footprint = "0402"; }
-    component R_LED_2: RESISTOR { value = 1kohm; footprint = "0402"; }
-    component R_RESET_MCU: RESISTOR { value = 10kohm; footprint = "0402"; }
-    component R_RESET_NRF: RESISTOR { value = 10kohm; footprint = "0402"; }
-    component R_CAN_TERM: RESISTOR { value = 120ohm; footprint = "0603"; }
-    component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "0402"; }
-    component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "0402"; }
-    component C_MCU: CAPACITOR { value = 100nF; footprint = "0402"; }
-    component C_NRF: CAPACITOR { value = 4.7uF; footprint = "0603"; }
-    component C_ACCEL: CAPACITOR { value = 100nF; footprint = "0402"; }
-    component C_GNSS: CAPACITOR { value = 1uF; footprint = "0603"; }
-    component C_MODEM_BULK: CAPACITOR { value = 100uF; footprint = "0603"; }
+    component R_I2C_SDA: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_I2C_SCL: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_LED_1: RESISTOR { value = 1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_LED_2: RESISTOR { value = 1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_RESET_MCU: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_RESET_NRF: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_CAN_TERM: RESISTOR { value = 120ohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
+    component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_MCU: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_NRF: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_ACCEL: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_GNSS: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_MODEM_BULK: CAPACITOR { value = 100uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
 
     configure U_MCU.USART1 as MODEM_UART {
         TX = PB6;

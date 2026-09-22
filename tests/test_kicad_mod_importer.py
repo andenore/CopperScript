@@ -128,6 +128,35 @@ def test_allows_repeated_pad_numbers_and_empty_npth_numbers() -> None:
     )
 
 
+def test_imports_kicad10_paste_apertures_and_pad_fabrication_metadata() -> None:
+    source = """(footprint "ThermalPackage"
+      (version 20260206)
+      (generator "test")
+      (layer "F.Cu")
+      (clearance 0.2)
+      (fp_rect (start -1 -1) (end 1 1)
+        (stroke (width 0) (type solid)) (fill yes) (layer "F.Mask"))
+      (pad "" smd roundrect (at 0 0) (size 0.8 0.8)
+        (layers "F.Paste") (roundrect_rratio 0.2))
+      (pad "1" smd rect (at 0 0) (size 2 2)
+        (property pad_prop_heatsink)
+        (layers "F.Cu" "F.Mask")
+        (zone_connect 2))
+      (pad "2" thru_hole circle (at 3 0) (size 1.5 1.5)
+        (drill 0.8) (layers "*.Cu" "*.Mask") (remove_unused_layers yes)))
+    """
+
+    footprint = parse_kicad_mod(source).footprint
+
+    assert footprint.clearance_nm == 200_000
+    assert footprint.graphics[0].layer is FootprintLayer.SOLDER_MASK
+    assert footprint.pads[0].kind is PadKind.APERTURE
+    assert footprint.pads[0].number == ""
+    assert footprint.pads[1].heatsink
+    assert footprint.pads[1].zone_connection.value == "thermal"
+    assert footprint.pads[2].remove_unused_layers
+
+
 def test_rejects_back_side_footprint_until_layer_side_is_in_ir() -> None:
     source = """(footprint "BackSide"
       (version 20240108)

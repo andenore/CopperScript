@@ -241,7 +241,13 @@ def transformed_pad_position(
         raise PlacementAlgorithmError(
             f"component {placement.reference!r} has no pad {pad_number!r}"
         ) from exc
-    offset = _transform_local(pad.position, placement.rotation_degrees, placement.side)
+    return transformed_local_point(placement, pad.position)
+
+
+def transformed_local_point(placement: Placement, point: Point) -> Point:
+    """Transform one footprint-local point without requiring a unique pad number."""
+
+    offset = _transform_local(point, placement.rotation_degrees, placement.side)
     return Point(
         placement.position.x_nm + offset.x_nm,
         placement.position.y_nm + offset.y_nm,

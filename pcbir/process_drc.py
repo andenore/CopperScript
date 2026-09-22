@@ -9,7 +9,7 @@ from math import hypot
 from .drc import placed_pad_shape
 from .geometry import RoundedConvexShape, shape_distance_squared, shapes_clear
 from .physical import FootprintArc, FootprintLayer, FootprintLine, PadKind, PhysicalBoard, Point
-from .placement import transformed_pad_position
+from .placement import transformed_local_point
 
 
 class ProcessGateStatus(str, Enum):
@@ -89,16 +89,16 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
             findings.append(ProcessFinding("ASM-HEIGHT", "assembly",
                                            f"{placement.reference} exceeds the assembly height limit",
                                            (placement.reference,)))
-        for pad in footprint.pads:
-            identity = f"{placement.reference}.{pad.number}"
-            position = transformed_pad_position(board, placement, pad.number)
+        for pad_index, pad in enumerate(footprint.pads):
+            identity = f"{placement.reference}.{pad.number or f'aperture:{pad_index}'}"
+            position = transformed_local_point(placement, pad.position)
             shape = placed_pad_shape(position, pad, placement)
             placed_pads.append((identity, position, pad, placement, shape))
             if pad.drill is not None and min(pad.drill.width_nm, pad.drill.height_nm) < profile.minimum_drill_nm.value:
                 fabrication_failed = True
                 findings.append(ProcessFinding("FAB-DRILL-MIN", "fabrication",
                                                f"{identity} drill is below the qualified process limit", (identity,)))
-            if pad.kind is PadKind.SMD and pad.has_solder_paste:
+            if pad.kind in {PadKind.SMD, PadKind.APERTURE} and pad.has_solder_paste:
                 width, height = pad.size.width_nm, pad.size.height_nm
                 area = width * height
                 wall = 2 * (width + height) * profile.stencil_thickness_nm.value
