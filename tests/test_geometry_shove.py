@@ -1,4 +1,4 @@
-from pcbir import BoardOutline, CopperLayer, PhysicalBoard, PhysicalNet, Point, PolygonRing, TrackSegment, Via, nm_from_mm, route_any_angle, shove_via
+from pcbir import BoardOutline, CopperLayer, PhysicalBoard, PhysicalNet, Point, PolygonRing, TrackSegment, Via, cleanup_acute_angles, nm_from_mm, route_any_angle, shove_bundle, shove_via
 from pcbir.geometry import capsules_clear, point_in_polygon, segment_distance_squared, segments_intersect
 from pcbir.shove import shove_track
 
@@ -46,3 +46,23 @@ def test_via_shove_moves_a_collision_chain_or_rolls_back() -> None:
     assert moved.committed and moved.moved_via_indexes == (0, 1)
     rejected = shove_via(board, 0, Point.mm("0.5", 0), locked_via_indexes=frozenset({1}))
     assert not rejected.committed and rejected.board is board
+
+
+def test_bundle_shove_preserves_all_members_and_propagates_by_net() -> None:
+    nets = tuple(PhysicalNet(name, ()) for name in ("P", "N", "X"))
+    board = PhysicalBoard("Bundle", BoardOutline.rectangle(12, 10), {}, (), nets,
+                          tracks=(_track("P", "2"), _track("N", "2.5"), _track("X", "3")))
+    result = shove_bundle(board, (0, 1), (), Point.mm(0, "0.4"))
+    assert result.committed and result.moved_track_indexes == (0, 1, 2)
+    assert result.board.tracks[0].start.y_nm - board.tracks[0].start.y_nm == nm_from_mm("0.4")
+
+
+def test_acute_cleanup_removes_a_safe_degree_two_spike() -> None:
+    nets = (PhysicalNet("A", ()),)
+    tracks = (
+        TrackSegment("A", Point.mm(2, 2), Point.mm(5, 5), nm_from_mm("0.2"), CopperLayer.FRONT),
+        TrackSegment("A", Point.mm(5, 5), Point.mm(3, 2), nm_from_mm("0.2"), CopperLayer.FRONT),
+    )
+    board = PhysicalBoard("Cleanup", BoardOutline.rectangle(10, 10), {}, (), nets, tracks=tracks)
+    result = cleanup_acute_angles(board)
+    assert result.removed_track_count == 1 and len(result.board.tracks) == 1

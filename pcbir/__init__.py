@@ -133,7 +133,7 @@ from .quantities import (
 )
 from .power import analyze_power_states
 from .process_drc import FabricationAssemblyProfile, ProcessCapability, ProcessDrcReport, ProcessFinding, ProcessGateStatus, run_process_drc
-from .shove import ShoveResult, shove_track, shove_via
+from .shove import CleanupResult, ShoveResult, cleanup_acute_angles, shove_bundle, shove_track, shove_via
 from .importers import (
     FootprintImportResult,
     KiCadModImportError,
@@ -270,6 +270,7 @@ __all__ = [
     "CopperZone",
     "CopperScriptError",
     "CriticalNetResult",
+    "CleanupResult",
     "CriticalRoutingResult",
     "CriticalRoutingStatus",
     "DetailedNetResult",
@@ -430,6 +431,7 @@ __all__ = [
     "Frequency",
     "Impedance",
     "check",
+    "cleanup_acute_angles",
     "creepage_screen",
     "dc_trace_resistance",
     "capsules_clear",
@@ -465,6 +467,7 @@ __all__ = [
     "segment_distance_squared",
     "segments_intersect",
     "shove_track",
+    "shove_bundle",
     "shove_via",
     "point_in_polygon",
     "run_physical_drc",

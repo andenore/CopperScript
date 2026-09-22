@@ -717,6 +717,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-057 | Accepted | Fabrication, stencil, assembly, engineering-analysis, and CAM qualification are separate gates. Process limits carry source/revision provenance; engineering results state evidence grade, scope, and validity; unavailable required evidence yields `incomplete` or `blocked`, never an optimistic pass. |
 | CS-058 | Accepted | Every normalized hard or external constraint has named downstream consumers and a verifier. Missing ownership or results block release. Soft preferences may affect scoring but cannot weaken a hard requirement. |
 | CS-059 | Accepted | Independent CAM tools are identified by exact version and executable digest. Production qualification compares normalized semantics from the required tool tuple over the exact hashed staged bytes; parser disagreement fails and a missing capability is incomplete. |
+| CS-060 | Accepted | Coupled route shoves expand collisions by complete net so pair/bus geometry moves atomically. Locked conflicts roll back the immutable transaction; deterministic acute-angle cleanup may replace only a safe degree-two spike and remains subject to physical DRC. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

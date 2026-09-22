@@ -72,7 +72,7 @@ where relevant. It does not imply third-party certification.
       fill provenance; and an authoritative, pinned KiCad refill before DRC and
       manufacturing. Native filling remains a preview feature until it passes
       differential tests against the qualified manufacturing filler.
-- [ ] P2. Arbitrary-angle and push-and-shove routing: exact integer geometry,
+- [x] P2. Arbitrary-angle and push-and-shove routing: exact integer geometry,
       walkaround/hugging, deterministic shove transactions, rollback, acute-
       angle cleanup, locked-object behavior, and detailed-router integration.
   - [x] Exact integer predicates and rational squared-distance comparisons.
@@ -80,7 +80,7 @@ where relevant. It does not imply third-party certification.
   - [x] Atomic recursive line shove with locked-track rollback.
   - [x] Atomic recursive via shove with locked-object rollback and detailed-router
         any-angle line-of-sight cleanup.
-  - [ ] Coupled-bundle shove and acute-angle cleanup.
+  - [x] Coupled-bundle shove and acute-angle cleanup.
 - [ ] P3. Differential-pair completion: coupled pad escape, fanout, via-pair
       transitions, uncoupled-length accounting, length/skew measurement,
       bounded trombone tuning, return-path requirements, and DRC.
