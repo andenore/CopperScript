@@ -69,6 +69,39 @@ class CamQualificationEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class CamCorpusCase:
+    id: str
+    path: Path
+    expect_parse: bool
+    file_function: str | None = None
+    file_polarity: str | None = None
+    units: str | None = None
+    bounds_nm: tuple[int, int, int, int] | None = None
+    bounds_tolerance_nm: int = 10_000
+
+
+@dataclass(frozen=True, slots=True)
+class CamMatrixCell:
+    case_id: str
+    tool: ToolIdentity
+    passed: bool
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CamQualificationMatrix:
+    status: CamGateStatus
+    corpus_hashes: tuple[tuple[str, str], ...]
+    required_tools: tuple[ToolIdentity, ...]
+    cells: tuple[CamMatrixCell, ...]
+    findings: tuple[str, ...] = ()
+
+    @property
+    def passed(self) -> bool:
+        return self.status is CamGateStatus.PASS
+
+
+@dataclass(frozen=True, slots=True)
 class DrillHit:
     tool: str
     diameter_nm: int
@@ -108,8 +141,16 @@ class PyGerberAdapter:
 
     def __init__(self) -> None:
         import pygerber
-        self.identity = ToolIdentity("PyGerber", pygerber.__version__,
-                                     sha256(Path(sys.executable).read_bytes()).hexdigest())
+        package_root = Path(pygerber.__file__).resolve().parent
+        digest = sha256()
+        digest.update(Path(sys.executable).read_bytes())
+        for source in sorted(package_root.rglob("*.py"),
+                             key=lambda item: item.relative_to(package_root).as_posix()):
+            digest.update(source.relative_to(package_root).as_posix().encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(source.read_bytes())
+            digest.update(b"\0")
+        self.identity = ToolIdentity("PyGerber", pygerber.__version__, digest.hexdigest())
 
     def parse_gerber(self, path: Path) -> NormalizedCamLayer:
         from pygerber.gerberx3.api import v2
@@ -134,7 +175,12 @@ class PyGerberAdapter:
 
 
 class GerbvSubprocessAdapter:
-    """Independent libgerbv CLI image oracle with exact executable identity."""
+    """Independent libgerbv parse/re-export oracle with exact CLI identity.
+
+    Gerbv re-exports RS-274X, then the same normalizer used for the original
+    Gerber renders both files. This avoids comparing unlike PNG encodings or
+    treating a raster's pixel origin as a physical coordinate origin.
+    """
 
     def __init__(self, executable: Path, version: str):
         executable = executable.resolve(strict=True)
@@ -143,30 +189,132 @@ class GerbvSubprocessAdapter:
                                      sha256(executable.read_bytes()).hexdigest())
 
     def parse_gerber(self, path: Path) -> NormalizedCamLayer:
-        from PIL import Image
         with tempfile.TemporaryDirectory(prefix="copper-gerbv-") as temporary:
-            output = Path(temporary) / "layer.png"
+            output = Path(temporary) / "layer.gbr"
             completed = subprocess.run(
-                (str(self.executable), "-x", "png", "--dpi=2540", "-o", str(output), str(path)),
+                (str(self.executable), "-x", "rs274x", "-o", str(output), str(path)),
                 text=True, capture_output=True, timeout=60, check=False,
             )
             if completed.returncode or not output.is_file():
-                raise RuntimeError(completed.stderr.strip() or "gerbv render failed")
-            image = Image.open(output).convert("RGBA")
-            alpha = image.getchannel("A")
-            bbox = alpha.getbbox()
-            if bbox is None:
-                bounds_nm = (0, 0, 0, 0)
-            else:
-                bounds_nm = tuple(value * 10_000 for value in bbox)
-            topology = sha256(image.tobytes()).hexdigest()
+                raise RuntimeError(completed.stderr.strip() or "gerbv re-export failed")
+            normalized = PyGerberAdapter().parse_gerber(output)
         text = path.read_text(encoding="ascii", errors="strict")
         function = re.search(r"%TF\.FileFunction,([^*]+)\*%", text)
         polarity = re.search(r"%TF\.FilePolarity,([^*]+)\*%", text)
         unit = "mm" if "%MOMM*%" in text else "inch" if "%MOIN*%" in text else "unknown"
         return NormalizedCamLayer(function.group(1) if function else "",
                                   polarity.group(1) if polarity else "", unit,
-                                  bounds_nm, topology)
+                                  normalized.bounds_nm, normalized.topology_digest)
+
+
+def run_cam_qualification_matrix(
+    profile: CamQualificationProfile,
+    cases: tuple[CamCorpusCase, ...],
+    adapters: tuple[CamToolAdapter, ...],
+) -> CamQualificationMatrix:
+    """Run a deterministic positive/negative corpus for every pinned adapter."""
+
+    findings: list[str] = []
+    if not cases or not any(case.expect_parse for case in cases) or not any(
+        not case.expect_parse for case in cases
+    ):
+        findings.append("qualification corpus requires positive and negative cases")
+    if len({case.id for case in cases}) != len(cases):
+        findings.append("qualification corpus case IDs must be unique")
+    if len({identity.name for identity in profile.required_tool_identities}) < 2:
+        findings.append("qualification requires at least two distinct CAM tools")
+    corpus_hashes: list[tuple[str, str]] = []
+    for case in sorted(cases, key=lambda item: item.id):
+        if not case.path.is_file() or case.path.is_symlink():
+            findings.append(f"corpus case unavailable or symlinked: {case.id}")
+            continue
+        if case.path.stat().st_size > profile.maximum_file_bytes:
+            findings.append(f"corpus case exceeds size limit: {case.id}")
+            continue
+        data = case.path.read_bytes()
+        corpus_hashes.append((case.id, sha256(data).hexdigest()))
+    expected = set(profile.required_tool_identities)
+    present = {adapter.identity for adapter in adapters}
+    missing = expected - present
+    for identity in sorted(missing, key=lambda item: (item.name, item.version)):
+        findings.append(f"required CAM tool unavailable: {identity.name} {identity.version}")
+    cells: list[CamMatrixCell] = []
+    parsed_by_case: dict[str, list[tuple[ToolIdentity, NormalizedCamLayer]]] = {}
+    for adapter in sorted(
+        (item for item in adapters if item.identity in expected),
+        key=lambda item: (
+            item.identity.name,
+            item.identity.version,
+            item.identity.executable_sha256,
+        ),
+    ):
+        for case in sorted(cases, key=lambda item: item.id):
+            if case.id not in dict(corpus_hashes):
+                continue
+            try:
+                parsed = adapter.parse_gerber(case.path)
+            except Exception as exc:  # adapter isolation boundary
+                if case.expect_parse:
+                    cells.append(
+                        CamMatrixCell(case.id, adapter.identity, False, f"unexpected rejection: {exc}")
+                    )
+                else:
+                    cells.append(CamMatrixCell(case.id, adapter.identity, True))
+                continue
+            if not case.expect_parse:
+                cells.append(
+                    CamMatrixCell(case.id, adapter.identity, False, "malformed case was accepted")
+                )
+                continue
+            mismatches: list[str] = []
+            for name, expected, actual in (
+                ("file function", case.file_function, parsed.file_function),
+                ("file polarity", case.file_polarity, parsed.file_polarity),
+                ("units", case.units, parsed.units),
+            ):
+                if expected is not None and expected != actual:
+                    mismatches.append(f"{name}: expected {expected!r}, got {actual!r}")
+            if parsed.bounds_nm[2] <= parsed.bounds_nm[0] or parsed.bounds_nm[3] <= parsed.bounds_nm[1]:
+                mismatches.append("non-positive rendered extent")
+            if case.bounds_nm is not None and any(
+                abs(expected - actual) > case.bounds_tolerance_nm
+                for expected, actual in zip(case.bounds_nm, parsed.bounds_nm)
+            ):
+                mismatches.append(
+                    f"bounds: expected {case.bounds_nm!r}, got {parsed.bounds_nm!r}"
+                )
+            if not parsed.topology_digest:
+                mismatches.append("missing rendered topology")
+            cells.append(
+                CamMatrixCell(case.id, adapter.identity, not mismatches, "; ".join(mismatches))
+            )
+            parsed_by_case.setdefault(case.id, []).append((adapter.identity, parsed))
+    for case_id, results in sorted(parsed_by_case.items()):
+        if len(results) < 2:
+            continue
+        baseline = results[0][1]
+        for identity, parsed in results[1:]:
+            if (parsed.file_function, parsed.file_polarity, parsed.units) != (
+                baseline.file_function, baseline.file_polarity, baseline.units
+            ):
+                findings.append(
+                    f"independent CAM metadata disagreement: {case_id}, {identity.name}"
+                )
+    if any(not cell.passed for cell in cells):
+        status = CamGateStatus.FAIL
+    elif any(not finding.startswith("required CAM tool unavailable:") for finding in findings):
+        status = CamGateStatus.FAIL
+    elif missing:
+        status = CamGateStatus.INCOMPLETE
+    else:
+        status = CamGateStatus.PASS
+    return CamQualificationMatrix(
+        status,
+        tuple(corpus_hashes),
+        profile.required_tool_identities,
+        tuple(cells),
+        tuple(findings),
+    )
 
 
 def parse_xnc(path: Path, *, plated: bool | None = None) -> NormalizedDrillProgram:
@@ -289,20 +437,24 @@ def qualify_cam_artifacts(directory: Path, profile: CamQualificationProfile,
         if path.is_symlink():
             findings.append(f"symlink is not allowed: {name}")
             continue
-        data = path.read_bytes()
-        if len(data) > profile.maximum_file_bytes:
+        if path.stat().st_size > profile.maximum_file_bytes:
             findings.append(f"artifact exceeds size limit: {name}")
+            continue
+        data = path.read_bytes()
         hashes.append((name, sha256(data).hexdigest()))
+    gerbers = tuple(path for path in paths if path.suffix.casefold() in {".gbr", ".ger"})
+    if not gerbers:
+        findings.append("no Gerber artwork")
+    if len({item.name for item in profile.required_tool_identities}) < 2:
+        findings.append("qualification requires at least two distinct CAM tools")
+    if findings:
+        return CamQualificationEvidence(CamGateStatus.FAIL, tuple(hashes), (), tuple(findings))
     expected = {item: item for item in profile.required_tool_identities}
     actual = {adapter.identity: adapter for adapter in adapters}
     missing = tuple(sorted((item for item in expected if item not in actual), key=lambda i: (i.name, i.version)))
     if missing:
         findings.extend(f"required CAM tool unavailable: {item.name} {item.version}" for item in missing)
         return CamQualificationEvidence(CamGateStatus.INCOMPLETE, tuple(hashes), tuple(actual), tuple(findings))
-    gerbers = tuple(path for path in paths if path.suffix.casefold() in {".gbr", ".ger"})
-    if not gerbers:
-        findings.append("no Gerber artwork")
-        return CamQualificationEvidence(CamGateStatus.FAIL, tuple(hashes), tuple(actual), tuple(findings))
     for path in gerbers:
         parsed: list[NormalizedCamLayer] = []
         for identity in profile.required_tool_identities:

@@ -133,8 +133,10 @@ where relevant. It does not imply third-party certification.
         publication binding.
   - [x] Reconcile drill multisets and IPC-D-356 net partitions to signed
         physical IR.
+  - [x] Gate CAM-required release on a freshly run, hashed positive/negative
+        corpus; record the corpus hashes in the release manifest.
   - [ ] Qualify an installed libgerbv build and expand the official golden
-        corpus/matrix.
+        corpus/matrix, including polarity and metamorphic render comparisons.
 - [ ] P9. Frontend and full-board closure: express every new rule in `.copper`,
       lower it into typed IR, resolve real CopperLib footprints, then place,
       route, DRC, export and independently verify the full acceptance board.

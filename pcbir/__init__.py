@@ -11,7 +11,7 @@ from .backends import (
 )
 from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source
-from .cam_qualification import CamGateStatus, CamQualificationEvidence, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net
+from .cam_qualification import CamCorpusCase, CamGateStatus, CamMatrixCell, CamQualificationEvidence, CamQualificationMatrix, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net, run_cam_qualification_matrix
 from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage, normalize_constraints
 from .critical import (
     CriticalNetResult,
@@ -258,6 +258,9 @@ __all__ = [
     "Capacitance",
     "CamFinding",
     "CamGateStatus",
+    "CamCorpusCase",
+    "CamMatrixCell",
+    "CamQualificationMatrix",
     "CamQualificationEvidence",
     "CamQualificationProfile",
     "CamReconciliation",
@@ -481,6 +484,7 @@ __all__ = [
     "parse_ipcd356",
     "reconcile_drills",
     "reconcile_test_net",
+    "run_cam_qualification_matrix",
     "qualify_cam_artifacts",
     "placement_metrics",
     "placement_solution_is_legal",

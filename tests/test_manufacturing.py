@@ -29,6 +29,7 @@ from pcbir import (
     ProcessCapability,
     run_process_drc,
     CamQualificationProfile,
+    CamCorpusCase,
     NormalizedCamLayer,
     ToolIdentity,
 )
@@ -179,6 +180,8 @@ def test_release_can_require_version_pinned_independent_cam_evidence(tmp_path: P
             self.identity = ToolIdentity(name, "1", sha256(name.encode()).hexdigest())
 
         def parse_gerber(self, path: Path) -> NormalizedCamLayer:
+            if "negative" in path.name:
+                raise ValueError("deliberately malformed fixture")
             text = path.read_text(encoding="ascii")
             function = text.split("%TF.FileFunction,")[1].split("*%")[0]
             return NormalizedCamLayer(function, "Positive", "mm", (0, 0, 1, 1),
@@ -187,12 +190,29 @@ def test_release_can_require_version_pinned_independent_cam_evidence(tmp_path: P
     first, second = Adapter("one"), Adapter("two")
     qualification = CamQualificationProfile("release", "2026.05", "2021.11",
                                             (first.identity, second.identity))
+    fixture = Path(__file__).parent / "fixtures" / "cam"
+    corpus = (
+        CamCorpusCase("positive", fixture / "positive_line.gbr", True,
+                      "Copper,L1,Top", "Positive", "mm"),
+        CamCorpusCase("negative", fixture / "negative_undefined_aperture.gbr", False),
+    )
     profile = ManufacturingProfile(require_qualified_cam_evidence=True)
     board = _board()
     release = build_manufacturing_release(
         board, run_physical_drc(board).token, tmp_path / "release",
         kicad_cli=Path("kicad-cli"), profile=profile, runner=_fake_kicad,
         cam_qualification_profile=qualification, cam_adapters=(first, second),
+        cam_corpus_cases=corpus,
     )
     assert release.qualification_evidence is not None
     assert release.qualification_evidence.status.value == "pass"
+    manifest = json.loads(release.manifest.read_text(encoding="utf-8"))
+    assert len(manifest["cam_qualification"]["corpus_hashes"]) == 2
+
+    with pytest.raises(RuntimeError, match="corpus qualification"):
+        build_manufacturing_release(
+            board, run_physical_drc(board).token, tmp_path / "unqualified",
+            kicad_cli=Path("kicad-cli"), profile=profile, runner=_fake_kicad,
+            cam_qualification_profile=qualification, cam_adapters=(first, second),
+        )
+    assert not (tmp_path / "unqualified").exists()

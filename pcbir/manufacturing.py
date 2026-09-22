@@ -17,11 +17,13 @@ from .drc import DrcCompleteness, DrcDecision, SignoffToken, physical_board_dige
 from .physical import PhysicalBoard
 from .process_drc import ProcessDrcReport
 from .cam_qualification import (
+    CamCorpusCase,
     CamGateStatus,
     CamQualificationEvidence,
     CamQualificationProfile,
     CamToolAdapter,
     qualify_cam_artifacts,
+    run_cam_qualification_matrix,
 )
 
 
@@ -117,6 +119,7 @@ def build_manufacturing_release(
     process_report: ProcessDrcReport | None = None,
     cam_qualification_profile: CamQualificationProfile | None = None,
     cam_adapters: tuple[CamToolAdapter, ...] = (),
+    cam_corpus_cases: tuple[CamCorpusCase, ...] = (),
 ) -> ManufacturingRelease:
     """Create a release atomically; no output is published unless every gate passes."""
 
@@ -230,6 +233,17 @@ def build_manufacturing_release(
         if profile.require_qualified_cam_evidence:
             if cam_qualification_profile is None:
                 raise RuntimeError("manufacturing profile requires a CAM qualification profile")
+            matrix = run_cam_qualification_matrix(
+                cam_qualification_profile, cam_corpus_cases, cam_adapters
+            )
+            if not matrix.passed:
+                raise RuntimeError(
+                    "independent CAM toolchain corpus qualification did not pass: "
+                    + "; ".join((*matrix.findings, *(
+                        f"{cell.case_id}/{cell.tool.name}: {cell.detail}"
+                        for cell in matrix.cells if not cell.passed
+                    )))
+                )
             qualification = qualify_cam_artifacts(stage, cam_qualification_profile, cam_adapters)
             if qualification.status is not CamGateStatus.PASS:
                 raise RuntimeError(
@@ -275,6 +289,7 @@ def build_manufacturing_release(
                     for tool in qualification.tool_identities
                 ],
                 "artifact_hashes": list(qualification.artifact_hashes),
+                "corpus_hashes": list(matrix.corpus_hashes),
                 "findings": list(qualification.findings),
             },
             "artifacts": [

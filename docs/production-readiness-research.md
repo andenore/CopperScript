@@ -89,6 +89,15 @@ functions/polarity/extents, exact drill multisets and IPC-D-356 net partitions.
 Pin executable hashes and qualify each toolchain tuple against positive,
 negative, metamorphic and resource-limit corpora.
 
+The current implementation hashes a small committed positive/negative corpus
+and runs it for every required adapter immediately before a CAM-required
+release. PyGerber is exercised locally; libgerbv is not installed or qualified
+on the Windows host. Its subprocess adapter re-exports RS-274X, then uses the
+same PyGerber rendering normalizer as the original file so byte-identical PNG
+encodings from different renderers are not mistaken for geometry agreement.
+The independent parser path and real production export remain unqualified
+until a pinned libgerbv build passes a broader official and adversarial corpus.
+
 References: [Ucamco format specifications and test files](https://www.ucamco.com/en/gerber/downloads),
 [PyGerber](https://github.com/Argmaster/pygerber),
 [libgerbv](https://gerbv.github.io/), and

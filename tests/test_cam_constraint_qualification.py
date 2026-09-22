@@ -9,7 +9,11 @@ from pcbir import (
     PyGerberAdapter, parse_xnc,
     parse_ipcd356, reconcile_drills, reconcile_test_net,
     BoardOutline, PhysicalBoard, PhysicalNet, Point, Via, nm_from_mm,
+    CamCorpusCase, run_cam_qualification_matrix,
 )
+
+
+ROOT = Path(__file__).parents[1]
 
 
 @dataclass
@@ -37,6 +41,16 @@ def test_cam_qualification_requires_pinned_tools_and_agreement(tmp_path: Path) -
     assert failed.status is CamGateStatus.FAIL
 
 
+def test_unsafe_artifact_fails_even_when_second_tool_is_missing(tmp_path: Path) -> None:
+    (tmp_path / "top.gbr").write_bytes(b"oversized")
+    one, two = _tool("parser-a"), _tool("parser-b")
+    profile = CamQualificationProfile("release", "2026.05", "2021.11", (one, two),
+                                      maximum_file_bytes=4)
+    result = qualify_cam_artifacts(tmp_path, profile, (_Adapter(one, "same"),))
+    assert result.status is CamGateStatus.FAIL
+    assert any("size limit" in finding for finding in result.findings)
+
+
 def test_unconsumed_hard_constraint_blocks_release() -> None:
     constraints = (
         NormalizedConstraint("usb.skew", "usb", "route.skew", ConstraintMode.REQUIRE,
@@ -60,6 +74,69 @@ def test_pinned_pygerber_adapter_and_strict_xnc_parser(tmp_path: Path) -> None:
     drill.write_text("M48\nMETRIC\nT1C0.300\n%\nT1\nX1.000Y2.000\nM30\n", encoding="ascii")
     program = parse_xnc(drill)
     assert program.hits[0].diameter_nm == 300_000
+
+
+def test_committed_cam_corpus_qualifies_pinned_pygerber() -> None:
+    fixture = ROOT / "tests" / "fixtures" / "cam"
+    cases = (
+        CamCorpusCase(
+            "positive-line",
+            fixture / "positive_line.gbr",
+            True,
+            "Copper,L1,Top",
+            "Positive",
+            "mm",
+            (-500_000, -500_000, 10_500_000, 10_500_000),
+        ),
+        CamCorpusCase(
+            "negative-undefined-aperture",
+            fixture / "negative_undefined_aperture.gbr",
+            False,
+        ),
+        CamCorpusCase(
+            "positive-inch-line",
+            fixture / "positive_inch_line.gbr",
+            True,
+            "Copper,L2,Bot",
+            "Positive",
+            "inch",
+            (-127_000, -127_000, 25_527_000, 25_527_000),
+        ),
+        CamCorpusCase(
+            "negative-missing-end",
+            fixture / "negative_missing_end.gbr",
+            False,
+        ),
+    )
+
+    pygerber = PyGerberAdapter()
+    other = _tool("libgerbv")
+    profile = CamQualificationProfile("corpus", "2026.05", "2021.11",
+                                      (pygerber.identity, other))
+    incomplete = run_cam_qualification_matrix(profile, cases, (pygerber,))
+    assert incomplete.status is CamGateStatus.INCOMPLETE
+    assert incomplete.corpus_hashes == tuple(sorted(incomplete.corpus_hashes))
+    assert len(incomplete.cells) == 4
+    matrix = run_cam_qualification_matrix(profile, cases, (
+        pygerber, _CorpusAdapter(other),
+    ))
+
+    assert matrix.passed, matrix.cells
+
+
+@dataclass
+class _CorpusAdapter:
+    identity: ToolIdentity
+
+    def parse_gerber(self, path: Path) -> NormalizedCamLayer:
+        if "negative" in path.name:
+            raise ValueError("undefined aperture")
+        if "inch" in path.name:
+            return NormalizedCamLayer("Copper,L2,Bot", "Positive", "inch",
+                                      (-127_000, -127_000, 25_527_000, 25_527_000),
+                                      "fixture")
+        return NormalizedCamLayer("Copper,L1,Top", "Positive", "mm",
+                                  (-500_000, -500_000, 10_500_000, 10_500_000), "fixture")
 
 
 def test_drill_multiset_and_ipcd356_partition_reconcile_to_physical_ir(tmp_path: Path) -> None:

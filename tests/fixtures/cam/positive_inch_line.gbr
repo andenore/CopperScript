@@ -1,0 +1,10 @@
+G04 CopperScript positive corpus: inch units*
+%FSLAX46Y46*%
+%MOIN*%
+%TF.FileFunction,Copper,L2,Bot*%
+%TF.FilePolarity,Positive*%
+%ADD10C,0.010*%
+D10*
+X0000000000Y0000000000D02*
+X0001000000Y0001000000D01*
+M02*

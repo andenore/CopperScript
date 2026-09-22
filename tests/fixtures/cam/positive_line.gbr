@@ -1,0 +1,10 @@
+G04 CopperScript positive corpus: metric line*
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+%TF.FilePolarity,Positive*%
+%ADD10C,1.000*%
+D10*
+X0000000000Y0000000000D02*
+X0010000000Y0010000000D01*
+M02*
