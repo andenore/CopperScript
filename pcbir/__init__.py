@@ -45,7 +45,7 @@ from .drc import (
     run_incremental_physical_drc,
 )
 from .erc import Diagnostic, Severity, check, has_errors
-from .engineering import AnalysisStatus, EngineeringResult, EvidenceGrade, creepage_screen, dc_trace_resistance
+from .engineering import AnalysisStatus, EngineeringResult, EvidenceGrade, creepage_screen, dc_net_voltage_drop, dc_trace_resistance, external_solver_result, microstrip_impedance, propagation_delay, return_path_continuity, thermal_screen
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
@@ -434,7 +434,13 @@ __all__ = [
     "check",
     "cleanup_acute_angles",
     "creepage_screen",
+    "dc_net_voltage_drop",
     "dc_trace_resistance",
+    "external_solver_result",
+    "microstrip_impedance",
+    "propagation_delay",
+    "return_path_continuity",
+    "thermal_screen",
     "capsules_clear",
     "analyze_power_states",
     "compile_file",

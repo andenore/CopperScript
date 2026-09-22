@@ -114,13 +114,13 @@ where relevant. It does not imply third-party certification.
   - [x] Derived mask/paste/silkscreen geometry, slots, explicit edge-plating
         capability, orientation marks, copper balance, and release-gate
         integration. Unsupported artwork arcs make the process gate incomplete.
-- [ ] P7. Engineering analyses: stackup-driven impedance estimates, return-path
+- [x] P7. Engineering analyses: stackup-driven impedance estimates, return-path
       continuity, conservative SI/PI checks, DC current/voltage-drop and thermal
       estimates, creepage/clearance profiles, explicit model validity and
       external-solver handoff without overstating signoff.
   - [x] Evidence-grade/status/scope/validity result contract, deterministic DC
         trace resistance and sourced creepage screening.
-  - [ ] Impedance/delay, return-path, via/DC network, thermal, and external
+  - [x] Impedance/delay, return-path, via/DC network, thermal, and external
         solver evidence adapters.
 - [ ] P8. Independent CAM qualification: second-tool parsing/rendering and
       comparison, layer/drill/netlist reconciliation, polarity and extents,

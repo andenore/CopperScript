@@ -1,10 +1,12 @@
 from decimal import Decimal
 
 from pcbir import (
-    AnalysisStatus, BoardOutline, FabricationAssemblyProfile, FootprintPad,
+    AnalysisStatus, BoardOutline, CopperLayer, FabricationAssemblyProfile, FootprintPad,
     FootprintLayer, FootprintLine, PadKind,
-    PhysicalBoard, PhysicalFootprint, Placement, Point, ProcessCapability,
-    ProcessGateStatus, Size, dc_trace_resistance, nm_from_mm, run_process_drc,
+    PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, ProcessCapability,
+    ProcessGateStatus, Size, dc_net_voltage_drop, dc_trace_resistance,
+    external_solver_result, microstrip_impedance, nm_from_mm, propagation_delay,
+    run_process_drc, thermal_screen, TrackSegment,
 )
 
 
@@ -53,3 +55,27 @@ def test_artwork_and_slot_checks_use_profile_geometry() -> None:
     report = run_process_drc(board, profile)
     codes = {item.code for item in report.findings}
     assert {"FAB-SLOT-MIN", "FAB-SILK-MASK"} <= codes
+
+
+def test_si_dc_thermal_and_external_results_are_evidence_graded() -> None:
+    impedance = microstrip_impedance(nm_from_mm("0.3"), nm_from_mm("0.035"),
+                                     nm_from_mm("0.18"), Decimal("4.1"),
+                                     target_ohms=Decimal("50"), tolerance_ohms=Decimal("30"))
+    assert impedance.value is not None and impedance.evidence_grade.value == "screening"
+    delay = propagation_delay(nm_from_mm(100), Decimal("3.2"))
+    assert delay.value is not None and delay.unit == "s"
+    board = PhysicalBoard("DC", BoardOutline.rectangle(20, 10), {}, (),
+                          (PhysicalNet("PWR", ()),),
+                          tracks=(TrackSegment(
+                              "PWR", Point.mm(2, 5), Point.mm(18, 5),
+                              nm_from_mm("0.5"), CopperLayer.FRONT),))
+    drop = dc_net_voltage_drop(board, "PWR", Decimal("1"), nm_from_mm("0.035"),
+                               nm_from_mm("0.02"), maximum_volts=Decimal("0.1"))
+    assert drop.value is not None
+    thermal = thermal_screen(Decimal("1.5"), Decimal("20"), Decimal("25"),
+                             Decimal("85"), model_source="component datasheet")
+    assert thermal.status is AnalysisStatus.PASS
+    external = external_solver_result("impedance", Decimal("49.8"), "ohm", b"report",
+                                      tool="openEMS", version="0.0.35", passed=True,
+                                      claim_scope="routed USB pair")
+    assert external.evidence_digest is not None and len(external.evidence_digest) == 64
