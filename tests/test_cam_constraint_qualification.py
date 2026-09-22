@@ -7,6 +7,8 @@ from pcbir import (
     ConstraintMode, NormalizedCamLayer, NormalizedConstraint, ToolIdentity,
     constraint_coverage, qualify_cam_artifacts,
     PyGerberAdapter, parse_xnc,
+    parse_ipcd356, reconcile_drills, reconcile_test_net,
+    BoardOutline, PhysicalBoard, PhysicalNet, Point, Via, nm_from_mm,
 )
 
 
@@ -58,3 +60,25 @@ def test_pinned_pygerber_adapter_and_strict_xnc_parser(tmp_path: Path) -> None:
     drill.write_text("M48\nMETRIC\nT1C0.300\n%\nT1\nX1.000Y2.000\nM30\n", encoding="ascii")
     program = parse_xnc(drill)
     assert program.hits[0].diameter_nm == 300_000
+
+
+def test_drill_multiset_and_ipcd356_partition_reconcile_to_physical_ir(tmp_path: Path) -> None:
+    board = PhysicalBoard("Drill", BoardOutline.rectangle(10, 10), {}, (),
+                          (PhysicalNet("N", ()),),
+                          vias=(Via("N", Point.mm(1, 2), nm_from_mm("0.6"),
+                                    nm_from_mm("0.3")),))
+    drill = tmp_path / "board.drl"
+    drill.write_text("M48\nMETRIC\nT1C0.300\n%\nT1\nX1.000Y2.000\nM30\n", encoding="ascii")
+    assert reconcile_drills(board, (parse_xnc(drill, plated=True),)).passed
+
+    from test_manufacturing import _board
+    electrical = _board()
+    d356 = tmp_path / "board.d356"
+    d356.write_text(
+        "P  CODE 00\nP  UNITS CUST 0\n"
+        "327SIGNAL           J1    -1          A01X+001181Y-002362X0236Y0236R000S2\n"
+        "327SIGNAL           J2    -1          A01X+006693Y-002362X0236Y0236R000S2\n999\n",
+        encoding="ascii",
+    )
+    parsed = parse_ipcd356(d356)
+    assert reconcile_test_net(electrical, parsed).passed

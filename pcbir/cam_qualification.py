@@ -12,6 +12,10 @@ import subprocess
 import sys
 import tempfile
 from typing import Protocol
+from collections import Counter
+
+from .physical import PadKind, PhysicalBoard
+from .placement import transformed_pad_position
 
 
 class CamGateStatus(str, Enum):
@@ -76,6 +80,27 @@ class DrillHit:
 class NormalizedDrillProgram:
     hits: tuple[DrillHit, ...]
     units: str
+    plated: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CamReconciliation:
+    passed: bool
+    findings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TestPoint:
+    net: str
+    component: str
+    pad: str
+    x_nm: int
+    y_nm: int
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedTestNet:
+    points: tuple[TestPoint, ...]
 
 
 class PyGerberAdapter:
@@ -144,7 +169,7 @@ class GerbvSubprocessAdapter:
                                   bounds_nm, topology)
 
 
-def parse_xnc(path: Path) -> NormalizedDrillProgram:
+def parse_xnc(path: Path, *, plated: bool | None = None) -> NormalizedDrillProgram:
     """Parse the strict decimal metric XNC subset emitted by the release profile."""
     text = path.read_text(encoding="ascii", errors="strict")
     if "M48" not in text or "M30" not in text or "METRIC" not in text:
@@ -168,7 +193,81 @@ def parse_xnc(path: Path) -> NormalizedDrillProgram:
                                  round(float(coordinate.group(1)) * 1_000_000),
                                  round(float(coordinate.group(2)) * 1_000_000)))
     return NormalizedDrillProgram(tuple(sorted(hits, key=lambda item: (item.x_nm, item.y_nm,
-                                                                        item.diameter_nm, item.tool))), "mm")
+                                                                        item.diameter_nm, item.tool))), "mm", plated)
+
+
+def reconcile_drills(board: PhysicalBoard,
+                     programs: tuple[NormalizedDrillProgram, ...]) -> CamReconciliation:
+    """Compare the normalized hit multiset to pads and vias in signed physical IR."""
+    expected: Counter[tuple[int, int, int, bool | None]] = Counter()
+    findings: list[str] = []
+    for placement in board.placements:
+        footprint = board.footprints[placement.footprint]
+        for pad in footprint.pads:
+            if pad.drill is None:
+                continue
+            if pad.drill.width_nm != pad.drill.height_nm:
+                findings.append(f"slot reconciliation requires routed XNC support: {placement.reference}.{pad.number}")
+                continue
+            point = transformed_pad_position(board, placement, pad.number)
+            plated = pad.kind is PadKind.THROUGH_HOLE
+            expected[(point.x_nm, point.y_nm, pad.drill.width_nm, plated)] += 1
+    for via in board.vias:
+        expected[(via.position.x_nm, via.position.y_nm, via.drill_nm, True)] += 1
+    actual: Counter[tuple[int, int, int, bool | None]] = Counter()
+    for program in programs:
+        for hit in program.hits:
+            actual[(hit.x_nm, hit.y_nm, hit.diameter_nm, program.plated)] += 1
+    if expected != actual:
+        for item, count in sorted((expected - actual).items()):
+            findings.append(f"missing drill hit {item} x{count}")
+        for item, count in sorted((actual - expected).items()):
+            findings.append(f"unexpected drill hit {item} x{count}")
+    return CamReconciliation(not findings, tuple(findings))
+
+
+def parse_ipcd356(path: Path) -> NormalizedTestNet:
+    text = path.read_text(encoding="ascii", errors="strict")
+    if not text.rstrip().endswith("999"):
+        raise ValueError("IPC-D-356 has no 999 end record")
+    scale_nm = 2_540 if "P  UNITS CUST 0" in text else 10_000
+    points: list[TestPoint] = []
+    pattern = re.compile(
+        r"^327(?P<net>\S+)\s+(?P<component>\S+)\s+-(?P<pad>\S+)"
+        r".*?X(?P<x>[+-]\d+)Y(?P<y>[+-]\d+)", re.MULTILINE
+    )
+    for match in pattern.finditer(text):
+        points.append(TestPoint(match.group("net"), match.group("component"),
+                                match.group("pad"), int(match.group("x")) * scale_nm,
+                                int(match.group("y")) * scale_nm))
+    return NormalizedTestNet(tuple(sorted(points, key=lambda item: (
+        item.net, item.component, item.pad, item.x_nm, item.y_nm))))
+
+
+def reconcile_test_net(board: PhysicalBoard,
+                       parsed: NormalizedTestNet) -> CamReconciliation:
+    expected = {
+        (pad.component, pad.pad): net.name
+        for net in board.nets for pad in net.pads
+    }
+    actual = {(point.component, point.pad): point.net for point in parsed.points}
+    findings: list[str] = []
+    for identity, net in sorted(expected.items()):
+        if identity not in actual:
+            findings.append(f"missing IPC-D-356 point {identity[0]}.{identity[1]}")
+        elif actual[identity] != net:
+            findings.append(f"IPC-D-356 point {identity[0]}.{identity[1]} maps to {actual[identity]!r}, expected {net!r}")
+    for identity in sorted(set(actual) - set(expected)):
+        findings.append(f"unexpected IPC-D-356 point {identity[0]}.{identity[1]}")
+    # Equivalence-relation check catches merged source nets even when names are truncated.
+    grouped: dict[str, set[str]] = {}
+    for identity, parsed_net in actual.items():
+        if identity in expected:
+            grouped.setdefault(parsed_net, set()).add(expected[identity])
+    for parsed_net, source_nets in sorted(grouped.items()):
+        if len(source_nets) > 1:
+            findings.append(f"IPC-D-356 net {parsed_net!r} merges source nets {sorted(source_nets)}")
+    return CamReconciliation(not findings, tuple(findings))
 
 
 def qualify_cam_artifacts(directory: Path, profile: CamQualificationProfile,

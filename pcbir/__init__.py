@@ -11,7 +11,7 @@ from .backends import (
 )
 from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source
-from .cam_qualification import CamGateStatus, CamQualificationEvidence, CamQualificationProfile, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, PyGerberAdapter, ToolIdentity, parse_xnc, qualify_cam_artifacts
+from .cam_qualification import CamGateStatus, CamQualificationEvidence, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net
 from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage
 from .critical import (
     CriticalNetResult,
@@ -256,6 +256,7 @@ __all__ = [
     "CamGateStatus",
     "CamQualificationEvidence",
     "CamQualificationProfile",
+    "CamReconciliation",
     "CamToolAdapter",
     "DrillHit",
     "GerbvSubprocessAdapter",
@@ -347,6 +348,7 @@ __all__ = [
     "NetRoutingRule",
     "NormalizedCamLayer",
     "NormalizedDrillProgram",
+    "NormalizedTestNet",
     "PyGerberAdapter",
     "NormalizedConstraint",
     "Net",
@@ -416,6 +418,7 @@ __all__ = [
     "StackupLayer",
     "StackupLayerKind",
     "ThermalReliefSettings",
+    "TestPoint",
     "ToolIdentity",
     "Supply",
     "TerminalBinding",
@@ -467,6 +470,9 @@ __all__ = [
     "ohms",
     "parse_kicad_mod",
     "parse_xnc",
+    "parse_ipcd356",
+    "reconcile_drills",
+    "reconcile_test_net",
     "qualify_cam_artifacts",
     "placement_metrics",
     "placement_solution_is_legal",
