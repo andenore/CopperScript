@@ -219,6 +219,12 @@ Key modules:
   orchestration with no proxy-to-copper shortcuts.
 - `pcbir.manufacturing` — gated KiCad 10 Gerber/drill/netlist releases with
   independent structural CAM parsing, manifests, checksums, and atomic publish.
+- `pcbir.process_drc` — separate provenance-bearing fabrication, stencil, and
+  assembly capability gates.
+- `pcbir.engineering` — evidence-graded screening results that explicitly state
+  claim scope and model limitations.
+- `pcbir.cam_qualification` and `pcbir.constraint_coverage` — fail-closed
+  independent-tool evidence and end-to-end ownership of hard constraints.
 - `pcbir.physical` — immutable placement, exact copper, typed zone/keepout
   intent, and content-bound external fill provenance. Manufacturing boards with
   zones are authoritatively refilled and saved by the pinned KiCad toolchain.

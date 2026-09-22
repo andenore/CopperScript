@@ -102,16 +102,34 @@ where relevant. It does not imply third-party certification.
 - [ ] P6. Artwork, assembly, and fabrication DRC: solder-mask and paste rules,
       silkscreen clipping/clearance, courtyard and component-side checks,
       hole/slot constraints, copper balance and documented fab-profile gates.
+  - [x] Provenance-bearing process capabilities and separate fabrication,
+        stencil, and assembly decisions for drill, mask-web, paste-area,
+        courtyard, and height checks.
+  - [ ] Exact derived mask/paste/silkscreen geometry, slots, edge plating,
+        orientation marks, copper balance, and release-gate integration.
 - [ ] P7. Engineering analyses: stackup-driven impedance estimates, return-path
       continuity, conservative SI/PI checks, DC current/voltage-drop and thermal
       estimates, creepage/clearance profiles, explicit model validity and
       external-solver handoff without overstating signoff.
+  - [x] Evidence-grade/status/scope/validity result contract, deterministic DC
+        trace resistance and sourced creepage screening.
+  - [ ] Impedance/delay, return-path, via/DC network, thermal, and external
+        solver evidence adapters.
 - [ ] P8. Independent CAM qualification: second-tool parsing/rendering and
       comparison, layer/drill/netlist reconciliation, polarity and extents,
       golden corpus, version-pinned qualification matrix, and release evidence.
+  - [x] Fail-closed qualification states, exact tool identities, immutable
+        inventory hashes, safe input limits, and independent normalized-parser
+        agreement contracts.
+  - [ ] PyGerber/libgerbv adapters, artwork/drill/net semantic reconciliation,
+        qualification corpus/matrix, and publication binding.
 - [ ] P9. Frontend and full-board closure: express every new rule in `.copper`,
       lower it into typed IR, resolve real CopperLib footprints, then place,
       route, DRC, export and independently verify the full acceptance board.
+  - [x] Normalized requirement/target/preference/assumption/external modes and
+        fail-closed constraint consumer/verifier coverage.
+  - [ ] Concrete syntax/lowering, content-addressed lockfile and asset audits,
+        real CopperLib resolution, and complete acceptance-board closure.
 
 ### Program completion criteria
 

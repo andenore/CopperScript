@@ -714,6 +714,9 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-054 | Accepted | Routing and physical DRC share deterministic integer geometry predicates. Interactive shove operations are transactions: recursive movement commits only when the complete result is legal, while locked-object or boundary conflicts return the original immutable board. |
 | CS-055 | Accepted | A differential pair is one atomic routed object. Signoff measures coupled and uncoupled portions, skew, and geometrically paired transitions; impedance remains an explicitly external claim. |
 | CS-056 | Accepted | Stackups are ordered physical copper/dielectric constructions. Vias select a named fabrication technology whose span, drill, annular-ring, aspect-ratio, and microvia-adjacency limits are validated and exported consistently. |
+| CS-057 | Accepted | Fabrication, stencil, assembly, engineering-analysis, and CAM qualification are separate gates. Process limits carry source/revision provenance; engineering results state evidence grade, scope, and validity; unavailable required evidence yields `incomplete` or `blocked`, never an optimistic pass. |
+| CS-058 | Accepted | Every normalized hard or external constraint has named downstream consumers and a verifier. Missing ownership or results block release. Soft preferences may affect scoring but cannot weaken a hard requirement. |
+| CS-059 | Accepted | Independent CAM tools are identified by exact version and executable digest. Production qualification compares normalized semantics from the required tool tuple over the exact hashed staged bytes; parser disagreement fails and a missing capability is incomplete. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

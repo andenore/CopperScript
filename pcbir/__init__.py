@@ -11,6 +11,8 @@ from .backends import (
 )
 from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source
+from .cam_qualification import CamGateStatus, CamQualificationEvidence, CamQualificationProfile, CamToolAdapter, NormalizedCamLayer, ToolIdentity, qualify_cam_artifacts
+from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage
 from .critical import (
     CriticalNetResult,
     CriticalRoutingResult,
@@ -42,6 +44,7 @@ from .drc import (
     run_physical_drc,
 )
 from .erc import Diagnostic, Severity, check, has_errors
+from .engineering import AnalysisStatus, EngineeringResult, EvidenceGrade, creepage_screen, dc_trace_resistance
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
@@ -129,6 +132,7 @@ from .quantities import (
     volts,
 )
 from .power import analyze_power_states
+from .process_drc import FabricationAssemblyProfile, ProcessCapability, ProcessDrcReport, ProcessFinding, ProcessGateStatus, run_process_drc
 from .shove import ShoveResult, shove_track
 from .importers import (
     FootprintImportResult,
@@ -236,6 +240,7 @@ from .syntax import CopperScriptError, SourceLocation
 
 __all__ = [
     "AlignmentAxis",
+    "AnalysisStatus",
     "Artifact",
     "ArtifactManifest",
     "Backend",
@@ -246,11 +251,18 @@ __all__ = [
     "BondDefinition",
     "Capacitance",
     "CamFinding",
+    "CamGateStatus",
+    "CamQualificationEvidence",
+    "CamQualificationProfile",
+    "CamToolAdapter",
     "CamVerificationReport",
     "ComponentInstance",
     "ComponentPlacementRule",
     "CommandResult",
     "Constraint",
+    "ConstraintCheckStatus",
+    "ConstraintCoverage",
+    "ConstraintMode",
     "ConstraintKind",
     "CopperLayer",
     "CopperKeepout",
@@ -281,6 +293,8 @@ __all__ = [
     "Direction",
     "DriveMode",
     "ElectricalProfile",
+    "EngineeringResult",
+    "EvidenceGrade",
     "Endpoint",
     "ElaboratedModuleInstance",
     "FlatElectricalView",
@@ -326,6 +340,8 @@ __all__ = [
     "MuxOption",
     "ModuleDefinition",
     "NetRoutingRule",
+    "NormalizedCamLayer",
+    "NormalizedConstraint",
     "Net",
     "PartDefinition",
     "PackagePinDefinition",
@@ -341,6 +357,11 @@ __all__ = [
     "PowerDomainDefinition",
     "PowerRailState",
     "PowerState",
+    "FabricationAssemblyProfile",
+    "ProcessCapability",
+    "ProcessDrcReport",
+    "ProcessFinding",
+    "ProcessGateStatus",
     "PhysicalBackend",
     "PhysicalBoard",
     "PhysicalDrcPolicy",
@@ -388,6 +409,7 @@ __all__ = [
     "StackupLayer",
     "StackupLayerKind",
     "ThermalReliefSettings",
+    "ToolIdentity",
     "Supply",
     "TerminalBinding",
     "TrackSegment",
@@ -407,10 +429,13 @@ __all__ = [
     "Frequency",
     "Impedance",
     "check",
+    "creepage_screen",
+    "dc_trace_resistance",
     "capsules_clear",
     "analyze_power_states",
     "compile_file",
     "compile_source",
+    "constraint_coverage",
     "build_manufacturing_release",
     "ep",
     "elaborate",
@@ -426,6 +451,7 @@ __all__ = [
     "nm_from_mm",
     "ohms",
     "parse_kicad_mod",
+    "qualify_cam_artifacts",
     "placement_metrics",
     "placement_solution_is_legal",
     "plan_placement",
@@ -439,6 +465,7 @@ __all__ = [
     "shove_track",
     "point_in_polygon",
     "run_physical_drc",
+    "run_process_drc",
     "run_routing_pipeline",
     "verify_cam_directory",
     "physical_board_digest",
