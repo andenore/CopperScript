@@ -42,3 +42,20 @@ Verified on 2026-09-21 with the full test suite, byte-identical repeated
 full-vertical artifacts, and KiCad 10 CLI parsing/DRC. The acceptance board
 uses proxy footprints and has no routed tracks, so KiCad DRC violations are
 expected and do not satisfy the future Route or Verify gates.
+
+## Routing-to-manufacturing pipeline
+
+- [x] 4. Add a deterministic multilayer congestion estimator/global router
+      using capacity guides, multi-source A*, and negotiated congestion. Keep
+      guide geometry separate from exact copper.
+- [ ] 5. Add a transactional placement–global-routing feedback loop with
+      bounded legal movement, rollback, convergence control, and full-route
+      certification.
+- [ ] 6. Add profile-driven critical-net routing for differential pairs,
+      clocks, buses, RF feeds, and power routes before general routing.
+- [ ] 7. Add a guide-aware general detailed router with pin access, vias,
+      exact tracks, deterministic rip-up/reroute, and cleanup.
+- [ ] 8. Add fail-closed physical DRC, coverage reporting, waivers, and signed
+      signoff tokens tied to exact manufacturing geometry.
+- [ ] 9. Add gated manufacturing export, release manifests, checksums, and an
+      independent CAM re-import/verification pass.

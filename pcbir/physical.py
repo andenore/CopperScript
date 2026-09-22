@@ -76,6 +76,13 @@ class RelativePlacementKind(str, Enum):
     ALIGN = "align"
 
 
+class RouteKind(str, Enum):
+    GENERAL = "general"
+    CRITICAL = "critical"
+    DIFFERENTIAL = "differential"
+    POWER = "power"
+
+
 @dataclass(frozen=True, slots=True)
 class Point:
     x_nm: Nanometres
@@ -459,6 +466,52 @@ class PlacementGroup:
 
 
 @dataclass(frozen=True, slots=True)
+class NetRoutingRule:
+    """Physical routing intent for one net.
+
+    Global routing uses these values as demand and eligibility constraints;
+    detailed routing and DRC use the same values for exact copper geometry.
+    """
+
+    net: str
+    kind: RouteKind = RouteKind.GENERAL
+    priority: int = 0
+    width_nm: Nanometres | None = None
+    clearance_nm: Nanometres | None = None
+    allowed_layers: tuple[CopperLayer, ...] = ()
+    max_vias: int | None = None
+    max_length_nm: Nanometres | None = None
+    differential_partner: str | None = None
+    pair_gap_nm: Nanometres | None = None
+    max_skew_nm: Nanometres | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "allowed_layers", tuple(self.allowed_layers))
+        if not self.net:
+            raise ValueError("routing rule requires a net")
+        if self.priority < 0:
+            raise ValueError("routing priority cannot be negative")
+        for name, value in (
+            ("width", self.width_nm),
+            ("clearance", self.clearance_nm),
+            ("maximum length", self.max_length_nm),
+            ("pair gap", self.pair_gap_nm),
+            ("maximum skew", self.max_skew_nm),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"routing {name} must be positive")
+        if self.max_vias is not None and self.max_vias < 0:
+            raise ValueError("routing maximum via count cannot be negative")
+        if self.kind is RouteKind.DIFFERENTIAL:
+            if self.differential_partner is None or self.pair_gap_nm is None:
+                raise ValueError(
+                    "differential routing requires a partner net and pair gap"
+                )
+            if self.differential_partner == self.net:
+                raise ValueError("a differential net cannot partner with itself")
+
+
+@dataclass(frozen=True, slots=True)
 class TrackSegment:
     net: str
     start: Point
@@ -510,6 +563,7 @@ class PhysicalBoard:
     placement_rules: tuple[ComponentPlacementRule, ...] = ()
     relative_rules: tuple[RelativePlacementRule, ...] = ()
     placement_groups: tuple[PlacementGroup, ...] = ()
+    net_routing_rules: tuple[NetRoutingRule, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -523,6 +577,7 @@ class PhysicalBoard:
         object.__setattr__(self, "placement_rules", tuple(self.placement_rules))
         object.__setattr__(self, "relative_rules", tuple(self.relative_rules))
         object.__setattr__(self, "placement_groups", tuple(self.placement_groups))
+        object.__setattr__(self, "net_routing_rules", tuple(self.net_routing_rules))
         self._validate_references()
 
     def _validate_references(self) -> None:
@@ -630,4 +685,26 @@ class PhysicalBoard:
                 raise ValueError(
                     f"placement group {group.name!r} references unknown component "
                     f"{min(unknown)!r}"
+                )
+
+        routed_rule_nets: set[str] = set()
+        for rule in self.net_routing_rules:
+            if rule.net not in known_nets:
+                raise ValueError(f"routing rule references unknown net {rule.net!r}")
+            if rule.net in routed_rule_nets:
+                raise ValueError(f"net {rule.net!r} has multiple routing rules")
+            routed_rule_nets.add(rule.net)
+            unavailable = set(rule.allowed_layers) - layers
+            if unavailable:
+                raise ValueError(
+                    f"routing rule for {rule.net!r} uses unavailable layer "
+                    f"{min(layer.value for layer in unavailable)!r}"
+                )
+            if (
+                rule.differential_partner is not None
+                and rule.differential_partner not in known_nets
+            ):
+                raise ValueError(
+                    f"routing rule for {rule.net!r} references unknown partner "
+                    f"{rule.differential_partner!r}"
                 )

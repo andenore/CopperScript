@@ -14,6 +14,8 @@ from .layout import PlacementPlannerOptions, plan_placement
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
 from .physicalize import prototype_physicalize, resolved_physicalize
+from .physical import nm_from_mm
+from .routing import GlobalRouterOptions, GlobalRoutingStatus, route_global
 from .serializer import board_to_json, write_json
 
 
@@ -99,6 +101,37 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum number of deterministic Pareto candidates to retain",
     )
 
+    global_route_parser = subparsers.add_parser(
+        "route-global",
+        help="produce multilayer routing guides with negotiated congestion",
+    )
+    global_route_parser.add_argument("board", type=Path, help="a .copper source file")
+    global_route_parser.add_argument("-o", "--output", type=Path, help="output global-route JSON")
+    global_route_parser.add_argument(
+        "--pcb-output", type=Path, help="optionally write the placed, unrouted KiCad PCB"
+    )
+    global_route_parser.add_argument(
+        "--no-check", action="store_true", help="generate even when ERC reports errors"
+    )
+    global_route_parser.add_argument(
+        "--footprint-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="explicit KiCad footprint search root (repeatable)",
+    )
+    global_route_parser.add_argument(
+        "--allow-proxy-footprints",
+        action="store_true",
+        help="use generated inspection-only pads instead of resolving .kicad_mod files",
+    )
+    global_route_parser.add_argument(
+        "--candidates", type=int, default=3, help="placement candidates to consider"
+    )
+    global_route_parser.add_argument(
+        "--tile-size-mm", default="5", help="global-routing tile size in millimetres"
+    )
+
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
     )
@@ -132,6 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "export-kicad",
         "export-kicad-pcb",
         "plan-layout",
+        "route-global",
     }:
         try:
             board = load_board(args.board)
@@ -155,6 +189,50 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print(f"OK: {board.name} passed power-state analysis")
             return 1 if has_errors(diagnostics) else 0
+
+        if args.command == "route-global":
+            if has_errors(diagnostics) and not args.no_check:
+                for diagnostic in diagnostics:
+                    print(diagnostic)
+                print("Global routing stopped because ERC reported errors.")
+                return 1
+            try:
+                if args.allow_proxy_footprints:
+                    physical_board = prototype_physicalize(board)
+                else:
+                    resolver = FootprintResolver(
+                        base_directory=args.board.resolve().parent,
+                        search_roots=tuple(root.resolve() for root in args.footprint_root),
+                    )
+                    physical_board = resolved_physicalize(board, resolver)
+                plan = plan_placement(
+                    physical_board,
+                    PlacementPlannerOptions(candidate_count=args.candidates),
+                )
+                route = route_global(
+                    plan.board,
+                    GlobalRouterOptions(tile_size_nm=nm_from_mm(args.tile_size_mm)),
+                )
+            except ValueError as exc:
+                print(f"ROUTING ERROR: {exc}")
+                return 2
+            output = args.output or Path(f"{board.name}.global-route.json")
+            try:
+                output.write_text(route.to_json(), encoding="utf-8")
+                if args.pcb_output:
+                    artifact = KiCadPcbBackend().generate(plan.board).artifacts[0]
+                    args.pcb_output.write_text(artifact.content, encoding="utf-8")
+            except OSError as exc:
+                print(f"OUTPUT ERROR: {exc}")
+                return 2
+            metrics = route.metrics
+            print(
+                f"GLOBAL ROUTE: {route.status.value} - "
+                f"unrouted={metrics.unrouted_net_count}, "
+                f"overflow={metrics.total_overflow}, vias={metrics.proposed_via_count}"
+            )
+            print(f"Generated routing guides -> {output}")
+            return 0 if route.status is GlobalRoutingStatus.SUCCESS else 1
 
         if args.command in {"export-kicad", "export-kicad-pcb", "plan-layout"}:
             if has_errors(diagnostics) and not args.no_check:

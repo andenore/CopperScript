@@ -248,6 +248,14 @@ def transformed_pad_position(
     )
 
 
+def transformed_footprint_polygon(
+    board: PhysicalBoard, placement: Placement
+) -> tuple[Point, ...]:
+    """Return the placed courtyard, or conservative body polygon."""
+
+    return _placement_polygon(board, placement)
+
+
 def _dominates(left: PlacementMetrics, right: PlacementMetrics) -> bool:
     a = left.quality_vector
     b = right.quality_vector

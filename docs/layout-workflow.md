@@ -117,10 +117,28 @@ with negotiated rip-up/reroute. Verify remains a collection of independently
 reportable sign-off checks, with release blocked unless every required check
 passes.
 
+## Implemented global routing
+
+`pcbir.routing.route_global()` builds a deterministic multilayer G-cell graph,
+derives pad-access nodes, accounts for per-net width and clearance demand, and
+grows multi-terminal trees with multi-source A*. Bounded PathFinder-style
+negotiation adds present and historical congestion costs across reroute passes.
+The result records corridors, layer assignments, proposed via transitions,
+unreachable terminals, capacity overflow, contributors, and stable input/output
+fingerprints.
+
+Global-route segments are guides only. They never enter `PhysicalBoard.tracks`
+or masquerade as routed copper. Exact geometry remains the responsibility of
+the specialized and general detailed routers, followed by independent physical
+DRC.
+
 ## Sources
 
 - [Analytical PCB placement optimization with fine tuning (Integration, 2026)](https://www.sciencedirect.com/science/article/pii/S016792602500224X)
 - [NS-Place: routability-driven PCB placement with legalization](https://cseweb.ucsd.edu/classes/fa23/cse248-a/papers/placement/PCBPlacement.pdf)
+- [PathFinder negotiated-congestion routing](https://janders.eecg.utoronto.ca/1387_2015/readings/pathfinder.pdf)
+- [FastRoute global routing](https://onlinelibrary.wiley.com/doi/10.1155/2012/608362)
+- [OpenROAD global-router architecture](https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/grt/README.md)
 - [Constraint-graph-based PCB placement legalization (DAC 2025)](https://scholars.lib.ntu.edu.tw/entities/publication/ba17d07b-da5e-4ff4-b3f9-d13ef75303aa)
 - [Negotiated-congestion and rip-up/reroute routing](https://engineering.lehigh.edu/sites/engineering.lehigh.edu/files/_DEPARTMENTS/ise/pdf/tech-papers/08/08t_003.pdf)
 - [Altium PCB routing workflow and constraints](https://www.altium.com/documentation/altium-designer/pcb/routing)

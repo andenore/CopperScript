@@ -234,6 +234,35 @@ def test_cli_plans_layout_and_writes_readiness_report(tmp_path: Path) -> None:
     assert "Pareto candidate" in result.stdout
 
 
+def test_cli_writes_global_routing_guides(tmp_path: Path) -> None:
+    output = tmp_path / "global-route.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "copperscript",
+            "route-global",
+            "examples/valid_board.copper",
+            "-o",
+            str(output),
+            "--allow-proxy-footprints",
+            "--candidates",
+            "1",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert document["schema"] == "copperscript-global-route/v0.1"
+    assert document["status"] == "success"
+    assert document["routes"]
+    assert "GLOBAL ROUTE: success" in result.stdout
+
+
 def test_cli_checks_kicad_mod_footprint() -> None:
     result = subprocess.run(
         [
