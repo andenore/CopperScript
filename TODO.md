@@ -136,7 +136,7 @@ where relevant. It does not imply third-party certification.
 
 ### Program completion criteria
 
-- [ ] Research recommendation and source record exists for P1–P9.
+- [x] Research recommendation and source record exists for P1–P9.
 - [ ] Every new geometry type participates in serialization, fingerprints,
       KiCad export, DRC coverage, and stale-signoff invalidation.
 - [ ] Tests include unit geometry, adversarial regression, determinism,
