@@ -10,6 +10,12 @@ from .backends import (
     PhysicalBackend,
 )
 from .compiler import compile_file, compile_source
+from .critical import (
+    CriticalNetResult,
+    CriticalRoutingResult,
+    CriticalRoutingStatus,
+    route_critical_nets,
+)
 from .erc import Diagnostic, Severity, check, has_errors
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
@@ -188,6 +194,9 @@ __all__ = [
     "ConstraintKind",
     "CopperLayer",
     "CopperScriptError",
+    "CriticalNetResult",
+    "CriticalRoutingResult",
+    "CriticalRoutingStatus",
     "Diagnostic",
     "Dependency",
     "DeviceDefinition",
@@ -325,6 +334,7 @@ __all__ = [
     "plan_placement",
     "optimize_placement_for_routing",
     "route_global",
+    "route_critical_nets",
     "prototype_physicalize",
     "resolved_physicalize",
     "transformed_pad_position",

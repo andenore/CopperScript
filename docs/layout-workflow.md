@@ -142,6 +142,14 @@ loop, and the accepted placement is always certified by a fresh full reroute.
 A feedback `pass` therefore means global feasibility, not detailed routing or
 physical signoff.
 
+`pcbir.critical.route_critical_nets()` consumes those guides first for nets
+with explicit non-general routing profiles. It materializes locked exact tracks
+and vias, routes differential/CAN members as coupled bundles, checks geometric
+length, skew, and via budgets, and reports external assumptions for impedance,
+RF, current, and thermal qualification. Coupled fanout is always rechecked by
+the authoritative physical DRC; a geometric proxy never constitutes SI/RF or
+thermal signoff.
+
 ## Sources
 
 - [Analytical PCB placement optimization with fine tuning (Integration, 2026)](https://www.sciencedirect.com/science/article/pii/S016792602500224X)
@@ -150,6 +158,9 @@ physical signoff.
 - [FastRoute global routing](https://onlinelibrary.wiley.com/doi/10.1155/2012/608362)
 - [OpenROAD global-router architecture](https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/grt/README.md)
 - [RePlAce routability-driven placement](https://vlsicad.ucsd.edu/Publications/Journals/j126.pdf)
+- [TI high-speed interface layout guidelines](https://www.ti.com/lit/an/spraar7j/spraar7j.pdf)
+- [USB 2.0 specification](https://www.usb.org/document-library/usb-20-specification)
+- [TI CAN physical-layer requirements](https://www.ti.com/lit/an/slla270/slla270.pdf)
 - [Constraint-graph-based PCB placement legalization (DAC 2025)](https://scholars.lib.ntu.edu.tw/entities/publication/ba17d07b-da5e-4ff4-b3f9-d13ef75303aa)
 - [Negotiated-congestion and rip-up/reroute routing](https://engineering.lehigh.edu/sites/engineering.lehigh.edu/files/_DEPARTMENTS/ise/pdf/tech-papers/08/08t_003.pdf)
 - [Altium PCB routing workflow and constraints](https://www.altium.com/documentation/altium-designer/pcb/routing)

@@ -705,6 +705,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-045 | Accepted | Placement consumes typed physical constraints and preserved semantic hierarchy, then uses deterministic analytical global placement, hybrid legalization, pad-aware route feedback, detailed refinement, and Pareto-ranked candidates. |
 | CS-046 | Accepted | Global routing uses deterministic multilayer capacity guides and negotiated congestion; guides and proposed vias are planning artifacts and only detailed routing may create physical copper. |
 | CS-047 | Accepted | Placement–routing feedback is transactional: only complete global-route improvements are accepted, rejected moves roll back atomically, and a fresh full reroute is required for certification. |
+| CS-048 | Accepted | Critical nets route before ordinary nets from explicit physical profiles; coupled bundles and exact locked copper retain external qualification assumptions, and geometric proxies never claim impedance, SI, RF, current, or thermal signoff. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

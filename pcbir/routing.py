@@ -702,9 +702,12 @@ def _neighbors(
 def _net_order(net: str, rule: NetRoutingRule | None) -> tuple[int, int, str]:
     hardness = {
         RouteKind.DIFFERENTIAL: 0,
-        RouteKind.CRITICAL: 1,
-        RouteKind.POWER: 2,
-        RouteKind.GENERAL: 3,
+        RouteKind.RF_FEED: 1,
+        RouteKind.CLOCK: 2,
+        RouteKind.CAN_BUS: 3,
+        RouteKind.CRITICAL: 4,
+        RouteKind.POWER: 5,
+        RouteKind.GENERAL: 6,
     }[(rule.kind if rule else RouteKind.GENERAL)]
     return hardness, -(rule.priority if rule else 0), net
 

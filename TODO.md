@@ -51,7 +51,7 @@ expected and do not satisfy the future Route or Verify gates.
 - [x] 5. Add a transactional placement–global-routing feedback loop with
       bounded legal movement, rollback, convergence control, and full-route
       certification.
-- [ ] 6. Add profile-driven critical-net routing for differential pairs,
+- [x] 6. Add profile-driven critical-net routing for differential pairs,
       clocks, buses, RF feeds, and power routes before general routing.
 - [ ] 7. Add a guide-aware general detailed router with pin access, vias,
       exact tracks, deterministic rip-up/reroute, and cleanup.

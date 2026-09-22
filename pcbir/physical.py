@@ -80,6 +80,9 @@ class RouteKind(str, Enum):
     GENERAL = "general"
     CRITICAL = "critical"
     DIFFERENTIAL = "differential"
+    CLOCK = "clock"
+    CAN_BUS = "can_bus"
+    RF_FEED = "rf_feed"
     POWER = "power"
 
 
@@ -484,6 +487,10 @@ class NetRoutingRule:
     differential_partner: str | None = None
     pair_gap_nm: Nanometres | None = None
     max_skew_nm: Nanometres | None = None
+    topology: str = "point_to_point"
+    target_impedance_ohms: int | None = None
+    maximum_uncoupled_length_nm: Nanometres | None = None
+    maximum_stub_length_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_layers", tuple(self.allowed_layers))
@@ -497,18 +504,24 @@ class NetRoutingRule:
             ("maximum length", self.max_length_nm),
             ("pair gap", self.pair_gap_nm),
             ("maximum skew", self.max_skew_nm),
+            ("maximum uncoupled length", self.maximum_uncoupled_length_nm),
+            ("maximum stub length", self.maximum_stub_length_nm),
         ):
             if value is not None and value <= 0:
                 raise ValueError(f"routing {name} must be positive")
         if self.max_vias is not None and self.max_vias < 0:
             raise ValueError("routing maximum via count cannot be negative")
-        if self.kind is RouteKind.DIFFERENTIAL:
+        if self.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
             if self.differential_partner is None or self.pair_gap_nm is None:
                 raise ValueError(
                     "differential routing requires a partner net and pair gap"
                 )
             if self.differential_partner == self.net:
                 raise ValueError("a differential net cannot partner with itself")
+        if self.target_impedance_ohms is not None and self.target_impedance_ohms <= 0:
+            raise ValueError("target impedance must be positive")
+        if not self.topology:
+            raise ValueError("routing topology cannot be empty")
 
 
 @dataclass(frozen=True, slots=True)

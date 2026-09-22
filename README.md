@@ -206,6 +206,8 @@ Key modules:
   negotiated-congestion guides and explicit overflow diagnostics.
 - `pcbir.routeflow` — full-route candidate selection, bounded legal placement
   moves, atomic rollback, stagnation control, and fresh-route certification.
+- `pcbir.critical` — profile-driven locked copper for critical, differential,
+  clock, CAN, RF-feed, power, and length/via-constrained routes.
 - `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
   parser and normalizer.
 - `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work
