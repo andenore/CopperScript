@@ -105,14 +105,15 @@ where relevant. It does not imply third-party certification.
         phase, incremental/full equivalence contract, concave-edge checks, and
         differential geometry checks. Copper arcs remain unavailable in the IR
         and therefore cannot be silently approximated.
-- [ ] P6. Artwork, assembly, and fabrication DRC: solder-mask and paste rules,
+- [x] P6. Artwork, assembly, and fabrication DRC: solder-mask and paste rules,
       silkscreen clipping/clearance, courtyard and component-side checks,
       hole/slot constraints, copper balance and documented fab-profile gates.
   - [x] Provenance-bearing process capabilities and separate fabrication,
         stencil, and assembly decisions for drill, mask-web, paste-area,
         courtyard, and height checks.
-  - [ ] Exact derived mask/paste/silkscreen geometry, slots, edge plating,
-        orientation marks, copper balance, and release-gate integration.
+  - [x] Derived mask/paste/silkscreen geometry, slots, explicit edge-plating
+        capability, orientation marks, copper balance, and release-gate
+        integration. Unsupported artwork arcs make the process gate incomplete.
 - [ ] P7. Engineering analyses: stackup-driven impedance estimates, return-path
       continuity, conservative SI/PI checks, DC current/voltage-drop and thermal
       estimates, creepage/clearance profiles, explicit model validity and

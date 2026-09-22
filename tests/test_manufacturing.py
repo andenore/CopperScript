@@ -24,6 +24,9 @@ from pcbir import (
     nm_from_mm,
     run_physical_drc,
     verify_cam_directory,
+    FabricationAssemblyProfile,
+    ProcessCapability,
+    run_process_drc,
 )
 
 
@@ -154,3 +157,13 @@ def test_independent_cam_parser_rejects_corrupt_artwork(tmp_path: Path) -> None:
         "CAM-GERBER-X2",
         "CAM-GERBER-POLARITY",
     }
+
+
+def test_release_profile_can_require_separate_process_gates(tmp_path: Path) -> None:
+    board = _board()
+    signoff = run_physical_drc(board).token
+    profile = ManufacturingProfile(require_process_drc=True)
+    with pytest.raises(ValueError, match="requires fabrication"):
+        build_manufacturing_release(board, signoff, tmp_path / "release",
+                                    kicad_cli=Path("kicad-cli"), profile=profile,
+                                    runner=_fake_kicad)

@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from pcbir import (
     AnalysisStatus, BoardOutline, FabricationAssemblyProfile, FootprintPad,
+    FootprintLayer, FootprintLine, PadKind,
     PhysicalBoard, PhysicalFootprint, Placement, Point, ProcessCapability,
     ProcessGateStatus, Size, dc_trace_resistance, nm_from_mm, run_process_drc,
 )
@@ -30,3 +31,25 @@ def test_engineering_results_state_scope_grade_and_validity() -> None:
                                  maximum_ohms=Decimal("0.3"))
     assert result.status is AnalysisStatus.PASS
     assert result.claim_scope and result.validity and result.value is not None
+
+
+def test_artwork_and_slot_checks_use_profile_geometry() -> None:
+    footprint = PhysicalFootprint(
+        "connector",
+        (FootprintPad("1", Point(0, 0), Size.mm("1", "1"), kind=PadKind.THROUGH_HOLE,
+                      drill=Size.mm("0.15", "0.5")),), Size.mm(2, 2),
+        graphics=(FootprintLine(Point.mm("-0.5", 0), Point.mm("0.5", 0),
+                                nm_from_mm("0.15"), FootprintLayer.SILKSCREEN),),
+        courtyard=(Point.mm(-1, -1), Point.mm(1, -1), Point.mm(1, 1), Point.mm(-1, 1)),
+    )
+    board = PhysicalBoard("Artwork", BoardOutline.rectangle(10, 10), {footprint.name: footprint},
+                          (Placement("J1", footprint.name, Point.mm(5, 5)),), ())
+    profile = FabricationAssemblyProfile(
+        "fab", _cap("0.1"), _cap("0.1"), _cap("0.12"),
+        ProcessCapability(500_000, "IPC-7525", "B"),
+        minimum_silkscreen_clearance_nm=_cap("0.2"),
+        minimum_slot_width_nm=_cap("0.2"),
+    )
+    report = run_process_drc(board, profile)
+    codes = {item.code for item in report.findings}
+    assert {"FAB-SLOT-MIN", "FAB-SILK-MASK"} <= codes

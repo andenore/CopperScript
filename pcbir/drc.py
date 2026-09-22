@@ -595,7 +595,7 @@ def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
                 layers = tuple(board.stackup.copper_layers)
             position = transformed_pad_position(board, placement, pad.number)
             result.append(_PadCopper(f"pad:{placement.reference}.{pad.number}", net,
-                                     position, _pad_shape(position, pad, placement), layers))
+                                     position, placed_pad_shape(position, pad, placement), layers))
     return tuple(result)
 
 
@@ -660,7 +660,7 @@ def _shape_clear_of_region(shape: RoundedConvexShape, region: object,
     return True
 
 
-def _pad_shape(position: Point, pad: object, placement: object) -> RoundedConvexShape:
+def placed_pad_shape(position: Point, pad: object, placement: object) -> RoundedConvexShape:
     width = getattr(pad, "size").width_nm
     height = getattr(pad, "size").height_nm
     shape = getattr(pad, "shape")

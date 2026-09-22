@@ -720,6 +720,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-060 | Accepted | Coupled route shoves expand collisions by complete net so pair/bus geometry moves atomically. Locked conflicts roll back the immutable transaction; deterministic acute-angle cleanup may replace only a safe degree-two spike and remains subject to physical DRC. |
 | CS-061 | Accepted | Differential-pair completion uses bounded local tuning, paired layer transitions, and explicitly bounded return vias. External impedance evidence is content-addressed and suppresses only the corresponding unqualified-model warning; geometric DRC remains mandatory. |
 | CS-062 | Accepted | Physical DRC normalizes copper to integer point/segment/polygon spines swept by exact radii, uses a stable spatial broad phase and exact rational narrow-phase decisions, checks normalized zone fills and concave boundaries, and guarantees incremental results equal the authoritative full run. Unsupported copper primitives fail at import rather than being approximated. |
+| CS-063 | Accepted | Fabrication, stencil, and assembly DRC derive mask, paste, silk, drill/slot, courtyard, orientation, edge-plating, height, and outer-layer balance evidence from normalized physical assets under a provenance-bearing process profile. Required unsupported artwork yields `incomplete`, and manufacturing profiles may require all three gates to pass. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import isqrt
+from math import hypot
 
-from .physical import PadKind, PhysicalBoard
+from .drc import placed_pad_shape
+from .geometry import RoundedConvexShape, shape_distance_squared, shapes_clear
+from .physical import FootprintArc, FootprintLayer, FootprintLine, PadKind, PhysicalBoard, Point
 from .placement import transformed_pad_position
 
 
@@ -36,6 +38,12 @@ class FabricationAssemblyProfile:
     minimum_paste_area_ratio_ppm: ProcessCapability
     maximum_component_height_nm: ProcessCapability | None = None
     require_courtyards: bool = True
+    solder_mask_expansion_nm: ProcessCapability | None = None
+    minimum_silkscreen_clearance_nm: ProcessCapability | None = None
+    minimum_slot_width_nm: ProcessCapability | None = None
+    maximum_copper_imbalance_ppm: ProcessCapability | None = None
+    require_orientation_marks: bool = True
+    allow_edge_plating: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +73,9 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
     fabrication_failed = False
     stencil_failed = False
     assembly_failed = False
-    placed_pads: list[tuple[str, object, object]] = []
+    fabrication_incomplete = False
+    placed_pads: list[tuple[str, object, object, object, RoundedConvexShape]] = []
+    silk_shapes: list[tuple[str, RoundedConvexShape]] = []
     for placement in board.placements:
         footprint = board.footprints[placement.footprint]
         if profile.require_courtyards and not footprint.courtyard:
@@ -82,7 +92,8 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
         for pad in footprint.pads:
             identity = f"{placement.reference}.{pad.number}"
             position = transformed_pad_position(board, placement, pad.number)
-            placed_pads.append((identity, position, pad))
+            shape = placed_pad_shape(position, pad, placement)
+            placed_pads.append((identity, position, pad, placement, shape))
             if pad.drill is not None and min(pad.drill.width_nm, pad.drill.height_nm) < profile.minimum_drill_nm.value:
                 fabrication_failed = True
                 findings.append(ProcessFinding("FAB-DRILL-MIN", "fabrication",
@@ -96,23 +107,101 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
                     stencil_failed = True
                     findings.append(ProcessFinding("STENCIL-AREA-RATIO", "stencil",
                                                    f"{identity} paste aperture area ratio is too low", (identity,)))
-    for index, (left_name, left_pos, left_pad) in enumerate(placed_pads):
+            if (pad.drill is not None and pad.drill.width_nm != pad.drill.height_nm
+                    and profile.minimum_slot_width_nm is not None
+                    and min(pad.drill.width_nm, pad.drill.height_nm) < profile.minimum_slot_width_nm.value):
+                fabrication_failed = True
+                findings.append(ProcessFinding("FAB-SLOT-MIN", "fabrication",
+                                               f"{identity} slot is below the qualified process limit", (identity,)))
+        if profile.require_orientation_marks and footprint.metadata.get("polarized") == "true":
+            if not any(getattr(graphic, "layer", None) is FootprintLayer.SILKSCREEN
+                       for graphic in footprint.graphics):
+                assembly_failed = True
+                findings.append(ProcessFinding("ASM-ORIENTATION-MARK", "assembly",
+                                               f"{placement.reference} has no silkscreen orientation mark",
+                                               (placement.reference,)))
+        if footprint.metadata.get("castellated") == "true" and not profile.allow_edge_plating:
+            fabrication_failed = True
+            findings.append(ProcessFinding("FAB-EDGE-PLATING", "fabrication",
+                                           f"{placement.reference} requires an edge-plating-capable profile",
+                                           (placement.reference,)))
+        for graphic_index, graphic in enumerate(footprint.graphics):
+            if getattr(graphic, "layer", None) is not FootprintLayer.SILKSCREEN:
+                continue
+            identity = f"silk:{placement.reference}:{graphic_index}"
+            if isinstance(graphic, FootprintLine):
+                silk_shapes.append((identity, RoundedConvexShape(
+                    (_placed_point(placement, graphic.start), _placed_point(placement, graphic.end)),
+                    graphic.width_nm // 2)))
+            elif isinstance(graphic, FootprintArc):
+                fabrication_incomplete = True
+                findings.append(ProcessFinding("FAB-SILK-ARC-UNSUPPORTED", "fabrication",
+                                               f"{identity} requires normalized arc artwork", (identity,)))
+    expansion = profile.solder_mask_expansion_nm.value if profile.solder_mask_expansion_nm else 0
+    for index, (left_name, _, left_pad, _, left_shape) in enumerate(placed_pads):
         if not left_pad.has_solder_mask:
             continue
-        for right_name, right_pos, right_pad in placed_pads[index + 1:]:
+        left_mask = RoundedConvexShape(left_shape.spine, left_shape.radius_nm + expansion)
+        for right_name, _, right_pad, _, right_shape in placed_pads[index + 1:]:
             if not right_pad.has_solder_mask:
                 continue
-            dx, dy = left_pos.x_nm - right_pos.x_nm, left_pos.y_nm - right_pos.y_nm
-            center = isqrt(dx * dx + dy * dy)
-            web = center - max(left_pad.size.width_nm, left_pad.size.height_nm) // 2 - max(right_pad.size.width_nm, right_pad.size.height_nm) // 2
-            if web < profile.minimum_mask_web_nm.value:
+            right_mask = RoundedConvexShape(right_shape.spine, right_shape.radius_nm + expansion)
+            if not shapes_clear(left_mask, right_mask, profile.minimum_mask_web_nm.value):
                 fabrication_failed = True
                 findings.append(ProcessFinding("FAB-MASK-WEB", "fabrication",
                                                f"mask web between {left_name} and {right_name} is below profile",
                                                tuple(sorted((left_name, right_name)))))
+    if profile.minimum_silkscreen_clearance_nm is not None:
+        for silk_name, silk in silk_shapes:
+            for pad_name, _, pad, _, pad_shape in placed_pads:
+                if not pad.has_solder_mask:
+                    continue
+                mask = RoundedConvexShape(pad_shape.spine, pad_shape.radius_nm + expansion)
+                if not shapes_clear(silk, mask, profile.minimum_silkscreen_clearance_nm.value):
+                    fabrication_failed = True
+                    findings.append(ProcessFinding("FAB-SILK-MASK", "fabrication",
+                                                   f"{silk_name} is too close to {pad_name} mask opening",
+                                                   (silk_name, pad_name)))
+    if profile.maximum_copper_imbalance_ppm is not None:
+        top, bottom = _copper_area(board)
+        total = top + bottom
+        imbalance = 0 if total == 0 else abs(top - bottom) * 1_000_000 // total
+        if imbalance > profile.maximum_copper_imbalance_ppm.value:
+            fabrication_failed = True
+            findings.append(ProcessFinding("FAB-COPPER-BALANCE", "fabrication",
+                                           f"outer-layer copper imbalance {imbalance} ppm exceeds profile"))
     return ProcessDrcReport(
-        ProcessGateStatus.FAIL if fabrication_failed else ProcessGateStatus.PASS,
+        ProcessGateStatus.FAIL if fabrication_failed else ProcessGateStatus.INCOMPLETE if fabrication_incomplete else ProcessGateStatus.PASS,
         ProcessGateStatus.FAIL if stencil_failed else ProcessGateStatus.PASS,
         ProcessGateStatus.FAIL if assembly_failed else ProcessGateStatus.PASS,
         tuple(sorted(findings, key=lambda item: (item.gate, item.code, item.objects))),
     )
+
+
+def _placed_point(placement: object, point: Point) -> Point:
+    from math import cos, radians, sin
+    angle = radians(float(getattr(placement, "rotation_degrees")))
+    x = -point.x_nm if getattr(placement, "side").value == "back" else point.x_nm
+    return Point(getattr(placement, "position").x_nm + round(x * cos(angle) - point.y_nm * sin(angle)),
+                 getattr(placement, "position").y_nm + round(x * sin(angle) + point.y_nm * cos(angle)))
+
+
+def _copper_area(board: PhysicalBoard) -> tuple[int, int]:
+    areas = {board.stackup.copper_layers[0]: 0, board.stackup.copper_layers[-1]: 0}
+    for track in board.tracks:
+        if track.layer in areas:
+            areas[track.layer] += round(hypot(track.end.x_nm - track.start.x_nm,
+                                             track.end.y_nm - track.start.y_nm)) * track.width_nm
+    for fill in board.zone_fills:
+        if fill.layer in areas:
+            for polygon in fill.polygons:
+                points = polygon.outer.vertices
+                outer = abs(sum(a.x_nm * b.y_nm - b.x_nm * a.y_nm
+                                for a, b in zip(points, (*points[1:], points[0])))) // 2
+                holes = 0
+                for hole in polygon.holes:
+                    hp = hole.vertices
+                    holes += abs(sum(a.x_nm * b.y_nm - b.x_nm * a.y_nm
+                                     for a, b in zip(hp, (*hp[1:], hp[0])))) // 2
+                areas[fill.layer] += outer - holes
+    return areas[board.stackup.copper_layers[0]], areas[board.stackup.copper_layers[-1]]

@@ -15,6 +15,7 @@ from typing import Callable
 from .backends import KiCadPcbBackend
 from .drc import DrcCompleteness, DrcDecision, SignoffToken, physical_board_digest
 from .physical import PhysicalBoard
+from .process_drc import ProcessDrcReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,7 @@ class ManufacturingProfile:
         "Soldermask,Bot",
         "Profile",
     )
+    require_process_drc: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,12 +105,13 @@ def build_manufacturing_release(
     kicad_cli: Path,
     profile: ManufacturingProfile | None = None,
     runner: CommandRunner | None = None,
+    process_report: ProcessDrcReport | None = None,
 ) -> ManufacturingRelease:
     """Create a release atomically; no output is published unless every gate passes."""
 
     profile = profile or ManufacturingProfile()
     runner = runner or _subprocess_runner
-    _validate_release_gate(board, signoff, profile)
+    _validate_release_gate(board, signoff, profile, process_report)
     output_directory = output_directory.resolve()
     if output_directory.exists():
         raise FileExistsError(f"release directory already exists: {output_directory}")
@@ -237,6 +240,12 @@ def build_manufacturing_release(
                 "engine_version": version if board.zones else None,
                 "saved_refilled_board": bool(board.zones),
             },
+            "process_drc": None if process_report is None else {
+                "fabrication": process_report.fabrication.value,
+                "stencil": process_report.stencil.value,
+                "assembly": process_report.assembly.value,
+                "passed": process_report.passed,
+            },
             "artifacts": [
                 {
                     "path": item.relative_to(stage).as_posix(),
@@ -318,7 +327,9 @@ def verify_cam_directory(
     return CamVerificationReport(not findings, tuple(findings), len(gerbers), len(drills), len(ipcd))
 
 
-def _validate_release_gate(board: PhysicalBoard, signoff: SignoffToken, profile: ManufacturingProfile) -> None:
+def _validate_release_gate(board: PhysicalBoard, signoff: SignoffToken,
+                           profile: ManufacturingProfile,
+                           process_report: ProcessDrcReport | None) -> None:
     if signoff.board_digest != physical_board_digest(board):
         raise ValueError("signoff token does not match the exact board geometry")
     if signoff.completeness is not DrcCompleteness.COMPLETE:
@@ -332,6 +343,11 @@ def _validate_release_gate(board: PhysicalBoard, signoff: SignoffToken, profile:
         raise ValueError("manufacturing export rejects proxy footprints")
     if board.metadata.get("detailed_routing") != "complete":
         raise ValueError("manufacturing export requires completed detailed routing")
+    if profile.require_process_drc:
+        if process_report is None:
+            raise ValueError("manufacturing profile requires fabrication/stencil/assembly DRC")
+        if not process_report.passed:
+            raise ValueError("fabrication/stencil/assembly DRC is not fully passed")
 
 
 def _subprocess_runner(command: tuple[str, ...], cwd: Path) -> CommandResult:
