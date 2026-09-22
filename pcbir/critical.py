@@ -24,6 +24,7 @@ from .physical import (
     Via,
 )
 from .routing import GlobalNetRoute, GlobalRoutingResult
+from .geometry import segment_distance_squared
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -42,6 +43,9 @@ class CriticalNetResult:
     skew_nm: int
     diagnostics: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
+    coupled_length_nm: int = 0
+    uncoupled_lengths_nm: tuple[int, ...] = ()
+    paired_via_transitions: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +74,9 @@ class CriticalRoutingResult:
                     "skew_nm": item.skew_nm,
                     "diagnostics": list(item.diagnostics),
                     "assumptions": list(item.assumptions),
+                    "coupled_length_nm": item.coupled_length_nm,
+                    "uncoupled_lengths_nm": list(item.uncoupled_lengths_nm),
+                    "paired_via_transitions": item.paired_via_transitions,
                 }
                 for item in self.nets
             ],
@@ -347,6 +354,12 @@ def _route_pair(
     first_length = _track_length(tuple(first_tracks))
     second_length = _track_length(tuple(second_tracks))
     skew = abs(first_length - second_length)
+    center_spacing = first_width + gap
+    coupled_length = _coupled_length(first_tracks, second_tracks, center_spacing)
+    uncoupled = (max(0, first_length - coupled_length), max(0, second_length - coupled_length))
+    first_pair_vias = tuple(v for v in pair_vias if v.net == first.net)
+    second_pair_vias = tuple(v for v in pair_vias if v.net == second.net)
+    paired_transitions = _paired_via_transitions(first_pair_vias, second_pair_vias, center_spacing)
     diagnostics = list(
         _budget_diagnostics(first, tuple(first_tracks), tuple(v for v in pair_vias if v.net == first.net))
     )
@@ -360,6 +373,17 @@ def _route_pair(
     ) if first.max_skew_nm is not None or second.max_skew_nm is not None else None
     if max_skew is not None and skew > max_skew:
         diagnostics.append(f"pair skew {skew} nm exceeds {max_skew} nm")
+    uncoupled_limit = min(
+        value
+        for value in (first.maximum_uncoupled_length_nm, second.maximum_uncoupled_length_nm)
+        if value is not None
+    ) if first.maximum_uncoupled_length_nm is not None or second.maximum_uncoupled_length_nm is not None else None
+    if uncoupled_limit is not None and max(uncoupled) > uncoupled_limit:
+        diagnostics.append(
+            f"pair uncoupled length {max(uncoupled)} nm exceeds {uncoupled_limit} nm"
+        )
+    if len(first_pair_vias) != len(second_pair_vias) or paired_transitions != len(first_pair_vias):
+        diagnostics.append("differential via transitions are not geometrically paired")
     assumptions = tuple(
         dict.fromkeys(
             (
@@ -380,10 +404,65 @@ def _route_pair(
             skew,
             tuple(diagnostics),
             assumptions,
+            coupled_length,
+            uncoupled,
+            paired_transitions,
         ),
         tracks,
         tuple(pair_vias),
     )
+
+
+def _coupled_length(
+    first_tracks: list[TrackSegment],
+    second_tracks: list[TrackSegment],
+    center_spacing_nm: int,
+) -> int:
+    """Measure the one-to-one parallel portion of an atomic pair route."""
+    used: set[int] = set()
+    total = 0
+    for first in first_tracks:
+        first_dx = first.end.x_nm - first.start.x_nm
+        first_dy = first.end.y_nm - first.start.y_nm
+        first_length = round(hypot(first_dx, first_dy))
+        for index, second in enumerate(second_tracks):
+            if index in used or first.layer is not second.layer:
+                continue
+            second_dx = second.end.x_nm - second.start.x_nm
+            second_dy = second.end.y_nm - second.start.y_nm
+            if first_dx * second_dy != first_dy * second_dx:
+                continue
+            if round(hypot(second_dx, second_dy)) != first_length:
+                continue
+            if segment_distance_squared(first.start, first.end, second.start, second.end) != center_spacing_nm ** 2:
+                continue
+            used.add(index)
+            total += first_length
+            break
+    return total
+
+
+def _paired_via_transitions(
+    first: tuple[Via, ...], second: tuple[Via, ...], center_spacing_nm: int
+) -> int:
+    remaining = list(second)
+    count = 0
+    for via in first:
+        match = next(
+            (
+                item for item in remaining
+                if item.from_layer is via.from_layer
+                and item.to_layer is via.to_layer
+                and (item.position.x_nm - via.position.x_nm) ** 2
+                + (item.position.y_nm - via.position.y_nm) ** 2
+                == center_spacing_nm ** 2
+            ),
+            None,
+        )
+        if match is not None:
+            remaining.remove(match)
+            count += 1
+    return count
 
 
 def _offset_guides(

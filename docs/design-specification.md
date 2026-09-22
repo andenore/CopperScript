@@ -712,6 +712,8 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-052 | Accepted | Routing stages compose in one direction through immutable typed results: global guides, locked critical copper, general exact copper, physical DRC, then manufacturing; a partial or stale result cannot satisfy a later gate. |
 | CS-053 | Accepted | Copper zones and keepouts are typed physical intent. CopperScript owns their deterministic identity, rules, and freshness fingerprint; a pinned KiCad refill is the authoritative manufacturing fill until a native filler passes differential qualification. Stale or missing required fill evidence blocks release. |
 | CS-054 | Accepted | Routing and physical DRC share deterministic integer geometry predicates. Interactive shove operations are transactions: recursive movement commits only when the complete result is legal, while locked-object or boundary conflicts return the original immutable board. |
+| CS-055 | Accepted | A differential pair is one atomic routed object. Signoff measures coupled and uncoupled portions, skew, and geometrically paired transitions; impedance remains an explicitly external claim. |
+| CS-056 | Accepted | Stackups are ordered physical copper/dielectric constructions. Vias select a named fabrication technology whose span, drill, annular-ring, aspect-ratio, and microvia-adjacency limits are validated and exported consistently. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

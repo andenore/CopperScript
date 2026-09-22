@@ -39,7 +39,27 @@ class BoardSide(str, Enum):
 
 class CopperLayer(str, Enum):
     FRONT = "F.Cu"
+    INTERNAL_1 = "In1.Cu"
+    INTERNAL_2 = "In2.Cu"
+    INTERNAL_3 = "In3.Cu"
+    INTERNAL_4 = "In4.Cu"
+    INTERNAL_5 = "In5.Cu"
+    INTERNAL_6 = "In6.Cu"
+    INTERNAL_7 = "In7.Cu"
+    INTERNAL_8 = "In8.Cu"
     BACK = "B.Cu"
+
+
+class StackupLayerKind(str, Enum):
+    COPPER = "copper"
+    DIELECTRIC = "dielectric"
+
+
+class ViaKind(str, Enum):
+    THROUGH = "through"
+    BLIND = "blind"
+    BURIED = "buried"
+    MICROVIA = "microvia"
 
 
 class PadKind(str, Enum):
@@ -273,21 +293,80 @@ class ZoneFillResult:
 
 
 @dataclass(frozen=True, slots=True)
+class StackupLayer:
+    id: str
+    kind: StackupLayerKind
+    thickness_nm: Nanometres
+    copper_layer: CopperLayer | None = None
+    material: str | None = None
+    relative_permittivity: Decimal | None = None
+    loss_tangent: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        if not self.id or self.thickness_nm <= 0:
+            raise ValueError("stackup layers require an id and positive thickness")
+        if (self.kind is StackupLayerKind.COPPER) != (self.copper_layer is not None):
+            raise ValueError("only copper stackup layers name a copper layer")
+        for value in (self.relative_permittivity, self.loss_tangent):
+            if value is not None and value <= 0:
+                raise ValueError("dielectric properties must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class ViaTechnology:
+    id: str
+    kind: ViaKind
+    from_layer: CopperLayer
+    to_layer: CopperLayer
+    minimum_drill_nm: Nanometres
+    minimum_annular_ring_nm: Nanometres
+    maximum_aspect_ratio: Decimal
+
+    def __post_init__(self) -> None:
+        if not self.id or self.from_layer is self.to_layer:
+            raise ValueError("via technology requires an id and distinct span")
+        if self.minimum_drill_nm <= 0 or self.minimum_annular_ring_nm <= 0 or self.maximum_aspect_ratio <= 0:
+            raise ValueError("via technology limits must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class Stackup:
     copper_layers: tuple[CopperLayer, ...] = (
         CopperLayer.FRONT,
         CopperLayer.BACK,
     )
     thickness_nm: Nanometres = nm_from_mm("1.6")
+    physical_layers: tuple[StackupLayer, ...] = ()
+    via_technologies: tuple[ViaTechnology, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "copper_layers", tuple(self.copper_layers))
+        object.__setattr__(self, "physical_layers", tuple(self.physical_layers))
+        object.__setattr__(self, "via_technologies", tuple(self.via_technologies))
         if len(self.copper_layers) < 1:
             raise ValueError("a stackup requires at least one copper layer")
         if len(set(self.copper_layers)) != len(self.copper_layers):
             raise ValueError("stackup copper layers must be unique")
         if self.thickness_nm <= 0:
             raise ValueError("board thickness must be positive")
+        if self.physical_layers:
+            explicit = tuple(layer.copper_layer for layer in self.physical_layers if layer.kind is StackupLayerKind.COPPER)
+            if explicit != self.copper_layers:
+                raise ValueError("physical stackup copper order must match copper_layers")
+            if sum(layer.thickness_nm for layer in self.physical_layers) != self.thickness_nm:
+                raise ValueError("physical stackup thickness must equal board thickness")
+        ids = [technology.id for technology in self.via_technologies]
+        if len(ids) != len(set(ids)):
+            raise ValueError("via technology ids must be unique")
+        indexes = {layer: index for index, layer in enumerate(self.copper_layers)}
+        for technology in self.via_technologies:
+            if technology.from_layer not in indexes or technology.to_layer not in indexes:
+                raise ValueError("via technology span must be in the stackup")
+            low, high = sorted((indexes[technology.from_layer], indexes[technology.to_layer]))
+            if technology.kind is ViaKind.THROUGH and (low, high) != (0, len(indexes) - 1):
+                raise ValueError("through-via technology must span the complete stackup")
+            if technology.kind is ViaKind.MICROVIA and high - low != 1:
+                raise ValueError("microvias may span only adjacent copper layers")
 
 
 @dataclass(frozen=True, slots=True)
@@ -673,6 +752,7 @@ class Via:
     drill_nm: Nanometres
     from_layer: CopperLayer = CopperLayer.FRONT
     to_layer: CopperLayer = CopperLayer.BACK
+    technology: str | None = None
 
     def __post_init__(self) -> None:
         if self.size_nm <= 0 or self.drill_nm <= 0:
@@ -810,6 +890,22 @@ class PhysicalBoard:
                 raise ValueError(f"via references unknown net {via.net!r}")
             if via.from_layer not in layers or via.to_layer not in layers:
                 raise ValueError("via uses a layer not present in the stackup")
+            technologies = {item.id: item for item in self.stackup.via_technologies}
+            if technologies and via.technology is None:
+                raise ValueError("vias must select a technology when the stackup defines a catalog")
+            if via.technology is not None:
+                technology = technologies.get(via.technology)
+                if technology is None:
+                    raise ValueError(f"via references unknown technology {via.technology!r}")
+                if {via.from_layer, via.to_layer} != {technology.from_layer, technology.to_layer}:
+                    raise ValueError("via span does not match its selected technology")
+                if via.drill_nm < technology.minimum_drill_nm:
+                    raise ValueError("via drill is below its technology limit")
+                if (via.size_nm - via.drill_nm) // 2 < technology.minimum_annular_ring_nm:
+                    raise ValueError("via annular ring is below its technology limit")
+                depth = _via_span_depth(self.stackup, via.from_layer, via.to_layer)
+                if Decimal(depth) / Decimal(via.drill_nm) > technology.maximum_aspect_ratio:
+                    raise ValueError("via aspect ratio exceeds its technology limit")
 
         region_names = [region.name for region in self.regions]
         if len(region_names) != len(set(region_names)):
@@ -878,3 +974,15 @@ class PhysicalBoard:
                     f"routing rule for {rule.net!r} references unknown partner "
                     f"{rule.differential_partner!r}"
                 )
+
+
+def _via_span_depth(stackup: Stackup, first: CopperLayer, second: CopperLayer) -> int:
+    if not stackup.physical_layers:
+        return stackup.thickness_nm
+    positions = {
+        layer.copper_layer: index
+        for index, layer in enumerate(stackup.physical_layers)
+        if layer.copper_layer is not None
+    }
+    low, high = sorted((positions[first], positions[second]))
+    return sum(layer.thickness_nm for layer in stackup.physical_layers[low : high + 1])

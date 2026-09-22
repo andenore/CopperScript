@@ -29,6 +29,7 @@ from ..physical import (
     Placement,
     Point,
     ZoneConnection,
+    ViaKind,
 )
 from .base import Artifact, ArtifactManifest
 
@@ -45,13 +46,8 @@ class KiCadPcbBackend:
     target_version = KICAD_PCB_TARGET_VERSION
 
     def generate(self, board: PhysicalBoard) -> ArtifactManifest:
-        if set(board.stackup.copper_layers) != {
-            CopperLayer.FRONT,
-            CopperLayer.BACK,
-        }:
-            raise ValueError(
-                "KiCad PCB backend currently supports a two-layer F.Cu/B.Cu stackup"
-            )
+        if board.stackup.copper_layers[0] is not CopperLayer.FRONT or board.stackup.copper_layers[-1] is not CopperLayer.BACK:
+            raise ValueError("KiCad stackups must start at F.Cu and end at B.Cu")
         content = _render(board)
         warnings: list[str] = []
         if board.metadata.get("prototype_footprints") == "true":
@@ -108,8 +104,7 @@ def _render(board: PhysicalBoard) -> str:
         "  )",
         '  (paper "A4")',
         "  (layers",
-        '    (0 "F.Cu" signal)',
-        '    (31 "B.Cu" signal)',
+        *_copper_layer_lines(board),
         '    (32 "B.Adhes" user "B.Adhesive")',
         '    (33 "F.Adhes" user "F.Adhesive")',
         '    (34 "B.Paste" user)',
@@ -154,9 +149,15 @@ def _render(board: PhysicalBoard) -> str:
         )
 
     for index, via in enumerate(board.vias):
+        technology = next((item for item in board.stackup.via_technologies if item.id == via.technology), None)
+        via_kind = ""
+        if technology is not None and technology.kind in {ViaKind.BLIND, ViaKind.BURIED}:
+            via_kind = " blind"
+        elif technology is not None and technology.kind is ViaKind.MICROVIA:
+            via_kind = " micro"
         lines.extend(
             [
-                "  (via",
+                f"  (via{via_kind}",
                 f"    (at {_point(via.position)})",
                 f"    (size {_mm(via.size_nm)})",
                 f"    (drill {_mm(via.drill_nm)})",
@@ -191,6 +192,14 @@ def _render(board: PhysicalBoard) -> str:
         )
     lines.append(")")
     return "\n".join(lines) + "\n"
+
+
+def _copper_layer_lines(board: PhysicalBoard) -> list[str]:
+    result: list[str] = []
+    for index, layer in enumerate(board.stackup.copper_layers):
+        number = 0 if layer is CopperLayer.FRONT else 31 if layer is CopperLayer.BACK else index
+        result.append(f'    ({number} "{layer.value}" signal)')
+    return result
 
 
 def _zone_lines(

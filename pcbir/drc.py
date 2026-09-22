@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
+from fractions import Fraction
 from hashlib import sha256
 import json
-from math import hypot
+from math import hypot, isqrt
 from typing import Iterable
 
 from .physical import (
@@ -21,6 +22,7 @@ from .physical import (
     Via,
 )
 from .placement import transformed_pad_position
+from .geometry import point_in_polygon, point_segment_distance_squared, segment_distance_squared
 from .placement import placement_solution_is_legal
 
 
@@ -268,6 +270,8 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "stackup": {
                 "layers": [layer.value for layer in board.stackup.copper_layers],
                 "thickness_nm": board.stackup.thickness_nm,
+                "physical_layers": [repr(layer) for layer in board.stackup.physical_layers],
+                "via_technologies": [repr(item) for item in board.stackup.via_technologies],
             },
             "rules": {
                 "clearance": board.rules.minimum_clearance_nm,
@@ -423,58 +427,58 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
         for right_index, right in tracks[position + 1 :]:
             if left.net == right.net or left.layer is not right.layer:
                 continue
-            distance = _segment_distance(left.start, left.end, right.start, right.end)
-            required = left.width_nm / 2 + right.width_nm / 2 + _clearance(board, rules.get(left.net), rules.get(right.net))
-            if distance < required:
-                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"tracks {left_index} and {right_index} violate copper spacing", objects=(f"track:{left_index}", f"track:{right_index}"), nets=tuple(sorted((left.net, right.net))), layers=(left.layer.value,), required_nm=round(required), measured_nm=round(distance)))
+            distance_squared = segment_distance_squared(left.start, left.end, right.start, right.end)
+            required_twice = left.width_nm + right.width_nm + 2 * _clearance(board, rules.get(left.net), rules.get(right.net))
+            if 4 * distance_squared < required_twice * required_twice:
+                code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"tracks {left_index} and {right_index} violate copper spacing", objects=(f"track:{left_index}", f"track:{right_index}"), nets=tuple(sorted((left.net, right.net))), layers=(left.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
     for track_index, track in tracks:
         for via_index, via in enumerate(board.vias):
             if track.net == via.net or not _via_covers_layer(board, via, track.layer):
                 continue
-            distance = _point_segment_distance(via.position, track.start, track.end)
-            required = track.width_nm / 2 + via.size_nm / 2 + _clearance(board, rules.get(track.net), rules.get(via.net))
-            if distance < required:
-                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and via {via_index} violate copper spacing", objects=(f"track:{track_index}", f"via:{via_index}"), nets=tuple(sorted((track.net, via.net))), layers=(track.layer.value,), required_nm=round(required), measured_nm=round(distance)))
+            distance_squared = point_segment_distance_squared(via.position, track.start, track.end)
+            required_twice = track.width_nm + via.size_nm + 2 * _clearance(board, rules.get(track.net), rules.get(via.net))
+            if 4 * distance_squared < required_twice * required_twice:
+                code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and via {via_index} violate copper spacing", objects=(f"track:{track_index}", f"via:{via_index}"), nets=tuple(sorted((track.net, via.net))), layers=(track.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
     for left_index, left in enumerate(board.vias):
         for right_index in range(left_index + 1, len(board.vias)):
             right = board.vias[right_index]
             if left.net == right.net or not _via_spans_overlap(board, left, right):
                 continue
-            distance = hypot(left.position.x_nm - right.position.x_nm, left.position.y_nm - right.position.y_nm)
-            required = left.size_nm / 2 + right.size_nm / 2 + _clearance(board, rules.get(left.net), rules.get(right.net))
-            if distance < required:
-                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"vias {left_index} and {right_index} violate copper spacing", objects=(f"via:{left_index}", f"via:{right_index}"), nets=tuple(sorted((left.net, right.net))), required_nm=round(required), measured_nm=round(distance)))
+            distance_squared = (left.position.x_nm - right.position.x_nm) ** 2 + (left.position.y_nm - right.position.y_nm) ** 2
+            required_twice = left.size_nm + right.size_nm + 2 * _clearance(board, rules.get(left.net), rules.get(right.net))
+            if 4 * distance_squared < required_twice * required_twice:
+                code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"vias {left_index} and {right_index} violate copper spacing", objects=(f"via:{left_index}", f"via:{right_index}"), nets=tuple(sorted((left.net, right.net))), required_nm=(required_twice + 1) // 2, measured_nm=isqrt(distance_squared)))
     pads = _copper_pads(board)
     for track_index, track in tracks:
         for pad in pads:
             if track.net == pad.net or track.layer not in pad.layers:
                 continue
-            distance = _point_segment_distance(pad.position, track.start, track.end)
-            required = track.width_nm / 2 + pad.radius_nm + _clearance(board, rules.get(track.net), rules.get(pad.net))
-            if distance < required:
-                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and {pad.identity} violate copper spacing", objects=(f"track:{track_index}", pad.identity), nets=tuple(sorted((track.net, pad.net))), layers=(track.layer.value,), required_nm=round(required), measured_nm=round(distance)))
+            distance_squared = point_segment_distance_squared(pad.position, track.start, track.end)
+            required_twice = track.width_nm + 2 * pad.radius_nm + 2 * _clearance(board, rules.get(track.net), rules.get(pad.net))
+            if 4 * distance_squared < required_twice * required_twice:
+                code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and {pad.identity} violate copper spacing", objects=(f"track:{track_index}", pad.identity), nets=tuple(sorted((track.net, pad.net))), layers=(track.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
     for via_index, via in enumerate(board.vias):
         for pad in pads:
             if via.net == pad.net or not any(_via_covers_layer(board, via, layer) for layer in pad.layers):
                 continue
-            distance = hypot(via.position.x_nm - pad.position.x_nm, via.position.y_nm - pad.position.y_nm)
-            required = via.size_nm / 2 + pad.radius_nm + _clearance(board, rules.get(via.net), rules.get(pad.net))
-            if distance < required:
-                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"via {via_index} and {pad.identity} violate copper spacing", objects=(f"via:{via_index}", pad.identity), nets=tuple(sorted((via.net, pad.net))), required_nm=round(required), measured_nm=round(distance)))
+            distance_squared = (via.position.x_nm - pad.position.x_nm) ** 2 + (via.position.y_nm - pad.position.y_nm) ** 2
+            required_twice = via.size_nm + 2 * pad.radius_nm + 2 * _clearance(board, rules.get(via.net), rules.get(pad.net))
+            if 4 * distance_squared < required_twice * required_twice:
+                code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"via {via_index} and {pad.identity} violate copper spacing", objects=(f"via:{via_index}", pad.identity), nets=tuple(sorted((via.net, pad.net))), required_nm=(required_twice + 1) // 2, measured_nm=isqrt(distance_squared)))
     for left_index, left in enumerate(pads):
         for right in pads[left_index + 1 :]:
             if left.net == right.net or not set(left.layers).intersection(right.layers):
                 continue
-            distance = hypot(left.position.x_nm - right.position.x_nm, left.position.y_nm - right.position.y_nm)
+            distance_squared = (left.position.x_nm - right.position.x_nm) ** 2 + (left.position.y_nm - right.position.y_nm) ** 2
             required = left.radius_nm + right.radius_nm + _clearance(board, rules.get(left.net), rules.get(right.net))
-            if distance < required:
-                code = "DRC-SHORT" if distance == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"{left.identity} and {right.identity} violate copper spacing", objects=(left.identity, right.identity), nets=tuple(sorted((left.net, right.net))), layers=tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))), required_nm=round(required), measured_nm=round(distance)))
+            if distance_squared < required * required:
+                code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
+                findings.append(_finding(code, DrcSeverity.ERROR, f"{left.identity} and {right.identity} violate copper spacing", objects=(left.identity, right.identity), nets=tuple(sorted((left.net, right.net))), layers=tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))), required_nm=required, measured_nm=isqrt(distance_squared)))
 
 
 def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
@@ -538,16 +542,16 @@ def _point_segment_distance(point: Point, start: Point, end: Point) -> float:
 
 
 def _point_in_polygon_or_edge(point: Point, polygon: tuple[Point, ...]) -> bool:
-    edges = tuple(zip(polygon, (*polygon[1:], polygon[0])))
-    if any(_point_segment_distance(point, first, second) == 0 for first, second in edges):
-        return True
-    inside = False
-    for first, second in edges:
-        if (first.y_nm > point.y_nm) != (second.y_nm > point.y_nm):
-            crossing = (second.x_nm - first.x_nm) * (point.y_nm - first.y_nm) / (second.y_nm - first.y_nm) + first.x_nm
-            if point.x_nm < crossing:
-                inside = not inside
-    return inside
+    return point_in_polygon(point, polygon)
+
+
+def _fraction_sqrt_floor(value: Fraction) -> int:
+    numerator = value.numerator
+    denominator = value.denominator
+    estimate = isqrt(numerator // denominator)
+    while (estimate + 1) * (estimate + 1) * denominator <= numerator:
+        estimate += 1
+    return estimate
 
 
 def _rules_digest(board: PhysicalBoard, policy: PhysicalDrcPolicy) -> str:
@@ -581,7 +585,7 @@ def _track_identity(item: TrackSegment) -> tuple[object, ...]:
 
 
 def _via_identity(item: Via) -> tuple[object, ...]:
-    return (item.net, item.position.x_nm, item.position.y_nm, item.from_layer.value, item.to_layer.value, item.size_nm, item.drill_nm)
+    return (item.net, item.position.x_nm, item.position.y_nm, item.from_layer.value, item.to_layer.value, item.size_nm, item.drill_nm, item.technology)
 
 
 def _routing_rule_document(item: NetRoutingRule) -> tuple[object, ...]:

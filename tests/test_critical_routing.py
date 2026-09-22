@@ -52,6 +52,7 @@ def _pair_board() -> PhysicalBoard:
                 differential_partner="USB_DM",
                 pair_gap_nm=nm_from_mm("0.2"),
                 max_skew_nm=nm_from_mm("10"),
+                maximum_uncoupled_length_nm=nm_from_mm("10"),
                 target_impedance_ohms=90,
             ),
             NetRoutingRule(
@@ -62,6 +63,7 @@ def _pair_board() -> PhysicalBoard:
                 differential_partner="USB_DP",
                 pair_gap_nm=nm_from_mm("0.2"),
                 max_skew_nm=nm_from_mm("10"),
+                maximum_uncoupled_length_nm=nm_from_mm("10"),
                 target_impedance_ohms=90,
             ),
         ),
@@ -81,6 +83,8 @@ def test_critical_pair_is_routed_as_locked_exact_copper() -> None:
     assert first.nets[0].connected
     assert first.nets[0].nets == ("USB_DM", "USB_DP")
     assert first.locked_tracks
+    assert first.nets[0].coupled_length_nm > 0
+    assert len(first.nets[0].uncoupled_lengths_nm) == 2
     assert first.board.tracks == first.locked_tracks
     assert first.board.metadata["detailed_routing"] == "partial"
     assert "field-solver" in first.nets[0].assumptions[0]
@@ -115,3 +119,13 @@ def test_pair_rules_must_be_symmetric() -> None:
 
     assert result.status is CriticalRoutingStatus.FAILED
     assert "symmetric" in result.nets[0].diagnostics[0]
+
+
+def test_pair_enforces_measured_uncoupled_budget() -> None:
+    board = _pair_board()
+    rules = tuple(replace(rule, maximum_uncoupled_length_nm=nm_from_mm("1")) for rule in board.net_routing_rules)
+    board = replace(board, net_routing_rules=rules)
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    result = route_critical_nets(board, guides)
+    assert result.status is CriticalRoutingStatus.FAILED
+    assert "uncoupled length" in result.nets[0].diagnostics[-1]

@@ -82,12 +82,23 @@ where relevant. It does not imply third-party certification.
 - [ ] P3. Differential-pair completion: coupled pad escape, fanout, via-pair
       transitions, uncoupled-length accounting, length/skew measurement,
       bounded trombone tuning, return-path requirements, and DRC.
+  - [x] Atomic paired fanout, centerline offset routing, paired transitions,
+        coupled/uncoupled measurement, skew and uncoupled-budget enforcement.
+  - [ ] Local trombone tuning, return-via rules, and field-solver evidence binding.
 - [ ] P4. Stackups and via technology: arbitrary copper/dielectric stacks,
       material properties, through/blind/buried/microvia definitions, legal
       spans, aspect/annular constraints, layer transitions, and KiCad mapping.
+  - [x] Ordered copper/dielectric stack, material properties, named through/
+        blind/buried/microvia catalog, span/ring/aspect validation, and KiCad
+        multilayer/via-kind mapping.
+  - [ ] Router transition graphs must select technologies automatically.
 - [ ] P5. Exact-shape physical DRC: pad and track shape primitives, polygonal
       broad/narrow phases, exact clearance/intersection/connectivity, concave
       board edges, zones, stable markers, coverage, and differential checks.
+  - [x] Shared exact integer segment/capsule predicates and exact copper-spacing
+        decisions with deterministic markers.
+  - [ ] Shape-accurate rotated pads/arcs/zones, spatial index, incremental/full
+        equivalence, and concave-edge offset checks.
 - [ ] P6. Artwork, assembly, and fabrication DRC: solder-mask and paste rules,
       silkscreen clipping/clearance, courtyard and component-side checks,
       hole/slot constraints, copper balance and documented fab-profile gates.
