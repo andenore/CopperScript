@@ -14,6 +14,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Generic, Mapping, TypeVar
 
+from .constraint_coverage import ConstraintMode
 from .quantities import Current, Quantity, Voltage
 
 
@@ -142,6 +143,7 @@ class ConstraintKind(str, Enum):
     PLACEMENT_GROUP = "placement_group"
     KEEPOUT = "keepout"
     NOTE = "note"
+    ROUTING = "routing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,9 +406,23 @@ class Constraint:
     kind: ConstraintKind
     targets: tuple[str, ...]
     parameters: Mapping[str, Quantity | str | int | float] = field(default_factory=dict)
+    constraint_id: str | None = None
+    mode: ConstraintMode = ConstraintMode.REQUIRE
+    consumers: tuple[str, ...] = ()
+    verifier: str | None = None
+    origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
+        object.__setattr__(self, "consumers", tuple(self.consumers))
+        object.__setattr__(self, "origins", tuple(self.origins))
+        if self.constraint_id is not None and not self.constraint_id:
+            raise ValueError("constraint id cannot be empty")
+        if self.mode in {ConstraintMode.REQUIRE, ConstraintMode.EXTERNAL}:
+            if bool(self.consumers) != (self.verifier is not None):
+                raise ValueError(
+                    "hard constraint ownership requires both consumers and verifier"
+                )
 
 
 @dataclass(frozen=True, slots=True)

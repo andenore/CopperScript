@@ -193,6 +193,11 @@ def _expand_one(
                 for target in constraint.targets
             ),
             constraint.parameters,
+            constraint.constraint_id,
+            constraint.mode,
+            constraint.consumers,
+            constraint.verifier,
+            constraint.origins,
         )
         for constraint in template.body.constraints
     )

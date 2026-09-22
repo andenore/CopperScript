@@ -47,7 +47,9 @@ replace github.com/vendor/parts => ./deps
     assert board.library["sensors.Sensor"].pins["VDD"].number == "1"
     assert board.dependencies[0].version == "v1.2.3"
     assert board.dependencies[0].checksum.startswith("sha256:")
-    assert not (tmp_path / "copper.sum").exists()
+    lock = (tmp_path / "copper.lock").read_text(encoding="utf-8")
+    assert '"module": "github.com/vendor/parts"' in lock
+    assert '"path": "sensors/sensor.copper"' in lock
 
 
 def test_checksum_change_is_rejected(tmp_path: Path) -> None:
@@ -73,16 +75,47 @@ require github.com/vendor/library v1.0.0
         encoding="utf-8",
     )
     compile_file(board_path)
-    assert (tmp_path / "copper.sum").read_text(encoding="utf-8").startswith(
-        "github.com/vendor/library v1.0.0 sha256:"
-    )
+    assert '"module": "github.com/vendor/library"' in (
+        tmp_path / "copper.lock"
+    ).read_text(encoding="utf-8")
     part_path.write_text(
         'part R { category = "passive.resistor"; manufacturer = "changed"; pin A { number = "1"; domains = "analog"; directions = "passive"; } }',
         encoding="utf-8",
     )
 
     with pytest.raises(CopperScriptError) as captured:
-        compile_file(board_path)
+        compile_file(board_path, locked=True)
+    assert captured.value.code == "PKG008"
+
+
+def test_locked_mode_rejects_missing_lock_and_tracks_assets(tmp_path: Path) -> None:
+    package = tmp_path / "deps" / "parts"
+    package.mkdir(parents=True)
+    (package / "part.copper").write_text(
+        'part R { pin A { number = "1"; domains = "analog"; directions = "passive"; } }',
+        encoding="utf-8",
+    )
+    (package / "R.kicad_mod").write_text("(footprint \"R\")", encoding="utf-8")
+    (tmp_path / "copper.mod").write_text(
+        "module test/board\nrequire github.com/vendor/lib v1\n"
+        "replace github.com/vendor/lib => ./deps\n",
+        encoding="utf-8",
+    )
+    board_path = tmp_path / "board.copper"
+    board_path.write_text(
+        'board B { import p "github.com/vendor/lib/parts"; component R1: p.R; net N { R1.A; } }',
+        encoding="utf-8",
+    )
+    with pytest.raises(CopperScriptError) as captured:
+        compile_file(board_path, locked=True, offline=True)
+    assert captured.value.code == "PKG010"
+    compile_file(board_path, offline=True)
+    lock = (tmp_path / "copper.lock").read_text(encoding="utf-8")
+    assert '"path": "parts/R.kicad_mod"' in lock
+    compile_file(board_path, locked=True, offline=True)
+    (package / "R.kicad_mod").write_text("(footprint \"changed\")", encoding="utf-8")
+    with pytest.raises(CopperScriptError) as captured:
+        compile_file(board_path, locked=True, offline=True)
     assert captured.value.code == "PKG008"
 
 

@@ -29,11 +29,13 @@ from .physical import (
     BoardOutline,
     BoardSide,
     ComponentPlacementRule,
+    CopperLayer,
     FootprintPad,
     PadReference,
     PhysicalBoard,
     PhysicalFootprint,
     PhysicalNet,
+    NetRoutingRule,
     Placement,
     PlacementGroup,
     PlacementKeepout,
@@ -42,6 +44,7 @@ from .physical import (
     Point,
     RelativePlacementKind,
     RelativePlacementRule,
+    RouteKind,
     Size,
 )
 from .quantities import Length, Quantity
@@ -63,6 +66,70 @@ class PrototypePhysicalOptions:
             raise ValueError("prototype board margin must be positive")
         if self.margin_mm * 2 >= min(self.board_width_mm, self.board_height_mm):
             raise ValueError("prototype board margin leaves no placement area")
+
+
+@dataclass(frozen=True, slots=True)
+class FootprintAuditEntry:
+    reference: str
+    components: tuple[str, ...]
+    source_path: str | None
+    source_sha256: str | None
+    warnings: tuple[str, ...]
+    errors: tuple[str, ...]
+
+    @property
+    def passed(self) -> bool:
+        return not self.errors
+
+
+@dataclass(frozen=True, slots=True)
+class FootprintAudit:
+    entries: tuple[FootprintAuditEntry, ...]
+
+    @property
+    def passed(self) -> bool:
+        return bool(self.entries) and all(entry.passed for entry in self.entries)
+
+
+def audit_resolved_footprints(board: Board, resolver: FootprintResolver) -> FootprintAudit:
+    """Resolve every selected footprint and report all gaps in one pass."""
+
+    flat = elaborate(board)
+    selected: dict[str, list[tuple[ComponentInstance, PartDefinition]]] = {}
+    for component in flat.components:
+        part = flat.library[component.part]
+        reference = _selected_footprint(component, part)
+        if reference is not None:
+            selected.setdefault(reference, []).append((component, part))
+    entries: list[FootprintAuditEntry] = []
+    for reference, uses in sorted(selected.items()):
+        errors: list[str] = []
+        warnings: tuple[str, ...] = ()
+        source_path: str | None = None
+        source_sha256: str | None = None
+        try:
+            result = resolver.resolve(reference)
+            warnings = result.warnings
+            source_path = result.footprint.metadata.get("source_path")
+            source_sha256 = result.footprint.metadata.get("source_sha256")
+            for component, part in uses:
+                try:
+                    _validate_footprint_pins(part, component, result.footprint)
+                except ValueError as exc:
+                    errors.append(str(exc))
+        except ValueError as exc:
+            errors.append(str(exc))
+        entries.append(
+            FootprintAuditEntry(
+                reference,
+                tuple(component.ref for component, _ in uses),
+                source_path,
+                source_sha256,
+                warnings,
+                tuple(errors),
+            )
+        )
+    return FootprintAudit(tuple(entries))
 
 
 def prototype_physicalize(
@@ -228,6 +295,7 @@ def _physicalize(
         placement_rules,
         relative_rules,
         placement_groups,
+        net_routing_rules,
     ) = _lower_physical_constraints(flat, component_index, metadata)
     return PhysicalBoard(
         name=board.name,
@@ -243,6 +311,7 @@ def _physicalize(
         placement_rules=placement_rules,
         relative_rules=relative_rules,
         placement_groups=placement_groups,
+        net_routing_rules=net_routing_rules,
     )
 
 
@@ -256,12 +325,14 @@ def _lower_physical_constraints(
     tuple[ComponentPlacementRule, ...],
     tuple[RelativePlacementRule, ...],
     tuple[PlacementGroup, ...],
+    tuple[NetRoutingRule, ...],
 ]:
     regions: list[PlacementRegion] = []
     keepouts: list[PlacementKeepout] = []
     rules: dict[str, ComponentPlacementRule] = {}
     relative: list[RelativePlacementRule] = []
     groups: list[PlacementGroup] = []
+    routing_rules: list[NetRoutingRule] = []
     skipped: list[str] = []
 
     def targets(values: tuple[str, ...]) -> tuple[PlacementTarget, ...] | None:
@@ -285,7 +356,40 @@ def _lower_physical_constraints(
             lowered.append(PlacementTarget(reference, physical_pad))
         return tuple(lowered)
 
+    net_names = {item.name for item in flat.nets}
     for index, constraint in enumerate(flat.constraints):
+        if constraint.kind is ConstraintKind.ROUTING:
+            if len(constraint.targets) != 1:
+                raise ValueError("routing requires exactly one net target")
+            net = constraint.targets[0]
+            if net not in net_names:
+                raise ValueError(f"routing constraint references unknown net {net!r}")
+            parameters = constraint.parameters
+            routing_rules.append(
+                NetRoutingRule(
+                    net=net,
+                    kind=RouteKind(str(parameters.get("kind", "general"))),
+                    priority=_constraint_int(parameters, "priority", 0),
+                    width_nm=_optional_constraint_length(parameters, "width"),
+                    clearance_nm=_optional_constraint_length(parameters, "clearance"),
+                    allowed_layers=_constraint_layers(parameters.get("allowed_layers")),
+                    max_vias=_optional_constraint_int(parameters, "max_vias"),
+                    max_length_nm=_optional_constraint_length(parameters, "max_length"),
+                    differential_partner=_optional_string(parameters, "partner"),
+                    pair_gap_nm=_optional_constraint_length(parameters, "pair_gap"),
+                    max_skew_nm=_optional_constraint_length(parameters, "max_skew"),
+                    topology=str(parameters.get("topology", "point_to_point")),
+                    target_impedance_ohms=_optional_constraint_int(parameters, "target_impedance_ohms"),
+                    maximum_uncoupled_length_nm=_optional_constraint_length(parameters, "maximum_uncoupled_length"),
+                    maximum_stub_length_nm=_optional_constraint_length(parameters, "maximum_stub_length"),
+                    tuning_amplitude_limit_nm=_optional_constraint_length(parameters, "tuning_amplitude_limit"),
+                    require_return_vias=_constraint_bool(parameters, "require_return_vias", False),
+                    return_via_net=_optional_string(parameters, "return_via_net"),
+                    maximum_return_via_distance_nm=_optional_constraint_length(parameters, "maximum_return_via_distance"),
+                    impedance_evidence_digest=_optional_string(parameters, "impedance_evidence_digest"),
+                )
+            )
+            continue
         lowered_targets = targets(constraint.targets)
         if lowered_targets is None:
             continue
@@ -438,6 +542,7 @@ def _lower_physical_constraints(
         tuple(rules[reference] for reference in sorted(rules)),
         tuple(relative),
         _unique_groups(groups),
+        tuple(routing_rules),
     )
 
 
@@ -461,6 +566,41 @@ def _constraint_int(parameters: Mapping[str, object], name: str, default: int) -
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"placement constraint parameter {name!r} must be numeric")
     return int(value)
+
+
+def _optional_constraint_int(parameters: Mapping[str, object], name: str) -> int | None:
+    return _constraint_int(parameters, name, 0) if name in parameters else None
+
+
+def _optional_constraint_length(parameters: Mapping[str, object], name: str) -> int | None:
+    return _constraint_length(parameters, name) if name in parameters else None
+
+
+def _optional_string(parameters: Mapping[str, object], name: str) -> str | None:
+    value = parameters.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"routing constraint parameter {name!r} must be a string")
+    return value
+
+
+def _constraint_bool(parameters: Mapping[str, object], name: str, default: bool) -> bool:
+    value = parameters.get(name, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"routing constraint parameter {name!r} must be boolean")
+    return value
+
+
+def _constraint_layers(value: object) -> tuple[CopperLayer, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, str):
+        raise ValueError("routing allowed_layers must be a comma-separated string")
+    try:
+        return tuple(CopperLayer(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise ValueError("routing allowed_layers contains an unknown copper layer") from exc
 
 
 def _constraint_side(value: object) -> BoardSide | None:

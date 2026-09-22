@@ -33,11 +33,14 @@ replace github.com/vendor/copper-parts => ../copper-parts
 ```
 
 `require` selects a module version. `replace` is optional and redirects that
-module to a local directory, relative to `copper.mod`. `copper.sum` records
-downloaded module content and compilation fails if known content changes. Local
-replacements are intentionally mutable and are not locked in `copper.sum`.
-Remote resolution currently supports tagged GitHub repositories. Dependencies
-are cached in `.copper-cache` and only `.copper` files are parsed.
+module to a local directory, relative to `copper.mod`. `copper lock board.copper`
+writes the canonical `copper.lock` inventory. The lock contains a module digest
+and an individual SHA-256 and size for each consumable `.copper`, `.kicad_mod`,
+3D-model, JSON, and CSV asset. Local replacements are locked exactly like
+downloaded modules. Use `--locked` to reject missing or changed content and
+`--offline` to reject remote cache misses. Remote resolution currently supports
+tagged GitHub repositories and caches them in `.copper-cache`; package code is
+never executed.
 
 A package is a directory. Every `.copper` file directly in it exports one
 `device`, `part`, or `module`; boards cannot be exported from packages.
@@ -416,14 +419,45 @@ constraint placement_group(U1, U2, C1) {
     anchor = U1;
     priority = 50;
 }
+
+constraint routing(USB_DP) {
+    id = "usb.dp";
+    mode = require;
+    consumers = "critical_router,physical_drc";
+    verifier = "DRC-DIFF";
+    kind = differential;
+    partner = USB_DM;
+    width = 0.18mm;
+    clearance = 0.15mm;
+    pair_gap = 0.2mm;
+    max_skew = 1mm;
+    allowed_layers = "F.Cu,B.Cu";
+    target_impedance_ohms = 90;
+    require_return_vias = true;
+    return_via_net = GND;
+    maximum_return_via_distance = 2mm;
+    impedance_evidence_digest = "<64 hexadecimal SHA-256 characters>";
+}
 ```
 
 Known constraint kinds are `max_distance`, `min_distance`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
-`placement_group`, `keepout`, and `note`. Coordinates and rectangle dimensions
+`placement_group`, `keepout`, `routing`, and `note`. Coordinates and rectangle dimensions
 are lengths in the physical board coordinate system; orientation values are
 unitless degrees. The detailed legalizer currently accepts orthogonal
 orientations only. `note` remains metadata and has no placement effect.
+
+All constraints accept the ownership metadata `id`, `mode`, `consumers`, and
+`verifier`. Modes are `require`, `target`, `prefer`, `assume`, and `external`.
+Hard `require` and `external` constraints must have a complete consumer/verifier
+pair when either is stated, and the normalized coverage gate supplies the known
+placement/routing defaults when neither is stated. Routing parameters lower to
+`NetRoutingRule`; supported values include `kind`, `priority`, `width`,
+`clearance`, `allowed_layers`, `max_vias`, `max_length`, `partner`, `pair_gap`,
+`max_skew`, `topology`, `target_impedance_ohms`,
+`maximum_uncoupled_length`, `maximum_stub_length`,
+`tuning_amplitude_limit`, `require_return_vias`, `return_via_net`,
+`maximum_return_via_distance`, and `impedance_evidence_digest`.
 
 ## KiCad schematic export
 

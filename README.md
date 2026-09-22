@@ -18,6 +18,15 @@ python -m copperscript check examples/invalid_board.copper
 python -m copperscript power-check examples/valid_board.copper
 ```
 
+Lock all imported source and physical assets, then reproduce without network
+access:
+
+```console
+python -m copperscript lock examples/full_vertical_board.copper --offline
+python -m copperscript check examples/full_vertical_board.copper --locked --offline
+python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints
+```
+
 Compile a valid design to normalized JSON IR:
 
 ```console

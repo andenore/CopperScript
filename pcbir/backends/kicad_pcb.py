@@ -558,6 +558,8 @@ def _footprint_layer(layer: FootprintLayer, side: BoardSide) -> str:
         FootprintLayer.COURTYARD: f"{prefix}.CrtYd",
         FootprintLayer.ADHESIVE: f"{prefix}.Adhes",
         FootprintLayer.DOCUMENTATION: "Dwgs.User",
+        FootprintLayer.SOLDER_MASK: f"{prefix}.Mask",
+        FootprintLayer.SOLDER_PASTE: f"{prefix}.Paste",
     }[layer]
 
 

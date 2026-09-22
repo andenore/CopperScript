@@ -55,6 +55,7 @@ from .model import (
 )
 from .parser import parse
 from .packages import PackageResolver, ResolvedPackage
+from .constraint_coverage import ConstraintMode
 from .quantities import (
     Capacitance,
     Current,
@@ -116,7 +117,13 @@ QUANTITY_TYPES: dict[str, type[Quantity]] = {
 }
 
 
-def compile_source(source: str, filename: str = "<memory>") -> Board:
+def compile_source(
+    source: str,
+    filename: str = "<memory>",
+    *,
+    locked: bool = False,
+    offline: bool = False,
+) -> Board:
     """Compile source into the authoritative hierarchical :class:`Board` IR."""
 
     document = parse(source, filename)
@@ -125,7 +132,9 @@ def compile_source(source: str, filename: str = "<memory>") -> Board:
     if document.imports and filename.startswith("<"):
         _error("CMP020", "package imports require a source filename", document.location)
     if document.imports:
-        resolver = PackageResolver.for_source(Path(filename).resolve(), document.location)
+        resolver = PackageResolver.for_source(
+            Path(filename).resolve(), document.location, locked=locked, offline=offline
+        )
         imported = _load_imports(document, resolver, ())
     else:
         imported = PackageContents({}, {}, {}, ())
@@ -134,13 +143,17 @@ def compile_source(source: str, filename: str = "<memory>") -> Board:
     )
 
 
-def compile_file(path: str | Path) -> Board:
+def compile_file(
+    path: str | Path, *, locked: bool = False, offline: bool = False
+) -> Board:
     source_path = Path(path).resolve()
     document = _read_document(source_path)
     if document.kind != "board":
         _error("CMP019", "compiler entry file must declare a board", document.location)
     if document.imports:
-        resolver = PackageResolver.for_source(source_path, document.location)
+        resolver = PackageResolver.for_source(
+            source_path, document.location, locked=locked, offline=offline
+        )
         imported = _load_imports(document, resolver, ())
     else:
         imported = PackageContents({}, {}, {}, ())
@@ -1356,14 +1369,46 @@ def _constraint(declaration: ConstraintDecl) -> Constraint:
     except ValueError:
         _error("CMP013", f"unsupported constraint kind {declaration.kind!r}", declaration.location)
     parameters: dict[str, Quantity | str | int | float] = {}
+    metadata_names = {"id", "mode", "consumers", "verifier"}
     for name, value in declaration.parameters.items():
+        if name in metadata_names:
+            continue
         if isinstance(value, RawQuantity):
             parameters[name] = _quantity(value, declaration.location)
         elif isinstance(value, (str, int, float)):
             parameters[name] = value
         else:
             _error("CMP014", f"unsupported constraint parameter {name!r}", declaration.location)
-    return Constraint(kind, declaration.targets, parameters)
+    constraint_id = declaration.parameters.get("id")
+    if constraint_id is not None and not isinstance(constraint_id, str):
+        _error("CMP014", "constraint id must be a string", declaration.location)
+    raw_mode = declaration.parameters.get("mode", "require")
+    if not isinstance(raw_mode, str):
+        _error("CMP014", "constraint mode must be a name", declaration.location)
+    try:
+        mode = ConstraintMode(raw_mode)
+    except ValueError:
+        _error("CMP014", f"unsupported constraint mode {raw_mode!r}", declaration.location)
+    raw_consumers = declaration.parameters.get("consumers", "")
+    if not isinstance(raw_consumers, str):
+        _error("CMP014", "constraint consumers must be a comma-separated string", declaration.location)
+    consumers = tuple(item.strip() for item in raw_consumers.split(",") if item.strip())
+    verifier = declaration.parameters.get("verifier")
+    if verifier is not None and not isinstance(verifier, str):
+        _error("CMP014", "constraint verifier must be a string", declaration.location)
+    try:
+        return Constraint(
+            kind=kind,
+            targets=declaration.targets,
+            parameters=parameters,
+            constraint_id=constraint_id,
+            mode=mode,
+            consumers=consumers,
+            verifier=verifier,
+            origins=(str(declaration.location),),
+        )
+    except ValueError as exc:
+        _error("CMP014", str(exc), declaration.location)
 
 
 def _quantity(value: Scalar, location: SourceLocation) -> Quantity:

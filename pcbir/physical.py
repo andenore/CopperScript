@@ -105,6 +105,8 @@ class FootprintLayer(str, Enum):
     COURTYARD = "courtyard"
     ADHESIVE = "adhesive"
     DOCUMENTATION = "documentation"
+    SOLDER_MASK = "solder_mask"
+    SOLDER_PASTE = "solder_paste"
 
 
 class AlignmentAxis(str, Enum):

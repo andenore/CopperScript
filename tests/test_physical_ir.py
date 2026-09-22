@@ -14,9 +14,11 @@ from pcbir import (
     Point,
     Size,
     RelativePlacementKind,
+    RouteKind,
     compile_file,
     compile_source,
     prototype_physicalize,
+    normalize_constraints,
 )
 
 
@@ -132,3 +134,50 @@ def test_copper_constraints_lower_to_typed_physical_ir() -> None:
     assert physical.relative_rules[0].kind is RelativePlacementKind.MAX_DISTANCE
     assert physical.relative_rules[1].axis is AlignmentAxis.Y
     assert next(group for group in physical.placement_groups if group.name == "pair").anchor == "R2"
+
+
+def test_routing_constraint_lowers_complete_source_profile_and_ownership() -> None:
+    digest = "a" * 64
+    electrical = compile_source(
+        f'''
+        board Routed {{
+            use library "tiny";
+            component R1: RESISTOR {{ footprint = "0402"; }}
+            component R2: RESISTOR {{ footprint = "0402"; }}
+            component R3: RESISTOR {{ footprint = "0402"; }}
+            net USB_DP {{ R1.1; R2.1; }}
+            net USB_DM {{ R1.2; R2.2; }}
+            net GND {{ R3.1; }}
+            constraint routing(USB_DP) {{
+                id = "usb.dp";
+                mode = require;
+                consumers = "critical_router,physical_drc";
+                verifier = "DRC-DIFF";
+                kind = differential;
+                partner = USB_DM;
+                width = 0.18mm;
+                clearance = 0.15mm;
+                pair_gap = 0.2mm;
+                max_skew = 1mm;
+                allowed_layers = "F.Cu,B.Cu";
+                max_vias = 2;
+                require_return_vias = true;
+                return_via_net = GND;
+                maximum_return_via_distance = 2mm;
+                target_impedance_ohms = 90;
+                impedance_evidence_digest = "{digest}";
+            }}
+        }}
+        '''
+    )
+
+    physical = prototype_physicalize(electrical)
+    rule = physical.net_routing_rules[0]
+    assert rule.kind is RouteKind.DIFFERENTIAL
+    assert rule.differential_partner == "USB_DM"
+    assert rule.require_return_vias
+    assert rule.impedance_evidence_digest == digest
+    normalized = normalize_constraints(electrical.constraints)[0]
+    assert normalized.id == "usb.dp"
+    assert normalized.consumers == ("critical_router", "physical_drc")
+    assert normalized.verifier == "DRC-DIFF"

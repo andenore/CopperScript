@@ -13,7 +13,11 @@ from .importers import KiCadModImportError, load_kicad_mod
 from .layout import PlacementPlannerOptions, plan_placement
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
-from .physicalize import prototype_physicalize, resolved_physicalize
+from .physicalize import (
+    audit_resolved_footprints,
+    prototype_physicalize,
+    resolved_physicalize,
+)
 from .physical import nm_from_mm
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routeflow import (
@@ -28,14 +32,25 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     check_parser = subparsers.add_parser("check", help="run electrical-rules checks")
     check_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(check_parser)
+
+    lock_parser = subparsers.add_parser(
+        "lock", help="resolve package content and update copper.lock"
+    )
+    lock_parser.add_argument("board", type=Path, help="a .copper source file")
+    lock_parser.add_argument(
+        "--offline", action="store_true", help="reject remote package cache misses"
+    )
 
     power_parser = subparsers.add_parser(
         "power-check", help="analyze explicit steady-state power scenarios"
     )
     power_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(power_parser)
 
     compile_parser = subparsers.add_parser("compile", help="compile source to JSON IR")
     compile_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(compile_parser)
     compile_parser.add_argument("-o", "--output", type=Path, help="write JSON IR to this file")
     compile_parser.add_argument(
         "--no-check", action="store_true", help="emit IR even when electrical checks fail"
@@ -45,6 +60,7 @@ def _parser() -> argparse.ArgumentParser:
         "export-kicad", help="generate a KiCad 8 schematic"
     )
     kicad_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(kicad_parser)
     kicad_parser.add_argument(
         "-o", "--output", type=Path, help="output .kicad_sch file"
     )
@@ -57,6 +73,7 @@ def _parser() -> argparse.ArgumentParser:
         help="generate a KiCad 8 PCB draft using resolved footprints",
     )
     pcb_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(pcb_parser)
     pcb_parser.add_argument("-o", "--output", type=Path, help="output .kicad_pcb file")
     pcb_parser.add_argument(
         "--no-check", action="store_true", help="generate even when ERC reports errors"
@@ -79,6 +96,7 @@ def _parser() -> argparse.ArgumentParser:
         help="produce a legal placement candidate and coarse routability report",
     )
     layout_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(layout_parser)
     layout_parser.add_argument("-o", "--output", type=Path, help="output .kicad_pcb file")
     layout_parser.add_argument(
         "--report", type=Path, help="write the layout readiness report as JSON"
@@ -110,6 +128,7 @@ def _parser() -> argparse.ArgumentParser:
         help="produce multilayer routing guides with negotiated congestion",
     )
     global_route_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(global_route_parser)
     global_route_parser.add_argument("-o", "--output", type=Path, help="output global-route JSON")
     global_route_parser.add_argument(
         "--pcb-output", type=Path, help="optionally write the placed, unrouted KiCad PCB"
@@ -149,7 +168,31 @@ def _parser() -> argparse.ArgumentParser:
     footprint_parser.add_argument(
         "--strict", action="store_true", help="treat lossy-import warnings as errors"
     )
+    audit_parser = subparsers.add_parser(
+        "audit-footprints", help="resolve and validate all selected board footprints"
+    )
+    audit_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(audit_parser)
+    audit_parser.add_argument(
+        "--footprint-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="explicit KiCad footprint search root (repeatable)",
+    )
+    audit_parser.add_argument(
+        "--strict", action="store_true", help="treat lossy-import warnings as errors"
+    )
     return parser
+
+
+def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--locked", action="store_true", help="require copper.lock to match every package byte"
+    )
+    parser.add_argument(
+        "--offline", action="store_true", help="reject remote package cache misses"
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -170,18 +213,47 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command in {
         "check",
+        "lock",
         "power-check",
         "compile",
         "export-kicad",
         "export-kicad-pcb",
         "plan-layout",
         "route-global",
+        "audit-footprints",
     }:
         try:
-            board = load_board(args.board)
+            board = load_board(
+                args.board,
+                locked=getattr(args, "locked", False),
+                offline=getattr(args, "offline", False),
+            )
         except BoardLoadError as exc:
             print(f"COMPILE ERROR: {exc}")
             return 2
+        if args.command == "lock":
+            print(f"Locked package content for {board.name} -> copper.lock")
+            return 0
+        if args.command == "audit-footprints":
+            resolver = FootprintResolver(
+                base_directory=args.board.resolve().parent,
+                search_roots=tuple(root.resolve() for root in args.footprint_root),
+                strict=args.strict,
+            )
+            audit = audit_resolved_footprints(board, resolver)
+            for entry in audit.entries:
+                status = "PASS" if entry.passed else "FAIL"
+                identity = entry.source_sha256 or "unresolved"
+                print(f"{status}: {entry.reference} [{', '.join(entry.components)}] {identity}")
+                for warning in entry.warnings:
+                    print(f"  WARNING: {warning}")
+                for error in entry.errors:
+                    print(f"  ERROR: {error}")
+            print(
+                f"Footprint audit: {'PASS' if audit.passed else 'FAIL'} "
+                f"({sum(item.passed for item in audit.entries)}/{len(audit.entries)} resolved)"
+            )
+            return 0 if audit.passed else 1
         diagnostics = (
             analyze_power_states(board) if args.command == "power-check" else check(board)
         )

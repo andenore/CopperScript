@@ -1,15 +1,16 @@
 """Go-style package manifests and deterministic dependency resolution.
 
 Package import paths are stable source identities. Versions and local
-development replacements live in ``copper.mod``; content hashes are recorded
-in ``copper.sum``. Remote modules are fetched as Git repositories into a
-project-local cache and CopperScript never executes package code.
+development replacements live in ``copper.mod``; complete content inventories
+are recorded in ``copper.lock``. Remote modules are fetched as Git repositories
+into a project-local cache and CopperScript never executes package code.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -37,6 +38,25 @@ class ResolvedPackage:
     version: str
     directory: Path
     checksum: str
+
+
+@dataclass(frozen=True, slots=True)
+class LockedFile:
+    path: str
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class LockedModule:
+    module_path: str
+    version: str
+    source: str
+    checksum: str
+    files: tuple[LockedFile, ...]
+
+
+LOCK_SCHEMA = "copperscript.package-lock/v1"
 
 
 def find_manifest(start: Path) -> Path | None:
@@ -94,12 +114,29 @@ def read_manifest(path: Path) -> ModuleManifest:
 class PackageResolver:
     """Resolve package paths declared by one project manifest."""
 
-    def __init__(self, manifest: ModuleManifest):
+    def __init__(
+        self,
+        manifest: ModuleManifest,
+        *,
+        locked: bool = False,
+        offline: bool = False,
+    ):
         self.manifest = manifest
         self.cache_root = manifest.root / ".copper-cache" / "pkg"
+        self.locked = locked
+        self.offline = offline
+        self.lock_path = manifest.root / "copper.lock"
+        self._lock_entries = _read_lock(self.lock_path)
 
     @classmethod
-    def for_source(cls, source: Path, location: SourceLocation) -> "PackageResolver":
+    def for_source(
+        cls,
+        source: Path,
+        location: SourceLocation,
+        *,
+        locked: bool = False,
+        offline: bool = False,
+    ) -> "PackageResolver":
         manifest_path = find_manifest(source)
         if manifest_path is None:
             raise CopperScriptError(
@@ -107,7 +144,7 @@ class PackageResolver:
                 "package imports require a copper.mod in this directory or a parent",
                 location,
             )
-        return cls(read_manifest(manifest_path))
+        return cls(read_manifest(manifest_path), locked=locked, offline=offline)
 
     def resolve(self, import_path: str, location: SourceLocation) -> ResolvedPackage:
         module_path = self._matching_module(import_path)
@@ -119,6 +156,13 @@ class PackageResolver:
             )
         version = self.manifest.requirements[module_path]
         replacement = self.manifest.replacements.get(module_path)
+        key = (module_path, version)
+        if self.locked and key not in self._lock_entries:
+            raise CopperScriptError(
+                "PKG010",
+                f"locked resolution requires {module_path}@{version} in copper.lock",
+                location,
+            )
         is_local_replacement = replacement is not None
         if is_local_replacement:
             module_root = Path(replacement)
@@ -142,12 +186,17 @@ class PackageResolver:
                 f"package {import_path!r} does not exist in module {module_path!r}",
                 location,
             )
-        checksum = _module_checksum(module_root)
-        # Match Go's development ergonomics: a local replacement is mutable
-        # source and is not locked in the sum file. Its current hash is still
-        # retained in IR provenance. Downloaded module content is immutable.
-        if not is_local_replacement:
-            self._verify_or_record_sum(module_path, version, checksum, location)
+        try:
+            files = _module_inventory(module_root)
+        except (OSError, ValueError) as exc:
+            raise CopperScriptError(
+                "PKG012", f"cannot inventory {module_path}@{version}: {exc}", location
+            ) from exc
+        checksum = _inventory_checksum(files)
+        source = f"replace:{replacement}" if replacement is not None else f"git:https://{module_path}.git"
+        self._verify_or_record_lock(
+            LockedModule(module_path, version, source, checksum, files), location
+        )
         return ResolvedPackage(import_path, module_path, version, package_dir, checksum)
 
     def _matching_module(self, import_path: str) -> str | None:
@@ -171,6 +220,12 @@ class PackageResolver:
         destination = self.cache_root / cache_key
         if destination.is_dir():
             return destination.resolve()
+        if self.offline:
+            raise CopperScriptError(
+                "PKG011",
+                f"offline resolution cache miss for {module_path}@{version}",
+                location,
+            )
         self.cache_root.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=f"{cache_key}-", dir=self.cache_root))
         try:
@@ -199,70 +254,108 @@ class PackageResolver:
                 shutil.rmtree(temporary)
         return destination.resolve()
 
-    def _verify_or_record_sum(
-        self,
-        module_path: str,
-        version: str,
-        checksum: str,
-        location: SourceLocation,
+    def _verify_or_record_lock(
+        self, entry: LockedModule, location: SourceLocation
     ) -> None:
-        sum_path = self.manifest.root / "copper.sum"
-        entries: dict[tuple[str, str], str] = {}
-        if sum_path.exists():
-            try:
-                lines = sum_path.read_text(encoding="utf-8").splitlines()
-            except OSError as exc:
-                raise CopperScriptError("PKG007", f"cannot read copper.sum: {exc}", location) from exc
-            for line_number, line in enumerate(lines, 1):
-                if not line.strip():
-                    continue
-                fields = line.split()
-                if len(fields) != 3:
-                    raise CopperScriptError(
-                        "PKG007", f"invalid copper.sum line {line_number}", location
-                    )
-                entries[(fields[0], fields[1])] = fields[2]
-
-        key = (module_path, version)
-        expected = entries.get(key)
-        if expected is not None and expected != checksum:
+        key = (entry.module_path, entry.version)
+        expected = self._lock_entries.get(key)
+        if expected == entry:
+            return
+        if self.locked:
+            expected_digest = expected.checksum if expected else "missing"
             raise CopperScriptError(
                 "PKG008",
-                f"checksum mismatch for {module_path}@{version}: expected {expected}, got {checksum}",
+                f"lock mismatch for {entry.module_path}@{entry.version}: "
+                f"expected {expected_digest}, got {entry.checksum}",
                 location,
             )
-        if expected is None:
-            entries[key] = checksum
-            content = "".join(
-                f"{module} {entry_version} {entry_checksum}\n"
-                for (module, entry_version), entry_checksum in sorted(entries.items())
-            )
-            try:
-                sum_path.write_text(content, encoding="utf-8")
-            except OSError as exc:
-                raise CopperScriptError("PKG007", f"cannot write copper.sum: {exc}", location) from exc
+        self._lock_entries[key] = entry
+        try:
+            _write_lock(self.lock_path, self._lock_entries)
+        except OSError as exc:
+            raise CopperScriptError("PKG007", f"cannot write copper.lock: {exc}", location) from exc
 
 
-def _module_checksum(root: Path) -> str:
+_LOCKED_SUFFIXES = frozenset({
+    ".copper", ".kicad_mod", ".step", ".stp", ".wrl", ".json", ".csv"
+})
+_IGNORED_PARTS = frozenset({".git", ".copper-cache", "__pycache__", ".pytest_cache"})
+
+
+def _module_inventory(root: Path) -> tuple[LockedFile, ...]:
+    inventory: list[LockedFile] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root)
+        if any(part in _IGNORED_PARTS for part in relative.parts):
+            continue
+        if path.is_symlink():
+            raise ValueError(f"package assets may not be symlinks: {relative.as_posix()}")
+        if not path.is_file():
+            continue
+        if path.name != "copper.mod" and path.suffix.casefold() not in _LOCKED_SUFFIXES:
+            continue
+        data = path.read_bytes()
+        inventory.append(
+            LockedFile(relative.as_posix(), len(data), hashlib.sha256(data).hexdigest())
+        )
+    return tuple(inventory)
+
+
+def _inventory_checksum(files: tuple[LockedFile, ...]) -> str:
     digest = hashlib.sha256()
-    files = sorted(
-        (
-            path
-            for path in root.rglob("*")
-            if path.is_file()
-            and ".git" not in path.relative_to(root).parts
-            and ".copper-cache" not in path.relative_to(root).parts
-            and (path.suffix == ".copper" or path.name == "copper.mod")
-        ),
-        key=lambda path: path.relative_to(root).as_posix(),
-    )
-    for path in files:
-        relative = path.relative_to(root).as_posix()
-        digest.update(relative.encode("utf-8"))
+    for item in files:
+        digest.update(item.path.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(str(item.size).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(item.sha256.encode("ascii"))
         digest.update(b"\0")
     return f"sha256:{digest.hexdigest()}"
+
+
+def _read_lock(path: Path) -> dict[tuple[str, str], LockedModule]:
+    if not path.exists():
+        return {}
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if document.get("schema") != LOCK_SCHEMA or not isinstance(document.get("modules"), list):
+            raise ValueError("unsupported schema")
+        entries: dict[tuple[str, str], LockedModule] = {}
+        for raw in document["modules"]:
+            files = tuple(
+                LockedFile(item["path"], int(item["size"]), item["sha256"])
+                for item in raw["files"]
+            )
+            entry = LockedModule(
+                raw["module"], raw["version"], raw["source"], raw["checksum"], files
+            )
+            key = (entry.module_path, entry.version)
+            if key in entries:
+                raise ValueError(f"duplicate module {entry.module_path}@{entry.version}")
+            entries[key] = entry
+        return entries
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise CopperScriptError(
+            "PKG007", f"cannot read copper.lock: {exc}", SourceLocation(str(path), 0, 1, 1)
+        ) from exc
+
+
+def _write_lock(path: Path, entries: dict[tuple[str, str], LockedModule]) -> None:
+    modules = []
+    for key in sorted(entries):
+        entry = entries[key]
+        modules.append({
+            "module": entry.module_path,
+            "version": entry.version,
+            "source": entry.source,
+            "checksum": entry.checksum,
+            "files": [
+                {"path": item.path, "size": item.size, "sha256": item.sha256}
+                for item in entry.files
+            ],
+        })
+    content = json.dumps({"schema": LOCK_SCHEMA, "modules": modules}, indent=2, sort_keys=True)
+    path.write_text(content + "\n", encoding="utf-8")
 
 
 def _manifest_error(path: Path, line: int, message: str):

@@ -58,3 +58,28 @@ def constraint_coverage(constraints: tuple[NormalizedConstraint, ...],
         coverage.append(ConstraintCoverage(constraint.id, status, constraint.consumers,
                                            constraint.verifier, detail))
     return tuple(coverage)
+
+
+def normalize_constraints(constraints: tuple[object, ...]) -> tuple[NormalizedConstraint, ...]:
+    """Convert semantic IR constraints into the common ownership contract."""
+
+    normalized: list[NormalizedConstraint] = []
+    for index, constraint in enumerate(constraints):
+        kind = constraint.kind.value
+        routing = kind == "routing"
+        default_consumers = ("critical_router", "physical_drc") if routing else (
+            "placement", "physical_drc"
+        )
+        normalized.append(
+            NormalizedConstraint(
+                constraint.constraint_id or f"{kind}:{index}",
+                ",".join(constraint.targets),
+                f"route.{kind}" if routing else f"placement.{kind}",
+                constraint.mode,
+                "routing" if routing else "placement",
+                constraint.origins,
+                constraint.consumers or default_consumers,
+                constraint.verifier or ("DRC-ROUTING" if routing else "DRC-PLACEMENT"),
+            )
+        )
+    return tuple(normalized)

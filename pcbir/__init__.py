@@ -12,7 +12,7 @@ from .backends import (
 from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source
 from .cam_qualification import CamGateStatus, CamQualificationEvidence, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net
-from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage
+from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage, normalize_constraints
 from .critical import (
     CriticalNetResult,
     CriticalRoutingResult,
@@ -193,7 +193,10 @@ from .physical import (
     select_via_technology,
 )
 from .physicalize import (
+    FootprintAudit,
+    FootprintAuditEntry,
     PrototypePhysicalOptions,
+    audit_resolved_footprints,
     prototype_physicalize,
     resolved_physicalize,
 )
@@ -307,6 +310,8 @@ __all__ = [
     "FootprintArc",
     "FootprintCircle",
     "FootprintGraphic",
+    "FootprintAudit",
+    "FootprintAuditEntry",
     "FootprintImportResult",
     "FootprintLayer",
     "FootprintLine",
@@ -450,9 +455,11 @@ __all__ = [
     "thermal_screen",
     "capsules_clear",
     "analyze_power_states",
+    "audit_resolved_footprints",
     "compile_file",
     "compile_source",
     "constraint_coverage",
+    "normalize_constraints",
     "build_manufacturing_release",
     "ep",
     "elaborate",

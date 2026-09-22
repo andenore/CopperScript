@@ -131,16 +131,20 @@ where relevant. It does not imply third-party certification.
   - [x] Pinned PyGerber 2.4.3 adapter, isolated libgerbv CLI adapter, strict
         metric-XNC normalization, adversarial fixtures, and optional fail-closed
         publication binding.
-  - [ ] Qualify an installed libgerbv build, reconcile drill multisets and
-        IPC-D-356 net partitions to signed physical IR, and expand the official
-        golden corpus/matrix.
+  - [x] Reconcile drill multisets and IPC-D-356 net partitions to signed
+        physical IR.
+  - [ ] Qualify an installed libgerbv build and expand the official golden
+        corpus/matrix.
 - [ ] P9. Frontend and full-board closure: express every new rule in `.copper`,
       lower it into typed IR, resolve real CopperLib footprints, then place,
       route, DRC, export and independently verify the full acceptance board.
   - [x] Normalized requirement/target/preference/assumption/external modes and
         fail-closed constraint consumer/verifier coverage.
-  - [ ] Concrete syntax/lowering, content-addressed lockfile and asset audits,
-        real CopperLib resolution, and complete acceptance-board closure.
+  - [x] Constraint ownership metadata and critical routing profiles have
+        concrete syntax and typed physical lowering.
+  - [x] Content-addressed package lockfile and whole-board footprint audit.
+  - [ ] Resolve the reported real CopperLib/KiCad footprint gaps and complete
+        acceptance-board placement, routing, DRC, manufacturing, and CAM closure.
 
 ### Program completion criteria
 

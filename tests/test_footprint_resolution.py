@@ -4,6 +4,7 @@ import shutil
 import pytest
 
 from pcbir import (
+    audit_resolved_footprints,
     FootprintResolutionError,
     FootprintResolver,
     compile_source,
@@ -114,3 +115,23 @@ def test_resolved_physicalizer_rejects_part_pad_mismatch(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="incompatible.*missing pads 3"):
         resolved_physicalize(board, FootprintResolver(tmp_path))
+
+
+def test_footprint_audit_reports_all_resolution_and_pin_failures(tmp_path: Path) -> None:
+    shutil.copyfile(FIXTURE, tmp_path / FIXTURE.name)
+    board = compile_source(
+        f'''board Audit {{
+            use library "tiny";
+            component R1: RESISTOR {{ footprint = "{FIXTURE.name}"; }}
+            component U1: REGULATOR_3V3 {{ footprint = "{FIXTURE.name}"; }}
+            component C1: CAPACITOR {{ footprint = "Missing.kicad_mod"; }}
+        }}'''
+    )
+
+    audit = audit_resolved_footprints(board, FootprintResolver(tmp_path))
+
+    assert not audit.passed
+    by_reference = {entry.reference: entry for entry in audit.entries}
+    assert by_reference[FIXTURE.name].source_sha256
+    assert "missing pads 3" in by_reference[FIXTURE.name].errors[0]
+    assert "cannot resolve footprint" in by_reference["Missing.kicad_mod"].errors[0]

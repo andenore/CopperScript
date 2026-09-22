@@ -9,7 +9,7 @@ errors with ``strict=True``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from hashlib import sha256
 from math import hypot, isqrt
@@ -62,6 +62,8 @@ _LAYER_MAP = {
     "F.Adhes": FootprintLayer.ADHESIVE,
     "Dwgs.User": FootprintLayer.DOCUMENTATION,
     "User.Drawings": FootprintLayer.DOCUMENTATION,
+    "F.Mask": FootprintLayer.SOLDER_MASK,
+    "F.Paste": FootprintLayer.SOLDER_PASTE,
 }
 
 
@@ -74,10 +76,14 @@ def load_kicad_mod(path: str | Path, *, strict: bool = False) -> FootprintImport
             f"{source_path}: expected a .kicad_mod footprint file"
         )
     try:
-        text = source_path.read_text(encoding="utf-8-sig")
-    except OSError as exc:
+        data = source_path.read_bytes()
+        text = data.decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
         raise KiCadModImportError(f"cannot read {source_path}: {exc}") from exc
-    return parse_kicad_mod(text, source=str(source_path), strict=strict)
+    result = parse_kicad_mod(text, source=str(source_path), strict=strict)
+    metadata = dict(result.footprint.metadata)
+    metadata["source_sha256"] = sha256(data).hexdigest()
+    return replace(result, footprint=replace(result.footprint, metadata=metadata))
 
 
 def parse_kicad_mod(
@@ -320,7 +326,7 @@ def _parse_graphic(
     layer_name = _required_atom(layer_node, 1, source, "graphic layer")
     layer = _LAYER_MAP.get(layer_name)
     if layer is None:
-        if layer_name in {"F.Cu", "F.Mask", "F.Paste", "Edge.Cuts"}:
+        if layer_name in {"F.Cu", "Edge.Cuts"}:
             raise KiCadModImportError(
                 f"{source}: unsupported fabrication-critical graphic layer {layer_name!r}"
             )
@@ -330,9 +336,14 @@ def _parse_graphic(
     filled = _graphic_filled(node, source)
     tag = _tag(node)
     if tag == "fp_line":
+        start = _point(_required_child(node, "start", source, "line start"), source)
+        end = _point(_required_child(node, "end", source, "line end"), source)
+        if start == end:
+            warnings.append(f"ignored zero-length graphic on {layer_name}")
+            return None
         return FootprintLine(
-            _point(_required_child(node, "start", source, "line start"), source),
-            _point(_required_child(node, "end", source, "line end"), source),
+            start,
+            end,
             width,
             layer,
         )
@@ -389,9 +400,9 @@ def _graphic_filled(node: list[SExpr], source: str) -> bool:
     if fill is None:
         return False
     value = _required_atom(fill, 1, source, "graphic fill")
-    if value not in {"none", "solid"}:
+    if value not in {"none", "solid", "no", "yes"}:
         raise KiCadModImportError(f"{source}: unsupported graphic fill {value!r}")
-    return value == "solid"
+    return value in {"solid", "yes"}
 
 
 def _bounding_size(

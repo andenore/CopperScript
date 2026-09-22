@@ -155,10 +155,15 @@ def _unit_fields(
             {
                 "kind": constraint.kind.value,
                 "targets": list(constraint.targets),
-                "parameters": {
-                    name: _value(value) for name, value in constraint.parameters.items()
-                },
-            }
+                  "parameters": {
+                      name: _value(value) for name, value in constraint.parameters.items()
+                  },
+                  "id": constraint.constraint_id,
+                  "mode": constraint.mode.value,
+                  "consumers": list(constraint.consumers),
+                  "verifier": constraint.verifier,
+                  "origins": list(constraint.origins),
+              }
             for constraint in constraints
         ],
         "peripheral_selections": [
