@@ -25,6 +25,47 @@ class Bounds:
                     or self.max_y < other.min_y or other.max_y < self.min_y)
 
 
+@dataclass(frozen=True, slots=True)
+class RoundedConvexShape:
+    """Convex point/segment/polygon swept by an integer radius."""
+    spine: tuple[Point, ...]
+    radius_nm: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "spine", tuple(self.spine))
+        if not self.spine or self.radius_nm < 0:
+            raise ValueError("rounded convex shapes require a spine and non-negative radius")
+
+    @property
+    def bounds(self) -> Bounds:
+        return bounds(self.spine).expanded(self.radius_nm)
+
+
+@dataclass(frozen=True, slots=True)
+class SpatialItem:
+    id: str
+    bounds: Bounds
+
+
+class SpatialIndex:
+    """Stable sweep index used as a deterministic broad phase."""
+
+    def __init__(self, items: Iterable[SpatialItem]):
+        self._items = tuple(sorted(items, key=lambda item: (
+            item.bounds.min_x, item.bounds.min_y, item.bounds.max_x,
+            item.bounds.max_y, item.id
+        )))
+
+    def query(self, area: Bounds) -> tuple[str, ...]:
+        result: list[str] = []
+        for item in self._items:
+            if item.bounds.min_x > area.max_x:
+                break
+            if item.bounds.intersects(area):
+                result.append(item.id)
+        return tuple(sorted(result))
+
+
 def bounds(points: Iterable[Point]) -> Bounds:
     values = tuple(points)
     if not values:
@@ -99,3 +140,52 @@ def point_in_polygon(point: Point, polygon: tuple[Point, ...]) -> bool:
         if lhs < rhs if second.y_nm > first.y_nm else lhs > rhs:
             inside = not inside
     return inside
+
+
+def shape_distance_squared(first: RoundedConvexShape,
+                           second: RoundedConvexShape) -> Fraction:
+    """Distance between the unswept convex spines; radii are not subtracted."""
+    return _spine_distance_squared(first.spine, second.spine)
+
+
+def shapes_clear(first: RoundedConvexShape, second: RoundedConvexShape,
+                 clearance_nm: int = 0) -> bool:
+    required = first.radius_nm + second.radius_nm + clearance_nm
+    if not first.bounds.expanded(clearance_nm).intersects(second.bounds):
+        return True
+    return shape_distance_squared(first, second) >= required * required
+
+
+def _spine_distance_squared(first: tuple[Point, ...],
+                            second: tuple[Point, ...]) -> Fraction:
+    if len(first) == 1 and len(second) == 1:
+        return Fraction((first[0].x_nm - second[0].x_nm) ** 2
+                        + (first[0].y_nm - second[0].y_nm) ** 2)
+    if len(first) == 1:
+        return _point_spine_distance_squared(first[0], second)
+    if len(second) == 1:
+        return _point_spine_distance_squared(second[0], first)
+    first_edges = _spine_edges(first)
+    second_edges = _spine_edges(second)
+    if any(segments_intersect(a, b, c, d)
+           for a, b in first_edges for c, d in second_edges):
+        return Fraction(0)
+    if len(first) >= 3 and point_in_polygon(second[0], first):
+        return Fraction(0)
+    if len(second) >= 3 and point_in_polygon(first[0], second):
+        return Fraction(0)
+    return min(segment_distance_squared(a, b, c, d)
+               for a, b in first_edges for c, d in second_edges)
+
+
+def _point_spine_distance_squared(point: Point, spine: tuple[Point, ...]) -> Fraction:
+    if len(spine) >= 3 and point_in_polygon(point, spine):
+        return Fraction(0)
+    return min(point_segment_distance_squared(point, start, end)
+               for start, end in _spine_edges(spine))
+
+
+def _spine_edges(spine: tuple[Point, ...]) -> tuple[tuple[Point, Point], ...]:
+    if len(spine) == 2:
+        return ((spine[0], spine[1]),)
+    return tuple(zip(spine, (*spine[1:], spine[0])))

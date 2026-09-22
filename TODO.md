@@ -96,13 +96,15 @@ where relevant. It does not imply third-party certification.
         multilayer/via-kind mapping.
   - [x] Critical and detailed routers select a legal named technology from the
         same catalog consumed by validation and export.
-- [ ] P5. Exact-shape physical DRC: pad and track shape primitives, polygonal
+- [x] P5. Exact-shape physical DRC: pad and track shape primitives, polygonal
       broad/narrow phases, exact clearance/intersection/connectivity, concave
       board edges, zones, stable markers, coverage, and differential checks.
   - [x] Shared exact integer segment/capsule predicates and exact copper-spacing
         decisions with deterministic markers.
-  - [ ] Shape-accurate rotated pads/arcs/zones, spatial index, incremental/full
-        equivalence, and concave-edge offset checks.
+  - [x] Shape-accurate rotated pads and normalized zone fills, spatial broad
+        phase, incremental/full equivalence contract, concave-edge checks, and
+        differential geometry checks. Copper arcs remain unavailable in the IR
+        and therefore cannot be silently approximated.
 - [ ] P6. Artwork, assembly, and fabrication DRC: solder-mask and paste rules,
       silkscreen clipping/clearance, courtyard and component-side checks,
       hole/slot constraints, copper balance and documented fab-profile gates.

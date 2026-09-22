@@ -13,10 +13,14 @@ from pcbir import (
     KiCadPcbBackend,
     ManufacturingProfile,
     Point,
+    PhysicalNet,
     PolygonRing,
     PolygonWithHoles,
     ThermalReliefSettings,
     ZoneConnection,
+    ZoneFillResult,
+    TrackSegment,
+    nm_from_mm,
     build_manufacturing_release,
     run_physical_drc,
 )
@@ -129,3 +133,21 @@ def test_manufacturing_refills_and_saves_zones_with_pinned_kicad(
     assert "--refill-zones" in drc
     assert "--save-board" in drc
     assert release.cam_report.passed
+
+
+def test_normalized_zone_fill_participates_in_exact_spacing_drc() -> None:
+    board = _zone_board()
+    fill = ZoneFillResult("signal-pour", CopperLayer.FRONT, "a" * 64,
+                          "test", "1", (_polygon(1, 1, 19, 11),))
+    board = replace(
+        board,
+        nets=(*board.nets, PhysicalNet("OTHER", ())),
+        tracks=(*board.tracks,
+                TrackSegment("OTHER", Point.mm(5, 3), Point.mm(15, 3),
+                             nm_from_mm("0.25"), CopperLayer.FRONT)),
+        zone_fills=(fill,),
+    )
+    report = run_physical_drc(board)
+    assert any(item.code == "DRC-ZONE-CLEARANCE" for item in report.findings)
+    coverage = next(item for item in report.coverage if item.check == "copper_zones")
+    assert coverage.status.value == "executed"

@@ -11,6 +11,7 @@ from pcbir import (
     DrcWaiver,
     FootprintPad,
     PadReference,
+    PadShape,
     PhysicalBoard,
     PhysicalFootprint,
     PhysicalNet,
@@ -22,6 +23,7 @@ from pcbir import (
     nm_from_mm,
     physical_board_digest,
     run_physical_drc,
+    run_incremental_physical_drc,
 )
 
 
@@ -123,3 +125,38 @@ def test_incomplete_route_makes_coverage_incomplete_and_stale_tokens_change() ->
     assert incomplete.decision is DrcDecision.FAIL
     assert incomplete.completeness is DrcCompleteness.INCOMPLETE
     assert run_physical_drc(changed).token.board_digest != run_physical_drc(board).token.board_digest
+
+
+def test_exact_rectangular_pad_geometry_avoids_bounding_circle_false_positive() -> None:
+    footprint = PhysicalFootprint(
+        "test/tall-pad",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.5", "3"),
+                      shape=PadShape.RECTANGLE),),
+        Size.mm(1, 3),
+    )
+    board = PhysicalBoard(
+        "ExactPads", BoardOutline.rectangle(12, 12), {footprint.name: footprint},
+        (Placement("A", footprint.name, Point.mm(4, 6)),
+         Placement("B", footprint.name, Point.mm(6, 6))),
+        (PhysicalNet("A", (PadReference("A", "1"),)),
+         PhysicalNet("B", (PadReference("B", "1"),))),
+        metadata={"detailed_routing": "complete"},
+    )
+    report = run_physical_drc(board)
+    assert not any(item.code in {"DRC-SHORT", "DRC-CLEARANCE"}
+                   for item in report.findings)
+
+
+def test_incremental_contract_matches_full_and_concave_edge_crossing_is_found() -> None:
+    board = _routed_board()
+    assert run_incremental_physical_drc(board, ("track:0",)) == run_physical_drc(board)
+    concave = BoardOutline((Point.mm(0, 0), Point.mm(10, 0), Point.mm(10, 10),
+                            Point.mm(6, 10), Point.mm(6, 4), Point.mm(4, 4),
+                            Point.mm(4, 10), Point.mm(0, 10)))
+    net = PhysicalNet("N", ())
+    crossing = PhysicalBoard("Concave", concave, {}, (), (net,),
+                             tracks=(TrackSegment("N", Point.mm(2, 8), Point.mm(8, 8),
+                                                  nm_from_mm("0.2"), CopperLayer.FRONT),),
+                             metadata={"detailed_routing": "complete"})
+    report = run_physical_drc(crossing)
+    assert any(item.code == "DRC-BOARD-EDGE" for item in report.findings)

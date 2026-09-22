@@ -42,6 +42,7 @@ from .drc import (
     SignoffToken,
     physical_board_digest,
     run_physical_drc,
+    run_incremental_physical_drc,
 )
 from .erc import Diagnostic, Severity, check, has_errors
 from .engineering import AnalysisStatus, EngineeringResult, EvidenceGrade, creepage_screen, dc_trace_resistance
@@ -471,6 +472,7 @@ __all__ = [
     "shove_via",
     "point_in_polygon",
     "run_physical_drc",
+    "run_incremental_physical_drc",
     "run_process_drc",
     "run_routing_pipeline",
     "verify_cam_directory",
