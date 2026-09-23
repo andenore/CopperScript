@@ -139,3 +139,28 @@ def test_detailed_router_uses_inner_copper_beneath_surface_footprint() -> None:
 
     assert result.status is DetailedRoutingStatus.SUCCESS
     assert any(track.layer is CopperLayer.INTERNAL_1 for track in result.board.tracks)
+
+
+def test_detailed_router_connects_distinct_pads_snapped_to_one_grid_node() -> None:
+    footprint = PhysicalFootprint(
+        "test/tiny-pad",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.1", "0.1")),),
+        Size.mm("0.1", "0.1"),
+    )
+    board = PhysicalBoard(
+        "SharedAccess",
+        BoardOutline.rectangle(20, 12),
+        {footprint.name: footprint},
+        (
+            Placement("J1", footprint.name, Point.mm("3.1", 6)),
+            Placement("J2", footprint.name, Point.mm("3.4", 6)),
+        ),
+        (PhysicalNet("SIGNAL", (PadReference("J1", "1"), PadReference("J2", "1"))),),
+    )
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_detailed(
+        board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=1)
+    )
+
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert len(result.board.tracks) == 2

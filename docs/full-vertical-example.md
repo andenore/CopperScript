@@ -193,6 +193,9 @@ physical design.
   Geometry-aware detailed routing, return-path review, clean physical and
   KiCad DRC, and independent CAM verification still gate any fabrication
   output. No production Gerbers should be exported from the current draft.
+  The next router iteration must make foreign pads, existing traces/vias,
+  clearance envelopes, and pad escape paths hard geometric obstacles during
+  search; the current grid-resource penalty alone does not prevent shorts.
 - `examples/full_vertical_provisional_4layer.kicad_pcb` is a placed,
   **unrouted** KiCad 10 preview for mechanical and component-location review.
   It is deliberately not a fabrication deliverable; its adjacent layout JSON

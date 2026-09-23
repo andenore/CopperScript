@@ -297,8 +297,6 @@ def _route_net(
             return _failed(name, f"no legal pin access for {pad.component}.{pad.pad}")
         accesses.append((pad, pad_position, node))
     unique = tuple(dict.fromkeys(item[2] for item in accesses))
-    if len(unique) <= 1:
-        return _NetAttempt(DetailedNetResult(name, True, 0, 0, 0, 0), (), (), frozenset())
     tree = {unique[0]}
     remaining = list(unique[1:])
     route_edges: set[tuple[DetailedNode, DetailedNode]] = set()

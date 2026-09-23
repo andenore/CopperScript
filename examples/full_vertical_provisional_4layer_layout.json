@@ -107,7 +107,7 @@
     {
       "stage": "route",
       "status": "not_run",
-      "summary": "detailed routing not implemented"
+      "summary": "detailed routing is not run by plan-layout"
     },
     {
       "stage": "verify",

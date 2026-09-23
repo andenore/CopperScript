@@ -299,7 +299,7 @@ def _gates(findings: tuple[LayoutFinding, ...]) -> tuple[LayoutGate, ...]:
             if place_warning
             else "legal placement produced with no estimated congestion or crossings",
         ),
-        LayoutGate(LayoutStage.ROUTE, GateStatus.NOT_RUN, "detailed routing not implemented"),
+        LayoutGate(LayoutStage.ROUTE, GateStatus.NOT_RUN, "detailed routing is not run by plan-layout"),
         LayoutGate(
             LayoutStage.VERIFY,
             GateStatus.BLOCKED,
