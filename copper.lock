@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:81f4eaa99542f695a65da709b4aa04c17bf3929cb0f9c34e91d9e482f8c1b31e",
+      "checksum": "sha256:21c21460f08a8f0d8eac359980e25c14ea0a7a8be7745f316150093f6296ceb3",
       "files": [
         {
           "path": "copper.mod",
@@ -77,6 +77,11 @@
           "path": "data/sources.json",
           "sha256": "7629817c92822636df3b6467f3fb464687c9895ed96497a097005ac12852795e",
           "size": 540
+        },
+        {
+          "path": "footprints/RF_Module.pretty/u-blox_MAX-M10S.kicad_mod",
+          "sha256": "6a87118c12a8b2a09eb5fab7b729489db47b0989d293fc24d129a673854101c5",
+          "size": 4453
         },
         {
           "path": "generated/stm32g0b1_device.copper",

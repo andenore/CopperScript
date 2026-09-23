@@ -165,6 +165,9 @@ where relevant. It does not imply third-party certification.
         preserve KiCad connector contacts and footprint-local placement
         keepouts through import, placement checks, physical DRC, and export.
         Installed KiCad audit now resolves 21/24 assets.
+  - [x] Generate the MAX-M10S-00B 18-land footprint and T-shaped stencil from
+        u-blox UBX-20053088 R05 Tables 44-45; KiCad parses the artifact and
+        the two-root footprint audit resolves 22/24 assets.
   - [ ] Specify a source-current policy and add input overvoltage, inrush,
         ESD, and reverse-current protection for the USB-C power entry.
   - [ ] Resolve the reported real CopperLib/KiCad footprint gaps and complete

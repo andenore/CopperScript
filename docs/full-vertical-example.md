@@ -106,14 +106,17 @@ physical design.
   pad coverage. The nRF52832-QFAA and STM32G0C1RET6 package maps are complete
   from the Nordic Product Specification v1.9, Table 1 and ST DS13564 Rev 5,
   Table 12 respectively; their support circuits remain incomplete.
-- The installed KiCad 10 footprint audit currently resolves 21 of 24 selected
-  assets. The remaining failures are the 3.8 V regulator, EG800G, and
-  MAX-M10S footprints. These are not safe to replace with generic land
+- The installed KiCad 10 plus CopperLib footprint audit currently resolves 22
+  of 24 selected assets. The remaining failures are the 3.8 V regulator and
+  EG800G footprints. These are not safe to replace with generic land
   patterns without an exact orderable part or vendor mechanical drawing.
 - The orderable GCT SIM socket, Coilcraft USB choke, and U.FL RF connector now
   resolve to installed KiCad footprints. CopperScript imports the embedded
   copper keepouts in the SIM and U.FL footprints and carries them through
   placement, routing, DRC, geometry-bound signoff, and KiCad export.
+- The MAX-M10S footprint is generated in CopperLib from u-blox's published
+  18-land geometry and separate T-shaped stencil recommendation. The latter
+  assumes the manual's 150-um stencil; fabricator review remains necessary.
 - The 5 V USB-C entry still needs source-current policy, input protection,
   power budgeting, and a qualified implementation of both regulator rails.
 - Regulator and level-shifter entries express architectural requirements but
@@ -134,7 +137,7 @@ python -m copperscript power-check examples/full_vertical_board.copper
 python -m copperscript compile examples/full_vertical_board.copper -o board.json
 python -m copperscript export-kicad examples/full_vertical_board.copper -o full_vertical_board.kicad_sch
 python -m copperscript plan-layout examples/full_vertical_board.copper --allow-proxy-footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
-python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints --json
+python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --json
 ```
 
 The last command emits a deterministic JSON gap list (`passed`, `resolved`,
