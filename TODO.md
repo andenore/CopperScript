@@ -170,8 +170,10 @@ where relevant. It does not imply third-party certification.
         the two-root footprint audit resolves 23/24 assets; the JLCPCB/EasyEDA
         EG800G-EU physical pattern is covered, but its full electrical model
         and Quectel mechanical/stencil signoff remain open.
-  - [ ] Specify a source-current policy and add input overvoltage, inrush,
-        ESD, and reverse-current protection for the USB-C power entry.
+  - [ ] Qualify the user's 5 V / 2 A input target with a measured worst-case
+        power budget. Decide between a 5 V / 2 A USB-PD contract and a 3 A
+        Type-C advertisement while limiting actual draw to 2 A; add input
+        overvoltage, inrush, ESD, and reverse-current protection.
   - [ ] Resolve the reported real CopperLib/KiCad footprint gaps and complete
         acceptance-board placement, routing, DRC, manufacturing, and CAM closure.
 

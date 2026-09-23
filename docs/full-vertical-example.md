@@ -57,7 +57,25 @@ and component-placement keepouts are preserved by the physical pipeline.
 
 ## Power and RF intent
 
-The board accepts 5 V through a GCT USB4135-GF-A power-only USB-C receptacle.
+The intended input is 5 V at no more than 2 A through a GCT USB4135-GF-A
+power-only USB-C receptacle. This is an *input target*, not a proven full-board
+maximum. Quectel separately requires the 3.8 V modem rail to be capable of
+2 A, or 7.6 W at the modem. At a hypothetical 90% modem-buck efficiency, that
+alone uses 8.44 W / 1.69 A from a nominal 5 V source, leaving only 1.56 W /
+0.31 A for the logic rail, USB_VBUS, protection losses, and margin. At 85%
+efficiency it uses 8.94 W / 1.79 A. Input-voltage drop reduces the available
+power further. These efficiencies are budgeting assumptions, not qualified
+measurements or guarantees from a selected regulator. A measured worst-case
+load budget and a switching modem regulator are prerequisites for accepting
+the 2 A input limit; the current regulator placeholder cannot establish it.
+
+USB Type-C current advertisement has default, 1.5 A, and 3 A classes, not a
+native 2 A class. A source rated exactly 5 V/2 A therefore needs a suitable
+USB-PD contract before the modem load is enabled; alternatively the board can
+draw no more than 2 A from a source advertising the 3 A Type-C class. The
+choice is pending. STM32G0C1 includes UCPD hardware, but the board does not
+yet connect its CC pins or implement negotiation and power gating.
+
 Separate 5.1 kOhm pull-downs on CC1 and CC2 establish sink attachment. The
 receptacle is rated for 3 A collectively across its VBUS contacts, but the
 board does not yet measure the source's advertised current or protect against
@@ -67,6 +85,10 @@ a 3.8 V modem rail. The modem rail is modelled as a 2 A-class source and has a
 local 100 uF bulk capacitor. The EG800G's 1.8 V `VDD_EXT` output powers the
 low-voltage side of a fixed-direction UART translator. Its control input uses
 an open-drain driver rather than exposing a 1.8 V modem pin directly to 3.3 V.
+
+Power-source and device references: [USB Type-C Specification R2.0 §2.3.4](https://www.usb.org/sites/default/files/USB%20Type-C%20Spec%20R2.0%20-%20August%202019.pdf),
+[Quectel EG800G QuecOpen Reference Design V1.1, VBAT design](https://developer.quectel.com/wp-content/uploads/2025/01/Quectel_EG800G_Series_QuecOpen_Reference_Design_V1.1.pdf), and
+[ST STM32G0 USB-C/UCPD overview](https://www.st.com/content/st_com/en/ecosystems/stm32-usb-c.html).
 
 The RF paths are represented electrically so they cannot disappear during
 backend work:
