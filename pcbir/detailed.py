@@ -551,8 +551,9 @@ def _build_grid(board: PhysicalBoard, options: DetailedRouterOptions) -> _Grid:
     max_y = max(item.y_nm for item in board.outline.vertices)
     xs = tuple(range(min_x, max_x + 1, options.pitch_nm))
     ys = tuple(range(min_y, max_y + 1, options.pitch_nm))
+    # Surface courtyards do not block inner-layer traces. Copper keepouts do.
     obstacles = tuple(
-        _bounds(transformed_footprint_polygon(board, placement))
+        (placement.side, _bounds(transformed_footprint_polygon(board, placement)))
         for placement in board.placements
     )
     keepouts = tuple(_bounds(item.outline.vertices) for item in board.keepouts)
@@ -568,7 +569,11 @@ def _build_grid(board: PhysicalBoard, options: DetailedRouterOptions) -> _Grid:
                 point = Point(x, y)
                 if not _point_in_polygon(point, board.outline.vertices):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
-                elif any(_in_box(point, item) for item in (*obstacles, *keepouts)):
+                elif any(
+                    (layer is CopperLayer.FRONT and side is BoardSide.FRONT)
+                    or (layer is CopperLayer.BACK and side is BoardSide.BACK)
+                    for side, box in obstacles if _in_box(point, box)
+                ) or any(_in_box(point, box) for box in keepouts):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
                 elif any(
                     layer in layers and _in_box(point, box)

@@ -20,6 +20,7 @@ from pcbir import (
     Placement,
     Point,
     Size,
+    Stackup,
     TrackSegment,
     build_manufacturing_release,
     nm_from_mm,
@@ -145,6 +146,28 @@ def test_release_rejects_stale_signoff_before_running_tools(tmp_path: Path) -> N
         )
 
     assert not (tmp_path / "release").exists()
+
+
+def test_four_layer_release_profile_requires_all_copper_artwork(tmp_path: Path) -> None:
+    board = replace(
+        _board(),
+        stackup=Stackup((
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.BACK,
+        )),
+    )
+    signoff = run_physical_drc(board).token
+    with pytest.raises(ValueError, match="omits board copper layers"):
+        build_manufacturing_release(
+            board, signoff, tmp_path / "release",
+            kicad_cli=Path("kicad-cli"), runner=_fake_kicad,
+        )
+
+    profile = ManufacturingProfile.jlcpcb_four_layer_prototype()
+    assert profile.gerber_layers[:4] == (
+        "F.Cu", "In1.Cu", "In2.Cu", "B.Cu",
+    )
+    assert "Copper,L4,Bot" in profile.required_file_function_prefixes
 
 
 def test_independent_cam_parser_rejects_corrupt_artwork(tmp_path: Path) -> None:

@@ -66,6 +66,23 @@ class ManufacturingProfile:
     require_process_drc: bool = False
     require_qualified_cam_evidence: bool = False
 
+    @classmethod
+    def jlcpcb_four_layer_prototype(cls) -> "ManufacturingProfile":
+        """Four-copper-layer artwork set; not an impedance or DFM qualification."""
+
+        return cls(
+            name="jlcpcb-four-layer-prototype",
+            gerber_layers=(
+                "F.Cu", "In1.Cu", "In2.Cu", "B.Cu",
+                "F.Mask", "B.Mask", "F.Silkscreen", "B.Silkscreen", "Edge.Cuts",
+            ),
+            required_file_function_prefixes=(
+                "Copper,L1,Top", "Copper,L2,Inr", "Copper,L3,Inr", "Copper,L4,Bot",
+                "Soldermask,Top", "Soldermask,Bot", "Profile",
+            ),
+            require_process_drc=True,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class CamFinding:
@@ -403,6 +420,14 @@ def verify_cam_directory(
 def _validate_release_gate(board: PhysicalBoard, signoff: SignoffToken,
                            profile: ManufacturingProfile,
                            process_report: ProcessDrcReport | None) -> None:
+    missing_layers = tuple(
+        layer.value for layer in board.stackup.copper_layers
+        if layer.value not in profile.gerber_layers
+    )
+    if missing_layers:
+        raise ValueError(
+            f"manufacturing profile omits board copper layers: {', '.join(missing_layers)}"
+        )
     if signoff.board_digest != physical_board_digest(board):
         raise ValueError("signoff token does not match the exact board geometry")
     if signoff.completeness is not DrcCompleteness.COMPLETE:

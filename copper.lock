@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:a6da767a3970ad1656349413e8720fc8ba4768c9777516f72b16da74cc03b707",
+      "checksum": "sha256:744fd13fed2512bb8c1a2070e1c48a46465225fb30fa1f4423d9302ed8902478",
       "files": [
         {
           "path": "copper.mod",
@@ -150,8 +150,8 @@
         },
         {
           "path": "packages/full_vertical/power_tree.copper",
-          "sha256": "c53651d43fae40985a683ba71a8d9712727b21b53b65c23ae36676d681ba4e4b",
-          "size": 2785
+          "sha256": "b31a602444fb90d25a34efe1d60e7eb5aa587f42b9186cca5c1a01deb48142d2",
+          "size": 2789
         },
         {
           "path": "packages/full_vertical/rf_antenna.copper",

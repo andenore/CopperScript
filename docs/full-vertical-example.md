@@ -171,13 +171,32 @@ physical design.
 - USB VBUS switching/current limiting, USB ESD, CAN protection, SIM ESD, input
   protection, programming-header conventions, crystals and complete vendor
   decoupling/reference circuits must be finalized.
-- With all real footprints, `plan-layout` currently finds no placement that
-  satisfies every represented distance constraint, even with eight search
-  candidates. One inspected candidate left C_MCU 27.4 mm from U_MCU.VDD,
-  C_CC 8.8 mm from U_CC.VDD, and C_MODEM_AVIN 4.2 mm from U_MODEM.AVIN against
-  3 mm limits. This is a planner/constraint feasibility problem to diagnose,
-  not a reason to relax decoupling intent. The backend must not emit
-  fabrication outputs without a legal placement, routing, and validation.
+- The provisional outline is 100 x 80 mm. A legal placement with all real
+  footprints and four copper layers now exists. This is an inspection layout,
+  not a mechanical design: connector alignment, mounting holes, enclosure,
+  antenna clearance and assembly access still require review. The intended
+  fabrication choice is [JLCPCB's nominal 1.6 mm four-layer
+  `JLC04161H-7628` stackup](https://jlcpcb.com/impedance)
+  (F.Cu / In1.Cu / In2.Cu / B.Cu). CopperScript
+  records four copper layers and nominal thickness but does not yet encode
+  that stackup's dielectric geometry or derive controlled-impedance widths.
+  USB and RF traces therefore cannot pass signoff yet. The four-layer
+  manufacturing profile includes all four copper Gerbers and refuses to
+  omit an inner layer, but no fabrication release has been generated.
+- On the provisional placement, five bounded congestion-negotiation iterations
+  reached all 58 multi-terminal nets with zero grid overflow, certifying the
+  placement for the global-routing model. Global-routing guides are not copper.
+  A bounded three-pass detailed route on a 1 mm grid connected all 58 nets
+  nominally but still had 153 shared routing resources. Exact physical DRC
+  found 683 shorts, 368 clearance violations, and 13 open nets on that
+  candidate. These are genuine release blockers, not waiver candidates.
+  Geometry-aware detailed routing, return-path review, clean physical and
+  KiCad DRC, and independent CAM verification still gate any fabrication
+  output. No production Gerbers should be exported from the current draft.
+- `examples/full_vertical_provisional_4layer.kicad_pcb` is a placed,
+  **unrouted** KiCad 10 preview for mechanical and component-location review.
+  It is deliberately not a fabrication deliverable; its adjacent layout JSON
+  records the placement gate result.
 - KiCad 10 parses the exported inspection schematic but reports 136 ERC
   violations on it. Many are caused by the current flattened automatic
   drawing; they are not implied to be 136 distinct board wiring defects.
@@ -191,7 +210,8 @@ python -m copperscript check examples/full_vertical_board.copper
 python -m copperscript power-check examples/full_vertical_board.copper
 python -m copperscript compile examples/full_vertical_board.copper -o board.json
 python -m copperscript export-kicad examples/full_vertical_board.copper -o full_vertical_board.kicad_sch
-python -m copperscript plan-layout examples/full_vertical_board.copper --allow-proxy-footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
+python -m copperscript plan-layout examples/full_vertical_board.copper --locked --offline --layers 4 --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
+python -m copperscript route-global examples/full_vertical_board.copper --locked --offline --layers 4 --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 -o full_vertical.global-route.json
 python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --json
 ```
 

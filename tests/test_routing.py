@@ -27,6 +27,7 @@ from pcbir import (
     PolygonWithHoles,
     RouteKind,
     Size,
+    Stackup,
     nm_from_mm,
     optimize_placement_for_routing,
     route_global,
@@ -110,6 +111,37 @@ def test_global_router_obeys_layer_specific_copper_keepout() -> None:
     assert route_global(back_allowed, GlobalRouterOptions(
         tile_size_nm=nm_from_mm("2.5"), maximum_iterations=2
     )).status is GlobalRoutingStatus.SUCCESS
+
+
+def test_four_layer_router_can_pass_beneath_surface_courtyard() -> None:
+    base = _two_terminal_board()
+    wall = PhysicalFootprint(
+        "test/surface-wall",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),),
+        Size.mm(10, 30),
+    )
+    board = replace(
+        base,
+        stackup=Stackup((
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.BACK,
+        )),
+        footprints={**base.footprints, wall.name: wall},
+        placements=(*base.placements, Placement("W1", wall.name, Point.mm(20, 15))),
+        net_routing_rules=(NetRoutingRule(
+            "SIGNAL", allowed_layers=(CopperLayer.FRONT, CopperLayer.INTERNAL_1),
+        ),),
+    )
+
+    result = route_global(
+        board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5"), maximum_iterations=1)
+    )
+
+    assert result.status is GlobalRoutingStatus.SUCCESS
+    assert any(
+        segment.layer is CopperLayer.INTERNAL_1
+        for segment in result.routes[0].segments
+    )
 
 
 def test_global_router_reports_physical_capacity_overflow() -> None:

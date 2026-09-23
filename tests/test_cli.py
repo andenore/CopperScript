@@ -185,6 +185,23 @@ def test_cli_exports_pcb_with_resolved_kicad_mod(tmp_path: Path) -> None:
     assert '(fp_rect' in content
 
 
+def test_cli_exports_provisional_four_layer_board(tmp_path: Path) -> None:
+    output = tmp_path / "four-layer.kicad_pcb"
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "copperscript", "export-kicad-pcb",
+            "examples/resolved_footprint_board.copper", "--layers", "4",
+            "-o", str(output),
+        ],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    content = output.read_text(encoding="utf-8")
+    assert '(1 "In1.Cu" signal)' in content
+    assert '(2 "In2.Cu" signal)' in content
+
+
 def test_cli_does_not_silently_fall_back_to_proxy_footprints(
     tmp_path: Path,
 ) -> None:

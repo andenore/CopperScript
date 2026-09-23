@@ -46,6 +46,7 @@ from .physical import (
     RelativePlacementRule,
     RouteKind,
     Size,
+    Stackup,
 )
 from .quantities import Length, Quantity
 
@@ -54,6 +55,7 @@ from .quantities import Length, Quantity
 class PrototypePhysicalOptions:
     board_width_mm: float = 100.0
     board_height_mm: float = 80.0
+    copper_layers: int = 2
     columns: int = 3
     margin_mm: float = 12.0
 
@@ -62,6 +64,8 @@ class PrototypePhysicalOptions:
             raise ValueError("prototype board dimensions must be positive")
         if self.columns < 1:
             raise ValueError("prototype placement columns must be at least one")
+        if self.copper_layers not in {2, 4}:
+            raise ValueError("prototype physicalizer supports two or four copper layers")
         if self.margin_mm <= 0:
             raise ValueError("prototype board margin must be positive")
         if self.margin_mm * 2 >= min(self.board_width_mm, self.board_height_mm):
@@ -301,6 +305,18 @@ def _physicalize(
         name=board.name,
         outline=BoardOutline.rectangle(
             options.board_width_mm, options.board_height_mm
+        ),
+        stackup=Stackup(
+            copper_layers=(
+                (CopperLayer.FRONT, CopperLayer.BACK)
+                if options.copper_layers == 2
+                else (
+                    CopperLayer.FRONT,
+                    CopperLayer.INTERNAL_1,
+                    CopperLayer.INTERNAL_2,
+                    CopperLayer.BACK,
+                )
+            )
         ),
         footprints=footprints,
         placements=tuple(placements),

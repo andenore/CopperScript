@@ -15,6 +15,7 @@ from .layout import PlacementPlannerOptions, plan_placement
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
 from .physicalize import (
+    PrototypePhysicalOptions,
     audit_resolved_footprints,
     prototype_physicalize,
     resolved_physicalize,
@@ -91,6 +92,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
+    pcb_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
 
     layout_parser = subparsers.add_parser(
         "plan-layout",
@@ -117,6 +119,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
+    layout_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
     layout_parser.add_argument(
         "--candidates",
         type=int,
@@ -149,11 +152,18 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
+    global_route_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
     global_route_parser.add_argument(
         "--candidates", type=int, default=3, help="placement candidates to consider"
     )
     global_route_parser.add_argument(
         "--tile-size-mm", default="5", help="global-routing tile size in millimetres"
+    )
+    global_route_parser.add_argument(
+        "--router-iterations",
+        type=int,
+        default=20,
+        help="maximum negotiated-congestion routing iterations",
     )
     global_route_parser.add_argument(
         "--feedback-iterations",
@@ -300,16 +310,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("Global routing stopped because ERC reported errors.")
                 return 1
             try:
+                physical_options = PrototypePhysicalOptions(copper_layers=args.layers)
                 if args.allow_proxy_footprints:
-                    physical_board = prototype_physicalize(board)
+                    physical_board = prototype_physicalize(board, physical_options)
                 else:
                     resolver = FootprintResolver(
                         base_directory=args.board.resolve().parent,
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
                     )
-                    physical_board = resolved_physicalize(board, resolver)
+                    physical_board = resolved_physicalize(board, resolver, physical_options)
                 router_options = GlobalRouterOptions(
-                    tile_size_nm=nm_from_mm(args.tile_size_mm)
+                    tile_size_nm=nm_from_mm(args.tile_size_mm),
+                    maximum_iterations=args.router_iterations,
                 )
                 flow = optimize_placement_for_routing(
                     physical_board,
@@ -355,8 +367,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             try:
                 if args.command in {"export-kicad-pcb", "plan-layout"}:
+                    physical_options = PrototypePhysicalOptions(copper_layers=args.layers)
                     if args.allow_proxy_footprints:
-                        physical_board = prototype_physicalize(board)
+                        physical_board = prototype_physicalize(board, physical_options)
                     else:
                         resolver = FootprintResolver(
                             base_directory=args.board.resolve().parent,
@@ -364,7 +377,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 root.resolve() for root in args.footprint_root
                             ),
                         )
-                        physical_board = resolved_physicalize(board, resolver)
+                        physical_board = resolved_physicalize(board, resolver, physical_options)
                     layout_report = None
                     if args.command == "plan-layout":
                         try:

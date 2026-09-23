@@ -530,8 +530,8 @@ def _search(
     previous: dict[tuple[GridNode, str, int], tuple[GridNode, str, int] | None] = {}
     best: dict[tuple[GridNode, str, int], int] = {}
     serial = 0
-    via_limit = remaining_vias if remaining_vias is not None else len(graph.layers) * len(graph.xs) * len(graph.ys)
-    if via_limit < 0:
+    track_vias = remaining_vias is not None
+    if remaining_vias is not None and remaining_vias < 0:
         return None
     for start in sorted(starts):
         if start.layer_index not in allowed_indexes:
@@ -553,8 +553,8 @@ def _search(
         for neighbor in _neighbors(graph, node, allowed_indexes):
             resource = graph.resources[_edge_key(node, neighbor)]
             next_direction = _direction(node, neighbor)
-            next_vias = vias_used + (next_direction == "v")
-            if next_vias > via_limit:
+            next_vias = vias_used + (next_direction == "v") if track_vias else 0
+            if remaining_vias is not None and next_vias > remaining_vias:
                 continue
             base = options.via_cost if next_direction == "v" else 10
             bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
@@ -592,8 +592,10 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
     max_y = max(point.y_nm for point in board.outline.vertices)
     xs = _axis_centers(min_x, max_x, options.tile_size_nm)
     ys = _axis_centers(min_y, max_y, options.tile_size_nm)
+    # A surface footprint courtyard constrains its own side, not buried copper.
+    # Explicit copper keepouts below are the mechanism for blocking inner layers.
     obstacles = tuple(
-        _bounds(transformed_footprint_polygon(board, placement))
+        (placement.side, _bounds(transformed_footprint_polygon(board, placement)))
         for placement in board.placements
     )
     keepouts = tuple(_bounds(item.outline.vertices) for item in board.keepouts)
@@ -609,7 +611,11 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
                 point = Point(x, y)
                 if not _point_in_polygon(point, board.outline.vertices):
                     continue
-                if any(_point_in_box(point, box) for box in (*obstacles, *keepouts)):
+                if any(
+                    (layer is CopperLayer.FRONT and side is BoardSide.FRONT)
+                    or (layer is CopperLayer.BACK and side is BoardSide.BACK)
+                    for side, box in obstacles if _point_in_box(point, box)
+                ) or any(_point_in_box(point, box) for box in keepouts):
                     continue
                 if any(
                     layer in layers and _point_in_box(point, box)

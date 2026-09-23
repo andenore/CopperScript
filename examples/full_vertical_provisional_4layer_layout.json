@@ -1,0 +1,136 @@
+{
+  "algorithm": "hierarchical-analytical/hybrid-legalize/route-refine-v0.2",
+  "board": "FullVerticalTracker",
+  "candidates": [
+    {
+      "id": "candidate-00",
+      "metrics": {
+        "component_count": 51,
+        "congestion_bin_count": 1280,
+        "congestion_capacity_per_bin": 11,
+        "congestion_overflow": 0,
+        "constraint_penalty_nm": 0,
+        "crossing_count": 113,
+        "estimated_connection_count": 193,
+        "estimated_via_count": 28,
+        "group_spread_nm": 15175120100,
+        "half_perimeter_wire_length_nm": 1363112492,
+        "maximum_congestion_utilization_ppm": 545454,
+        "minimum_constraint_margin_nm": 0,
+        "net_count": 58,
+        "pin_escape_pressure": 0
+      },
+      "seed": 0,
+      "selected": true,
+      "statistics": {
+        "analytical_iterations": 40,
+        "exact_repair_count": 0,
+        "refinement_move_count": 29,
+        "refinement_swap_count": 0,
+        "relative_repair_count": 1,
+        "routing_feedback_passes": 2
+      }
+    },
+    {
+      "id": "candidate-01",
+      "metrics": {
+        "component_count": 51,
+        "congestion_bin_count": 1280,
+        "congestion_capacity_per_bin": 11,
+        "congestion_overflow": 0,
+        "constraint_penalty_nm": 0,
+        "crossing_count": 114,
+        "estimated_connection_count": 193,
+        "estimated_via_count": 28,
+        "group_spread_nm": 9897120100,
+        "half_perimeter_wire_length_nm": 1338187054,
+        "maximum_congestion_utilization_ppm": 545454,
+        "minimum_constraint_margin_nm": 0,
+        "net_count": 58,
+        "pin_escape_pressure": 0
+      },
+      "seed": 1,
+      "selected": false,
+      "statistics": {
+        "analytical_iterations": 40,
+        "exact_repair_count": 0,
+        "refinement_move_count": 28,
+        "refinement_swap_count": 0,
+        "relative_repair_count": 0,
+        "routing_feedback_passes": 2
+      }
+    }
+  ],
+  "findings": [
+    {
+      "code": "FOOTPRINT_IMPORT_WARNINGS",
+      "message": "one or more resolved footprints have lossy-import warnings",
+      "stage": "prepare",
+      "status": "warning"
+    },
+    {
+      "code": "ESTIMATED_CROSSINGS",
+      "message": "coarse routing estimate contains 113 same-layer crossings",
+      "stage": "place",
+      "status": "warning"
+    },
+    {
+      "code": "PLACEMENT_CANDIDATES",
+      "message": "generated 2 non-dominated deterministic placement candidate(s)",
+      "stage": "place",
+      "status": "pass"
+    },
+    {
+      "code": "DETAILED_ROUTING_NOT_RUN",
+      "message": "placement includes a coarse routability estimate only; no copper routes were generated",
+      "stage": "route",
+      "status": "not_run"
+    },
+    {
+      "code": "PHYSICAL_SIGNOFF_NOT_RUN",
+      "message": "DRC, SI/PI, thermal, RF, DFX, and independent CAM verification remain required",
+      "stage": "verify",
+      "status": "not_run"
+    }
+  ],
+  "gates": [
+    {
+      "stage": "prepare",
+      "status": "warning",
+      "summary": "inputs accepted for placement exploration"
+    },
+    {
+      "stage": "place",
+      "status": "warning",
+      "summary": "legal placement produced with routability warnings"
+    },
+    {
+      "stage": "route",
+      "status": "not_run",
+      "summary": "detailed routing not implemented"
+    },
+    {
+      "stage": "verify",
+      "status": "blocked",
+      "summary": "release is blocked until routing and signoff pass"
+    }
+  ],
+  "metrics": {
+    "component_count": 51,
+    "congestion_bin_count": 1280,
+    "congestion_capacity_per_bin": 11,
+    "congestion_overflow": 0,
+    "constraint_penalty_nm": 0,
+    "crossing_count": 113,
+    "estimated_connection_count": 193,
+    "estimated_via_count": 28,
+    "group_spread_nm": 15175120100,
+    "half_perimeter_wire_length_nm": 1363112492,
+    "maximum_congestion_utilization_ppm": 545454,
+    "minimum_constraint_margin_nm": 0,
+    "net_count": 58,
+    "pin_escape_pressure": 0
+  },
+  "schema": "copperscript-layout-report/v0.1",
+  "selected_candidate": "candidate-00"
+}

@@ -6,6 +6,7 @@ import json
 from pcbir import (
     BoardOutline,
     CriticalRoutingStatus,
+    CopperLayer,
     DetailedRouterOptions,
     DetailedRoutingStatus,
     FootprintPad,
@@ -20,6 +21,7 @@ from pcbir import (
     Point,
     RouteKind,
     Size,
+    Stackup,
     nm_from_mm,
     route_critical_nets,
     route_detailed,
@@ -107,3 +109,33 @@ def test_detailed_router_fails_closed_without_a_connected_guide() -> None:
     assert result.metrics.unrouted_net_count == 1
     assert "missing connected global guide" in result.nets[0].diagnostics[0]
     assert result.board.metadata["fabrication_ready"] == "false"
+
+
+def test_detailed_router_uses_inner_copper_beneath_surface_footprint() -> None:
+    base = _board()
+    wall = PhysicalFootprint(
+        "test/surface-wall",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),),
+        Size.mm(4, 12),
+    )
+    board = replace(
+        base,
+        stackup=Stackup((
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.BACK,
+        )),
+        footprints={**base.footprints, wall.name: wall},
+        placements=(*base.placements, Placement("W1", wall.name, Point.mm(10, 6))),
+        net_routing_rules=(NetRoutingRule(
+            "SIGNAL", allowed_layers=(CopperLayer.FRONT, CopperLayer.INTERNAL_1),
+        ),),
+    )
+    guide = route_global(
+        board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2"), maximum_iterations=1)
+    )
+    result = route_detailed(
+        board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=1)
+    )
+
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert any(track.layer is CopperLayer.INTERNAL_1 for track in result.board.tracks)

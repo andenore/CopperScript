@@ -659,6 +659,7 @@ def _legalize(
             reference,
         ),
     )
+    movable = _relative_cluster_order(board, movable, targets)
     placed_order: list[str] = []
     repair_count = 0
     for reference in movable:
@@ -694,6 +695,70 @@ def _legalize(
             placed[reference] = choice
         placed_order.append(reference)
     return placed, repair_count
+
+
+def _relative_cluster_order(
+    board: PhysicalBoard,
+    movable: list[str],
+    targets: Mapping[str, Placement],
+) -> list[str]:
+    """Reserve space for close-placement groups before unrelated components.
+
+    A decoupler placed after most of the board has been legalized may have no
+    vacant position near its IC even on an otherwise roomy board. Keep each
+    connected relative-rule group together, starting with its largest anchor.
+    The normal priority order is retained for unconstrained components.
+    """
+    movable_set = set(movable)
+    neighbors: dict[str, set[str]] = {reference: set() for reference in movable}
+    for rule in board.relative_rules:
+        members = [target.reference for target in rule.targets if target.reference in movable_set]
+        for reference in members:
+            neighbors[reference].update(other for other in members if other != reference)
+    visited: set[str] = set()
+    clusters: list[list[str]] = []
+    for reference in movable:
+        if reference in visited or not neighbors[reference]:
+            continue
+        stack = [reference]
+        group: list[str] = []
+        while stack:
+            item = stack.pop()
+            if item in visited:
+                continue
+            visited.add(item)
+            group.append(item)
+            stack.extend(sorted(neighbors[item] - visited, reverse=True))
+        clusters.append(group)
+    order = {reference: index for index, reference in enumerate(movable)}
+    clusters.sort(
+        key=lambda group: (
+            -max(_footprint_area(board, targets[reference]) for reference in group),
+            min(order[reference] for reference in group),
+        )
+    )
+    result: list[str] = []
+    for group in clusters:
+        anchor = max(group, key=lambda reference: (_footprint_area(board, targets[reference]), -order[reference]))
+        result.append(anchor)
+        companions = [reference for reference in group if reference != anchor]
+        distance_limits = {
+            reference: min(
+                (
+                    rule.distance_nm
+                    for rule in board.relative_rules
+                    if rule.kind is RelativePlacementKind.MAX_DISTANCE
+                    and any(target.reference == reference for target in rule.targets)
+                    and any(target.reference == anchor for target in rule.targets)
+                    and rule.distance_nm is not None
+                ),
+                default=2**63,
+            )
+            for reference in companions
+        }
+        result.extend(sorted(companions, key=lambda reference: (distance_limits[reference], -_footprint_area(board, targets[reference]), order[reference])))
+    result.extend(reference for reference in movable if reference not in visited)
+    return result
 
 
 def _best_legal_choice(
