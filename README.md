@@ -5,8 +5,9 @@ connectivity, electrical intent, and design constraints.
 
 The v0.1 compiler parses `.copper` source into a typed intermediate
 representation and runs electrical-rules checks (ERC). It deliberately does not
-perform detailed routing yet; its first physical workflow can produce a legal,
-routability-estimated placement candidate without claiming fabrication readiness.
+claim fabrication readiness from routing guidance. Its prototype physical
+workflow can place components and attempt geometry-checked detailed routing,
+but a routed board still requires independent physical and KiCad DRC signoff.
 
 ## Quick start
 
@@ -71,6 +72,8 @@ The planner estimates global routing congestion but does not generate copper.
 Its report therefore marks Route as not run and Verify as blocked. See the
 [physical layout workflow](docs/layout-workflow.md) for the research,
 consolidated stages, algorithms, and limitations.
+The [detailed-routing research](docs/detailed-routing-research.md) explains
+the geometry checks, fabrication-rule profile, and current full-board limits.
 
 Produce deterministic multilayer global-routing guides after transactional
 placement feedback:
@@ -217,8 +220,9 @@ Key modules:
   moves, atomic rollback, stagnation control, and fresh-route certification.
 - `pcbir.critical` — profile-driven locked copper for critical, differential,
   clock, CAN, RF-feed, power, and length/via-constrained routes.
-- `pcbir.detailed` — guide-aware deterministic general routing with pin access,
-  exact tracks/vias, locked critical copper, and negotiated rip-up/reroute.
+- `pcbir.detailed` — guide-aware deterministic general routing with legal pad
+  escape, exact foreign-copper clearance, locked critical copper, and bounded
+  whole-pass rerouting. See [detailed-routing research](docs/detailed-routing-research.md).
 - `pcbir.geometry`, `pcbir.any_angle`, and `pcbir.shove` — shared exact integer
   predicates, deterministic visibility walkaround, and atomic recursive line
   shove with fail-safe rollback.

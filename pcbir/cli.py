@@ -93,6 +93,10 @@ def _parser() -> argparse.ArgumentParser:
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
     pcb_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
+    pcb_parser.add_argument(
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic",
+        help="physical clearance and track-width profile",
+    )
 
     layout_parser = subparsers.add_parser(
         "plan-layout",
@@ -120,6 +124,10 @@ def _parser() -> argparse.ArgumentParser:
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
     layout_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
+    layout_parser.add_argument(
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic",
+        help="physical clearance and track-width profile",
+    )
     layout_parser.add_argument(
         "--candidates",
         type=int,
@@ -153,6 +161,10 @@ def _parser() -> argparse.ArgumentParser:
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
     global_route_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
+    global_route_parser.add_argument(
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic",
+        help="physical clearance and track-width profile",
+    )
     global_route_parser.add_argument(
         "--candidates", type=int, default=3, help="placement candidates to consider"
     )
@@ -310,7 +322,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("Global routing stopped because ERC reported errors.")
                 return 1
             try:
-                physical_options = PrototypePhysicalOptions(copper_layers=args.layers)
+                physical_options = PrototypePhysicalOptions(
+                    copper_layers=args.layers, fabrication_profile=args.fab_profile
+                )
                 if args.allow_proxy_footprints:
                     physical_board = prototype_physicalize(board, physical_options)
                 else:
@@ -367,7 +381,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             try:
                 if args.command in {"export-kicad-pcb", "plan-layout"}:
-                    physical_options = PrototypePhysicalOptions(copper_layers=args.layers)
+                    physical_options = PrototypePhysicalOptions(
+                        copper_layers=args.layers, fabrication_profile=args.fab_profile
+                    )
                     if args.allow_proxy_footprints:
                         physical_board = prototype_physicalize(board, physical_options)
                     else:

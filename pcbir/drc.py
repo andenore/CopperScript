@@ -661,12 +661,14 @@ def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
         footprint = board.footprints[placement.footprint]
         for pad_index, pad in enumerate(footprint.pads):
             reference = PadReference(placement.reference, pad.number)
-            net = pad_nets.get(reference)
-            if net is None or pad.kind in {
+            if pad.kind in {
                 PadKind.NON_PLATED_THROUGH_HOLE,
                 PadKind.APERTURE,
             }:
                 continue
+            net = pad_nets.get(
+                reference, f"<unconnected:{placement.reference}.{pad.number}:{pad_index}>"
+            )
             if pad.kind is PadKind.SMD:
                 layers = (CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK,)
             else:

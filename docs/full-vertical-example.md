@@ -186,16 +186,18 @@ physical design.
 - On the provisional placement, five bounded congestion-negotiation iterations
   reached all 58 multi-terminal nets with zero grid overflow, certifying the
   placement for the global-routing model. Global-routing guides are not copper.
-  A bounded three-pass detailed route on a 1 mm grid connected all 58 nets
+  The earlier cost-only detailed route on a 1 mm grid connected all 58 nets
   nominally but still had 153 shared routing resources. Exact physical DRC
-  found 683 shorts, 368 clearance violations, and 13 open nets on that
-  candidate. These are genuine release blockers, not waiver candidates.
-  Geometry-aware detailed routing, return-path review, clean physical and
+  found 683 shorts, 368 clearance violations, and 13 open nets. The new
+  geometry-checked router refuses those shorts. A fresh one-pass check of the
+  current implementation on a 1 mm grid with the explicit four-layer JLCPCB
+  prototype profile connected 32 nets and left 26 open. Native DRC found no
+  shorts, clearance errors, or copper-keepout violations; it still reports
+  the 26 opens and incomplete route. These are release
+  blockers, not waiver candidates. Pin-access, placement/routing feedback,
+  return-path review, clean physical and
   KiCad DRC, and independent CAM verification still gate any fabrication
   output. No production Gerbers should be exported from the current draft.
-  The next router iteration must make foreign pads, existing traces/vias,
-  clearance envelopes, and pad escape paths hard geometric obstacles during
-  search; the current grid-resource penalty alone does not prevent shorts.
 - `examples/full_vertical_provisional_4layer.kicad_pcb` is a placed,
   **unrouted** KiCad 10 preview for mechanical and component-location review.
   It is deliberately not a fabrication deliverable; its adjacent layout JSON
@@ -213,8 +215,8 @@ python -m copperscript check examples/full_vertical_board.copper
 python -m copperscript power-check examples/full_vertical_board.copper
 python -m copperscript compile examples/full_vertical_board.copper -o board.json
 python -m copperscript export-kicad examples/full_vertical_board.copper -o full_vertical_board.kicad_sch
-python -m copperscript plan-layout examples/full_vertical_board.copper --locked --offline --layers 4 --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
-python -m copperscript route-global examples/full_vertical_board.copper --locked --offline --layers 4 --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 -o full_vertical.global-route.json
+python -m copperscript plan-layout examples/full_vertical_board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
+python -m copperscript route-global examples/full_vertical_board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 -o full_vertical.global-route.json
 python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --json
 ```
 

@@ -22,10 +22,10 @@ from .physical import (
     RouteKind,
     TrackSegment,
     Via,
-    select_via_technology,
 )
-from .routing import GlobalNetRoute, GlobalRoutingResult
+from .routing import GlobalNetRoute, GlobalRoutingResult, GlobalViaProposal
 from .geometry import segment_distance_squared
+from .routing_vias import physical_via_span
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -199,6 +199,21 @@ def route_critical_nets(
     )
 
 
+def _guide_via(
+    board: PhysicalBoard, net: str, proposal: GlobalViaProposal, position: Point
+) -> Via:
+    span = physical_via_span(board, proposal.from_layer, proposal.to_layer)
+    if span is None:
+        raise ValueError(
+            f"no legal physical via for {proposal.from_layer.value} to "
+            f"{proposal.to_layer.value} on {net}"
+        )
+    return Via(
+        net, position, board.rules.default_via_size_nm,
+        board.rules.default_via_drill_nm, *span,
+    )
+
+
 def _route_single(
     board: PhysicalBoard,
     rule: NetRoutingRule,
@@ -232,19 +247,9 @@ def _route_single(
         for item in guide.segments
     ]
     tracks.extend(_pin_stubs(rule.net, guide, width))
-    vias = tuple(
-        Via(
-            rule.net,
-            item.position,
-            board.rules.default_via_size_nm,
-            board.rules.default_via_drill_nm,
-            item.from_layer,
-            item.to_layer,
-            select_via_technology(board.stackup, item.from_layer, item.to_layer,
-                                  board.rules.default_via_size_nm, board.rules.default_via_drill_nm),
-        )
-        for item in guide.vias
-    )
+    vias = tuple(dict.fromkeys(
+        _guide_via(board, rule.net, item, item.position) for item in guide.vias
+    ))
     diagnostics = _budget_diagnostics(rule, tuple(tracks), vias)
     assumptions = _external_assumptions(rule)
     evidence = _external_evidence(rule)
@@ -371,28 +376,14 @@ def _route_pair(
     return_vias: list[Via] = []
     for item in guide.vias:
         for net, sign in ((first.net, 1), (second.net, -1)):
-            pair_vias.append(
-                Via(
-                    net,
-                    Point(item.position.x_nm + sign * offset, item.position.y_nm),
-                    board.rules.default_via_size_nm,
-                    board.rules.default_via_drill_nm,
-                    item.from_layer,
-                    item.to_layer,
-                    select_via_technology(board.stackup, item.from_layer, item.to_layer,
-                                          board.rules.default_via_size_nm, board.rules.default_via_drill_nm),
-                )
-            )
+            pair_vias.append(_guide_via(
+                board, net, item,
+                Point(item.position.x_nm + sign * offset, item.position.y_nm),
+            ))
         if first.require_return_vias or second.require_return_vias:
             return_net = first.return_via_net or second.return_via_net
             assert return_net is not None
-            return_vias.append(
-                Via(return_net, item.position, board.rules.default_via_size_nm,
-                    board.rules.default_via_drill_nm, item.from_layer, item.to_layer,
-                    select_via_technology(board.stackup, item.from_layer, item.to_layer,
-                                          board.rules.default_via_size_nm,
-                                          board.rules.default_via_drill_nm))
-            )
+            return_vias.append(_guide_via(board, return_net, item, item.position))
     first_length = _track_length(tuple(first_tracks))
     second_length = _track_length(tuple(second_tracks))
     skew = abs(first_length - second_length)

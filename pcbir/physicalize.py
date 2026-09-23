@@ -30,6 +30,7 @@ from .physical import (
     BoardSide,
     ComponentPlacementRule,
     CopperLayer,
+    DesignRules,
     FootprintPad,
     PadReference,
     PhysicalBoard,
@@ -47,6 +48,7 @@ from .physical import (
     RouteKind,
     Size,
     Stackup,
+    nm_from_mm,
 )
 from .quantities import Length, Quantity
 
@@ -56,6 +58,7 @@ class PrototypePhysicalOptions:
     board_width_mm: float = 100.0
     board_height_mm: float = 80.0
     copper_layers: int = 2
+    fabrication_profile: str = "generic"
     columns: int = 3
     margin_mm: float = 12.0
 
@@ -66,6 +69,10 @@ class PrototypePhysicalOptions:
             raise ValueError("prototype placement columns must be at least one")
         if self.copper_layers not in {2, 4}:
             raise ValueError("prototype physicalizer supports two or four copper layers")
+        if self.fabrication_profile not in {"generic", "jlcpcb-four-layer"}:
+            raise ValueError("unknown prototype fabrication profile")
+        if self.fabrication_profile == "jlcpcb-four-layer" and self.copper_layers != 4:
+            raise ValueError("JLCPCB four-layer profile requires four copper layers")
         if self.margin_mm <= 0:
             raise ValueError("prototype board margin must be positive")
         if self.margin_mm * 2 >= min(self.board_width_mm, self.board_height_mm):
@@ -223,6 +230,17 @@ def _physicalize(
     metadata: dict[str, str],
 ) -> PhysicalBoard:
     flat = elaborate(board)
+    if options.fabrication_profile == "jlcpcb-four-layer":
+        # JLCPCB's published multilayer minimum is 0.09 mm; this is an
+        # escape-rule floor, not a recommendation for every signal or a
+        # substitute for impedance/current/assembly qualification.
+        rules = DesignRules(
+            minimum_clearance_nm=nm_from_mm("0.09"),
+            default_track_width_nm=nm_from_mm("0.20"),
+        )
+        metadata["fabrication_profile"] = options.fabrication_profile
+    else:
+        rules = DesignRules()
     selected_components = tuple(
         sorted(
             (
@@ -318,6 +336,7 @@ def _physicalize(
                 )
             )
         ),
+        rules=rules,
         footprints=footprints,
         placements=tuple(placements),
         nets=tuple(nets),

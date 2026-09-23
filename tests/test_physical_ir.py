@@ -12,6 +12,7 @@ from pcbir import (
     PhysicalNet,
     Placement,
     Point,
+    PrototypePhysicalOptions,
     Size,
     RelativePlacementKind,
     RouteKind,
@@ -19,6 +20,7 @@ from pcbir import (
     compile_source,
     prototype_physicalize,
     normalize_constraints,
+    nm_from_mm,
 )
 
 
@@ -44,6 +46,20 @@ def test_prototype_physicalizer_keeps_electrical_ir_separate() -> None:
         net.pads for net in physical.nets if net.name == "V3V3"
     )
     assert not hasattr(electrical.components[0], "position")
+
+
+def test_four_layer_fabrication_profile_is_explicit() -> None:
+    electrical = compile_file(ROOT / "examples" / "valid_board.copper")
+    options = PrototypePhysicalOptions(
+        copper_layers=4, fabrication_profile="jlcpcb-four-layer"
+    )
+    physical = prototype_physicalize(electrical, options)
+
+    assert physical.rules.minimum_clearance_nm == nm_from_mm("0.09")
+    assert physical.rules.default_track_width_nm == nm_from_mm("0.20")
+    assert physical.metadata["fabrication_profile"] == "jlcpcb-four-layer"
+    with pytest.raises(ValueError, match="requires four copper layers"):
+        PrototypePhysicalOptions(fabrication_profile="jlcpcb-four-layer")
 
 
 def test_physical_ir_rejects_unknown_pad_references() -> None:

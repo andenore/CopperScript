@@ -19,6 +19,7 @@ from pcbir import (
     Point,
     RouteKind,
     Size,
+    Stackup,
     nm_from_mm,
     route_critical_nets,
     route_global,
@@ -181,3 +182,31 @@ def test_pair_transition_generates_bounded_return_via() -> None:
     pair = result.nets[0]
     assert pair.return_via_count == 1
     assert sum(via.net == "GND" for via in result.locked_vias) == 1
+
+
+def test_critical_transition_without_special_technology_is_through_via() -> None:
+    base = _pair_board()
+    board = replace(
+        base,
+        stackup=Stackup((
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.BACK,
+        )),
+        net_routing_rules=(NetRoutingRule("USB_DP", RouteKind.CRITICAL),),
+    )
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    guides = replace(guides, routes=tuple(
+        replace(route, vias=(GlobalViaProposal(
+            route.net, Point.mm(20, 12), CopperLayer.FRONT,
+            CopperLayer.INTERNAL_1, "test-via",
+        ),)) if route.net == "USB_DP" else route
+        for route in guides.routes
+    ))
+
+    result = route_critical_nets(board, guides)
+
+    assert result.locked_vias
+    assert all(
+        via.from_layer is CopperLayer.FRONT and via.to_layer is CopperLayer.BACK
+        for via in result.locked_vias
+    )

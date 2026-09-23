@@ -7,6 +7,7 @@ from pcbir import (
     BoardOutline,
     CriticalRoutingStatus,
     CopperLayer,
+    CopperKeepout,
     DetailedRouterOptions,
     DetailedRoutingStatus,
     FootprintPad,
@@ -19,6 +20,8 @@ from pcbir import (
     Placement,
     PlacementKeepout,
     Point,
+    PolygonRing,
+    PolygonWithHoles,
     RouteKind,
     Size,
     Stackup,
@@ -26,6 +29,8 @@ from pcbir import (
     route_critical_nets,
     route_detailed,
     route_global,
+    run_physical_drc,
+    TrackSegment,
 )
 
 
@@ -139,6 +144,11 @@ def test_detailed_router_uses_inner_copper_beneath_surface_footprint() -> None:
 
     assert result.status is DetailedRoutingStatus.SUCCESS
     assert any(track.layer is CopperLayer.INTERNAL_1 for track in result.board.tracks)
+    assert result.board.vias
+    assert all(
+        via.from_layer is CopperLayer.FRONT and via.to_layer is CopperLayer.BACK
+        for via in result.board.vias
+    )
 
 
 def test_detailed_router_connects_distinct_pads_snapped_to_one_grid_node() -> None:
@@ -164,3 +174,138 @@ def test_detailed_router_connects_distinct_pads_snapped_to_one_grid_node() -> No
 
     assert result.status is DetailedRoutingStatus.SUCCESS
     assert len(result.board.tracks) == 2
+
+
+def test_detailed_router_walks_around_foreign_pad_with_exact_clearance() -> None:
+    base = _board()
+    blocker = PhysicalFootprint(
+        "test/blocker",
+        (FootprintPad("1", Point(0, 0), Size.mm(2, 2)),),
+        Size.mm(2, 2),
+    )
+    board = replace(
+        base,
+        footprints={**base.footprints, blocker.name: blocker},
+        placements=(*base.placements, Placement("X1", blocker.name, Point.mm(10, 6))),
+        nets=(*base.nets, PhysicalNet("BLOCKER", (PadReference("X1", "1"),))),
+        net_routing_rules=(NetRoutingRule(
+            "SIGNAL", allowed_layers=(CopperLayer.FRONT,),
+        ),),
+    )
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
+    ))
+
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET",
+    }
+
+
+def test_unconnected_pad_is_still_a_copper_obstacle() -> None:
+    base = _board()
+    blocker = PhysicalFootprint(
+        "test/unconnected-blocker",
+        (FootprintPad("NC", Point(0, 0), Size.mm(2, 2)),),
+        Size.mm(2, 2),
+    )
+    board = replace(
+        base,
+        footprints={**base.footprints, blocker.name: blocker},
+        placements=(*base.placements, Placement("X1", blocker.name, Point.mm(10, 6))),
+        net_routing_rules=(NetRoutingRule(
+            "SIGNAL", allowed_layers=(CopperLayer.FRONT,),
+        ),),
+    )
+    direct = replace(board, tracks=(TrackSegment(
+        "SIGNAL", Point.mm(3, 6), Point.mm(17, 6),
+        nm_from_mm("0.25"), CopperLayer.FRONT,
+    ),))
+    assert "DRC-SHORT" in {
+        finding.code for finding in run_physical_drc(direct).findings
+    }
+
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=1,
+    ))
+
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET",
+    }
+
+
+def test_detailed_router_fails_closed_at_unavoidable_locked_track() -> None:
+    base = _board()
+    board = replace(
+        base,
+        placements=(
+            Placement("J1", next(iter(base.footprints)), Point.mm(3, 3)),
+            Placement("J2", next(iter(base.footprints)), Point.mm(17, 9)),
+        ),
+        nets=(
+            PhysicalNet("SIGNAL", (PadReference("J1", "1"), PadReference("J2", "1"))),
+            PhysicalNet("BLOCKER", ()),
+        ),
+        tracks=(TrackSegment(
+            "BLOCKER", Point.mm(0, 6), Point.mm(20, 6),
+            nm_from_mm("0.5"), CopperLayer.FRONT,
+        ),),
+        net_routing_rules=(
+            NetRoutingRule("SIGNAL", allowed_layers=(CopperLayer.FRONT,)),
+            NetRoutingRule("BLOCKER", RouteKind.CRITICAL),
+        ),
+    )
+    guide = route_global(replace(board, tracks=()), GlobalRouterOptions(
+        tile_size_nm=nm_from_mm(2), maximum_iterations=1,
+    ))
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
+    ))
+
+    assert result.status is DetailedRoutingStatus.PARTIAL
+    assert not any(track.net == "SIGNAL" for track in result.board.tracks)
+
+
+def test_multiterminal_cleanup_keeps_exact_branch_junctions() -> None:
+    base = _board()
+    footprint_name = next(iter(base.footprints))
+    board = replace(
+        base,
+        placements=(*base.placements, Placement("J3", footprint_name, Point.mm(10, 25))),
+        outline=BoardOutline.rectangle(20, 30),
+        nets=(PhysicalNet("SIGNAL", (
+            PadReference("J1", "1"), PadReference("J2", "1"), PadReference("J3", "1"),
+        )),),
+    )
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_detailed(board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm(1)))
+
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert "DRC-OPEN-NET" not in {
+        finding.code for finding in run_physical_drc(result.board).findings
+    }
+
+
+def test_detailed_router_does_not_cut_through_track_keepout() -> None:
+    base = _board()
+    keepout = CopperKeepout(
+        "center",
+        (CopperLayer.FRONT,),
+        PolygonWithHoles(PolygonRing((
+            Point.mm(8, 4), Point.mm(12, 4),
+            Point.mm(12, 8), Point.mm(8, 8),
+        ))),
+    )
+    board = replace(base, copper_keepouts=(keepout,))
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=1,
+    ))
+
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert "DRC-COPPER-KEEPOUT" not in {
+        finding.code for finding in run_physical_drc(result.board).findings
+    }

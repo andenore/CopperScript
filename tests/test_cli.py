@@ -202,6 +202,21 @@ def test_cli_exports_provisional_four_layer_board(tmp_path: Path) -> None:
     assert '(2 "In2.Cu" signal)' in content
 
 
+def test_cli_accepts_explicit_four_layer_fabrication_profile(tmp_path: Path) -> None:
+    output = tmp_path / "four-layer-profile.kicad_pcb"
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "copperscript", "export-kicad-pcb",
+            "examples/resolved_footprint_board.copper", "--layers", "4",
+            "--fab-profile", "jlcpcb-four-layer", "-o", str(output),
+        ],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert output.exists()
+
+
 def test_cli_does_not_silently_fall_back_to_proxy_footprints(
     tmp_path: Path,
 ) -> None:
