@@ -5,7 +5,7 @@ board FullVerticalTracker {
     use library "tiny";
     import vertical "github.com/andenore/CopperLib/packages/full_vertical";
 
-    component PS5: VOLTAGE_SOURCE;
+    component J_POWER: vertical.GCT_USB4135_GF_A;
     module PWR: vertical.FullVerticalPowerTree;
 
     component U_MCU: vertical.STM32G0C1RET6;
@@ -32,6 +32,8 @@ board FullVerticalTracker {
 
     component R_I2C_SDA: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_I2C_SCL: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_CC1: RESISTOR { value = 5.1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_CC2: RESISTOR { value = 5.1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_LED_1: RESISTOR { value = 1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_LED_2: RESISTOR { value = 1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_RESET_MCU: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
@@ -79,7 +81,8 @@ board FullVerticalTracker {
     }
 
     net V5 {
-        PS5.OUT;
+        J_POWER.VBUS_A;
+        J_POWER.VBUS_B;
         PWR.VIN5;
         U_MODEM.USB_VBUS;
     }
@@ -123,8 +126,12 @@ board FullVerticalTracker {
         U_MODEM_LEVEL.VCCB;
     }
     net GND {
-        PS5.GND;
+        J_POWER.GND_A;
+        J_POWER.GND_B;
+        J_POWER.SHIELD;
         PWR.GND;
+        R_CC1.2;
+        R_CC2.2;
         U_MCU.VSS;
         U_CAN.GND;
         U_CAN.SHDN;
@@ -213,7 +220,10 @@ board FullVerticalTracker {
     net MCU_SWDIO { U_MCU.PA13; J_SWD_MCU.SWDIO; }
     net MCU_SWDCLK { U_MCU.PA14; J_SWD_MCU.SWDCLK; }
 
-    supply V5 { voltage = 5V; source = PS5.OUT; }
+    net USB_C_CC1 { J_POWER.CC1; R_CC1.1; }
+    net USB_C_CC2 { J_POWER.CC2; R_CC2.1; }
+
+    supply V5 { voltage = 5V; external = true; }
     supply V3V3 { voltage = 3.3V; external = true; }
     supply V3V8 { voltage = 3.8V; external = true; }
     supply GND { voltage = 0V; external = true; }

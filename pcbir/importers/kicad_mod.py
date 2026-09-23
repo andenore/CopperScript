@@ -145,6 +145,14 @@ def parse_kicad_mod(
                 warnings.append(f"ignored footprint text ({text_kind})")
         elif child_tag == "model":
             warnings.append("ignored 3D model reference")
+        elif child_tag == "duplicate_pad_numbers_are_jumpers":
+            if _required_atom(child, 1, source, "duplicate pad jumper setting") != "no":
+                raise KiCadModImportError(
+                    f"{source}: jumper-linked duplicate pads are unsupported"
+                )
+        elif child_tag == "embedded_fonts":
+            if _required_atom(child, 1, source, "embedded fonts setting") != "no":
+                warnings.append("ignored embedded footprint fonts")
         elif child_tag in {
             "solder_mask_margin",
             "solder_paste_margin",

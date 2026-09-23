@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:6bc6c8068b60a6bc054472abe0cc116bfb576d9da1a59abb604103159a11e4c5",
+      "checksum": "sha256:f74d4f5313e66a773598cfc7e9f91aec0c5882e05941644e39efd735987b0367",
       "files": [
         {
           "path": "copper.mod",
@@ -187,6 +187,11 @@
           "path": "packages/full_vertical/uart_level_shifter.copper",
           "sha256": "1b618e6e5d46b2cf531a8f0eff9c2cfc54287ad0710429956d03e86bda878705",
           "size": 1035
+        },
+        {
+          "path": "packages/full_vertical/usb_c_power_receptacle.copper",
+          "sha256": "1b26ec9de320e690d47bb6259d0b75f1a1c42b224b49f87cee187f156d6c8af9",
+          "size": 918
         },
         {
           "path": "packages/full_vertical/usb_common_mode_choke.copper",

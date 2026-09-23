@@ -23,9 +23,11 @@ from pcbir import (
     PhysicalNet,
     Placement,
     Point,
+    TrackSegment,
     load_kicad_mod,
     parse_kicad_mod,
     run_physical_drc,
+    nm_from_mm,
 )
 from pcbir.placement import resolved_copper_keepouts
 
@@ -133,6 +135,17 @@ def test_allows_repeated_pad_numbers_and_empty_npth_numbers() -> None:
         for pad in footprint.pads[2:]
     )
 
+    board = PhysicalBoard(
+        "RepeatedPadDrc",
+        BoardOutline.rectangle(20, 10),
+        {footprint.name: footprint},
+        (Placement("J1", footprint.name, Point.mm(10, 5)),),
+        (PhysicalNet("GND", (PadReference("J1", "1"),)), PhysicalNet("OTHER", ())),
+        tracks=(TrackSegment("OTHER", Point.mm(11, 4), Point.mm(11, 6),
+                             nm_from_mm("0.25"), CopperLayer.FRONT),),
+    )
+    assert any(item.code == "DRC-SHORT" for item in run_physical_drc(board).findings)
+
 
 def test_imports_kicad10_paste_apertures_and_pad_fabrication_metadata() -> None:
     source = """(footprint "ThermalPackage"
@@ -223,6 +236,16 @@ def test_rejects_unrepresented_footprint_placement_keepout() -> None:
     """
     with pytest.raises(KiCadModImportError, match="footprint-placement keepout"):
         parse_kicad_mod(source)
+
+
+def test_kicad10_jumper_setting_must_not_change_pad_connectivity() -> None:
+    source = """(footprint "Jumpers" (layer "F.Cu")
+      (duplicate_pad_numbers_are_jumpers no) (embedded_fonts no)
+      (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask")))
+    """
+    assert parse_kicad_mod(source).warnings == ()
+    with pytest.raises(KiCadModImportError, match="jumper-linked duplicate pads"):
+        parse_kicad_mod(source.replace("jumpers no", "jumpers yes"))
 
 
 def test_footprint_keepout_moves_with_front_and_back_placements() -> None:

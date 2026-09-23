@@ -96,3 +96,24 @@ def test_usb_choke_uses_coilcraft_winding_pairs_and_land_pattern() -> None:
     assert {
         name: pin.number for name, pin in part.pins.items()
     } == {"DP_IN": "1", "DM_IN": "2", "DM_OUT": "3", "DP_OUT": "4"}
+
+
+def test_usb_c_power_entry_has_separate_cc_pull_downs_and_both_vbus_contacts() -> None:
+    board = compile_file(EXAMPLE)
+    part = board.library["vertical.GCT_USB4135_GF_A"]
+    assert part.footprints == (
+        "Connector_USB:USB_C_Receptacle_GCT_USB4135-GF-A_6P_TopMnt_Horizontal",
+    )
+    assert {name: pin.number for name, pin in part.pins.items()} == {
+        "CC1": "A5", "VBUS_A": "A9", "GND_A": "A12",
+        "CC2": "B5", "VBUS_B": "B9", "GND_B": "B12", "SHIELD": "SH",
+    }
+    nets = {
+        net.name: {(endpoint.component, endpoint.pin) for endpoint in net.endpoints}
+        for net in board.nets
+    }
+    assert {("J_POWER", "VBUS_A"), ("J_POWER", "VBUS_B")} <= nets["V5"]
+    assert nets["USB_C_CC1"] == {("J_POWER", "CC1"), ("R_CC1", "1")}
+    assert nets["USB_C_CC2"] == {("J_POWER", "CC2"), ("R_CC2", "1")}
+    assert {("R_CC1", "2"), ("R_CC2", "2")} <= nets["GND"]
+    assert next(supply for supply in board.supplies if supply.name == "V5").externally_driven

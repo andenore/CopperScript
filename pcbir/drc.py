@@ -659,7 +659,7 @@ def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
     result: list[_PadCopper] = []
     for placement in sorted(board.placements, key=lambda item: item.reference):
         footprint = board.footprints[placement.footprint]
-        for pad in footprint.pads:
+        for pad_index, pad in enumerate(footprint.pads):
             reference = PadReference(placement.reference, pad.number)
             net = pad_nets.get(reference)
             if net is None or pad.kind in {
@@ -671,8 +671,8 @@ def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
                 layers = (CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK,)
             else:
                 layers = tuple(board.stackup.copper_layers)
-            position = transformed_pad_position(board, placement, pad.number)
-            result.append(_PadCopper(f"pad:{placement.reference}.{pad.number}", net,
+            position = transformed_local_point(placement, pad.position)
+            result.append(_PadCopper(f"pad:{placement.reference}.{pad.number}:{pad_index}", net,
                                      position, placed_pad_shape(position, pad, placement), layers,
                                      footprint.clearance_nm or 0))
     return tuple(result)
