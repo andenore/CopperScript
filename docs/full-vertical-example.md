@@ -101,15 +101,18 @@ physical design.
 
 ## Current blockers before fabrication
 
-- The EG800G definition still exposes only the pins used by this design. Its
-  production footprint needs complete power, ground, exposed, and reserved
-  pad coverage. The nRF52832-QFAA and STM32G0C1RET6 package maps are complete
+- The EG800G-EU now has a 109-pad third-party JLCPCB/EasyEDA footprint in
+  CopperLib and all physical pads are represented in the package definition.
+  Quectel-identified ground pads are connected; other unverified functions are
+  explicit unmodeled placeholders that ERC refuses to connect. The EasyEDA
+  symbol conflicts with Quectel's QuecOpen reference on some multifunction
+  pads, so complete electrical pin validation and mechanical/stencil review
+  remain production blockers. The nRF52832-QFAA and STM32G0C1RET6 package maps are complete
   from the Nordic Product Specification v1.9, Table 1 and ST DS13564 Rev 5,
   Table 12 respectively; their support circuits remain incomplete.
-- The installed KiCad 10 plus CopperLib footprint audit currently resolves 22
-  of 24 selected assets. The remaining failures are the 3.8 V regulator and
-  EG800G footprints. These are not safe to replace with generic land
-  patterns without an exact orderable part or vendor mechanical drawing.
+- The installed KiCad 10 plus CopperLib footprint audit currently resolves 23
+  of 24 selected assets. The remaining failure is the 3.8 V regulator, which
+  still needs an exact orderable part and validated support circuit.
 - The orderable GCT SIM socket, Coilcraft USB choke, and U.FL RF connector now
   resolve to installed KiCad footprints. CopperScript imports the embedded
   copper keepouts in the SIM and U.FL footprints and carries them through

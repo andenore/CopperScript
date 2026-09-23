@@ -304,6 +304,11 @@ route availability. A component makes an explicit choice or uses a declared
 default. General boolean expressions and conditions derived from connectivity
 are not part of the language.
 
+An optional, physically numbered package pin may have no electrical profile
+while its function is unresolved. It is a structural placeholder only: ERC
+must reject any net attached to it. This separates complete land-pattern
+coverage from evidence-backed electrical modeling.
+
 Explicit mux rows remain appropriate for irregular mappings such as STM32
 alternate functions. Regular routing such as Nordic PSEL uses concrete named
 pad sets and a typed selector scheme, avoiding an N-by-M expansion while still

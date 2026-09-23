@@ -243,12 +243,22 @@ def _check_references(context: _Context) -> list[Diagnostic]:
                 )
                 continue
             part = context.board.library.get(component.part)
-            if part is not None and context.resolve_pin(endpoint) is None:
+            resolved = context.resolve_pin(endpoint) if part is not None else None
+            if part is not None and resolved is None:
                 diagnostics.append(
                     Diagnostic(
                         Severity.ERROR,
                         "UNKNOWN_PIN",
                         f"part {part.name} has no pin {endpoint.pin!r}",
+                        str(endpoint),
+                    )
+                )
+            elif resolved is not None and context.pin_profile(*resolved) is None:
+                diagnostics.append(
+                    Diagnostic(
+                        Severity.ERROR,
+                        "UNMODELED_PIN",
+                        f"pin {endpoint} has no electrical profile and cannot be connected",
                         str(endpoint),
                     )
                 )

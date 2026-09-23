@@ -7,6 +7,38 @@ from pcbir import CopperScriptError, check, compile_file
 from pcbir.packages import read_manifest
 
 
+def test_optional_unmodeled_package_pad_is_structural_only(tmp_path: Path) -> None:
+    package = tmp_path / "deps" / "parts"
+    package.mkdir(parents=True)
+    (package / "module.copper").write_text(
+        'part Module { pin SIGNAL { number = "1"; domains = "digital"; directions = "input"; } '
+        'pin UNMODELED_2 { number = "2"; connection = optional; } }',
+        encoding="utf-8",
+    )
+    (tmp_path / "copper.mod").write_text(
+        "module github.com/test/board\n"
+        "require github.com/vendor/parts v1.0.0\n"
+        "replace github.com/vendor/parts => ./deps\n",
+        encoding="utf-8",
+    )
+    board_path = tmp_path / "board.copper"
+    board_path.write_text(
+        'board Demo { import parts "github.com/vendor/parts/parts"; '
+        'component U1: parts.Module; net SIGNAL { U1.SIGNAL; } }',
+        encoding="utf-8",
+    )
+    board = compile_file(board_path)
+    assert board.library["parts.Module"].pins["UNMODELED_2"].profile is None
+    assert check(board) == []
+
+    board_path.write_text(
+        'board Demo { import parts "github.com/vendor/parts/parts"; '
+        'component U1: parts.Module; net BAD { U1.UNMODELED_2; } }',
+        encoding="utf-8",
+    )
+    assert "UNMODELED_PIN" in {diagnostic.code for diagnostic in check(compile_file(board_path))}
+
+
 def test_manifest_local_replacement_imports_a_part(tmp_path: Path) -> None:
     package = tmp_path / "deps" / "sensors"
     package.mkdir(parents=True)

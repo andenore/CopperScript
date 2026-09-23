@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:21c21460f08a8f0d8eac359980e25c14ea0a7a8be7745f316150093f6296ceb3",
+      "checksum": "sha256:c064b787041a92eb7ea6cad50030aa2aabc675ff6d1220b4d10c1f28b534e95b",
       "files": [
         {
           "path": "copper.mod",
@@ -79,6 +79,11 @@
           "size": 540
         },
         {
+          "path": "footprints/RF_Module.pretty/Quectel_EG800G.kicad_mod",
+          "sha256": "1a45d714a7697d0476566333e1aac52e774c8e151df434075cc86caf30e8fb7e",
+          "size": 12525
+        },
+        {
           "path": "footprints/RF_Module.pretty/u-blox_MAX-M10S.kicad_mod",
           "sha256": "6a87118c12a8b2a09eb5fab7b729489db47b0989d293fc24d129a673854101c5",
           "size": 4453
@@ -110,8 +115,8 @@
         },
         {
           "path": "packages/full_vertical/eg800g_eu.copper",
-          "sha256": "d1cdd80727267c8ad1452978a15b9c120478e406bbd14003ffc78a5a3112bc8a",
-          "size": 2410
+          "sha256": "e4fb4dfdfca1d7d5b397e53485cf4059fe8ae69a22a767ba96abdd9ca3baa6e2",
+          "size": 8851
         },
         {
           "path": "packages/full_vertical/led.copper",

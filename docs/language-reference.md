@@ -80,6 +80,11 @@ Standalone parts declare `domains` and `directions`, with optional
 `passive`; drive modes are `push_pull`, `open_drain`, and `high_impedance`.
 Pins may use `connection = required`, `do_not_connect`, `optional`, or `normal`
 and may declare comma-separated `required_net_traits`.
+As an exception, `optional` or `do_not_connect` pins may omit their electrical
+profile to preserve a known physical pad whose function has not yet been
+verified. An unmodeled optional pin cannot be connected to any net: ERC reports
+`UNMODELED_PIN`. This supports complete footprint-pad coverage without
+asserting invented electrical facts.
 Set `assembled = false` for bare-board targets such as Tag-Connect programming
 pads; the KiCad schematic then excludes them from its BOM while retaining them
 on the board. The selected footprint must separately carry KiCad's

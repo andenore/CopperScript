@@ -1049,7 +1049,11 @@ def _compile_part(
     for pin in pins.values():
         if resolved_device and not pin.bonds and pin.connection_policy is not ConnectionPolicy.DO_NOT_CONNECT:
             _error("CMP079", f"device-backed pin {pin.name!r} must declare bond", document.location)
-        if not resolved_device and pin.profile is None and pin.connection_policy is not ConnectionPolicy.DO_NOT_CONNECT:
+        if (
+            not resolved_device
+            and pin.profile is None
+            and pin.connection_policy not in (ConnectionPolicy.DO_NOT_CONNECT, ConnectionPolicy.OPTIONAL)
+        ):
             _error("CMP080", f"standalone pin {pin.name!r} must declare an electrical profile", document.location)
         if device_definition is not None:
             unknown = sorted({bond.pad for bond in pin.bonds} - set(device_definition.pads))
