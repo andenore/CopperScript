@@ -61,7 +61,7 @@ def _zone_board():
             CopperKeepout(
                 "antenna-clearance",
                 (CopperLayer.FRONT, CopperLayer.BACK),
-                _polygon(8, 4, 12, 8),
+                _polygon(8, 9, 12, 11),
             ),
         ),
     )
@@ -79,6 +79,23 @@ def test_zone_intent_is_typed_validated_and_deterministic() -> None:
     assert "(island_removal_mode 1)" in first
     assert '(name "antenna-clearance")' in first
     assert "(copperpour not_allowed)" in first
+
+
+def test_copper_keepout_blocks_track_and_is_bound_to_drc_signoff() -> None:
+    board = _zone_board()
+    clean = run_physical_drc(board)
+    assert not any(item.code == "DRC-COPPER-KEEPOUT" for item in clean.findings)
+    blocked = replace(
+        board,
+        copper_keepouts=(
+            CopperKeepout("antenna-clearance", (CopperLayer.FRONT,),
+                           _polygon(8, 4, 12, 8)),
+        ),
+    )
+    report = run_physical_drc(blocked)
+    assert any(item.code == "DRC-COPPER-KEEPOUT" for item in report.findings)
+    assert report.token.board_digest != clean.token.board_digest
+    assert next(item for item in report.coverage if item.check == "copper_keepouts").status.value == "executed"
 
 
 def test_zone_references_and_polygon_holes_fail_safely() -> None:

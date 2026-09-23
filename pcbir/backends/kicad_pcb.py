@@ -31,6 +31,7 @@ from ..physical import (
     ZoneConnection,
     ViaKind,
 )
+from ..placement import resolved_copper_keepouts
 from .base import Artifact, ArtifactManifest
 
 
@@ -172,7 +173,7 @@ def _render(board: PhysicalBoard) -> str:
         for layer in sorted(zone.layers, key=lambda item: item.value):
             lines.extend(_zone_lines(board, zone, layer, net_codes))
 
-    for keepout in sorted(board.copper_keepouts, key=lambda item: item.id):
+    for keepout in sorted(resolved_copper_keepouts(board), key=lambda item: item.id):
         for layer in sorted(keepout.layers, key=lambda item: item.value):
             lines.extend(_copper_keepout_lines(board, keepout, layer))
 

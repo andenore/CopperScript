@@ -27,7 +27,11 @@ from .physical import (
     RouteKind,
     nm_from_mm,
 )
-from .placement import transformed_footprint_polygon, transformed_pad_position
+from .placement import (
+    resolved_copper_keepouts,
+    transformed_footprint_polygon,
+    transformed_pad_position,
+)
 
 
 class GlobalRoutingStatus(str, Enum):
@@ -593,14 +597,24 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
         for placement in board.placements
     )
     keepouts = tuple(_bounds(item.outline.vertices) for item in board.keepouts)
+    copper_keepouts = tuple(
+        (item.layers, _bounds(item.outline.outer.vertices))
+        for item in resolved_copper_keepouts(board)
+        if item.block_tracks or item.block_vias
+    )
     legal: set[GridNode] = set()
-    for layer_index, _ in enumerate(board.stackup.copper_layers):
+    for layer_index, layer in enumerate(board.stackup.copper_layers):
         for x_index, x in enumerate(xs):
             for y_index, y in enumerate(ys):
                 point = Point(x, y)
                 if not _point_in_polygon(point, board.outline.vertices):
                     continue
                 if any(_point_in_box(point, box) for box in (*obstacles, *keepouts)):
+                    continue
+                if any(
+                    layer in layers and _point_in_box(point, box)
+                    for layers, box in copper_keepouts
+                ):
                     continue
                 legal.add(GridNode(layer_index, x_index, y_index))
     pitch = board.rules.default_track_width_nm + board.rules.minimum_clearance_nm

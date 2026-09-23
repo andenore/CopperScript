@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Iterator, TypeAlias
 
 from ..physical import (
+    CopperKeepout,
+    CopperLayer,
     FootprintArc,
     FootprintCircle,
     FootprintGraphic,
@@ -29,6 +31,8 @@ from ..physical import (
     PadShape,
     PhysicalFootprint,
     Point,
+    PolygonRing,
+    PolygonWithHoles,
     Size,
     ZoneConnection,
     nm_from_mm,
@@ -124,10 +128,13 @@ def parse_kicad_mod(
     )
     pads: list[FootprintPad] = []
     graphics: list[FootprintGraphic] = []
+    keepouts: list[CopperKeepout] = []
     for child in _lists(root[2:]):
         child_tag = _tag(child)
         if child_tag == "pad":
             pads.append(_parse_pad(child, source))
+        elif child_tag == "zone":
+            keepouts.append(_parse_footprint_keepout(child, source, len(keepouts)))
         elif child_tag in {"fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly"}:
             graphic = _parse_graphic(child, source, warnings)
             if graphic is not None:
@@ -147,7 +154,6 @@ def parse_kicad_mod(
             "thermal_gap",
             "private_layers",
             "net_tie_pad_groups",
-            "zone",
         }:
             raise KiCadModImportError(
                 f"{source}: unsupported fabrication-critical footprint setting "
@@ -194,11 +200,93 @@ def parse_kicad_mod(
         body_size=_bounding_size(pads, graphics),
         source_library_id=name,
         graphics=tuple(graphics),
+        keepouts=tuple(keepouts),
         metadata=metadata,
         courtyard=_courtyard_polygon(graphics),
         clearance_nm=clearance_nm,
     )
     return FootprintImportResult(footprint, tuple(warnings), version)
+
+
+def _parse_footprint_keepout(
+    node: list[SExpr], source: str, index: int
+) -> CopperKeepout:
+    """Import the copper effect of a footprint-local KiCad keepout zone."""
+
+    keepout_node = _required_child(node, "keepout", source, "footprint keepout")
+    layer_node = _first(node, "layer") or _first(node, "layers")
+    if layer_node is None:
+        raise KiCadModImportError(f"{source}: footprint keepout has no layers")
+    raw_layers = tuple(item for item in layer_node[1:] if isinstance(item, str))
+    if not raw_layers or any(item not in {"F.Cu", "F.CrtYd"} for item in raw_layers):
+        raise KiCadModImportError(
+            f"{source}: unsupported footprint keepout layers {raw_layers!r}"
+        )
+    if "F.Cu" not in raw_layers:
+        raise KiCadModImportError(f"{source}: footprint keepout has no copper layer")
+    placement_node = _first(node, "placement")
+    if placement_node is not None:
+        enabled = _first(placement_node, "enabled")
+        if enabled is not None and _required_atom(
+            enabled, 1, source, "placement keepout state"
+        ) != "no":
+            raise KiCadModImportError(
+                f"{source}: active footprint placement keepouts are unsupported"
+            )
+    for tag in ("net", "net_name"):
+        item = _first(node, tag)
+        if item is not None and _required_atom(item, 1, source, tag) not in {"", "0"}:
+            raise KiCadModImportError(
+                f"{source}: connected footprint zones are unsupported"
+            )
+
+    blocked: dict[str, bool] = {}
+    for item in _lists(keepout_node[1:]):
+        tag = _tag(item)
+        if tag not in {"tracks", "vias", "pads", "copperpour", "footprints"}:
+            raise KiCadModImportError(
+                f"{source}: unsupported footprint keepout rule {tag!r}"
+            )
+        value = _required_atom(item, 1, source, f"keepout {tag}")
+        if value not in {"allowed", "not_allowed"}:
+            raise KiCadModImportError(f"{source}: invalid keepout {tag} rule")
+        blocked[tag] = value == "not_allowed"
+    if blocked.get("footprints", False):
+        raise KiCadModImportError(
+            f"{source}: footprint-placement keepout rule is unsupported"
+        )
+    if not {"tracks", "vias", "pads", "copperpour"} <= blocked.keys():
+        raise KiCadModImportError(f"{source}: incomplete footprint keepout rules")
+
+    polygon = _required_child(node, "polygon", source, "keepout polygon")
+    pts = _required_child(polygon, "pts", source, "keepout polygon points")
+    if any(_tag(item) != "xy" for item in _lists(pts[1:])):
+        raise KiCadModImportError(f"{source}: unsupported keepout polygon item")
+    vertices = tuple(_point(item, source) for item in _children(pts, "xy"))
+    try:
+        outline = PolygonWithHoles(PolygonRing(vertices))
+    except ValueError as exc:
+        raise KiCadModImportError(f"{source}: invalid keepout polygon: {exc}") from exc
+    allowed = {
+        "layer", "layers", "uuid", "name", "hatch", "connect_pads",
+        "min_thickness", "keepout", "placement", "fill", "polygon",
+    }
+    for child in _lists(node[1:]):
+        if _tag(child) not in allowed:
+            raise KiCadModImportError(
+                f"{source}: unsupported footprint keepout item {_tag(child)!r}"
+            )
+    name_node = _first(node, "name")
+    name = _atom(name_node, 1) if name_node is not None else None
+    return CopperKeepout(
+        id=f"{name or 'keepout'}-{index}",
+        layers=(CopperLayer.FRONT,),
+        outline=outline,
+        block_tracks=blocked["tracks"],
+        block_vias=blocked["vias"],
+        block_pads=blocked["pads"],
+        block_zones=blocked["copperpour"],
+    )
 
 
 def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
@@ -281,6 +369,14 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
             raise KiCadModImportError(f"{source}: invalid remove_unused_layers value")
         remove_unused_layers = remove_value == "yes"
 
+    thermal_angle = _first(node, "thermal_bridge_angle")
+    if thermal_angle is not None and _required_atom(
+        thermal_angle, 1, source, "pad thermal angle"
+    ) != "45":
+        raise KiCadModImportError(
+            f"{source}: pad {number!r} uses unsupported non-default thermal bridge angle"
+        )
+
     allowed_children = {
         "at",
         "size",
@@ -294,6 +390,7 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
         "property",
         "zone_connect",
         "remove_unused_layers",
+        "thermal_bridge_angle",
     }
     for child in _lists(node[4:]):
         if _tag(child) not in allowed_children:

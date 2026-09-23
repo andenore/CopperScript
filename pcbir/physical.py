@@ -552,6 +552,8 @@ class PhysicalFootprint:
     body_size: Size
     source_library_id: str | None = None
     graphics: tuple[FootprintGraphic, ...] = ()
+    # Footprint-local copper keepouts move and mirror with each placement.
+    keepouts: tuple[CopperKeepout, ...] = ()
     metadata: Mapping[str, str] = field(default_factory=dict)
     courtyard: tuple[Point, ...] = ()
     height_nm: Nanometres | None = None
@@ -560,6 +562,7 @@ class PhysicalFootprint:
     def __post_init__(self) -> None:
         object.__setattr__(self, "pads", tuple(self.pads))
         object.__setattr__(self, "graphics", tuple(self.graphics))
+        object.__setattr__(self, "keepouts", tuple(self.keepouts))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
         object.__setattr__(self, "courtyard", tuple(self.courtyard))
         if not self.name:
@@ -570,6 +573,8 @@ class PhysicalFootprint:
             raise ValueError("footprint height must be positive")
         if self.clearance_nm is not None and self.clearance_nm < 0:
             raise ValueError("footprint clearance cannot be negative")
+        if len({item.id for item in self.keepouts}) != len(self.keepouts):
+            raise ValueError("footprint keepout ids must be unique")
 
 
 @dataclass(frozen=True, slots=True)

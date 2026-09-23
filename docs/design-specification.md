@@ -570,7 +570,13 @@ executing code or requiring KiCad. It supports ordinary SMD and through-hole
 pads, circular and slotted drills, pad rotations, mask and paste layer presence,
 paste-only apertures, per-pad zone/heatsink/layer-removal properties,
 footprint-local clearance, round-rectangle ratios, and common footprint drawing
-primitives including mask and paste artwork. Ignored
+primitives including mask and paste artwork. Simple footprint-local copper
+keepouts are typed, transformed with each placement (including back-side
+mirroring), conservatively excluded from routing grids, checked against exact
+copper geometry in DRC, signed with the geometry, and emitted
+as deterministic KiCad board zones. Active footprint-placement keepouts,
+connected footprint zones, and polygon holes remain unsupported and fail
+closed. Ignored
 presentation-only constructs produce warnings, and strict mode promotes all
 warnings to errors. Custom pads, copper graphics, drill offsets, and
 unsupported fabrication modifiers are errors until the physical IR can retain
@@ -731,6 +737,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-069 | Accepted | KiCad fabrication-only pad apertures are distinct from electrical copper pads. The physical IR retains paste/mask apertures, footprint clearance, heatsink/zone behavior, and unused-layer removal; export, process DRC, geometry fingerprints, and audit preserve those distinctions. |
 | CS-070 | Accepted | A CAM-required manufacturing release must freshly qualify its exact tool tuple against a hashed positive/negative corpus before inspecting staged production artwork. The manifest records corpus hashes; a missing tool, missing corpus, unsafe file, parser disagreement, or failed case cannot be published as a qualified release. |
 | CS-071 | Accepted | CAM-required release reconciles metric Excellon hits and IPC-D-356 pad/via records against the signed physical IR before publication. KiCad drill and IPC-D-356 coordinates are Cartesian-up relative to PCB/IR Y-down; unknown drill commands and missing, extra, moved, or remapped contacts fail closed. |
+| CS-072 | Accepted | Footprint-local copper keepouts are first-class physical IR. They move and mirror with placements and participate in routing, DRC, KiCad export, and geometry-bound signoff; unsupported embedded zones fail closed. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

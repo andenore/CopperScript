@@ -26,7 +26,11 @@ from .physical import (
     nm_from_mm,
     select_via_technology,
 )
-from .placement import transformed_footprint_polygon, transformed_pad_position
+from .placement import (
+    resolved_copper_keepouts,
+    transformed_footprint_polygon,
+    transformed_pad_position,
+)
 from .routing import GlobalNetRoute, GlobalRoutingResult
 
 
@@ -552,14 +556,24 @@ def _build_grid(board: PhysicalBoard, options: DetailedRouterOptions) -> _Grid:
         for placement in board.placements
     )
     keepouts = tuple(_bounds(item.outline.vertices) for item in board.keepouts)
+    copper_keepouts = tuple(
+        (item.layers, _bounds(item.outline.outer.vertices))
+        for item in resolved_copper_keepouts(board)
+        if item.block_tracks or item.block_vias
+    )
     blocked: set[DetailedNode] = set()
-    for layer_index, _ in enumerate(board.stackup.copper_layers):
+    for layer_index, layer in enumerate(board.stackup.copper_layers):
         for x_index, x in enumerate(xs):
             for y_index, y in enumerate(ys):
                 point = Point(x, y)
                 if not _point_in_polygon(point, board.outline.vertices):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
                 elif any(_in_box(point, item) for item in (*obstacles, *keepouts)):
+                    blocked.add(DetailedNode(layer_index, x_index, y_index))
+                elif any(
+                    layer in layers and _in_box(point, box)
+                    for layers, box in copper_keepouts
+                ):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
     return _Grid(tuple(board.stackup.copper_layers), xs, ys, board, frozenset(blocked))
 

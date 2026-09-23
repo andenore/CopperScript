@@ -17,12 +17,16 @@ from .physical import (
     BoardOutline,
     BoardSide,
     ComponentPlacementRule,
+    CopperKeepout,
+    CopperLayer,
     Nanometres,
     PhysicalBoard,
     Placement,
     PlacementGroup,
     PlacementTarget,
     Point,
+    PolygonRing,
+    PolygonWithHoles,
     RelativePlacementKind,
     nm_from_mm,
 )
@@ -252,6 +256,44 @@ def transformed_local_point(placement: Placement, point: Point) -> Point:
         placement.position.x_nm + offset.x_nm,
         placement.position.y_nm + offset.y_nm,
     )
+
+
+def resolved_copper_keepouts(board: PhysicalBoard) -> tuple[CopperKeepout, ...]:
+    """Return board keepouts plus footprint-local keepouts at placed locations."""
+
+    result = list(board.copper_keepouts)
+    for placement in sorted(board.placements, key=lambda item: item.reference):
+        footprint = board.footprints[placement.footprint]
+        for local in footprint.keepouts:
+            layers = tuple(
+                CopperLayer.BACK if placement.side is BoardSide.BACK and layer is CopperLayer.FRONT
+                else CopperLayer.FRONT if placement.side is BoardSide.BACK and layer is CopperLayer.BACK
+                else layer
+                for layer in local.layers
+            )
+            outer = PolygonRing(tuple(
+                transformed_local_point(placement, point)
+                for point in local.outline.outer.vertices
+            ))
+            holes = tuple(
+                PolygonRing(tuple(
+                    transformed_local_point(placement, point)
+                    for point in hole.vertices
+                ))
+                for hole in local.outline.holes
+            )
+            result.append(
+                CopperKeepout(
+                    id=f"{placement.reference}/{local.id}",
+                    layers=layers,
+                    outline=PolygonWithHoles(outer, holes),
+                    block_tracks=local.block_tracks,
+                    block_vias=local.block_vias,
+                    block_pads=local.block_pads,
+                    block_zones=local.block_zones,
+                )
+            )
+    return tuple(result)
 
 
 def transformed_footprint_polygon(

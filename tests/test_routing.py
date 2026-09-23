@@ -7,6 +7,7 @@ import pytest
 
 from pcbir import (
     BoardOutline,
+    CopperKeepout,
     CopperLayer,
     FootprintPad,
     FeedbackStatus,
@@ -22,6 +23,8 @@ from pcbir import (
     PlacementPlannerOptions,
     PlacementRoutingFeedbackOptions,
     Point,
+    PolygonRing,
+    PolygonWithHoles,
     RouteKind,
     Size,
     nm_from_mm,
@@ -84,6 +87,29 @@ def test_global_router_reports_an_impossible_keepout_cut() -> None:
     assert result.status is GlobalRoutingStatus.UNREACHABLE
     assert result.metrics.unrouted_net_count == 1
     assert "no capacity-graph path" in result.routes[0].diagnostics[0]
+
+
+def test_global_router_obeys_layer_specific_copper_keepout() -> None:
+    wall = PolygonWithHoles(PolygonRing((
+        Point.mm(15, 0), Point.mm(25, 0),
+        Point.mm(25, 30), Point.mm(15, 30),
+    )))
+    board = replace(
+        _two_terminal_board(),
+        copper_keepouts=(CopperKeepout("front-wall", (CopperLayer.FRONT,), wall),),
+        net_routing_rules=(NetRoutingRule(
+            "SIGNAL", RouteKind.GENERAL, allowed_layers=(CopperLayer.FRONT,),
+        ),),
+    )
+    blocked = route_global(
+        board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5"), maximum_iterations=2)
+    )
+    assert blocked.status is GlobalRoutingStatus.UNREACHABLE
+
+    back_allowed = replace(board, net_routing_rules=())
+    assert route_global(back_allowed, GlobalRouterOptions(
+        tile_size_nm=nm_from_mm("2.5"), maximum_iterations=2
+    )).status is GlobalRoutingStatus.SUCCESS
 
 
 def test_global_router_reports_physical_capacity_overflow() -> None:

@@ -22,7 +22,7 @@ from .physical import (
     TrackSegment,
     Via,
 )
-from .placement import transformed_pad_position
+from .placement import resolved_copper_keepouts, transformed_local_point, transformed_pad_position
 from .geometry import (
     RoundedConvexShape,
     SpatialIndex,
@@ -203,6 +203,13 @@ def run_physical_drc(
     coverage.append(DrcCoverage("copper_to_board_edge", DrcCoverageStatus.EXECUTED, True))
     _check_copper_spacing(board, findings)
     coverage.append(DrcCoverage("shorts_and_clearance", DrcCoverageStatus.EXECUTED, True))
+    keepout_covered = _check_copper_keepouts(board, findings)
+    coverage.append(DrcCoverage(
+        "copper_keepouts",
+        DrcCoverageStatus.EXECUTED if keepout_covered else DrcCoverageStatus.FAILED,
+        True,
+        "polygonal keepout checks for tracks, vias, and component pads",
+    ))
 
     if board.zone_fills:
         _check_zone_fill_spacing(board, findings)
@@ -585,6 +592,68 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
                 findings.append(_finding(code, DrcSeverity.ERROR, f"{left.identity} and {right.identity} violate copper spacing", objects=(left.identity, right.identity), nets=tuple(sorted((left.net, right.net))), layers=tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
 
 
+def _check_copper_keepouts(
+    board: PhysicalBoard, findings: list[DrcFinding]
+) -> bool:
+    """Check all placed and board-level copper keepouts against actual copper."""
+
+    covered = True
+    for keepout in sorted(resolved_copper_keepouts(board), key=lambda item: item.id):
+        if keepout.outline.holes:
+            covered = False
+            findings.append(_finding(
+                "DRC-KEEPOUT-UNSUPPORTED", DrcSeverity.ERROR,
+                f"keepout {keepout.id} has polygon holes that native DRC cannot validate",
+                objects=(keepout.id,),
+            ))
+            continue
+        region = RoundedConvexShape(keepout.outline.outer.vertices)
+        for index, track in enumerate(board.tracks):
+            if not keepout.block_tracks or track.layer not in keepout.layers:
+                continue
+            copper = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
+            if not shapes_clear(region, copper):
+                findings.append(_finding(
+                    "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
+                    f"track {index} enters copper keepout {keepout.id}",
+                    objects=(keepout.id, f"track:{index}"),
+                    nets=(track.net,), layers=(track.layer.value,),
+                ))
+        for index, via in enumerate(board.vias):
+            if not keepout.block_vias or not any(
+                _via_covers_layer(board, via, layer) for layer in keepout.layers
+            ):
+                continue
+            copper = RoundedConvexShape((via.position,), via.size_nm // 2)
+            if not shapes_clear(region, copper):
+                findings.append(_finding(
+                    "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
+                    f"via {index} enters copper keepout {keepout.id}",
+                    objects=(keepout.id, f"via:{index}"), nets=(via.net,),
+                ))
+        if keepout.block_pads:
+            for placement in board.placements:
+                footprint = board.footprints[placement.footprint]
+                for pad_index, pad in enumerate(footprint.pads):
+                    if pad.kind in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}:
+                        continue
+                    pad_layers = (
+                        (CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK,)
+                        if pad.kind is PadKind.SMD else tuple(board.stackup.copper_layers)
+                    )
+                    if not set(pad_layers).intersection(keepout.layers):
+                        continue
+                    point = transformed_local_point(placement, pad.position)
+                    copper = placed_pad_shape(point, pad, placement)
+                    if not shapes_clear(region, copper):
+                        findings.append(_finding(
+                            "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
+                            f"pad {placement.reference}.{pad.number} enters copper keepout {keepout.id}",
+                            objects=(keepout.id, f"pad:{placement.reference}.{pad.number}:{pad_index}"),
+                        ))
+    return covered
+
+
 def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
     pad_nets = {pad: net.name for net in board.nets for pad in net.pads}
     result: list[_PadCopper] = []
@@ -830,6 +899,7 @@ def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:
             for pad in pads
         ),
         tuple(repr(item) for item in getattr(footprint, "graphics")),
+        tuple(repr(item) for item in getattr(footprint, "keepouts")),
         tuple((point.x_nm, point.y_nm) for point in getattr(footprint, "courtyard")),
         tuple(sorted(getattr(footprint, "metadata").items())),
         getattr(footprint, "height_nm"),

@@ -50,7 +50,9 @@ source metadata a requirement of the language.
 
 ## Power and RF intent
 
-The board accepts 5 V. `FullVerticalPowerTree` creates a 3.3 V logic rail and
+The finished board will accept 5 V through USB-C. The current source still
+models that rail virtually; the receptacle, CC resistors, and input protection
+are the next electrical integration step. `FullVerticalPowerTree` creates a 3.3 V logic rail and
 a 3.8 V modem rail. The modem rail is modelled as a 2 A-class source and has a
 local 100 uF bulk capacitor. The EG800G's 1.8 V `VDD_EXT` output powers the
 low-voltage side of a fixed-direction UART translator. Its control input uses
@@ -94,16 +96,14 @@ physical design.
   pad coverage. The nRF52832-QFAA and STM32G0C1RET6 package maps are complete
   from the Nordic Product Specification v1.9, Table 1 and ST DS13564 Rev 5,
   Table 12 respectively; their support circuits remain incomplete.
-- The installed KiCad 10 footprint audit currently resolves 17 of 23 selected
-  assets. The remaining failures are the SWD header, SIM socket, RF connector,
-  3.8 V regulator, EG800G, and MAX-M10S footprints. The USB choke is now an
-  orderable Coilcraft 0603USB-601MLC with an imported KiCad land pattern.
-- The SIM socket now identifies an exact GCT part and matching KiCad footprint.
-  Its footprint and the U.FL RF connector footprint contain embedded copper
-  keepouts not yet represented in physical IR; the importer rejects them rather
-  than dropping the routing restrictions. The other unresolved assets are not
-  safe to replace with generic land patterns without an exact orderable part
-  or vendor mechanical drawing.
+- The installed KiCad 10 footprint audit currently resolves 19 of 23 selected
+  assets. The remaining failures are the SWD header, 3.8 V regulator, EG800G,
+  and MAX-M10S footprints. These are not safe to replace with generic land
+  patterns without an exact orderable part or vendor mechanical drawing.
+- The orderable GCT SIM socket, Coilcraft USB choke, and U.FL RF connector now
+  resolve to installed KiCad footprints. CopperScript imports the embedded
+  copper keepouts in the SIM and U.FL footprints and carries them through
+  placement, routing, DRC, geometry-bound signoff, and KiCad export.
 - Regulator and level-shifter entries express architectural requirements but
   need concrete orderable manufacturer part numbers and validated support
   components.

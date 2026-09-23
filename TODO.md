@@ -150,13 +150,16 @@ where relevant. It does not imply third-party certification.
   - [x] Complete the nRF52832-QFAA QFN48 bond map from the official Nordic
         pin table.
   - [x] Complete STM32G0C1RET6 LQFP64-GP bonds from ST DS13564 Table 12 and
-        connect VBAT/VREF+; installed KiCad audit now resolves 17/23 assets.
+        connect VBAT/VREF+.
   - [x] Correct the nano-SIM C7 I/O mapping and select an exact GCT connector;
         fail closed on unsupported embedded footprint keepouts.
   - [x] Replace the placeholder USB choke with orderable Coilcraft
         0603USB-601MLC and its verified pin-compatible KiCad land pattern.
-  - [ ] Preserve embedded footprint keepouts through import, physical IR,
-        placement/routing checks, KiCad export, and signoff.
+  - [x] Preserve simple embedded footprint copper keepouts through import,
+        physical IR, placement/routing checks, KiCad export, and signoff;
+        installed KiCad audit now resolves 19/23 assets.
+  - [ ] Replace virtual 5 V source with a real USB-C input, CC resistors, and
+        input protection suitable for the selected fabrication profile.
   - [ ] Resolve the reported real CopperLib/KiCad footprint gaps and complete
         acceptance-board placement, routing, DRC, manufacturing, and CAM closure.
 

@@ -1,10 +1,14 @@
 from decimal import Decimal
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
 from pcbir import (
     BoardOutline,
+    BoardSide,
+    CopperLayer,
     FootprintArc,
     FootprintCircle,
     FootprintLayer,
@@ -21,7 +25,9 @@ from pcbir import (
     Point,
     load_kicad_mod,
     parse_kicad_mod,
+    run_physical_drc,
 )
+from pcbir.placement import resolved_copper_keepouts
 
 
 ROOT = Path(__file__).parents[1]
@@ -186,18 +192,105 @@ def test_rejects_unsupported_custom_pad_instead_of_losing_geometry() -> None:
         parse_kicad_mod(source)
 
 
-def test_rejects_embedded_keepout_zone_instead_of_losing_routing_rules() -> None:
+def test_preserves_embedded_keepout_zone() -> None:
     source = """(footprint "Socket"
       (version 20260206)
       (layer "F.Cu")
       (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask"))
-      (zone (layers "F.Cu")
-        (keepout (tracks not_allowed) (vias not_allowed))
+      (zone (layers "F.Cu" "F.CrtYd")
+        (keepout (tracks not_allowed) (vias not_allowed)
+          (pads not_allowed) (copperpour not_allowed) (footprints allowed))
         (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1)))))
     """
 
-    with pytest.raises(KiCadModImportError, match="footprint setting 'zone'"):
+    footprint = parse_kicad_mod(source).footprint
+    assert len(footprint.keepouts) == 1
+    keepout = footprint.keepouts[0]
+    assert keepout.block_tracks and keepout.block_vias
+    assert keepout.block_pads and keepout.block_zones
+    assert keepout.outline.outer.vertices == (
+        Point.mm(0, 0), Point.mm(1, 0), Point.mm(1, 1)
+    )
+
+
+def test_rejects_unrepresented_footprint_placement_keepout() -> None:
+    source = """(footprint "Socket" (layer "F.Cu")
+      (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask"))
+      (zone (layer "F.Cu")
+        (keepout (tracks not_allowed) (vias not_allowed)
+          (pads not_allowed) (copperpour not_allowed) (footprints not_allowed))
+        (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1)))))
+    """
+    with pytest.raises(KiCadModImportError, match="footprint-placement keepout"):
         parse_kicad_mod(source)
+
+
+def test_footprint_keepout_moves_with_front_and_back_placements() -> None:
+    source = """(footprint "Socket" (layer "F.Cu")
+      (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask"))
+      (zone (layer "F.Cu")
+        (keepout (tracks not_allowed) (vias not_allowed)
+          (pads not_allowed) (copperpour not_allowed) (footprints allowed))
+        (polygon (pts (xy 1 0) (xy 2 0) (xy 2 1) (xy 1 1)))))
+    """
+    footprint = parse_kicad_mod(source).footprint
+    board = PhysicalBoard(
+        name="SocketKeepouts",
+        outline=BoardOutline.rectangle(30, 20),
+        footprints={footprint.name: footprint},
+        placements=(
+            Placement("J1", footprint.name, Point.mm(10, 5)),
+            Placement("J2", footprint.name, Point.mm(20, 5), side=BoardSide.BACK),
+        ),
+        nets=(),
+    )
+
+    keepouts = resolved_copper_keepouts(board)
+    assert keepouts[0].layers == (CopperLayer.FRONT,)
+    assert keepouts[0].outline.outer.vertices[0] == Point.mm(11, 5)
+    assert keepouts[1].layers == (CopperLayer.BACK,)
+    assert keepouts[1].outline.outer.vertices[0] == Point.mm(19, 5)
+    pcb = KiCadPcbBackend().generate(board).artifacts[0].content
+    assert '(name "J1/keepout-0")' in pcb
+    assert '(name "J2/keepout-0")' in pcb
+    assert '(layer "B.Cu")' in pcb
+
+
+def test_installed_kicad_accepts_imported_sim_and_rf_keepouts(tmp_path: Path) -> None:
+    footprint_root = Path("C:/Program Files/KiCad/10.0/share/kicad/footprints")
+    cli = shutil.which("kicad-cli") or "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
+    if not footprint_root.is_dir() or not Path(cli).is_file():
+        pytest.skip("KiCad 10 is not installed")
+    sim = load_kicad_mod(
+        footprint_root / "Connector_Card.pretty" / "nanoSIM_GCT_SIM8060-6-0-14-00.kicad_mod"
+    ).footprint
+    rf = load_kicad_mod(
+        footprint_root / "Connector_Coaxial.pretty" / "U.FL_Hirose_U.FL-R-SMT-1_Vertical.kicad_mod"
+    ).footprint
+    board = PhysicalBoard(
+        name="ImportedKeepouts",
+        outline=BoardOutline.rectangle(50, 30),
+        footprints={sim.name: sim, rf.name: rf},
+        placements=(
+            Placement("J_SIM", sim.name, Point.mm(15, 15)),
+            Placement("J_RF", rf.name, Point.mm(35, 15)),
+        ),
+        nets=(),
+    )
+    assert not any(
+        item.code == "DRC-COPPER-KEEPOUT"
+        for item in run_physical_drc(board).findings
+    )
+    pcb = tmp_path / "ImportedKeepouts.kicad_pcb"
+    pcb.write_text(KiCadPcbBackend().generate(board).artifacts[0].content, encoding="utf-8")
+    result = subprocess.run(
+        [cli, "pcb", "export", "svg", "--mode-multi", "--layers", "F.Cu", "--output", str(tmp_path), str(pcb)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_strict_mode_promotes_loss_warning_to_error() -> None:
