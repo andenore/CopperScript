@@ -52,7 +52,7 @@ and component-placement keepouts are preserved by the physical pipeline.
 | CAN | FDCAN1 | PC5 TX, PC4 RX |
 | EG800G USB | USB FS | PA12 DP, PA11 DM, through a common-mode choke |
 | User inputs/outputs | GPIO | PC13 button, PC6/PC7 LEDs |
-| Monitoring/control | GPIO | PC0 modem PWRKEY, PC1 modem STATUS, PC2 accelerometer INT, PC3 GNSS TIMEPULSE |
+| Monitoring/control | GPIO | PC0 modem PWRKEY, PC1 modem STATUS, PC2 accelerometer INT, PC3 GNSS TIMEPULSE, PC8/PC9 USB-C current class, PC10 modem-buck enable |
 | Debug | SWD | PA13 SWDIO, PA14 SWCLK, NRST |
 
 ## Power and RF intent
@@ -65,30 +65,45 @@ alone uses 8.44 W / 1.69 A from a nominal 5 V source, leaving only 1.56 W /
 0.31 A for the logic rail, USB_VBUS, protection losses, and margin. At 85%
 efficiency it uses 8.94 W / 1.79 A. Input-voltage drop reduces the available
 power further. These efficiencies are budgeting assumptions, not qualified
-measurements or guarantees from a selected regulator. A measured worst-case
-load budget and a switching modem regulator are prerequisites for accepting
-the 2 A input limit; the current regulator placeholder cannot establish it.
+measurements or guarantees from the selected regulator. The modem rail now
+uses a TPS62130ARGTR 3 A synchronous buck with a Coilcraft XAL4020-222MEC
+2.2 uH inductor. Its 750 kOhm / 200 kOhm feedback divider targets 3.8 V from
+TI's 0.8 V reference. A measured worst-case load budget, including regulator
+efficiency and USB input losses, remains necessary before accepting the 2 A
+input limit. The user's previously successful TLV76701DRV-family design is a
+useful prototype reference, but TI rates that LDO for 1 A, so it cannot be
+used here as evidence of a 2 A modem-supply capability.
 
 USB Type-C current advertisement has default, 1.5 A, and 3 A classes, not a
-native 2 A class. A source rated exactly 5 V/2 A therefore needs a suitable
-USB-PD contract before the modem load is enabled; alternatively the board can
-draw no more than 2 A from a source advertising the 3 A Type-C class. The
-choice is pending. STM32G0C1 includes UCPD hardware, but the board does not
-yet connect its CC pins or implement negotiation and power gating.
+native 2 A class. This board is a **sink**: it does not advertise 3 A itself.
+It requires a source advertising the 3 A Type-C class before it enables the
+modem, while its planned input draw remains capped at 2 A. The TUSB320LAI
+handles the sink CC pull-downs and reports the source class on open-drain
+OUT1/OUT2. Its GPIO-mode code is OUT1=low and OUT2=low for an attached
+3 A source; unattached, default-current, and 1.5 A codes must all keep the
+modem disabled. PC8/PC9 read these signals via 10 kOhm pull-ups to 3.3 V;
+PC10 drives MODEM_EN, with a 100 kOhm hardware pull-down so the buck remains
+off through reset. Firmware must implement the class check, deassert MODEM_EN
+on detach or current-class downgrade, and enforce the 2 A input budget.
+There is not yet firmware or a hardware-only current limiter, so this policy
+is an integration requirement, not a validated protection mechanism.
 
-Separate 5.1 kOhm pull-downs on CC1 and CC2 establish sink attachment. The
-receptacle is rated for 3 A collectively across its VBUS contacts, but the
-board does not yet measure the source's advertised current or protect against
-overvoltage/inrush. It must not assume that every USB-C supply can deliver the
-modem's peak load. `FullVerticalPowerTree` creates a 3.3 V logic rail and
-a 3.8 V modem rail. The modem rail is modelled as a 2 A-class source and has a
-local 100 uF bulk capacitor. The EG800G's 1.8 V `VDD_EXT` output powers the
+The GCT receptacle is rated for 3 A collectively across its VBUS contacts.
+There are **no separate 5.1 kOhm CC resistors**, because the TUSB320LAI has
+dead-battery sink pull-downs. VBUS_DET is fed through 900 kOhm per TI's
+datasheet. The board still needs input overvoltage/inrush protection. It must
+not assume that every USB-C supply can deliver the modem's peak load.
+`FullVerticalPowerTree` creates a 3.3 V logic rail and a switched 3.8 V modem
+rail, with 22 uF local buck output capacitance and a separate 100 uF modem
+bulk capacitor. The EG800G's 1.8 V `VDD_EXT` output powers the
 low-voltage side of a fixed-direction UART translator. Its control input uses
 an open-drain driver rather than exposing a 1.8 V modem pin directly to 3.3 V.
 
 Power-source and device references: [USB Type-C Specification R2.0 §2.3.4](https://www.usb.org/sites/default/files/USB%20Type-C%20Spec%20R2.0%20-%20August%202019.pdf),
 [Quectel EG800G QuecOpen Reference Design V1.1, VBAT design](https://developer.quectel.com/wp-content/uploads/2025/01/Quectel_EG800G_Series_QuecOpen_Reference_Design_V1.1.pdf), and
-[ST STM32G0 USB-C/UCPD overview](https://www.st.com/content/st_com/en/ecosystems/stm32-usb-c.html).
+[TI TUSB320LAI datasheet](https://www.ti.com/lit/ds/symlink/tusb320lai.pdf),
+[TI TPS62130A datasheet](https://www.ti.com/lit/ds/symlink/tps62130.pdf), and
+[TI TLV767 datasheet](https://www.ti.com/lit/ds/symlink/tlv767.pdf).
 
 The RF paths are represented electrically so they cannot disappear during
 backend work:
@@ -132,9 +147,11 @@ physical design.
   remain production blockers. The nRF52832-QFAA and STM32G0C1RET6 package maps are complete
   from the Nordic Product Specification v1.9, Table 1 and ST DS13564 Rev 5,
   Table 12 respectively; their support circuits remain incomplete.
-- The installed KiCad 10 plus CopperLib footprint audit currently resolves 23
-  of 24 selected assets. The remaining failure is the 3.8 V regulator, which
-  still needs an exact orderable part and validated support circuit.
+- The installed KiCad 10 plus CopperLib footprint audit resolves all 27
+  selected footprint types, including the TPS62130A buck and its inductor.
+  This is package/pad-number coverage, not a board-level electrical or
+  assembly qualification. In particular, capacitor dielectric, voltage rating,
+  effective capacitance at DC bias, and individual MPNs need review.
 - The orderable GCT SIM socket, Coilcraft USB choke, and U.FL RF connector now
   resolve to installed KiCad footprints. CopperScript imports the embedded
   copper keepouts in the SIM and U.FL footprints and carries them through
@@ -142,17 +159,30 @@ physical design.
 - The MAX-M10S footprint is generated in CopperLib from u-blox's published
   18-land geometry and separate T-shaped stencil recommendation. The latter
   assumes the manual's 150-um stencil; fabricator review remains necessary.
-- The 5 V USB-C entry still needs source-current policy, input protection,
-  power budgeting, and a qualified implementation of both regulator rails.
-- Regulator and level-shifter entries express architectural requirements but
-  need concrete orderable manufacturer part numbers and validated support
-  components.
+- The 5 V USB-C entry has a 3 A source-class detection path and default-off
+  modem enable, but firmware, input overvoltage/inrush/current protection,
+  input power budgeting, and a load-transient/thermal qualification remain.
+  The EG800G `USB_VBUS` connection while VBAT is off also needs a back-power
+  review against Quectel's reference design.
+- The 3.3 V logic regulator and UART level-shifter still need concrete
+  orderable manufacturer selections and validated support components. The
+  TPS62130A circuit needs measured 5 V-to-3.8 V efficiency, 2 A modem burst
+  response, stability with all bulk capacitance, and RF-noise qualification.
 - USB VBUS switching/current limiting, USB ESD, CAN protection, SIM ESD, input
   protection, programming-header conventions, crystals and complete vendor
   decoupling/reference circuits must be finalized.
-- `plan-layout` creates a legal, routability-estimated placement candidate, but
-  it still produces an unrouted inspection draft. It must not produce
-  fabrication outputs without routing and manufacturing validation stages.
+- With all real footprints, `plan-layout` currently finds no placement that
+  satisfies every represented distance constraint, even with eight search
+  candidates. One inspected candidate left C_MCU 27.4 mm from U_MCU.VDD,
+  C_CC 8.8 mm from U_CC.VDD, and C_MODEM_AVIN 4.2 mm from U_MODEM.AVIN against
+  3 mm limits. This is a planner/constraint feasibility problem to diagnose,
+  not a reason to relax decoupling intent. The backend must not emit
+  fabrication outputs without a legal placement, routing, and validation.
+- KiCad 10 parses the exported inspection schematic but reports 136 ERC
+  violations on it. Many are caused by the current flattened automatic
+  drawing; they are not implied to be 136 distinct board wiring defects.
+  The schematic backend needs a separate review and clean KiCad ERC before
+  that export can be used for signoff.
 
 ## Running the example
 
@@ -165,6 +195,7 @@ python -m copperscript plan-layout examples/full_vertical_board.copper --allow-p
 python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --json
 ```
 
-The last command emits a deterministic JSON gap list (`passed`, `resolved`,
-`total`, and per-footprint errors) for the separate CopperLib generation
-workflow. It returns a nonzero status while any footprint remains unresolved.
+The last command emits a deterministic JSON coverage list (`passed`,
+`resolved`, `total`, and per-footprint errors) for the separate CopperLib
+generation workflow. All 27 selected footprint types currently resolve with
+KiCad 10 and the sibling CopperLib checkout; a new mismatch makes it fail.

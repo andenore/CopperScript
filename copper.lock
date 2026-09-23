@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:c064b787041a92eb7ea6cad50030aa2aabc675ff6d1220b4d10c1f28b534e95b",
+      "checksum": "sha256:a6da767a3970ad1656349413e8720fc8ba4768c9777516f72b16da74cc03b707",
       "files": [
         {
           "path": "copper.mod",
@@ -150,13 +150,8 @@
         },
         {
           "path": "packages/full_vertical/power_tree.copper",
-          "sha256": "9536edb19e9b84140ed7b1cb1a32a49740caeb89154258a52fc0a31f52126937",
-          "size": 1311
-        },
-        {
-          "path": "packages/full_vertical/regulator_3v8.copper",
-          "sha256": "09102af2962468d42b5062ebdb3ded294d02c81c408024bef995d6aa9b6ad4c1",
-          "size": 567
+          "sha256": "c53651d43fae40985a683ba71a8d9712727b21b53b65c23ae36676d681ba4e4b",
+          "size": 2785
         },
         {
           "path": "packages/full_vertical/rf_antenna.copper",
@@ -194,6 +189,16 @@
           "size": 1174
         },
         {
+          "path": "packages/full_vertical/tps62130a.copper",
+          "sha256": "8b418fbb5bdb77d0bba933ede7699734c06c1594d7b2c15f66c2e85327f233e4",
+          "size": 2012
+        },
+        {
+          "path": "packages/full_vertical/tusb320lai.copper",
+          "sha256": "23e2de03e0184ec1e254492371093357e3bdeece8f8935fa2da7484a43af9f46",
+          "size": 1807
+        },
+        {
           "path": "packages/full_vertical/uart_level_shifter.copper",
           "sha256": "1b618e6e5d46b2cf531a8f0eff9c2cfc54287ad0710429956d03e86bda878705",
           "size": 1035
@@ -207,6 +212,11 @@
           "path": "packages/full_vertical/usb_common_mode_choke.copper",
           "sha256": "16233d06579c7028dc3686c31925691f8f76d2ac6f753c45f319aeaa5bd50ac5",
           "size": 836
+        },
+        {
+          "path": "packages/full_vertical/xal4020_222mec.copper",
+          "sha256": "004d96510d7d3f362a7fd625799e59b73810b48e5ae235f21c406f6bad44005c",
+          "size": 627
         },
         {
           "path": "reports/compatibility.json",

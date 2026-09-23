@@ -98,7 +98,7 @@ def test_usb_choke_uses_coilcraft_winding_pairs_and_land_pattern() -> None:
     } == {"DP_IN": "1", "DM_IN": "2", "DM_OUT": "3", "DP_OUT": "4"}
 
 
-def test_usb_c_power_entry_has_separate_cc_pull_downs_and_both_vbus_contacts() -> None:
+def test_usb_c_power_entry_detects_3a_source_and_defaults_modem_off() -> None:
     board = compile_file(EXAMPLE)
     part = board.library["vertical.GCT_USB4135_GF_A"]
     assert part.footprints == (
@@ -112,8 +112,54 @@ def test_usb_c_power_entry_has_separate_cc_pull_downs_and_both_vbus_contacts() -
         net.name: {(endpoint.component, endpoint.pin) for endpoint in net.endpoints}
         for net in board.nets
     }
+    flat_nets = {
+        net.name: {(endpoint.component, endpoint.pin) for endpoint in net.endpoints}
+        for net in elaborate(board).nets
+    }
+    cc = board.library["vertical.TUSB320LAI"]
+    assert cc.footprints == ("Package_DFN_QFN:Texas_X2QFN-12_1.6x1.6mm_P0.4mm",)
+    assert {pin.number for pin in cc.pins.values()} == {str(number) for number in range(1, 13)}
+    assert cc.pins["ADDR"].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
     assert {("J_POWER", "VBUS_A"), ("J_POWER", "VBUS_B")} <= nets["V5"]
-    assert nets["USB_C_CC1"] == {("J_POWER", "CC1"), ("R_CC1", "1")}
-    assert nets["USB_C_CC2"] == {("J_POWER", "CC2"), ("R_CC2", "1")}
-    assert {("R_CC1", "2"), ("R_CC2", "2")} <= nets["GND"]
+    assert nets["USB_C_CC1"] == {("J_POWER", "CC1"), ("U_CC", "CC1")}
+    assert nets["USB_C_CC2"] == {("J_POWER", "CC2"), ("U_CC", "CC2")}
+    assert {("U_CC", "PORT"), ("U_CC", "EN_N")} <= nets["GND"]
+    assert {("U_CC", "VDD"), ("R_CC_OUT1", "1"), ("R_CC_OUT2", "1")} <= nets["V3V3"]
+    assert nets["USB_C_CURRENT_1"] == {
+        ("U_CC", "OUT1"), ("R_CC_OUT1", "2"), ("U_MCU", "PC8")
+    }
+    assert nets["USB_C_CURRENT_2"] == {
+        ("U_CC", "OUT2"), ("R_CC_OUT2", "2"), ("U_MCU", "PC9")
+    }
+    assert {("U_MCU", "PC10"), ("PWR/U_MODEM", "EN"),
+            ("PWR/R_MODEM_EN_PD", "1")} <= flat_nets["MODEM_EN"]
+    assert ("PWR/R_MODEM_EN_PD", "2") in flat_nets["GND"]
+    assert ("PWR/U_MODEM", "EN") not in flat_nets["V5"]
     assert next(supply for supply in board.supplies if supply.name == "V5").externally_driven
+
+
+def test_modem_rail_uses_real_buck_power_stage() -> None:
+    board = compile_file(EXAMPLE)
+    flat = elaborate(board)
+    nets = {
+        net.name: {(endpoint.component, endpoint.pin) for endpoint in net.endpoints}
+        for net in flat.nets
+    }
+    buck = board.library["vertical.TPS62130ARGTR"]
+    inductor = board.library["vertical.XAL4020_222MEC"]
+    assert buck.footprints == (
+        "Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
+    )
+    assert {pin.number for pin in buck.pins.values()} == {
+        str(number) for number in range(1, 18)
+    }
+    assert inductor.footprints == ("Inductor_SMD:L_Coilcraft_XAL4020-XXX",)
+    assert {("PWR/U_MODEM", "SW_1"), ("PWR/U_MODEM", "SW_2"),
+            ("PWR/U_MODEM", "SW_3"), ("PWR/L_MODEM", "A")} <= nets["PWR/MODEM_SW"]
+    assert {("PWR/L_MODEM", "B"), ("PWR/U_MODEM", "VOS"),
+            ("PWR/R_MODEM_FB_TOP", "1")} <= nets["V3V8"]
+    assert {("PWR/U_MODEM", "FB"), ("PWR/R_MODEM_FB_TOP", "2"),
+            ("PWR/R_MODEM_FB_BOT", "1")} <= nets["PWR/MODEM_FB"]
+    assert {("PWR/U_MODEM", "AGND"), ("PWR/U_MODEM", "PGND_1"),
+            ("PWR/U_MODEM", "PGND_2"), ("PWR/U_MODEM", "EP"),
+            ("PWR/R_MODEM_FB_BOT", "2")} <= nets["GND"]

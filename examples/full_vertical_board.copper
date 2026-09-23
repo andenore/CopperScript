@@ -6,6 +6,7 @@ board FullVerticalTracker {
     import vertical "github.com/andenore/CopperLib/packages/full_vertical";
 
     component J_POWER: vertical.GCT_USB4135_GF_A;
+    component U_CC: vertical.TUSB320LAI;
     module PWR: vertical.FullVerticalPowerTree;
 
     component U_MCU: vertical.STM32G0C1RET6;
@@ -32,8 +33,9 @@ board FullVerticalTracker {
 
     component R_I2C_SDA: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_I2C_SCL: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
-    component R_CC1: RESISTOR { value = 5.1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
-    component R_CC2: RESISTOR { value = 5.1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_CC_VBUS: RESISTOR { value = 900kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_CC_OUT1: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_CC_OUT2: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_LED_1: RESISTOR { value = 1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_LED_2: RESISTOR { value = 1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_RESET_MCU: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
@@ -42,10 +44,11 @@ board FullVerticalTracker {
     component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
     component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
     component C_MCU: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_CC: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
     component C_NRF: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
     component C_ACCEL: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
     component C_GNSS: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
-    component C_MODEM_BULK: CAPACITOR { value = 100uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_MODEM_BULK: CAPACITOR { value = 100uF; footprint = "Capacitor_SMD:C_1210_3225Metric"; }
 
     configure U_MCU.USART1 as MODEM_UART {
         TX = PB6;
@@ -85,12 +88,17 @@ board FullVerticalTracker {
         J_POWER.VBUS_B;
         PWR.VIN5;
         U_MODEM.USB_VBUS;
+        R_CC_VBUS.1;
     }
     net V3V3 {
         PWR.V3V3;
         U_MCU.VDD;
         U_MCU.VBAT;
         U_MCU.VREF_PLUS;
+        U_CC.VDD;
+        R_CC_OUT1.1;
+        R_CC_OUT2.1;
+        C_CC.1;
         U_CAN.VCC;
         U_MODEM_LEVEL.VCCA;
         U_MODEM_LEVEL.OE;
@@ -130,8 +138,10 @@ board FullVerticalTracker {
         J_POWER.GND_B;
         J_POWER.SHIELD;
         PWR.GND;
-        R_CC1.2;
-        R_CC2.2;
+        U_CC.PORT;
+        U_CC.GND;
+        U_CC.EN_N;
+        C_CC.2;
         U_MCU.VSS;
         U_CAN.GND;
         U_CAN.SHDN;
@@ -245,8 +255,12 @@ board FullVerticalTracker {
     net MCU_SWDIO { U_MCU.PA13; J_SWD_MCU.SWDIO; }
     net MCU_SWDCLK { U_MCU.PA14; J_SWD_MCU.SWDCLK; }
 
-    net USB_C_CC1 { J_POWER.CC1; R_CC1.1; }
-    net USB_C_CC2 { J_POWER.CC2; R_CC2.1; }
+    net USB_C_CC1 { J_POWER.CC1; U_CC.CC1; }
+    net USB_C_CC2 { J_POWER.CC2; U_CC.CC2; }
+    net USB_C_VBUS_DET { R_CC_VBUS.2; U_CC.VBUS_DET; }
+    net USB_C_CURRENT_1 { U_CC.OUT1; R_CC_OUT1.2; U_MCU.PC8; }
+    net USB_C_CURRENT_2 { U_CC.OUT2; R_CC_OUT2.2; U_MCU.PC9; }
+    net MODEM_EN { U_MCU.PC10; PWR.MODEM_EN; }
 
     supply V5 { voltage = 5V; external = true; }
     supply V3V3 { voltage = 3.3V; external = true; }
@@ -275,6 +289,7 @@ board FullVerticalTracker {
     }
 
     constraint max_distance(C_MCU, U_MCU.VDD) { distance = 3mm; }
+    constraint max_distance(C_CC, U_CC.VDD) { distance = 3mm; }
     constraint max_distance(C_NRF, U_NRF.VDD_1) { distance = 3mm; }
     constraint max_distance(C_ACCEL, U_ACCEL.VDD) { distance = 3mm; }
     constraint max_distance(C_GNSS, U_GNSS.VCC) { distance = 3mm; }
