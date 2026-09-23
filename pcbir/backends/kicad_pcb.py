@@ -289,7 +289,7 @@ def _copper_keepout_lines(
         f"      (vias {setting(keepout.block_vias)})",
         f"      (pads {setting(keepout.block_pads)})",
         f"      (copperpour {setting(keepout.block_zones)})",
-        "      (footprints allowed)",
+        f"      (footprints {setting(keepout.block_footprints)})",
         "    )",
         "    (polygon",
         "      (pts",
@@ -354,10 +354,14 @@ def _footprint_lines(
         )
     attribute = (
         "smd"
-        if all(pad.kind in {PadKind.SMD, PadKind.APERTURE} for pad in footprint.pads)
+        if all(pad.kind in {PadKind.SMD, PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE} for pad in footprint.pads)
         else "through_hole"
     )
-    lines.append(f"    (attr {attribute})")
+    exclusions = (
+        (" exclude_from_bom" if footprint.exclude_from_bom else "")
+        + (" exclude_from_pos_files" if footprint.exclude_from_pos_files else "")
+    )
+    lines.append(f"    (attr {attribute}{exclusions})")
     if footprint.clearance_nm is not None:
         lines.append(f"    (clearance {_mm(footprint.clearance_nm)})")
     if footprint.graphics:
@@ -426,7 +430,7 @@ def _pad_lines(
     net_codes: dict[str, int],
 ) -> list[str]:
     kind = {
-        PadKind.SMD: "smd",
+        PadKind.SMD: "connect" if pad.connector_contact else "smd",
         PadKind.APERTURE: "smd",
         PadKind.THROUGH_HOLE: "thru_hole",
         PadKind.NON_PLATED_THROUGH_HOLE: "np_thru_hole",

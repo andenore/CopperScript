@@ -156,7 +156,9 @@ board FullVerticalTracker {
         J_SIM.SHIELD;
         J_DEBUG.GND;
         J_SWD_MCU.GND;
+        J_SWD_MCU.GND_5;
         J_SWD_NRF.GND;
+        J_SWD_NRF.GND_5;
         ANT_BT.GND;
         SW_USER.B;
         LED_1.K;

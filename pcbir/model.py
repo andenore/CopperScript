@@ -321,6 +321,7 @@ class PartDefinition:
     traits: frozenset[str] = frozenset()
     footprints: tuple[str, ...] = ()
     manufacturer: str | None = None
+    assembled: bool = True
     device: str | None = None
     source: SourceReference | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
@@ -328,6 +329,8 @@ class PartDefinition:
     def __post_init__(self) -> None:
         # Defensive copies keep an otherwise frozen IR from being mutated via a
         # caller-owned dictionary.
+        if not isinstance(self.assembled, bool):
+            raise ValueError("part assembled must be a boolean")
         object.__setattr__(self, "pins", MappingProxyType(dict(self.pins)))
         object.__setattr__(self, "traits", frozenset(self.traits))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))

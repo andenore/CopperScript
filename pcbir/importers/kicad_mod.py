@@ -129,6 +129,7 @@ def parse_kicad_mod(
     pads: list[FootprintPad] = []
     graphics: list[FootprintGraphic] = []
     keepouts: list[CopperKeepout] = []
+    footprint_attributes: set[str] = set()
     for child in _lists(root[2:]):
         child_tag = _tag(child)
         if child_tag == "pad":
@@ -153,6 +154,16 @@ def parse_kicad_mod(
         elif child_tag == "embedded_fonts":
             if _required_atom(child, 1, source, "embedded fonts setting") != "no":
                 warnings.append("ignored embedded footprint fonts")
+        elif child_tag == "attr":
+            attributes = {item for item in child[1:] if isinstance(item, str)}
+            unsupported = attributes - {
+                "smd", "through_hole", "exclude_from_bom", "exclude_from_pos_files"
+            }
+            if unsupported:
+                raise KiCadModImportError(
+                    f"{source}: unsupported footprint attributes {sorted(unsupported)!r}"
+                )
+            footprint_attributes.update(attributes)
         elif child_tag in {
             "solder_mask_margin",
             "solder_paste_margin",
@@ -176,7 +187,6 @@ def parse_kicad_mod(
             "descr",
             "tags",
             "property",
-            "attr",
             "uuid",
             "tedit",
         }:
@@ -212,6 +222,8 @@ def parse_kicad_mod(
         metadata=metadata,
         courtyard=_courtyard_polygon(graphics),
         clearance_nm=clearance_nm,
+        exclude_from_bom="exclude_from_bom" in footprint_attributes,
+        exclude_from_pos_files="exclude_from_pos_files" in footprint_attributes,
     )
     return FootprintImportResult(footprint, tuple(warnings), version)
 
@@ -259,10 +271,6 @@ def _parse_footprint_keepout(
         if value not in {"allowed", "not_allowed"}:
             raise KiCadModImportError(f"{source}: invalid keepout {tag} rule")
         blocked[tag] = value == "not_allowed"
-    if blocked.get("footprints", False):
-        raise KiCadModImportError(
-            f"{source}: footprint-placement keepout rule is unsupported"
-        )
     if not {"tracks", "vias", "pads", "copperpour"} <= blocked.keys():
         raise KiCadModImportError(f"{source}: incomplete footprint keepout rules")
 
@@ -294,6 +302,7 @@ def _parse_footprint_keepout(
         block_vias=blocked["vias"],
         block_pads=blocked["pads"],
         block_zones=blocked["copperpour"],
+        block_footprints=blocked.get("footprints", False),
     )
 
 
@@ -304,6 +313,7 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
     try:
         kind = {
             "smd": PadKind.SMD,
+            "connect": PadKind.SMD,
             "thru_hole": PadKind.THROUGH_HOLE,
             "np_thru_hole": PadKind.NON_PLATED_THROUGH_HOLE,
         }[kind_text]
@@ -331,6 +341,10 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
     if kind is PadKind.SMD and "F.Cu" not in layers and set(layers) <= {"F.Mask", "F.Paste"}:
         kind = PadKind.APERTURE
     has_mask, has_paste = _validate_pad_layers(kind, layers, source)
+    if kind_text == "connect" and (not has_mask or has_paste):
+        raise KiCadModImportError(
+            f"{source}: connector-contact pad {number!r} must have mask but no paste"
+        )
     drill = _parse_drill(_first(node, "drill"), kind, source)
 
     ratio_node = _first(node, "roundrect_rratio")
@@ -421,6 +435,7 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
         zone_connection=zone_connection,
         heatsink=heatsink,
         remove_unused_layers=remove_unused_layers,
+        connector_contact=kind_text == "connect",
     )
 
 

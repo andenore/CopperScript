@@ -1,4 +1,5 @@
 from decimal import Decimal
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -29,7 +30,7 @@ from pcbir import (
     run_physical_drc,
     nm_from_mm,
 )
-from pcbir.placement import resolved_copper_keepouts
+from pcbir.placement import placement_solution_is_legal, resolved_copper_keepouts
 
 
 ROOT = Path(__file__).parents[1]
@@ -226,7 +227,7 @@ def test_preserves_embedded_keepout_zone() -> None:
     )
 
 
-def test_rejects_unrepresented_footprint_placement_keepout() -> None:
+def test_preserves_footprint_placement_keepout() -> None:
     source = """(footprint "Socket" (layer "F.Cu")
       (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask"))
       (zone (layer "F.Cu")
@@ -234,8 +235,49 @@ def test_rejects_unrepresented_footprint_placement_keepout() -> None:
           (pads not_allowed) (copperpour not_allowed) (footprints not_allowed))
         (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1)))))
     """
-    with pytest.raises(KiCadModImportError, match="footprint-placement keepout"):
-        parse_kicad_mod(source)
+    assert parse_kicad_mod(source).footprint.keepouts[0].block_footprints
+
+
+def test_connector_contact_pad_round_trips_without_paste() -> None:
+    source = '''(footprint "Pogo" (layer "F.Cu")
+      (pad "1" connect circle (at 0 0) (size 0.8 0.8)
+        (layers "F.Cu" "F.Mask")))'''
+    footprint = parse_kicad_mod(source).footprint
+    assert footprint.pads[0].connector_contact
+    assert not footprint.pads[0].has_solder_paste
+    board = PhysicalBoard(
+        name="PogoBoard", outline=BoardOutline.rectangle(20, 20),
+        footprints={footprint.name: footprint},
+        placements=(Placement("J1", footprint.name, Point.mm(10, 10)),), nets=(),
+    )
+    pcb = KiCadPcbBackend().generate(board).artifacts[0].content
+    assert '(pad "1" connect circle' in pcb
+    assert '(layers "F.Cu" "F.Mask")' in pcb
+
+
+def test_footprint_local_placement_keepout_blocks_other_component() -> None:
+    contact = parse_kicad_mod('''(footprint "Target" (layer "F.Cu")
+      (pad "1" connect circle (at 0 0) (size 0.8 0.8)
+        (layers "F.Cu" "F.Mask"))
+      (zone (layer "F.Cu")
+        (keepout (tracks allowed) (vias not_allowed) (pads allowed)
+          (copperpour not_allowed) (footprints not_allowed))
+        (polygon (pts (xy 2 0) (xy 4 0) (xy 4 2) (xy 2 2)))))''').footprint
+    small = parse_kicad_mod('''(footprint "Small" (layer "F.Cu")
+      (pad "1" smd rect (at 0 0) (size 0.5 0.5)
+        (layers "F.Cu" "F.Mask" "F.Paste")))''').footprint
+    placements = (
+        Placement("J1", "Target", Point.mm(10, 10)),
+        Placement("R1", "Small", Point.mm(13, 11)),
+    )
+    board = PhysicalBoard(
+        name="LocalPlacementKeepout", outline=BoardOutline.rectangle(30, 30),
+        footprints={"Target": contact, "Small": small}, placements=placements, nets=(),
+    )
+    assert not placement_solution_is_legal(board, {p.reference: p for p in placements})
+    assert any(item.code == "DRC-PLACEMENT" for item in run_physical_drc(board).findings)
+    pcb = KiCadPcbBackend().generate(board).artifacts[0].content
+    assert '(footprints not_allowed)' in pcb
 
 
 def test_kicad10_jumper_setting_must_not_change_pad_connectivity() -> None:
@@ -314,6 +356,42 @@ def test_installed_kicad_accepts_imported_sim_and_rf_keepouts(tmp_path: Path) ->
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_installed_tag_connect_target_imports_and_exports(tmp_path: Path) -> None:
+    footprint_root = Path("C:/Program Files/KiCad/10.0/share/kicad/footprints")
+    cli = shutil.which("kicad-cli") or "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
+    if not footprint_root.is_dir() or not Path(cli).is_file():
+        pytest.skip("KiCad 10 is not installed")
+    footprint = load_kicad_mod(
+        footprint_root / "Connector.pretty" /
+        "Tag-Connect_TC2050-IDC-FP_2x05_P1.27mm_Vertical.kicad_mod"
+    ).footprint
+    assert len([pad for pad in footprint.pads if pad.connector_contact]) == 10
+    assert footprint.keepouts[0].block_footprints
+    assert footprint.exclude_from_bom and footprint.exclude_from_pos_files
+    board = PhysicalBoard(
+        name="TagConnectTarget", outline=BoardOutline.rectangle(30, 20),
+        footprints={footprint.name: footprint},
+        placements=(Placement("J1", footprint.name, Point.mm(15, 10)),), nets=(),
+    )
+    assert not any(item.code == "DRC-PLACEMENT" for item in run_physical_drc(board).findings)
+    pcb = tmp_path / "TagConnectTarget.kicad_pcb"
+    pcb.write_text(KiCadPcbBackend().generate(board).artifacts[0].content, encoding="utf-8")
+    assert '(attr smd exclude_from_bom exclude_from_pos_files)' in pcb.read_text(encoding="utf-8")
+    result = subprocess.run(
+        [cli, "pcb", "export", "svg", "--mode-multi", "--layers", "F.Cu", "--output", str(tmp_path), str(pcb)],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    drc_path = tmp_path / "tag_drc.json"
+    drc = subprocess.run(
+        [cli, "pcb", "drc", "--format", "json", "--output", str(drc_path), str(pcb)],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert drc.returncode == 0, drc.stdout + drc.stderr
+    report = json.loads(drc_path.read_text(encoding="utf-8"))
+    assert "footprint in keepout" not in str(report).lower()
 
 
 def test_strict_mode_promotes_loss_warning_to_error() -> None:

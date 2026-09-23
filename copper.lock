@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:f74d4f5313e66a773598cfc7e9f91aec0c5882e05941644e39efd735987b0367",
+      "checksum": "sha256:81f4eaa99542f695a65da709b4aa04c17bf3929cb0f9c34e91d9e482f8c1b31e",
       "files": [
         {
           "path": "copper.mod",
@@ -175,8 +175,8 @@
         },
         {
           "path": "packages/full_vertical/swd_header.copper",
-          "sha256": "8e3f49813bb74cbab4fadf4a9b7564d28c9d4c132e434077e526290fd1ee3339",
-          "size": 588
+          "sha256": "ffbf1da17f4187965a5d43e633d548368d3dead5649e4061e1c74078e28ec9b2",
+          "size": 1372
         },
         {
           "path": "packages/full_vertical/tcan334g.copper",

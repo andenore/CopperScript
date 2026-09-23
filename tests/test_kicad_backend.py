@@ -3,6 +3,7 @@ import re
 import uuid
 
 from pcbir import KiCadSchematicBackend, compile_file
+from pcbir.loader import load_board
 
 
 ROOT = Path(__file__).parents[1]
@@ -56,6 +57,15 @@ def test_kicad_backend_explicitly_flattens_hierarchy() -> None:
     assert '(property "Reference" "PWR_U1"' in schematic
     assert '(property "CopperScriptPath" "PWR/U1"' in schematic
     assert '(label "V3V3"' in schematic
+
+
+def test_bare_board_debug_targets_are_excluded_from_schematic_bom() -> None:
+    board = load_board(ROOT / "examples" / "full_vertical_board.copper")
+    target = board.library["vertical.SWD_HEADER"]
+    assert not target.assembled
+    schematic = KiCadSchematicBackend().generate(board).artifacts[0].content
+    assert schematic.count("(in_bom no)") >= 3  # library symbol and two targets
+    assert "(in_bom yes)" in schematic
 
 
 def _parentheses_are_balanced(text: str) -> bool:

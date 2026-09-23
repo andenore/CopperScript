@@ -291,12 +291,13 @@ class CopperKeepout:
     block_vias: bool = True
     block_pads: bool = False
     block_zones: bool = True
+    block_footprints: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "layers", tuple(self.layers))
         if not self.id or not self.layers or len(set(self.layers)) != len(self.layers):
             raise ValueError("a copper keepout requires an id and unique layers")
-        if not any((self.block_tracks, self.block_vias, self.block_pads, self.block_zones)):
+        if not any((self.block_tracks, self.block_vias, self.block_pads, self.block_zones, self.block_footprints)):
             raise ValueError("a copper keepout must block at least one object type")
 
 
@@ -436,6 +437,8 @@ class FootprintPad:
     zone_connection: ZoneConnection | None = None
     heatsink: bool = False
     remove_unused_layers: bool = False
+    # KiCad `connect` pads are bare, mask-opened contacts (e.g. pogo pads).
+    connector_contact: bool = False
 
     def __post_init__(self) -> None:
         if not self.number and self.kind not in {
@@ -450,14 +453,21 @@ class FootprintPad:
         )
         if self.kind in {PadKind.SMD, PadKind.APERTURE} and self.drill is not None:
             raise ValueError("SMD and aperture pads cannot have a drill")
+        if self.connector_contact and (self.kind is not PadKind.SMD or self.has_solder_paste):
+            raise ValueError("connector contacts must be non-pasted surface pads")
         if self.kind in {PadKind.THROUGH_HOLE, PadKind.NON_PLATED_THROUGH_HOLE}:
             if self.drill is None:
                 raise ValueError("through-hole pads require a drill")
-            if (
+            if self.kind is PadKind.THROUGH_HOLE and (
                 self.drill.width_nm >= self.size.width_nm
                 or self.drill.height_nm >= self.size.height_nm
             ):
                 raise ValueError("pad drill must be smaller than pad size")
+            if self.kind is PadKind.NON_PLATED_THROUGH_HOLE and (
+                self.drill.width_nm > self.size.width_nm
+                or self.drill.height_nm > self.size.height_nm
+            ):
+                raise ValueError("non-plated drill cannot exceed its hole envelope")
         if not 0 <= self.roundrect_ratio_ppm <= 500_000:
             raise ValueError("roundrect pad ratio must be between 0 and 0.5")
 
@@ -558,6 +568,8 @@ class PhysicalFootprint:
     courtyard: tuple[Point, ...] = ()
     height_nm: Nanometres | None = None
     clearance_nm: Nanometres | None = None
+    exclude_from_bom: bool = False
+    exclude_from_pos_files: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pads", tuple(self.pads))

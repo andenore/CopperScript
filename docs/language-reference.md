@@ -71,7 +71,7 @@ part BME280 {
 ```
 
 Supported part properties are open `category` and `traits` strings,
-`manufacturer`, one `footprint`, and an
+`manufacturer`, `assembled` (boolean, default `true`), one `footprint`, and an
 optional package-independent `device`. Every pin requires a quoted `number`;
 `voltage_min` and `voltage_max` are optional typed voltage quantities.
 Standalone parts declare `domains` and `directions`, with optional
@@ -80,6 +80,10 @@ Standalone parts declare `domains` and `directions`, with optional
 `passive`; drive modes are `push_pull`, `open_drain`, and `high_impedance`.
 Pins may use `connection = required`, `do_not_connect`, `optional`, or `normal`
 and may declare comma-separated `required_net_traits`.
+Set `assembled = false` for bare-board targets such as Tag-Connect programming
+pads; the KiCad schematic then excludes them from its BOM while retaining them
+on the board. The selected footprint must separately carry KiCad's
+`exclude_from_bom` and `exclude_from_pos_files` attributes for PCB export.
 
 Part and device provenance is optional. Definitions may use
 `source_document`, `source_revision`, `source_location`, `source_url`, and

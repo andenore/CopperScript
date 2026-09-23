@@ -33,6 +33,13 @@ The source references stored in each part/device definition are optional
 provenance. They document which manufacturer revision was used without making
 source metadata a requirement of the language.
 
+Both SWD targets are bare-PCB Tag-Connect TC2050 footprints, wired for the
+TC2050-ARM2010 adapter's SWD pinout. There is no fitted debug header or BOM
+component at either target; production programming needs a compatible TC2050
+cable/adapter. Pads 7-9 are unused, pin 6 (SWO) is optional, and pin 5 is
+ground, not a debugger-supplied power input. The footprint's no-via/no-pour
+and component-placement keepouts are preserved by the physical pipeline.
+
 ## Main MCU allocation
 
 | Function | STM32 peripheral | Pins |
@@ -99,9 +106,9 @@ physical design.
   pad coverage. The nRF52832-QFAA and STM32G0C1RET6 package maps are complete
   from the Nordic Product Specification v1.9, Table 1 and ST DS13564 Rev 5,
   Table 12 respectively; their support circuits remain incomplete.
-- The installed KiCad 10 footprint audit currently resolves 20 of 24 selected
-  assets. The remaining failures are the SWD header, 3.8 V regulator, EG800G,
-  and MAX-M10S footprints. These are not safe to replace with generic land
+- The installed KiCad 10 footprint audit currently resolves 21 of 24 selected
+  assets. The remaining failures are the 3.8 V regulator, EG800G, and
+  MAX-M10S footprints. These are not safe to replace with generic land
   patterns without an exact orderable part or vendor mechanical drawing.
 - The orderable GCT SIM socket, Coilcraft USB choke, and U.FL RF connector now
   resolve to installed KiCad footprints. CopperScript imports the embedded

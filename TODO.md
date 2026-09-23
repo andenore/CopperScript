@@ -161,6 +161,10 @@ where relevant. It does not imply third-party certification.
   - [x] Replace the virtual 5 V source with an orderable power-only USB-C
         receptacle and separate CC1/CC2 sink pull-downs; installed KiCad audit
         now resolves 20/24 assets.
+  - [x] Use the Tag-Connect TC2050 bare-PCB SWD target for both processors;
+        preserve KiCad connector contacts and footprint-local placement
+        keepouts through import, placement checks, physical DRC, and export.
+        Installed KiCad audit now resolves 21/24 assets.
   - [ ] Specify a source-current policy and add input overvoltage, inrush,
         ESD, and reverse-current protection for the USB-C power entry.
   - [ ] Resolve the reported real CopperLib/KiCad footprint gaps and complete

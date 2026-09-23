@@ -1015,6 +1015,7 @@ def _compile_part(
             "category",
             "traits",
             "manufacturer",
+            "assembled",
             "footprint",
             "device",
             "source_document",
@@ -1034,6 +1035,9 @@ def _compile_part(
     manufacturer = properties.get("manufacturer")
     if manufacturer is not None and not isinstance(manufacturer, str):
         _error("CMP048", "part manufacturer must be a string", document.location)
+    assembled = properties.get("assembled", True)
+    if not isinstance(assembled, bool):
+        _error("CMP048", "part assembled must be a boolean", document.location)
     footprint = properties.get("footprint")
     if footprint is not None and not isinstance(footprint, str):
         _error("CMP049", "part footprint must be a string", document.location)
@@ -1063,6 +1067,7 @@ def _compile_part(
         traits=traits,
         footprints=(footprint,) if footprint else (),
         manufacturer=manufacturer,
+        assembled=assembled,
         device=resolved_device,
         source=_source_reference(properties, document.location),
     )

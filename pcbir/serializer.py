@@ -201,6 +201,7 @@ def _part_to_dict(part: PartDefinition) -> dict[str, object]:
         "category": part.category,
         "traits": sorted(part.traits),
         "manufacturer": part.manufacturer,
+        "assembled": part.assembled,
         "device": part.device,
         "source": _source_to_dict(part.source),
         "footprints": list(part.footprints),

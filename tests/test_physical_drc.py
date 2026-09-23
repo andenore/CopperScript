@@ -127,6 +127,21 @@ def test_incomplete_route_makes_coverage_incomplete_and_stale_tokens_change() ->
     assert run_physical_drc(changed).token.board_digest != run_physical_drc(board).token.board_digest
 
 
+def test_debug_contact_and_assembly_attributes_invalidate_signoff() -> None:
+    board = _routed_board()
+    footprint_name, footprint = next(iter(board.footprints.items()))
+    changed = replace(
+        board,
+        footprints={footprint_name: replace(
+            footprint,
+            pads=(replace(footprint.pads[0], has_solder_paste=False, connector_contact=True),),
+            exclude_from_bom=True,
+            exclude_from_pos_files=True,
+        )},
+    )
+    assert physical_board_digest(changed) != physical_board_digest(board)
+
+
 def test_exact_rectangular_pad_geometry_avoids_bounding_circle_false_positive() -> None:
     footprint = PhysicalFootprint(
         "test/tall-pad",

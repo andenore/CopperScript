@@ -895,6 +895,7 @@ def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:
                 pad.zone_connection.value if pad.zone_connection else None,
                 pad.heatsink,
                 pad.remove_unused_layers,
+                pad.connector_contact,
             )
             for pad in pads
         ),
@@ -904,6 +905,8 @@ def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:
         tuple(sorted(getattr(footprint, "metadata").items())),
         getattr(footprint, "height_nm"),
         getattr(footprint, "clearance_nm"),
+        getattr(footprint, "exclude_from_bom"),
+        getattr(footprint, "exclude_from_pos_files"),
     )
 
 

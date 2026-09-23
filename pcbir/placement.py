@@ -291,6 +291,7 @@ def resolved_copper_keepouts(board: PhysicalBoard) -> tuple[CopperKeepout, ...]:
                     block_vias=local.block_vias,
                     block_pads=local.block_pads,
                     block_zones=local.block_zones,
+                    block_footprints=local.block_footprints,
                 )
             )
     return tuple(result)
@@ -1103,12 +1104,34 @@ def _legal(
                 continue
         if _polygons_too_close(polygon, keepout.outline.vertices, 0):
             return False
+    for keepout in board.copper_keepouts:
+        candidate_layer = CopperLayer.FRONT if candidate.side is BoardSide.FRONT else CopperLayer.BACK
+        if keepout.block_footprints and candidate_layer in keepout.layers and _polygons_too_close(
+            polygon, keepout.outline.outer.vertices, 0
+        ):
+            return False
     for other in placed.values():
         if other.side is not candidate.side:
             continue
+        other_footprint = board.footprints[other.footprint]
+        other_polygon = _placement_polygon(board, other)
+        for local in other_footprint.keepouts:
+            if local.block_footprints and _polygons_too_close(
+                polygon,
+                tuple(transformed_local_point(other, point) for point in local.outline.outer.vertices),
+                0,
+            ):
+                return False
+        for local in footprint.keepouts:
+            if local.block_footprints and _polygons_too_close(
+                other_polygon,
+                tuple(transformed_local_point(candidate, point) for point in local.outline.outer.vertices),
+                0,
+            ):
+                return False
         if _polygons_too_close(
             polygon,
-            _placement_polygon(board, other),
+            other_polygon,
             options.component_clearance_nm,
         ):
             return False

@@ -277,7 +277,7 @@ def _library_symbol_lines(symbol: _PartSymbol) -> list[str]:
         f"    (symbol {_quote(symbol.library_id)}",
         "      (pin_names (offset 1.016))",
         "      (exclude_from_sim no)",
-        "      (in_bom yes)",
+        f"      (in_bom {'yes' if part.assembled else 'no'})",
         "      (on_board yes)",
     ]
     lines.extend(
@@ -351,7 +351,7 @@ def _component_symbol_lines(
         f"    (at {_number(x)} {_number(y)} 0)",
         "    (unit 1)",
         "    (exclude_from_sim no)",
-        "    (in_bom yes)",
+        f"    (in_bom {'yes' if symbol.part.assembled else 'no'})",
         "    (on_board yes)",
         "    (dnp no)",
         f'    (uuid "{symbol_uuid}")',
