@@ -167,6 +167,8 @@ def build_manufacturing_release(
         board_artifact = manifest.artifacts[0]
         board_path = stage / board_artifact.name
         board_path.write_text(board_artifact.content, encoding="utf-8")
+        project_artifact = manifest.artifacts[1]
+        (stage / project_artifact.name).write_text(project_artifact.content, encoding="utf-8")
         drc_path = stage / "kicad-drc.json"
         drc_command = [
                 str(kicad_cli),

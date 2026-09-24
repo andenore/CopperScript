@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import re
 import uuid
 
@@ -37,6 +38,11 @@ def test_kicad_pcb_backend_emits_deterministic_board_geometry() -> None:
     assert first.target_version == "8.0"
     assert first.warnings == ()
     assert first.artifacts[0].name == "BackendTest.kicad_pcb"
+    assert first.artifacts[1].name == "BackendTest.kicad_pro"
+    project = json.loads(first.artifacts[1].content)
+    assert project["net_settings"]["classes"][0]["clearance"] == 0.2
+    assert project["net_settings"]["classes"][0]["track_width"] == 0.25
+    assert "min_track_width" not in project["board"]["design_settings"]["rules"]
     pcb = first.artifacts[0].content
     assert pcb.startswith("(kicad_pcb\n  (version 20240108)")
     assert '(net 1 "GND")' in pcb
@@ -81,6 +87,19 @@ def test_rotated_footprint_exports_pad_angles_in_board_coordinates() -> None:
 
     assert '(at -1 0 90)' in pcb
     assert '(at 1 0 90)' in pcb
+
+
+def test_kicad_project_uses_explicit_physical_clearance() -> None:
+    from dataclasses import replace
+    from pcbir import DesignRules
+
+    board = replace(_routed_board(), rules=DesignRules(
+        minimum_clearance_nm=nm_from_mm("0.09"),
+        default_track_width_nm=nm_from_mm("0.20"),
+    ))
+    project = json.loads(KiCadPcbBackend().generate(board).artifacts[1].content)
+    assert project["net_settings"]["classes"][0]["clearance"] == 0.09
+    assert project["board"]["design_settings"]["rules"]["min_clearance"] == 0.09
 
 
 def _routed_board() -> PhysicalBoard:

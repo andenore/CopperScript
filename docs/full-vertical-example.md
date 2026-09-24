@@ -213,8 +213,11 @@ physical design.
 - KiCad 10 successfully parsed and refilled an inspection-only export of this
   zone. Correcting the PCB backend's rotated pad angles reduced KiCad's
   reported shorts from 20 to zero on the same placed draft. KiCad still
-  reported 202 unconnected items and 351 other violations after the fix;
-  these remain open, and this draft is not a release candidate.
+  reported 202 unconnected items. A companion `.kicad_pro` now carries the
+  explicit 0.09 mm clearance; on the same placement this removed 15 false
+  default-rule clearance findings, leaving 336 other KiCad violations. Most
+  are silkscreen findings, but keepout and footprint findings remain too.
+  This draft is not a release candidate.
 - KiCad 10 parses the exported inspection schematic but reports 136 ERC
   violations on it. Many are caused by the current flattened automatic
   drawing; they are not implied to be 136 distinct board wiring defects.

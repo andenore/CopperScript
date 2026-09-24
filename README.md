@@ -325,10 +325,14 @@ when constructed.
 The KiCad PCB backend targets KiCad 8's `20240108` board format. It emits a
 self-contained board with deterministic UUIDs, embedded footprints, net
 assignments, copper tracks and vias when present, and a closed `Edge.Cuts`
-outline. Backend tests include a completely routed synthetic physical board.
+outline. Each PCB export also writes a same-stem `.kicad_pro` with the physical
+IR's minimum clearance and default net-class widths/vias; open the board with
+that project for KiCad DRC. Backend tests include a completely routed synthetic
+physical board.
 
-The current `.copper` frontend does not yet define board geometry, placement,
-or routing constraints. `export-kicad-pcb` resolves selected `.kicad_mod` files into
+The `.copper` frontend supports selected placement, routing, and copper-zone
+constraints, while arbitrary board-outline authoring is still pending.
+`export-kicad-pcb` resolves selected `.kicad_mod` files into
 physical IR, checks that their numbered pads exactly match the electrical part,
 and arranges components on a deterministic grid. These unrouted drafts must not
 be sent for fabrication. Generic proxy geometry is available only with

@@ -80,9 +80,53 @@ class KiCadPcbBackend:
                     "application/x-kicad-pcb",
                     content,
                 ),
+                Artifact(
+                    f"{_safe_name(board.name)}.kicad_pro",
+                    "application/json",
+                    _render_project(board),
+                ),
             ),
             warnings=tuple(warnings),
         )
+
+
+def _render_project(board: PhysicalBoard) -> str:
+    """Pin KiCad's board-wide DRC rules to the signed physical IR.
+
+    A standalone PCB otherwise inherits KiCad's local defaults, which may be
+    stricter or looser than the explicit clearance profile used by routing.
+    IR default widths and via sizes are net-class choices, not minima.
+    """
+
+    clearance = float(board.rules.minimum_clearance_nm) / 1_000_000
+    track_width = float(board.rules.default_track_width_nm) / 1_000_000
+    via_size = float(board.rules.default_via_size_nm) / 1_000_000
+    via_drill = float(board.rules.default_via_drill_nm) / 1_000_000
+    project = {
+        "meta": {"filename": f"{_safe_name(board.name)}.kicad_pro", "version": 3},
+        "board": {
+            "design_settings": {
+                "rules": {
+                    "min_clearance": clearance,
+                }
+            }
+        },
+        "net_settings": {
+            "classes": [{
+                "name": "Default",
+                "priority": 2147483647,
+                "clearance": clearance,
+                "track_width": track_width,
+                "via_diameter": via_size,
+                "via_drill": via_drill,
+            }],
+            "meta": {"version": 4},
+            "net_colors": None,
+            "netclass_assignments": None,
+            "netclass_patterns": [],
+        },
+    }
+    return json.dumps(project, indent=2, sort_keys=True) + "\n"
 
 
 def _render(board: PhysicalBoard) -> str:

@@ -393,8 +393,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if args.output:
-                    artifact = KiCadPcbBackend().generate(result.board).artifacts[0]
-                    args.output.write_text(artifact.content, encoding="utf-8")
+                    pcb_manifest = KiCadPcbBackend().generate(result.board)
+                    args.output.write_text(pcb_manifest.artifacts[0].content, encoding="utf-8")
+                    args.output.with_suffix(".kicad_pro").write_text(
+                        pcb_manifest.artifacts[1].content, encoding="utf-8"
+                    )
             except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2
@@ -448,8 +451,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 output.write_text(route.to_json(), encoding="utf-8")
                 if args.pcb_output:
-                    artifact = KiCadPcbBackend().generate(flow.board).artifacts[0]
-                    args.pcb_output.write_text(artifact.content, encoding="utf-8")
+                    pcb_manifest = KiCadPcbBackend().generate(flow.board)
+                    args.pcb_output.write_text(pcb_manifest.artifacts[0].content, encoding="utf-8")
+                    args.pcb_output.with_suffix(".kicad_pro").write_text(
+                        pcb_manifest.artifacts[1].content, encoding="utf-8"
+                    )
             except OSError as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2
@@ -512,6 +518,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             output = args.output or Path(artifact.name)
             try:
                 output.write_text(artifact.content, encoding="utf-8")
+                if artifact_kind == "PCB":
+                    output.with_suffix(".kicad_pro").write_text(
+                        manifest.artifacts[1].content, encoding="utf-8"
+                    )
                 if args.command == "plan-layout" and args.report:
                     args.report.write_text(layout_report.to_json(), encoding="utf-8")
             except OSError as exc:

@@ -158,6 +158,7 @@ def test_cli_exports_prototype_kicad_pcb(tmp_path: Path) -> None:
     assert "Generated KiCad 8.0 PCB" in result.stdout
     assert "proxy footprints" in result.stdout
     assert output.read_text(encoding="utf-8").startswith("(kicad_pcb")
+    assert output.with_suffix(".kicad_pro").is_file()
 
 
 def test_cli_exports_pcb_with_resolved_kicad_mod(tmp_path: Path) -> None:
@@ -215,6 +216,8 @@ def test_cli_accepts_explicit_four_layer_fabrication_profile(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stdout
     assert output.exists()
+    project = json.loads(output.with_suffix(".kicad_pro").read_text(encoding="utf-8"))
+    assert project["net_settings"]["classes"][0]["clearance"] == 0.09
 
 
 def test_cli_does_not_silently_fall_back_to_proxy_footprints(
@@ -268,6 +271,7 @@ def test_cli_plans_layout_and_writes_readiness_report(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout
     assert output.read_text(encoding="utf-8").startswith("(kicad_pcb")
+    assert output.with_suffix(".kicad_pro").is_file()
     document = json.loads(report.read_text(encoding="utf-8"))
     assert document["schema"] == "copperscript-layout-report/v0.1"
     assert 1 <= len(document["candidates"]) <= 2
@@ -328,6 +332,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["detailed"]["status"] in {"success", "partial"}
     assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
     assert pcb.read_text(encoding="utf-8").startswith("(kicad_pcb")
+    assert pcb.with_suffix(".kicad_pro").is_file()
     assert "BOARD ROUTE:" in result.stdout
 
 
