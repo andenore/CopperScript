@@ -598,6 +598,11 @@ def _check_copper_keepouts(
     """Check all placed and board-level copper keepouts against actual copper."""
 
     covered = True
+    local_owner = {
+        f"{placement.reference}/{local.id}": placement.reference
+        for placement in board.placements
+        for local in board.footprints[placement.footprint].keepouts
+    }
     for keepout in sorted(resolved_copper_keepouts(board), key=lambda item: item.id):
         if keepout.outline.holes:
             covered = False
@@ -633,6 +638,10 @@ def _check_copper_keepouts(
                 ))
         if keepout.block_pads:
             for placement in board.placements:
+                if placement.reference == local_owner.get(keepout.id):
+                    # A footprint's own local rule areas protect it from
+                    # foreign pads, tracks and vias, not its own pads.
+                    continue
                 footprint = board.footprints[placement.footprint]
                 for pad_index, pad in enumerate(footprint.pads):
                     if pad.kind in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}:

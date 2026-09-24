@@ -262,9 +262,14 @@ def resolved_copper_keepouts(board: PhysicalBoard) -> tuple[CopperKeepout, ...]:
     """Return board keepouts plus footprint-local keepouts at placed locations."""
 
     result = list(board.copper_keepouts)
+    seen = {keepout.id for keepout in result}
     for placement in sorted(board.placements, key=lambda item: item.reference):
         footprint = board.footprints[placement.footprint]
         for local in footprint.keepouts:
+            resolved_id = f"{placement.reference}/{local.id}"
+            if resolved_id in seen:
+                raise ValueError(f"duplicate resolved copper keepout id {resolved_id!r}")
+            seen.add(resolved_id)
             layers = tuple(
                 CopperLayer.BACK if placement.side is BoardSide.BACK and layer is CopperLayer.FRONT
                 else CopperLayer.FRONT if placement.side is BoardSide.BACK and layer is CopperLayer.BACK
@@ -284,7 +289,7 @@ def resolved_copper_keepouts(board: PhysicalBoard) -> tuple[CopperKeepout, ...]:
             )
             result.append(
                 CopperKeepout(
-                    id=f"{placement.reference}/{local.id}",
+                    id=resolved_id,
                     layers=layers,
                     outline=PolygonWithHoles(outer, holes),
                     block_tracks=local.block_tracks,

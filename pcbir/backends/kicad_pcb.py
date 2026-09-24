@@ -31,7 +31,6 @@ from ..physical import (
     ZoneConnection,
     ViaKind,
 )
-from ..placement import resolved_copper_keepouts
 from .base import Artifact, ArtifactManifest
 
 
@@ -217,7 +216,7 @@ def _render(board: PhysicalBoard) -> str:
         for layer in sorted(zone.layers, key=lambda item: item.value):
             lines.extend(_zone_lines(board, zone, layer, net_codes))
 
-    for keepout in sorted(resolved_copper_keepouts(board), key=lambda item: item.id):
+    for keepout in sorted(board.copper_keepouts, key=lambda item: item.id):
         for layer in sorted(keepout.layers, key=lambda item: item.value):
             lines.extend(_copper_keepout_lines(board, keepout, layer))
 
@@ -314,19 +313,23 @@ def _copper_keepout_lines(
     board: PhysicalBoard,
     keepout: CopperKeepout,
     layer: CopperLayer,
+    *,
+    identity: str | None = None,
+    footprint_local: bool = False,
 ) -> list[str]:
     if keepout.outline.holes:
         raise ValueError(
             f"KiCad zone backend does not support holes in keepout {keepout.id!r}"
         )
     setting = lambda blocked: "not_allowed" if blocked else "allowed"
-    return [
+    name = identity or keepout.id
+    lines = [
         "  (zone",
         "    (net 0)",
         '    (net_name "")',
         f"    (layer {_quote(layer.value)})",
-        f'    (uuid "{_stable_uuid(board.name, "copper-keepout", keepout.id, layer.value)}")',
-        f"    (name {_quote(keepout.id)})",
+        f'    (uuid "{_stable_uuid(board.name, "copper-keepout", name, layer.value)}")',
+        f"    (name {_quote(name)})",
         "    (hatch edge 0.5)",
         "    (keepout",
         f"      (tracks {setting(keepout.block_tracks)})",
@@ -342,6 +345,7 @@ def _copper_keepout_lines(
         "    )",
         "  )",
     ]
+    return ["  " + line for line in lines] if footprint_local else lines
 
 
 def _footprint_lines(
@@ -433,6 +437,13 @@ def _footprint_lines(
         lines.extend(
             _pad_lines(board.name, placement, pad, index, net_name, net_codes)
         )
+    for local in sorted(footprint.keepouts, key=lambda item: item.id):
+        for layer in sorted(local.layers, key=lambda item: item.value):
+            lines.extend(_copper_keepout_lines(
+                board, local, layer,
+                identity=f"{placement.reference}/{local.id}",
+                footprint_local=True,
+            ))
     lines.append("  )")
     return lines
 

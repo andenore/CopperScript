@@ -318,7 +318,39 @@ def test_footprint_keepout_moves_with_front_and_back_placements() -> None:
     pcb = KiCadPcbBackend().generate(board).artifacts[0].content
     assert '(name "J1/keepout-0")' in pcb
     assert '(name "J2/keepout-0")' in pcb
+    assert pcb.count("\n    (zone") == 2
+    assert "\n  (zone" not in pcb
     assert '(layer "B.Cu")' in pcb
+
+
+def test_footprint_local_keepout_exempts_own_pad_but_blocks_track() -> None:
+    footprint = parse_kicad_mod('''(footprint "LocalRule" (layer "F.Cu")
+      (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask"))
+      (zone (layer "F.Cu")
+        (keepout (tracks not_allowed) (vias not_allowed)
+          (pads not_allowed) (copperpour not_allowed) (footprints allowed))
+        (polygon (pts (xy -0.5 -0.5) (xy 0.5 -0.5)
+                      (xy 0.5 0.5) (xy -0.5 0.5)))))''').footprint
+    board = PhysicalBoard(
+        name="LocalRuleBoard", outline=BoardOutline.rectangle(20, 20),
+        footprints={footprint.name: footprint},
+        placements=(Placement("J1", footprint.name, Point.mm(10, 10)),),
+        nets=(PhysicalNet("SIGNAL", (PadReference("J1", "1"),)),),
+    )
+    assert not any(
+        item.code == "DRC-COPPER-KEEPOUT"
+        for item in run_physical_drc(board).findings
+    )
+    routed = PhysicalBoard(
+        name=board.name, outline=board.outline, footprints=board.footprints,
+        placements=board.placements, nets=board.nets,
+        tracks=(TrackSegment("SIGNAL", Point.mm(9, 10), Point.mm(11, 10),
+                             nm_from_mm("0.2"), CopperLayer.FRONT),),
+    )
+    assert any(
+        item.code == "DRC-COPPER-KEEPOUT"
+        for item in run_physical_drc(routed).findings
+    )
 
 
 def test_installed_kicad_accepts_imported_sim_and_rf_keepouts(tmp_path: Path) -> None:

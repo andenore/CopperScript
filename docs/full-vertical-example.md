@@ -216,7 +216,9 @@ physical design.
   reported 202 unconnected items. A companion `.kicad_pro` now carries the
   explicit 0.09 mm clearance; on the same placement this removed 15 false
   default-rule clearance findings, leaving 336 other KiCad violations. Most
-  are silkscreen findings, but keepout and footprint findings remain too.
+  are silkscreen findings. Preserving imported keepouts inside their owning
+  footprints removed eight further false board-level keepout findings,
+  leaving 328 violations: 320 silkscreen and eight footprint-library findings.
   This draft is not a release candidate.
 - KiCad 10 parses the exported inspection schematic but reports 136 ERC
   violations on it. Many are caused by the current flattened automatic
