@@ -219,7 +219,12 @@ physical design.
   are silkscreen findings. Preserving imported keepouts inside their owning
   footprints removed eight further false board-level keepout findings,
   leaving 328 violations: 320 silkscreen and eight footprint-library findings.
-  This draft is not a release candidate.
+  All 320 silkscreen findings involved automatically placed reference text.
+  Putting draft reference text on `F.Fab` eliminated those print collisions
+  without removing assembly identity. KiCad now reports eight footprint-library
+  findings and 202 unconnected items on this **unrouted** preview. A proper
+  silkscreen label pass and library-identity audit are still required; this
+  draft is not a release candidate.
 - KiCad 10 parses the exported inspection schematic but reports 136 ERC
   violations on it. Many are caused by the current flattened automatic
   drawing; they are not implied to be 136 distinct board wiring defects.

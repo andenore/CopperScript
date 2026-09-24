@@ -49,6 +49,9 @@ def test_kicad_pcb_backend_emits_deterministic_board_geometry() -> None:
     assert '(net 2 "VIN")' in pcb
     assert '(footprint "test/two_pin"' in pcb
     assert '(pad "1" smd roundrect' in pcb
+    assert re.search(
+        r'\(property "Reference" "R1"\s+\(at [^\n]+\)\s+\(layer "F\.Fab"\)', pcb
+    )
     assert '(segment' in pcb
     assert '(via' in pcb
     assert '(38 "B.Mask" user)' in pcb

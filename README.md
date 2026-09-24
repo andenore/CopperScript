@@ -328,7 +328,8 @@ assignments, copper tracks and vias when present, and a closed `Edge.Cuts`
 outline. Each PCB export also writes a same-stem `.kicad_pro` with the physical
 IR's minimum clearance and default net-class widths/vias; open the board with
 that project for KiCad DRC. Backend tests include a completely routed synthetic
-physical board.
+physical board. Generated reference designators are on fabrication layers
+until a collision-aware silkscreen labeling pass is available.
 
 The `.copper` frontend supports selected placement, routing, and copper-zone
 constraints, while arbitrary board-outline authoring is still pending.

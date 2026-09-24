@@ -372,7 +372,7 @@ def _footprint_lines(
             _kicad_reference(placement.reference),
             0,
             -(footprint.body_size.height_nm // 2 + 1500000),
-            silk_layer,
+            "F.Fab" if placement.side is BoardSide.FRONT else "B.Fab",
         )
     )
     lines.extend(
