@@ -198,6 +198,11 @@ physical design.
   return-path review, clean physical and
   KiCad DRC, and independent CAM verification still gate any fabrication
   output. No production Gerbers should be exported from the current draft.
+  Pad-centered access removed the observed pin-access failures in a guided
+  20,000-state search, but still connected only 32 of 58 nets in one pass;
+  24 nets hit the bounded search limit and two were unreachable in that route
+  order. A grounded inner-plane/stitching strategy and iterative rip-up are
+  needed before the physical route can close.
 - `examples/full_vertical_provisional_4layer.kicad_pcb` is a placed,
   **unrouted** KiCad 10 preview for mechanical and component-location review.
   It is deliberately not a fabrication deliverable; its adjacent layout JSON
@@ -217,6 +222,7 @@ python -m copperscript compile examples/full_vertical_board.copper -o board.json
 python -m copperscript export-kicad examples/full_vertical_board.copper -o full_vertical_board.kicad_sch
 python -m copperscript plan-layout examples/full_vertical_board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
 python -m copperscript route-global examples/full_vertical_board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 -o full_vertical.global-route.json
+python -m copperscript route-board examples/full_vertical_board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 --pitch-mm 1 --passes 1 --report full_vertical.route-report.json -o full_vertical.routed-draft.kicad_pcb
 python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --json
 ```
 

@@ -85,6 +85,19 @@ python -m copperscript route-global examples/valid_board.copper --allow-proxy-fo
 Global guides reserve corridors, layers, and proposed transitions; they are not
 tracks or fabrication data.
 
+Attempt detailed routing and write a native DRC report plus an inspection-only
+KiCad PCB draft:
+
+```console
+python -m copperscript route-board examples/valid_board.copper --allow-proxy-footprints --report route-report.json -o routed-draft.kicad_pcb
+```
+
+The command exits nonzero when routing or DRC is incomplete. Even a successful
+native check does not qualify proxy footprints or replace KiCad and CAM review.
+`--pitch-mm`, `--passes`, and `--search-budget` bound detailed-routing work;
+exhausting the search budget is reported per net rather than silently accepting
+an unfinished path.
+
 Validate and inspect a KiCad footprint before resolving it into a physical
 design:
 

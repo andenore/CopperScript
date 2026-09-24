@@ -21,6 +21,8 @@ from .physicalize import (
     resolved_physicalize,
 )
 from .physical import nm_from_mm
+from .detailed import DetailedRouterOptions
+from .flow import PhysicalFlowStatus, run_routing_pipeline
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routeflow import (
     PlacementRoutingFeedbackOptions,
@@ -184,6 +186,28 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum transactional placement-routing feedback iterations",
     )
 
+    board_route_parser = subparsers.add_parser(
+        "route-board", help="attempt complete physical routing and run native DRC"
+    )
+    board_route_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(board_route_parser)
+    board_route_parser.add_argument("-o", "--output", type=Path, help="optional routed KiCad PCB draft")
+    board_route_parser.add_argument("--report", type=Path, help="physical routing and DRC report JSON")
+    board_route_parser.add_argument("--no-check", action="store_true", help="attempt routing despite ERC errors")
+    board_route_parser.add_argument("--footprint-root", action="append", default=[], type=Path)
+    board_route_parser.add_argument("--allow-proxy-footprints", action="store_true")
+    board_route_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
+    board_route_parser.add_argument(
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic"
+    )
+    board_route_parser.add_argument("--candidates", type=int, default=1)
+    board_route_parser.add_argument("--tile-size-mm", default="5")
+    board_route_parser.add_argument("--router-iterations", type=int, default=5)
+    board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
+    board_route_parser.add_argument("--pitch-mm", default="1")
+    board_route_parser.add_argument("--passes", type=int, default=1)
+    board_route_parser.add_argument("--search-budget", type=int, default=50_000)
+
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
     )
@@ -246,6 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "export-kicad-pcb",
         "plan-layout",
         "route-global",
+        "route-board",
         "audit-footprints",
     }:
         try:
@@ -314,6 +339,75 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print(f"OK: {board.name} passed power-state analysis")
             return 1 if has_errors(diagnostics) else 0
+
+        if args.command == "route-board":
+            if has_errors(diagnostics) and not args.no_check:
+                for diagnostic in diagnostics:
+                    print(diagnostic)
+                print("Board routing stopped because ERC reported errors.")
+                return 1
+            try:
+                physical_options = PrototypePhysicalOptions(
+                    copper_layers=args.layers, fabrication_profile=args.fab_profile
+                )
+                if args.allow_proxy_footprints:
+                    physical_board = prototype_physicalize(board, physical_options)
+                else:
+                    resolver = FootprintResolver(
+                        base_directory=args.board.resolve().parent,
+                        search_roots=tuple(root.resolve() for root in args.footprint_root),
+                    )
+                    physical_board = resolved_physicalize(board, resolver, physical_options)
+                router_options = GlobalRouterOptions(
+                    tile_size_nm=nm_from_mm(args.tile_size_mm),
+                    maximum_iterations=args.router_iterations,
+                )
+                result = run_routing_pipeline(
+                    physical_board,
+                    placement_options=PlacementPlannerOptions(candidate_count=args.candidates),
+                    global_options=router_options,
+                    feedback_options=PlacementRoutingFeedbackOptions(
+                        maximum_iterations=args.feedback_iterations,
+                        initial_movement_nm=router_options.tile_size_nm,
+                    ),
+                    detailed_options=DetailedRouterOptions(
+                        pitch_nm=nm_from_mm(args.pitch_mm), maximum_passes=args.passes,
+                        maximum_search_states=args.search_budget,
+                    ),
+                )
+            except ValueError as exc:
+                print(f"ROUTING ERROR: {exc}")
+                return 2
+            report_path = args.report or Path(f"{board.name}.route-report.json")
+            report = {
+                "schema": "copperscript-route-board/v0.1",
+                "status": result.status.value,
+                "erc_pass": not has_errors(diagnostics),
+                "erc_diagnostics": [str(item) for item in diagnostics],
+                "fabrication_ready": False,
+                "global": json.loads(result.placement_and_global.global_route.to_json()),
+                "critical": json.loads(result.critical.to_json()),
+                "detailed": json.loads(result.detailed.to_json()),
+                "drc": json.loads(result.drc.to_json()),
+            }
+            try:
+                report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                if args.output:
+                    artifact = KiCadPcbBackend().generate(result.board).artifacts[0]
+                    args.output.write_text(artifact.content, encoding="utf-8")
+            except (OSError, ValueError) as exc:
+                print(f"OUTPUT ERROR: {exc}")
+                return 2
+            metrics = result.detailed.metrics
+            print(
+                f"BOARD ROUTE: {result.status.value} - "
+                f"routed={metrics.routed_net_count}, unrouted={metrics.unrouted_net_count}, "
+                f"DRC={result.drc.decision.value}"
+            )
+            print(f"Report -> {report_path}")
+            if args.output:
+                print(f"KiCad PCB draft -> {args.output}")
+            return 0 if result.status is PhysicalFlowStatus.PASS and not has_errors(diagnostics) else 1
 
         if args.command == "route-global":
             if has_errors(diagnostics) and not args.no_check:

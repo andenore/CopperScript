@@ -307,6 +307,30 @@ def test_cli_writes_global_routing_guides(tmp_path: Path) -> None:
     assert "GLOBAL ROUTE: success" in result.stdout
 
 
+def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_path: Path) -> None:
+    report = tmp_path / "route-report.json"
+    pcb = tmp_path / "route-draft.kicad_pcb"
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "copperscript", "route-board",
+            "examples/valid_board.copper", "--allow-proxy-footprints",
+            "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
+            "--report", str(report), "-o", str(pcb),
+        ],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode in {0, 1}, result.stdout + result.stderr
+    document = json.loads(report.read_text(encoding="utf-8"))
+    assert document["schema"] == "copperscript-route-board/v0.1"
+    assert document["erc_pass"]
+    assert document["fabrication_ready"] is False
+    assert document["detailed"]["status"] in {"success", "partial"}
+    assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
+    assert pcb.read_text(encoding="utf-8").startswith("(kicad_pcb")
+    assert "BOARD ROUTE:" in result.stdout
+
+
 def test_cli_checks_kicad_mod_footprint() -> None:
     result = subprocess.run(
         [

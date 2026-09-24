@@ -44,6 +44,9 @@ rather than retaining violating tracks. Explicit copper keepouts remain hard
 obstacles; footprint courtyards do not stand in for copper geometry. Pads with
 no assigned net remain physical copper obstacles and are included in the
 independent spacing check.
+The first two passes use opposite orders; later passes prioritize nets left
+open by the best prior pass. Each pass is transactional, and only the best
+complete set of non-overlapping net routes is materialized.
 
 On a multilayer board without a declared blind/buried/microvia technology,
 both critical and general routing now materialize transitions as through-vias
@@ -57,9 +60,20 @@ and must pass the same copper-clearance query. The independent physical DRC
 remains the final authority; detailed-router success alone cannot authorize
 manufacturing export.
 
+The next iteration adds connected pad centers to a nonuniform search grid and
+offers several direction-diverse, clearance-checked accesses per pad. A
+multi-source/multi-target A* search commits only the selected lead-ins. Track
+cost and heuristic use physical distance rather than grid index counts, so
+fine local spacing does not make a long detour appear artificially cheap.
+Each A* invocation has an explicit state budget. Exhaustion is a distinct
+per-net diagnostic, not evidence that no geometric route exists.
+Search first tries the global guide corridor under a smaller budget, then
+falls back to unrestricted walk-around with the configured budget. Candidate
+edge legality and guide membership are memoized within each immutable search.
+
 This is an incremental implementation, not a full shove router. Planned work
-still includes multiple legal pin-access candidates, pad neckdown rules,
-geometry-aware rip-up of selected nets, via technology/span validation for
+still includes pad neckdown rules, geometry-aware rip-up of selected nets,
+via technology/span validation for
 each fabrication profile, zone-aware power routing, and KiCad DRC comparison.
 
 ## Full-board checkpoint
@@ -74,6 +88,22 @@ copper-keepout violations. The remaining opens show that a legal global guide
 is not enough: fine-pitch pin access, grid resolution, and net-order
 interactions still need work. None of these results qualifies the board for
 manufacturing.
+
+With pad-centered access and a 20,000-state guide-first search, the same
+board still routed 32 of 58 nets in one pass. All previously observed
+"no legal pin access" diagnostics disappeared: 24 remaining nets exhausted
+the search budget and two were unreachable under the chosen route order.
+Native DRC again reported only the 26 opens and incomplete-route finding.
+This narrows the next work to search efficiency, rip-up/order, and power-plane
+strategy rather than loosening copper clearance.
+
+The full board's many-pad GND net should not be assumed connected by an
+unfilled zone. [KiCad's PCB documentation](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html)
+states that zone fill and pad-connection rules determine real copper, and the
+[KiCad CLI](https://docs.kicad.org/10.0/en/cli/cli.pdf) exposes `--refill-zones`
+for DRC. CopperScript currently does not lower a source-level plane intent or
+count verified zone fill in native connectivity. Those are required before a
+plane can close GND without misleading native signoff.
 
 The exported `.kicad_pcb` is an inspection artifact. KiCad's project-level
 design rules are not yet emitted from the selected profile, so independent

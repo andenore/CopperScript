@@ -10,6 +10,7 @@ from pcbir import (
     CopperKeepout,
     DetailedRouterOptions,
     DetailedRoutingStatus,
+    DesignRules,
     FootprintPad,
     GlobalRouterOptions,
     NetRoutingRule,
@@ -72,6 +73,19 @@ def test_detailed_router_materializes_deterministic_exact_copper() -> None:
         for track in first.board.tracks
     ) or len(first.board.tracks) < 28
     assert json.loads(first.to_json())["schema"] == "copperscript-detailed-route/v0.1"
+
+
+def test_detailed_router_reports_search_budget_without_emitting_partial_copper() -> None:
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(1), maximum_passes=1, maximum_search_states=1,
+    ))
+
+    assert result.status is DetailedRoutingStatus.PARTIAL
+    assert "search budget" in result.nets[0].diagnostics[0]
+    assert not result.board.tracks
 
 
 def test_detailed_router_preserves_critical_copper() -> None:
@@ -237,6 +251,48 @@ def test_unconnected_pad_is_still_a_copper_obstacle() -> None:
     }
 
 
+def test_pad_center_grid_escapes_fine_pitch_at_coarse_global_pitch() -> None:
+    array = PhysicalFootprint(
+        "test/fine-pitch-array",
+        (
+            FootprintPad("L", Point.mm("-0.75", 0), Size.mm("0.375", "0.375")),
+            FootprintPad("S", Point.mm("-0.25", 0), Size.mm("0.375", "0.375")),
+            FootprintPad("R", Point.mm("0.25", 0), Size.mm("0.375", "0.375")),
+        ),
+        Size.mm(2, 1),
+    )
+    target = PhysicalFootprint(
+        "test/target",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.5", "0.5")),),
+        Size.mm(1, 1),
+    )
+    board = PhysicalBoard(
+        "FinePitchAccess",
+        BoardOutline.rectangle(20, 12),
+        {array.name: array, target.name: target},
+        (
+            Placement("U1", array.name, Point.mm(10, 6)),
+            Placement("J1", target.name, Point.mm(17, 6)),
+        ),
+        (PhysicalNet("SIGNAL", (
+            PadReference("U1", "S"), PadReference("J1", "1"),
+        )),),
+        rules=DesignRules(
+            minimum_clearance_nm=nm_from_mm("0.09"),
+            default_track_width_nm=nm_from_mm("0.20"),
+        ),
+    )
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(1), maximum_passes=1,
+    ))
+
+    assert result.status is DetailedRoutingStatus.SUCCESS, result.nets
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET",
+    }
+
+
 def test_detailed_router_fails_closed_at_unavoidable_locked_track() -> None:
     base = _board()
     board = replace(
@@ -262,10 +318,11 @@ def test_detailed_router_fails_closed_at_unavoidable_locked_track() -> None:
         tile_size_nm=nm_from_mm(2), maximum_iterations=1,
     ))
     result = route_detailed(board, guide, DetailedRouterOptions(
-        pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=4,
     ))
 
     assert result.status is DetailedRoutingStatus.PARTIAL
+    assert result.metrics.passes == 4
     assert not any(track.net == "SIGNAL" for track in result.board.tracks)
 
 
