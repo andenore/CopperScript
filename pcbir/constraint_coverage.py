@@ -67,19 +67,24 @@ def normalize_constraints(constraints: tuple[object, ...]) -> tuple[NormalizedCo
     for index, constraint in enumerate(constraints):
         kind = constraint.kind.value
         routing = kind == "routing"
-        default_consumers = ("critical_router", "physical_drc") if routing else (
-            "placement", "physical_drc"
+        zone = kind == "copper_zone"
+        default_consumers = (
+            ("physicalizer", "kicad_zone_refill", "physical_drc") if zone
+            else ("critical_router", "physical_drc") if routing
+            else ("placement", "physical_drc")
         )
         normalized.append(
             NormalizedConstraint(
                 constraint.constraint_id or f"{kind}:{index}",
                 ",".join(constraint.targets),
-                f"route.{kind}" if routing else f"placement.{kind}",
+                f"copper.{kind}" if zone else f"route.{kind}" if routing else f"placement.{kind}",
                 constraint.mode,
-                "routing" if routing else "placement",
+                "physical" if zone else "routing" if routing else "placement",
                 constraint.origins,
                 constraint.consumers or default_consumers,
-                constraint.verifier or ("DRC-ROUTING" if routing else "DRC-PLACEMENT"),
+                constraint.verifier or (
+                    "KICAD-ZONE-FILL" if zone else "DRC-ROUTING" if routing else "DRC-PLACEMENT"
+                ),
             )
         )
     return tuple(normalized)

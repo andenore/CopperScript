@@ -70,6 +70,19 @@ def test_kicad_pcb_backend_marks_proxy_board_as_non_fabrication_ready() -> None:
     assert '(net 4 "V3V3")' in manifest.artifacts[0].content
 
 
+def test_rotated_footprint_exports_pad_angles_in_board_coordinates() -> None:
+    from dataclasses import replace
+
+    board = _routed_board()
+    placement = replace(board.placements[0], rotation_degrees=90)
+    rotated = replace(board, placements=(placement, board.placements[1]))
+
+    pcb = KiCadPcbBackend().generate(rotated).artifacts[0].content
+
+    assert '(at -1 0 90)' in pcb
+    assert '(at 1 0 90)' in pcb
+
+
 def _routed_board() -> PhysicalBoard:
     footprint = PhysicalFootprint(
         name="test/two_pin",

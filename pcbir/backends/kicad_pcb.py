@@ -455,7 +455,10 @@ def _pad_lines(
     layers = " ".join(_quote(layer) for layer in pad_layers)
     lines = [
         f"    (pad {_quote(pad.number)} {kind} {shape}",
-        f"      (at {_point(pad.position)} {_decimal(pad.rotation_degrees)})",
+        # KiCad stores the pad angle in board coordinates even though its
+        # position is local to the footprint. Without the placement angle,
+        # rotated rectangular pads overlap their neighbours after export.
+        f"      (at {_point(pad.position)} {_decimal((pad.rotation_degrees + placement.rotation_degrees) % 360)})",
         f"      (size {_mm(pad.size.width_nm)} {_mm(pad.size.height_nm)})",
     ]
     if pad.drill is not None:

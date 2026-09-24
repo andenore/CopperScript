@@ -152,6 +152,64 @@ def test_copper_constraints_lower_to_typed_physical_ir() -> None:
     assert next(group for group in physical.placement_groups if group.name == "pair").anchor == "R2"
 
 
+def test_source_ground_plane_lowers_to_unfilled_physical_zone() -> None:
+    electrical = compile_source(
+        '''
+        board GroundPlane {
+            use library "tiny";
+            component R1: RESISTOR { footprint = "0402"; }
+            net GND { R1.1; }
+            constraint copper_zone(GND) {
+                id = "ground-plane";
+                layers = "In1.Cu";
+                inset = 0.5mm;
+                pad_connection = solid;
+            }
+        }
+        '''
+    )
+    physical = prototype_physicalize(
+        electrical, PrototypePhysicalOptions(copper_layers=4)
+    )
+    assert len(physical.zones) == 1
+    zone = physical.zones[0]
+    assert zone.id == "ground-plane"
+    assert zone.net == "GND"
+    assert tuple(layer.value for layer in zone.layers) == ("In1.Cu",)
+    assert zone.outline.outer.vertices[0] == Point.mm(0.5, 0.5)
+    assert not physical.zone_fills
+    normalized = normalize_constraints(electrical.constraints)[0]
+    assert normalized.domain == "physical"
+    assert normalized.verifier == "KICAD-ZONE-FILL"
+
+
+def test_source_ground_plane_rejects_unknown_net_and_invalid_layer() -> None:
+    electrical = compile_source(
+        '''
+        board GroundPlane {
+            use library "tiny";
+            component R1: RESISTOR { footprint = "0402"; }
+            net GND { R1.1; }
+            constraint copper_zone(MISSING) { layers = "In1.Cu"; }
+        }
+        '''
+    )
+    with pytest.raises(ValueError, match="unknown net"):
+        prototype_physicalize(electrical, PrototypePhysicalOptions(copper_layers=4))
+    valid = compile_source(
+        '''
+        board GroundPlane {
+            use library "tiny";
+            component R1: RESISTOR { footprint = "0402"; }
+            net GND { R1.1; }
+            constraint copper_zone(GND) { layers = "In1.Cu"; }
+        }
+        '''
+    )
+    with pytest.raises(ValueError, match="outside the stackup"):
+        prototype_physicalize(valid, PrototypePhysicalOptions(copper_layers=2))
+
+
 def test_routing_constraint_lowers_complete_source_profile_and_ownership() -> None:
     digest = "a" * 64
     electrical = compile_source(

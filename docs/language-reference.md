@@ -451,7 +451,7 @@ constraint routing(USB_DP) {
 
 Known constraint kinds are `max_distance`, `min_distance`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
-`placement_group`, `keepout`, `routing`, and `note`. Coordinates and rectangle dimensions
+`placement_group`, `keepout`, `routing`, `copper_zone`, and `note`. Coordinates and rectangle dimensions
 are lengths in the physical board coordinate system; orientation values are
 unitless degrees. The detailed legalizer currently accepts orthogonal
 orientations only. `note` remains metadata and has no placement effect.
@@ -467,6 +467,24 @@ placement/routing defaults when neither is stated. Routing parameters lower to
 `maximum_uncoupled_length`, `maximum_stub_length`,
 `tuning_amplitude_limit`, `require_return_vias`, `return_via_net`,
 `maximum_return_via_distance`, and `impedance_evidence_digest`.
+
+A provisional plane can be declared separately from electrical connectivity:
+
+```copper
+constraint copper_zone(GND) {
+    id = "ground-return-plane";
+    layers = "In1.Cu";
+    inset = 0.5mm;
+    pad_connection = solid;
+}
+```
+
+`copper_zone` targets exactly one existing net and lowers to an unfilled
+physical zone inside the rectangular board outline. `layers` is required;
+`inset`, `clearance`, `minimum_width`, and `pad_connection` are optional. The
+selected layers must exist in the chosen physical stackup. A zone declaration
+does not establish electrical connectivity or fabrication readiness: its
+actual fill and connected copper require later verification.
 
 ## KiCad schematic export
 

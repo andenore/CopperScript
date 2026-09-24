@@ -30,6 +30,7 @@ from .physical import (
     BoardSide,
     ComponentPlacementRule,
     CopperLayer,
+    CopperZone,
     DesignRules,
     FootprintPad,
     PadReference,
@@ -43,11 +44,14 @@ from .physical import (
     PlacementRegion,
     PlacementTarget,
     Point,
+    PolygonRing,
+    PolygonWithHoles,
     RelativePlacementKind,
     RelativePlacementRule,
     RouteKind,
     Size,
     Stackup,
+    ZoneConnection,
     nm_from_mm,
 )
 from .quantities import Length, Quantity
@@ -311,6 +315,7 @@ def _physicalize(
         if _selected_footprint(component, flat.library[component.part]) is None
     )
     metadata["omitted_components"] = ",".join(omitted)
+    outline = BoardOutline.rectangle(options.board_width_mm, options.board_height_mm)
     (
         regions,
         keepouts,
@@ -318,12 +323,11 @@ def _physicalize(
         relative_rules,
         placement_groups,
         net_routing_rules,
-    ) = _lower_physical_constraints(flat, component_index, metadata)
+        zones,
+    ) = _lower_physical_constraints(flat, component_index, metadata, outline)
     return PhysicalBoard(
         name=board.name,
-        outline=BoardOutline.rectangle(
-            options.board_width_mm, options.board_height_mm
-        ),
+        outline=outline,
         stackup=Stackup(
             copper_layers=(
                 (CopperLayer.FRONT, CopperLayer.BACK)
@@ -347,6 +351,7 @@ def _physicalize(
         relative_rules=relative_rules,
         placement_groups=placement_groups,
         net_routing_rules=net_routing_rules,
+        zones=zones,
     )
 
 
@@ -354,6 +359,7 @@ def _lower_physical_constraints(
     flat: FlatElectricalView,
     components: Mapping[str, ComponentInstance],
     metadata: dict[str, str],
+    outline: BoardOutline,
 ) -> tuple[
     tuple[PlacementRegion, ...],
     tuple[PlacementKeepout, ...],
@@ -361,6 +367,7 @@ def _lower_physical_constraints(
     tuple[RelativePlacementRule, ...],
     tuple[PlacementGroup, ...],
     tuple[NetRoutingRule, ...],
+    tuple[CopperZone, ...],
 ]:
     regions: list[PlacementRegion] = []
     keepouts: list[PlacementKeepout] = []
@@ -368,6 +375,7 @@ def _lower_physical_constraints(
     relative: list[RelativePlacementRule] = []
     groups: list[PlacementGroup] = []
     routing_rules: list[NetRoutingRule] = []
+    zones: list[CopperZone] = []
     skipped: list[str] = []
 
     def targets(values: tuple[str, ...]) -> tuple[PlacementTarget, ...] | None:
@@ -393,6 +401,47 @@ def _lower_physical_constraints(
 
     net_names = {item.name for item in flat.nets}
     for index, constraint in enumerate(flat.constraints):
+        if constraint.kind is ConstraintKind.COPPER_ZONE:
+            if len(constraint.targets) != 1:
+                raise ValueError("copper_zone requires exactly one net target")
+            net = constraint.targets[0]
+            if net not in net_names:
+                raise ValueError(f"copper_zone references unknown net {net!r}")
+            parameters = constraint.parameters
+            unknown = set(parameters) - {"layers", "inset", "pad_connection", "clearance", "minimum_width"}
+            if unknown:
+                raise ValueError(f"unknown copper_zone parameter {sorted(unknown)[0]!r}")
+            layers = _constraint_layers(parameters.get("layers"))
+            if not layers:
+                raise ValueError("copper_zone requires at least one copper layer")
+            inset = _optional_constraint_length(parameters, "inset") or 0
+            if inset < 0:
+                raise ValueError("copper_zone inset cannot be negative")
+            xs = [point.x_nm for point in outline.vertices]
+            ys = [point.y_nm for point in outline.vertices]
+            left, right = min(xs) + inset, max(xs) - inset
+            top, bottom = min(ys) + inset, max(ys) - inset
+            if left >= right or top >= bottom:
+                raise ValueError("copper_zone inset consumes the board outline")
+            if set(outline.vertices) != {
+                Point(min(xs), min(ys)), Point(max(xs), min(ys)),
+                Point(max(xs), max(ys)), Point(min(xs), max(ys)),
+            }:
+                raise ValueError("copper_zone inset currently requires a rectangular board outline")
+            zone = CopperZone(
+                id=constraint.constraint_id or f"zone:{net}:{index}",
+                net=net,
+                layers=layers,
+                outline=PolygonWithHoles(PolygonRing((
+                    Point(left, top), Point(right, top),
+                    Point(right, bottom), Point(left, bottom),
+                ))),
+                clearance_nm=_optional_constraint_length(parameters, "clearance"),
+                minimum_width_nm=_optional_constraint_length(parameters, "minimum_width") or nm_from_mm("0.25"),
+                pad_connection=ZoneConnection(str(parameters.get("pad_connection", "thermal"))),
+            )
+            zones.append(zone)
+            continue
         if constraint.kind is ConstraintKind.ROUTING:
             if len(constraint.targets) != 1:
                 raise ValueError("routing requires exactly one net target")
@@ -578,6 +627,7 @@ def _lower_physical_constraints(
         tuple(relative),
         _unique_groups(groups),
         tuple(routing_rules),
+        tuple(zones),
     )
 
 

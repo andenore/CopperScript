@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pcbir import ConnectionPolicy, check, compile_file
+from pcbir import ConnectionPolicy, PrototypePhysicalOptions, check, compile_file, prototype_physicalize
 from pcbir.elaborate import elaborate
 from pcbir.power import analyze_power_states
 
@@ -19,6 +19,15 @@ def test_full_vertical_example_compiles_and_passes_erc() -> None:
     assert {
         dependency.import_path for dependency in board.dependencies
     } == {"github.com/andenore/CopperLib/packages/full_vertical"}
+
+
+def test_full_vertical_declares_unfilled_inner_ground_plane() -> None:
+    board = compile_file(EXAMPLE)
+    physical = prototype_physicalize(board, PrototypePhysicalOptions(copper_layers=4))
+    assert len(physical.zones) == 1
+    assert physical.zones[0].net == "GND"
+    assert tuple(layer.value for layer in physical.zones[0].layers) == ("In1.Cu",)
+    assert physical.zone_fills == ()
 
 
 def test_full_vertical_example_exercises_required_subsystems() -> None:

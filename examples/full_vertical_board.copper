@@ -294,4 +294,13 @@ board FullVerticalTracker {
     constraint max_distance(C_ACCEL, U_ACCEL.VDD) { distance = 3mm; }
     constraint max_distance(C_GNSS, U_GNSS.VCC) { distance = 3mm; }
     constraint max_distance(C_MODEM_BULK, U_MODEM.VBAT_1) { distance = 5mm; }
+
+    // A provisional inner-layer return plane. The exported zone is intent only;
+    // KiCad refill and connected-copper signoff are still required.
+    constraint copper_zone(GND) {
+        id = "ground-return-plane";
+        layers = "In1.Cu";
+        inset = 0.5mm;
+        pad_connection = solid;
+    }
 }

@@ -207,6 +207,14 @@ physical design.
   **unrouted** KiCad 10 preview for mechanical and component-location review.
   It is deliberately not a fabrication deliverable; its adjacent layout JSON
   records the placement gate result.
+- The source now declares a provisional GND zone on `In1.Cu` with 0.5 mm
+  outline inset. It is unfilled intent at source lowering; its actual copper
+  connectivity, return path, and clearances are not signed off.
+- KiCad 10 successfully parsed and refilled an inspection-only export of this
+  zone. Correcting the PCB backend's rotated pad angles reduced KiCad's
+  reported shorts from 20 to zero on the same placed draft. KiCad still
+  reported 202 unconnected items and 351 other violations after the fix;
+  these remain open, and this draft is not a release candidate.
 - KiCad 10 parses the exported inspection schematic but reports 136 ERC
   violations on it. Many are caused by the current flattened automatic
   drawing; they are not implied to be 136 distinct board wiring defects.
