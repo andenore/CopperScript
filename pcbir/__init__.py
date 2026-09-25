@@ -49,6 +49,7 @@ from .engineering import AnalysisStatus, EngineeringResult, EvidenceGrade, creep
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
+from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .geometry import (
     Bounds,
     capsules_clear,
@@ -287,6 +288,8 @@ __all__ = [
     "DetailedNetResult",
     "DetailedNode",
     "DetailedRouterOptions",
+    "PlaneStitchOptions",
+    "PlaneStitchResult",
     "DetailedRoutingMetrics",
     "DetailedRoutingResult",
     "DetailedRoutingStatus",
@@ -505,6 +508,7 @@ __all__ = [
     "run_incremental_physical_drc",
     "run_process_drc",
     "run_routing_pipeline",
+    "stitch_zone_pads",
     "verify_cam_directory",
     "physical_board_digest",
     "prototype_physicalize",

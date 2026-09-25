@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import pcbir.detailed as detailed_module
 
 from pcbir import (
     BoardOutline,
     CriticalRoutingStatus,
     CopperLayer,
     CopperKeepout,
+    CopperZone,
     DetailedRouterOptions,
     DetailedRoutingStatus,
     DesignRules,
@@ -100,6 +102,31 @@ def test_detailed_router_reports_search_budget_without_emitting_partial_copper()
     assert not result.board.tracks
 
 
+def test_zone_net_is_deferred_without_claiming_unfilled_copper_connected() -> None:
+    base = _board()
+    zone = CopperZone(
+        "plane", "SIGNAL", (CopperLayer.BACK,),
+        PolygonWithHoles(PolygonRing((
+            Point.mm(1, 1), Point.mm(19, 1),
+            Point.mm(19, 11), Point.mm(1, 11),
+        ))),
+    )
+    board = replace(base, zones=(zone,))
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        maximum_passes=2, defer_zone_nets=True,
+    ))
+
+    assert result.status is DetailedRoutingStatus.PARTIAL
+    assert result.metrics.unrouted_net_count == 1
+    assert "awaits verified fill" in result.nets[0].diagnostics[0]
+    assert result.board.tracks == ()
+    assert "DRC-OPEN-NET" in {
+        finding.code for finding in run_physical_drc(result.board).findings
+    }
+
+
 def test_per_net_grid_does_not_cross_product_unrelated_pad_coordinates() -> None:
     base = _board()
     footprint = next(iter(base.footprints.values()))
@@ -168,6 +195,32 @@ def test_repair_combines_clear_routes_from_different_passes() -> None:
     assert repaired.metrics.routed_net_count == 2
     assert repaired.metrics.unrouted_net_count == 0
     assert repaired.metrics.total_conflict_overflow == 0
+
+
+def test_repair_expands_budget_only_for_remaining_open_nets(monkeypatch) -> None:
+    board = _board()
+    missing = _NetAttempt(
+        DetailedNetResult("SIGNAL", False, 0, 0, 0, 0, ("failed",)),
+        (), (), frozenset(),
+    )
+    metrics = DetailedRoutingMetrics(0, 1, 0, 0, 0, 0, 0, 1)
+    best = _Pass((missing,), {}, metrics)
+    observed: list[int] = []
+
+    def fake_route_net(*args, **kwargs):
+        observed.append(args[-1].maximum_search_states)
+        return missing
+
+    monkeypatch.setattr(detailed_module, "_route_net", fake_route_net)
+    _repair_from_passes(
+        board, list(board.nets), {}, {}, best, [best, best],
+        DetailedRouterOptions(
+            maximum_passes=2, maximum_search_states=10,
+            repair_budget_multiplier=5,
+        ),
+    )
+
+    assert observed == [50]
 
 
 def test_clearance_index_distinguishes_movable_from_locked_blockers() -> None:
@@ -440,6 +493,14 @@ def test_detailed_router_walks_around_foreign_pad_with_exact_clearance() -> None
     assert result.status is DetailedRoutingStatus.SUCCESS
     assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
         "DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET",
+    }
+    progressive = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
+        progressive_guides=True,
+    ))
+    assert progressive.status is DetailedRoutingStatus.SUCCESS
+    assert "DRC-OPEN-NET" not in {
+        finding.code for finding in run_physical_drc(progressive.board).findings
     }
 
 

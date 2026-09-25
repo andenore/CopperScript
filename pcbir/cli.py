@@ -22,7 +22,9 @@ from .physicalize import (
 )
 from .physical import nm_from_mm
 from .detailed import DetailedRouterOptions
+from .drc import run_physical_drc
 from .flow import PhysicalFlowStatus, run_routing_pipeline
+from .plane import stitch_zone_pads
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routeflow import (
     PlacementRoutingFeedbackOptions,
@@ -222,6 +224,22 @@ def _parser() -> argparse.ArgumentParser:
         "--constrained-pins-first", action="store_true",
         help="connect multi-terminal pads with fewer legal accesses first",
     )
+    board_route_parser.add_argument(
+        "--progressive-guides", action="store_true",
+        help="retry maze search in gradually wider guide corridors",
+    )
+    board_route_parser.add_argument(
+        "--repair-budget-multiplier", type=int, default=1,
+        help="multiply the search limit only when retrying nets left open after all passes",
+    )
+    board_route_parser.add_argument(
+        "--defer-zone-nets", action="store_true",
+        help="report zone nets as pending verified fill instead of tracing one large tree",
+    )
+    board_route_parser.add_argument(
+        "--stitch-zone-pads", action="store_true",
+        help="add DRC-checked pad escapes and vias, but still require verified zone fill",
+    )
 
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
@@ -392,11 +410,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         heuristic_weight_percent=args.heuristic_weight,
                         enable_soft_ripup=args.soft_ripup,
                         constrained_pins_first=args.constrained_pins_first,
+                        progressive_guides=args.progressive_guides,
+                        repair_budget_multiplier=args.repair_budget_multiplier,
+                        defer_zone_nets=args.defer_zone_nets,
                     ),
                 )
             except ValueError as exc:
                 print(f"ROUTING ERROR: {exc}")
                 return 2
+            stitch = stitch_zone_pads(result.board) if args.stitch_zone_pads else None
+            output_board = stitch.board if stitch is not None else result.board
+            output_drc = run_physical_drc(output_board) if stitch is not None else result.drc
             report_path = args.report or Path(f"{board.name}.route-report.json")
             report = {
                 "schema": "copperscript-route-board/v0.1",
@@ -408,12 +432,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "global": json.loads(result.placement_and_global.global_route.to_json()),
                 "critical": json.loads(result.critical.to_json()),
                 "detailed": json.loads(result.detailed.to_json()),
-                "drc": json.loads(result.drc.to_json()),
+                "drc": json.loads(output_drc.to_json()),
             }
+            if stitch is not None:
+                report["plane_stitch"] = {
+                    "stitched_pads": [
+                        f"{item.component}.{item.pad}" for item in stitch.stitched_pads
+                    ],
+                    "pending_pads": [
+                        f"{item.component}.{item.pad}" for item in stitch.pending_pads
+                    ],
+                    "added_track_count": stitch.added_track_count,
+                    "added_via_count": stitch.added_via_count,
+                    "zone_fill_verified": False,
+                }
             try:
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if args.output:
-                    pcb_manifest = KiCadPcbBackend().generate(result.board)
+                    pcb_manifest = KiCadPcbBackend().generate(output_board)
                     args.output.write_text(pcb_manifest.artifacts[0].content, encoding="utf-8")
                     args.output.with_suffix(".kicad_pro").write_text(
                         pcb_manifest.artifacts[1].content, encoding="utf-8"
@@ -425,7 +461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 f"BOARD ROUTE: {result.status.value} - "
                 f"routed={metrics.routed_net_count}, unrouted={metrics.unrouted_net_count}, "
-                f"DRC={result.drc.decision.value}"
+                f"DRC={output_drc.decision.value}"
             )
             print(f"Report -> {report_path}")
             if args.output:

@@ -142,6 +142,9 @@ class DetailedRouterOptions:
     heuristic_weight_percent: int = 100
     enable_soft_ripup: bool = False
     constrained_pins_first: bool = False
+    progressive_guides: bool = False
+    repair_budget_multiplier: int = 1
+    defer_zone_nets: bool = False
 
     def __post_init__(self) -> None:
         if min(
@@ -159,6 +162,8 @@ class DetailedRouterOptions:
             raise ValueError("detailed router costs cannot be negative")
         if not 100 <= self.heuristic_weight_percent <= 300:
             raise ValueError("detailed router heuristic weight must be 100..300 percent")
+        if not 1 <= self.repair_budget_multiplier <= 10:
+            raise ValueError("detailed router repair budget multiplier must be 1..10")
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,10 +208,15 @@ def route_detailed(
     options = options or DetailedRouterOptions()
     rules = {item.net: item for item in board.net_routing_rules}
     guides = {item.net: item for item in global_route.routes}
+    zone_nets = {zone.net for zone in board.zones} if options.defer_zone_nets else set()
+    deferred = [
+        net for net in board.nets if len(net.pads) >= 2 and net.name in zone_nets
+    ]
     general_nets = [
         net
         for net in board.nets
         if len(net.pads) >= 2
+        and net.name not in zone_nets
         and (rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
     ]
     history: dict[str, int] = {}
@@ -217,7 +227,10 @@ def route_detailed(
         completed_passes = pass_index
         clearance = RoutingClearanceIndex(board)
         usage: dict[str, int] = {}
-        attempts: list[_NetAttempt] = []
+        attempts: list[_NetAttempt] = [
+            _failed(net.name, "zone net awaits verified fill and pad stitching")
+            for net in deferred
+        ]
         ordered_nets = sorted(
             general_nets,
             key=lambda item: (-len(item.pads), _net_span(board, item.pads), item.name),
@@ -464,9 +477,16 @@ def _repair_from_passes(
     for net in nets:
         if selected[net.name].result.connected:
             continue
+        repair_options = replace(
+            options,
+            maximum_search_states=(
+                options.maximum_search_states * options.repair_budget_multiplier
+            ),
+        )
         attempt = _route_net(
-            board, _build_grid(board, options, net.pads), net.name, net.pads,
-            rules.get(net.name), guides.get(net.name), usage, {}, clearance, options,
+            board, _build_grid(board, repair_options, net.pads), net.name, net.pads,
+            rules.get(net.name), guides.get(net.name), usage, {}, clearance,
+            repair_options,
         )
         if not attempt.result.connected:
             continue
@@ -478,7 +498,10 @@ def _repair_from_passes(
         for via in attempt.vias:
             clearance.add_via(via)
 
-    attempts = tuple(selected[net.name] for net in nets)
+    ordinary_names = {net.name for net in nets}
+    attempts = tuple(selected[net.name] for net in nets) + tuple(
+        item for item in best.nets if item.result.net not in ordinary_names
+    )
     overflow = [value - 1 for value in usage.values() if value > 1]
     metrics = DetailedRoutingMetrics(
         routed_net_count=sum(item.result.connected for item in attempts),
@@ -672,22 +695,28 @@ def _search(
     allow_movable_conflicts: bool = False,
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     if options.allow_guide_deviation:
-        corridor_budget = min(5_000, max(1, options.maximum_search_states // 5))
-        try:
-            guided = _search_once(
-                grid, starts, targets, allowed, guide, usage, history,
-                clearance, net, width_nm, options,
-                corridor_only=True, state_budget=corridor_budget,
-                allow_movable_conflicts=allow_movable_conflicts,
+        scales = (1, 2, 4) if options.progressive_guides else (1,)
+        for scale in scales:
+            corridor_budget = min(
+                5_000, max(1, options.maximum_search_states // (5 if scale == 1 else 2)),
             )
-        except _SearchBudgetExceeded:
-            guided = None
-        if guided is not None:
-            return guided
+            try:
+                guided = _search_once(
+                    grid, starts, targets, allowed, guide, usage, history,
+                    clearance, net, width_nm, options,
+                    corridor_only=True, state_budget=corridor_budget,
+                    guide_margin_nm=options.guide_margin_nm * scale,
+                    allow_movable_conflicts=allow_movable_conflicts,
+                )
+            except _SearchBudgetExceeded:
+                guided = None
+            if guided is not None:
+                return guided
     return _search_once(
         grid, starts, targets, allowed, guide, usage, history,
         clearance, net, width_nm, options,
         corridor_only=False, state_budget=options.maximum_search_states,
+        guide_margin_nm=options.guide_margin_nm,
         allow_movable_conflicts=allow_movable_conflicts,
     )
 
@@ -707,6 +736,7 @@ def _search_once(
     *,
     corridor_only: bool,
     state_budget: int,
+    guide_margin_nm: int,
     allow_movable_conflicts: bool,
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     allowed_indexes = {grid.layers.index(layer) for layer in allowed}
@@ -729,7 +759,7 @@ def _search_once(
     def inside_guide(node: DetailedNode) -> bool:
         value = guide_cache.get(node)
         if value is None:
-            value = _inside_guide(grid, node, guide, options.guide_margin_nm)
+            value = _inside_guide(grid, node, guide, guide_margin_nm)
             guide_cache[node] = value
         return value
 

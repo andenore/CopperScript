@@ -132,9 +132,14 @@ The full board's many-pad GND net should not be assumed connected by an
 unfilled zone. [KiCad's PCB documentation](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html)
 states that zone fill and pad-connection rules determine real copper, and the
 [KiCad CLI](https://docs.kicad.org/10.0/en/cli/cli.pdf) exposes `--refill-zones`
-for DRC. CopperScript currently does not lower a source-level plane intent or
-count verified zone fill in native connectivity. Those are required before a
-plane can close GND without misleading native signoff.
+for DRC. The source now lowers a declared inner GND zone, but an unfilled zone
+does not count in native connectivity. The optional `--defer-zone-nets` mode
+avoids spending trace-search time on the 81-pad physical GND net and reports it
+as pending. `--stitch-zone-pads` adds DRC-checked surface-pad escapes and
+through-vias inside the zone outline, and reports any pads for which no legal
+escape was found. It does **not** certify zone fill or count the net connected.
+A pinned KiCad refill, connected-copper check, and native/imported fill evidence
+are still required before the plane can close GND in signoff.
 
 The exported `.kicad_pcb` is an inspection artifact. KiCad's project-level
 design rules are not yet emitted from the selected profile, so independent

@@ -319,6 +319,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
             sys.executable, "-m", "copperscript", "route-board",
             "examples/valid_board.copper", "--allow-proxy-footprints",
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
+            "--stitch-zone-pads",
             "--report", str(report), "-o", str(pcb),
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -331,6 +332,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["fabrication_ready"] is False
     assert document["detailed"]["status"] in {"success", "partial"}
     assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
+    assert document["plane_stitch"]["zone_fill_verified"] is False
     assert pcb.read_text(encoding="utf-8").startswith("(kicad_pcb")
     assert pcb.with_suffix(".kicad_pro").is_file()
     assert "BOARD ROUTE:" in result.stdout
