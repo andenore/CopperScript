@@ -201,12 +201,27 @@ def _parser() -> argparse.ArgumentParser:
         "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic"
     )
     board_route_parser.add_argument("--candidates", type=int, default=1)
+    board_route_parser.add_argument(
+        "--placement-candidate", help="select a named legal candidate, e.g. candidate-01",
+    )
     board_route_parser.add_argument("--tile-size-mm", default="5")
     board_route_parser.add_argument("--router-iterations", type=int, default=5)
     board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
     board_route_parser.add_argument("--pitch-mm", default="1")
     board_route_parser.add_argument("--passes", type=int, default=1)
     board_route_parser.add_argument("--search-budget", type=int, default=50_000)
+    board_route_parser.add_argument(
+        "--heuristic-weight", type=int, default=100,
+        help="A* heuristic weight in percent (100=shortest-search baseline, up to 300)",
+    )
+    board_route_parser.add_argument(
+        "--soft-ripup", action="store_true",
+        help="try slower tentative routes through removable copper, then reroute blockers",
+    )
+    board_route_parser.add_argument(
+        "--constrained-pins-first", action="store_true",
+        help="connect multi-terminal pads with fewer legal accesses first",
+    )
 
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
@@ -369,10 +384,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     feedback_options=PlacementRoutingFeedbackOptions(
                         maximum_iterations=args.feedback_iterations,
                         initial_movement_nm=router_options.tile_size_nm,
+                        preferred_candidate_id=args.placement_candidate,
                     ),
                     detailed_options=DetailedRouterOptions(
                         pitch_nm=nm_from_mm(args.pitch_mm), maximum_passes=args.passes,
                         maximum_search_states=args.search_budget,
+                        heuristic_weight_percent=args.heuristic_weight,
+                        enable_soft_ripup=args.soft_ripup,
+                        constrained_pins_first=args.constrained_pins_first,
                     ),
                 )
             except ValueError as exc:
@@ -385,6 +404,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 "fabrication_ready": False,
+                "placement_candidate": result.placement_and_global.placement_candidate,
                 "global": json.loads(result.placement_and_global.global_route.to_json()),
                 "critical": json.loads(result.critical.to_json()),
                 "detailed": json.loads(result.detailed.to_json()),

@@ -33,6 +33,18 @@ from pcbir import (
     run_physical_drc,
     TrackSegment,
 )
+from pcbir.detailed import (
+    DetailedNetResult,
+    DetailedNode,
+    DetailedRoutingMetrics,
+    _NetAttempt,
+    _Pass,
+    _build_grid,
+    _edge_resources,
+    _repair_from_passes,
+    _route_net,
+)
+from pcbir.routing_clearance import RoutingClearanceIndex
 
 
 def _board() -> PhysicalBoard:
@@ -88,6 +100,197 @@ def test_detailed_router_reports_search_budget_without_emitting_partial_copper()
     assert not result.board.tracks
 
 
+def test_per_net_grid_does_not_cross_product_unrelated_pad_coordinates() -> None:
+    base = _board()
+    footprint = next(iter(base.footprints.values()))
+    board = replace(
+        base,
+        placements=(*base.placements, Placement(
+            "X1", footprint.name, Point.mm("8.37", "4.19"),
+        )),
+        nets=(*base.nets, PhysicalNet("OTHER", (PadReference("X1", "1"),))),
+    )
+    options = DetailedRouterOptions(pitch_nm=nm_from_mm(1))
+    signal_grid = _build_grid(board, options, board.nets[0].pads)
+    other_grid = _build_grid(board, options, board.nets[1].pads)
+
+    assert nm_from_mm("8.37") not in signal_grid.xs
+    assert nm_from_mm("4.19") not in signal_grid.ys
+    assert nm_from_mm("8.37") in other_grid.xs
+    assert nm_from_mm("4.19") in other_grid.ys
+    assert _edge_resources(
+        signal_grid, DetailedNode(0, 0, 0), DetailedNode(0, 1, 0),
+    ) == _edge_resources(
+        other_grid, DetailedNode(0, 0, 0), DetailedNode(0, 1, 0),
+    )
+
+
+def test_repair_combines_clear_routes_from_different_passes() -> None:
+    base = _board()
+    footprint = next(iter(base.footprints.values()))
+    board = replace(
+        base,
+        placements=(*base.placements,
+            Placement("J3", footprint.name, Point.mm(3, 9)),
+            Placement("J4", footprint.name, Point.mm(17, 9))),
+        nets=(*base.nets, PhysicalNet(
+            "OTHER", (PadReference("J3", "1"), PadReference("J4", "1")),
+        )),
+    )
+    signal = _NetAttempt(
+        DetailedNetResult("SIGNAL", True, 1, 0, nm_from_mm(14), 0),
+        (TrackSegment("SIGNAL", Point.mm(3, 6), Point.mm(17, 6),
+                      nm_from_mm("0.25"), CopperLayer.FRONT),),
+        (), frozenset(),
+    )
+    other = _NetAttempt(
+        DetailedNetResult("OTHER", True, 1, 0, nm_from_mm(14), 0),
+        (TrackSegment("OTHER", Point.mm(3, 9), Point.mm(17, 9),
+                      nm_from_mm("0.25"), CopperLayer.FRONT),),
+        (), frozenset(),
+    )
+    missing_signal = _NetAttempt(
+        DetailedNetResult("SIGNAL", False, 0, 0, 0, 0, ("failed",)),
+        (), (), frozenset(),
+    )
+    missing_other = replace(missing_signal, result=replace(
+        missing_signal.result, net="OTHER",
+    ))
+    metrics = DetailedRoutingMetrics(1, 1, 0, 0, 1, 0, nm_from_mm(14), 1)
+    first = _Pass((signal, missing_other), {}, metrics)
+    second = _Pass((missing_signal, other), {}, metrics)
+
+    repaired = _repair_from_passes(
+        board, list(board.nets), {}, {}, first, [first, second],
+        DetailedRouterOptions(maximum_passes=2),
+    )
+
+    assert repaired.metrics.routed_net_count == 2
+    assert repaired.metrics.unrouted_net_count == 0
+    assert repaired.metrics.total_conflict_overflow == 0
+
+
+def test_clearance_index_distinguishes_movable_from_locked_blockers() -> None:
+    board = _board()
+    candidate = TrackSegment(
+        "OTHER", Point.mm(10, 3), Point.mm(10, 9),
+        nm_from_mm("0.25"), CopperLayer.FRONT,
+    )
+    crossing = TrackSegment(
+        "SIGNAL", Point.mm(3, 6), Point.mm(17, 6),
+        nm_from_mm("0.25"), CopperLayer.FRONT,
+    )
+    clearance = RoutingClearanceIndex(board)
+    clearance.add_track(crossing)
+
+    assert clearance.blocking_track_nets(candidate) == (
+        frozenset({"SIGNAL"}), False,
+    )
+    locked = RoutingClearanceIndex(replace(board, tracks=(crossing,)))
+    assert locked.blocking_track_nets(candidate) == (frozenset(), True)
+
+
+def test_soft_search_proposes_removable_conflict_but_never_locked_conflict() -> None:
+    base = _board()
+    wall = TrackSegment(
+        "BLOCKER", Point.mm(10, 0), Point.mm(10, 12),
+        nm_from_mm("0.5"), CopperLayer.FRONT,
+    )
+    board = replace(
+        base,
+        nets=(*base.nets, PhysicalNet("BLOCKER", ())),
+        net_routing_rules=(NetRoutingRule(
+            "SIGNAL", allowed_layers=(CopperLayer.FRONT,),
+        ),),
+    )
+    guide = next(item for item in route_global(
+        board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
+    ).routes if item.net == "SIGNAL")
+    options = DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=1,
+    )
+    grid = _build_grid(board, options, board.nets[0].pads)
+    movable = RoutingClearanceIndex(board)
+    movable.add_track(wall)
+    hard_attempt = _route_net(
+        board, grid, "SIGNAL", board.nets[0].pads,
+        board.net_routing_rules[0], guide, {}, {}, movable, options,
+    )
+    soft_attempt = _route_net(
+        board, grid, "SIGNAL", board.nets[0].pads,
+        board.net_routing_rules[0], guide, {}, {}, movable, options,
+        allow_movable_conflicts=True,
+    )
+    locked_board = replace(board, tracks=(wall,))
+    locked_attempt = _route_net(
+        locked_board, _build_grid(locked_board, options, locked_board.nets[0].pads),
+        "SIGNAL", locked_board.nets[0].pads,
+        locked_board.net_routing_rules[0], guide, {}, {},
+        RoutingClearanceIndex(locked_board), options,
+        allow_movable_conflicts=True,
+    )
+
+    assert not hard_attempt.result.connected
+    assert soft_attempt.result.connected
+    assert any(movable.blocking_track_nets(track)[0] for track in soft_attempt.tracks)
+    assert not locked_attempt.result.connected
+
+
+def test_repair_rips_up_one_blocker_and_reroutes_it() -> None:
+    base = _board()
+    footprint = next(iter(base.footprints.values()))
+    board = replace(
+        base,
+        placements=(*base.placements,
+            Placement("J3", footprint.name, Point.mm(10, 3)),
+            Placement("J4", footprint.name, Point.mm(10, 9))),
+        nets=(*base.nets, PhysicalNet(
+            "OTHER", (PadReference("J3", "1"), PadReference("J4", "1")),
+        )),
+    )
+    signal_track = TrackSegment(
+        "SIGNAL", Point.mm(3, 6), Point.mm(17, 6),
+        nm_from_mm("0.25"), CopperLayer.FRONT,
+    )
+    other_track = TrackSegment(
+        "OTHER", Point.mm(10, 3), Point.mm(10, 9),
+        nm_from_mm("0.25"), CopperLayer.FRONT,
+    )
+    signal = _NetAttempt(
+        DetailedNetResult("SIGNAL", True, 1, 0, nm_from_mm(14), 0),
+        (signal_track,), (), frozenset(),
+    )
+    other = _NetAttempt(
+        DetailedNetResult("OTHER", True, 1, 0, nm_from_mm(6), 0),
+        (other_track,), (), frozenset(),
+    )
+    missing_signal = _NetAttempt(
+        DetailedNetResult("SIGNAL", False, 0, 0, 0, 0, ("failed",)),
+        (), (), frozenset(),
+    )
+    missing_other = replace(missing_signal, result=replace(
+        missing_signal.result, net="OTHER",
+    ))
+    metrics = DetailedRoutingMetrics(1, 1, 0, 0, 1, 0, nm_from_mm(14), 1)
+    first = _Pass((signal, missing_other), {}, metrics)
+    second = _Pass((missing_signal, other), {}, metrics)
+    guides = {item.net: item for item in route_global(
+        board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
+    ).routes}
+
+    repaired = _repair_from_passes(
+        board, list(board.nets), {}, guides, first, [first, second],
+        DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=2),
+    )
+
+    assert repaired.metrics.routed_net_count == 2
+    tracks = tuple(track for item in repaired.nets for track in item.tracks)
+    vias = tuple(via for item in repaired.nets for via in item.vias)
+    assert not {finding.code for finding in run_physical_drc(
+        replace(board, tracks=tracks, vias=vias),
+    ).findings} & {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
+
+
 def test_detailed_router_preserves_critical_copper() -> None:
     board = replace(
         _board(),
@@ -109,9 +312,12 @@ def test_detailed_router_preserves_critical_copper() -> None:
 def test_detailed_router_fails_closed_without_a_connected_guide() -> None:
     board = replace(
         _board(),
-        keepouts=(
-            PlacementKeepout(
-                "wall", BoardOutline.rectangle(4, 12, origin=Point.mm(8, 0))
+        copper_keepouts=(
+            CopperKeepout("wall", (CopperLayer.FRONT, CopperLayer.BACK),
+                PolygonWithHoles(PolygonRing((
+                    Point.mm(8, 0), Point.mm(12, 0),
+                    Point.mm(12, 12), Point.mm(8, 12),
+                ))),
             ),
         ),
     )
@@ -128,6 +334,26 @@ def test_detailed_router_fails_closed_without_a_connected_guide() -> None:
     assert result.metrics.unrouted_net_count == 1
     assert "missing connected global guide" in result.nets[0].diagnostics[0]
     assert result.board.metadata["fabrication_ready"] == "false"
+
+
+def test_placement_only_keepout_does_not_block_copper_routing() -> None:
+    board = replace(
+        _board(), keepouts=(PlacementKeepout(
+            "assembly-space", BoardOutline.rectangle(
+                4, 12, origin=Point.mm(8, 0),
+            ),
+        ),),
+    )
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(1), maximum_passes=1,
+    ))
+
+    assert guide.routes[0].connected
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert "DRC-OPEN-NET" not in {
+        finding.code for finding in run_physical_drc(result.board).findings
+    }
 
 
 def test_detailed_router_uses_inner_copper_beneath_surface_footprint() -> None:
@@ -318,12 +544,15 @@ def test_detailed_router_fails_closed_at_unavoidable_locked_track() -> None:
         tile_size_nm=nm_from_mm(2), maximum_iterations=1,
     ))
     result = route_detailed(board, guide, DetailedRouterOptions(
-        pitch_nm=nm_from_mm("0.5"), maximum_passes=4,
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=6,
     ))
 
     assert result.status is DetailedRoutingStatus.PARTIAL
-    assert result.metrics.passes == 4
+    assert result.metrics.passes == 6
     assert not any(track.net == "SIGNAL" for track in result.board.tracks)
+    assert result == route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=6,
+    ))
 
 
 def test_multiterminal_cleanup_keeps_exact_branch_junctions() -> None:
@@ -343,6 +572,13 @@ def test_multiterminal_cleanup_keeps_exact_branch_junctions() -> None:
     assert result.status is DetailedRoutingStatus.SUCCESS
     assert "DRC-OPEN-NET" not in {
         finding.code for finding in run_physical_drc(result.board).findings
+    }
+    constrained = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(1), constrained_pins_first=True,
+    ))
+    assert constrained.status is DetailedRoutingStatus.SUCCESS
+    assert "DRC-OPEN-NET" not in {
+        finding.code for finding in run_physical_drc(constrained.board).findings
     }
 
 

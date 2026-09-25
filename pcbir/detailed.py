@@ -19,6 +19,7 @@ from .physical import (
     PadKind,
     PadReference,
     PhysicalBoard,
+    PhysicalNet,
     Placement,
     Point,
     RouteKind,
@@ -138,6 +139,9 @@ class DetailedRouterOptions:
     any_angle_cleanup: bool = True
     pin_access_candidates: int = 8
     maximum_search_states: int = 50_000
+    heuristic_weight_percent: int = 100
+    enable_soft_ripup: bool = False
+    constrained_pins_first: bool = False
 
     def __post_init__(self) -> None:
         if min(
@@ -153,6 +157,8 @@ class DetailedRouterOptions:
             self.guide_margin_nm,
         ) < 0:
             raise ValueError("detailed router costs cannot be negative")
+        if not 100 <= self.heuristic_weight_percent <= 300:
+            raise ValueError("detailed router heuristic weight must be 100..300 percent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +201,6 @@ def route_detailed(
     """Route all ordinary nets while preserving existing critical copper."""
 
     options = options or DetailedRouterOptions()
-    grid = _build_grid(board, options)
     rules = {item.net: item for item in board.net_routing_rules}
     guides = {item.net: item for item in global_route.routes}
     general_nets = [
@@ -206,6 +211,7 @@ def route_detailed(
     ]
     history: dict[str, int] = {}
     best: _Pass | None = None
+    completed: list[_Pass] = []
     completed_passes = 0
     for pass_index in range(1, options.maximum_passes + 1):
         completed_passes = pass_index
@@ -220,12 +226,22 @@ def route_detailed(
             ordered_nets.reverse()
         elif pass_index >= 3 and best is not None:
             failed = {item.result.net for item in best.nets if not item.result.connected}
-            ordered_nets.sort(key=lambda item: (
-                item.name not in failed,
-                -len(item.pads) if pass_index % 2 else len(item.pads),
-                _net_span(board, item.pads), item.name,
-            ))
+            if pass_index <= 4:
+                ordered_nets.sort(key=lambda item: (
+                    item.name not in failed,
+                    -len(item.pads) if pass_index % 2 else len(item.pads),
+                    _net_span(board, item.pads), item.name,
+                ))
+            else:
+                # Repeating the same two sorts cannot discover a new legal
+                # route order once the best pass stagnates. Diversify later
+                # passes reproducibly while keeping failed nets prioritized.
+                ordered_nets.sort(key=lambda item: (
+                    item.name not in failed,
+                    sha256(f"{pass_index}:{item.name}".encode()).digest(),
+                ))
         for net in ordered_nets:
+            grid = _build_grid(board, options, net.pads)
             guide = guides.get(net.name)
             attempt = _route_net(
                 board,
@@ -259,6 +275,7 @@ def route_detailed(
             passes=pass_index,
         )
         current = _Pass(tuple(attempts), usage, metrics)
+        completed.append(current)
         if best is None or current.metrics.quality_vector < best.metrics.quality_vector:
             best = current
         if metrics.unrouted_net_count == 0 and metrics.total_conflict_overflow == 0:
@@ -268,6 +285,12 @@ def route_detailed(
             if value > 1:
                 history[resource] = history.get(resource, 0) + value - 1
     assert best is not None
+    if len(completed) > 1 and best.metrics.unrouted_net_count:
+        repaired = _repair_from_passes(
+            board, general_nets, rules, guides, best, completed, options,
+        )
+        if repaired.metrics.quality_vector < best.metrics.quality_vector:
+            best = repaired
     metrics = replace(best.metrics, passes=completed_passes)
     new_tracks = tuple(track for item in best.nets if item.result.connected for track in item.tracks)
     new_vias = tuple(via for item in best.nets if item.result.connected for via in item.vias)
@@ -299,6 +322,186 @@ def route_detailed(
     )
 
 
+def _repair_from_passes(
+    board: PhysicalBoard,
+    nets: list[PhysicalNet],
+    rules: Mapping[str, NetRoutingRule],
+    guides: Mapping[str, GlobalNetRoute],
+    best: _Pass,
+    completed: list[_Pass],
+    options: DetailedRouterOptions,
+) -> _Pass:
+    """Keep the best legal pass and add compatible routes found in other passes."""
+
+    selected = {item.result.net: item for item in best.nets}
+    clearance = RoutingClearanceIndex(board)
+    usage = dict(best.usage)
+    for item in best.nets:
+        if item.result.connected:
+            for track in item.tracks:
+                clearance.add_track(track)
+            for via in item.vias:
+                clearance.add_via(via)
+
+    alternatives: dict[str, list[_NetAttempt]] = {}
+    for completed_pass in completed:
+        for item in completed_pass.nets:
+            if item.result.connected and not selected[item.result.net].result.connected:
+                alternatives.setdefault(item.result.net, []).append(item)
+
+    for net in nets:
+        if selected[net.name].result.connected:
+            continue
+        candidates = sorted(
+            alternatives.get(net.name, ()),
+            key=lambda item: (item.result.via_count, item.result.length_nm),
+        )
+        if options.enable_soft_ripup:
+            soft_candidate = _route_net(
+                board, _build_grid(board, options, net.pads), net.name, net.pads,
+                rules.get(net.name), guides.get(net.name), usage, {}, clearance,
+                options, allow_movable_conflicts=True,
+            )
+            if soft_candidate.result.connected:
+                candidates.append(soft_candidate)
+        for candidate in candidates:
+            if not all(
+                clearance.can_track(
+                    net.name, track.start, track.end, track.width_nm, track.layer,
+                ) for track in candidate.tracks
+            ) or not all(
+                clearance.can_via(
+                    net.name, via.position, via.size_nm, via.from_layer, via.to_layer,
+                ) for via in candidate.vias
+            ):
+                continue
+            selected[net.name] = candidate
+            for resource in candidate.resources:
+                usage[resource] = usage.get(resource, 0) + 1
+            for track in candidate.tracks:
+                clearance.add_track(track)
+            for via in candidate.vias:
+                clearance.add_via(via)
+            break
+
+    # A candidate from another pass may be blocked by only one or two
+    # already-routed nets. Rip those nets up transactionally, install the
+    # candidate, then retain the swap only if every evicted net reroutes.
+    net_by_name = {net.name: net for net in nets}
+    for net in nets:
+        if selected[net.name].result.connected:
+            continue
+        candidates = sorted(
+            alternatives.get(net.name, ()),
+            key=lambda item: (item.result.via_count, item.result.length_nm),
+        )
+        for candidate in candidates:
+            blockers: set[str] = set()
+            immutable = False
+            for track in candidate.tracks:
+                names, locked = clearance.blocking_track_nets(track)
+                blockers.update(names)
+                immutable |= locked
+            for via in candidate.vias:
+                names, locked = clearance.blocking_via_nets(via)
+                blockers.update(names)
+                immutable |= locked
+            if immutable or not 1 <= len(blockers) <= 2:
+                continue
+            if any(
+                name not in net_by_name or not selected[name].result.connected
+                for name in blockers
+            ):
+                continue
+            trial = {**selected, net.name: candidate}
+            trial_clearance = RoutingClearanceIndex(board)
+            for name, item in trial.items():
+                if not item.result.connected or name in blockers or name == net.name:
+                    continue
+                for track in item.tracks:
+                    trial_clearance.add_track(track)
+                for via in item.vias:
+                    trial_clearance.add_via(via)
+            if not all(
+                trial_clearance.can_track(
+                    net.name, track.start, track.end, track.width_nm, track.layer,
+                ) for track in candidate.tracks
+            ) or not all(
+                trial_clearance.can_via(
+                    net.name, via.position, via.size_nm, via.from_layer, via.to_layer,
+                ) for via in candidate.vias
+            ):
+                continue
+            for track in candidate.tracks:
+                trial_clearance.add_track(track)
+            for via in candidate.vias:
+                trial_clearance.add_via(via)
+            rerouted: dict[str, _NetAttempt] = {}
+            for blocker_name in sorted(blockers):
+                blocker = net_by_name[blocker_name]
+                attempt = _route_net(
+                    board, _build_grid(board, options, blocker.pads),
+                    blocker.name, blocker.pads, rules.get(blocker.name),
+                    guides.get(blocker.name), {}, {}, trial_clearance, options,
+                )
+                if not attempt.result.connected:
+                    break
+                rerouted[blocker_name] = attempt
+                for track in attempt.tracks:
+                    trial_clearance.add_track(track)
+                for via in attempt.vias:
+                    trial_clearance.add_via(via)
+            if len(rerouted) != len(blockers):
+                continue
+            selected.update(rerouted)
+            selected[net.name] = candidate
+            clearance = trial_clearance
+            usage = _attempt_usage(selected.values())
+            break
+
+    # The merged geometry may open a different corridor for a net that no
+    # complete pass could route. Retry it against the exact merged copper.
+    for net in nets:
+        if selected[net.name].result.connected:
+            continue
+        attempt = _route_net(
+            board, _build_grid(board, options, net.pads), net.name, net.pads,
+            rules.get(net.name), guides.get(net.name), usage, {}, clearance, options,
+        )
+        if not attempt.result.connected:
+            continue
+        selected[net.name] = attempt
+        for resource in attempt.resources:
+            usage[resource] = usage.get(resource, 0) + 1
+        for track in attempt.tracks:
+            clearance.add_track(track)
+        for via in attempt.vias:
+            clearance.add_via(via)
+
+    attempts = tuple(selected[net.name] for net in nets)
+    overflow = [value - 1 for value in usage.values() if value > 1]
+    metrics = DetailedRoutingMetrics(
+        routed_net_count=sum(item.result.connected for item in attempts),
+        unrouted_net_count=sum(not item.result.connected for item in attempts),
+        conflict_resource_count=len(overflow),
+        total_conflict_overflow=sum(overflow),
+        track_count=sum(len(item.tracks) for item in attempts if item.result.connected),
+        via_count=sum(len(item.vias) for item in attempts if item.result.connected),
+        total_length_nm=sum(item.result.length_nm for item in attempts if item.result.connected),
+        passes=best.metrics.passes,
+    )
+    return _Pass(attempts, usage, metrics)
+
+
+def _attempt_usage(attempts: Iterable[_NetAttempt]) -> dict[str, int]:
+    usage: dict[str, int] = {}
+    for attempt in attempts:
+        if attempt.result.connected:
+            for resource in attempt.resources:
+                usage[resource] = usage.get(resource, 0) + 1
+    return usage
+
+
 def _route_net(
     board: PhysicalBoard,
     grid: _Grid,
@@ -310,6 +513,8 @@ def _route_net(
     history: Mapping[str, int],
     clearance: RoutingClearanceIndex,
     options: DetailedRouterOptions,
+    *,
+    allow_movable_conflicts: bool = False,
 ) -> _NetAttempt:
     if guide is None or not guide.connected:
         return _failed(name, "missing connected global guide")
@@ -320,11 +525,13 @@ def _route_net(
         pad_position = _pad_position(board, pad)
         candidates = _access_candidates(
             board, grid, pad, pad_position, allowed, clearance, name, width,
-            options.pin_access_candidates,
+            options.pin_access_candidates, allow_movable_conflicts,
         )
         if not candidates:
             return _failed(name, f"no legal pin access for {pad.component}.{pad.pad}")
         access_options.append((pad, pad_position, candidates))
+    if options.constrained_pins_first and len(access_options) > 2:
+        access_options.sort(key=lambda item: (len(item[2]), item[0]))
     tree: set[DetailedNode] = set()
     chosen_accesses: list[tuple[PadReference, Point, DetailedNode]] = []
     remaining = access_options[1:]
@@ -335,7 +542,9 @@ def _route_net(
         target_entry = min(
             remaining,
             key=lambda item: (
-                min(_heuristic(grid, candidate, node, options) for candidate in item[2] for node in starts),
+                len(item[2]) if options.constrained_pins_first else 0,
+                min(_heuristic(grid, candidate, node, options)
+                    for candidate in item[2] for node in starts),
                 item[0],
             ),
         )
@@ -352,6 +561,7 @@ def _route_net(
                 name,
                 width,
                 options,
+                allow_movable_conflicts=allow_movable_conflicts,
             )
         except _SearchBudgetExceeded:
             return _failed(
@@ -374,7 +584,8 @@ def _route_net(
         # exact grid tree for multi-terminal nets until topology-aware cleanup.
         materialized = (
             _compact_path(path, grid, clearance, name, width)
-            if options.any_angle_cleanup and len(pads) == 2 else path
+            if options.any_angle_cleanup and len(pads) == 2
+            and not allow_movable_conflicts else path
         )
         for first, second, _ in materialized:
             route_edges.add(_edge_key(first, second))
@@ -413,7 +624,7 @@ def _route_net(
                 )
             )
     for first, second in route_edges:
-        resources.update(_edge_resources(first, second))
+        resources.update(_edge_resources(grid, first, second))
     for _, pad_position, access in chosen_accesses:
         access_position = grid.point(access)
         if pad_position != access_position:
@@ -457,6 +668,8 @@ def _search(
     net: str,
     width_nm: int,
     options: DetailedRouterOptions,
+    *,
+    allow_movable_conflicts: bool = False,
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     if options.allow_guide_deviation:
         corridor_budget = min(5_000, max(1, options.maximum_search_states // 5))
@@ -465,6 +678,7 @@ def _search(
                 grid, starts, targets, allowed, guide, usage, history,
                 clearance, net, width_nm, options,
                 corridor_only=True, state_budget=corridor_budget,
+                allow_movable_conflicts=allow_movable_conflicts,
             )
         except _SearchBudgetExceeded:
             guided = None
@@ -474,6 +688,7 @@ def _search(
         grid, starts, targets, allowed, guide, usage, history,
         clearance, net, width_nm, options,
         corridor_only=False, state_budget=options.maximum_search_states,
+        allow_movable_conflicts=allow_movable_conflicts,
     )
 
 
@@ -492,6 +707,7 @@ def _search_once(
     *,
     corridor_only: bool,
     state_budget: int,
+    allow_movable_conflicts: bool,
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     allowed_indexes = {grid.layers.index(layer) for layer in allowed}
     queue: list[tuple[int, int, int, int, DetailedNode, str, int]] = []
@@ -500,6 +716,7 @@ def _search_once(
     heuristic_cache: dict[DetailedNode, int] = {}
     guide_cache: dict[DetailedNode, bool] = {}
     legal_edge_cache: dict[tuple[DetailedNode, DetailedNode], bool] = {}
+    movable_edge_cache: dict[tuple[DetailedNode, DetailedNode], int] = {}
     edge_resource_cache: dict[tuple[DetailedNode, DetailedNode], tuple[str, ...]] = {}
 
     def heuristic(node: DetailedNode) -> int:
@@ -523,7 +740,10 @@ def _search_once(
         state = (start, "")
         best[state] = 0
         previous[state] = None
-        heappush(queue, (heuristic(start), 0, 0, 0, start, "", serial))
+        heappush(queue, (
+            options.heuristic_weight_percent * heuristic(start) // 100,
+            0, 0, 0, start, "", serial,
+        ))
         serial += 1
     final: tuple[DetailedNode, str] | None = None
     expanded = 0
@@ -545,26 +765,47 @@ def _search_once(
             edge = _edge_key(node, neighbor)
             legal = legal_edge_cache.get(edge)
             if legal is None:
+                movable_count = 0
                 if next_direction == "v":
                     via_span = physical_via_span(
                         grid.board, grid.layers[node.layer_index],
                         grid.layers[neighbor.layer_index],
                     )
-                    legal = via_span is not None and clearance.can_via(
-                        net, grid.point(node), grid.board.rules.default_via_size_nm,
-                        via_span[0], via_span[1],
-                    )
+                    if via_span is None:
+                        legal = False
+                    elif allow_movable_conflicts:
+                        movable, locked = clearance.blocking_via_nets(Via(
+                            net, grid.point(node), grid.board.rules.default_via_size_nm,
+                            grid.board.rules.default_via_drill_nm,
+                            *via_span,
+                        ))
+                        legal = not locked
+                        movable_count = len(movable)
+                    else:
+                        legal = clearance.can_via(
+                            net, grid.point(node), grid.board.rules.default_via_size_nm,
+                            via_span[0], via_span[1],
+                        )
                 else:
-                    legal = clearance.can_track(
-                        net, grid.point(node), grid.point(neighbor), width_nm,
-                        grid.layers[node.layer_index],
-                    )
+                    if allow_movable_conflicts:
+                        movable, locked = clearance.blocking_track_nets(TrackSegment(
+                            net, grid.point(node), grid.point(neighbor), width_nm,
+                            grid.layers[node.layer_index],
+                        ))
+                        legal = not locked
+                        movable_count = len(movable)
+                    else:
+                        legal = clearance.can_track(
+                            net, grid.point(node), grid.point(neighbor), width_nm,
+                            grid.layers[node.layer_index],
+                        )
                 legal_edge_cache[edge] = legal
+                movable_edge_cache[edge] = movable_count
             if not legal:
                 continue
             resource_ids = edge_resource_cache.get(edge)
             if resource_ids is None:
-                resource_ids = _edge_resources(node, neighbor)
+                resource_ids = _edge_resources(grid, node, neighbor)
                 edge_resource_cache[edge] = resource_ids
             congestion = sum(
                 options.present_penalty * max(0, usage.get(resource, 0))
@@ -581,7 +822,10 @@ def _search_once(
                 distance_nm = abs(first_point.x_nm - second_point.x_nm) + abs(first_point.y_nm - second_point.y_nm)
                 base = max(1, (10 * distance_nm + grid.pitch_nm - 1) // grid.pitch_nm)
             bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
-            step = base + bend + congestion + (50 if outside else 0)
+            step = (
+                base + bend + congestion + (50 if outside else 0)
+                + 2 * options.present_penalty * movable_edge_cache[edge]
+            )
             candidate_cost = cost + step
             candidate = (neighbor, next_direction)
             if candidate_cost >= best.get(candidate, 1 << 60):
@@ -593,7 +837,9 @@ def _search_once(
             heappush(
                 queue,
                 (
-                    candidate_cost + heuristic(neighbor),
+                    candidate_cost + (
+                        options.heuristic_weight_percent * heuristic(neighbor) // 100
+                    ),
                     candidate_cost,
                     next_vias,
                     next_bends,
@@ -685,7 +931,10 @@ def _grid_line_clear(
             y += sy
 
 
-def _build_grid(board: PhysicalBoard, options: DetailedRouterOptions) -> _Grid:
+def _build_grid(
+    board: PhysicalBoard, options: DetailedRouterOptions,
+    pads: tuple[PadReference, ...],
+) -> _Grid:
     min_x = min(item.x_nm for item in board.outline.vertices)
     max_x = max(item.x_nm for item in board.outline.vertices)
     min_y = min(item.y_nm for item in board.outline.vertices)
@@ -693,7 +942,7 @@ def _build_grid(board: PhysicalBoard, options: DetailedRouterOptions) -> _Grid:
     placements = {item.reference: item for item in board.placements}
     pin_points = (
         transformed_pad_position(board, placements[pad.component], pad.pad)
-        for net in board.nets if len(net.pads) >= 2 for pad in net.pads
+        for pad in pads
     )
     pin_points = tuple(pin_points)
     xs = tuple(sorted(set(range(min_x, max_x + 1, options.pitch_nm)).union(
@@ -704,7 +953,6 @@ def _build_grid(board: PhysicalBoard, options: DetailedRouterOptions) -> _Grid:
     )))
     # Courtyards are assembly geometry, not copper obstacles. The clearance
     # index checks the actual placed pads and existing copper instead.
-    keepouts = tuple(_bounds(item.outline.vertices) for item in board.keepouts)
     copper_keepouts = tuple(
         (item.layers, _bounds(item.outline.outer.vertices))
         for item in resolved_copper_keepouts(board)
@@ -716,8 +964,6 @@ def _build_grid(board: PhysicalBoard, options: DetailedRouterOptions) -> _Grid:
             for y_index, y in enumerate(ys):
                 point = Point(x, y)
                 if not _point_in_polygon(point, board.outline.vertices):
-                    blocked.add(DetailedNode(layer_index, x_index, y_index))
-                elif any(_in_box(point, box) for box in keepouts):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
                 elif any(
                     layer in layers and _in_box(point, box)
@@ -740,6 +986,7 @@ def _access_candidates(
     net: str,
     width_nm: int,
     limit: int,
+    allow_movable_conflicts: bool = False,
 ) -> tuple[DetailedNode, ...]:
     placement = next(item for item in board.placements if item.reference == pad.component)
     footprint = board.footprints[placement.footprint]
@@ -781,7 +1028,18 @@ def _access_candidates(
         )
         if sector in sectors:
             continue
-        if clearance.can_track(net, position, access, width_nm, grid.layers[node.layer_index]):
+        if position == access:
+            legal = True
+        elif allow_movable_conflicts:
+            _, locked = clearance.blocking_track_nets(TrackSegment(
+                net, position, access, width_nm, grid.layers[node.layer_index],
+            ))
+            legal = not locked
+        else:
+            legal = clearance.can_track(
+                net, position, access, width_nm, grid.layers[node.layer_index],
+            )
+        if legal:
             result.append(node)
             sectors.add(sector)
             if len(result) == limit:
@@ -837,13 +1095,18 @@ def _inside_guide(
     )
 
 
-def _edge_resources(first: DetailedNode, second: DetailedNode) -> tuple[str, ...]:
+def _edge_resources(
+    grid: _Grid, first: DetailedNode, second: DetailedNode,
+) -> tuple[str, ...]:
     edge = _edge_key(first, second)
+    a, b = grid.point(edge[0]), grid.point(edge[1])
+    la, lb = grid.layers[edge[0].layer_index], grid.layers[edge[1].layer_index]
+    first_key = f"{la.value}:{a.x_nm}:{a.y_nm}"
+    second_key = f"{lb.value}:{b.x_nm}:{b.y_nm}"
     return (
-        f"node:{edge[0].layer_index}:{edge[0].x_index}:{edge[0].y_index}",
-        f"node:{edge[1].layer_index}:{edge[1].x_index}:{edge[1].y_index}",
-        f"edge:{edge[0].layer_index}:{edge[0].x_index}:{edge[0].y_index}:"
-        f"{edge[1].layer_index}:{edge[1].x_index}:{edge[1].y_index}",
+        f"node:{first_key}",
+        f"node:{second_key}",
+        f"edge:{first_key}:{second_key}",
     )
 
 

@@ -598,7 +598,6 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
         (placement.side, _bounds(transformed_footprint_polygon(board, placement)))
         for placement in board.placements
     )
-    keepouts = tuple(_bounds(item.outline.vertices) for item in board.keepouts)
     copper_keepouts = tuple(
         (item.layers, _bounds(item.outline.outer.vertices))
         for item in resolved_copper_keepouts(board)
@@ -615,7 +614,7 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
                     (layer is CopperLayer.FRONT and side is BoardSide.FRONT)
                     or (layer is CopperLayer.BACK and side is BoardSide.BACK)
                     for side, box in obstacles if _point_in_box(point, box)
-                ) or any(_point_in_box(point, box) for box in keepouts):
+                ):
                     continue
                 if any(
                     layer in layers and _point_in_box(point, box)

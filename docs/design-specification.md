@@ -587,6 +587,10 @@ warnings to errors. Custom pads, copper graphics, drill offsets, and
 unsupported fabrication modifiers are errors until the physical IR can retain
 them losslessly.
 
+Board-level `PlacementKeepout` constrains component placement only; it is not a
+copper obstacle for global or detailed routing. Only typed copper keepouts may
+block tracks and vias. The two keepout classes must not be conflated.
+
 Footprint selection and footprint resolution are separate phases. The
 electrical IR retains the user-selected string; physical lowering resolves it
 through a dedicated adapter. A direct `.kicad_mod` path is relative to the
@@ -719,7 +723,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-046 | Accepted | Global routing uses deterministic multilayer capacity guides and negotiated congestion; guides and proposed vias are planning artifacts and only detailed routing may create physical copper. |
 | CS-047 | Accepted | Placement–routing feedback is transactional: only complete global-route improvements are accepted, rejected moves roll back atomically, and a fresh full reroute is required for certification. |
 | CS-048 | Accepted | Critical nets route before ordinary nets from explicit physical profiles; coupled bundles and exact locked copper retain external qualification assumptions, and geometric proxies never claim impedance, SI, RF, current, or thermal signoff. |
-| CS-049 | Accepted | General detailed routing consumes global guides, preserves locked critical copper, owns exact tracks and vias, and reroutes in bounded deterministic passes. Foreign-net and unconnected pads, tracks, and vias with their required clearances are hard geometric obstacles during route search and pad escape; congestion costs alone cannot legalize overlapping copper. Routing success never substitutes for physical DRC. |
+| CS-049 | Accepted | General detailed routing consumes global guides, preserves locked critical copper, owns exact tracks and vias, and reroutes in bounded deterministic passes. Each net's pad-aware grid uses physical-coordinate resource identities. Foreign-net and unconnected pads and locked copper are immutable geometric obstacles. Existing ordinary routes may be tentatively crossed only for a transactional rip-up proposal; the proposal is committed solely if all displaced nets reroute and exact clearances hold. Congestion costs alone cannot legalize overlapping copper. Routing success never substitutes for physical DRC. |
 | CS-050 | Accepted | Physical signoff is fail-closed and reports check coverage separately from findings; exact waivers are fingerprint-bound, and every signoff token is content-bound to the complete physical geometry, rules, policy, and report. |
 | CS-051 | Accepted | Manufacturing releases use a qualified KiCad CLI as the geometry exporter, require a matching complete signoff token, generate Gerber X2 plus metric drill and IPC-D-356 data, and publish atomically only after independent CAM parsing, manifesting, and checksums succeed. |
 | CS-052 | Accepted | Routing stages compose in one direction through immutable typed results: global guides, locked critical copper, general exact copper, physical DRC, then manufacturing; a partial or stale result cannot satisfy a later gate. |

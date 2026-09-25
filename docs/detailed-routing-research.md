@@ -71,10 +71,24 @@ Search first tries the global guide corridor under a smaller budget, then
 falls back to unrestricted walk-around with the configured budget. Candidate
 edge legality and guide membership are memoized within each immutable search.
 
-This is an incremental implementation, not a full shove router. Planned work
-still includes pad neckdown rules, geometry-aware rip-up of selected nets,
-via technology/span validation for
-each fabrication profile, zone-aware power routing, and KiCad DRC comparison.
+The next iteration uses a separate pad-aware grid for each net. This avoids a
+Cartesian product of every pad's X and Y coordinates across the board while
+retaining exact positions for the current net. Resource identifiers use physical
+coordinates and layer names, not grid indexes. Passes 5 and later use a stable
+hash ordering; repeating only the first two sorts cannot explore new orders
+after the best result stagnates. Compatible routes from different passes can be
+merged. If a route is blocked by one or two mutable routes, repair can
+transactionally rip them up, install the waiting route, and reroute every
+displaced net. A slower soft-conflict search can propose such swaps with
+`--soft-ripup`; it is opt-in because it did not improve the current example.
+`--heuristic-weight` allows bounded weighted-A* experiments without changing
+the default search objective. Every committed edge still passes exact clearance
+queries; neither soft proposals nor historical routing resources are signoff.
+
+This is not a complete shove router. Planned work still includes pad neckdown
+rules, more effective repair and placement coupling, via technology/span
+validation for each fabrication profile, zone-aware power routing, and KiCad
+DRC comparison.
 
 ## Full-board checkpoint
 
@@ -96,6 +110,23 @@ the search budget and two were unreachable under the chosen route order.
 Native DRC again reported only the 26 opens and incomplete-route finding.
 This narrows the next work to search efficiency, rip-up/order, and power-plane
 strategy rather than loosening copper clearance.
+
+With per-net grids and four deterministic passes, the current provisional
+placement reaches 42 of 58 nets. The 16 opens and route-incomplete finding are
+the only native DRC findings; there are no shorts, clearance errors, or copper
+keepout violations. A one-pass 0.5 mm grid reached 37 nets despite a 20,000
+state budget; one-pass weighted A* at 150% reached 39 nets, but four weighted
+passes reached only 41. Cross-pass merging and one/two-net rip-up retained 42;
+opt-in soft-conflict repair also retained 42. Eight diversified passes reached
+43 of 58 with 15 opens and no other native DRC findings. The placement search
+also exposes a distinct legal `candidate-01`: eight passes route 49 of 58 there,
+with nine opens and no shorts or spacing violations. Its remaining failures
+all exhaust the 10,000-state search budget, so a higher-budget run is the next
+bounded check. A targeted isolated-net probe
+routes 15 of the 16 remaining nets on the same placement without other general
+traces. GND alone still exhausts the 10,000-state budget, confirming that
+ordinary-net interaction is the main signal-routing problem while GND needs a
+separate plane/stitching strategy. The board remains unfit for fabrication.
 
 The full board's many-pad GND net should not be assumed connected by an
 unfilled zone. [KiCad's PCB documentation](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html)

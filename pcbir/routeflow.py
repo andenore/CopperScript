@@ -32,6 +32,7 @@ class PlacementRoutingFeedbackOptions:
     minimum_movement_nm: int = nm_from_mm("0.5")
     maximum_trials_per_iteration: int = 24
     stagnation_limit: int = 3
+    preferred_candidate_id: str | None = None
 
     def __post_init__(self) -> None:
         if min(
@@ -87,14 +88,25 @@ def optimize_placement_for_routing(
         _evaluate_candidate(board, candidate, router_options)
         for candidate in candidates
     ]
-    candidate, accepted_board, accepted_route = min(
-        evaluated,
-        key=lambda item: (
-            *_route_score(item[2]),
-            *item[0].metrics.quality_vector,
-            item[0].seed,
-        ),
-    )
+    if feedback_options.preferred_candidate_id is not None:
+        selected = [item for item in evaluated
+                    if item[0].candidate_id == feedback_options.preferred_candidate_id]
+        if not selected:
+            available = ", ".join(item[0].candidate_id for item in evaluated)
+            raise ValueError(
+                f"placement candidate {feedback_options.preferred_candidate_id!r} "
+                f"is unavailable; legal candidates: {available}"
+            )
+        candidate, accepted_board, accepted_route = selected[0]
+    else:
+        candidate, accepted_board, accepted_route = min(
+            evaluated,
+            key=lambda item: (
+                *_route_score(item[2]),
+                *item[0].metrics.quality_vector,
+                item[0].seed,
+            ),
+        )
     records: list[FeedbackIteration] = []
     accepted_moves = 0
     movement = feedback_options.initial_movement_nm

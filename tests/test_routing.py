@@ -4,6 +4,7 @@ from dataclasses import replace
 import json
 
 import pytest
+from pcbir.placement import generate_placement_candidates
 
 from pcbir import (
     BoardOutline,
@@ -72,10 +73,12 @@ def test_global_router_is_deterministic_and_produces_guides_not_copper() -> None
 def test_global_router_reports_an_impossible_keepout_cut() -> None:
     board = replace(
         _two_terminal_board(),
-        keepouts=(
-            PlacementKeepout(
-                "wall",
-                BoardOutline.rectangle(10, 30, origin=Point.mm(15, 0)),
+        copper_keepouts=(
+            CopperKeepout("wall", (CopperLayer.FRONT, CopperLayer.BACK),
+                PolygonWithHoles(PolygonRing((
+                    Point.mm(15, 0), Point.mm(25, 0),
+                    Point.mm(25, 30), Point.mm(15, 30),
+                ))),
             ),
         ),
     )
@@ -206,6 +209,30 @@ def test_real_global_route_certifies_placement_feedback_deterministically() -> N
     assert first.status is FeedbackStatus.PASS
     assert first.full_route_certified
     assert first.global_route.status is GlobalRoutingStatus.SUCCESS
+
+
+def test_placement_feedback_can_select_named_legal_candidate() -> None:
+    board = _two_terminal_board()
+    placement_options = PlacementPlannerOptions(
+        candidate_count=2, analytical_iterations=4, refinement_passes=0,
+    )
+    candidate = generate_placement_candidates(board, placement_options)[-1]
+    options = PlacementRoutingFeedbackOptions(
+        preferred_candidate_id=candidate.candidate_id,
+    )
+
+    result = optimize_placement_for_routing(
+        board, placement_options,
+        GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")), options,
+    )
+
+    assert result.placement_candidate == candidate.candidate_id
+    with pytest.raises(ValueError, match="unavailable"):
+        optimize_placement_for_routing(
+            board, placement_options,
+            GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")),
+            replace(options, preferred_candidate_id="missing"),
+        )
 
 
 def test_feedback_rolls_back_when_placement_cannot_relieve_capacity() -> None:

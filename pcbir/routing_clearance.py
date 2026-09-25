@@ -9,6 +9,7 @@ as a broad phase.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
 
 from .drc import placed_pad_shape
 from .geometry import RoundedConvexShape, shapes_clear
@@ -33,6 +34,7 @@ class _CopperObject:
     layers: tuple[CopperLayer, ...]
     shape: RoundedConvexShape
     clearance_nm: int = 0
+    locked: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,9 +92,9 @@ class RoutingClearanceIndex:
                     footprint.clearance_nm or 0,
                 ))
         for track in board.tracks:
-            self.add_track(track)
+            self.add_track(track, locked=True)
         for via in board.vias:
-            self.add_via(via)
+            self.add_via(via, locked=True)
 
     def can_track(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer
@@ -126,17 +128,57 @@ class RoutingClearanceIndex:
                 return False
         return True
 
-    def add_track(self, track: TrackSegment) -> None:
+    def add_track(self, track: TrackSegment, *, locked: bool = False) -> None:
         self._add(_CopperObject(
             track.net, (track.layer,),
             RoundedConvexShape((track.start, track.end), track.width_nm // 2),
+            locked=locked,
         ))
 
-    def add_via(self, via: Via) -> None:
+    def add_via(self, via: Via, *, locked: bool = False) -> None:
         self._add(_CopperObject(
             via.net, self._via_layers(via.from_layer, via.to_layer),
             RoundedConvexShape((via.position,), via.size_nm // 2),
+            locked=locked,
         ))
+
+    def blocking_track_nets(self, track: TrackSegment) -> tuple[frozenset[str], bool]:
+        """Return movable blocker nets and whether immutable geometry blocks a track."""
+        shape = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
+        return self._blockers(track.net, shape, (track.layer,), for_via=False)
+
+    def blocking_via_nets(self, via: Via) -> tuple[frozenset[str], bool]:
+        """Return movable blocker nets and whether immutable geometry blocks a via."""
+        layers = self._via_layers(via.from_layer, via.to_layer)
+        shape = RoundedConvexShape((via.position,), via.size_nm // 2)
+        return self._blockers(via.net, shape, layers, for_via=True)
+
+    def _blockers(
+        self, net: str, shape: RoundedConvexShape,
+        layers: tuple[CopperLayer, ...], *, for_via: bool,
+    ) -> tuple[frozenset[str], bool]:
+        if not self._keepout_clear(shape, layers, for_via=for_via):
+            return frozenset(), True
+        movable: set[str] = set()
+        locked = False
+        for other in self._overlapping_objects(shape, layers):
+            if other.net == net:
+                continue
+            own_rule = self.rules.get(net)
+            other_rule = self.rules.get(other.net)
+            clearance = max(
+                self.board.rules.minimum_clearance_nm,
+                own_rule.clearance_nm or 0 if own_rule else 0,
+                other_rule.clearance_nm or 0 if other_rule else 0,
+                other.clearance_nm,
+            )
+            if shapes_clear(shape, other.shape, clearance):
+                continue
+            if other.locked:
+                locked = True
+            else:
+                movable.add(other.net)
+        return frozenset(movable), locked
 
     def _via_layers(
         self, from_layer: CopperLayer, to_layer: CopperLayer
@@ -157,6 +199,24 @@ class RoutingClearanceIndex:
     def _clear(
         self, net: str, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...]
     ) -> bool:
+        for other in self._overlapping_objects(shape, layers):
+            if other.net == net:
+                continue
+            own_rule = self.rules.get(net)
+            other_rule = self.rules.get(other.net)
+            clearance = max(
+                self.board.rules.minimum_clearance_nm,
+                own_rule.clearance_nm or 0 if own_rule else 0,
+                other_rule.clearance_nm or 0 if other_rule else 0,
+                other.clearance_nm,
+            )
+            if not shapes_clear(shape, other.shape, clearance):
+                return False
+        return True
+
+    def _overlapping_objects(
+        self, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...]
+    ) -> Iterable[_CopperObject]:
         area = shape.bounds.expanded(self._max_clearance_nm)
         seen: set[int] = set()
         for layer in layers:
@@ -166,17 +226,4 @@ class RoutingClearanceIndex:
                         if identity in seen:
                             continue
                         seen.add(identity)
-                        other = self._objects[identity]
-                        if other.net == net:
-                            continue
-                        own_rule = self.rules.get(net)
-                        other_rule = self.rules.get(other.net)
-                        clearance = max(
-                            self.board.rules.minimum_clearance_nm,
-                            own_rule.clearance_nm or 0 if own_rule else 0,
-                            other_rule.clearance_nm or 0 if other_rule else 0,
-                            other.clearance_nm,
-                        )
-                        if not shapes_clear(shape, other.shape, clearance):
-                            return False
-        return True
+                        yield self._objects[identity]

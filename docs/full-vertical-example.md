@@ -203,6 +203,18 @@ physical design.
   24 nets hit the bounded search limit and two were unreachable in that route
   order. A grounded inner-plane/stitching strategy and iterative rip-up are
   needed before the physical route can close.
+- Per-net pad grids and four deterministic passes now connect 42 of 58 nets on
+  this provisional placement. Native DRC reports 16 opens and incomplete
+  routing, with no shorts, clearance errors, or keepout violations. Isolated
+  routing succeeds for 15 of those 16 open nets; only GND still exceeds the
+  10,000-state budget without other ordinary traces. Alternate route ordering,
+  placement, and a verified GND plane/stitching strategy remain necessary.
+  This is still not a board ready for manufacture.
+- Eight diversified route orders reach 43 of 58 nets without adding spacing
+  violations. The remaining 15 opens still block board release.
+- Selecting the distinct legal placement `candidate-01` reaches 49 of 58 nets
+  after eight passes. Nine nets remain open, all at the 10,000-state search
+  limit. The placement is promising but still not fabrication-ready.
 - `examples/full_vertical_provisional_4layer.kicad_pcb` is a placed,
   **unrouted** KiCad 10 preview for mechanical and component-location review.
   It is deliberately not a fabrication deliverable; its adjacent layout JSON
