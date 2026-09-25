@@ -43,6 +43,7 @@ from pcbir.detailed import (
     _Pass,
     _build_grid,
     _edge_resources,
+    _pass_heuristic_weight,
     _repair_from_passes,
     _route_net,
 )
@@ -255,6 +256,14 @@ def test_repair_refines_grid_only_after_exhaustive_no_path(monkeypatch) -> None:
 
     assert observed == [nm_from_mm(1), nm_from_mm("0.5")]
     assert repaired.nets[0].result.connected
+
+
+def test_later_passes_diversify_search_weight_deterministically() -> None:
+    options = DetailedRouterOptions(heuristic_weight_percent=100)
+
+    assert [_pass_heuristic_weight(options, index) for index in range(1, 9)] == [
+        100, 100, 150, 200, 250, 300, 150, 200,
+    ]
 
 
 def test_clearance_index_distinguishes_movable_from_locked_blockers() -> None:

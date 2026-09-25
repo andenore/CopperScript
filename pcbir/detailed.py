@@ -225,6 +225,10 @@ def route_detailed(
     completed_passes = 0
     for pass_index in range(1, options.maximum_passes + 1):
         completed_passes = pass_index
+        pass_options = replace(
+            options,
+            heuristic_weight_percent=_pass_heuristic_weight(options, pass_index),
+        )
         clearance = RoutingClearanceIndex(board)
         usage: dict[str, int] = {}
         attempts: list[_NetAttempt] = [
@@ -254,7 +258,7 @@ def route_detailed(
                     sha256(f"{pass_index}:{item.name}".encode()).digest(),
                 ))
         for net in ordered_nets:
-            grid = _build_grid(board, options, net.pads)
+            grid = _build_grid(board, pass_options, net.pads)
             guide = guides.get(net.name)
             attempt = _route_net(
                 board,
@@ -266,7 +270,7 @@ def route_detailed(
                 usage,
                 history,
                 clearance,
-                options,
+                pass_options,
             )
             attempts.append(attempt)
             if attempt.result.connected:
@@ -333,6 +337,14 @@ def route_detailed(
         global_route.routing_fingerprint,
         fingerprint,
     )
+
+
+def _pass_heuristic_weight(options: DetailedRouterOptions, pass_index: int) -> int:
+    """Diversify later bounded passes without sacrificing the baseline passes."""
+
+    if pass_index <= 2:
+        return options.heuristic_weight_percent
+    return min(300, options.heuristic_weight_percent + 50 * (1 + (pass_index - 3) % 4))
 
 
 def _repair_from_passes(
