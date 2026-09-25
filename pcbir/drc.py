@@ -203,6 +203,8 @@ def run_physical_drc(
     coverage.append(DrcCoverage("copper_to_board_edge", DrcCoverageStatus.EXECUTED, True))
     _check_copper_spacing(board, findings)
     coverage.append(DrcCoverage("shorts_and_clearance", DrcCoverageStatus.EXECUTED, True))
+    _check_non_plated_hole_clearance(board, findings)
+    coverage.append(DrcCoverage("non_plated_hole_clearance", DrcCoverageStatus.EXECUTED, True))
     keepout_covered = _check_copper_keepouts(board, findings)
     coverage.append(DrcCoverage(
         "copper_keepouts",
@@ -315,6 +317,7 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             },
             "rules": {
                 "clearance": board.rules.minimum_clearance_nm,
+                "hole_clearance": board.rules.minimum_hole_clearance_nm,
                 "track": board.rules.default_track_width_nm,
                 "via": board.rules.default_via_size_nm,
                 "drill": board.rules.default_via_drill_nm,
@@ -689,6 +692,52 @@ def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
     return tuple(result)
 
 
+def non_plated_holes(board: PhysicalBoard) -> tuple[tuple[str, RoundedConvexShape], ...]:
+    """Return placed drill envelopes, including unnumbered mechanical holes."""
+
+    holes: list[tuple[str, RoundedConvexShape]] = []
+    for placement in sorted(board.placements, key=lambda item: item.reference):
+        footprint = board.footprints[placement.footprint]
+        for index, pad in enumerate(footprint.pads):
+            if pad.kind is not PadKind.NON_PLATED_THROUGH_HOLE:
+                continue
+            assert pad.drill is not None
+            drill_pad = replace(
+                pad,
+                size=pad.drill,
+                shape=(PadShape.CIRCLE if pad.drill.width_nm == pad.drill.height_nm
+                       else PadShape.OVAL),
+            )
+            position = transformed_local_point(placement, pad.position)
+            holes.append((f"hole:{placement.reference}.{pad.number}:{index}",
+                          placed_pad_shape(position, drill_pad, placement)))
+    return tuple(holes)
+
+
+def _check_non_plated_hole_clearance(
+    board: PhysicalBoard, findings: list[DrcFinding]
+) -> None:
+    clearance = board.rules.minimum_hole_clearance_nm
+    for identity, hole in non_plated_holes(board):
+        for index, track in enumerate(board.tracks):
+            copper = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
+            if not shapes_clear(copper, hole, clearance):
+                findings.append(_finding(
+                    "DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
+                    f"track {index} violates {identity} drill clearance",
+                    objects=(f"track:{index}", identity), nets=(track.net,),
+                    layers=(track.layer.value,),
+                ))
+        for index, via in enumerate(board.vias):
+            copper = RoundedConvexShape((via.position,), via.size_nm // 2)
+            if not shapes_clear(copper, hole, clearance):
+                findings.append(_finding(
+                    "DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
+                    f"via {index} violates {identity} drill clearance",
+                    objects=(f"via:{index}", identity), nets=(via.net,),
+                ))
+
+
 def _check_zone_fill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
     zone_nets = {zone.id: zone.net for zone in board.zones}
     pads = _copper_pads(board)
@@ -757,7 +806,9 @@ def placed_pad_shape(position: Point, pad: object, placement: object) -> Rounded
     width = getattr(pad, "size").width_nm
     height = getattr(pad, "size").height_nm
     shape = getattr(pad, "shape")
-    angle = float(getattr(placement, "rotation_degrees") + getattr(pad, "rotation_degrees"))
+    # Pad angles exported to KiCad are in board coordinates. Convert its
+    # Cartesian-positive angle to the IR's screen-coordinate convention.
+    angle = -float(getattr(placement, "rotation_degrees") + getattr(pad, "rotation_degrees"))
     if shape is PadShape.CIRCLE:
         return RoundedConvexShape((position,), min(width, height) // 2)
     if shape is PadShape.OVAL:

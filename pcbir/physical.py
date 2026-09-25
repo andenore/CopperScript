@@ -405,6 +405,7 @@ class Stackup:
 @dataclass(frozen=True, slots=True)
 class DesignRules:
     minimum_clearance_nm: Nanometres = nm_from_mm("0.2")
+    minimum_hole_clearance_nm: Nanometres = nm_from_mm("0.25")
     default_track_width_nm: Nanometres = nm_from_mm("0.25")
     default_via_size_nm: Nanometres = nm_from_mm("0.8")
     default_via_drill_nm: Nanometres = nm_from_mm("0.4")
@@ -412,6 +413,7 @@ class DesignRules:
     def __post_init__(self) -> None:
         values = (
             self.minimum_clearance_nm,
+            self.minimum_hole_clearance_nm,
             self.default_track_width_nm,
             self.default_via_size_nm,
             self.default_via_drill_nm,

@@ -41,6 +41,7 @@ def test_kicad_pcb_backend_emits_deterministic_board_geometry() -> None:
     assert first.artifacts[1].name == "BackendTest.kicad_pro"
     project = json.loads(first.artifacts[1].content)
     assert project["net_settings"]["classes"][0]["clearance"] == 0.2
+    assert project["board"]["design_settings"]["rules"]["min_hole_clearance"] == 0.25
     assert project["net_settings"]["classes"][0]["track_width"] == 0.25
     assert "min_track_width" not in project["board"]["design_settings"]["rules"]
     pcb = first.artifacts[0].content
@@ -90,6 +91,23 @@ def test_rotated_footprint_exports_pad_angles_in_board_coordinates() -> None:
 
     assert '(at -1 0 90)' in pcb
     assert '(at 1 0 90)' in pcb
+
+
+def test_rotated_pad_positions_match_kicad_board_coordinates() -> None:
+    """A 90-degree KiCad placement maps local +X toward board -Y."""
+    from dataclasses import replace
+    from pcbir.placement import transformed_pad_position
+
+    board = _routed_board()
+    placement = replace(board.placements[0], rotation_degrees=90)
+    rotated = replace(board, placements=(placement, board.placements[1]))
+    pad = board.footprints[placement.footprint].pads[0]
+
+    assert pad.position.x_nm != 0
+    assert transformed_pad_position(rotated, placement, pad.number) == Point(
+        placement.position.x_nm + pad.position.y_nm,
+        placement.position.y_nm - pad.position.x_nm,
+    )
 
 
 def test_kicad_project_uses_explicit_physical_clearance() -> None:

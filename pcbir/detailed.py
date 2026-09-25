@@ -489,6 +489,7 @@ def _repair_from_passes(
             repair_options,
         )
         if not attempt.result.connected:
+            selected[net.name] = attempt
             continue
         selected[net.name] = attempt
         for resource in attempt.resources:

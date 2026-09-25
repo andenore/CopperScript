@@ -1233,7 +1233,9 @@ def _placement_polygon(board: PhysicalBoard, placement: Placement) -> tuple[Poin
 
 def _transform_local(point: Point, rotation: Decimal, side: BoardSide) -> Point:
     x = -point.x_nm if side is BoardSide.BACK else point.x_nm
-    angle = radians(float(rotation))
+    # KiCad's positive footprint angle rotates counter-clockwise in its
+    # Cartesian convention; PCB/IR coordinates have Y increasing downwards.
+    angle = radians(-float(rotation))
     return Point(
         round(x * cos(angle) - point.y_nm * sin(angle)),
         round(x * sin(angle) + point.y_nm * cos(angle)),

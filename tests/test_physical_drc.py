@@ -11,6 +11,7 @@ from pcbir import (
     DrcWaiver,
     FootprintPad,
     PadReference,
+    PadKind,
     PadShape,
     PhysicalBoard,
     PhysicalFootprint,
@@ -112,6 +113,61 @@ def test_physical_drc_detects_cross_net_short() -> None:
 
     assert report.decision is DrcDecision.FAIL
     assert any(item.code == "DRC-SHORT" for item in report.findings)
+
+
+def test_rotated_pad_geometry_finds_track_on_foreign_net() -> None:
+    footprint = PhysicalFootprint(
+        "test/two-pad",
+        (
+            FootprintPad("1", Point.mm(-1, 0), Size.mm("0.5", "0.5")),
+            FootprintPad("2", Point.mm(1, 0), Size.mm("0.5", "0.5")),
+        ),
+        Size.mm(3, 1),
+    )
+    board = PhysicalBoard(
+        "RotatedShort", BoardOutline.rectangle(20, 20),
+        {footprint.name: footprint},
+        (Placement("U1", footprint.name, Point.mm(10, 10), rotation_degrees=90),),
+        (
+            PhysicalNet("A", (PadReference("U1", "1"),)),
+            PhysicalNet("B", (PadReference("U1", "2"),)),
+        ),
+        tracks=(TrackSegment("B", Point.mm(10, 11), Point.mm(10, 12),
+                             nm_from_mm("0.2"), CopperLayer.FRONT),),
+        metadata={"detailed_routing": "complete"},
+    )
+
+    report = run_physical_drc(board)
+
+    assert any(item.code == "DRC-SHORT" and set(item.nets) == {"A", "B"}
+               for item in report.findings)
+
+
+def test_non_plated_hole_blocks_routing_on_every_layer() -> None:
+    from pcbir.routing_clearance import RoutingClearanceIndex
+
+    footprint = PhysicalFootprint(
+        "test/mounting-hole",
+        (FootprintPad("", Point(0, 0), Size.mm(1, 1),
+                      kind=PadKind.NON_PLATED_THROUGH_HOLE,
+                      drill=Size.mm(1, 1)),),
+        Size.mm(2, 2),
+    )
+    track = TrackSegment("A", Point.mm(8, 10), Point.mm(12, 10),
+                         nm_from_mm("0.2"), CopperLayer.FRONT)
+    board = PhysicalBoard(
+        "MechanicalHole", BoardOutline.rectangle(20, 20),
+        {footprint.name: footprint},
+        (Placement("H1", footprint.name, Point.mm(10, 10)),),
+        (PhysicalNet("A", ()),), tracks=(track,),
+        metadata={"detailed_routing": "complete"},
+    )
+
+    assert any(item.code == "DRC-HOLE-CLEARANCE"
+               for item in run_physical_drc(board).findings)
+    index = RoutingClearanceIndex(replace(board, tracks=()))
+    assert not index.can_track("A", track.start, track.end, track.width_nm,
+                               track.layer)
 
 
 def test_incomplete_route_makes_coverage_incomplete_and_stale_tokens_change() -> None:

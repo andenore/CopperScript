@@ -205,14 +205,17 @@ def test_repair_expands_budget_only_for_remaining_open_nets(monkeypatch) -> None
     )
     metrics = DetailedRoutingMetrics(0, 1, 0, 0, 0, 0, 0, 1)
     best = _Pass((missing,), {}, metrics)
+    retry_failure = replace(missing, result=replace(
+        missing.result, diagnostics=("repair budget exhausted",),
+    ))
     observed: list[int] = []
 
     def fake_route_net(*args, **kwargs):
         observed.append(args[-1].maximum_search_states)
-        return missing
+        return retry_failure
 
     monkeypatch.setattr(detailed_module, "_route_net", fake_route_net)
-    _repair_from_passes(
+    repaired = _repair_from_passes(
         board, list(board.nets), {}, {}, best, [best, best],
         DetailedRouterOptions(
             maximum_passes=2, maximum_search_states=10,
@@ -221,6 +224,7 @@ def test_repair_expands_budget_only_for_remaining_open_nets(monkeypatch) -> None
     )
 
     assert observed == [50]
+    assert repaired.nets[0].result.diagnostics == ("repair budget exhausted",)
 
 
 def test_clearance_index_distinguishes_movable_from_locked_blockers() -> None:

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .drc import placed_pad_shape
+from .drc import non_plated_holes, placed_pad_shape
 from .geometry import RoundedConvexShape, shapes_clear
 from .physical import (
     BoardSide,
@@ -69,6 +69,7 @@ class RoutingClearanceIndex:
         )
         self._max_clearance_nm = max(
             board.rules.minimum_clearance_nm,
+            board.rules.minimum_hole_clearance_nm,
             *(rule.clearance_nm or 0 for rule in self.rules.values()),
             *(footprint.clearance_nm or 0 for footprint in board.footprints.values()),
         )
@@ -91,6 +92,11 @@ class RoutingClearanceIndex:
                     net, tuple(layers), placed_pad_shape(position, pad, placement),
                     footprint.clearance_nm or 0,
                 ))
+        for _, hole in non_plated_holes(board):
+            self._add(_CopperObject(
+                "<non-plated-hole>", tuple(board.stackup.copper_layers), hole,
+                board.rules.minimum_hole_clearance_nm,
+            ))
         for track in board.tracks:
             self.add_track(track, locked=True)
         for via in board.vias:
