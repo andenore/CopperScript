@@ -227,6 +227,36 @@ def test_repair_expands_budget_only_for_remaining_open_nets(monkeypatch) -> None
     assert repaired.nets[0].result.diagnostics == ("repair budget exhausted",)
 
 
+def test_repair_refines_grid_only_after_exhaustive_no_path(monkeypatch) -> None:
+    board = _board()
+    missing = _NetAttempt(
+        DetailedNetResult("SIGNAL", False, 0, 0, 0, 0, ("initial failure",)),
+        (), (), frozenset(),
+    )
+    metrics = DetailedRoutingMetrics(0, 1, 0, 0, 0, 0, 0, 1)
+    best = _Pass((missing,), {}, metrics)
+    no_path = replace(missing, result=replace(
+        missing.result, diagnostics=("detailed search cannot reach J2.1",),
+    ))
+    connected = replace(missing, result=replace(
+        missing.result, connected=True, diagnostics=(),
+    ))
+    observed: list[int] = []
+
+    def fake_route_net(*args, **kwargs):
+        observed.append(args[-1].pitch_nm)
+        return no_path if len(observed) == 1 else connected
+
+    monkeypatch.setattr(detailed_module, "_route_net", fake_route_net)
+    repaired = _repair_from_passes(
+        board, list(board.nets), {}, {}, best, [best],
+        DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=1),
+    )
+
+    assert observed == [nm_from_mm(1), nm_from_mm("0.5")]
+    assert repaired.nets[0].result.connected
+
+
 def test_clearance_index_distinguishes_movable_from_locked_blockers() -> None:
     board = _board()
     candidate = TrackSegment(

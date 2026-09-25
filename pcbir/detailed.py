@@ -488,6 +488,22 @@ def _repair_from_passes(
             rules.get(net.name), guides.get(net.name), usage, {}, clearance,
             repair_options,
         )
+        # A coarse global grid can be topologically disconnected around fine
+        # pitch pads even when exact copper clearance permits a route. Refine
+        # only a proven no-path search; a budget-exhausted search needs more
+        # states, not a larger graph.
+        if (not attempt.result.connected
+                and any("cannot reach" in message for message in attempt.result.diagnostics)
+                and repair_options.pitch_nm > nm_from_mm("0.25")):
+            refined_options = replace(
+                repair_options,
+                pitch_nm=max(nm_from_mm("0.25"), repair_options.pitch_nm // 2),
+            )
+            attempt = _route_net(
+                board, _build_grid(board, refined_options, net.pads),
+                net.name, net.pads, rules.get(net.name), guides.get(net.name),
+                usage, {}, clearance, refined_options,
+            )
         if not attempt.result.connected:
             selected[net.name] = attempt
             continue
