@@ -187,6 +187,7 @@ def _route_score(route: GlobalRoutingResult) -> tuple[int, ...]:
         metrics.total_overflow,
         metrics.maximum_overflow,
         metrics.overfull_resource_count,
+        metrics.region_only_access_count,
         metrics.proposed_via_count,
         metrics.total_length_nm,
     )

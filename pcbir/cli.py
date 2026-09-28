@@ -189,6 +189,12 @@ def _parser() -> argparse.ArgumentParser:
         default=4,
         help="maximum transactional placement-routing feedback iterations",
     )
+    global_route_parser.add_argument(
+        "--feedback-trials",
+        type=int,
+        default=24,
+        help="maximum legal placement trials per feedback iteration",
+    )
 
     board_route_parser = subparsers.add_parser(
         "route-board", help="attempt complete physical routing and run native DRC"
@@ -538,6 +544,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     router_options,
                     PlacementRoutingFeedbackOptions(
                         maximum_iterations=args.feedback_iterations,
+                        maximum_trials_per_iteration=args.feedback_trials,
                         initial_movement_nm=router_options.tile_size_nm,
                     ),
                 )
@@ -561,7 +568,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 f"GLOBAL ROUTE: {route.status.value} - "
                 f"unrouted={metrics.unrouted_net_count}, "
-                f"overflow={metrics.total_overflow}, vias={metrics.proposed_via_count}"
+                f"overflow={metrics.total_overflow}, vias={metrics.proposed_via_count}, "
+                f"region_only_accesses={metrics.region_only_access_count}"
             )
             print(
                 f"Placement feedback: {flow.status.value}, "

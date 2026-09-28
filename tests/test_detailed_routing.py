@@ -515,7 +515,7 @@ def test_placement_only_keepout_does_not_block_copper_routing() -> None:
     }
 
 
-def test_detailed_router_uses_inner_copper_beneath_surface_footprint() -> None:
+def test_detailed_router_may_cross_surface_courtyard_without_extra_vias() -> None:
     base = _board()
     wall = PhysicalFootprint(
         "test/surface-wall",
@@ -542,12 +542,8 @@ def test_detailed_router_uses_inner_copper_beneath_surface_footprint() -> None:
     )
 
     assert result.status is DetailedRoutingStatus.SUCCESS
-    assert any(track.layer is CopperLayer.INTERNAL_1 for track in result.board.tracks)
-    assert result.board.vias
-    assert all(
-        via.from_layer is CopperLayer.FRONT and via.to_layer is CopperLayer.BACK
-        for via in result.board.vias
-    )
+    assert all(track.layer is CopperLayer.FRONT for track in result.board.tracks)
+    assert result.board.vias == ()
 
 
 def test_detailed_router_connects_distinct_pads_snapped_to_one_grid_node() -> None:

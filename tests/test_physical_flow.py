@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pcbir.flow as flow_module
 from pcbir.routeflow import FeedbackStatus, PlacementRoutingResult
 from pcbir.routing import GlobalRoutingStatus, route_global
@@ -92,7 +94,10 @@ def test_detailed_failure_can_trigger_legal_placement_retry(monkeypatch) -> None
         detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"),
                                                maximum_passes=1),
     )
-    guide = route_global(board, common["global_options"])
+    # Seed a deliberately stale guide to exercise detailed-placement repair.
+    # The corrected global access model now rejects the trapped pin outright.
+    assert route_global(board, common["global_options"]).status is GlobalRoutingStatus.UNREACHABLE
+    guide = route_global(replace(board, copper_keepouts=()), common["global_options"])
     assert guide.status is GlobalRoutingStatus.SUCCESS
     monkeypatch.setattr(flow_module, "optimize_placement_for_routing", lambda *_: (
         PlacementRoutingResult(

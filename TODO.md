@@ -60,6 +60,14 @@ expected and do not satisfy the future Route or Verify gates.
 - [x] 9. Add gated manufacturing export, release manifests, checksums, and an
       independent CAM re-import/verification pass.
 
+## Global-routing and package-escape refinement
+
+The detailed implementation sequence and remaining acceptance work are in
+[global-routing-and-escape-todo.md](docs/global-routing-and-escape-todo.md).
+Steps 1–2 are being validated against the full-vertical board; later steps
+cover simultaneous escape assignment, global–detailed feedback, and board
+closure. This refinement does not change the board's manufacturing gate.
+
 ## Production-readiness program
 
 Each item has its own research record and acceptance tests. Work proceeds in

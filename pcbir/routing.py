@@ -15,6 +15,9 @@ import json
 from math import ceil
 from typing import Iterable, Mapping
 
+from .drc import placed_pad_shape
+from .geometry import point_in_polygon, point_segment_distance_squared
+from .pin_access import local_access_path
 from .physical import (
     BoardSide,
     CopperLayer,
@@ -25,13 +28,17 @@ from .physical import (
     Placement,
     Point,
     RouteKind,
+    TrackSegment,
+    Via,
     nm_from_mm,
 )
 from .placement import (
     resolved_copper_keepouts,
-    transformed_footprint_polygon,
+    transformed_local_point,
     transformed_pad_position,
 )
+from .routing_clearance import RoutingClearanceIndex
+from .routing_vias import physical_via_span
 
 
 class GlobalRoutingStatus(str, Enum):
@@ -54,6 +61,16 @@ class PinAccess:
     node: GridNode
     access_position: Point
     layer: CopperLayer
+    tracks: tuple[TrackSegment, ...] = ()
+    via: Via | None = None
+    region_only: bool = False
+
+    @property
+    def estimated_cost_nm(self) -> int:
+        return sum(abs(item.start.x_nm - item.end.x_nm)
+                   + abs(item.start.y_nm - item.end.y_nm) for item in self.tracks) + (
+                       nm_from_mm(2) if self.via is not None else 0) + (
+                           nm_from_mm(3) if self.region_only else 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +126,7 @@ class GlobalRoutingMetrics:
     total_length_nm: int
     proposed_via_count: int
     iterations: int
+    region_only_access_count: int = 0
 
     @property
     def quality_vector(self) -> tuple[int, ...]:
@@ -117,6 +135,7 @@ class GlobalRoutingMetrics:
             self.total_overflow,
             self.maximum_overflow,
             self.overfull_resource_count,
+            self.region_only_access_count,
             self.proposed_via_count,
             self.total_length_nm,
         )
@@ -147,6 +166,7 @@ class GlobalRoutingResult:
                 "total_length_nm": self.metrics.total_length_nm,
                 "proposed_via_count": self.metrics.proposed_via_count,
                 "iterations": self.metrics.iterations,
+                "region_only_access_count": self.metrics.region_only_access_count,
             },
             "routes": [
                 {
@@ -166,6 +186,20 @@ class GlobalRoutingResult:
                                 access.access_position.x_nm,
                                 access.access_position.y_nm,
                             ],
+                            "physical_tracks": [
+                                {
+                                    "layer": track.layer.value,
+                                    "start_nm": [track.start.x_nm, track.start.y_nm],
+                                    "end_nm": [track.end.x_nm, track.end.y_nm],
+                                    "width_nm": track.width_nm,
+                                }
+                                for track in access.tracks
+                            ],
+                            "physical_via_nm": (
+                                [access.via.position.x_nm, access.via.position.y_nm]
+                                if access.via else None
+                            ),
+                            "region_only": access.region_only,
                         }
                         for access in route.accesses
                     ],
@@ -218,10 +252,15 @@ class GlobalRouterOptions:
     via_cost: int = 20
     bend_cost: int = 2
     guide_half_width_tiles: int = 1
+    pin_access_candidates: int = 4
+    escape_radius_nm: int = nm_from_mm("3")
+    escape_step_nm: int = nm_from_mm("0.5")
 
     def __post_init__(self) -> None:
         if self.tile_size_nm <= 0 or self.maximum_iterations <= 0:
             raise ValueError("global router dimensions and iteration count must be positive")
+        if min(self.pin_access_candidates, self.escape_radius_nm, self.escape_step_nm) <= 0:
+            raise ValueError("pin-access options must be positive")
         if min(
             self.present_penalty,
             self.present_penalty_growth,
@@ -250,6 +289,7 @@ class _Graph:
     ys: tuple[int, ...]
     legal_nodes: frozenset[GridNode]
     resources: Mapping[tuple[GridNode, GridNode], _Resource]
+    via_sites: Mapping[str, tuple[Point, ...]]
 
     def point(self, node: GridNode) -> Point:
         return Point(self.xs[node.x_index], self.ys[node.y_index])
@@ -274,6 +314,16 @@ def route_global(
         raise ValueError("global routing requires a board without detailed copper")
     graph = _build_graph(board, options)
     rules = {rule.net: rule for rule in board.net_routing_rules}
+    clearance = RoutingClearanceIndex(board)
+    access_options = {
+        (net.name, pad): _pin_access_candidates(
+            board, graph, pad, net.name,
+            tuple(rules[net.name].allowed_layers)
+            if net.name in rules and rules[net.name].allowed_layers else graph.layers,
+            rules.get(net.name), clearance, options,
+        )
+        for net in board.nets if len(net.pads) >= 2 for pad in net.pads
+    }
     capacities = {
         resource.identifier: resource.capacity
         for resource in graph.resources.values()
@@ -284,7 +334,8 @@ def route_global(
     completed_iterations = 0
     for iteration in range(1, options.maximum_iterations + 1):
         completed_iterations = iteration
-        attempt = _route_iteration(board, graph, rules, history, present, options, iteration)
+        attempt = _route_iteration(board, graph, rules, access_options,
+                                   history, present, options, iteration)
         if best is None or attempt.metrics.quality_vector < best.metrics.quality_vector:
             best = attempt
         if (
@@ -307,6 +358,7 @@ def route_global(
         best.metrics.total_length_nm,
         best.metrics.proposed_via_count,
         completed_iterations,
+        best.metrics.region_only_access_count,
     )
     hotspots = _hotspots(graph, best.usage, best.contributors)
     status = (
@@ -334,6 +386,7 @@ def _route_iteration(
     board: PhysicalBoard,
     graph: _Graph,
     rules: Mapping[str, NetRoutingRule],
+    access_options: Mapping[tuple[str, PadReference], tuple[PinAccess, ...]],
     history: Mapping[str, int],
     present: int,
     options: GlobalRouterOptions,
@@ -355,6 +408,7 @@ def _route_iteration(
             net.name,
             net.pads,
             rule,
+            access_options,
             demand,
             usage,
             history,
@@ -392,6 +446,9 @@ def _route_iteration(
         total_length_nm=sum(route.length_nm for route in routes),
         proposed_via_count=sum(len(route.vias) for route in routes),
         iterations=iteration,
+        region_only_access_count=sum(
+            access.region_only for route in routes for access in route.accesses
+        ),
     )
     return _Attempt(
         tuple(routes),
@@ -407,6 +464,7 @@ def _route_net(
     net: str,
     pads: tuple[PadReference, ...],
     rule: NetRoutingRule | None,
+    access_options: Mapping[tuple[str, PadReference], tuple[PinAccess, ...]],
     demand: int,
     usage: Mapping[str, int],
     history: Mapping[str, int],
@@ -414,49 +472,47 @@ def _route_net(
     options: GlobalRouterOptions,
 ) -> GlobalNetRoute:
     allowed = tuple(rule.allowed_layers) if rule and rule.allowed_layers else graph.layers
-    accesses: list[PinAccess] = []
-    for pad in sorted(pads):
-        access = _pin_access(board, graph, pad, allowed)
-        if access is None:
+    by_pad = {pad: access_options.get((net, pad), ()) for pad in sorted(pads)}
+    for pad, choices in by_pad.items():
+        if not choices:
             return GlobalNetRoute(
-                net,
-                False,
-                tuple(accesses),
-                (),
-                (),
-                0,
-                (f"no legal global-routing access for {pad.component}.{pad.pad}",),
+                net, False, (), (), (), 0,
+                (f"no legal bounded local/global access for {pad.component}.{pad.pad}",),
             )
-        accesses.append(access)
-    unique_nodes = tuple(dict.fromkeys(access.node for access in accesses))
-    if len(unique_nodes) <= 1:
-        return GlobalNetRoute(net, True, tuple(accesses), (), (), 0)
-    tree_nodes = {unique_nodes[0]}
-    remaining = list(unique_nodes[1:])
-    route_resources: set[str] = set()
-    resource_by_id = {item.identifier: item for item in graph.resources.values()}
-    via_count = 0
+    root_pad = min(by_pad, key=lambda pad: (len(by_pad[pad]), pad))
+    root = min(by_pad[root_pad], key=lambda item: (item.estimated_cost_nm, item.node))
+    accesses = [root]
+    tree_nodes = {root.node}
+    remaining = [pad for pad in by_pad if pad != root_pad]
+    route_resources: dict[str, _Resource] = {}
+    via_count = int(root.via is not None)
     while remaining:
-        target = min(
+        target_pad = min(
             remaining,
-            key=lambda node: (
-                min(_node_distance(node, tree) for tree in tree_nodes),
-                node,
+            key=lambda pad: (
+                min(_node_distance(access.node, tree) for access in by_pad[pad]
+                    for tree in tree_nodes), pad,
             ),
         )
-        path = _search(
-            graph,
-            tree_nodes,
-            target,
-            allowed,
-            demand,
-            usage,
-            history,
-            present,
-            options,
-            None if rule is None or rule.max_vias is None else rule.max_vias - via_count,
-        )
-        if path is None:
+        found: list[tuple[int, PinAccess, tuple[tuple[GridNode, GridNode], ...]]] = []
+        for candidate in by_pad[target_pad]:
+            allowance = None if rule is None or rule.max_vias is None else (
+                rule.max_vias - via_count - int(candidate.via is not None))
+            path = _search(
+                graph, tree_nodes, candidate.node, allowed, demand, usage,
+                history, present, options, allowance,
+            )
+            if path is not None:
+                path_cost = sum(
+                    (options.via_cost if a.layer_index != b.layer_index else 10)
+                    + present * max(0, usage[graph.resources[_edge_key(a, b)].identifier]
+                                    + demand - graph.resources[_edge_key(a, b)].capacity)
+                    + options.history_penalty * history[graph.resources[_edge_key(a, b)].identifier]
+                    for a, b in path
+                )
+                found.append((path_cost + candidate.estimated_cost_nm // nm_from_mm("0.25"),
+                              candidate, path))
+        if not found:
             return GlobalNetRoute(
                 net,
                 False,
@@ -464,20 +520,31 @@ def _route_net(
                 (),
                 (),
                 0,
-                (f"no capacity-graph path reaches terminal at {graph.point(target)}",),
+                (f"no capacity-graph path reaches terminal {target_pad.component}.{target_pad.pad}",),
             )
+        _, chosen, path = min(found, key=lambda item: (
+            item[0], item[1].estimated_cost_nm, item[1].node,
+            item[1].access_position.x_nm, item[1].access_position.y_nm,
+        ))
+        accesses.append(chosen)
+        via_count += int(chosen.via is not None)
+        tree_nodes.add(chosen.node)
         for first, second in path:
             resource = graph.resources[_edge_key(first, second)]
-            route_resources.add(resource.identifier)
+            route_resources.setdefault(resource.identifier, resource)
             tree_nodes.update((first, second))
             if first.layer_index != second.layer_index:
                 via_count += 1
-        remaining.remove(target)
+        remaining.remove(target_pad)
     segments: list[GlobalRouteSegment] = []
     vias: list[GlobalViaProposal] = []
-    total_length = 0
+    total_length = sum(
+        abs(track.start.x_nm - track.end.x_nm)
+        + abs(track.start.y_nm - track.end.y_nm)
+        for access in accesses for track in access.tracks
+    )
     for identifier in sorted(route_resources):
-        resource = resource_by_id[identifier]
+        resource = route_resources[identifier]
         first = graph.point(resource.first)
         second = graph.point(resource.second)
         if resource.first.layer_index == resource.second.layer_index:
@@ -503,6 +570,14 @@ def _route_net(
                     identifier,
                 )
             )
+    for access in accesses:
+        if access.via is None:
+            continue
+        span = access.via
+        identifier = _via_resource_id(graph, access.node, span.from_layer, span.to_layer)
+        vias.append(GlobalViaProposal(net, span.position, span.from_layer,
+                                      span.to_layer, identifier))
+    vias = list(dict.fromkeys(vias))
     return GlobalNetRoute(
         net,
         True,
@@ -592,17 +667,24 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
     max_y = max(point.y_nm for point in board.outline.vertices)
     xs = _axis_centers(min_x, max_x, options.tile_size_nm)
     ys = _axis_centers(min_y, max_y, options.tile_size_nm)
-    # A surface footprint courtyard constrains its own side, not buried copper.
-    # Explicit copper keepouts below are the mechanism for blocking inner layers.
-    obstacles = tuple(
-        (placement.side, _bounds(transformed_footprint_polygon(board, placement)))
-        for placement in board.placements
-    )
-    copper_keepouts = tuple(
+    # Courtyards are assembly geometry; they are not copper obstructions.
+    copper_keepouts = tuple(resolved_copper_keepouts(board))
+    track_keepouts = tuple(
         (item.layers, _bounds(item.outline.outer.vertices))
-        for item in resolved_copper_keepouts(board)
-        if item.block_tracks or item.block_vias
+        for item in copper_keepouts if item.block_tracks
     )
+    pad_obstacles: list[tuple[tuple[CopperLayer, ...], tuple[int, int, int, int]]] = []
+    for placement in board.placements:
+        footprint = board.footprints[placement.footprint]
+        for pad in footprint.pads:
+            if pad.kind is PadKind.APERTURE:
+                continue
+            position = transformed_local_point(placement, pad.position)
+            bounds = placed_pad_shape(position, pad, placement).bounds
+            layers = ((CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK,)
+                      if pad.kind is PadKind.SMD else board.stackup.copper_layers)
+            pad_obstacles.append((layers, (bounds.min_x, bounds.min_y,
+                                           bounds.max_x, bounds.max_y)))
     legal: set[GridNode] = set()
     for layer_index, layer in enumerate(board.stackup.copper_layers):
         for x_index, x in enumerate(xs):
@@ -611,33 +693,53 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
                 if not _point_in_polygon(point, board.outline.vertices):
                     continue
                 if any(
-                    (layer is CopperLayer.FRONT and side is BoardSide.FRONT)
-                    or (layer is CopperLayer.BACK and side is BoardSide.BACK)
-                    for side, box in obstacles if _point_in_box(point, box)
-                ):
-                    continue
-                if any(
                     layer in layers and _point_in_box(point, box)
-                    for layers, box in copper_keepouts
+                    for layers, box in track_keepouts
                 ):
                     continue
                 legal.add(GridNode(layer_index, x_index, y_index))
     pitch = board.rules.default_track_width_nm + board.rules.minimum_clearance_nm
-    planar_capacity = max(1, options.tile_size_nm // pitch)
-    via_pitch = board.rules.default_via_size_nm + board.rules.minimum_clearance_nm
-    via_capacity = max(1, (options.tile_size_nm // via_pitch) ** 2 // 4)
     resources: dict[tuple[GridNode, GridNode], _Resource] = {}
+    via_sites: dict[str, tuple[Point, ...]] = {}
+    clearance = RoutingClearanceIndex(board)
     for node in sorted(legal):
         for dx, dy in ((1, 0), (0, 1)):
             neighbor = GridNode(node.layer_index, node.x_index + dx, node.y_index + dy)
             if neighbor in legal:
-                _add_resource(resources, node, neighbor, planar_capacity, board.stackup.copper_layers[node.layer_index])
-        neighbor = GridNode(node.layer_index + 1, node.x_index, node.y_index)
-        if neighbor in legal:
-            _add_resource(resources, node, neighbor, via_capacity, None)
+                layer = board.stackup.copper_layers[node.layer_index]
+                capacity = _planar_capacity(
+                    Point(xs[node.x_index], ys[node.y_index]),
+                    Point(xs[neighbor.x_index], ys[neighbor.y_index]),
+                    options.tile_size_nm, pitch, board.rules.minimum_clearance_nm,
+                    layer, pad_obstacles, track_keepouts,
+                )
+                if capacity:
+                    _add_resource(resources, node, neighbor, capacity, layer)
+        for other_index in range(node.layer_index + 1, len(board.stackup.copper_layers)):
+            neighbor = GridNode(other_index, node.x_index, node.y_index)
+            if neighbor not in legal:
+                continue
+            span = physical_via_span(
+                board, board.stackup.copper_layers[node.layer_index],
+                board.stackup.copper_layers[other_index],
+            )
+            if span is None:
+                continue
+            span_start = board.stackup.copper_layers.index(span[0])
+            span_end = board.stackup.copper_layers.index(span[1])
+            identifier = f"via:{span_start}:{span_end}:{node.x_index}:{node.y_index}"
+            if identifier not in via_sites:
+                via_sites[identifier] = _legal_via_sites(
+                    board, clearance, Point(xs[node.x_index], ys[node.y_index]),
+                    options.tile_size_nm, span[0], span[1],
+                )
+            if via_sites[identifier]:
+                _add_resource(resources, node, neighbor, len(via_sites[identifier]),
+                              None, identifier=identifier)
     if not resources:
         raise ValueError("global routing capacity graph is empty")
-    return _Graph(tuple(board.stackup.copper_layers), xs, ys, frozenset(legal), resources)
+    return _Graph(tuple(board.stackup.copper_layers), xs, ys, frozenset(legal),
+                  resources, via_sites)
 
 
 def _add_resource(
@@ -646,74 +748,262 @@ def _add_resource(
     second: GridNode,
     capacity: int,
     layer: CopperLayer | None,
+    *, identifier: str | None = None,
 ) -> None:
     key = _edge_key(first, second)
     prefix = "via" if first.layer_index != second.layer_index else "edge"
-    identifier = (
+    identifier = identifier or (
         f"{prefix}:{first.layer_index}:{first.x_index}:{first.y_index}:"
         f"{second.layer_index}:{second.x_index}:{second.y_index}"
     )
     resources[key] = _Resource(identifier, key[0], key[1], capacity, layer)
 
 
-def _pin_access(
+def _planar_capacity(
+    first: Point, second: Point, tile_size_nm: int, pitch_nm: int,
+    clearance_nm: int, layer: CopperLayer,
+    pads: Iterable[tuple[tuple[CopperLayer, ...], tuple[int, int, int, int]]],
+    keepouts: Iterable[tuple[tuple[CopperLayer, ...], tuple[int, int, int, int]]],
+) -> int:
+    """Count usable crossing lanes, conservatively clipping copper obstacles."""
+    horizontal = first.y_nm == second.y_nm
+    crossing = (first.x_nm + second.x_nm) // 2 if horizontal else (first.y_nm + second.y_nm) // 2
+    center = first.y_nm if horizontal else first.x_nm
+    low, high = center - tile_size_nm // 2, center + tile_size_nm // 2
+    blocked: list[tuple[int, int]] = []
+    for layers, box in (*pads, *keepouts):
+        if layer not in layers:
+            continue
+        x0, y0, x1, y1 = box
+        near, far = (x0, x1) if horizontal else (y0, y1)
+        if not near - clearance_nm <= crossing <= far + clearance_nm:
+            continue
+        start, end = (y0, y1) if horizontal else (x0, x1)
+        blocked.append((max(low, start - clearance_nm), min(high, end + clearance_nm)))
+    cursor = low
+    capacity = 0
+    for start, end in sorted(blocked):
+        if end <= cursor or start >= high:
+            continue
+        if start > cursor:
+            capacity += (start - cursor) // pitch_nm
+        cursor = max(cursor, end)
+    if cursor < high:
+        capacity += (high - cursor) // pitch_nm
+    return capacity
+
+
+def _legal_via_sites(
+    board: PhysicalBoard, clearance: RoutingClearanceIndex, center: Point,
+    tile_size_nm: int, from_layer: CopperLayer, to_layer: CopperLayer,
+) -> tuple[Point, ...]:
+    """Sample independent, legal drill sites inside one coarse routing cell."""
+    size = board.rules.default_via_size_nm
+    pitch = max(size + board.rules.minimum_clearance_nm,
+                board.rules.default_via_drill_nm + board.rules.minimum_hole_clearance_nm)
+    edge_margin = size // 2 + board.rules.minimum_clearance_nm
+    half = tile_size_nm // 2
+    if half < edge_margin:
+        return ()
+    steps = (half - edge_margin) // pitch
+    offsets = range(-steps, steps + 1)
+    points = (Point(center.x_nm + dx * pitch, center.y_nm + dy * pitch)
+              for dx in offsets for dy in offsets)
+    result: list[Point] = []
+    outline = board.outline.vertices
+    for point in sorted(points, key=lambda item: (
+        abs(item.x_nm - center.x_nm) + abs(item.y_nm - center.y_nm),
+        item.x_nm, item.y_nm,
+    )):
+        if not point_in_polygon(point, outline):
+            continue
+        if min(point_segment_distance_squared(point, a, b)
+               for a, b in zip(outline, (*outline[1:], outline[0]))) < edge_margin ** 2:
+            continue
+        if clearance.can_via("<global-via-site>", point, size, from_layer, to_layer):
+            result.append(point)
+    return tuple(result)
+
+
+def _pin_access_candidates(
     board: PhysicalBoard,
     graph: _Graph,
     pad: PadReference,
+    net: str,
     allowed_layers: tuple[CopperLayer, ...],
-) -> PinAccess | None:
+    rule: NetRoutingRule | None,
+    clearance: RoutingClearanceIndex,
+    options: GlobalRouterOptions,
+) -> tuple[PinAccess, ...]:
     placements = {item.reference: item for item in board.placements}
     placement = placements[pad.component]
     footprint = board.footprints[placement.footprint]
     physical_pad = next(item for item in footprint.pads if item.number == pad.pad)
     position = transformed_pad_position(board, placement, pad.pad)
-    preferred = _pad_layers(board, placement, physical_pad.kind, allowed_layers)
-    candidates = [
-        node
-        for node in graph.legal_nodes
-        if graph.layers[node.layer_index] in preferred
-    ]
-    if not candidates:
-        return None
-    node = min(
-        candidates,
-        key=lambda item: (
-            abs(graph.point(item).x_nm - position.x_nm)
-            + abs(graph.point(item).y_nm - position.y_nm),
-            item,
-        ),
+    width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+    side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+    if physical_pad.kind is PadKind.SMD and side not in allowed_layers:
+        return ()
+    direct_layers = (side,) if physical_pad.kind is PadKind.SMD else allowed_layers
+    max_distance = max(options.tile_size_nm * 2, options.escape_radius_nm)
+    nearby = sorted(
+        (node for node in graph.legal_nodes
+         if graph.layers[node.layer_index] in allowed_layers
+         and abs(graph.point(node).x_nm - position.x_nm)
+         + abs(graph.point(node).y_nm - position.y_nm) <= max_distance),
+        key=lambda node: (_node_distance_nm(graph.point(node), position), node),
     )
-    return PinAccess(pad, position, node, graph.point(node), graph.layers[node.layer_index])
+    found: list[PinAccess] = []
+    for node in nearby:
+        layer = graph.layers[node.layer_index]
+        if layer not in direct_layers:
+            continue
+        endpoint = graph.point(node)
+        if position != endpoint and not clearance.can_track(net, position, endpoint, width, layer):
+            continue
+        tracks = (TrackSegment(net, position, endpoint, width, layer),) if position != endpoint else ()
+        found.append(PinAccess(pad, position, node, endpoint, layer, tracks))
+        if len(found) >= options.pin_access_candidates:
+            break
+    if not found:
+        local_nodes = [item for item in nearby
+                       if graph.layers[item.layer_index] in direct_layers]
+        for node in local_nodes[:max(4, options.pin_access_candidates)]:
+            layer = graph.layers[node.layer_index]
+            endpoint = graph.point(node)
+            tracks = local_access_path(
+                board, clearance, net, position, endpoint, layer, width,
+                step_nm=min(options.escape_step_nm, nm_from_mm("0.25")),
+                detour_nm=options.escape_radius_nm, maximum_states=600,
+            )
+            if tracks is not None:
+                found.append(PinAccess(pad, position, node, endpoint, layer, tracks))
+            if len(found) >= options.pin_access_candidates:
+                break
+    if (physical_pad.kind is PadKind.SMD and len(allowed_layers) > 1
+            and (rule is None or rule.kind is not RouteKind.DIFFERENTIAL)
+            and (rule is None or rule.max_vias != 0)):
+        bounds = placed_pad_shape(position, physical_pad, placement).bounds
+        margin = board.rules.default_via_size_nm // 2 + board.rules.minimum_clearance_nm
+        directions = ((1, 0), (-1, 0), (0, 1), (0, -1),
+                      (1, 1), (1, -1), (-1, 1), (-1, -1))
+        for radius in range(options.escape_step_nm, options.escape_radius_nm + 1,
+                            options.escape_step_nm):
+            for dx, dy in directions:
+                anchor = Point(position.x_nm + radius * dx, position.y_nm + radius * dy)
+                if (bounds.min_x - margin <= anchor.x_nm <= bounds.max_x + margin
+                        and bounds.min_y - margin <= anchor.y_nm <= bounds.max_y + margin):
+                    continue
+                if not _inside_outline_with_margin(anchor, board.outline.vertices, margin):
+                    continue
+                if not clearance.can_track(net, position, anchor, width, side):
+                    continue
+                for layer in allowed_layers:
+                    if layer is side:
+                        continue
+                    span = physical_via_span(board, side, layer)
+                    if span is None or not clearance.can_via(
+                        net, anchor, board.rules.default_via_size_nm, span[0], span[1]
+                    ):
+                        continue
+                    nodes = [node for node in nearby if graph.layers[node.layer_index] is layer
+                             and abs(graph.point(node).x_nm - anchor.x_nm) <= options.tile_size_nm // 2
+                             and abs(graph.point(node).y_nm - anchor.y_nm) <= options.tile_size_nm // 2]
+                    if not nodes:
+                        continue
+                    node = min(nodes, key=lambda item: (
+                        _node_distance_nm(graph.point(item), anchor), item,
+                    ))
+                    identifier = _via_resource_id(graph, node, span[0], span[1])
+                    if identifier not in graph.via_sites or not graph.via_sites[identifier]:
+                        continue
+                    endpoint = graph.point(node)
+                    if anchor != endpoint and not clearance.can_track(
+                        net, anchor, endpoint, width, layer,
+                    ):
+                        continue
+                    tracks = [TrackSegment(net, position, anchor, width, side)]
+                    if anchor != endpoint:
+                        tracks.append(TrackSegment(net, anchor, endpoint, width, layer))
+                    via = Via(net, anchor, board.rules.default_via_size_nm,
+                              board.rules.default_via_drill_nm, *span)
+                    found.append(PinAccess(pad, position, node, endpoint, layer,
+                                           tuple(tracks), via))
+            if len(found) >= options.pin_access_candidates * 3:
+                break
+    if not found and (rule is None or rule.kind is RouteKind.GENERAL):
+        # A coarse node denotes a routing region, not a compulsory track end.
+        # Preserve a checked physical exit even when no straight/dogleg stub
+        # reaches the center; detailed routing must close the remaining gap.
+        directions = ((1, 0), (-1, 0), (0, 1), (0, -1),
+                      (1, 1), (1, -1), (-1, 1), (-1, -1))
+        for radius in range(options.escape_step_nm, options.escape_radius_nm + 1,
+                            options.escape_step_nm):
+            for dx, dy in directions:
+                anchor = Point(position.x_nm + dx * radius,
+                               position.y_nm + dy * radius)
+                if not _inside_outline_with_margin(
+                    anchor, board.outline.vertices,
+                    width // 2 + board.rules.minimum_clearance_nm,
+                ) or not clearance.can_track(net, position, anchor, width, side):
+                    continue
+                candidates = [node for node in nearby
+                              if graph.layers[node.layer_index] is side
+                              and abs(graph.point(node).x_nm - anchor.x_nm)
+                              <= options.tile_size_nm // 2
+                              and abs(graph.point(node).y_nm - anchor.y_nm)
+                              <= options.tile_size_nm // 2]
+                if not candidates:
+                    continue
+                node = min(candidates, key=lambda item: (
+                    _node_distance_nm(graph.point(item), anchor), item,
+                ))
+                found.append(PinAccess(
+                    pad, position, node, anchor, side,
+                    (TrackSegment(net, position, anchor, width, side),),
+                    region_only=True,
+                ))
+            if len(found) >= options.pin_access_candidates:
+                break
+    return tuple(sorted(found, key=lambda item: (
+        item.estimated_cost_nm, item.node, item.via is not None,
+        item.via.position.x_nm if item.via else 0,
+        item.via.position.y_nm if item.via else 0,
+    ))[:options.pin_access_candidates])
 
 
-def _pad_layers(
-    board: PhysicalBoard,
-    placement: Placement,
-    kind: PadKind,
-    allowed: tuple[CopperLayer, ...],
-) -> tuple[CopperLayer, ...]:
-    if kind is not PadKind.SMD:
-        return allowed
-    side_layer = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
-    return (side_layer,) if side_layer in allowed else allowed
+def _node_distance_nm(first: Point, second: Point) -> int:
+    return abs(first.x_nm - second.x_nm) + abs(first.y_nm - second.y_nm)
+
+
+def _inside_outline_with_margin(point: Point, outline: tuple[Point, ...], margin: int) -> bool:
+    return point_in_polygon(point, outline) and min(
+        point_segment_distance_squared(point, a, b)
+        for a, b in zip(outline, (*outline[1:], outline[0]))
+    ) >= margin ** 2
+
+
+def _via_resource_id(graph: _Graph, node: GridNode,
+                     first: CopperLayer, second: CopperLayer) -> str:
+    low, high = sorted((graph.layers.index(first), graph.layers.index(second)))
+    return f"via:{low}:{high}:{node.x_index}:{node.y_index}"
 
 
 def _neighbors(
     graph: _Graph, node: GridNode, allowed_indexes: set[int]
 ) -> tuple[GridNode, ...]:
     result: list[GridNode] = []
-    for delta_layer, dx, dy in (
-        (0, -1, 0),
-        (0, 0, -1),
-        (0, 0, 1),
-        (0, 1, 0),
-        (-1, 0, 0),
-        (1, 0, 0),
-    ):
-        other = GridNode(node.layer_index + delta_layer, node.x_index + dx, node.y_index + dy)
+    for dx, dy in ((-1, 0), (0, -1), (0, 1), (1, 0)):
+        other = GridNode(node.layer_index, node.x_index + dx, node.y_index + dy)
         if other.layer_index not in allowed_indexes or other not in graph.legal_nodes:
             continue
         if _edge_key(node, other) in graph.resources:
+            result.append(other)
+    for layer_index in sorted(allowed_indexes):
+        if layer_index == node.layer_index:
+            continue
+        other = GridNode(layer_index, node.x_index, node.y_index)
+        if other in graph.legal_nodes and _edge_key(node, other) in graph.resources:
             result.append(other)
     return tuple(result)
 
@@ -748,7 +1038,11 @@ def _hotspots(
     contributors: Mapping[str, tuple[str, ...]],
 ) -> tuple[RoutingHotspot, ...]:
     result: list[RoutingHotspot] = []
+    seen: set[str] = set()
     for resource in sorted(graph.resources.values(), key=lambda item: item.identifier):
+        if resource.identifier in seen:
+            continue
+        seen.add(resource.identifier)
         used = usage[resource.identifier]
         overflow = max(0, used - resource.capacity)
         if not overflow:
@@ -796,7 +1090,7 @@ def _heuristic(first: GridNode, second: GridNode) -> int:
     return 10 * (
         abs(first.x_index - second.x_index)
         + abs(first.y_index - second.y_index)
-    ) + 20 * abs(first.layer_index - second.layer_index)
+    )
 
 
 def _bounds(points: Iterable[Point]) -> tuple[int, int, int, int]:
@@ -872,6 +1166,12 @@ def _routing_fingerprint(
             (
                 route.net,
                 route.connected,
+                tuple((access.pad.component, access.pad.pad,
+                       access.node.layer_index, access.node.x_index, access.node.y_index,
+                       access.region_only,
+                       access.via.position.x_nm if access.via else None,
+                       access.via.position.y_nm if access.via else None)
+                      for access in route.accesses),
                 tuple(segment.resource_id for segment in route.segments),
                 tuple(via.resource_id for via in route.vias),
             )
@@ -887,6 +1187,9 @@ def _routing_fingerprint(
             options.via_cost,
             options.bend_cost,
             options.guide_half_width_tiles,
+            options.pin_access_candidates,
+            options.escape_radius_nm,
+            options.escape_step_nm,
         ),
     }
     return sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()

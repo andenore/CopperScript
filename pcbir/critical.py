@@ -601,7 +601,9 @@ def _join_offset_junctions(
 def _pin_stubs(net: str, guide: GlobalNetRoute, width: int) -> tuple[TrackSegment, ...]:
     result: list[TrackSegment] = []
     for access in guide.accesses:
-        if access.pad_position != access.access_position:
+        if access.tracks:
+            result.extend(access.tracks)
+        elif access.pad_position != access.access_position:
             result.append(
                 TrackSegment(net, access.pad_position, access.access_position, width, access.layer)
             )
