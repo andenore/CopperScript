@@ -59,13 +59,13 @@ def test_kicad_backend_explicitly_flattens_hierarchy() -> None:
     assert '(label "V3V3"' in schematic
 
 
-def test_bare_board_debug_targets_are_excluded_from_schematic_bom() -> None:
+def test_smd_cortex_debug_connectors_are_in_schematic_bom() -> None:
     board = load_board(ROOT / "examples" / "full_vertical_board.copper")
     target = board.library["vertical.SWD_HEADER"]
-    assert not target.assembled
+    assert target.assembled
+    assert target.footprints == ("Connector_Debug:FTSH-105-01-L-DV-007-K",)
     schematic = KiCadSchematicBackend().generate(board).artifacts[0].content
-    assert schematic.count("(in_bom no)") >= 3  # library symbol and two targets
-    assert "(in_bom yes)" in schematic
+    assert schematic.count("(in_bom yes)") >= 3
 
 
 def _parentheses_are_balanced(text: str) -> bool:

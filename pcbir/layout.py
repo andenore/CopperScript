@@ -176,6 +176,7 @@ def _metrics_json(metrics: PlacementMetrics) -> dict[str, int]:
         "crossing_count": metrics.crossing_count,
         "estimated_via_count": metrics.estimated_via_count,
         "pin_escape_pressure": metrics.pin_escape_pressure,
+        "high_pin_spacing_penalty_nm": metrics.high_pin_spacing_penalty_nm,
         "constraint_penalty_nm": metrics.constraint_penalty_nm,
         "minimum_constraint_margin_nm": metrics.minimum_constraint_margin_nm,
         "group_spread_nm": metrics.group_spread_nm,

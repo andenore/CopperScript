@@ -556,6 +556,12 @@ routability metrics use transformed footprint pads. Multiple legal results are
 Pareto-filtered and deterministically ranked; reports MUST retain both the
 selected result and candidate metrics. Proxy crossings, vias, pin escape, and
 congestion are estimates only and MUST NOT be serialized as routed copper.
+High-pin-count packages receive a soft escape-channel spacing objective,
+measured between placed courtyards. It may use free board area but MUST NOT
+override fixed positions, board/keepout legality, or relative constraints;
+close-placement companions move together when a legal cluster translation
+improves the score. Spacing remains a placement heuristic, not a routing
+guarantee.
 
 Automated placement and routing artifacts MUST retain their algorithm identity,
 gate state, metrics, and non-fabrication-ready status. See

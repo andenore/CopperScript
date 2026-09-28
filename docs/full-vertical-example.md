@@ -33,12 +33,11 @@ The source references stored in each part/device definition are optional
 provenance. They document which manufacturer revision was used without making
 source metadata a requirement of the language.
 
-Both SWD targets are bare-PCB Tag-Connect TC2050 footprints, wired for the
-TC2050-ARM2010 adapter's SWD pinout. There is no fitted debug header or BOM
-component at either target; production programming needs a compatible TC2050
-cable/adapter. Pads 7-9 are unused, pin 6 (SWO) is optional, and pin 5 is
-ground, not a debugger-supplied power input. The footprint's no-via/no-pour
-and component-placement keepouts are preserved by the physical pipeline.
+Both SWD ports use fitted Samtec FTSH-105-01-L-DV-007-K 1.27 mm, 2x5
+surface-mount Cortex Debug headers. Position 7 is omitted for cable keying,
+pin 9 is grounded as GNDDetect, pin 6 (SWO) is optional, and pin 8 is unused.
+The headers are BOM items. Their CopperLib footprint uses nine SMD pads and
+the connector land pattern must receive normal assembly review.
 
 ## Main MCU allocation
 

@@ -24,6 +24,7 @@ from pcbir import (
     Stackup,
     compile_source,
     placement_metrics,
+    placement_solution_is_legal,
     plan_placement,
     prototype_physicalize,
     transformed_pad_position,
@@ -92,6 +93,40 @@ def test_planner_produces_in_bounds_non_overlapping_placement() -> None:
             assert separated, f"{left_ref} overlaps {right_ref}"
 
 
+def test_dense_packages_get_a_soft_escape_channel_when_space_is_available() -> None:
+    footprint = PhysicalFootprint(
+        "test/dense-ic",
+        tuple(
+            FootprintPad(str(index + 1), Point.mm((index % 8 - 3.5) * 0.6,
+                                                    (index // 8 - 1.5) * 0.6),
+                         Size.mm(0.3, 0.3))
+            for index in range(32)
+        ),
+        Size.mm(6, 6),
+    )
+    board = PhysicalBoard(
+        "DensePlacement",
+        BoardOutline.rectangle(60, 40),
+        {footprint.name: footprint},
+        (
+            Placement("U1", footprint.name, Point.mm(20, 20)),
+            Placement("U2", footprint.name, Point.mm(29, 20)),
+        ),
+        (),
+    )
+    options = PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
+                                      refinement_passes=0)
+    before = placement_metrics(board, {item.reference: item for item in board.placements}, options)
+    plan = plan_placement(board, options)
+    after = plan.report.metrics
+
+    assert before.high_pin_spacing_penalty_nm > 0
+    assert after.high_pin_spacing_penalty_nm < before.high_pin_spacing_penalty_nm
+    assert placement_solution_is_legal(
+        board, {item.reference: item for item in plan.board.placements}, options
+    )
+
+
 def test_planner_preserves_fixed_placement() -> None:
     physical = _prototype_board()
     original = next(item for item in physical.placements if item.reference == "U1")
@@ -114,6 +149,7 @@ def test_layout_report_is_machine_readable() -> None:
     assert document["gates"][2]["status"] == "not_run"
     assert document["metrics"]["component_count"] > 0
     assert "pin_escape_pressure" in document["metrics"]
+    assert "high_pin_spacing_penalty_nm" in document["metrics"]
     assert "minimum_constraint_margin_nm" in document["metrics"]
     assert document["candidates"]
     assert "analytical_iterations" in document["candidates"][0]["statistics"]

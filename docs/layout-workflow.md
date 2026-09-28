@@ -70,13 +70,16 @@ instead of equating successful file generation with sign-off.
 4. orientation selection followed by bounded grid/Hanan-style legalization,
    with recursive exact repair for small dense conflict tails;
 5. hard relative-constraint repair and legal local moves, swaps, and rotations;
+   dense packages (32 or more pads) also receive a soft 8-10 mm escape-channel
+   objective and bounded legal translations with their close-placement
+   companions, so decoupling rules stay intact;
 6. periodic coarse-routing feedback with per-layer capacity, crossing, via,
    and pin-escape estimates; and
 7. Pareto filtering and deterministic ranking of retained candidates.
 
 Wirelength is measured from transformed physical pads, not component centers.
 The ranking vector combines hard-constraint penalty and margin, congestion,
-crossings, estimated vias, pin-escape pressure, pad-aware HPWL, and semantic
+crossings, estimated vias, pin-escape pressure, dense-package spacing, pad-aware HPWL, and semantic
 group spread. Identical physical IR and options produce identical candidates,
 KiCad output, and reports.
 
@@ -98,7 +101,7 @@ checks have run.
 The report schema is `copperscript-layout-report/v0.1`. It contains the four
 gate states, actionable findings, the selected candidate, the retained Pareto
 frontier, per-phase statistics, pad-aware HPWL, crossings, estimated vias,
-pin-escape pressure, constraint penalty and margin, group spread, and
+pin-escape pressure, dense-package spacing penalty, constraint penalty and margin, group spread, and
 routing-bin capacity, overflow, and maximum estimated utilization.
 
 ## Deliberate limitations and next increments

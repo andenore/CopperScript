@@ -84,6 +84,7 @@ class PlacementMetrics:
     crossing_count: int
     estimated_via_count: int
     pin_escape_pressure: int
+    high_pin_spacing_penalty_nm: Nanometres
     constraint_penalty_nm: Nanometres
     minimum_constraint_margin_nm: Nanometres
     group_spread_nm: Nanometres
@@ -101,6 +102,7 @@ class PlacementMetrics:
             self.estimated_via_count,
             self.pin_escape_pressure,
             -self.minimum_constraint_margin_nm,
+            self.half_perimeter_wire_length_nm + self.high_pin_spacing_penalty_nm,
             self.half_perimeter_wire_length_nm,
             self.group_spread_nm,
         )
@@ -165,6 +167,7 @@ def generate_placement_candidates(
         refined, relative_after = _repair_relative_constraints(
             board, refined, options
         )
+        refined = _spread_high_pin_components(board, refined, options)
         metrics = placement_metrics(board, refined, options)
         if metrics.constraint_penalty_nm:
             continue
@@ -223,6 +226,7 @@ def placement_metrics(
         crossing_count=route.crossing_count,
         estimated_via_count=route.estimated_vias,
         pin_escape_pressure=_pin_escape_pressure(board, placements),
+        high_pin_spacing_penalty_nm=_high_pin_spacing_penalty(board, placements),
         constraint_penalty_nm=_relative_penalty(board, placements),
         minimum_constraint_margin_nm=_relative_margin(board, placements),
         group_spread_nm=_group_spread(board, placements),
@@ -525,11 +529,17 @@ def _analytical_place(
         for index, left in enumerate(references):
             left_width, left_height = _half_extents_mm(board, source[left])
             for right in references[index + 1 :]:
+                if source[left].side is not source[right].side:
+                    continue
                 right_width, right_height = _half_extents_mm(board, source[right])
                 dx = coordinates[left][0] - coordinates[right][0]
                 dy = coordinates[left][1] - coordinates[right][1]
-                limit_x = left_width + right_width + options.component_clearance_nm / 1_000_000
-                limit_y = left_height + right_height + options.component_clearance_nm / 1_000_000
+                dense_gap = _high_pin_target_gap(board, source[left], source[right]) / 1_000_000
+                # Keep global repulsion gentle; exact clearance is only a soft
+                # refinement score because fixed/proximity rules may need space.
+                clearance = max(options.component_clearance_nm / 1_000_000, min(2.0, dense_gap))
+                limit_x = left_width + right_width + clearance
+                limit_y = left_height + right_height + clearance
                 overlap_x = limit_x - abs(dx)
                 overlap_y = limit_y - abs(dy)
                 if overlap_x <= 0 or overlap_y <= 0:
@@ -1572,9 +1582,123 @@ def _group_spread(board: PhysicalBoard, placements: Mapping[str, Placement]) -> 
     return total
 
 
+def _high_pin_target_gap(board: PhysicalBoard, left: Placement, right: Placement) -> int:
+    """Soft courtyard channel reserved between two dense, same-side packages."""
+
+    if left.side is not right.side:
+        return 0
+    left_pads = len({pad.number for pad in board.footprints[left.footprint].pads if pad.number})
+    right_pads = len({pad.number for pad in board.footprints[right.footprint].pads if pad.number})
+    smaller = min(left_pads, right_pads)
+    if smaller < 32:
+        return 0
+    return nm_from_mm("10" if smaller >= 64 else "8")
+
+
+def _high_pin_spacing_penalty(
+    board: PhysicalBoard, placements: Mapping[str, Placement]
+) -> int:
+    """Bounded soft cost for dense packages without an escape corridor."""
+
+    dense = sorted(
+        (item for item in placements.values()
+         if len({pad.number for pad in board.footprints[item.footprint].pads if pad.number}) >= 32),
+        key=lambda item: item.reference,
+    )
+    penalty = 0
+    for index, left in enumerate(dense):
+        left_width, left_height = _half_extents(board, left)
+        for right in dense[index + 1 :]:
+            gap = _high_pin_target_gap(board, left, right)
+            if not gap:
+                continue
+            right_width, right_height = _half_extents(board, right)
+            deficit_x = gap + left_width + right_width - abs(left.position.x_nm - right.position.x_nm)
+            deficit_y = gap + left_height + right_height - abs(left.position.y_nm - right.position.y_nm)
+            if deficit_x > 0 and deficit_y > 0:
+                penalty += min(deficit_x, deficit_y) * 40
+    return penalty
+
+
+def _spread_high_pin_components(
+    board: PhysicalBoard,
+    source: Mapping[str, Placement],
+    options: PlacementPlannerOptions,
+) -> dict[str, Placement]:
+    """Translate dense ICs with close companions into free board space.
+
+    Moving a decoupled IC alone would violate its proximity rule. The small
+    MAX_DISTANCE cluster is moved together, and every trial is fully legalized.
+    This is a bounded soft optimization; fixed placements always win.
+    """
+
+    placements = dict(source)
+    dense = sorted(
+        reference for reference, item in placements.items()
+        if len({pad.number for pad in board.footprints[item.footprint].pads if pad.number}) >= 32
+    )
+    if len(dense) < 2:
+        return placements
+    fixed = set(_fixed_placements(board, placements, options))
+    companions: dict[str, set[str]] = {reference: {reference} for reference in placements}
+    for rule in board.relative_rules:
+        if rule.kind is not RelativePlacementKind.MAX_DISTANCE:
+            continue
+        members = {target.reference for target in rule.targets if target.reference in placements}
+        for reference in members:
+            companions[reference].update(members)
+    offsets = (
+        (dx, dy)
+        for radius in (4, 8, 12, 16)
+        for dx, dy in (
+            (-radius, 0), (radius, 0), (0, -radius), (0, radius),
+            (-radius, -radius), (-radius, radius), (radius, -radius), (radius, radius),
+        )
+    )
+    displacements = tuple(offsets)
+    for _ in range(2):
+        changed = False
+        for reference in dense:
+            cluster = set(companions[reference])
+            # Include transitive companions so no proximity relation is broken.
+            while any(not companions[item] <= cluster for item in cluster):
+                cluster.update(*(companions[item] for item in tuple(cluster)))
+            if cluster & fixed:
+                continue
+            baseline = _fast_score(board, placements)
+            best = placements
+            best_rank = (baseline, _hpwl(board, placements))
+            for dx, dy in displacements:
+                offset_x = nm_from_mm(dx)
+                offset_y = nm_from_mm(dy)
+                trial = dict(placements)
+                for item in cluster:
+                    current = trial[item]
+                    trial[item] = replace(current, position=Point(
+                        current.position.x_nm + offset_x,
+                        current.position.y_nm + offset_y,
+                    ))
+                if not placement_solution_is_legal(board, trial, options):
+                    continue
+                rank = (_fast_score(board, trial), _hpwl(board, trial))
+                if rank < best_rank:
+                    best, best_rank = trial, rank
+            if (
+                best is not placements
+                and _coarse_route(board, best, options).overflow
+                <= _coarse_route(board, placements, options).overflow
+            ):
+                placements = best
+                changed = True
+        if not changed:
+            break
+    return placements
+
+
 def _fast_score(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:
     return (
         _hpwl(board, placements)
+        + _high_pin_spacing_penalty(board, placements)
         + _group_spread(board, placements) // 20
         + _relative_penalty(board, placements) * 100
     )

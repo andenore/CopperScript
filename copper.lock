@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:744fd13fed2512bb8c1a2070e1c48a46465225fb30fa1f4423d9302ed8902478",
+      "checksum": "sha256:990fd7e2013566c06826a1bc6e1cf9d900063a835869639012fe8f071600aa2d",
       "files": [
         {
           "path": "copper.mod",
@@ -77,6 +77,11 @@
           "path": "data/sources.json",
           "sha256": "7629817c92822636df3b6467f3fb464687c9895ed96497a097005ac12852795e",
           "size": 540
+        },
+        {
+          "path": "footprints/Connector_Debug.pretty/FTSH-105-01-L-DV-007-K.kicad_mod",
+          "sha256": "4c66f92ed67d117b419c23e2c38d2d79a76a899d9680fa25068cba6cb3a44a5c",
+          "size": 1833
         },
         {
           "path": "footprints/RF_Module.pretty/Quectel_EG800G.kicad_mod",
@@ -180,8 +185,8 @@
         },
         {
           "path": "packages/full_vertical/swd_header.copper",
-          "sha256": "ffbf1da17f4187965a5d43e633d548368d3dead5649e4061e1c74078e28ec9b2",
-          "size": 1372
+          "sha256": "56c338f7961b15c9dc69b008214a869e31c0ec72fb4dc7c240d6277d8c01573c",
+          "size": 1183
         },
         {
           "path": "packages/full_vertical/tcan334g.copper",

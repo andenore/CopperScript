@@ -30,6 +30,20 @@ def test_full_vertical_declares_unfilled_inner_ground_plane() -> None:
     assert physical.zone_fills == ()
 
 
+def test_swd_headers_use_keyed_smd_cortex_pinout() -> None:
+    board = compile_file(EXAMPLE)
+    header = board.library["vertical.SWD_HEADER"]
+    assert header.footprints == ("Connector_Debug:FTSH-105-01-L-DV-007-K",)
+    assert {pin.number for pin in header.pins.values()} == {
+        "1", "2", "3", "4", "5", "6", "8", "9", "10"
+    }
+    assert header.pins["GND_DETECT"].number == "9"
+    ground = next(net for net in board.nets if net.name == "GND")
+    assert {(endpoint.component, endpoint.pin) for endpoint in ground.endpoints} >= {
+        ("J_SWD_MCU", "GND_DETECT"), ("J_SWD_NRF", "GND_DETECT")
+    }
+
+
 def test_full_vertical_example_exercises_required_subsystems() -> None:
     board = compile_file(EXAMPLE)
     flat = elaborate(board)
