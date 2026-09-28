@@ -97,6 +97,9 @@ before manufacturing export.
   fanout, detailed routing, and native DRC, committing only an improved score.
   It is opt-in (`--detailed-feedback-trials`) because full reroutes are costly.
   The first prototype uses cardinal moves, not rotations or analytic gradients.
+  A synthetic pin trap now verifies that the global guide can succeed, exact
+  detailed access can fail, and a legal placement retry closes the route while
+  a fixed component remains fixed.
 - R3: repair now accepts a configurable 1–8 ordinary-net blocker group and
   tries bounded deterministic reroute orders. Locked critical/fanout copper is
   never evicted. Each order builds a fresh clearance index, so failed partial
