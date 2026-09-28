@@ -26,6 +26,7 @@ from .physical import (
 from .routing import GlobalNetRoute, GlobalRoutingResult, GlobalViaProposal
 from .geometry import segment_distance_squared
 from .routing_vias import physical_via_span
+from .routing_layers import routing_layers
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -136,6 +137,9 @@ def route_critical_nets(
             result, pair_tracks, pair_vias = _route_pair(
                 board, rule, partner_rule, routes
             )
+            result, pair_tracks, pair_vias = _reject_reserved_plane_tracks(
+                board, result, pair_tracks, pair_vias, rules,
+            )
             processed.update((rule.net, partner_name))
             coupled_pairs.add(frozenset((rule.net, partner_name)))
             results.append(result)
@@ -144,6 +148,9 @@ def route_critical_nets(
         else:
             result, net_tracks, net_vias = _route_single(
                 board, rule, routes.get(rule.net)
+            )
+            result, net_tracks, net_vias = _reject_reserved_plane_tracks(
+                board, result, net_tracks, net_vias, rules,
             )
             processed.add(rule.net)
             results.append(result)
@@ -196,6 +203,30 @@ def route_critical_nets(
         tuple(vias),
         global_route.routing_fingerprint,
         fingerprint,
+    )
+
+
+def _reject_reserved_plane_tracks(
+    board: PhysicalBoard,
+    result: CriticalNetResult,
+    tracks: tuple[TrackSegment, ...],
+    vias: tuple[Via, ...],
+    rules: dict[str, NetRoutingRule],
+) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
+    forbidden = tuple(
+        track for track in tracks
+        if track.layer not in routing_layers(board, track.net, rules.get(track.net))
+    )
+    if not forbidden:
+        return result, tracks, vias
+    layers = ", ".join(sorted({track.layer.value for track in forbidden}))
+    return (
+        replace(
+            result, connected=False, track_count=0, via_count=0,
+            diagnostics=(*result.diagnostics, f"critical route uses reserved plane layer {layers}"),
+        ),
+        (),
+        (),
     )
 
 

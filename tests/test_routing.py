@@ -16,6 +16,8 @@ from pcbir import (
     BoardOutline,
     CopperKeepout,
     CopperLayer,
+    CopperZone,
+    DetailedRouterOptions,
     FootprintPad,
     FeedbackStatus,
     GlobalRouterOptions,
@@ -38,7 +40,9 @@ from pcbir import (
     nm_from_mm,
     optimize_placement_for_routing,
     route_global,
+    route_detailed,
 )
+from pcbir.routing_layers import dedicated_plane_layers, routing_layers
 
 
 def _two_terminal_board() -> PhysicalBoard:
@@ -120,6 +124,52 @@ def test_global_router_obeys_layer_specific_copper_keepout() -> None:
     assert route_global(back_allowed, GlobalRouterOptions(
         tile_size_nm=nm_from_mm("2.5"), maximum_iterations=2
     )).status is GlobalRoutingStatus.SUCCESS
+
+
+def test_board_wide_inner_ground_plane_is_reserved_for_ground() -> None:
+    wall = PolygonWithHoles(PolygonRing((
+        Point.mm(15, 0), Point.mm(25, 0),
+        Point.mm(25, 30), Point.mm(15, 30),
+    )))
+    plane = CopperZone(
+        "ground-plane", "GND", (CopperLayer.INTERNAL_1,),
+        PolygonWithHoles(PolygonRing((
+            Point.mm(1, 1), Point.mm(39, 1),
+            Point.mm(39, 29), Point.mm(1, 29),
+        ))),
+    )
+    base = _two_terminal_board()
+    board = replace(
+        base,
+        stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+                         CopperLayer.INTERNAL_2, CopperLayer.BACK)),
+        nets=(*base.nets, PhysicalNet("GND", ())),
+        zones=(plane,),
+        copper_keepouts=(CopperKeepout(
+            "surface-wall", (CopperLayer.FRONT, CopperLayer.BACK), wall,
+        ),),
+    )
+    assert dedicated_plane_layers(board) == {CopperLayer.INTERNAL_1: "GND"}
+    assert CopperLayer.INTERNAL_1 not in routing_layers(board, "SIGNAL")
+    assert CopperLayer.INTERNAL_1 in routing_layers(board, "GND")
+
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    assert guide.status is GlobalRoutingStatus.SUCCESS
+    assert not any(segment.layer is CopperLayer.INTERNAL_1
+                   for route in guide.routes for segment in route.segments)
+    routed = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_search_states=20_000,
+    ))
+    assert routed.metrics.routed_net_count == 1
+    assert any(track.layer is CopperLayer.INTERNAL_2 for track in routed.board.tracks)
+    assert not any(track.layer is CopperLayer.INTERNAL_1 for track in routed.board.tracks)
+
+    local = replace(board, zones=(replace(plane, outline=PolygonWithHoles(
+        PolygonRing((Point.mm(1, 1), Point.mm(5, 1),
+                     Point.mm(5, 5), Point.mm(1, 5))),
+    )),))
+    assert dedicated_plane_layers(local) == {}
+    assert CopperLayer.INTERNAL_1 in routing_layers(local, "SIGNAL")
 
 
 def test_surface_courtyard_does_not_block_global_tracks() -> None:

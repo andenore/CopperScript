@@ -34,6 +34,7 @@ from pcbir import (
     route_global,
     run_physical_drc,
     TrackSegment,
+    Via,
 )
 from pcbir.detailed import (
     DetailedNetResult,
@@ -101,6 +102,27 @@ def test_detailed_router_reports_search_budget_without_emitting_partial_copper()
     assert result.status is DetailedRoutingStatus.PARTIAL
     assert "search budget" in result.nets[0].diagnostics[0]
     assert not result.board.tracks
+
+
+def test_same_net_candidate_vias_must_meet_drill_spacing() -> None:
+    board = _board()
+    clearance = RoutingClearanceIndex(board)
+    first = Via(
+        "SIGNAL", Point.mm(10, 6), nm_from_mm("0.8"), nm_from_mm("0.4"),
+        CopperLayer.FRONT, CopperLayer.BACK,
+    )
+    too_close = replace(first, position=Point.mm("10.5", 6))
+    legal = replace(first, position=Point.mm(12, 6))
+
+    assert clearance.can_via(first.net, first.position, first.size_nm,
+                             first.from_layer, first.to_layer)
+    assert clearance.can_via(too_close.net, too_close.position, too_close.size_nm,
+                             too_close.from_layer, too_close.to_layer)
+    assert not clearance.candidate_vias_clear((first, too_close))
+    assert clearance.candidate_via_conflict(
+        (first, too_close), allow_movable_conflicts=True,
+    ) == too_close
+    assert clearance.candidate_vias_clear((first, legal))
 
 
 def test_zone_net_is_deferred_without_claiming_unfilled_copper_connected() -> None:
@@ -764,4 +786,34 @@ def test_detailed_router_does_not_cut_through_track_keepout() -> None:
     assert result.status is DetailedRoutingStatus.SUCCESS
     assert "DRC-COPPER-KEEPOUT" not in {
         finding.code for finding in run_physical_drc(result.board).findings
+    }
+
+
+def test_progressive_guide_can_project_corridor_to_signal_layer() -> None:
+    base = replace(
+        _board(),
+        stackup=Stackup((
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.BACK,
+        )),
+    )
+    guide = route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    assert all(segment.layer is CopperLayer.FRONT for segment in guide.routes[0].segments)
+    board = replace(base, copper_keepouts=(CopperKeepout(
+        "surface-wall", (CopperLayer.FRONT,),
+        PolygonWithHoles(PolygonRing((
+            Point.mm(9, 0), Point.mm(11, 0),
+            Point.mm(11, 12), Point.mm(9, 12),
+        ))),
+    ),))
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(1), maximum_passes=1,
+        maximum_search_states=1000, progressive_guides=True,
+    ))
+
+    assert result.status is DetailedRoutingStatus.SUCCESS, result.nets
+    assert any(track.layer is CopperLayer.INTERNAL_1 for track in result.board.tracks)
+    assert len(result.board.vias) >= 2
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET",
     }

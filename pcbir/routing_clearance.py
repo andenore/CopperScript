@@ -135,7 +135,46 @@ class RoutingClearanceIndex:
                 and self._hole_clear(
                     net, position, self.board.rules.default_via_drill_nm // 2,
                     (from_layer, to_layer),
-                ))
+                 ))
+
+    def candidate_vias_clear(self, vias: Iterable[Via]) -> bool:
+        """Validate a net's whole tentative via set, not just each via alone.
+
+        Search checks against committed copper incrementally, but several
+        branches of one net are materialized together. Their drill envelopes
+        must also be compared with one another before accepting the route.
+        """
+
+        return self.candidate_via_conflict(vias) is None
+
+    def candidate_via_conflict(
+        self, vias: Iterable[Via], *, allow_movable_conflicts: bool = False,
+    ) -> Via | None:
+        """Return the first tentative via that cannot coexist with its peers."""
+
+        proposed = tuple(vias)
+        for index, via in enumerate(proposed):
+            if allow_movable_conflicts:
+                _, locked = self.blocking_via_nets(via)
+                legal = not locked
+            else:
+                legal = self.can_via(
+                    via.net, via.position, via.size_nm, via.from_layer, via.to_layer,
+                )
+            if not legal:
+                return via
+            for earlier in proposed[:index]:
+                distance_squared = (
+                    (via.position.x_nm - earlier.position.x_nm) ** 2
+                    + (via.position.y_nm - earlier.position.y_nm) ** 2
+                )
+                required = (
+                    via.drill_nm // 2 + earlier.drill_nm // 2
+                    + self.board.rules.minimum_hole_clearance_nm
+                )
+                if distance_squared < required * required:
+                    return via
+        return None
 
     def _hole_clear(
         self, net: str, position: Point, radius_nm: int,

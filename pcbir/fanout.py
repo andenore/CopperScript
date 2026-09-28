@@ -18,6 +18,7 @@ from .physical import (
 )
 from .placement import transformed_pad_position
 from .routing_clearance import RoutingClearanceIndex
+from .routing_layers import routing_layers
 from .routing_vias import physical_via_span
 
 
@@ -92,7 +93,7 @@ def route_fanout(
         net = net_by_pad[reference]
         side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
         rule = rules.get(net)
-        allowed = rule.allowed_layers if rule and rule.allowed_layers else board.stackup.copper_layers
+        allowed = routing_layers(board, net, rule)
         if side not in allowed or len(allowed) < 2:
             pending.append(reference)
             continue

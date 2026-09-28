@@ -38,6 +38,7 @@ from .placement import (
     transformed_pad_position,
 )
 from .routing_clearance import RoutingClearanceIndex
+from .routing_layers import routing_layers
 from .routing_vias import physical_via_span
 
 
@@ -318,8 +319,7 @@ def route_global(
     access_options = {
         (net.name, pad): _pin_access_candidates(
             board, graph, pad, net.name,
-            tuple(rules[net.name].allowed_layers)
-            if net.name in rules and rules[net.name].allowed_layers else graph.layers,
+            routing_layers(board, net.name, rules.get(net.name)),
             rules.get(net.name), clearance, options,
         )
         for net in board.nets if len(net.pads) >= 2 for pad in net.pads
@@ -471,7 +471,7 @@ def _route_net(
     present: int,
     options: GlobalRouterOptions,
 ) -> GlobalNetRoute:
-    allowed = tuple(rule.allowed_layers) if rule and rule.allowed_layers else graph.layers
+    allowed = routing_layers(board, net, rule)
     by_pad = {pad: access_options.get((net, pad), ()) for pad in sorted(pads)}
     for pad, choices in by_pad.items():
         if not choices:

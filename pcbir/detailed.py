@@ -35,6 +35,7 @@ from .placement import (
 )
 from .routing import GlobalNetRoute, GlobalRoutingResult
 from .routing_clearance import RoutingClearanceIndex
+from .routing_layers import routing_layers
 from .routing_vias import physical_via_span
 
 
@@ -668,10 +669,12 @@ def _route_net(
     *,
     allow_movable_conflicts: bool = False,
     fanout_accesses: Mapping[PadReference, Point] | None = None,
+    forbidden_via_positions: frozenset[Point] = frozenset(),
+    via_repair_round: int = 0,
 ) -> _NetAttempt:
     if guide is None or not guide.connected:
         return _failed(name, "missing connected global guide")
-    allowed = tuple(rule.allowed_layers) if rule and rule.allowed_layers else grid.layers
+    allowed = routing_layers(board, name, rule)
     width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
     access_options: list[tuple[PadReference, Point, tuple[DetailedNode, ...]]] = []
     for pad in sorted(pads):
@@ -738,6 +741,7 @@ def _route_net(
                 width,
                 options,
                 allow_movable_conflicts=allow_movable_conflicts,
+                forbidden_via_positions=forbidden_via_positions,
             )
         except _SearchBudgetExceeded:
             return _failed(
@@ -816,6 +820,22 @@ def _route_net(
         round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm))
         for item in tracks
     )
+    conflict = clearance.candidate_via_conflict(
+        vias, allow_movable_conflicts=allow_movable_conflicts,
+    )
+    if conflict is not None:
+        if via_repair_round < 2 and conflict.position not in forbidden_via_positions:
+            retry = _route_net(
+                board, grid, name, pads, rule, guide, usage, history,
+                clearance, options,
+                allow_movable_conflicts=allow_movable_conflicts,
+                fanout_accesses=fanout_accesses,
+                forbidden_via_positions=forbidden_via_positions | {conflict.position},
+                via_repair_round=via_repair_round + 1,
+            )
+            if retry.result.connected:
+                return retry
+        return _failed(name, "candidate vias violate drill spacing or existing copper")
     diagnostics: list[str] = []
     if rule and rule.max_length_nm is not None and length > rule.max_length_nm:
         diagnostics.append(f"route length {length} nm exceeds {rule.max_length_nm} nm")
@@ -851,6 +871,7 @@ def _search(
     options: DetailedRouterOptions,
     *,
     allow_movable_conflicts: bool = False,
+    forbidden_via_positions: frozenset[Point] = frozenset(),
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     if options.allow_guide_deviation:
         scales = (1, 2, 4) if options.progressive_guides else (1,)
@@ -865,17 +886,39 @@ def _search(
                     corridor_only=True, state_budget=corridor_budget,
                     guide_margin_nm=options.guide_margin_nm * scale,
                     allow_movable_conflicts=allow_movable_conflicts,
+                    forbidden_via_positions=forbidden_via_positions,
                 )
             except _SearchBudgetExceeded:
                 guided = None
             if guided is not None:
                 return guided
+        # A global guide reserves coarse capacity, not a mandatory copper
+        # layer.  Before searching the whole board, try the same corridor on
+        # other *allowed* signal layers.  Physical via legality is still
+        # checked at every transition by the search.
+        if options.progressive_guides and len(allowed) > 1:
+            try:
+                projected = _search_once(
+                    grid, starts, targets, allowed, guide, usage, history,
+                    clearance, net, width_nm, options,
+                    corridor_only=True,
+                    state_budget=min(5_000, options.maximum_search_states),
+                    guide_margin_nm=options.guide_margin_nm * 2,
+                    allow_movable_conflicts=allow_movable_conflicts,
+                    forbidden_via_positions=forbidden_via_positions,
+                    project_guide_layers=True,
+                )
+            except _SearchBudgetExceeded:
+                projected = None
+            if projected is not None:
+                return projected
     return _search_once(
         grid, starts, targets, allowed, guide, usage, history,
         clearance, net, width_nm, options,
         corridor_only=False, state_budget=options.maximum_search_states,
         guide_margin_nm=options.guide_margin_nm,
         allow_movable_conflicts=allow_movable_conflicts,
+        forbidden_via_positions=forbidden_via_positions,
     )
 
 
@@ -896,6 +939,8 @@ def _search_once(
     state_budget: int,
     guide_margin_nm: int,
     allow_movable_conflicts: bool,
+    forbidden_via_positions: frozenset[Point],
+    project_guide_layers: bool = False,
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     allowed_indexes = {grid.layers.index(layer) for layer in allowed}
     queue: list[tuple[int, int, int, int, DetailedNode, str, int]] = []
@@ -917,7 +962,10 @@ def _search_once(
     def inside_guide(node: DetailedNode) -> bool:
         value = guide_cache.get(node)
         if value is None:
-            value = _inside_guide(grid, node, guide, guide_margin_nm)
+            value = _inside_guide(
+                grid, node, guide, guide_margin_nm,
+                ignore_layer=project_guide_layers,
+            )
             guide_cache[node] = value
         return value
 
@@ -950,6 +998,8 @@ def _search_once(
             if corridor_only and neighbor not in targets and not inside_guide(neighbor):
                 continue
             next_direction = _direction(node, neighbor)
+            if next_direction == "v" and grid.point(node) in forbidden_via_positions:
+                continue
             edge = _edge_key(node, neighbor)
             legal = legal_edge_cache.get(edge)
             if legal is None:
@@ -1048,7 +1098,9 @@ def _search_once(
             (
                 parent[0],
                 current[0],
-                int(not inside_guide(current[0])),
+                int(not _inside_guide(
+                    grid, current[0], guide, guide_margin_nm,
+                )),
             )
         )
         current = parent
@@ -1271,16 +1323,18 @@ def _inside_guide(
     node: DetailedNode,
     guide: GlobalNetRoute,
     margin: int,
+    *,
+    ignore_layer: bool = False,
 ) -> bool:
     point = grid.point(node)
     layer = grid.layers[node.layer_index]
     return any(
-        segment.layer is layer
+        (ignore_layer or segment.layer is layer)
         and _point_segment_distance(point, segment.start, segment.end)
         <= segment.guide_half_width_nm + margin
         for segment in guide.segments
     ) or any(
-        access.layer is layer
+        (ignore_layer or access.layer is layer)
         and abs(point.x_nm - access.access_position.x_nm) <= margin
         and abs(point.y_nm - access.access_position.y_nm) <= margin
         for access in guide.accesses
