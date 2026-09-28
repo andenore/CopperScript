@@ -140,5 +140,15 @@ A bounded post-fix regression (two passes, 2,000 search states) connected only
 22/58 nets, as expected from its much smaller search budget. Its refill-aware
 KiCad DRC found **zero dangling vias and zero drill-spacing violations**;
 the eight remaining rule findings were six footprint-library mismatches and
-two footprint-library issues. It still had 172 unconnected items. The
-50/58 completion benchmark has not yet been rerun with the post-fix code.
+two footprint-library issues. It still had 172 unconnected items.
+
+The corrected eight-pass full rerun connected **51/58 nets**. Native DRC
+reported seven open nets and incomplete routing, with no copper-geometry
+findings. The remaining nets are `CAN_RX`, `MCU_SWDCLK`, `MCU_SWDIO`,
+`NRF_SWDCLK`, `USB_C_CC2`, `V3V3`, and the intentionally deferred `GND`.
+KiCad 10.0.6 refill-aware DRC found 125 unconnected items and 13 rule
+findings: five isolated copper islands plus the same six library-footprint
+mismatches and two library-footprint issues. There were no dangling-via,
+drill-spacing, short, or copper-clearance findings. The change from 50 to
+51 routed nets is a measured improvement, not signoff; the different route
+also increased KiCad's unconnected-item count from 121 to 125.
