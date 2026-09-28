@@ -71,12 +71,14 @@ class PrototypePhysicalOptions:
             raise ValueError("prototype board dimensions must be positive")
         if self.columns < 1:
             raise ValueError("prototype placement columns must be at least one")
-        if self.copper_layers not in {2, 4}:
-            raise ValueError("prototype physicalizer supports two or four copper layers")
-        if self.fabrication_profile not in {"generic", "jlcpcb-four-layer"}:
+        if self.copper_layers not in {2, 4, 6}:
+            raise ValueError("prototype physicalizer supports two, four, or six copper layers")
+        if self.fabrication_profile not in {"generic", "jlcpcb-four-layer", "jlcpcb-six-layer"}:
             raise ValueError("unknown prototype fabrication profile")
         if self.fabrication_profile == "jlcpcb-four-layer" and self.copper_layers != 4:
             raise ValueError("JLCPCB four-layer profile requires four copper layers")
+        if self.fabrication_profile == "jlcpcb-six-layer" and self.copper_layers != 6:
+            raise ValueError("JLCPCB six-layer profile requires six copper layers")
         if self.margin_mm <= 0:
             raise ValueError("prototype board margin must be positive")
         if self.margin_mm * 2 >= min(self.board_width_mm, self.board_height_mm):
@@ -234,7 +236,7 @@ def _physicalize(
     metadata: dict[str, str],
 ) -> PhysicalBoard:
     flat = elaborate(board)
-    if options.fabrication_profile == "jlcpcb-four-layer":
+    if options.fabrication_profile in {"jlcpcb-four-layer", "jlcpcb-six-layer"}:
         # JLCPCB's published multilayer minimum is 0.09 mm; this is an
         # escape-rule floor, not a recommendation for every signal or a
         # substitute for impedance/current/assembly qualification.
@@ -336,6 +338,7 @@ def _physicalize(
                     CopperLayer.FRONT,
                     CopperLayer.INTERNAL_1,
                     CopperLayer.INTERNAL_2,
+                    *((CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4) if options.copper_layers == 6 else ()),
                     CopperLayer.BACK,
                 )
             )

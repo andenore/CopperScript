@@ -98,9 +98,9 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
-    pcb_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
+    pcb_parser.add_argument("--layers", type=int, choices=(2, 4, 6), default=2)
     pcb_parser.add_argument(
-        "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic",
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic",
         help="physical clearance and track-width profile",
     )
 
@@ -129,9 +129,9 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
-    layout_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
+    layout_parser.add_argument("--layers", type=int, choices=(2, 4, 6), default=2)
     layout_parser.add_argument(
-        "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic",
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic",
         help="physical clearance and track-width profile",
     )
     layout_parser.add_argument(
@@ -166,9 +166,9 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use generated inspection-only pads instead of resolving .kicad_mod files",
     )
-    global_route_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
+    global_route_parser.add_argument("--layers", type=int, choices=(2, 4, 6), default=2)
     global_route_parser.add_argument(
-        "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic",
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic",
         help="physical clearance and track-width profile",
     )
     global_route_parser.add_argument(
@@ -206,9 +206,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--no-check", action="store_true", help="attempt routing despite ERC errors")
     board_route_parser.add_argument("--footprint-root", action="append", default=[], type=Path)
     board_route_parser.add_argument("--allow-proxy-footprints", action="store_true")
-    board_route_parser.add_argument("--layers", type=int, choices=(2, 4), default=2)
+    board_route_parser.add_argument("--layers", type=int, choices=(2, 4, 6), default=2)
     board_route_parser.add_argument(
-        "--fab-profile", choices=("generic", "jlcpcb-four-layer"), default="generic"
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic"
     )
     board_route_parser.add_argument("--candidates", type=int, default=1)
     board_route_parser.add_argument(

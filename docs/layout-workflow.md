@@ -98,6 +98,16 @@ physical results, use resolved `.kicad_mod` footprints. In either case the
 result remains non-fabrication-ready because no detailed routes or sign-off
 checks have run.
 
+For a routing-capacity experiment, `--layers 6 --fab-profile jlcpcb-six-layer`
+is also accepted by the PCB export, placement, global-route, and board-route
+commands. It uses F.Cu/In1.Cu/In2.Cu/In3.Cu/In4.Cu/B.Cu with the same
+provisional 0.09 mm clearance and 0.20 mm default track width as the four-layer
+profile. This is not a controlled-impedance stackup model or a six-layer
+manufacturing qualification; a routed draft still requires plane-fill,
+independent KiCad DRC, electrical review, and CAM signoff.
+The matched four/six-layer prototype results and identified router limitations
+are recorded in [routing-layer-comparison.md](routing-layer-comparison.md).
+
 The report schema is `copperscript-layout-report/v0.1`. It contains the four
 gate states, actionable findings, the selected candidate, the retained Pareto
 frontier, per-phase statistics, pad-aware HPWL, crossings, estimated vias,

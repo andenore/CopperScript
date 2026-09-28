@@ -220,6 +220,25 @@ def test_cli_accepts_explicit_four_layer_fabrication_profile(tmp_path: Path) -> 
     assert project["net_settings"]["classes"][0]["clearance"] == 0.09
 
 
+def test_cli_exports_provisional_six_layer_board(tmp_path: Path) -> None:
+    output = tmp_path / "six-layer.kicad_pcb"
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "copperscript", "export-kicad-pcb",
+            "examples/resolved_footprint_board.copper", "--layers", "6",
+            "--fab-profile", "jlcpcb-six-layer", "-o", str(output),
+        ],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    content = output.read_text(encoding="utf-8")
+    assert '(3 "In3.Cu" signal)' in content
+    assert '(4 "In4.Cu" signal)' in content
+    project = json.loads(output.with_suffix(".kicad_pro").read_text(encoding="utf-8"))
+    assert project["net_settings"]["classes"][0]["clearance"] == 0.09
+
+
 def test_cli_does_not_silently_fall_back_to_proxy_footprints(
     tmp_path: Path,
 ) -> None:

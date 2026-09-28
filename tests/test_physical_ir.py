@@ -62,6 +62,22 @@ def test_four_layer_fabrication_profile_is_explicit() -> None:
         PrototypePhysicalOptions(fabrication_profile="jlcpcb-four-layer")
 
 
+def test_six_layer_fabrication_profile_is_explicit() -> None:
+    electrical = compile_file(ROOT / "examples" / "valid_board.copper")
+    options = PrototypePhysicalOptions(
+        copper_layers=6, fabrication_profile="jlcpcb-six-layer"
+    )
+    physical = prototype_physicalize(electrical, options)
+
+    assert tuple(layer.value for layer in physical.stackup.copper_layers) == (
+        "F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu"
+    )
+    assert physical.rules.minimum_clearance_nm == nm_from_mm("0.09")
+    assert physical.metadata["fabrication_profile"] == "jlcpcb-six-layer"
+    with pytest.raises(ValueError, match="requires six copper layers"):
+        PrototypePhysicalOptions(fabrication_profile="jlcpcb-six-layer")
+
+
 def test_physical_ir_rejects_unknown_pad_references() -> None:
     footprint = PhysicalFootprint(
         "test/resistor",
