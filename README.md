@@ -97,6 +97,14 @@ native check does not qualify proxy footprints or replace KiCad and CAM review.
 `--pitch-mm`, `--passes`, and `--search-budget` bound detailed-routing work;
 exhausting the search budget is reported per net rather than silently accepting
 an unfinished path.
+For difficult boards, `--fanout` pre-escapes crowded SMD pads, `--soft-ripup`
+and `--maximum-ripup-blockers 4` try bounded transactional rerouting, and
+`--detailed-feedback-trials 4` retries legal placement changes against exact
+routing failures. These experiments do not waive physical DRC. Pass
+`--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` to
+refill a disposable KiCad copy and include authoritative open-net/island
+findings in the report; a zone outline or stitched via alone is not proof of
+connectivity. See [routing research tasks](docs/routing-research-tasks.md).
 
 Validate and inspect a KiCad footprint before resolving it into a physical
 design:

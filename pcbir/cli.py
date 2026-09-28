@@ -24,7 +24,9 @@ from .physical import nm_from_mm
 from .detailed import DetailedRouterOptions
 from .drc import run_physical_drc
 from .flow import PhysicalFlowStatus, run_routing_pipeline
+from .fanout import FanoutOptions
 from .plane import stitch_zone_pads
+from .plane_verify import verify_filled_planes
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routeflow import (
     PlacementRoutingFeedbackOptions,
@@ -221,6 +223,18 @@ def _parser() -> argparse.ArgumentParser:
         help="try slower tentative routes through removable copper, then reroute blockers",
     )
     board_route_parser.add_argument(
+        "--maximum-ripup-blockers", type=int, default=4,
+        help="maximum ordinary nets displaced in one transactional repair (1..8)",
+    )
+    board_route_parser.add_argument(
+        "--fanout", action="store_true",
+        help="pre-escape crowded SMD pins to legal vias before detailed routing",
+    )
+    board_route_parser.add_argument(
+        "--detailed-feedback-trials", type=int, default=0,
+        help="bounded legal placement retries guided by detailed-route failures",
+    )
+    board_route_parser.add_argument(
         "--constrained-pins-first", action="store_true",
         help="connect multi-terminal pads with fewer legal accesses first",
     )
@@ -239,6 +253,10 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument(
         "--stitch-zone-pads", action="store_true",
         help="add DRC-checked pad escapes and vias, but still require verified zone fill",
+    )
+    board_route_parser.add_argument(
+        "--verify-plane-fill", type=Path, metavar="KICAD_CLI",
+        help="refill disposable KiCad board and report actual zone/connectivity DRC",
     )
 
     footprint_parser = subparsers.add_parser(
@@ -413,7 +431,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         progressive_guides=args.progressive_guides,
                         repair_budget_multiplier=args.repair_budget_multiplier,
                         defer_zone_nets=args.defer_zone_nets,
+                        maximum_ripup_blockers=args.maximum_ripup_blockers,
                     ),
+                    fanout_options=FanoutOptions() if args.fanout else None,
+                    detailed_feedback_trials=args.detailed_feedback_trials,
                 )
             except ValueError as exc:
                 print(f"ROUTING ERROR: {exc}")
@@ -421,6 +442,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             stitch = stitch_zone_pads(result.board) if args.stitch_zone_pads else None
             output_board = stitch.board if stitch is not None else result.board
             output_drc = run_physical_drc(output_board) if stitch is not None else result.drc
+            try:
+                plane_verification = (verify_filled_planes(
+                    output_board, kicad_cli=args.verify_plane_fill,
+                ) if args.verify_plane_fill else None)
+            except RuntimeError as exc:
+                print(f"PLANE VERIFICATION ERROR: {exc}")
+                return 2
             report_path = args.report or Path(f"{board.name}.route-report.json")
             report = {
                 "schema": "copperscript-route-board/v0.1",
@@ -429,11 +457,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 "fabrication_ready": False,
                 "placement_candidate": result.placement_and_global.placement_candidate,
+                "detailed_feedback_trials": result.detailed_feedback_trials,
                 "global": json.loads(result.placement_and_global.global_route.to_json()),
                 "critical": json.loads(result.critical.to_json()),
                 "detailed": json.loads(result.detailed.to_json()),
                 "drc": json.loads(output_drc.to_json()),
             }
+            if result.fanout is not None:
+                report["fanout"] = {
+                    "added_track_count": result.fanout.added_track_count,
+                    "added_via_count": result.fanout.added_via_count,
+                    "escaped_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.accesses],
+                    "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
+                }
             if stitch is not None:
                 report["plane_stitch"] = {
                     "stitched_pads": [
@@ -446,6 +482,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_via_count": stitch.added_via_count,
                     "zone_fill_verified": False,
                 }
+            if plane_verification is not None:
+                report["plane_verification"] = json.loads(plane_verification.to_json())
+                if stitch is not None:
+                    report["plane_stitch"]["zone_fill_verified"] = plane_verification.passed
             try:
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if args.output:
@@ -466,7 +506,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Report -> {report_path}")
             if args.output:
                 print(f"KiCad PCB draft -> {args.output}")
-            return 0 if result.status is PhysicalFlowStatus.PASS and not has_errors(diagnostics) else 1
+            return 0 if (result.status is PhysicalFlowStatus.PASS
+                         and not has_errors(diagnostics)
+                         and (plane_verification is None or plane_verification.passed)) else 1
 
         if args.command == "route-global":
             if has_errors(diagnostics) and not args.no_check:

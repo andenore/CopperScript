@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from hashlib import sha256
 from heapq import heappop, heappush
+from itertools import permutations
 import json
 from math import hypot
 from types import MappingProxyType
@@ -145,6 +146,7 @@ class DetailedRouterOptions:
     progressive_guides: bool = False
     repair_budget_multiplier: int = 1
     defer_zone_nets: bool = False
+    maximum_ripup_blockers: int = 4
 
     def __post_init__(self) -> None:
         if min(
@@ -164,6 +166,8 @@ class DetailedRouterOptions:
             raise ValueError("detailed router heuristic weight must be 100..300 percent")
         if not 1 <= self.repair_budget_multiplier <= 10:
             raise ValueError("detailed router repair budget multiplier must be 1..10")
+        if not 1 <= self.maximum_ripup_blockers <= 8:
+            raise ValueError("maximum rip-up blockers must be 1..8")
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,10 +206,13 @@ def route_detailed(
     board: PhysicalBoard,
     global_route: GlobalRoutingResult,
     options: DetailedRouterOptions | None = None,
+    *,
+    fanout_accesses: Mapping[PadReference, Point] | None = None,
 ) -> DetailedRoutingResult:
     """Route all ordinary nets while preserving existing critical copper."""
 
     options = options or DetailedRouterOptions()
+    fanout_accesses = fanout_accesses or {}
     rules = {item.net: item for item in board.net_routing_rules}
     guides = {item.net: item for item in global_route.routes}
     zone_nets = {zone.net for zone in board.zones} if options.defer_zone_nets else set()
@@ -258,7 +265,7 @@ def route_detailed(
                     sha256(f"{pass_index}:{item.name}".encode()).digest(),
                 ))
         for net in ordered_nets:
-            grid = _build_grid(board, pass_options, net.pads)
+            grid = _build_grid(board, pass_options, net.pads, fanout_accesses)
             guide = guides.get(net.name)
             attempt = _route_net(
                 board,
@@ -271,6 +278,7 @@ def route_detailed(
                 history,
                 clearance,
                 pass_options,
+                fanout_accesses=fanout_accesses,
             )
             attempts.append(attempt)
             if attempt.result.connected:
@@ -305,6 +313,7 @@ def route_detailed(
     if len(completed) > 1 and best.metrics.unrouted_net_count:
         repaired = _repair_from_passes(
             board, general_nets, rules, guides, best, completed, options,
+            fanout_accesses,
         )
         if repaired.metrics.quality_vector < best.metrics.quality_vector:
             best = repaired
@@ -355,10 +364,12 @@ def _repair_from_passes(
     best: _Pass,
     completed: list[_Pass],
     options: DetailedRouterOptions,
+    fanout_accesses: Mapping[PadReference, Point] | None = None,
 ) -> _Pass:
     """Keep the best legal pass and add compatible routes found in other passes."""
 
     selected = {item.result.net: item for item in best.nets}
+    fanout_accesses = fanout_accesses or {}
     clearance = RoutingClearanceIndex(board)
     usage = dict(best.usage)
     for item in best.nets:
@@ -383,9 +394,9 @@ def _repair_from_passes(
         )
         if options.enable_soft_ripup:
             soft_candidate = _route_net(
-                board, _build_grid(board, options, net.pads), net.name, net.pads,
+                board, _build_grid(board, options, net.pads, fanout_accesses), net.name, net.pads,
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
-                options, allow_movable_conflicts=True,
+                options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
             )
             if soft_candidate.result.connected:
                 candidates.append(soft_candidate)
@@ -409,7 +420,7 @@ def _repair_from_passes(
                 clearance.add_via(via)
             break
 
-    # A candidate from another pass may be blocked by only one or two
+    # A candidate from another pass may be blocked by several
     # already-routed nets. Rip those nets up transactionally, install the
     # candidate, then retain the swap only if every evicted net reroutes.
     net_by_name = {net.name: net for net in nets}
@@ -420,6 +431,14 @@ def _repair_from_passes(
             alternatives.get(net.name, ()),
             key=lambda item: (item.result.via_count, item.result.length_nm),
         )
+        if options.enable_soft_ripup:
+            soft_candidate = _route_net(
+                board, _build_grid(board, options, net.pads, fanout_accesses), net.name, net.pads,
+                rules.get(net.name), guides.get(net.name), usage, {}, clearance,
+                options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
+            )
+            if soft_candidate.result.connected:
+                candidates.append(soft_candidate)
         for candidate in candidates:
             blockers: set[str] = set()
             immutable = False
@@ -431,7 +450,7 @@ def _repair_from_passes(
                 names, locked = clearance.blocking_via_nets(via)
                 blockers.update(names)
                 immutable |= locked
-            if immutable or not 1 <= len(blockers) <= 2:
+            if immutable or not 1 <= len(blockers) <= options.maximum_ripup_blockers:
                 continue
             if any(
                 name not in net_by_name or not selected[name].result.connected
@@ -462,20 +481,39 @@ def _repair_from_passes(
             for via in candidate.vias:
                 trial_clearance.add_via(via)
             rerouted: dict[str, _NetAttempt] = {}
-            for blocker_name in sorted(blockers):
-                blocker = net_by_name[blocker_name]
-                attempt = _route_net(
-                    board, _build_grid(board, options, blocker.pads),
-                    blocker.name, blocker.pads, rules.get(blocker.name),
-                    guides.get(blocker.name), {}, {}, trial_clearance, options,
-                )
-                if not attempt.result.connected:
-                    break
-                rerouted[blocker_name] = attempt
-                for track in attempt.tracks:
+            # Order is a first-class repair variable. Rebuild the index for
+            # every trial so failed partial reroutes cannot leak copper.
+            for order in _ripup_orders(blockers):
+                trial_clearance = RoutingClearanceIndex(board)
+                for name, item in trial.items():
+                    if not item.result.connected or name in blockers or name == net.name:
+                        continue
+                    for track in item.tracks:
+                        trial_clearance.add_track(track)
+                    for via in item.vias:
+                        trial_clearance.add_via(via)
+                for track in candidate.tracks:
                     trial_clearance.add_track(track)
-                for via in attempt.vias:
+                for via in candidate.vias:
                     trial_clearance.add_via(via)
+                rerouted = {}
+                for blocker_name in order:
+                    blocker = net_by_name[blocker_name]
+                    attempt = _route_net(
+                        board, _build_grid(board, options, blocker.pads, fanout_accesses),
+                        blocker.name, blocker.pads, rules.get(blocker.name),
+                        guides.get(blocker.name), {}, {}, trial_clearance, options,
+                        fanout_accesses=fanout_accesses,
+                    )
+                    if not attempt.result.connected:
+                        break
+                    rerouted[blocker_name] = attempt
+                    for track in attempt.tracks:
+                        trial_clearance.add_track(track)
+                    for via in attempt.vias:
+                        trial_clearance.add_via(via)
+                if len(rerouted) == len(blockers):
+                    break
             if len(rerouted) != len(blockers):
                 continue
             selected.update(rerouted)
@@ -483,7 +521,6 @@ def _repair_from_passes(
             clearance = trial_clearance
             usage = _attempt_usage(selected.values())
             break
-
     # The merged geometry may open a different corridor for a net that no
     # complete pass could route. Retry it against the exact merged copper.
     for net in nets:
@@ -496,9 +533,9 @@ def _repair_from_passes(
             ),
         )
         attempt = _route_net(
-            board, _build_grid(board, repair_options, net.pads), net.name, net.pads,
+            board, _build_grid(board, repair_options, net.pads, fanout_accesses), net.name, net.pads,
             rules.get(net.name), guides.get(net.name), usage, {}, clearance,
-            repair_options,
+            repair_options, fanout_accesses=fanout_accesses,
         )
         # A coarse global grid can be topologically disconnected around fine
         # pitch pads even when exact copper clearance permits a route. Refine
@@ -512,9 +549,10 @@ def _repair_from_passes(
                 pitch_nm=max(nm_from_mm("0.25"), repair_options.pitch_nm // 2),
             )
             attempt = _route_net(
-                board, _build_grid(board, refined_options, net.pads),
+                board, _build_grid(board, refined_options, net.pads, fanout_accesses),
                 net.name, net.pads, rules.get(net.name), guides.get(net.name),
                 usage, {}, clearance, refined_options,
+                fanout_accesses=fanout_accesses,
             )
         if not attempt.result.connected:
             selected[net.name] = attempt
@@ -545,6 +583,18 @@ def _repair_from_passes(
     return _Pass(attempts, usage, metrics)
 
 
+def _ripup_orders(blockers: set[str]) -> tuple[tuple[str, ...], ...]:
+    """Bound order search, prioritizing reproducibility over factorial work."""
+
+    ordered = tuple(sorted(blockers))
+    if len(ordered) <= 3:
+        return tuple(permutations(ordered))
+    return (ordered, tuple(reversed(ordered)), *(
+        ordered[index:] + ordered[:index]
+        for index in range(1, min(len(ordered), 4))
+    ))
+
+
 def _attempt_usage(attempts: Iterable[_NetAttempt]) -> dict[str, int]:
     usage: dict[str, int] = {}
     for attempt in attempts:
@@ -567,6 +617,7 @@ def _route_net(
     options: DetailedRouterOptions,
     *,
     allow_movable_conflicts: bool = False,
+    fanout_accesses: Mapping[PadReference, Point] | None = None,
 ) -> _NetAttempt:
     if guide is None or not guide.connected:
         return _failed(name, "missing connected global guide")
@@ -574,11 +625,34 @@ def _route_net(
     width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
     access_options: list[tuple[PadReference, Point, tuple[DetailedNode, ...]]] = []
     for pad in sorted(pads):
-        pad_position = _pad_position(board, pad)
-        candidates = _access_candidates(
-            board, grid, pad, pad_position, allowed, clearance, name, width,
-            options.pin_access_candidates, allow_movable_conflicts,
-        )
+        anchor = (fanout_accesses or {}).get(pad)
+        if anchor is not None:
+            via = next((item for item in board.vias
+                        if item.net == name and item.position == anchor), None)
+            original = _pad_position(board, pad)
+            stub = next((item for item in board.tracks
+                         if item.net == name
+                         and ((item.start == original and item.end == anchor)
+                              or (item.end == original and item.start == anchor))), None)
+            if via is None or stub is None:
+                return _failed(name, f"unverified fanout anchor for {pad.component}.{pad.pad}")
+            layer_indexes = tuple(range(
+                grid.layers.index(via.from_layer), grid.layers.index(via.to_layer) + 1,
+            ))
+            candidates = tuple(
+                DetailedNode(layer_index, grid.xs.index(anchor.x_nm), grid.ys.index(anchor.y_nm))
+                for layer_index, layer in enumerate(grid.layers)
+                if layer in allowed and layer_index in layer_indexes
+                and anchor.x_nm in grid.xs and anchor.y_nm in grid.ys
+                and DetailedNode(layer_index, grid.xs.index(anchor.x_nm), grid.ys.index(anchor.y_nm)) not in grid.blocked
+            )
+            pad_position = anchor
+        else:
+            pad_position = _pad_position(board, pad)
+            candidates = _access_candidates(
+                board, grid, pad, pad_position, allowed, clearance, name, width,
+                options.pin_access_candidates, allow_movable_conflicts,
+            )
         if not candidates:
             return _failed(name, f"no legal pin access for {pad.component}.{pad.pad}")
         access_options.append((pad, pad_position, candidates))
@@ -993,6 +1067,7 @@ def _grid_line_clear(
 def _build_grid(
     board: PhysicalBoard, options: DetailedRouterOptions,
     pads: tuple[PadReference, ...],
+    fanout_accesses: Mapping[PadReference, Point] | None = None,
 ) -> _Grid:
     min_x = min(item.x_nm for item in board.outline.vertices)
     max_x = max(item.x_nm for item in board.outline.vertices)
@@ -1003,7 +1078,10 @@ def _build_grid(
         transformed_pad_position(board, placements[pad.component], pad.pad)
         for pad in pads
     )
-    pin_points = tuple(pin_points)
+    pin_points = tuple(pin_points) + tuple(
+        fanout_accesses[pad] for pad in pads
+        if fanout_accesses is not None and pad in fanout_accesses
+    )
     xs = tuple(sorted(set(range(min_x, max_x + 1, options.pitch_nm)).union(
         point.x_nm for point in pin_points
     )))

@@ -272,3 +272,44 @@ def _directions_away_from_hotspots(
         for _, dx, dy in sorted(set(ranked))
         if dx or dy
     )
+
+
+def detailed_failure_trials(
+    board: PhysicalBoard,
+    failed_nets: frozenset[str],
+    placement_options: PlacementPlannerOptions,
+    movement_nm: int,
+    maximum_trials: int,
+) -> tuple[PhysicalBoard, ...]:
+    """Legal, deterministic perturbations around exact-routing failures."""
+
+    if movement_nm <= 0 or maximum_trials < 0:
+        raise ValueError("detailed feedback movement/trial bounds are invalid")
+    if board.tracks or board.vias:
+        return ()  # Never move a component under accepted copper.
+    fixed = set(placement_options.fixed_references) | {
+        rule.reference for rule in board.placement_rules
+        if rule.fixed_position is not None
+    }
+    affected = sorted({
+        pad.component for net in board.nets if net.name in failed_nets
+        for pad in net.pads
+    } - fixed)
+    placements = {item.reference: item for item in board.placements}
+    trials: list[PhysicalBoard] = []
+    for reference in affected:
+        current = placements[reference]
+        for dx, dy in ((movement_nm, 0), (-movement_nm, 0),
+                       (0, movement_nm), (0, -movement_nm)):
+            moved = replace(current, position=Point(
+                current.position.x_nm + dx, current.position.y_nm + dy,
+            ))
+            candidate = {**placements, reference: moved}
+            if not placement_solution_is_legal(board, candidate, placement_options):
+                continue
+            trials.append(replace(board, placements=tuple(
+                candidate[item.reference] for item in board.placements
+            )))
+            if len(trials) >= maximum_trials:
+                return tuple(trials)
+    return tuple(trials)

@@ -387,6 +387,69 @@ def test_repair_rips_up_one_blocker_and_reroutes_it() -> None:
     ).findings} & {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
 
 
+def test_transactional_repair_can_displace_three_blockers(monkeypatch) -> None:
+    base = _board()
+    footprint = next(iter(base.footprints.values()))
+    placements = list(base.placements)
+    nets = list(base.nets)
+    blockers = []
+    for index, x in enumerate((6, 10, 14), 1):
+        placements.extend((
+            Placement(f"B{index}A", footprint.name, Point.mm(x, 3)),
+            Placement(f"B{index}B", footprint.name, Point.mm(x, 9)),
+        ))
+        name = f"BLOCK{index}"
+        nets.append(PhysicalNet(name, (
+            PadReference(f"B{index}A", "1"), PadReference(f"B{index}B", "1"),
+        )))
+        track = TrackSegment(name, Point.mm(x, 3), Point.mm(x, 9),
+                             nm_from_mm("0.25"), CopperLayer.FRONT)
+        blockers.append(_NetAttempt(
+            DetailedNetResult(name, True, 1, 0, nm_from_mm(6), 0),
+            (track,), (), frozenset(),
+        ))
+    board = replace(base, placements=tuple(placements), nets=tuple(nets))
+    signal_track = TrackSegment("SIGNAL", Point.mm(3, 6), Point.mm(17, 6),
+                                nm_from_mm("0.25"), CopperLayer.FRONT)
+    signal = _NetAttempt(
+        DetailedNetResult("SIGNAL", True, 1, 0, nm_from_mm(14), 0),
+        (signal_track,), (), frozenset(),
+    )
+    missing_signal = detailed_module._failed("SIGNAL", "unrouted")
+    missing_blockers = tuple(detailed_module._failed(item.result.net, "unrouted")
+                             for item in blockers)
+    first = _Pass((missing_signal, *blockers), {},
+                  DetailedRoutingMetrics(3, 1, 0, 0, 3, 0, nm_from_mm(18), 1))
+    second = _Pass((signal, *missing_blockers), {},
+                   DetailedRoutingMetrics(1, 3, 0, 0, 1, 0, nm_from_mm(14), 2))
+    guides = {item.net: item for item in route_global(
+        board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
+    ).routes}
+    original_route_net = detailed_module._route_net
+    def only_candidate_for_signal(*args, **kwargs):
+        if args[2] == "SIGNAL":
+            return detailed_module._failed("SIGNAL", "no alternate path")
+        return original_route_net(*args, **kwargs)
+    monkeypatch.setattr(detailed_module, "_route_net", only_candidate_for_signal)
+    repaired = _repair_from_passes(
+        board, list(board.nets), {}, guides, first, [first, second],
+        DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
+                              maximum_ripup_blockers=3),
+    )
+    assert repaired.metrics.routed_net_count == 4
+    all_tracks = tuple(track for item in repaired.nets for track in item.tracks)
+    all_vias = tuple(via for item in repaired.nets for via in item.vias)
+    assert not {item.code for item in run_physical_drc(
+        replace(board, tracks=all_tracks, vias=all_vias),
+    ).findings} & {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
+    limited = _repair_from_passes(
+        board, list(board.nets), {}, guides, first, [first, second],
+        DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
+                              maximum_ripup_blockers=2),
+    )
+    assert limited.metrics.unrouted_net_count >= 1
+
+
 def test_detailed_router_preserves_critical_copper() -> None:
     board = replace(
         _board(),
