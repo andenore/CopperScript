@@ -65,6 +65,8 @@ def run_routing_pipeline(
     detailed = route_detailed(
         fanout.board if fanout else critical.board, placement.global_route,
         detailed_options, fanout_accesses=fanout.accesses if fanout else None,
+        fanout_created_vias=frozenset((item.net, item.position)
+                                    for item in fanout.created_vias) if fanout else None,
     )
     drc = run_physical_drc(detailed.board, policy=drc_policy)
     trials_run = 0
@@ -88,6 +90,9 @@ def run_routing_pipeline(
                 trial_fanout.board if trial_fanout else trial_critical.board,
                 trial_global, detailed_options,
                 fanout_accesses=trial_fanout.accesses if trial_fanout else None,
+                fanout_created_vias=frozenset((item.net, item.position)
+                                            for item in trial_fanout.created_vias)
+                if trial_fanout else None,
             )
             trial_drc = run_physical_drc(trial_detailed.board, policy=drc_policy)
             score = _detailed_score(trial_detailed, trial_drc)

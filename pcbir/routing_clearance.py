@@ -46,6 +46,16 @@ class _KeepoutObject:
     has_holes: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _DrilledHole:
+    net: str
+    position: Point
+    radius_nm: int
+    locked: bool
+    reusable: bool = False
+    span: tuple[CopperLayer, CopperLayer] | None = None
+
+
 class RoutingClearanceIndex:
     """Query and incrementally reserve physical copper, excluding the same net."""
 
@@ -56,6 +66,7 @@ class RoutingClearanceIndex:
             rule.net: rule for rule in board.net_routing_rules
         }
         self._objects: list[_CopperObject] = []
+        self._holes: list[_DrilledHole] = []
         self._bins: dict[tuple[CopperLayer, int, int], list[int]] = {}
         self._keepouts = tuple(
             _KeepoutObject(
@@ -88,6 +99,11 @@ class RoutingClearanceIndex:
                     if pad.kind is PadKind.SMD else board.stackup.copper_layers
                 )
                 position = transformed_local_point(placement, pad.position)
+                if pad.kind is PadKind.THROUGH_HOLE and pad.drill is not None:
+                    self._holes.append(_DrilledHole(
+                        net, position, max(pad.drill.width_nm, pad.drill.height_nm) // 2,
+                        True,
+                    ))
                 self._add(_CopperObject(
                     net, tuple(layers), placed_pad_shape(position, pad, placement),
                     footprint.clearance_nm or 0,
@@ -114,7 +130,27 @@ class RoutingClearanceIndex:
     ) -> bool:
         layers = self._via_layers(from_layer, to_layer)
         shape = RoundedConvexShape((position,), size_nm // 2)
-        return self._keepout_clear(shape, layers, for_via=True) and self._clear(net, shape, layers)
+        return (self._keepout_clear(shape, layers, for_via=True)
+                and self._clear(net, shape, layers)
+                and self._hole_clear(
+                    net, position, self.board.rules.default_via_drill_nm // 2,
+                    (from_layer, to_layer),
+                ))
+
+    def _hole_clear(
+        self, net: str, position: Point, radius_nm: int,
+        span: tuple[CopperLayer, CopperLayer],
+    ) -> bool:
+        for hole in self._holes:
+            distance_squared = ((position.x_nm - hole.position.x_nm) ** 2
+                                + (position.y_nm - hole.position.y_nm) ** 2)
+            if (distance_squared == 0 and hole.net == net and hole.reusable
+                    and hole.span == span):
+                continue  # Reuse an existing same-net through via, not a new drill.
+            required = radius_nm + hole.radius_nm + self.board.rules.minimum_hole_clearance_nm
+            if distance_squared < required * required:
+                return False
+        return True
 
     def _keepout_clear(
         self, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...], *, for_via: bool
@@ -142,6 +178,10 @@ class RoutingClearanceIndex:
         ))
 
     def add_via(self, via: Via, *, locked: bool = False) -> None:
+        self._holes.append(_DrilledHole(
+            via.net, via.position, via.drill_nm // 2, locked, True,
+            (via.from_layer, via.to_layer),
+        ))
         self._add(_CopperObject(
             via.net, self._via_layers(via.from_layer, via.to_layer),
             RoundedConvexShape((via.position,), via.size_nm // 2),
@@ -157,7 +197,22 @@ class RoutingClearanceIndex:
         """Return movable blocker nets and whether immutable geometry blocks a via."""
         layers = self._via_layers(via.from_layer, via.to_layer)
         shape = RoundedConvexShape((via.position,), via.size_nm // 2)
-        return self._blockers(via.net, shape, layers, for_via=True)
+        movable, locked = self._blockers(via.net, shape, layers, for_via=True)
+        movable = set(movable)
+        for hole in self._holes:
+            distance_squared = ((via.position.x_nm - hole.position.x_nm) ** 2
+                                + (via.position.y_nm - hole.position.y_nm) ** 2)
+            if (distance_squared == 0 and hole.net == via.net and hole.reusable
+                    and hole.span == (via.from_layer, via.to_layer)):
+                continue
+            required = (via.drill_nm // 2 + hole.radius_nm
+                        + self.board.rules.minimum_hole_clearance_nm)
+            if distance_squared < required * required:
+                if hole.locked or hole.net == via.net:
+                    locked = True
+                else:
+                    movable.add(hole.net)
+        return frozenset(movable), locked
 
     def _blockers(
         self, net: str, shape: RoundedConvexShape,

@@ -205,6 +205,8 @@ def run_physical_drc(
     coverage.append(DrcCoverage("shorts_and_clearance", DrcCoverageStatus.EXECUTED, True))
     _check_non_plated_hole_clearance(board, findings)
     coverage.append(DrcCoverage("non_plated_hole_clearance", DrcCoverageStatus.EXECUTED, True))
+    _check_drill_spacing(board, findings)
+    coverage.append(DrcCoverage("drill_to_drill_spacing", DrcCoverageStatus.EXECUTED, True))
     keepout_covered = _check_copper_keepouts(board, findings)
     coverage.append(DrcCoverage(
         "copper_keepouts",
@@ -736,6 +738,44 @@ def _check_non_plated_hole_clearance(
                     f"via {index} violates {identity} drill clearance",
                     objects=(f"via:{index}", identity), nets=(via.net,),
                 ))
+
+
+def _check_drill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+    """Check via-to-via and via-to-plated-pad drills, independent of net."""
+
+    clearance = board.rules.minimum_hole_clearance_nm
+    for first_index, first in enumerate(board.vias):
+        first_hole = RoundedConvexShape((first.position,), first.drill_nm // 2)
+        for second_index in range(first_index + 1, len(board.vias)):
+            second = board.vias[second_index]
+            second_hole = RoundedConvexShape((second.position,), second.drill_nm // 2)
+            if not shapes_clear(first_hole, second_hole, clearance):
+                findings.append(_finding(
+                    "DRC-DRILL-SPACING", DrcSeverity.ERROR,
+                    f"vias {first_index} and {second_index} violate hole spacing",
+                    objects=(f"via:{first_index}", f"via:{second_index}"),
+                    nets=tuple(sorted({first.net, second.net})),
+                    required_nm=clearance,
+                ))
+        for placement in board.placements:
+            footprint = board.footprints[placement.footprint]
+            for pad_index, pad in enumerate(footprint.pads):
+                if pad.kind is not PadKind.THROUGH_HOLE or pad.drill is None:
+                    continue
+                drill_pad = replace(
+                    pad, size=pad.drill, kind=PadKind.SMD, drill=None,
+                    shape=(PadShape.CIRCLE if pad.drill.width_nm == pad.drill.height_nm
+                           else PadShape.OVAL),
+                )
+                position = transformed_local_point(placement, pad.position)
+                other_hole = placed_pad_shape(position, drill_pad, placement)
+                if not shapes_clear(first_hole, other_hole, clearance):
+                    findings.append(_finding(
+                        "DRC-DRILL-SPACING", DrcSeverity.ERROR,
+                        f"via {first_index} violates {placement.reference}.{pad.number} hole spacing",
+                        objects=(f"via:{first_index}", f"pad:{placement.reference}.{pad.number}:{pad_index}"),
+                        nets=(first.net,), required_nm=clearance,
+                    ))
 
 
 def _check_zone_fill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> None:

@@ -41,6 +41,7 @@ class FanoutResult:
     pending_pads: tuple[PadReference, ...]
     added_track_count: int
     added_via_count: int
+    created_vias: tuple[Via, ...] = ()
 
 
 def route_fanout(
@@ -102,7 +103,7 @@ def route_fanout(
             continue
         width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
         bounds = placed_pad_shape(position, pad, placement).bounds
-        choice: tuple[TrackSegment, Via] | None = None
+        choice: tuple[TrackSegment, Via | None] | None = None
         for candidate in _candidates(position, placement.position, options):
             margin = via_size // 2 + board.rules.minimum_clearance_nm
             if not point_in_polygon(candidate, board.outline.vertices):
@@ -114,9 +115,17 @@ def route_fanout(
                     and bounds.min_y - via_size // 2 <= candidate.y_nm <= bounds.max_y + via_size // 2):
                 continue
             track = TrackSegment(net, position, candidate, width, side)
-            via = Via(net, candidate, via_size, via_drill, *span)
+            coincident = tuple(item for item in (*board.vias, *vias)
+                               if item.position == candidate)
+            existing = next((item for item in coincident
+                             if item.net == net and item.from_layer == span[0]
+                             and item.to_layer == span[1]), None)
+            if coincident and existing is None:
+                continue
+            via = None if existing else Via(net, candidate, via_size, via_drill, *span)
             if (clearance.can_track(net, track.start, track.end, width, side)
-                    and clearance.can_via(net, candidate, via_size, span[0], span[1])):
+                    and (existing is not None or clearance.can_via(
+                        net, candidate, via_size, span[0], span[1]))):
                 choice = track, via
                 break
         if choice is None:
@@ -124,10 +133,11 @@ def route_fanout(
             continue
         track, via = choice
         tracks.append(track)
-        vias.append(via)
-        accesses[reference] = via.position
+        accesses[reference] = track.end
         clearance.add_track(track, locked=True)
-        clearance.add_via(via, locked=True)
+        if via is not None:
+            vias.append(via)
+            clearance.add_via(via, locked=True)
 
     if not tracks:
         return FanoutResult(board, MappingProxyType({}), tuple(pending), 0, 0)
@@ -135,7 +145,8 @@ def route_fanout(
     # Geometry queries are the fast gate; native DRC is the final transactional
     # gate. A new manufacturing violation rejects the whole fanout proposal.
     fatal = {"DRC-SHORT", "DRC-CLEARANCE", "DRC-BOARD-EDGE", "DRC-HOLE-CLEARANCE",
-             "DRC-COPPER-KEEPOUT", "DRC-VIA-SPAN", "DRC-TRACK-WIDTH"}
+             "DRC-DRILL-SPACING", "DRC-COPPER-KEEPOUT", "DRC-VIA-SPAN",
+             "DRC-TRACK-WIDTH"}
     before = run_physical_drc(board)
     after = run_physical_drc(routed)
     before_count = {code: sum(item.code == code for item in before.findings) for code in fatal}
@@ -144,7 +155,7 @@ def route_fanout(
         return FanoutResult(board, MappingProxyType({}),
                             tuple(item[1] for item in pads), 0, 0)
     return FanoutResult(routed, MappingProxyType(accesses), tuple(pending),
-                        len(tracks), len(vias))
+                        len(tracks), len(vias), tuple(vias))
 
 
 def _candidates(position: Point, center: Point, options: FanoutOptions):

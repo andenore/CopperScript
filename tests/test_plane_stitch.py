@@ -81,6 +81,17 @@ def test_multiple_zones_on_same_net_do_not_duplicate_stitches() -> None:
     assert len(result.stitched_pads) == 2
 
 
+def test_existing_same_net_via_is_reused_not_drilled_twice() -> None:
+    board = _plane_board()
+    first = stitch_zone_pads(board)
+    seeded = replace(board, vias=(first.board.vias[0],))
+    result = stitch_zone_pads(seeded)
+    assert result.complete
+    assert result.added_track_count == 2
+    assert result.added_via_count == 1
+    assert len(result.board.vias) == 2
+
+
 def test_blocked_stitches_remain_explicitly_pending() -> None:
     board = _plane_board()
     wall = CopperKeepout(

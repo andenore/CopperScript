@@ -14,10 +14,12 @@ from pcbir.manufacturing import CommandResult
 from pcbir.routing import GlobalRouterOptions, route_global
 from pcbir.routeflow import detailed_failure_trials
 from pcbir.placement import PlacementPlannerOptions
+from pcbir.routing_clearance import RoutingClearanceIndex
+from pcbir.drc import run_physical_drc
 from pcbir.physical import (
-    BoardOutline, CopperLayer, CopperZone, FootprintPad, NetRoutingRule, PadReference,
+    BoardOutline, CopperLayer, CopperZone, FootprintPad, NetRoutingRule, PadKind, PadReference,
     PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, Size,
-    PolygonRing, PolygonWithHoles, ZoneConnection, nm_from_mm,
+    PolygonRing, PolygonWithHoles, Via, ZoneConnection, nm_from_mm,
 )
 
 
@@ -59,7 +61,79 @@ def test_detailed_router_uses_fanout_via_as_access() -> None:
                             fanout_accesses=fanout.accesses)
     assert routed.metrics.routed_net_count == 1
     assert routed.locked_via_count == 1
-    assert routed.board.vias[0] == fanout.board.vias[0]
+    assert routed.board.tracks[0] == fanout.board.tracks[0]
+    assert not routed.board.vias  # The front-only route does not need a drill.
+
+
+def test_same_net_fanout_drills_respect_hole_spacing() -> None:
+    board = _dense_board()
+    board = replace(board, nets=(PhysicalNet("SIGNAL", (
+        PadReference("U1", "1"), PadReference("U1", "2"),
+        PadReference("J1", "1"),
+    )),))
+    result = route_fanout(board)
+    assert len(result.board.vias) == 2
+    for first in result.board.vias:
+        for second in result.board.vias:
+            if first is second:
+                continue
+            distance_sq = ((first.position.x_nm - second.position.x_nm) ** 2
+                           + (first.position.y_nm - second.position.y_nm) ** 2)
+            required = (first.drill_nm // 2 + second.drill_nm // 2
+                        + board.rules.minimum_hole_clearance_nm)
+            assert distance_sq >= required * required
+
+
+def test_fanout_reuses_existing_matching_via() -> None:
+    board = _dense_board()
+    initial = route_fanout(board)
+    seeded = replace(board, vias=(initial.board.vias[0],))
+    result = route_fanout(seeded)
+    assert result.added_track_count == 1
+    assert result.added_via_count == 0
+    assert len(result.board.vias) == 1
+    assert result.accesses[PadReference("U1", "1")] == seeded.vias[0].position
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    routed = route_detailed(
+        result.board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm("0.5")),
+        fanout_accesses=result.accesses,
+        fanout_created_vias=frozenset((item.net, item.position)
+                                    for item in result.created_vias),
+    )
+    assert seeded.vias[0] in routed.board.vias
+
+
+def test_same_net_drill_collision_is_rejected_by_router_and_native_drc() -> None:
+    board = _dense_board()
+    via = Via("SIGNAL", Point.mm(4, 4), nm_from_mm("0.8"), nm_from_mm("0.4"),
+              CopperLayer.FRONT, CopperLayer.BACK)
+    board = replace(board, vias=(via,))
+    too_close = Point.mm(4.5, 4)
+    index = RoutingClearanceIndex(board)
+    assert not index.can_via("SIGNAL", too_close, via.size_nm,
+                             CopperLayer.FRONT, CopperLayer.BACK)
+    assert index.can_via("SIGNAL", via.position, via.size_nm,
+                         CopperLayer.FRONT, CopperLayer.BACK)
+    duplicate = replace(via, position=too_close)
+    bad = replace(board, vias=(via, duplicate))
+    assert any(item.code == "DRC-DRILL-SPACING"
+               for item in run_physical_drc(bad).findings)
+
+
+def test_via_near_plated_pad_drill_is_checked_without_invalid_pad_copy() -> None:
+    pad = FootprintPad("1", Point(0, 0), Size.mm("1", "1"),
+                       kind=PadKind.THROUGH_HOLE, drill=Size.mm("0.5", "0.5"))
+    footprint = PhysicalFootprint("plated", (pad,), Size.mm(2, 2))
+    via = Via("SIGNAL", Point.mm(6.6, 6), nm_from_mm("0.8"),
+              nm_from_mm("0.4"), CopperLayer.FRONT, CopperLayer.BACK)
+    board = PhysicalBoard(
+        "Plated", BoardOutline.rectangle(12, 12), {footprint.name: footprint},
+        (Placement("J1", footprint.name, Point.mm(6, 6)),),
+        (PhysicalNet("SIGNAL", (PadReference("J1", "1"),)),),
+        vias=(via,),
+    )
+    assert any(item.code == "DRC-DRILL-SPACING"
+               for item in run_physical_drc(board).findings)
 
 
 def test_detailed_router_rejects_forged_fanout_anchor() -> None:
@@ -157,3 +231,21 @@ def test_installed_kicad_can_verify_a_filled_connected_plane() -> None:
     incomplete = verify_filled_planes(restricted, kicad_cli=Path(executable))
     assert not incomplete.passed
     assert incomplete.unconnected_count > 0
+
+
+def test_installed_kicad_accepts_pruned_fanout_route() -> None:
+    executable = shutil.which("kicad-cli")
+    if executable is None:
+        installed = Path("C:/Program Files/KiCad/10.0/bin/kicad-cli.exe")
+        if not installed.is_file():
+            pytest.skip("KiCad CLI not installed")
+        executable = str(installed)
+    board = _dense_board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    fanout = route_fanout(board)
+    detailed = route_detailed(
+        fanout.board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm("0.5")),
+        fanout_accesses=fanout.accesses,
+    )
+    evidence = verify_filled_planes(detailed.board, kicad_cli=Path(executable))
+    assert evidence.passed, evidence.findings

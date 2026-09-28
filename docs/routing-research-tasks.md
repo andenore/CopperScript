@@ -114,3 +114,28 @@ before manufacturing export.
 The full-vertical board remains a draft until the measured route has zero
 unrouted nets and passes native plus refill-aware KiCad DRC. An installed
 algorithm is not itself evidence that this acceptance condition was met.
+
+## Prototype benchmark and independent findings
+
+An eight-pass, 0.5 mm-grid, 10,000-state full-vertical run with fanout and
+four-blocker soft repair connected **50/58 nets**, versus the prior **46/58**
+baseline. Native DRC reported the eight open nets and incomplete routing,
+without shorts or copper-clearance findings. The open ordinary nets were
+`GNSS_TX`, `MCU_RESET`, `MCU_SWDCLK`, `MCU_SWDIO`, `NRF_SWDCLK`,
+`USB_DP_MODEM`, and `V3V3`; `GND` was deliberately deferred pending a verified
+plane fill. This did not produce a manufacturable board.
+
+KiCad 10.0.6 refill-aware DRC of that first draft found 121 unconnected items,
+45 dangling fanout vias, six drill-spacing warnings, three isolated copper
+findings, and eight library-footprint findings. The dangling-via and same-net
+drill-spacing findings led to the post-route pruning and shared drill checks
+in CS-089/CS-090. These fixes have targeted regression tests, including a
+real KiCad connected/disconnected plane fixture. They do not close the seven
+ordinary failed nets or verify the full board's GND plane.
+
+A bounded post-fix regression (two passes, 2,000 search states) connected only
+22/58 nets, as expected from its much smaller search budget. Its refill-aware
+KiCad DRC found **zero dangling vias and zero drill-spacing violations**;
+the eight remaining rule findings were six footprint-library mismatches and
+two footprint-library issues. It still had 172 unconnected items. The
+50/58 completion benchmark has not yet been rerun with the post-fix code.

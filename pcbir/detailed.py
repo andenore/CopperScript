@@ -13,6 +13,7 @@ from math import hypot
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
+from .geometry import point_on_segment
 from .physical import (
     BoardSide,
     CopperLayer,
@@ -208,6 +209,7 @@ def route_detailed(
     options: DetailedRouterOptions | None = None,
     *,
     fanout_accesses: Mapping[PadReference, Point] | None = None,
+    fanout_created_vias: frozenset[tuple[str, Point]] | None = None,
 ) -> DetailedRoutingResult:
     """Route all ordinary nets while preserving existing critical copper."""
 
@@ -329,10 +331,18 @@ def route_detailed(
             "fabrication_ready": "false",
         }
     )
+    all_tracks = tuple((*board.tracks, *new_tracks))
+    all_vias = tuple((*board.vias, *new_vias))
+    if fanout_accesses:
+        all_tracks, all_vias = _prune_fanout_copper(
+            board, all_tracks, all_vias, fanout_accesses,
+            frozenset(item.result.net for item in best.nets if item.result.connected),
+            fanout_created_vias,
+        )
     routed = replace(
         board,
-        tracks=tuple((*board.tracks, *new_tracks)),
-        vias=tuple((*board.vias, *new_vias)),
+        tracks=all_tracks,
+        vias=all_vias,
         metadata=MappingProxyType(metadata),
     )
     fingerprint = _fingerprint(global_route.routing_fingerprint, routed, metrics)
@@ -354,6 +364,46 @@ def _pass_heuristic_weight(options: DetailedRouterOptions, pass_index: int) -> i
     if pass_index <= 2:
         return options.heuristic_weight_percent
     return min(300, options.heuristic_weight_percent + 50 * (1 + (pass_index - 3) % 4))
+
+
+def _prune_fanout_copper(
+    board: PhysicalBoard,
+    tracks: tuple[TrackSegment, ...],
+    vias: tuple[Via, ...],
+    accesses: Mapping[PadReference, Point],
+    successful_nets: frozenset[str],
+    created_vias: frozenset[tuple[str, Point]] | None,
+) -> tuple[tuple[TrackSegment, ...], tuple[Via, ...]]:
+    """Remove abandoned stubs and vias unused on a second copper layer."""
+
+    net_by_pad = {pad: net.name for net in board.nets for pad in net.pads}
+    placement_by_ref = {item.reference: item for item in board.placements}
+    abandoned: set[tuple[str, Point, Point]] = set()
+    anchors: set[tuple[str, Point]] = set()
+    for pad, anchor in accesses.items():
+        net = net_by_pad[pad]
+        anchors.add((net, anchor))
+        if net not in successful_nets:
+            original = transformed_pad_position(
+                board, placement_by_ref[pad.component], pad.pad,
+            )
+            abandoned.add((net, original, anchor))
+            abandoned.add((net, anchor, original))
+    tracks = tuple(track for track in tracks
+                   if (track.net, track.start, track.end) not in abandoned)
+    used_layers: dict[tuple[str, Point], set[CopperLayer]] = {
+        anchor: set() for anchor in anchors
+    }
+    for track in tracks:
+        for key in used_layers:
+            net, point = key
+            if track.net == net and point_on_segment(point, track.start, track.end):
+                used_layers[key].add(track.layer)
+    prunable = anchors if created_vias is None else anchors & created_vias
+    vias = tuple(via for via in vias
+                 if (via.net, via.position) not in prunable
+                 or len(used_layers[(via.net, via.position)]) >= 2)
+    return tracks, vias
 
 
 def _repair_from_passes(
@@ -740,6 +790,11 @@ def _route_net(
             if (position, *via_span) in via_positions:
                 continue
             via_positions.add((position, *via_span))
+            if any(existing.net == name and existing.position == position
+                   and existing.from_layer == via_span[0]
+                   and existing.to_layer == via_span[1]
+                   for existing in board.vias):
+                continue
             vias.append(
                 Via(
                     name,

@@ -90,7 +90,7 @@ def stitch_zone_pads(
             rule = rules.get(net)
             width = (rule.width_nm if rule and rule.width_nm is not None
                      else board.rules.default_track_width_nm)
-            choice: tuple[TrackSegment, Via] | None = None
+            choice: tuple[TrackSegment, Via | None] | None = None
             for candidate in _candidate_points(position, options):
                 if not _point_in_outline(candidate, board.outline.vertices):
                     continue
@@ -104,15 +104,23 @@ def stitch_zone_pads(
                 ):
                     continue
                 track = TrackSegment(net, position, candidate, width, side)
-                via = Via(
+                coincident = tuple(item for item in (*board.vias, *added_vias)
+                                   if item.position == candidate)
+                existing = next((item for item in coincident
+                                 if item.net == net
+                                 and item.from_layer == outer_layers[0]
+                                 and item.to_layer == outer_layers[1]), None)
+                if coincident and existing is None:
+                    continue
+                via = None if existing else Via(
                     net, candidate, via_size, via_drill,
                     outer_layers[0], outer_layers[1],
                 )
                 if (
                     clearance.can_track(net, track.start, track.end, width, side)
-                    and clearance.can_via(
+                    and (existing is not None or clearance.can_via(
                         net, candidate, via_size, via.from_layer, via.to_layer,
-                    )
+                    ))
                 ):
                     choice = track, via
                     break
@@ -121,9 +129,10 @@ def stitch_zone_pads(
                 continue
             track, via = choice
             added_tracks.append(track)
-            added_vias.append(via)
             clearance.add_track(track)
-            clearance.add_via(via)
+            if via is not None:
+                added_vias.append(via)
+                clearance.add_via(via)
             stitched.append(reference)
 
     metadata = dict(board.metadata)
