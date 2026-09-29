@@ -1,8 +1,8 @@
 """Connect separate copper lands that represent one logical footprint pad.
 
 KiCad reports disconnected same-number lands even when the electrical IR
-correctly treats them as one pin. This conservative closure stage adds only
-straight, DRC-checked tracks; blocked lands remain explicit pending work.
+correctly treats them as one pin. This conservative closure stage adds bounded,
+DRC-checked surface tracks; blocked lands remain explicit pending work.
 """
 
 from __future__ import annotations
@@ -11,10 +11,11 @@ from dataclasses import dataclass, replace
 
 from .physical import (
     BoardSide, CopperLayer, PadKind, PadReference, PhysicalBoard, Point,
-    TrackSegment,
+    TrackSegment, nm_from_mm,
 )
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
+from .surface_path import surface_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,24 +84,22 @@ def stitch_duplicate_pads(board: PhysicalBoard) -> DuplicatePadStitchResult:
                         item[2].x_nm, item[2].y_nm,
                     ),
                 )
-                chosen: tuple[TrackSegment | None, Point] | None = None
+                chosen: tuple[tuple[TrackSegment, ...], Point] | None = None
                 for _, start, end in proposals:
-                    if any(
-                        track.net == net and track.layer is side
-                        and {track.start, track.end} == {start, end}
-                        for track in (*board.tracks, *added)
-                    ):
-                        chosen = None, end
-                        break
-                    if clearance.can_track(net, start, end, width, side):
-                        chosen = TrackSegment(net, start, end, width, side), end
+                    path = surface_path(
+                        board, clearance, net, start, end, width, side,
+                        (*board.tracks, *added, *local_tracks),
+                        maximum_detour_nm=nm_from_mm(3),
+                    )
+                    if path is not None:
+                        chosen = path, end
                         break
                 if chosen is None:
                     pending.append(reference)
                     added.extend(local_tracks)
                     break
-                track, end = chosen
-                if track is not None:
+                tracks, end = chosen
+                for track in tracks:
                     local_tracks.append(track)
                     clearance.add_track(track)
                 connected.add(end)

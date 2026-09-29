@@ -16,17 +16,20 @@ from .physical import (
     BoardSide,
     CopperLayer,
     CopperZone,
+    FootprintPad,
     PadKind,
     PadReference,
     PhysicalBoard,
+    Placement,
     Point,
     PolygonWithHoles,
     TrackSegment,
     Via,
     nm_from_mm,
 )
-from .placement import transformed_pad_position
+from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
+from .surface_path import surface_path, via_inside_board
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,104 +89,35 @@ def stitch_zone_pads(
                 continue
             placement = placements[reference.component]
             footprint = board.footprints[placement.footprint]
-            pad = next(item for item in footprint.pads if item.number == reference.pad)
-            if pad.kind is not PadKind.SMD:
+            lands = tuple(
+                item for item in footprint.pads
+                if item.number == reference.pad and item.kind is PadKind.SMD
+            )
+            if not lands:
                 continue
             side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
-            position = transformed_pad_position(board, placement, reference.pad)
-            pad_bounds = placed_pad_shape(position, pad, placement).bounds
             rule = rules.get(net)
             width = (rule.width_nm if rule and rule.width_nm is not None
                      else board.rules.default_track_width_nm)
-            choice: tuple[TrackSegment | None, Via | None] | None = None
-            # Reuse actual same-net through-vias before proposing another
-            # drill. Fanout and routed copper do not necessarily lie on this
-            # stage's half-millimetre candidate grid.
-            reusable = sorted(
-                (
-                    via for via in (*board.vias, *added_vias)
-                    if via.net == net
-                    and via.from_layer == outer_layers[0]
-                    and via.to_layer == outer_layers[1]
-                    and any(_point_in_zone(via.position, zone.outline) for zone in zones)
-                    and (via.position.x_nm - position.x_nm) ** 2
-                        + (via.position.y_nm - position.y_nm) ** 2
-                        <= options.maximum_radius_nm ** 2
-                ),
-                key=lambda via: (
-                    (via.position.x_nm - position.x_nm) ** 2
-                    + (via.position.y_nm - position.y_nm) ** 2,
-                    via.position.x_nm, via.position.y_nm,
-                ),
-            )
-            for existing in reusable:
-                already_connected = any(
-                    track.net == net and track.layer is side
-                    and {track.start, track.end} == {position, existing.position}
-                    for track in (*board.tracks, *added_tracks)
+            all_lands_stitched = True
+            for pad in lands:
+                position = transformed_local_point(placement, pad.position)
+                choice = _stitch_land(
+                    board, clearance, net, zones, pad, placement, position,
+                    side, width, via_size, via_drill, outer_layers, options,
+                    (*board.tracks, *added_tracks), (*board.vias, *added_vias),
                 )
-                if already_connected:
-                    choice = None, None
-                    break
-                track = (
-                    TrackSegment(net, position, existing.position, width, side)
-                    if position != existing.position else None
-                )
-                if track is None or clearance.can_track(
-                    net, track.start, track.end, width, side,
-                ):
-                    choice = track, None
-                    break
-            if choice is not None:
-                track, _ = choice
-                if track is not None:
+                if choice is None:
+                    all_lands_stitched = False
+                    continue
+                tracks, via = choice
+                for track in tracks:
                     added_tracks.append(track)
                     clearance.add_track(track)
-                stitched.append(reference)
-                continue
-            for candidate in _candidate_points(position, options):
-                if not _point_in_outline(candidate, board.outline.vertices):
-                    continue
-                if not any(_point_in_zone(candidate, zone.outline) for zone in zones):
-                    continue
-                # Through-via-in-pad needs a separately qualified filled/capped
-                # assembly process; this prototype always escapes the land.
-                if (
-                    pad_bounds.min_x - via_size // 2 <= candidate.x_nm <= pad_bounds.max_x + via_size // 2
-                    and pad_bounds.min_y - via_size // 2 <= candidate.y_nm <= pad_bounds.max_y + via_size // 2
-                ):
-                    continue
-                track = TrackSegment(net, position, candidate, width, side)
-                coincident = tuple(item for item in (*board.vias, *added_vias)
-                                   if item.position == candidate)
-                existing = next((item for item in coincident
-                                 if item.net == net
-                                 and item.from_layer == outer_layers[0]
-                                 and item.to_layer == outer_layers[1]), None)
-                if coincident and existing is None:
-                    continue
-                via = None if existing else Via(
-                    net, candidate, via_size, via_drill,
-                    outer_layers[0], outer_layers[1],
-                )
-                if (
-                    clearance.can_track(net, track.start, track.end, width, side)
-                    and (existing is not None or clearance.can_via(
-                        net, candidate, via_size, via.from_layer, via.to_layer,
-                    ))
-                ):
-                    choice = track, via
-                    break
-            if choice is None:
-                pending.append(reference)
-                continue
-            track, via = choice
-            added_tracks.append(track)
-            clearance.add_track(track)
-            if via is not None:
-                added_vias.append(via)
-                clearance.add_via(via)
-            stitched.append(reference)
+                if via is not None:
+                    added_vias.append(via)
+                    clearance.add_via(via)
+            (stitched if all_lands_stitched else pending).append(reference)
 
     metadata = dict(board.metadata)
     metadata["plane_stitching"] = "partial" if pending else "pad-escapes-only"
@@ -197,6 +131,78 @@ def stitch_zone_pads(
     return PlaneStitchResult(
         routed, tuple(stitched), tuple(pending), len(added_tracks), len(added_vias),
     )
+
+
+def _stitch_land(
+    board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
+    zones: list[CopperZone], pad: FootprintPad, placement: Placement, position: Point,
+    side: CopperLayer, width: int, via_size: int, via_drill: int,
+    outer_layers: tuple[CopperLayer, CopperLayer], options: PlaneStitchOptions,
+    committed_tracks: tuple[TrackSegment, ...], committed_vias: tuple[Via, ...],
+) -> tuple[tuple[TrackSegment, ...], Via | None] | None:
+    """Find one physical land's provisional contact to an inner zone."""
+
+    # Existing fanout and routed vias need not lie on the half-mm grid.
+    reusable = sorted(
+        (
+            via for via in committed_vias
+            if via.net == net
+            and via.from_layer == outer_layers[0]
+            and via.to_layer == outer_layers[1]
+            and any(_point_in_zone(via.position, zone.outline) for zone in zones)
+            and (via.position.x_nm - position.x_nm) ** 2
+                + (via.position.y_nm - position.y_nm) ** 2
+                <= options.maximum_radius_nm ** 2
+        ),
+        key=lambda via: (
+            (via.position.x_nm - position.x_nm) ** 2
+            + (via.position.y_nm - position.y_nm) ** 2,
+            via.position.x_nm, via.position.y_nm,
+        ),
+    )
+    for existing in reusable:
+        path = surface_path(
+            board, clearance, net, position, existing.position, width, side,
+            committed_tracks,
+        )
+        if path is not None:
+            return path, None
+    pad_bounds = placed_pad_shape(position, pad, placement).bounds
+    for candidate in _candidate_points(position, options):
+        if not _point_in_outline(candidate, board.outline.vertices):
+            continue
+        if not any(_point_in_zone(candidate, zone.outline) for zone in zones):
+            continue
+        # Through-via-in-pad needs a separately qualified filled/capped
+        # assembly process; this prototype always escapes the land.
+        if (
+            pad_bounds.min_x - via_size // 2 <= candidate.x_nm <= pad_bounds.max_x + via_size // 2
+            and pad_bounds.min_y - via_size // 2 <= candidate.y_nm <= pad_bounds.max_y + via_size // 2
+        ):
+            continue
+        coincident = tuple(item for item in committed_vias if item.position == candidate)
+        existing = next((item for item in coincident
+                         if item.net == net
+                         and item.from_layer == outer_layers[0]
+                         and item.to_layer == outer_layers[1]), None)
+        if coincident and existing is None:
+            continue
+        via = None if existing else Via(
+            net, candidate, via_size, via_drill, outer_layers[0], outer_layers[1],
+        )
+        if existing is None and not via_inside_board(board, candidate, via_size):
+            continue
+        if existing is None and not clearance.can_via(
+            net, candidate, via_size, via.from_layer, via.to_layer,
+        ):
+            continue
+        path = surface_path(
+            board, clearance, net, position, candidate, width, side,
+            committed_tracks,
+        )
+        if path is not None:
+            return path, via
+    return None
 
 
 def _candidate_points(position: Point, options: PlaneStitchOptions) -> Iterator[Point]:

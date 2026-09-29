@@ -78,7 +78,18 @@ def run_routing_pipeline(
     )
     drc = run_physical_drc(detailed.board, policy=drc_policy)
     trials_run = 0
-    failed_nets = frozenset(item.net for item in detailed.nets if not item.connected)
+    # A deferred zone net is awaiting external fill evidence, not a detailed
+    # maze-route failure. Moving components to "repair" it cannot improve the
+    # detailed search and can displace already-routed signals.
+    deferred_zones = (
+        {zone.net for zone in board.zones}
+        if detailed_options is not None and detailed_options.defer_zone_nets
+        else set()
+    )
+    failed_nets = frozenset(
+        item.net for item in detailed.nets
+        if not item.connected and item.net not in deferred_zones
+    )
     if failed_nets and detailed_feedback_trials:
         accepted_score = _detailed_score(detailed, drc)
         for trial_board in detailed_failure_trials(

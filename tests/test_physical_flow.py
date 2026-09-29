@@ -108,12 +108,14 @@ def test_plane_pad_escapes_are_reserved_before_detailed_signals() -> None:
             pitch_nm=nm_from_mm(1), maximum_passes=1, defer_zone_nets=True,
         ),
         plane_stitch_options=PlaneStitchOptions(),
+        detailed_feedback_trials=2,
     )
 
     assert result.plane_stitch is not None
     assert result.plane_stitch.added_via_count >= 1
     assert result.detailed.locked_via_count == result.plane_stitch.added_via_count
     assert result.detailed.metrics.routed_net_count == 1
+    assert result.detailed_feedback_trials == 0
     assert result.board.vias[:result.detailed.locked_via_count] == result.plane_stitch.board.vias
 
 

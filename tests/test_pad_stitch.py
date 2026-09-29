@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pcbir import (
-    BoardOutline, FootprintPad, PadReference, PhysicalBoard, PhysicalFootprint,
-    PhysicalNet, Placement, Point, Size, stitch_duplicate_pads,
+    BoardOutline, CopperKeepout, CopperLayer, FootprintPad, PadReference,
+    PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point,
+    PolygonRing, PolygonWithHoles, Size, run_physical_drc,
+    stitch_duplicate_pads,
 )
+from dataclasses import replace
 
 
 def _board(*, blocking_middle: bool) -> PhysicalBoard:
@@ -42,10 +45,31 @@ def test_stitches_separate_same_number_lands() -> None:
     assert repeated.board == result.board
 
 
-def test_blocked_same_number_lands_remain_pending() -> None:
+def test_detours_around_foreign_pad_between_same_number_lands() -> None:
     board = _board(blocking_middle=True)
     result = stitch_duplicate_pads(board)
 
+    assert result.stitched == (PadReference("U1", "1"),)
+    assert result.pending == ()
+    assert result.added_track_count == 3
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-BOARD-EDGE",
+    }
+    repeated = stitch_duplicate_pads(result.board)
+    assert repeated.added_track_count == 0
+
+
+def test_unavoidable_keepout_leaves_duplicate_lands_pending() -> None:
+    board = _board(blocking_middle=False)
+    wall = CopperKeepout(
+        "wall", (CopperLayer.FRONT,),
+        PolygonWithHoles(PolygonRing((
+            Point.mm(1, 9), Point.mm(19, 9),
+            Point.mm(19, 11), Point.mm(1, 11),
+        ))),
+    )
+    result = stitch_duplicate_pads(replace(board, copper_keepouts=(wall,)))
+
     assert result.stitched == ()
     assert result.pending == (PadReference("U1", "1"),)
-    assert result.board == board
+    assert result.added_track_count == 0

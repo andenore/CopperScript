@@ -113,6 +113,77 @@ def test_reuses_off_grid_same_net_via_before_adding_drill() -> None:
     }
 
 
+def test_existing_via_can_be_reached_with_legal_two_segment_escape() -> None:
+    base = _plane_board()
+    blocker = PhysicalFootprint(
+        "test/blocker",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),),
+        Size.mm(1, 1),
+    )
+    existing = Via(
+        "GND", Point.mm(5, 8), nm_from_mm("0.8"),
+        nm_from_mm("0.4"), CopperLayer.FRONT, CopperLayer.BACK,
+    )
+    board = replace(
+        base,
+        footprints={**base.footprints, blocker.name: blocker},
+        placements=(*base.placements, Placement("U1", blocker.name, Point.mm(4, 7))),
+        nets=(*base.nets, PhysicalNet("SIGNAL", (PadReference("U1", "1"),))),
+        vias=(existing,),
+    )
+
+    result = stitch_zone_pads(board)
+
+    assert result.complete
+    assert sum(existing.position in (track.start, track.end)
+               for track in result.board.tracks) == 1
+    assert any(Point.mm(3, 6) in (track.start, track.end)
+               for track in result.board.tracks)
+    assert len(result.board.tracks) == 3  # Two for J1, one for J2.
+    assert len(result.board.vias) == 2
+    repeated = stitch_zone_pads(result.board)
+    assert repeated.added_track_count == 0
+    assert repeated.added_via_count == 0
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-BOARD-EDGE",
+    }
+
+
+def test_every_separate_land_of_one_logical_ground_pad_is_escaped() -> None:
+    base = _plane_board()
+    connector = PhysicalFootprint(
+        "test/two-ground-lands",
+        (
+            FootprintPad("G", Point.mm(-2, 0), Size.mm("0.6", "0.6")),
+            FootprintPad("S", Point(0, 0), Size.mm("0.6", "0.6")),
+            FootprintPad("G", Point.mm(2, 0), Size.mm("0.6", "0.6")),
+        ),
+        Size.mm(6, 2),
+    )
+    board = replace(
+        base,
+        footprints={connector.name: connector},
+        placements=(Placement("J1", connector.name, Point.mm(10, 6)),),
+        nets=(
+            PhysicalNet("GND", (PadReference("J1", "G"),)),
+            PhysicalNet("SIGNAL", (PadReference("J1", "S"),)),
+        ),
+    )
+
+    result = stitch_zone_pads(board)
+
+    assert result.stitched_pads == (PadReference("J1", "G"),)
+    assert result.pending_pads == ()
+    assert any(Point.mm(8, 6) in (track.start, track.end)
+               for track in result.board.tracks)
+    assert any(Point.mm(12, 6) in (track.start, track.end)
+               for track in result.board.tracks)
+    assert len(result.board.vias) == 2
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-BOARD-EDGE",
+    }
+
+
 def test_selected_early_escape_is_not_duplicated_by_late_pass() -> None:
     board = _plane_board()
     early = stitch_zone_pads(board, PlaneStitchOptions(

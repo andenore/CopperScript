@@ -63,5 +63,22 @@ library lookup/mismatch warnings remain for qualification.
 An experimental all-early plane stitch connected every targeted GND pad,
 but blocked V3V3 (31 KiCad V3V3 gaps); selectively reserving the eight
 previously pending GND pads also blocked V3V3. Early plane reservation is
-therefore opt-in only. A broader placement/route-feedback experiment is
-underway. None of these drafts is production-ready.
+therefore opt-in only. A broader three-candidate placement experiment with
+two detailed-feedback trials again yielded 57/58 logical nets and 14 KiCad
+GND opens. Those trials were targeting deliberately deferred GND; placement
+feedback now excludes deferred plane nets and reserves a separate plane-aware
+objective for future work. Ground escapes now try a bounded two-segment
+Manhattan path when a direct pad-to-via trace is blocked, retaining exact
+copper and board-edge checks. The first rerun improved the pending GND-pad
+count from eight to seven, and KiCad's refilled-zone DRC improved from 14 to
+13 GND opens without introducing copper shorts or drill-spacing violations.
+Repeated connector shield lands now also try a bounded three-segment lateral
+detour. The next rerun stitched J_CELL.2, J_GNSS.2, and J_SIM.SH; only
+J_POWER.SH remained pending, and KiCad's open count fell from 13 to 9.
+The plane stage now separately escapes every physical SMD land sharing a
+logical pad number instead of silently taking the first; a full-board rerun
+reduced KiCad's open count from 9 to 7 and resolved the USB-C shield gap.
+The remaining seven opens are GND contacts around the CC controller, MCU
+decoupling/level shifter, and GNSS. KiCad reports no copper-short or
+drill-spacing violations, but eight footprint-library warnings remain.
+None of these drafts is production-ready.
