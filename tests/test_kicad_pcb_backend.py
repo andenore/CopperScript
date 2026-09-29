@@ -43,7 +43,7 @@ def test_kicad_pcb_backend_emits_deterministic_board_geometry() -> None:
     assert project["net_settings"]["classes"][0]["clearance"] == 0.2
     assert project["board"]["design_settings"]["rules"]["min_hole_clearance"] == 0.25
     assert project["net_settings"]["classes"][0]["track_width"] == 0.25
-    assert "min_track_width" not in project["board"]["design_settings"]["rules"]
+    assert project["board"]["design_settings"]["rules"]["min_track_width"] == 0.2
     pcb = first.artifacts[0].content
     assert pcb.startswith("(kicad_pcb\n  (version 20240108)")
     assert '(net 1 "GND")' in pcb
@@ -121,6 +121,7 @@ def test_kicad_project_uses_explicit_physical_clearance() -> None:
     project = json.loads(KiCadPcbBackend().generate(board).artifacts[1].content)
     assert project["net_settings"]["classes"][0]["clearance"] == 0.09
     assert project["board"]["design_settings"]["rules"]["min_clearance"] == 0.09
+    assert project["board"]["design_settings"]["rules"]["min_track_width"] == 0.2
 
 
 def _routed_board() -> PhysicalBoard:

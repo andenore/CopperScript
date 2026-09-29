@@ -218,6 +218,7 @@ def test_cli_accepts_explicit_four_layer_fabrication_profile(tmp_path: Path) -> 
     assert output.exists()
     project = json.loads(output.with_suffix(".kicad_pro").read_text(encoding="utf-8"))
     assert project["net_settings"]["classes"][0]["clearance"] == 0.09
+    assert project["board"]["design_settings"]["rules"]["min_track_width"] == 0.09
 
 
 def test_cli_exports_provisional_six_layer_board(tmp_path: Path) -> None:
@@ -237,6 +238,7 @@ def test_cli_exports_provisional_six_layer_board(tmp_path: Path) -> None:
     assert '(4 "In4.Cu" signal)' in content
     project = json.loads(output.with_suffix(".kicad_pro").read_text(encoding="utf-8"))
     assert project["net_settings"]["classes"][0]["clearance"] == 0.09
+    assert project["board"]["design_settings"]["rules"]["min_track_width"] == 0.09
 
 
 def test_cli_does_not_silently_fall_back_to_proxy_footprints(
@@ -338,7 +340,8 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
             sys.executable, "-m", "copperscript", "route-board",
             "examples/valid_board.copper", "--allow-proxy-footprints",
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
-            "--stitch-zone-pads",
+            "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
+            "--plane-stitch-radius-mm", "5",
             "--report", str(report), "-o", str(pcb),
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -352,6 +355,9 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["detailed"]["status"] in {"success", "partial"}
     assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
     assert document["plane_stitch"]["zone_fill_verified"] is False
+    assert document["plane_stitch"]["step_nm"] == 250_000
+    assert document["plane_stitch"]["maximum_radius_nm"] == 5_000_000
+    assert document["plane_stitch"]["maximum_contact_radius_nm"] == 0
     assert pcb.read_text(encoding="utf-8").startswith("(kicad_pcb")
     assert pcb.with_suffix(".kicad_pro").is_file()
     assert "BOARD ROUTE:" in result.stdout
@@ -369,6 +375,19 @@ def test_cli_rejects_unknown_selective_plane_pad() -> None:
 
     assert result.returncode == 2
     assert "not a zone-net pad" in result.stdout
+
+
+def test_cli_rejects_nonpositive_plane_search_step() -> None:
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "copperscript", "route-board",
+            "examples/valid_board.copper", "--plane-stitch-step-mm", "0",
+        ],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode == 2
+    assert "expected a positive finite length" in result.stderr
 
 
 def test_cli_checks_kicad_mod_footprint() -> None:

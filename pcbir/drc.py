@@ -320,6 +320,7 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "rules": {
                 "clearance": board.rules.minimum_clearance_nm,
                 "hole_clearance": board.rules.minimum_hole_clearance_nm,
+                "minimum_track_width": board.rules.minimum_track_width_nm,
                 "track": board.rules.default_track_width_nm,
                 "via": board.rules.default_via_size_nm,
                 "drill": board.rules.default_via_drill_nm,
@@ -420,9 +421,12 @@ def _check_track_rules(board: PhysicalBoard, findings: list[DrcFinding]) -> None
     rules = {item.net: item for item in board.net_routing_rules}
     for index, track in enumerate(board.tracks):
         rule = rules.get(track.net)
-        required = rule.width_nm if rule and rule.width_nm is not None else None
-        if required is not None and track.width_nm < required:
-            findings.append(_finding("DRC-TRACK-WIDTH", DrcSeverity.ERROR, f"track {index} on {track.net!r} is below its routing profile width", objects=(f"track:{index}",), nets=(track.net,), layers=(track.layer.value,), required_nm=required, measured_nm=track.width_nm))
+        required = max(
+            board.rules.minimum_track_width_nm,
+            rule.width_nm if rule and rule.width_nm is not None else 0,
+        )
+        if track.width_nm < required:
+            findings.append(_finding("DRC-TRACK-WIDTH", DrcSeverity.ERROR, f"track {index} on {track.net!r} is below its minimum or routing profile width", objects=(f"track:{index}",), nets=(track.net,), layers=(track.layer.value,), required_nm=required, measured_nm=track.width_nm))
     for net, rule in sorted(rules.items()):
         net_tracks = [item for item in board.tracks if item.net == net]
         length = sum(round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm)) for item in net_tracks)

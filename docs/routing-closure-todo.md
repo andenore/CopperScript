@@ -82,3 +82,27 @@ The remaining seven opens are GND contacts around the CC controller, MCU
 decoupling/level shifter, and GNSS. KiCad reports no copper-short or
 drill-spacing violations, but eight footprint-library warnings remain.
 None of these drafts is production-ready.
+
+A 0.25 mm candidate grid and 5 mm plane-via search radius (versus the
+default 0.5 mm/3 mm) reduced KiCad's open count from seven to five, but
+introduced one new F.Cu copper-sliver warning. The larger/finer search is
+therefore experimental rather than a clean improvement. A bounded
+three-segment pad-to-via detour is being compared on the original coarse
+grid. The seven-open default-grid draft remains the cleanest independent
+DRC result aside from eight footprint-library warnings.
+
+The 1.5 mm three-segment detour on the original coarse grid did not change
+the seven-open KiCad count, so it remains opt-in. A 0.12 mm local GND escape
+width also left seven opens. Its first draft exposed a project-rule bug:
+KiCad inherited a 0.20 mm *minimum* width and rejected all 85 narrow traces.
+Minimum track width is now first-class in the physical IR, native DRC, signed
+geometry digest, fabrication profile, and exported KiCad project. The
+regenerated 0.12 mm draft passed KiCad's corrected width rule, but still had
+seven GND opens and eight footprint-library warnings.
+
+A bounded same-net pad-to-escaped-pad rescue can build short surface chains
+to one legal plane via instead of requiring a via at every GND pad. Its 5 mm
+full-board experiment added one surface track but left seven KiCad opens and
+eight footprint-library warnings. It is opt-in (default contact radius zero)
+until plane-aware placement, a more capable legal access search, or a targeted
+site move shows an actual improvement on this board.

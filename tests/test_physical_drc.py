@@ -9,6 +9,7 @@ from pcbir import (
     DrcDecision,
     DrcDisposition,
     DrcWaiver,
+    DesignRules,
     FootprintPad,
     PadReference,
     PadKind,
@@ -68,6 +69,24 @@ def test_physical_drc_passes_and_binds_token_to_exact_geometry() -> None:
     assert first.token.board_digest == physical_board_digest(board)
     assert len(first.token.token_digest) == 64
     assert json.loads(first.to_json())["schema"] == "copperscript-physical-drc/v0.1"
+
+
+def test_minimum_track_width_is_drc_enforced_and_digest_bound() -> None:
+    base = _routed_board()
+    narrow = replace(base, tracks=(replace(
+        base.tracks[0], width_nm=nm_from_mm("0.12"),
+    ),))
+
+    findings = [item for item in run_physical_drc(narrow).findings
+                if item.code == "DRC-TRACK-WIDTH"]
+    assert len(findings) == 1
+    assert findings[0].required_nm == nm_from_mm("0.2")
+    permissive = replace(narrow, rules=DesignRules(
+        minimum_track_width_nm=nm_from_mm("0.09"),
+    ))
+    assert not any(item.code == "DRC-TRACK-WIDTH"
+                   for item in run_physical_drc(permissive).findings)
+    assert physical_board_digest(narrow) != physical_board_digest(permissive)
 
 
 def test_physical_drc_fails_for_open_net_and_accepts_exact_waiver() -> None:

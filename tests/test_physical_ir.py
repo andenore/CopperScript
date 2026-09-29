@@ -56,6 +56,7 @@ def test_four_layer_fabrication_profile_is_explicit() -> None:
     physical = prototype_physicalize(electrical, options)
 
     assert physical.rules.minimum_clearance_nm == nm_from_mm("0.09")
+    assert physical.rules.minimum_track_width_nm == nm_from_mm("0.09")
     assert physical.rules.default_track_width_nm == nm_from_mm("0.20")
     assert physical.metadata["fabrication_profile"] == "jlcpcb-four-layer"
     with pytest.raises(ValueError, match="requires four copper layers"):
@@ -73,6 +74,7 @@ def test_six_layer_fabrication_profile_is_explicit() -> None:
         "F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu"
     )
     assert physical.rules.minimum_clearance_nm == nm_from_mm("0.09")
+    assert physical.rules.minimum_track_width_nm == nm_from_mm("0.09")
     assert physical.metadata["fabrication_profile"] == "jlcpcb-six-layer"
     with pytest.raises(ValueError, match="requires six copper layers"):
         PrototypePhysicalOptions(fabrication_profile="jlcpcb-six-layer")

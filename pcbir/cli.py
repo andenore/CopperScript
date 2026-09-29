@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from decimal import InvalidOperation
 from pathlib import Path
 from typing import Sequence
 
@@ -34,6 +35,28 @@ from .routeflow import (
     optimize_placement_for_routing,
 )
 from .serializer import board_to_json, write_json
+
+
+def _positive_mm(value: str) -> str:
+    try:
+        if nm_from_mm(value) <= 0:
+            raise ValueError("must be positive")
+    except (InvalidOperation, ValueError, OverflowError) as exc:
+        raise argparse.ArgumentTypeError(
+            f"expected a positive finite length in mm, got {value!r}"
+        ) from exc
+    return value
+
+
+def _nonnegative_mm(value: str) -> str:
+    try:
+        if nm_from_mm(value) < 0:
+            raise ValueError("must not be negative")
+    except (InvalidOperation, ValueError, OverflowError) as exc:
+        raise argparse.ArgumentTypeError(
+            f"expected a nonnegative finite length in mm, got {value!r}"
+        ) from exc
+    return value
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -262,6 +285,26 @@ def _parser() -> argparse.ArgumentParser:
         help="add DRC-checked plane escapes; still require verified zone fill",
     )
     board_route_parser.add_argument(
+        "--plane-stitch-step-mm", default="0.5", type=_positive_mm,
+        help="spacing of provisional plane-via candidates (default: 0.5 mm)",
+    )
+    board_route_parser.add_argument(
+        "--plane-stitch-radius-mm", default="3", type=_positive_mm,
+        help="maximum provisional pad-to-plane-via search radius (default: 3 mm)",
+    )
+    board_route_parser.add_argument(
+        "--plane-contact-radius-mm", default="0", type=_nonnegative_mm,
+        help="optional link to a previously escaped same-net pad (default: disabled)",
+    )
+    board_route_parser.add_argument(
+        "--plane-stitch-detour-mm", default="0", type=_nonnegative_mm,
+        help="optional three-segment pad escape detour (default: disabled)",
+    )
+    board_route_parser.add_argument(
+        "--plane-escape-width-mm", type=_positive_mm,
+        help="experimental local GND escape width; cannot undercut a net rule or 0.09 mm",
+    )
+    board_route_parser.add_argument(
         "--early-plane-stitch", action="store_true",
         help="reserve plane escapes before signal routing (experimental; may reduce signal routability)",
     )
@@ -440,8 +483,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if pad not in zone_pads:
                         raise ValueError(f"early plane pad {value!r} is not a zone-net pad")
                     early_pads.add(pad)
+                plane_options = PlaneStitchOptions(
+                    step_nm=nm_from_mm(args.plane_stitch_step_mm),
+                    maximum_radius_nm=nm_from_mm(args.plane_stitch_radius_mm),
+                    maximum_contact_radius_nm=nm_from_mm(args.plane_contact_radius_mm),
+                    maximum_detour_nm=nm_from_mm(args.plane_stitch_detour_mm),
+                    escape_width_nm=(nm_from_mm(args.plane_escape_width_mm)
+                                     if args.plane_escape_width_mm else None),
+                )
+                if (plane_options.escape_width_nm is not None
+                        and plane_options.escape_width_nm
+                        < max(physical_board.rules.minimum_track_width_nm,
+                              physical_board.rules.minimum_clearance_nm)):
+                    raise ValueError("plane escape width is below this board's rule floor")
                 early_options = (
                     PlaneStitchOptions(
+                        step_nm=plane_options.step_nm,
+                        maximum_radius_nm=plane_options.maximum_radius_nm,
+                        maximum_contact_radius_nm=plane_options.maximum_contact_radius_nm,
+                        maximum_detour_nm=plane_options.maximum_detour_nm,
+                        escape_width_nm=plane_options.escape_width_nm,
                         only_pads=frozenset(early_pads) if early_pads else None,
                     ) if args.early_plane_stitch or early_pads else None
                 )
@@ -476,7 +537,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             except ValueError as exc:
                 print(f"ROUTING ERROR: {exc}")
                 return 2
-            stitch = (stitch_zone_pads(result.board) if args.stitch_zone_pads
+            stitch = (stitch_zone_pads(result.board, plane_options) if args.stitch_zone_pads
                       else result.plane_stitch)
             output_board = stitch.board if args.stitch_zone_pads else result.board
             duplicate_stitch = stitch_duplicate_pads(output_board)
@@ -533,6 +594,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ],
                     "added_track_count": stitch.added_track_count,
                     "added_via_count": stitch.added_via_count,
+                    "step_nm": plane_options.step_nm,
+                    "maximum_radius_nm": plane_options.maximum_radius_nm,
+                    "maximum_contact_radius_nm": plane_options.maximum_contact_radius_nm,
+                    "maximum_detour_nm": plane_options.maximum_detour_nm,
+                    "escape_width_nm": plane_options.escape_width_nm,
                     "zone_fill_verified": False,
                 }
             if result.plane_stitch is not None:

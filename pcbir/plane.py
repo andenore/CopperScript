@@ -36,13 +36,20 @@ from .surface_path import surface_path, via_inside_board
 class PlaneStitchOptions:
     step_nm: int = nm_from_mm("0.5")
     maximum_radius_nm: int = nm_from_mm("3")
+    maximum_contact_radius_nm: int = 0
+    maximum_detour_nm: int = 0
+    escape_width_nm: int | None = None
     only_pads: frozenset[PadReference] | None = None
 
     def __post_init__(self) -> None:
         if self.only_pads is not None:
             object.__setattr__(self, "only_pads", frozenset(self.only_pads))
-        if self.step_nm <= 0 or self.maximum_radius_nm < self.step_nm:
-            raise ValueError("plane-stitch step and radius must be positive")
+        if (self.step_nm <= 0 or self.maximum_radius_nm < self.step_nm
+                or self.maximum_contact_radius_nm < 0
+                or self.maximum_detour_nm < 0
+                or (self.escape_width_nm is not None
+                    and self.escape_width_nm < nm_from_mm("0.09"))):
+            raise ValueError("plane-stitch search bounds or escape width are invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,12 +66,27 @@ class PlaneStitchResult:
         return not self.pending_pads
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingContact:
+    net: str
+    reference: PadReference
+    position: Point
+    side: CopperLayer
+    width_nm: int
+
+
 def stitch_zone_pads(
     board: PhysicalBoard, options: PlaneStitchOptions | None = None,
 ) -> PlaneStitchResult:
     """Escape SMD pads to legal through-vias inside their declared zone."""
 
     options = options or PlaneStitchOptions()
+    if (options.escape_width_nm is not None
+            and options.escape_width_nm < max(
+                board.rules.minimum_track_width_nm,
+                board.rules.minimum_clearance_nm,
+            )):
+        raise ValueError("plane escape width is below the board rule floor")
     if not board.zones:
         return PlaneStitchResult(board, (), (), 0, 0)
     clearance = RoutingClearanceIndex(board)
@@ -73,8 +95,9 @@ def stitch_zone_pads(
     rules = {rule.net: rule for rule in board.net_routing_rules}
     added_tracks: list[TrackSegment] = []
     added_vias: list[Via] = []
-    stitched: list[PadReference] = []
-    pending: list[PadReference] = []
+    targets: list[PadReference] = []
+    pending_lands: list[_PendingContact] = []
+    anchors_by_net: dict[str, list[tuple[Point, CopperLayer]]] = {}
     via_size = board.rules.default_via_size_nm
     via_drill = board.rules.default_via_drill_nm
     outer_layers = (board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
@@ -95,11 +118,13 @@ def stitch_zone_pads(
             )
             if not lands:
                 continue
+            targets.append(reference)
             side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
             rule = rules.get(net)
-            width = (rule.width_nm if rule and rule.width_nm is not None
-                     else board.rules.default_track_width_nm)
-            all_lands_stitched = True
+            width = max(
+                rule.width_nm if rule and rule.width_nm is not None else 0,
+                options.escape_width_nm or board.rules.default_track_width_nm,
+            )
             for pad in lands:
                 position = transformed_local_point(placement, pad.position)
                 choice = _stitch_land(
@@ -108,7 +133,9 @@ def stitch_zone_pads(
                     (*board.tracks, *added_tracks), (*board.vias, *added_vias),
                 )
                 if choice is None:
-                    all_lands_stitched = False
+                    pending_lands.append(_PendingContact(
+                        net, reference, position, side, width,
+                    ))
                     continue
                 tracks, via = choice
                 for track in tracks:
@@ -117,7 +144,52 @@ def stitch_zone_pads(
                 if via is not None:
                     added_vias.append(via)
                     clearance.add_via(via)
-            (stitched if all_lands_stitched else pending).append(reference)
+                anchors_by_net.setdefault(net, []).append((position, side))
+
+    # A blocked land may still reach the plane through an already escaped
+    # same-net land. Retry until no further local chain can be proven.
+    unresolved = pending_lands
+    while unresolved and options.maximum_contact_radius_nm:
+        remaining: list[_PendingContact] = []
+        for contact in unresolved:
+            anchors = sorted(
+                (
+                    (anchor, side) for anchor, side in anchors_by_net.get(contact.net, ())
+                    if side is contact.side
+                    and (anchor.x_nm - contact.position.x_nm) ** 2
+                        + (anchor.y_nm - contact.position.y_nm) ** 2
+                        <= options.maximum_contact_radius_nm ** 2
+                ),
+                key=lambda item: (
+                    (item[0].x_nm - contact.position.x_nm) ** 2
+                    + (item[0].y_nm - contact.position.y_nm) ** 2,
+                    item[0].x_nm, item[0].y_nm,
+                ),
+            )
+            path = next((
+                candidate for anchor, _ in anchors
+                if (candidate := surface_path(
+                    board, clearance, contact.net, contact.position, anchor,
+                    contact.width_nm, contact.side, (*board.tracks, *added_tracks),
+                    maximum_detour_nm=options.maximum_detour_nm,
+                )) is not None
+            ), None)
+            if path is None:
+                remaining.append(contact)
+                continue
+            for track in path:
+                added_tracks.append(track)
+                clearance.add_track(track)
+            anchors_by_net.setdefault(contact.net, []).append(
+                (contact.position, contact.side)
+            )
+        if len(remaining) == len(unresolved):
+            break
+        unresolved = remaining
+
+    pending_refs = {item.reference for item in unresolved}
+    stitched = [reference for reference in targets if reference not in pending_refs]
+    pending = [reference for reference in targets if reference in pending_refs]
 
     metadata = dict(board.metadata)
     metadata["plane_stitching"] = "partial" if pending else "pad-escapes-only"
@@ -163,7 +235,7 @@ def _stitch_land(
     for existing in reusable:
         path = surface_path(
             board, clearance, net, position, existing.position, width, side,
-            committed_tracks,
+            committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
         )
         if path is not None:
             return path, None
@@ -198,7 +270,7 @@ def _stitch_land(
             continue
         path = surface_path(
             board, clearance, net, position, candidate, width, side,
-            committed_tracks,
+            committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
         )
         if path is not None:
             return path, via

@@ -406,6 +406,7 @@ class Stackup:
 class DesignRules:
     minimum_clearance_nm: Nanometres = nm_from_mm("0.2")
     minimum_hole_clearance_nm: Nanometres = nm_from_mm("0.25")
+    minimum_track_width_nm: Nanometres = nm_from_mm("0.2")
     default_track_width_nm: Nanometres = nm_from_mm("0.25")
     default_via_size_nm: Nanometres = nm_from_mm("0.8")
     default_via_drill_nm: Nanometres = nm_from_mm("0.4")
@@ -414,12 +415,15 @@ class DesignRules:
         values = (
             self.minimum_clearance_nm,
             self.minimum_hole_clearance_nm,
+            self.minimum_track_width_nm,
             self.default_track_width_nm,
             self.default_via_size_nm,
             self.default_via_drill_nm,
         )
         if any(value <= 0 for value in values):
             raise ValueError("physical design rules must be positive")
+        if self.minimum_track_width_nm > self.default_track_width_nm:
+            raise ValueError("minimum track width cannot exceed default track width")
         if self.default_via_drill_nm >= self.default_via_size_nm:
             raise ValueError("default via drill must be smaller than via size")
 

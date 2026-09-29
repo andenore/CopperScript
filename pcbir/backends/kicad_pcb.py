@@ -99,6 +99,7 @@ def _render_project(board: PhysicalBoard) -> str:
 
     clearance = float(board.rules.minimum_clearance_nm) / 1_000_000
     hole_clearance = float(board.rules.minimum_hole_clearance_nm) / 1_000_000
+    minimum_track_width = float(board.rules.minimum_track_width_nm) / 1_000_000
     track_width = float(board.rules.default_track_width_nm) / 1_000_000
     via_size = float(board.rules.default_via_size_nm) / 1_000_000
     via_drill = float(board.rules.default_via_drill_nm) / 1_000_000
@@ -109,6 +110,7 @@ def _render_project(board: PhysicalBoard) -> str:
                 "rules": {
                     "min_clearance": clearance,
                     "min_hole_clearance": hole_clearance,
+                    "min_track_width": minimum_track_width,
                 }
             }
         },

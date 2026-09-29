@@ -242,6 +242,7 @@ def _physicalize(
         # substitute for impedance/current/assembly qualification.
         rules = DesignRules(
             minimum_clearance_nm=nm_from_mm("0.09"),
+            minimum_track_width_nm=nm_from_mm("0.09"),
             default_track_width_nm=nm_from_mm("0.20"),
         )
         metadata["fabrication_profile"] = options.fabrication_profile

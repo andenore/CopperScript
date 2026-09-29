@@ -39,9 +39,18 @@ def surface_path(
                 elif start.x_nm == end.x_nm:
                     x = start.x_nm + sign * offset
                     paths.append((start, Point(x, start.y_nm), Point(x, end.y_nm), end))
+                else:
+                    x = start.x_nm + sign * offset
+                    y = start.y_nm + sign * offset
+                    paths.extend((
+                        (start, Point(x, start.y_nm), Point(x, end.y_nm), end),
+                        (start, Point(start.x_nm, y), Point(end.x_nm, y), end),
+                    ))
     for points in paths:
         additions: list[TrackSegment] = []
         for first, second in zip(points, points[1:]):
+            if first == second:
+                continue
             if any(
                 track.net == net and track.layer is layer
                 and {track.start, track.end} == {first, second}
