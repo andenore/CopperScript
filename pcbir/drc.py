@@ -205,6 +205,8 @@ def run_physical_drc(
     coverage.append(DrcCoverage("shorts_and_clearance", DrcCoverageStatus.EXECUTED, True))
     _check_non_plated_hole_clearance(board, findings)
     coverage.append(DrcCoverage("non_plated_hole_clearance", DrcCoverageStatus.EXECUTED, True))
+    _check_filled_via_hole_clearance(board, findings)
+    coverage.append(DrcCoverage("filled_via_hole_to_copper", DrcCoverageStatus.EXECUTED, True))
     _check_drill_spacing(board, findings)
     coverage.append(DrcCoverage("drill_to_drill_spacing", DrcCoverageStatus.EXECUTED, True))
     keepout_covered = _check_copper_keepouts(board, findings)
@@ -744,6 +746,56 @@ def _check_non_plated_hole_clearance(
                 ))
 
 
+def _check_filled_via_hole_clearance(
+    board: PhysicalBoard, findings: list[DrcFinding],
+) -> None:
+    """Do not accept via-in-pad when its drill approaches foreign copper."""
+
+    pads = _copper_pads(board)
+    clearance = board.rules.minimum_hole_clearance_nm
+    for via_index, via in enumerate(board.vias):
+        if via.finish != "filled-capped":
+            continue
+        hole = RoundedConvexShape((via.position,), via.drill_nm // 2)
+        for track_index, track in enumerate(board.tracks):
+            if track.net == via.net or not _via_covers_layer(board, via, track.layer):
+                continue
+            copper = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
+            if not shapes_clear(hole, copper, clearance):
+                findings.append(_finding(
+                    "DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
+                    f"filled via {via_index} drill violates track {track_index} clearance",
+                    objects=(f"via:{via_index}", f"track:{track_index}"),
+                    nets=tuple(sorted((via.net, track.net))),
+                    required_nm=clearance,
+                ))
+        for other_index, other in enumerate(board.vias):
+            if other_index == via_index or other.net == via.net or not _via_spans_overlap(board, via, other):
+                continue
+            copper = RoundedConvexShape((other.position,), other.size_nm // 2)
+            if not shapes_clear(hole, copper, clearance):
+                findings.append(_finding(
+                    "DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
+                    f"filled via {via_index} drill violates via {other_index} copper clearance",
+                    objects=(f"via:{via_index}", f"via:{other_index}"),
+                    nets=tuple(sorted((via.net, other.net))),
+                    required_nm=clearance,
+                ))
+        for pad in pads:
+            if pad.net == via.net or not any(
+                _via_covers_layer(board, via, layer) for layer in pad.layers
+            ):
+                continue
+            if not shapes_clear(hole, pad.shape, clearance):
+                findings.append(_finding(
+                    "DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
+                    f"filled via {via_index} drill violates {pad.identity} clearance",
+                    objects=(f"via:{via_index}", pad.identity),
+                    nets=tuple(sorted((via.net, pad.net))),
+                    required_nm=clearance,
+                ))
+
+
 def _check_drill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
     """Check via-to-via and via-to-plated-pad drills, independent of net."""
 
@@ -964,7 +1016,7 @@ def _track_identity(item: TrackSegment) -> tuple[object, ...]:
 
 
 def _via_identity(item: Via) -> tuple[object, ...]:
-    return (item.net, item.position.x_nm, item.position.y_nm, item.from_layer.value, item.to_layer.value, item.size_nm, item.drill_nm, item.technology)
+    return (item.net, item.position.x_nm, item.position.y_nm, item.from_layer.value, item.to_layer.value, item.size_nm, item.drill_nm, item.technology, item.finish)
 
 
 def _routing_rule_document(item: NetRoutingRule) -> tuple[object, ...]:

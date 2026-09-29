@@ -363,6 +363,26 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert "BOARD ROUTE:" in result.stdout
 
 
+def test_cli_requires_plane_stitch_and_six_layers_for_ground_via_in_pad() -> None:
+    command = [
+        sys.executable, "-m", "copperscript", "route-board",
+        "examples/valid_board.copper", "--allow-proxy-footprints",
+        "--ground-via-in-pad",
+    ]
+    without_stitch = subprocess.run(
+        command, cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+    assert without_stitch.returncode != 0
+    assert "requires --stitch-zone-pads" in without_stitch.stdout
+
+    without_profile = subprocess.run(
+        [*command, "--stitch-zone-pads"], cwd=ROOT,
+        text=True, capture_output=True, check=False,
+    )
+    assert without_profile.returncode != 0
+    assert "six-layer profile" in without_profile.stdout
+
+
 def test_cli_rejects_unknown_selective_plane_pad() -> None:
     result = subprocess.run(
         [

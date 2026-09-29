@@ -828,6 +828,7 @@ class Via:
     from_layer: CopperLayer = CopperLayer.FRONT
     to_layer: CopperLayer = CopperLayer.BACK
     technology: str | None = None
+    finish: str = "standard"
 
     def __post_init__(self) -> None:
         if self.size_nm <= 0 or self.drill_nm <= 0:
@@ -836,6 +837,8 @@ class Via:
             raise ValueError("via drill must be smaller than via size")
         if self.from_layer == self.to_layer:
             raise ValueError("a via must connect distinct copper layers")
+        if self.finish not in {"standard", "filled-capped"}:
+            raise ValueError("unsupported via finish")
 
 
 @dataclass(frozen=True, slots=True)

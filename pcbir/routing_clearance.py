@@ -127,13 +127,21 @@ class RoutingClearanceIndex:
     def can_via(
         self, net: str, position: Point, size_nm: int,
         from_layer: CopperLayer, to_layer: CopperLayer,
+        drill_nm: int | None = None,
+        *, check_hole_copper: bool = False,
     ) -> bool:
         layers = self._via_layers(from_layer, to_layer)
         shape = RoundedConvexShape((position,), size_nm // 2)
         return (self._keepout_clear(shape, layers, for_via=True)
                 and self._clear(net, shape, layers)
+                and (not check_hole_copper or self._clear(
+                    net, RoundedConvexShape(
+                        (position,), (drill_nm or self.board.rules.default_via_drill_nm) // 2
+                    ), layers,
+                    clearance_floor_nm=self.board.rules.minimum_hole_clearance_nm,
+                ))
                 and self._hole_clear(
-                    net, position, self.board.rules.default_via_drill_nm // 2,
+                    net, position, (drill_nm or self.board.rules.default_via_drill_nm) // 2,
                     (from_layer, to_layer),
                  ))
 
@@ -297,7 +305,8 @@ class RoutingClearanceIndex:
                     self._bins.setdefault((layer, x, y), []).append(identity)
 
     def _clear(
-        self, net: str, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...]
+        self, net: str, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...],
+        *, clearance_floor_nm: int = 0,
     ) -> bool:
         for other in self._overlapping_objects(shape, layers):
             if other.net == net:
@@ -306,6 +315,7 @@ class RoutingClearanceIndex:
             other_rule = self.rules.get(other.net)
             clearance = max(
                 self.board.rules.minimum_clearance_nm,
+                clearance_floor_nm,
                 own_rule.clearance_nm or 0 if own_rule else 0,
                 other_rule.clearance_nm or 0 if other_rule else 0,
                 other.clearance_nm,

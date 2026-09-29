@@ -106,3 +106,18 @@ full-board experiment added one surface track but left seven KiCad opens and
 eight footprint-library warnings. It is opt-in (default contact radius zero)
 until plane-aware placement, a more capable legal access search, or a targeted
 site move shows an actual improvement on this board.
+
+An opt-in six-layer GND via-in-pad experiment is now available with
+`--ground-via-in-pad` in the stitched route flow. It attempts a 0.30/0.20 mm
+filled-and-capped via at the pad center only when ordinary escape fails, and
+reports the manufacturing requirement separately from KiCad geometry. It must
+pass independent zone-refilled KiCad DRC and a separately confirmed JLCPCB
+plated-over-filled via order before it can count toward board closure.
+The first full-board pass provisionally closed U_CC.3 (six opens), but KiCad
+found four hole-to-copper clearance errors at that via plus generic minimum
+via-rule errors. The corrected planner and native DRC now enforce the board's
+0.25 mm hole-to-copper rule; the matched six-layer rerun placed no filled via.
+Independent KiCad 10 DRC after zone refill again reports seven GND opens and
+eight footprint-library warnings, with no new copper or drill violations.
+Completing these pads needs a layout/routing change or a separately reviewed
+local fabrication rule, not merely permission to use via-in-pad.

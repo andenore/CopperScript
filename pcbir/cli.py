@@ -309,6 +309,10 @@ def _parser() -> argparse.ArgumentParser:
         help="reserve plane escapes before signal routing (experimental; may reduce signal routability)",
     )
     board_route_parser.add_argument(
+        "--ground-via-in-pad", action="store_true",
+        help="allow 0.30/0.20 mm filled-and-capped GND vias centered in pads on JLCPCB six-layer boards",
+    )
+    board_route_parser.add_argument(
         "--early-plane-pad", action="append", default=[], metavar="REF.PAD",
         help="reserve only this zone-net pad early; repeat as needed and combine with --stitch-zone-pads",
     )
@@ -470,6 +474,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 early_pads: set[PadReference] = set()
                 if args.early_plane_pad and not args.stitch_zone_pads:
                     raise ValueError("--early-plane-pad requires --stitch-zone-pads")
+                if args.ground_via_in_pad and not args.stitch_zone_pads:
+                    raise ValueError("--ground-via-in-pad requires --stitch-zone-pads")
+                if args.ground_via_in_pad and args.fab_profile != "jlcpcb-six-layer":
+                    raise ValueError("--ground-via-in-pad requires the JLCPCB six-layer profile")
                 zone_pads = {
                     pad for net in physical_board.nets
                     if any(zone.net == net.name for zone in physical_board.zones)
@@ -490,6 +498,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     maximum_detour_nm=nm_from_mm(args.plane_stitch_detour_mm),
                     escape_width_nm=(nm_from_mm(args.plane_escape_width_mm)
                                      if args.plane_escape_width_mm else None),
+                    ground_via_in_pad=args.ground_via_in_pad,
                 )
                 if (plane_options.escape_width_nm is not None
                         and plane_options.escape_width_nm
@@ -503,6 +512,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         maximum_contact_radius_nm=plane_options.maximum_contact_radius_nm,
                         maximum_detour_nm=plane_options.maximum_detour_nm,
                         escape_width_nm=plane_options.escape_width_nm,
+                        ground_via_in_pad=plane_options.ground_via_in_pad,
                         only_pads=frozenset(early_pads) if early_pads else None,
                     ) if args.early_plane_stitch or early_pads else None
                 )
@@ -577,6 +587,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "detailed": json.loads(result.detailed.to_json()),
                 "drc": json.loads(output_drc.to_json()),
             }
+            filled_vias = tuple(
+                via for via in output_board.vias if via.finish == "filled-capped"
+            )
+            if filled_vias:
+                report["fabrication_requirements"] = [{
+                    "process": "plated-over-filled-via-in-pad",
+                    "net": "GND",
+                    "count": len(filled_vias),
+                    "diameter_nm": nm_from_mm("0.30"),
+                    "drill_nm": nm_from_mm("0.20"),
+                    "ordering_note": "Explicitly specify filled and capped via-in-pad; KiCad PCB and Gerbers do not encode this process.",
+                }]
             if result.fanout is not None:
                 report["fanout"] = {
                     "added_track_count": result.fanout.added_track_count,
@@ -599,6 +621,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "maximum_contact_radius_nm": plane_options.maximum_contact_radius_nm,
                     "maximum_detour_nm": plane_options.maximum_detour_nm,
                     "escape_width_nm": plane_options.escape_width_nm,
+                    "ground_via_in_pad": plane_options.ground_via_in_pad,
+                    "filled_capped_via_count": sum(
+                        via.finish == "filled-capped" for via in stitch.board.vias
+                    ),
                     "zone_fill_verified": False,
                 }
             if result.plane_stitch is not None:

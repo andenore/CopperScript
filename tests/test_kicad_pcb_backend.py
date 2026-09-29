@@ -66,6 +66,23 @@ def test_kicad_pcb_backend_emits_deterministic_board_geometry() -> None:
     assert all(uuid.UUID(identifier).version == 4 for identifier in identifiers)
 
 
+def test_filled_capped_via_exports_qualified_kicad_minima() -> None:
+    from dataclasses import replace
+
+    board = _routed_board()
+    via = replace(
+        board.vias[0], size_nm=nm_from_mm("0.30"),
+        drill_nm=nm_from_mm("0.20"), finish="filled-capped",
+    )
+    project = json.loads(KiCadPcbBackend().generate(
+        replace(board, vias=(via,))
+    ).artifacts[1].content)
+    rules = project["board"]["design_settings"]["rules"]
+    assert rules["min_via_diameter"] == 0.30
+    assert rules["min_through_hole_diameter"] == 0.20
+    assert rules["min_via_annular_width"] == 0.05
+
+
 def test_kicad_pcb_backend_marks_proxy_board_as_non_fabrication_ready() -> None:
     electrical = compile_file(ROOT / "examples" / "valid_board.copper")
     physical = prototype_physicalize(electrical)

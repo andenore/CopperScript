@@ -40,6 +40,7 @@ class PlaneStitchOptions:
     maximum_detour_nm: int = 0
     escape_width_nm: int | None = None
     only_pads: frozenset[PadReference] | None = None
+    ground_via_in_pad: bool = False
 
     def __post_init__(self) -> None:
         if self.only_pads is not None:
@@ -81,6 +82,8 @@ def stitch_zone_pads(
     """Escape SMD pads to legal through-vias inside their declared zone."""
 
     options = options or PlaneStitchOptions()
+    if options.ground_via_in_pad and board.metadata.get("fabrication_profile") != "jlcpcb-six-layer":
+        raise ValueError("filled/capped ground via-in-pad requires the JLCPCB six-layer profile")
     if (options.escape_width_nm is not None
             and options.escape_width_nm < max(
                 board.rules.minimum_track_width_nm,
@@ -194,6 +197,12 @@ def stitch_zone_pads(
     metadata = dict(board.metadata)
     metadata["plane_stitching"] = "partial" if pending else "pad-escapes-only"
     metadata["fabrication_ready"] = "false"
+    filled_count = sum(via.finish == "filled-capped" for via in added_vias)
+    if filled_count:
+        metadata["via_in_pad_process"] = "filled-capped"
+        metadata["via_in_pad_count"] = str(
+            int(metadata.get("via_in_pad_count", "0")) + filled_count
+        )
     routed = replace(
         board,
         tracks=(*board.tracks, *added_tracks),
@@ -265,7 +274,7 @@ def _stitch_land(
         if existing is None and not via_inside_board(board, candidate, via_size):
             continue
         if existing is None and not clearance.can_via(
-            net, candidate, via_size, via.from_layer, via.to_layer,
+            net, candidate, via_size, via.from_layer, via.to_layer, via_drill,
         ):
             continue
         path = surface_path(
@@ -274,6 +283,23 @@ def _stitch_land(
         )
         if path is not None:
             return path, via
+    if options.ground_via_in_pad and net == "GND":
+        # A centered, plated-over-filled through via is the last resort. The
+        # smaller drill is checked against actual holes, not the ordinary via
+        # default; every copper layer and keepout is still checked exactly.
+        size = nm_from_mm("0.30")
+        drill = nm_from_mm("0.20")
+        if (any(_point_in_zone(position, zone.outline) for zone in zones)
+                and via_inside_board(board, position, size)
+                and not any(via.position == position for via in committed_vias)
+                and clearance.can_via(
+                    net, position, size, outer_layers[0], outer_layers[1], drill,
+                    check_hole_copper=True,
+                )):
+            return (), Via(
+                net, position, size, drill, outer_layers[0], outer_layers[1],
+                finish="filled-capped",
+            )
     return None
 
 

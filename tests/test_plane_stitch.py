@@ -21,6 +21,7 @@ from pcbir import (
     PolygonWithHoles,
     Size,
     Stackup,
+    TrackSegment,
     Via,
     nm_from_mm,
     run_physical_drc,
@@ -322,3 +323,95 @@ def test_blocked_stitches_remain_explicitly_pending() -> None:
     assert len(result.pending_pads) == 2
     assert not result.board.tracks
     assert not result.board.vias
+
+
+def test_filled_capped_ground_via_in_pad_rescues_only_qualified_board() -> None:
+    base = _plane_board()
+    small_zone = replace(base.zones[0], outline=PolygonWithHoles(PolygonRing((
+        Point.mm("2.7", "5.7"), Point.mm("3.3", "5.7"),
+        Point.mm("3.3", "6.3"), Point.mm("2.7", "6.3"),
+    ))))
+    board = replace(
+        base, placements=(base.placements[0],),
+        nets=(PhysicalNet("GND", (PadReference("J1", "1"),)),),
+        zones=(small_zone,), metadata={"fabrication_profile": "jlcpcb-six-layer"},
+    )
+    assert stitch_zone_pads(board).pending_pads == (PadReference("J1", "1"),)
+    result = stitch_zone_pads(board, PlaneStitchOptions(ground_via_in_pad=True))
+    assert result.complete
+    assert result.added_track_count == 0
+    assert result.added_via_count == 1
+    via = result.board.vias[0]
+    assert via.position == Point.mm(3, 6)
+    assert via.size_nm == nm_from_mm("0.30")
+    assert via.drill_nm == nm_from_mm("0.20")
+    assert via.finish == "filled-capped"
+    assert result.board.metadata["via_in_pad_count"] == "1"
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-BOARD-EDGE",
+    }
+    with pytest.raises(ValueError, match="six-layer"):
+        stitch_zone_pads(base, PlaneStitchOptions(ground_via_in_pad=True))
+
+
+def test_ground_via_in_pad_still_rejects_foreign_copper() -> None:
+    base = _plane_board()
+    blocker = PhysicalFootprint(
+        "test/foreign-pad",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.2", "0.2")),),
+        Size.mm("0.2", "0.2"),
+    )
+    board = replace(
+        base, footprints={**base.footprints, blocker.name: blocker},
+        placements=(*base.placements, Placement("U1", blocker.name, Point.mm("3.4", 6))),
+        nets=(*base.nets, PhysicalNet("SIGNAL", (PadReference("U1", "1"),))),
+        metadata={"fabrication_profile": "jlcpcb-six-layer"},
+    )
+    # With a tiny zone around J1, only the centered via is a candidate.
+    board = replace(board, zones=(replace(base.zones[0], outline=PolygonWithHoles(PolygonRing((
+        Point.mm("2.7", "5.7"), Point.mm("3.3", "5.7"),
+        Point.mm("3.3", "6.3"), Point.mm("2.7", "6.3"),
+    )))),))
+    result = stitch_zone_pads(board, PlaneStitchOptions(ground_via_in_pad=True))
+    assert PadReference("J1", "1") in result.pending_pads
+
+
+def test_ground_via_in_pad_rejects_hole_clearance_even_when_annulus_clears() -> None:
+    base = _plane_board()
+    blocker = PhysicalFootprint(
+        "test/nearby-signal",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.2", "0.2")),),
+        Size.mm("0.2", "0.2"),
+    )
+    board = replace(
+        base, footprints={**base.footprints, blocker.name: blocker},
+        placements=(base.placements[0], Placement(
+            "U1", blocker.name, Point.mm("3.5", 6),
+        )),
+        nets=(
+            PhysicalNet("GND", (PadReference("J1", "1"),)),
+            PhysicalNet("SIGNAL", (PadReference("U1", "1"),)),
+        ),
+        zones=(replace(base.zones[0], outline=PolygonWithHoles(PolygonRing((
+            Point.mm("2.7", "5.7"), Point.mm("3.3", "5.7"),
+            Point.mm("3.3", "6.3"), Point.mm("2.7", "6.3"),
+        )))),),
+        tracks=(TrackSegment(
+            "SIGNAL", Point.mm(2, "6.4"), Point.mm(4, "6.4"),
+            nm_from_mm("0.2"), CopperLayer.INTERNAL_2,
+        ),),
+        rules=DesignRules(
+            minimum_clearance_nm=nm_from_mm("0.09"),
+            minimum_track_width_nm=nm_from_mm("0.09"),
+        ),
+        metadata={"fabrication_profile": "jlcpcb-six-layer"},
+    )
+    result = stitch_zone_pads(board, PlaneStitchOptions(ground_via_in_pad=True))
+    assert PadReference("J1", "1") in result.pending_pads
+    unsafe = replace(board, vias=(Via(
+        "GND", Point.mm(3, 6), nm_from_mm("0.30"), nm_from_mm("0.20"),
+        CopperLayer.FRONT, CopperLayer.BACK, finish="filled-capped",
+    ),))
+    assert "DRC-HOLE-CLEARANCE" in {
+        finding.code for finding in run_physical_drc(unsafe).findings
+    }

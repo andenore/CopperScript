@@ -103,6 +103,7 @@ def _render_project(board: PhysicalBoard) -> str:
     track_width = float(board.rules.default_track_width_nm) / 1_000_000
     via_size = float(board.rules.default_via_size_nm) / 1_000_000
     via_drill = float(board.rules.default_via_drill_nm) / 1_000_000
+    filled_capped = any(via.finish == "filled-capped" for via in board.vias)
     project = {
         "meta": {"filename": f"{_safe_name(board.name)}.kicad_pro", "version": 3},
         "board": {
@@ -111,6 +112,11 @@ def _render_project(board: PhysicalBoard) -> str:
                     "min_clearance": clearance,
                     "min_hole_clearance": hole_clearance,
                     "min_track_width": minimum_track_width,
+                    **({
+                        "min_via_diameter": 0.30,
+                        "min_through_hole_diameter": 0.20,
+                        "min_via_annular_width": 0.05,
+                    } if filled_capped else {}),
                 }
             }
         },
