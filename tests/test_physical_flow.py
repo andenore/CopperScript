@@ -25,8 +25,11 @@ from pcbir import (
     run_routing_pipeline,
     CopperKeepout,
     CopperLayer,
+    CopperZone,
+    PlaneStitchOptions,
     PolygonRing,
     PolygonWithHoles,
+    Stackup,
 )
 
 
@@ -61,6 +64,57 @@ def test_steps_four_through_eight_share_one_fail_closed_pipeline() -> None:
     assert result.placement_and_global.full_route_certified
     assert result.board.metadata["detailed_routing"] == "complete"
     assert result.drc.token.board_digest
+
+
+def test_plane_pad_escapes_are_reserved_before_detailed_signals() -> None:
+    footprint = PhysicalFootprint(
+        "test/one-pad",
+        (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),),
+        Size.mm(1, 1),
+    )
+    board = PhysicalBoard(
+        "EarlyPlane", BoardOutline.rectangle(20, 12),
+        {footprint.name: footprint},
+        (
+            Placement("G1", footprint.name, Point.mm(3, 3)),
+            Placement("G2", footprint.name, Point.mm(17, 3)),
+            Placement("S1", footprint.name, Point.mm(3, 9)),
+            Placement("S2", footprint.name, Point.mm(17, 9)),
+        ),
+        (
+            PhysicalNet("GND", (PadReference("G1", "1"), PadReference("G2", "1"))),
+            PhysicalNet("SIGNAL", (PadReference("S1", "1"), PadReference("S2", "1"))),
+        ),
+        stackup=Stackup((
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.BACK,
+        )),
+        zones=(CopperZone(
+            "plane", "GND", (CopperLayer.INTERNAL_1,),
+            PolygonWithHoles(PolygonRing((
+                Point.mm(1, 1), Point.mm(19, 1),
+                Point.mm(19, 11), Point.mm(1, 11),
+            ))),
+        ),),
+    )
+    result = run_routing_pipeline(
+        board,
+        placement_options=PlacementPlannerOptions(
+            candidate_count=1, analytical_iterations=0, refinement_passes=0,
+        ),
+        global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
+        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
+        detailed_options=DetailedRouterOptions(
+            pitch_nm=nm_from_mm(1), maximum_passes=1, defer_zone_nets=True,
+        ),
+        plane_stitch_options=PlaneStitchOptions(),
+    )
+
+    assert result.plane_stitch is not None
+    assert result.plane_stitch.added_via_count >= 1
+    assert result.detailed.locked_via_count == result.plane_stitch.added_via_count
+    assert result.detailed.metrics.routed_net_count == 1
+    assert result.board.vias[:result.detailed.locked_via_count] == result.plane_stitch.board.vias
 
 
 def test_detailed_failure_can_trigger_legal_placement_retry(monkeypatch) -> None:

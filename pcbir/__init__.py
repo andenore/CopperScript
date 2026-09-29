@@ -50,6 +50,7 @@ from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
+from .pad_stitch import DuplicatePadStitchResult, stitch_duplicate_pads
 from .geometry import (
     Bounds,
     capsules_clear,
@@ -290,6 +291,7 @@ __all__ = [
     "DetailedRouterOptions",
     "PlaneStitchOptions",
     "PlaneStitchResult",
+    "DuplicatePadStitchResult",
     "DetailedRoutingMetrics",
     "DetailedRoutingResult",
     "DetailedRoutingStatus",
@@ -509,6 +511,7 @@ __all__ = [
     "run_process_drc",
     "run_routing_pipeline",
     "stitch_zone_pads",
+    "stitch_duplicate_pads",
     "verify_cam_directory",
     "physical_board_digest",
     "prototype_physicalize",

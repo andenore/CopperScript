@@ -612,6 +612,14 @@ one pad number are allowed, and unnumbered non-plated mounting holes are ignored
 for electrical matching. Proxy geometry requires explicit opt-in and MUST
 remain marked as non-fabrication-ready.
 
+Repeated physical lands with one pad number are one logical electrical pin,
+but they remain distinct copper objects for layout and independent KiCad DRC.
+The PCB flow SHOULD bridge them with exact-clearance copper where legal and
+MUST report any unbridgeable lands as pending. It MUST NOT interpret a shared
+pad number alone as proof that all lands are externally connected. A future
+explicit, qualified internal-tie declaration may avoid unnecessary copper,
+but no such waiver is implied by the current footprint importer.
+
 ## 7. Serialization and versioning
 
 Serialized IR MUST declare a schema identifier and version. Readers MUST reject
@@ -772,6 +780,9 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-089 | Accepted | Drill-to-drill spacing is checked independently of electrical net, including same-net via pairs and via-to-plated-pad holes. The incremental router and authoritative native DRC share this requirement; copper clearance alone cannot certify hole spacing. An existing same-net via may be reused at its exact position without drilling another hole. |
 | CS-090 | Accepted | Pre-escape vias are provisional until a detailed route uses a second copper layer. After routing, an unused fanout via is removed while its connected surface stub may remain; abandoned stubs and vias of failed nets are removed. KiCad dangling-via findings remain a required independent check. |
 | CS-091 | Accepted | Global resources estimate usable copper crossings and legal via sites from physical geometry, never from footprint courtyards. A through-via consumes one shared site resource across its full physical span. Pads may offer multiple individually DRC-checked local access candidates; a `region_only` access certifies only its pad exit, not a complete path to the coarse guide center, and is reported separately. Only detailed copper plus DRC can establish connectivity. |
+| CS-092 | Accepted | A nearly board-wide inner copper zone reserves that layer for its net. Foreign-net global, critical, fanout, and detailed tracks may not consume it; legal through-vias may cross it. Coarse guides are geometric capacity reservations rather than mandatory detailed-route layers, so bounded detailed search may project a guide across other allowed signal layers while retaining exact via and copper checks. |
+| CS-093 | Accepted | Repeated footprint lands with one logical pad number remain separate physical copper objects. A bounded, exact-clearance post-route stitch may join them; blocked lands are reported, not silently accepted as externally connected. Native logical-pin connectivity and independent KiCad physical connectivity must both pass before release. |
+| CS-094 | Experimental | An opt-in early plane-pad escape stage can reserve legal surface traces and through-vias after critical routing but before dense-pad fanout and ordinary detailed routing. Signal routing treats these provisional escapes as locked copper. The stage improves GND access but can block high-fanout power nets, so it is not the default until selective pre-reservation or multiobjective feedback is implemented. Filled-zone continuity still requires independent evidence. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

@@ -357,6 +357,20 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert "BOARD ROUTE:" in result.stdout
 
 
+def test_cli_rejects_unknown_selective_plane_pad() -> None:
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "copperscript", "route-board",
+            "examples/valid_board.copper", "--allow-proxy-footprints",
+            "--stitch-zone-pads", "--early-plane-pad", "UNKNOWN.1",
+        ],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode == 2
+    assert "not a zone-net pad" in result.stdout
+
+
 def test_cli_checks_kicad_mod_footprint() -> None:
     result = subprocess.run(
         [

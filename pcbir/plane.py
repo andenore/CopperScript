@@ -33,8 +33,11 @@ from .routing_clearance import RoutingClearanceIndex
 class PlaneStitchOptions:
     step_nm: int = nm_from_mm("0.5")
     maximum_radius_nm: int = nm_from_mm("3")
+    only_pads: frozenset[PadReference] | None = None
 
     def __post_init__(self) -> None:
+        if self.only_pads is not None:
+            object.__setattr__(self, "only_pads", frozenset(self.only_pads))
         if self.step_nm <= 0 or self.maximum_radius_nm < self.step_nm:
             raise ValueError("plane-stitch step and radius must be positive")
 
@@ -79,6 +82,8 @@ def stitch_zone_pads(
             zones_by_net.setdefault(zone.net, []).append(zone)
     for net, zones in sorted(zones_by_net.items()):
         for reference in sorted(net_pads[net]):
+            if options.only_pads is not None and reference not in options.only_pads:
+                continue
             placement = placements[reference.component]
             footprint = board.footprints[placement.footprint]
             pad = next(item for item in footprint.pads if item.number == reference.pad)
@@ -90,7 +95,52 @@ def stitch_zone_pads(
             rule = rules.get(net)
             width = (rule.width_nm if rule and rule.width_nm is not None
                      else board.rules.default_track_width_nm)
-            choice: tuple[TrackSegment, Via | None] | None = None
+            choice: tuple[TrackSegment | None, Via | None] | None = None
+            # Reuse actual same-net through-vias before proposing another
+            # drill. Fanout and routed copper do not necessarily lie on this
+            # stage's half-millimetre candidate grid.
+            reusable = sorted(
+                (
+                    via for via in (*board.vias, *added_vias)
+                    if via.net == net
+                    and via.from_layer == outer_layers[0]
+                    and via.to_layer == outer_layers[1]
+                    and any(_point_in_zone(via.position, zone.outline) for zone in zones)
+                    and (via.position.x_nm - position.x_nm) ** 2
+                        + (via.position.y_nm - position.y_nm) ** 2
+                        <= options.maximum_radius_nm ** 2
+                ),
+                key=lambda via: (
+                    (via.position.x_nm - position.x_nm) ** 2
+                    + (via.position.y_nm - position.y_nm) ** 2,
+                    via.position.x_nm, via.position.y_nm,
+                ),
+            )
+            for existing in reusable:
+                already_connected = any(
+                    track.net == net and track.layer is side
+                    and {track.start, track.end} == {position, existing.position}
+                    for track in (*board.tracks, *added_tracks)
+                )
+                if already_connected:
+                    choice = None, None
+                    break
+                track = (
+                    TrackSegment(net, position, existing.position, width, side)
+                    if position != existing.position else None
+                )
+                if track is None or clearance.can_track(
+                    net, track.start, track.end, width, side,
+                ):
+                    choice = track, None
+                    break
+            if choice is not None:
+                track, _ = choice
+                if track is not None:
+                    added_tracks.append(track)
+                    clearance.add_track(track)
+                stitched.append(reference)
+                continue
             for candidate in _candidate_points(position, options):
                 if not _point_in_outline(candidate, board.outline.vertices):
                     continue

@@ -9,6 +9,7 @@ from .critical import CriticalRoutingResult, CriticalRoutingStatus, route_critic
 from .detailed import DetailedRouterOptions, DetailedRoutingResult, DetailedRoutingStatus, route_detailed
 from .drc import DrcDecision, PhysicalDrcPolicy, PhysicalDrcReport, run_physical_drc
 from .fanout import FanoutOptions, FanoutResult, route_fanout
+from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .physical import PhysicalBoard, nm_from_mm
 from .placement import PlacementPlannerOptions
 from .routeflow import (PlacementRoutingFeedbackOptions, PlacementRoutingResult,
@@ -29,6 +30,7 @@ class RoutingPipelineResult:
     detailed: DetailedRoutingResult
     drc: PhysicalDrcReport
     fanout: FanoutResult | None = None
+    plane_stitch: PlaneStitchResult | None = None
     detailed_feedback_trials: int = 0
 
     @property
@@ -45,6 +47,7 @@ def run_routing_pipeline(
     detailed_options: DetailedRouterOptions | None = None,
     drc_policy: PhysicalDrcPolicy | None = None,
     fanout_options: FanoutOptions | None = None,
+    plane_stitch_options: PlaneStitchOptions | None = None,
     detailed_feedback_trials: int = 0,
     detailed_feedback_movement_nm: int = nm_from_mm("0.5"),
 ) -> RoutingPipelineResult:
@@ -61,9 +64,14 @@ def run_routing_pipeline(
         board, placement_options, global_options, feedback_options
     )
     critical = route_critical_nets(placement.board, placement.global_route)
-    fanout = route_fanout(critical.board, fanout_options) if fanout_options else None
+    plane_stitch = (
+        stitch_zone_pads(critical.board, plane_stitch_options)
+        if plane_stitch_options else None
+    )
+    pre_fanout = plane_stitch.board if plane_stitch else critical.board
+    fanout = route_fanout(pre_fanout, fanout_options) if fanout_options else None
     detailed = route_detailed(
-        fanout.board if fanout else critical.board, placement.global_route,
+        fanout.board if fanout else pre_fanout, placement.global_route,
         detailed_options, fanout_accesses=fanout.accesses if fanout else None,
         fanout_created_vias=frozenset((item.net, item.position)
                                     for item in fanout.created_vias) if fanout else None,
@@ -84,10 +92,17 @@ def run_routing_pipeline(
             trial_critical = route_critical_nets(trial_board, trial_global)
             if trial_critical.status is CriticalRoutingStatus.FAILED:
                 continue
-            trial_fanout = (route_fanout(trial_critical.board, fanout_options)
+            trial_plane_stitch = (
+                stitch_zone_pads(trial_critical.board, plane_stitch_options)
+                if plane_stitch_options else None
+            )
+            trial_pre_fanout = (
+                trial_plane_stitch.board if trial_plane_stitch else trial_critical.board
+            )
+            trial_fanout = (route_fanout(trial_pre_fanout, fanout_options)
                             if fanout_options else None)
             trial_detailed = route_detailed(
-                trial_fanout.board if trial_fanout else trial_critical.board,
+                trial_fanout.board if trial_fanout else trial_pre_fanout,
                 trial_global, detailed_options,
                 fanout_accesses=trial_fanout.accesses if trial_fanout else None,
                 fanout_created_vias=frozenset((item.net, item.position)
@@ -101,8 +116,9 @@ def run_routing_pipeline(
                 placement = replace(placement, board=trial_board,
                                     global_route=trial_global,
                                     placement_candidate=placement.placement_candidate + "-detail")
-                critical, fanout, detailed, drc = (
-                    trial_critical, trial_fanout, trial_detailed, trial_drc,
+                critical, plane_stitch, fanout, detailed, drc = (
+                    trial_critical, trial_plane_stitch, trial_fanout,
+                    trial_detailed, trial_drc,
                 )
     passed = (
         placement.full_route_certified
@@ -111,13 +127,14 @@ def run_routing_pipeline(
         and drc.decision is DrcDecision.PASS
     )
     return RoutingPipelineResult(
-        PhysicalFlowStatus.PASS if passed else PhysicalFlowStatus.FAIL,
-        placement,
-        critical,
-        detailed,
-        drc,
-        fanout,
-        trials_run,
+        status=PhysicalFlowStatus.PASS if passed else PhysicalFlowStatus.FAIL,
+        placement_and_global=placement,
+        critical=critical,
+        detailed=detailed,
+        drc=drc,
+        fanout=fanout,
+        plane_stitch=plane_stitch,
+        detailed_feedback_trials=trials_run,
     )
 
 

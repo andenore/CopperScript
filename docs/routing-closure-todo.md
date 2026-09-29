@@ -16,6 +16,12 @@ two same-net via drill-spacing violations; the added In3/In4 layers were unused.
 - [ ] Improve dense-package pad access with compatible escape choices and
       placement feedback; distinguish a genuinely blocked pad from a bounded
       search failure.
+- [x] Model duplicated physical lands sharing one logical pad number (the
+      TL3342 button has two separate `SW_USER.1` lands). Require a verified
+      internal-tie declaration or a legal copper stitch so KiCad and native
+      connectivity agree.
+- [ ] Resolve the four still-pending duplicated connector shield lands and
+      all GND contacts without relying on an unqualified internal tie.
 - [x] Rerun matched four/six-layer experiments and KiCad DRC. Record open
       nets, layer usage, via count, and drill spacing.
 - [ ] Resolve every open net, verify GND zone fill and all pad stitches, then
@@ -45,7 +51,17 @@ The same settings with projected guides and GND-pad stitching produced:
 Six-layer ordinary copper now uses F.Cu, In2.Cu, In3.Cu, In4.Cu, and B.Cu;
 In1.Cu remains the GND plane. Both KiCad DRC reports show eight footprint
 library findings, no copper shorts, and no drill-spacing violations.
-The six-layer draft still has six open signal nets (`GNSS_TX`, `I2C_SCL`,
-`MCU_NRF_RX`, `MCU_NRF_TX`, `MODEM_EN`, `V3V8`) plus GND pending verified
-fill. An additional bounded fanout/rip-up/search-repair experiment is in
-progress. None of these drafts is production-ready.
+With dense-pin fanout, bounded rip-up, and a 10x failed-net search repair,
+the six-layer late-stitch draft routed all 57 signal nets. The new
+duplicate-pad closure connected both button lands, and off-grid reuse of
+existing GND vias cut new stitch drills from 66 to 50. KiCad 10 then
+reported 14 GND unconnected items and zero signal gaps, copper shorts, or
+drill-spacing violations. Eight GND pads and four duplicated connector
+shield references remain pending in the closure stages; eight footprint
+library lookup/mismatch warnings remain for qualification.
+
+An experimental all-early plane stitch connected every targeted GND pad,
+but blocked V3V3 (31 KiCad V3V3 gaps); selectively reserving the eight
+previously pending GND pads also blocked V3V3. Early plane reservation is
+therefore opt-in only. A broader placement/route-feedback experiment is
+underway. None of these drafts is production-ready.

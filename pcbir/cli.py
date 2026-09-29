@@ -20,12 +20,13 @@ from .physicalize import (
     prototype_physicalize,
     resolved_physicalize,
 )
-from .physical import nm_from_mm
+from .physical import PadReference, nm_from_mm
 from .detailed import DetailedRouterOptions
-from .drc import run_physical_drc
+from .drc import DrcDecision, run_physical_drc
 from .flow import PhysicalFlowStatus, run_routing_pipeline
 from .fanout import FanoutOptions
-from .plane import stitch_zone_pads
+from .pad_stitch import stitch_duplicate_pads
+from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routeflow import (
@@ -258,7 +259,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument(
         "--stitch-zone-pads", action="store_true",
-        help="add DRC-checked pad escapes and vias, but still require verified zone fill",
+        help="add DRC-checked plane escapes; still require verified zone fill",
+    )
+    board_route_parser.add_argument(
+        "--early-plane-stitch", action="store_true",
+        help="reserve plane escapes before signal routing (experimental; may reduce signal routability)",
+    )
+    board_route_parser.add_argument(
+        "--early-plane-pad", action="append", default=[], metavar="REF.PAD",
+        help="reserve only this zone-net pad early; repeat as needed and combine with --stitch-zone-pads",
     )
     board_route_parser.add_argument(
         "--verify-plane-fill", type=Path, metavar="KICAD_CLI",
@@ -415,6 +424,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
                     )
                     physical_board = resolved_physicalize(board, resolver, physical_options)
+                early_pads: set[PadReference] = set()
+                if args.early_plane_pad and not args.stitch_zone_pads:
+                    raise ValueError("--early-plane-pad requires --stitch-zone-pads")
+                zone_pads = {
+                    pad for net in physical_board.nets
+                    if any(zone.net == net.name for zone in physical_board.zones)
+                    for pad in net.pads
+                }
+                for value in args.early_plane_pad:
+                    if "." not in value:
+                        raise ValueError(f"invalid early plane pad {value!r}; expected REF.PAD")
+                    reference, number = value.rsplit(".", 1)
+                    pad = PadReference(reference, number)
+                    if pad not in zone_pads:
+                        raise ValueError(f"early plane pad {value!r} is not a zone-net pad")
+                    early_pads.add(pad)
+                early_options = (
+                    PlaneStitchOptions(
+                        only_pads=frozenset(early_pads) if early_pads else None,
+                    ) if args.early_plane_stitch or early_pads else None
+                )
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
                     maximum_iterations=args.router_iterations,
@@ -440,14 +470,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                         maximum_ripup_blockers=args.maximum_ripup_blockers,
                     ),
                     fanout_options=FanoutOptions() if args.fanout else None,
+                    plane_stitch_options=early_options,
                     detailed_feedback_trials=args.detailed_feedback_trials,
                 )
             except ValueError as exc:
                 print(f"ROUTING ERROR: {exc}")
                 return 2
-            stitch = stitch_zone_pads(result.board) if args.stitch_zone_pads else None
-            output_board = stitch.board if stitch is not None else result.board
-            output_drc = run_physical_drc(output_board) if stitch is not None else result.drc
+            stitch = (stitch_zone_pads(result.board) if args.stitch_zone_pads
+                      else result.plane_stitch)
+            output_board = stitch.board if args.stitch_zone_pads else result.board
+            duplicate_stitch = stitch_duplicate_pads(output_board)
+            output_board = duplicate_stitch.board
+            output_drc = (
+                run_physical_drc(output_board)
+                if args.stitch_zone_pads
+                or duplicate_stitch.added_track_count
+                else result.drc
+            )
             try:
                 plane_verification = (verify_filled_planes(
                     output_board, kicad_cli=args.verify_plane_fill,
@@ -455,10 +494,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             except RuntimeError as exc:
                 print(f"PLANE VERIFICATION ERROR: {exc}")
                 return 2
+            closure_status = (
+                PhysicalFlowStatus.PASS
+                if result.status is PhysicalFlowStatus.PASS
+                and output_drc.decision is DrcDecision.PASS
+                and not duplicate_stitch.pending
+                and (stitch is None or stitch.complete)
+                else PhysicalFlowStatus.FAIL
+            )
             report_path = args.report or Path(f"{board.name}.route-report.json")
             report = {
                 "schema": "copperscript-route-board/v0.1",
-                "status": result.status.value,
+                "status": closure_status.value,
                 "erc_pass": not has_errors(diagnostics),
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 "fabrication_ready": False,
@@ -488,6 +535,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_via_count": stitch.added_via_count,
                     "zone_fill_verified": False,
                 }
+            if result.plane_stitch is not None:
+                report["early_plane_stitch"] = {
+                    "selected_pads": [
+                        f"{item.component}.{item.pad}"
+                        for item in sorted(early_options.only_pads)
+                    ] if early_options is not None and early_options.only_pads else "all",
+                    "stitched_pads": [
+                        f"{item.component}.{item.pad}"
+                        for item in result.plane_stitch.stitched_pads
+                    ],
+                    "pending_pads": [
+                        f"{item.component}.{item.pad}"
+                        for item in result.plane_stitch.pending_pads
+                    ],
+                    "added_via_count": result.plane_stitch.added_via_count,
+                }
+            report["duplicate_pad_stitch"] = {
+                "stitched_pads": [
+                    f"{item.component}.{item.pad}" for item in duplicate_stitch.stitched
+                ],
+                "pending_pads": [
+                    f"{item.component}.{item.pad}" for item in duplicate_stitch.pending
+                ],
+                "added_track_count": duplicate_stitch.added_track_count,
+            }
             if plane_verification is not None:
                 report["plane_verification"] = json.loads(plane_verification.to_json())
                 if stitch is not None:
@@ -505,14 +577,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 2
             metrics = result.detailed.metrics
             print(
-                f"BOARD ROUTE: {result.status.value} - "
+                f"BOARD ROUTE: {closure_status.value} - "
                 f"routed={metrics.routed_net_count}, unrouted={metrics.unrouted_net_count}, "
                 f"DRC={output_drc.decision.value}"
             )
             print(f"Report -> {report_path}")
             if args.output:
                 print(f"KiCad PCB draft -> {args.output}")
-            return 0 if (result.status is PhysicalFlowStatus.PASS
+            return 0 if (closure_status is PhysicalFlowStatus.PASS
                          and not has_errors(diagnostics)
                          and (plane_verification is None or plane_verification.passed)) else 1
 
