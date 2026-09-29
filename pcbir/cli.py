@@ -27,6 +27,7 @@ from .detailed import DetailedRouterOptions
 from .drc import DrcDecision, run_physical_drc
 from .flow import PhysicalFlowStatus, run_routing_pipeline
 from .fanout import FanoutOptions
+from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
 from .pad_stitch import stitch_duplicate_pads
 from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
@@ -264,6 +265,14 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument(
         "--detailed-feedback-trials", type=int, default=0,
         help="bounded legal placement retries guided by detailed-route failures",
+    )
+    board_route_parser.add_argument(
+        "--zone-escape-trials", type=int, default=4,
+        help="bounded full reroutes for late-failing plane pads, including local placement moves (default: 4; expensive)",
+    )
+    board_route_parser.add_argument(
+        "--zone-escape-movement-mm", default="0.5", type=_positive_mm,
+        help="local placement step for plane-pad escape feedback (default: 0.5 mm)",
     )
     board_route_parser.add_argument(
         "--constrained-pins-first", action="store_true",
@@ -522,34 +531,57 @@ def main(argv: Sequence[str] | None = None) -> int:
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
                     maximum_iterations=args.router_iterations,
                 )
+                placement_options = PlacementPlannerOptions(
+                    candidate_count=args.candidates,
+                )
+                feedback_options = PlacementRoutingFeedbackOptions(
+                    maximum_iterations=args.feedback_iterations,
+                    initial_movement_nm=router_options.tile_size_nm,
+                    preferred_candidate_id=args.placement_candidate,
+                )
+                detailed_options = DetailedRouterOptions(
+                    pitch_nm=nm_from_mm(args.pitch_mm), maximum_passes=args.passes,
+                    maximum_search_states=args.search_budget,
+                    heuristic_weight_percent=args.heuristic_weight,
+                    enable_soft_ripup=args.soft_ripup,
+                    constrained_pins_first=args.constrained_pins_first,
+                    progressive_guides=args.progressive_guides,
+                    repair_budget_multiplier=args.repair_budget_multiplier,
+                    defer_zone_nets=bool(physical_board.zones) or args.defer_zone_nets,
+                    maximum_ripup_blockers=args.maximum_ripup_blockers,
+                )
+                fanout_options = FanoutOptions() if args.fanout else None
                 result = run_routing_pipeline(
                     physical_board,
-                    placement_options=PlacementPlannerOptions(candidate_count=args.candidates),
+                    placement_options=placement_options,
                     global_options=router_options,
-                    feedback_options=PlacementRoutingFeedbackOptions(
-                        maximum_iterations=args.feedback_iterations,
-                        initial_movement_nm=router_options.tile_size_nm,
-                        preferred_candidate_id=args.placement_candidate,
-                    ),
-                    detailed_options=DetailedRouterOptions(
-                        pitch_nm=nm_from_mm(args.pitch_mm), maximum_passes=args.passes,
-                        maximum_search_states=args.search_budget,
-                        heuristic_weight_percent=args.heuristic_weight,
-                        enable_soft_ripup=args.soft_ripup,
-                        constrained_pins_first=args.constrained_pins_first,
-                        progressive_guides=args.progressive_guides,
-                        repair_budget_multiplier=args.repair_budget_multiplier,
-                        defer_zone_nets=bool(physical_board.zones) or args.defer_zone_nets,
-                        maximum_ripup_blockers=args.maximum_ripup_blockers,
-                    ),
-                    fanout_options=FanoutOptions() if args.fanout else None,
+                    feedback_options=feedback_options,
+                    detailed_options=detailed_options,
+                    fanout_options=fanout_options,
                     plane_stitch_options=early_options,
                     detailed_feedback_trials=args.detailed_feedback_trials,
                 )
+                escape_feedback = (
+                    improve_zone_escapes(
+                        result, plane_options,
+                        placement_options=placement_options,
+                        global_options=router_options,
+                        feedback_options=feedback_options,
+                        detailed_options=detailed_options,
+                        fanout_options=fanout_options,
+                        options=EscapeFeedbackOptions(
+                            maximum_trials=args.zone_escape_trials,
+                            movement_nm=nm_from_mm(args.zone_escape_movement_mm),
+                        ),
+                    ) if stitch_enabled and args.zone_escape_trials else None
+                )
+                if escape_feedback is not None:
+                    result = escape_feedback.pipeline
             except ValueError as exc:
                 print(f"ROUTING ERROR: {exc}")
                 return 2
-            stitch = (stitch_zone_pads(result.board, plane_options) if stitch_enabled
+            stitch = (escape_feedback.plane_stitch if escape_feedback is not None
+                      else stitch_zone_pads(result.board, plane_options) if stitch_enabled
                       else result.plane_stitch)
             output_board = stitch.board if stitch_enabled else result.board
             duplicate_stitch = stitch_duplicate_pads(output_board)
@@ -589,6 +621,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "detailed": json.loads(result.detailed.to_json()),
                 "drc": json.loads(output_drc.to_json()),
             }
+            if escape_feedback is not None:
+                report["zone_escape_feedback"] = {
+                    "trials": [
+                        {
+                            "description": attempt.description,
+                            "early_pending": [f"{pad.component}.{pad.pad}"
+                                              for pad in attempt.early_pending],
+                            "late_pending": (
+                                [f"{pad.component}.{pad.pad}"
+                                 for pad in attempt.late_pending]
+                                if attempt.late_pending is not None else None
+                            ),
+                            "signal_failures": attempt.signal_failures,
+                            "failed_signals": list(attempt.failed_signals),
+                            "accepted": attempt.accepted,
+                            "decision": attempt.decision,
+                        }
+                        for attempt in escape_feedback.attempts
+                    ],
+                }
             zone_nets = {zone.net for zone in output_board.zones}
             signal_lengths = {"straight_nm": 0, "diagonal_45_nm": 0,
                               "other_angle_nm": 0}

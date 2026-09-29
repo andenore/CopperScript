@@ -415,7 +415,7 @@ constraint fixed_placement(J1) {
 }
 
 constraint allowed_orientations(U1) {
-    values = "0,90,180,270";
+    values = "0,45,90,135,180,225,270,315";
 }
 
 constraint align(U1, U2) {
@@ -453,8 +453,11 @@ Known constraint kinds are `max_distance`, `min_distance`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
 `placement_group`, `keepout`, `routing`, `copper_zone`, and `note`. Coordinates and rectangle dimensions
 are lengths in the physical board coordinate system; orientation values are
-unitless degrees. The detailed legalizer currently accepts orthogonal
-orientations only. `note` remains metadata and has no placement effect.
+unitless degrees. The legalizer accepts any explicitly permitted angle,
+including 45-degree increments; unconstrained components still default to
+0, 90, 180, or 270 degrees. Use `allowed_orientations` when a diagonal
+placement is acceptable for assembly and interface alignment. `note` remains
+metadata and has no placement effect.
 
 All constraints accept the ownership metadata `id`, `mode`, `consumers`, and
 `verifier`. Modes are `require`, `target`, `prefer`, `assume`, and `external`.

@@ -49,6 +49,10 @@ from .engineering import AnalysisStatus, EngineeringResult, EvidenceGrade, creep
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
+from .escape_feedback import (
+    EscapeFeedbackAttempt, EscapeFeedbackOptions, EscapeFeedbackResult,
+    improve_zone_escapes,
+)
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .pad_stitch import DuplicatePadStitchResult, stitch_duplicate_pads
 from .geometry import (
@@ -510,6 +514,10 @@ __all__ = [
     "run_incremental_physical_drc",
     "run_process_drc",
     "run_routing_pipeline",
+    "EscapeFeedbackAttempt",
+    "EscapeFeedbackOptions",
+    "EscapeFeedbackResult",
+    "improve_zone_escapes",
     "stitch_zone_pads",
     "stitch_duplicate_pads",
     "verify_cam_directory",

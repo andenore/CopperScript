@@ -136,3 +136,19 @@ and no other violations. The board is still not fabrication-ready: U_CC.10 and
 U_CC.11 need a component/placement or local geometry solution, and the
 footprint warnings still need review. At the smaller 5,000-state budget V3V3
 exhausted search, so the full-board verification requires the larger bound.
+
+A bounded octilinear local escape search and transactional zone-pad placement
+feedback now target pads that fail late. Explicitly allowed 45-degree component
+orientations participate in placement; unconstrained parts remain cardinal. A
+matched six-layer rerun with 5 mm same-net contact radius accepted a 0.5 mm
+U_CC move: all 57 signal nets still route, and independent KiCad 10 zone-refilled
+DRC improved from two GND opens to one, at J_SIM.SH. The iterative feedback now
+retargets that newly pending shield while preserving the accepted U_CC early
+contacts. Its next two full-route trials found legal provisional shield escapes
+but both reopened V3V3; they were correctly rejected. The best board remains
+one GND open with eight footprint-library findings and no copper-rule
+violations, so it is not manufacturing-ready. Next: inspect J_SIM.SH's local
+track/via access against the V3V3 corridor, try finer legal via sites or a
+larger placement move, and only accept a candidate after full rerouting plus
+KiCad zone-refilled DRC. The four full-route feedback trials are expensive;
+cheap blocker-aware preflight ranking is also needed before scaling this loop.

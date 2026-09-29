@@ -29,7 +29,7 @@ from .physical import (
 )
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
-from .surface_path import surface_path, via_inside_board
+from .surface_path import surface_path, surface_path_to_via, via_inside_board
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +38,9 @@ class PlaneStitchOptions:
     maximum_radius_nm: int = nm_from_mm("3")
     maximum_contact_radius_nm: int = 0
     maximum_detour_nm: int = 0
+    maze_step_nm: int = nm_from_mm("0.1")
+    maze_state_budget: int = 12_000
+    candidate_bias: str | None = None
     escape_width_nm: int | None = None
     only_pads: frozenset[PadReference] | None = None
     ground_via_in_pad: bool = False
@@ -45,9 +48,12 @@ class PlaneStitchOptions:
     def __post_init__(self) -> None:
         if self.only_pads is not None:
             object.__setattr__(self, "only_pads", frozenset(self.only_pads))
+        if self.candidate_bias not in {None, "east", "south", "west", "north"}:
+            raise ValueError("plane-stitch candidate bias must be a cardinal direction")
         if (self.step_nm <= 0 or self.maximum_radius_nm < self.step_nm
                 or self.maximum_contact_radius_nm < 0
                 or self.maximum_detour_nm < 0
+                or self.maze_step_nm <= 0 or self.maze_state_budget <= 0
                 or (self.escape_width_nm is not None
                     and self.escape_width_nm < nm_from_mm("0.09"))):
             raise ValueError("plane-stitch search bounds or escape width are invalid")
@@ -249,6 +255,7 @@ def _stitch_land(
         if path is not None:
             return path, None
     pad_bounds = placed_pad_shape(position, pad, placement).bounds
+    legal_via_targets: list[Point] = []
     for candidate in _candidate_points(position, options):
         if not _point_in_outline(candidate, board.outline.vertices):
             continue
@@ -277,12 +284,43 @@ def _stitch_land(
             net, candidate, via_size, via.from_layer, via.to_layer, via_drill,
         ):
             continue
+        if existing is None:
+            legal_via_targets.append(candidate)
         path = surface_path(
             board, clearance, net, position, candidate, width, side,
             committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
         )
         if path is not None:
             return path, via
+    # A dense package may have no legal straight, elbow, or short lateral
+    # escape. Search its small local neighborhood jointly over path and via
+    # location before considering a qualified via in the SMD land itself.
+    occupied = {via.position for via in committed_vias}
+    maze = surface_path_to_via(
+        board, clearance, net, position, width, side,
+        step_nm=options.maze_step_nm,
+        radius_nm=options.maximum_radius_nm,
+        via_size_nm=via_size,
+        via_drill_nm=via_drill,
+        via_layers=outer_layers,
+        via_targets=tuple(legal_via_targets),
+        state_budget=options.maze_state_budget,
+        accept_via=lambda candidate: (
+            candidate not in occupied
+            and any(_point_in_zone(candidate, zone.outline) for zone in zones)
+            and not (
+                pad_bounds.min_x - via_size // 2 <= candidate.x_nm
+                <= pad_bounds.max_x + via_size // 2
+                and pad_bounds.min_y - via_size // 2 <= candidate.y_nm
+                <= pad_bounds.max_y + via_size // 2
+            )
+        ),
+    )
+    if maze is not None:
+        tracks, candidate = maze
+        return tracks, Via(
+            net, candidate, via_size, via_drill, outer_layers[0], outer_layers[1],
+        )
     if options.ground_via_in_pad and net == "GND":
         # A centered, plated-over-filled through via is the last resort. The
         # smaller drill is checked against actual holes, not the ordinary via
@@ -305,6 +343,10 @@ def _stitch_land(
 
 def _candidate_points(position: Point, options: PlaneStitchOptions) -> Iterator[Point]:
     steps = options.maximum_radius_nm // options.step_nm
+    preferred = {
+        "east": (1, 0), "south": (0, 1),
+        "west": (-1, 0), "north": (0, -1),
+    }.get(options.candidate_bias, (0, 0))
     for radius in range(1, steps + 1):
         offsets = (
             (dx, dy)
@@ -313,7 +355,8 @@ def _candidate_points(position: Point, options: PlaneStitchOptions) -> Iterator[
             if max(abs(dx), abs(dy)) == radius
         )
         for dx, dy in sorted(offsets, key=lambda item: (
-            item[0] * item[0] + item[1] * item[1], item,
+            item[0] * item[0] + item[1] * item[1],
+            -(item[0] * preferred[0] + item[1] * preferred[1]), item,
         )):
             yield Point(
                 position.x_nm + dx * options.step_nm,

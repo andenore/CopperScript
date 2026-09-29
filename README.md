@@ -100,6 +100,15 @@ fill remains provisional until KiCad refills the zones and verifies physical
 connectivity. A net named GND without a declared zone receives no implicit
 plane.
 
+If a zone pad remains inaccessible, the default bounded escape feedback tries
+alternative via exits and legal local placement changes, rerouting signals from
+the clean placement before accepting an improvement. Use
+`--zone-escape-trials 0` to disable it, or adjust
+`--zone-escape-movement-mm` for the placement step. These trials never move
+components under existing copper. For intentional diagonal placement, add a
+`constraint allowed_orientations(U1) { values = "0,45,90"; }`; unconstrained
+parts retain 0/90/180/270-degree candidates.
+
 The command exits nonzero when routing or DRC is incomplete. Even a successful
 native check does not qualify proxy footprints or replace KiCad and CAM review.
 `--pitch-mm`, `--passes`, and `--search-budget` bound detailed-routing work;

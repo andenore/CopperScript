@@ -7,6 +7,7 @@ import pytest
 
 from pcbir import (
     BoardOutline,
+    ComponentPlacementRule,
     FootprintPad,
     GateStatus,
     LayoutStage,
@@ -196,6 +197,31 @@ def test_planner_normalizes_a_movable_non_orthogonal_seed() -> None:
     planned = plan_placement(rotated)
 
     assert all(item.rotation_degrees % 90 == 0 for item in planned.board.placements)
+
+
+def test_explicit_45_degree_orientation_is_legal_and_selected() -> None:
+    footprint = PhysicalFootprint(
+        "test/diagonal",
+        (FootprintPad("1", Point.mm(1, 0), Size.mm("0.5", "0.5")),),
+        Size.mm(4, 2),
+    )
+    board = PhysicalBoard(
+        "DiagonalPlacement", BoardOutline.rectangle(30, 30),
+        {footprint.name: footprint},
+        (Placement("U1", footprint.name, Point.mm(15, 15)),),
+        (),
+        placement_rules=(ComponentPlacementRule(
+            "U1", allowed_orientations=(45,),
+        ),),
+    )
+    plan = plan_placement(board, PlacementPlannerOptions(
+        candidate_count=1, analytical_iterations=0, refinement_passes=0,
+    ))
+
+    placed = plan.board.placements[0]
+    assert placed.rotation_degrees == 45
+    assert placement_solution_is_legal(board, {"U1": placed})
+    assert transformed_pad_position(board, placed, "1") != Point.mm(16, 15)
 
 
 def test_hierarchy_and_interfaces_create_semantic_placement_groups() -> None:

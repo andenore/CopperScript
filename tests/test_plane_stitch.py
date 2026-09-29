@@ -204,6 +204,42 @@ def test_blocked_elbows_can_use_bounded_three_segment_escape() -> None:
     }
 
 
+def test_dense_package_escape_can_route_around_pad_to_one_legal_via() -> None:
+    base = _plane_board()
+    obstacle = PhysicalFootprint(
+        "test/escape-obstacle",
+        (FootprintPad("1", Point(0, 0), Size.mm(1, 2)),),
+        Size.mm(1, 2),
+    )
+    via_zone = replace(base.zones[0], outline=PolygonWithHoles(PolygonRing((
+        Point.mm("6.8", "5.8"), Point.mm("7.2", "5.8"),
+        Point.mm("7.2", "6.2"), Point.mm("6.8", "6.2"),
+    ))))
+    board = replace(
+        base,
+        footprints={**base.footprints, obstacle.name: obstacle},
+        placements=(*base.placements, Placement(
+            "U_BLOCK", obstacle.name, Point.mm(5, 6),
+        )),
+        nets=(*base.nets, PhysicalNet(
+            "BLOCKED", (PadReference("U_BLOCK", "1"),),
+        )),
+        zones=(via_zone,),
+    )
+    result = stitch_zone_pads(board, PlaneStitchOptions(
+        only_pads=frozenset({PadReference("J1", "1")}),
+        maximum_radius_nm=nm_from_mm(5),
+        maze_step_nm=nm_from_mm("0.25"),
+    ))
+
+    assert result.complete
+    assert result.board.vias[-1].position == Point.mm(7, 6)
+    assert result.added_track_count >= 3
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-BOARD-EDGE",
+    }
+
+
 def test_every_separate_land_of_one_logical_ground_pad_is_escaped() -> None:
     base = _plane_board()
     connector = PhysicalFootprint(

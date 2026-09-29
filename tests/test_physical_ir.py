@@ -129,11 +129,12 @@ def test_copper_constraints_lower_to_typed_physical_ir() -> None:
                 width = 20mm;
                 height = 15mm;
             }
-            constraint allowed_orientations(R1) { values = "0,180"; }
+            constraint allowed_orientations(R1) { values = "0,45,90,180"; }
+            constraint allowed_orientations(R2) { values = "45"; }
             constraint fixed_placement(R2) {
                 x = 30mm;
                 y = 20mm;
-                rotation = 90;
+                rotation = 45;
                 side = "front";
             }
             constraint max_distance(R1.1, R2.1) { distance = 10mm; }
@@ -161,10 +162,10 @@ def test_copper_constraints_lower_to_typed_physical_ir() -> None:
     assert physical.keepouts[0].name == "mounting"
     r1 = next(rule for rule in physical.placement_rules if rule.reference == "R1")
     assert r1.region == "left"
-    assert tuple(map(int, r1.allowed_orientations)) == (0, 180)
+    assert tuple(map(int, r1.allowed_orientations)) == (0, 45, 90, 180)
     r2 = next(rule for rule in physical.placement_rules if rule.reference == "R2")
     assert r2.fixed_position == Point.mm(30, 20)
-    assert int(r2.fixed_rotation_degrees) == 90
+    assert int(r2.fixed_rotation_degrees) == 45
     assert physical.relative_rules[0].kind is RelativePlacementKind.MAX_DISTANCE
     assert physical.relative_rules[1].axis is AlignmentAxis.Y
     assert next(group for group in physical.placement_groups if group.name == "pair").anchor == "R2"

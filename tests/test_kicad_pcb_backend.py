@@ -110,6 +110,19 @@ def test_rotated_footprint_exports_pad_angles_in_board_coordinates() -> None:
     assert '(at 1 0 90)' in pcb
 
 
+def test_45_degree_footprint_rotation_exports_to_kicad() -> None:
+    from dataclasses import replace
+
+    board = _routed_board()
+    placement = replace(board.placements[0], rotation_degrees=45)
+    rotated = replace(board, placements=(placement, board.placements[1]))
+
+    pcb = KiCadPcbBackend().generate(rotated).artifacts[0].content
+
+    assert '(at -1 0 45)' in pcb
+    assert '(at 1 0 45)' in pcb
+
+
 def test_rotated_pad_positions_match_kicad_board_coordinates() -> None:
     """A 90-degree KiCad placement maps local +X toward board -Y."""
     from dataclasses import replace

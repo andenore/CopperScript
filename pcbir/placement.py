@@ -148,8 +148,6 @@ def generate_placement_candidates(
         raise PlacementAlgorithmError(
             f"fixed placement references unknown component {unknown_fixed[0]!r}"
         )
-    _validate_orthogonal_rules(board)
-
     attempts: list[PlacementCandidate] = []
     seeds = max(2, options.candidate_count)
     for seed in range(seeds):
@@ -384,16 +382,6 @@ def _allowed_orientations(board: PhysicalBoard, reference: str) -> tuple[Decimal
         if rule is not None
         else (Decimal(0), Decimal(90), Decimal(180), Decimal(270))
     )
-
-
-def _validate_orthogonal_rules(board: PhysicalBoard) -> None:
-    for placement in board.placements:
-        orientations = _allowed_orientations(board, placement.reference)
-        if any(value % 90 for value in orientations):
-            raise PlacementAlgorithmError(
-                f"component {placement.reference!r} permits a non-orthogonal rotation; "
-                "the current detailed legalizer supports orthogonal orientations only"
-            )
 
 
 def _initial_seed(
