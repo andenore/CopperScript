@@ -108,8 +108,16 @@ def test_reuses_off_grid_same_net_via_before_adding_drill() -> None:
     result = stitch_zone_pads(board)
 
     assert result.complete
-    assert any(track.start == Point.mm(3, 6)
-               and track.end == existing.position for track in result.board.tracks)
+    assert any(track.start == Point.mm(3, 6) for track in result.board.tracks)
+    assert any(existing.position in (track.start, track.end)
+               for track in result.board.tracks)
+    assert all(
+        track.start.x_nm == track.end.x_nm
+        or track.start.y_nm == track.end.y_nm
+        or abs(track.start.x_nm - track.end.x_nm)
+           == abs(track.start.y_nm - track.end.y_nm)
+        for track in result.board.tracks
+    )
     assert len(result.board.vias) == 2  # Only J2 needs a new drill.
     assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
         "DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING",

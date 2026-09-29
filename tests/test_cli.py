@@ -354,6 +354,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["fabrication_ready"] is False
     assert document["detailed"]["status"] in {"success", "partial"}
     assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
+    assert "signal_track_length_nm" in document["route_geometry"]
     assert document["plane_stitch"]["zone_fill_verified"] is False
     assert document["plane_stitch"]["step_nm"] == 250_000
     assert document["plane_stitch"]["maximum_radius_nm"] == 5_000_000
@@ -373,7 +374,7 @@ def test_cli_requires_plane_stitch_and_six_layers_for_ground_via_in_pad() -> Non
         command, cwd=ROOT, text=True, capture_output=True, check=False,
     )
     assert without_stitch.returncode != 0
-    assert "requires --stitch-zone-pads" in without_stitch.stdout
+    assert "requires a declared copper zone" in without_stitch.stdout
 
     without_profile = subprocess.run(
         [*command, "--stitch-zone-pads"], cwd=ROOT,

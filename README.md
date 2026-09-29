@@ -82,8 +82,9 @@ placement feedback:
 python -m copperscript route-global examples/valid_board.copper --allow-proxy-footprints -o global-route.json
 ```
 
-Global guides reserve corridors, layers, and proposed transitions; they are not
-tracks or fabrication data.
+Global guides reserve corridors, layers, and proposed transitions for ordinary
+signal nets; declared copper-zone nets are reported as deferred and consume no
+global wire corridor. Guides are not tracks or fabrication data.
 
 Attempt detailed routing and write a native DRC report plus an inspection-only
 KiCad PCB draft:
@@ -91,6 +92,13 @@ KiCad PCB draft:
 ```console
 python -m copperscript route-board examples/valid_board.copper --allow-proxy-footprints --report route-report.json -o routed-draft.kicad_pcb
 ```
+
+Detailed signal tracks prefer long straight runs and 45-degree bends. Nets with
+declared copper zones (typically GND) are deferred from ordinary maze routing;
+`route-board` instead attempts short pad escapes and plane vias. Their copper
+fill remains provisional until KiCad refills the zones and verifies physical
+connectivity. A net named GND without a declared zone receives no implicit
+plane.
 
 The command exits nonzero when routing or DRC is incomplete. Even a successful
 native check does not qualify proxy footprints or replace KiCad and CAM review.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from decimal import InvalidOperation
+from math import isqrt
 from pathlib import Path
 from typing import Sequence
 
@@ -278,11 +279,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument(
         "--defer-zone-nets", action="store_true",
-        help="report zone nets as pending verified fill instead of tracing one large tree",
+        help="explicitly request the default plane-first treatment of declared zone nets",
     )
     board_route_parser.add_argument(
         "--stitch-zone-pads", action="store_true",
-        help="add DRC-checked plane escapes; still require verified zone fill",
+        help="explicitly request the default DRC-checked pad escapes for declared zones",
     )
     board_route_parser.add_argument(
         "--plane-stitch-step-mm", default="0.5", type=_positive_mm,
@@ -471,11 +472,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
                     )
                     physical_board = resolved_physicalize(board, resolver, physical_options)
+                stitch_enabled = args.stitch_zone_pads or bool(physical_board.zones)
                 early_pads: set[PadReference] = set()
-                if args.early_plane_pad and not args.stitch_zone_pads:
-                    raise ValueError("--early-plane-pad requires --stitch-zone-pads")
-                if args.ground_via_in_pad and not args.stitch_zone_pads:
-                    raise ValueError("--ground-via-in-pad requires --stitch-zone-pads")
+                if args.early_plane_pad and not stitch_enabled:
+                    raise ValueError("--early-plane-pad requires a declared copper zone")
+                if args.ground_via_in_pad and not stitch_enabled:
+                    raise ValueError("--ground-via-in-pad requires a declared copper zone")
                 if args.ground_via_in_pad and args.fab_profile != "jlcpcb-six-layer":
                     raise ValueError("--ground-via-in-pad requires the JLCPCB six-layer profile")
                 zone_pads = {
@@ -537,7 +539,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         constrained_pins_first=args.constrained_pins_first,
                         progressive_guides=args.progressive_guides,
                         repair_budget_multiplier=args.repair_budget_multiplier,
-                        defer_zone_nets=args.defer_zone_nets,
+                        defer_zone_nets=bool(physical_board.zones) or args.defer_zone_nets,
                         maximum_ripup_blockers=args.maximum_ripup_blockers,
                     ),
                     fanout_options=FanoutOptions() if args.fanout else None,
@@ -547,14 +549,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             except ValueError as exc:
                 print(f"ROUTING ERROR: {exc}")
                 return 2
-            stitch = (stitch_zone_pads(result.board, plane_options) if args.stitch_zone_pads
+            stitch = (stitch_zone_pads(result.board, plane_options) if stitch_enabled
                       else result.plane_stitch)
-            output_board = stitch.board if args.stitch_zone_pads else result.board
+            output_board = stitch.board if stitch_enabled else result.board
             duplicate_stitch = stitch_duplicate_pads(output_board)
             output_board = duplicate_stitch.board
             output_drc = (
                 run_physical_drc(output_board)
-                if args.stitch_zone_pads
+                if stitch_enabled
                 or duplicate_stitch.added_track_count
                 else result.drc
             )
@@ -586,6 +588,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "critical": json.loads(result.critical.to_json()),
                 "detailed": json.loads(result.detailed.to_json()),
                 "drc": json.loads(output_drc.to_json()),
+            }
+            zone_nets = {zone.net for zone in output_board.zones}
+            signal_lengths = {"straight_nm": 0, "diagonal_45_nm": 0,
+                              "other_angle_nm": 0}
+            for track in output_board.tracks:
+                if track.net in zone_nets:
+                    continue
+                dx = abs(track.end.x_nm - track.start.x_nm)
+                dy = abs(track.end.y_nm - track.start.y_nm)
+                kind = ("straight_nm" if not dx or not dy else
+                        "diagonal_45_nm" if dx == dy else "other_angle_nm")
+                signal_lengths[kind] += isqrt(dx * dx + dy * dy)
+            report["route_geometry"] = {
+                "signal_track_length_nm": signal_lengths,
+                "zone_net_track_count": sum(
+                    track.net in zone_nets for track in output_board.tracks
+                ),
+                "zone_nets_deferred": sorted(zone_nets),
             }
             filled_vias = tuple(
                 via for via in output_board.vias if via.finish == "filled-capped"

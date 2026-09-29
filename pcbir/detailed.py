@@ -9,7 +9,7 @@ from hashlib import sha256
 from heapq import heappop, heappush
 from itertools import permutations
 import json
-from math import hypot
+from math import hypot, isqrt
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
@@ -60,6 +60,7 @@ class DetailedNetResult:
     length_nm: int
     guide_deviation_count: int
     diagnostics: tuple[str, ...] = ()
+    orthogonal_mode_used: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +123,7 @@ class DetailedRoutingResult:
                     "length_nm": item.length_nm,
                     "guide_deviation_count": item.guide_deviation_count,
                     "diagnostics": list(item.diagnostics),
+                    "orthogonal_mode_used": item.orthogonal_mode_used,
                 }
                 for item in self.nets
             ],
@@ -136,10 +138,12 @@ class DetailedRouterOptions:
     present_penalty: int = 100
     history_penalty: int = 30
     via_cost: int = 80
-    bend_cost: int = 5
+    bend_cost: int = 12
     guide_margin_nm: int = nm_from_mm("1")
     allow_guide_deviation: bool = True
     any_angle_cleanup: bool = True
+    octilinear_search: bool = True
+    orthogonal_first_min_pads: int = 16
     pin_access_candidates: int = 8
     maximum_search_states: int = 50_000
     heuristic_weight_percent: int = 100
@@ -147,7 +151,7 @@ class DetailedRouterOptions:
     constrained_pins_first: bool = False
     progressive_guides: bool = False
     repair_budget_multiplier: int = 1
-    defer_zone_nets: bool = False
+    defer_zone_nets: bool = True
     maximum_ripup_blockers: int = 4
 
     def __post_init__(self) -> None:
@@ -170,6 +174,8 @@ class DetailedRouterOptions:
             raise ValueError("detailed router repair budget multiplier must be 1..10")
         if not 1 <= self.maximum_ripup_blockers <= 8:
             raise ValueError("maximum rip-up blockers must be 1..8")
+        if self.orthogonal_first_min_pads < 3:
+            raise ValueError("orthogonal-first threshold must be at least 3 pads")
 
 
 @dataclass(frozen=True, slots=True)
@@ -672,6 +678,7 @@ def _route_net(
     forbidden_via_positions: frozenset[Point] = frozenset(),
     via_repair_round: int = 0,
 ) -> _NetAttempt:
+    options = _net_search_options(options, len(pads))
     if guide is None or not guide.connected:
         return _failed(name, "missing connected global guide")
     allowed = routing_layers(board, name, rule)
@@ -716,6 +723,7 @@ def _route_net(
     remaining = access_options[1:]
     route_edges: set[tuple[DetailedNode, DetailedNode]] = set()
     deviations = 0
+    orthogonal_mode_used = not options.octilinear_search
     while remaining:
         starts = tree if tree else set(access_options[0][2])
         target_entry = min(
@@ -744,11 +752,27 @@ def _route_net(
                 forbidden_via_positions=forbidden_via_positions,
             )
         except _SearchBudgetExceeded:
-            return _failed(
-                name,
-                f"search budget of {options.maximum_search_states} states exhausted "
-                f"for {target_entry[0].component}.{target_entry[0].pad}",
-            )
+            if not options.octilinear_search:
+                return _failed(
+                    name,
+                    f"search budget of {options.maximum_search_states} states exhausted "
+                    f"for {target_entry[0].component}.{target_entry[0].pad}",
+                )
+            try:
+                found = _search(
+                    grid, starts, frozenset(target_entry[2]), allowed,
+                    guide, usage, history, clearance, name, width,
+                    replace(options, octilinear_search=False, bend_cost=5),
+                    allow_movable_conflicts=allow_movable_conflicts,
+                    forbidden_via_positions=forbidden_via_positions,
+                )
+                orthogonal_mode_used = True
+            except _SearchBudgetExceeded:
+                return _failed(
+                    name,
+                    f"octilinear and fallback search budgets exhausted "
+                    f"for {target_entry[0].component}.{target_entry[0].pad}",
+                )
         if found is None:
             return _failed(name, f"detailed search cannot reach {target_entry[0].component}.{target_entry[0].pad}")
         path, root, target = found
@@ -816,6 +840,7 @@ def _route_net(
             tracks.append(
                 TrackSegment(name, pad_position, access_position, width, grid.layers[access.layer_index])
             )
+    tracks = list(_merge_collinear_tracks(tracks))
     length = sum(
         round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm))
         for item in tracks
@@ -850,6 +875,7 @@ def _route_net(
             length,
             deviations,
             tuple(diagnostics),
+            orthogonal_mode_used,
         ),
         tuple(tracks),
         tuple(vias),
@@ -994,10 +1020,14 @@ def _search_once(
         if node in targets:
             final = state
             break
-        for neighbor in _neighbors(grid, node, allowed_indexes):
+        for neighbor in _neighbors(
+            grid, node, allowed_indexes, diagonals=options.octilinear_search,
+        ):
             if corridor_only and neighbor not in targets and not inside_guide(neighbor):
                 continue
             next_direction = _direction(node, neighbor)
+            if not options.octilinear_search and next_direction != "v":
+                next_direction = "h" if node.y_index == neighbor.y_index else "n"
             if next_direction == "v" and grid.point(node) in forbidden_via_positions:
                 continue
             edge = _edge_key(node, neighbor)
@@ -1057,9 +1087,19 @@ def _search_once(
                 base = options.via_cost
             else:
                 first_point, second_point = grid.point(node), grid.point(neighbor)
-                distance_nm = abs(first_point.x_nm - second_point.x_nm) + abs(first_point.y_nm - second_point.y_nm)
+                dx = first_point.x_nm - second_point.x_nm
+                dy = first_point.y_nm - second_point.y_nm
+                distance_nm = isqrt(dx * dx + dy * dy)
                 base = max(1, (10 * distance_nm + grid.pitch_nm - 1) // grid.pitch_nm)
-            bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
+            if options.octilinear_search:
+                bend = _turn_steps(direction, next_direction) * options.bend_cost
+            else:
+                bend = (
+                    options.bend_cost
+                    if direction and direction != next_direction
+                    and "v" not in {direction, next_direction}
+                    else 0
+                )
             step = (
                 base + bend + congestion + (50 if outside else 0)
                 + 2 * options.present_penalty * movable_edge_cache[edge]
@@ -1130,15 +1170,17 @@ def _compact_path(
         farthest = end
         while end + 1 < len(nodes) and nodes[end + 1].layer_index == nodes[start].layer_index:
             candidate = end + 1
+            end = candidate
+            if not _octilinear(grid.point(nodes[start]), grid.point(nodes[candidate])):
+                continue
             if not _grid_line_clear(grid, nodes[start], nodes[candidate]):
-                break
+                continue
             if not clearance.can_track(
                 net, grid.point(nodes[start]), grid.point(nodes[candidate]),
                 width_nm, grid.layers[nodes[start].layer_index],
             ):
-                break
+                continue
             farthest = candidate
-            end = candidate
         outside = sum(edge[2] for edge in path[start:farthest])
         result.append((nodes[start], nodes[farthest], outside))
         start = farthest
@@ -1292,7 +1334,8 @@ def _access_candidates(
 
 
 def _neighbors(
-    grid: _Grid, node: DetailedNode, allowed_indexes: set[int]
+    grid: _Grid, node: DetailedNode, allowed_indexes: set[int],
+    *, diagonals: bool = True,
 ) -> tuple[DetailedNode, ...]:
     result: list[DetailedNode] = []
     for dl, dx, dy in (
@@ -1300,13 +1343,23 @@ def _neighbors(
         (0, 0, -1),
         (0, 0, 1),
         (0, 1, 0),
+        (0, -1, -1),
+        (0, -1, 1),
+        (0, 1, -1),
+        (0, 1, 1),
     ):
+        if dx and dy and not diagonals:
+            continue
         candidate = DetailedNode(node.layer_index + dl, node.x_index + dx, node.y_index + dy)
         if candidate.layer_index not in allowed_indexes:
             continue
         if not (0 <= candidate.x_index < len(grid.xs) and 0 <= candidate.y_index < len(grid.ys)):
             continue
         if candidate in grid.blocked:
+            continue
+        if dx and dy and abs(grid.xs[candidate.x_index] - grid.xs[node.x_index]) != abs(
+            grid.ys[candidate.y_index] - grid.ys[node.y_index]
+        ):
             continue
         result.append(candidate)
     for layer_index in sorted(allowed_indexes):
@@ -1365,7 +1418,77 @@ def _edge_key(
 def _direction(first: DetailedNode, second: DetailedNode) -> str:
     if first.layer_index != second.layer_index:
         return "v"
-    return "h" if first.y_index == second.y_index else "n"
+    dx = (second.x_index > first.x_index) - (second.x_index < first.x_index)
+    dy = (second.y_index > first.y_index) - (second.y_index < first.y_index)
+    return {
+        (1, 0): "E", (1, -1): "NE", (0, -1): "N", (-1, -1): "NW",
+        (-1, 0): "W", (-1, 1): "SW", (0, 1): "S", (1, 1): "SE",
+    }[(dx, dy)]
+
+
+def _turn_steps(first: str, second: str) -> int:
+    if not first or "v" in {first, second}:
+        return 0
+    headings = ("E", "NE", "N", "NW", "W", "SW", "S", "SE")
+    difference = abs(headings.index(first) - headings.index(second))
+    return min(difference, 8 - difference)
+
+
+def _octilinear(first: Point, second: Point) -> bool:
+    dx = abs(second.x_nm - first.x_nm)
+    dy = abs(second.y_nm - first.y_nm)
+    return dx == 0 or dy == 0 or dx == dy
+
+
+def _net_search_options(
+    options: DetailedRouterOptions, pad_count: int,
+) -> DetailedRouterOptions:
+    if options.octilinear_search and pad_count >= options.orthogonal_first_min_pads:
+        return replace(options, octilinear_search=False, bend_cost=5)
+    return options
+
+
+def _merge_collinear_tracks(tracks: Iterable[TrackSegment]) -> tuple[TrackSegment, ...]:
+    """Coalesce exact straight runs without moving copper or branch points."""
+
+    active = list(tracks)
+    while True:
+        endpoints: dict[tuple[CopperLayer, Point], list[int]] = {}
+        for index, track in enumerate(active):
+            endpoints.setdefault((track.layer, track.start), []).append(index)
+            endpoints.setdefault((track.layer, track.end), []).append(index)
+        merge: tuple[int, int, TrackSegment] | None = None
+        for (layer, junction), indexes in sorted(
+            endpoints.items(),
+            key=lambda item: (item[0][0].value, item[0][1].x_nm, item[0][1].y_nm),
+        ):
+            if len(indexes) != 2:
+                continue
+            first_index, second_index = indexes
+            first, second = active[first_index], active[second_index]
+            if first.net != second.net or first.width_nm != second.width_nm:
+                continue
+            outer_first = first.end if first.start == junction else first.start
+            outer_second = second.end if second.start == junction else second.start
+            first_dx = junction.x_nm - outer_first.x_nm
+            first_dy = junction.y_nm - outer_first.y_nm
+            second_dx = outer_second.x_nm - junction.x_nm
+            second_dy = outer_second.y_nm - junction.y_nm
+            if (first_dx * second_dy != first_dy * second_dx
+                    or first_dx * second_dx + first_dy * second_dy <= 0):
+                continue
+            merge = (first_index, second_index, TrackSegment(
+                first.net, outer_first, outer_second, first.width_nm, layer,
+            ))
+            break
+        if merge is None:
+            return tuple(active)
+        first_index, second_index, joined = merge
+        active = [
+            track for index, track in enumerate(active)
+            if index not in {first_index, second_index}
+        ]
+        active.append(joined)
 
 
 def _heuristic(
@@ -1373,8 +1496,12 @@ def _heuristic(
     options: DetailedRouterOptions,
 ) -> int:
     first_point, second_point = grid.point(first), grid.point(second)
-    distance_nm = abs(first_point.x_nm - second_point.x_nm) + abs(first_point.y_nm - second_point.y_nm)
-    track_cost = (10 * distance_nm + grid.pitch_nm - 1) // grid.pitch_nm
+    dx = abs(first_point.x_nm - second_point.x_nm)
+    dy = abs(first_point.y_nm - second_point.y_nm)
+    if options.octilinear_search:
+        track_cost = (10 * max(dx, dy) + 4 * min(dx, dy)) // grid.pitch_nm
+    else:
+        track_cost = (10 * (dx + dy) + grid.pitch_nm - 1) // grid.pitch_nm
     return track_cost + (options.via_cost if first.layer_index != second.layer_index else 0)
 
 

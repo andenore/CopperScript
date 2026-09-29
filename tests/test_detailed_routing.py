@@ -44,6 +44,8 @@ from pcbir.detailed import (
     _Pass,
     _build_grid,
     _edge_resources,
+    _merge_collinear_tracks,
+    _net_search_options,
     _pass_heuristic_weight,
     _repair_from_passes,
     _route_net,
@@ -89,6 +91,82 @@ def test_detailed_router_materializes_deterministic_exact_copper() -> None:
         for track in first.board.tracks
     ) or len(first.board.tracks) < 28
     assert json.loads(first.to_json())["schema"] == "copperscript-detailed-route/v0.1"
+
+
+def test_open_board_prefers_long_45_degree_and_straight_segments() -> None:
+    base = _board()
+    board = replace(base, placements=(
+        replace(base.placements[0], position=Point.mm(3, 3)),
+        replace(base.placements[1], position=Point.mm(15, 9)),
+    ))
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(1), maximum_passes=1,
+    ))
+
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert len(result.board.tracks) <= 4
+    assert any(
+        abs(track.end.x_nm - track.start.x_nm) >= nm_from_mm(4)
+        and abs(track.end.x_nm - track.start.x_nm)
+            == abs(track.end.y_nm - track.start.y_nm)
+        for track in result.board.tracks
+    )
+    assert all(
+        track.start.x_nm == track.end.x_nm
+        or track.start.y_nm == track.end.y_nm
+        or abs(track.end.x_nm - track.start.x_nm)
+            == abs(track.end.y_nm - track.start.y_nm)
+        for track in result.board.tracks
+    )
+
+
+def test_straight_runs_merge_without_erasing_a_branch() -> None:
+    layer = CopperLayer.FRONT
+    tracks = (
+        TrackSegment("SIGNAL", Point.mm(1, 1), Point.mm(2, 1), nm_from_mm("0.2"), layer),
+        TrackSegment("SIGNAL", Point.mm(2, 1), Point.mm(3, 1), nm_from_mm("0.2"), layer),
+        TrackSegment("SIGNAL", Point.mm(3, 1), Point.mm(4, 1), nm_from_mm("0.2"), layer),
+        TrackSegment("SIGNAL", Point.mm(2, 1), Point.mm(2, 2), nm_from_mm("0.2"), layer),
+    )
+
+    merged = _merge_collinear_tracks(tracks)
+    assert len(merged) == 3
+    assert any({track.start, track.end} == {Point.mm(2, 1), Point.mm(4, 1)}
+               for track in merged)
+    assert any({track.start, track.end} == {Point.mm(1, 1), Point.mm(2, 1)}
+               for track in merged)
+
+
+def test_budget_exhaustion_retries_with_orthogonal_search(monkeypatch) -> None:
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    original = detailed_module._search
+    modes: list[bool] = []
+
+    def forced_octilinear_exhaustion(*args, **kwargs):
+        mode = args[10].octilinear_search
+        modes.append(mode)
+        if mode:
+            raise detailed_module._SearchBudgetExceeded
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(detailed_module, "_search", forced_octilinear_exhaustion)
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        maximum_passes=1, pitch_nm=nm_from_mm(1),
+    ))
+
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    assert modes == [True, False]
+    assert result.nets[0].orthogonal_mode_used
+
+
+def test_high_fanout_net_uses_orthogonal_first_mode() -> None:
+    options = DetailedRouterOptions()
+    assert _net_search_options(options, 15).octilinear_search
+    chosen = _net_search_options(options, 16)
+    assert not chosen.octilinear_search
+    assert chosen.bend_cost == 5
 
 
 def test_detailed_router_reports_search_budget_without_emitting_partial_copper() -> None:
@@ -137,9 +215,7 @@ def test_zone_net_is_deferred_without_claiming_unfilled_copper_connected() -> No
     board = replace(base, zones=(zone,))
     guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
 
-    result = route_detailed(board, guide, DetailedRouterOptions(
-        maximum_passes=2, defer_zone_nets=True,
-    ))
+    result = route_detailed(board, guide, DetailedRouterOptions(maximum_passes=2))
 
     assert result.status is DetailedRoutingStatus.PARTIAL
     assert result.metrics.unrouted_net_count == 1

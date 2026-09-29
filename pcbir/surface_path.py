@@ -14,7 +14,7 @@ def surface_path(
     maximum_detour_nm: int = 0,
     detour_step_nm: int = nm_from_mm("0.5"),
 ) -> tuple[TrackSegment, ...] | None:
-    """Find new segments for a straight, elbow, or bounded side-step path.
+    """Find short 45-degree-first pad escapes with exact-clearance fallbacks.
 
     Existing exact segments may be reused. This only checks local copper; it
     cannot prove zone-fill connectivity or that remote same-net lands join.
@@ -22,8 +22,25 @@ def surface_path(
 
     if start == end:
         return ()
-    paths = [(start, end)]
-    if start.x_nm != end.x_nm and start.y_nm != end.y_nm:
+    dx = end.x_nm - start.x_nm
+    dy = end.y_nm - start.y_nm
+    diagonal = min(abs(dx), abs(dy))
+    paths: list[tuple[Point, ...]] = []
+    if dx == 0 or dy == 0 or abs(dx) == abs(dy):
+        paths.append((start, end))
+    elif abs(dx) > abs(dy):
+        step = diagonal if dx > 0 else -diagonal
+        paths.extend((
+            (start, Point(end.x_nm - step, start.y_nm), end),
+            (start, Point(start.x_nm + step, end.y_nm), end),
+        ))
+    else:
+        step = diagonal if dy > 0 else -diagonal
+        paths.extend((
+            (start, Point(start.x_nm, end.y_nm - step), end),
+            (start, Point(end.x_nm, start.y_nm + step), end),
+        ))
+    if dx and dy:
         paths.extend((
             (start, Point(start.x_nm, end.y_nm), end),
             (start, Point(end.x_nm, start.y_nm), end),
@@ -46,6 +63,10 @@ def surface_path(
                         (start, Point(x, start.y_nm), Point(x, end.y_nm), end),
                         (start, Point(start.x_nm, y), Point(end.x_nm, y), end),
                     ))
+    # Keep the historical any-angle escape only when more conventional
+    # geometry cannot clear this particular local obstacle.
+    if (start, end) not in paths:
+        paths.append((start, end))
     for points in paths:
         additions: list[TrackSegment] = []
         for first, second in zip(points, points[1:]):

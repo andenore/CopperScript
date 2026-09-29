@@ -121,3 +121,18 @@ Independent KiCad 10 DRC after zone refill again reports seven GND opens and
 eight footprint-library warnings, with no new copper or drill violations.
 Completing these pads needs a layout/routing change or a separately reviewed
 local fabrication rule, not merely permission to use via-in-pad.
+
+The octilinear-preferred detailed router and plane-first GND flow were tested
+on the six-layer full-vertical board. With a 20,000-state base search budget
+and the existing 10x repair limit, all 57 ordinary nets routed; GND remains
+intentionally deferred to verified filled copper. Signal copper totals about
+1,253 mm straight, 321 mm at exactly 45 degrees, and 87 mm of short
+non-octilinear lead-ins/critical copper (about 95% straight or 45 degrees).
+The local plane-contact stage added 117 short GND tracks and 61 vias, not a
+long GND maze tree. Ground via-in-pad was enabled but could not legally reach
+the two remaining U_CC ground lands. Independent KiCad 10 DRC after zone
+refill reports two GND unconnected items, eight footprint-library warnings,
+and no other violations. The board is still not fabrication-ready: U_CC.10 and
+U_CC.11 need a component/placement or local geometry solution, and the
+footprint warnings still need review. At the smaller 5,000-state budget V3V3
+exhausted search, so the full-board verification requires the larger bound.

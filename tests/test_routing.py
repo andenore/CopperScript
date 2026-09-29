@@ -172,6 +172,42 @@ def test_board_wide_inner_ground_plane_is_reserved_for_ground() -> None:
     assert CopperLayer.INTERNAL_1 in routing_layers(local, "SIGNAL")
 
 
+def test_declared_ground_plane_consumes_no_global_wire_capacity() -> None:
+    base = _two_terminal_board()
+    footprint = next(iter(base.footprints.values()))
+    board = replace(
+        base,
+        stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+                         CopperLayer.INTERNAL_2, CopperLayer.BACK)),
+        placements=(*base.placements,
+                    Placement("G1", footprint.name, Point.mm(5, 10)),
+                    Placement("G2", footprint.name, Point.mm(35, 10))),
+        nets=(*base.nets, PhysicalNet("GND", (
+            PadReference("G1", "1"), PadReference("G2", "1"),
+        ))),
+        zones=(CopperZone(
+            "ground-plane", "GND", (CopperLayer.INTERNAL_1,),
+            PolygonWithHoles(PolygonRing((
+                Point.mm(1, 1), Point.mm(39, 1),
+                Point.mm(39, 29), Point.mm(1, 29),
+            ))),
+        ),),
+    )
+
+    result = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(5)))
+    ground = next(route for route in result.routes if route.net == "GND")
+    assert result.status is GlobalRoutingStatus.SUCCESS
+    assert result.metrics.deferred_net_count == 1
+    assert result.metrics.unrouted_net_count == 0
+    assert ground.deferred_to_zone and not ground.connected
+    assert not ground.accesses and not ground.segments and not ground.vias
+    document = json.loads(result.to_json())
+    assert document["metrics"]["deferred_net_count"] == 1
+    assert next(item for item in document["routes"] if item["net"] == "GND")[
+        "deferred_to_zone"
+    ]
+
+
 def test_surface_courtyard_does_not_block_global_tracks() -> None:
     base = _two_terminal_board()
     wall = PhysicalFootprint(

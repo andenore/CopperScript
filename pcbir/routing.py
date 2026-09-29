@@ -102,6 +102,7 @@ class GlobalNetRoute:
     vias: tuple[GlobalViaProposal, ...]
     length_nm: int
     diagnostics: tuple[str, ...] = ()
+    deferred_to_zone: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +129,7 @@ class GlobalRoutingMetrics:
     proposed_via_count: int
     iterations: int
     region_only_access_count: int = 0
+    deferred_net_count: int = 0
 
     @property
     def quality_vector(self) -> tuple[int, ...]:
@@ -168,6 +170,7 @@ class GlobalRoutingResult:
                 "proposed_via_count": self.metrics.proposed_via_count,
                 "iterations": self.metrics.iterations,
                 "region_only_access_count": self.metrics.region_only_access_count,
+                "deferred_net_count": self.metrics.deferred_net_count,
             },
             "routes": [
                 {
@@ -175,6 +178,7 @@ class GlobalRoutingResult:
                     "connected": route.connected,
                     "length_nm": route.length_nm,
                     "diagnostics": list(route.diagnostics),
+                    "deferred_to_zone": route.deferred_to_zone,
                     "accesses": [
                         {
                             "pad": f"{access.pad.component}.{access.pad.pad}",
@@ -316,13 +320,15 @@ def route_global(
     graph = _build_graph(board, options)
     rules = {rule.net: rule for rule in board.net_routing_rules}
     clearance = RoutingClearanceIndex(board)
+    zone_nets = {zone.net for zone in board.zones}
     access_options = {
         (net.name, pad): _pin_access_candidates(
             board, graph, pad, net.name,
             routing_layers(board, net.name, rules.get(net.name)),
             rules.get(net.name), clearance, options,
         )
-        for net in board.nets if len(net.pads) >= 2 for pad in net.pads
+        for net in board.nets if len(net.pads) >= 2 and net.name not in zone_nets
+        for pad in net.pads
     }
     capacities = {
         resource.identifier: resource.capacity
@@ -359,6 +365,7 @@ def route_global(
         best.metrics.proposed_via_count,
         completed_iterations,
         best.metrics.region_only_access_count,
+        best.metrics.deferred_net_count,
     )
     hotspots = _hotspots(graph, best.usage, best.contributors)
     status = (
@@ -400,6 +407,12 @@ def _route_iteration(
         key=lambda net: _net_order(net.name, rules.get(net.name)),
     )
     for net in ordered_nets:
+        if any(zone.net == net.name for zone in board.zones):
+            routes.append(GlobalNetRoute(
+                net.name, False, (), (), (), 0,
+                ("deferred to declared copper zone and verified fill",), True,
+            ))
+            continue
         rule = rules.get(net.name)
         demand = _net_demand(board, rule, options)
         route = _route_net(
@@ -438,7 +451,9 @@ def _route_iteration(
     )
     metrics = GlobalRoutingMetrics(
         routed_net_count=sum(route.connected for route in routes),
-        unrouted_net_count=sum(not route.connected for route in routes),
+        unrouted_net_count=sum(
+            not route.connected and not route.deferred_to_zone for route in routes
+        ),
         total_overflow=sum(overflows),
         maximum_overflow=max(overflows, default=0),
         overfull_resource_count=sum(value > 0 for value in overflows),
@@ -449,6 +464,7 @@ def _route_iteration(
         region_only_access_count=sum(
             access.region_only for route in routes for access in route.accesses
         ),
+        deferred_net_count=sum(route.deferred_to_zone for route in routes),
     )
     return _Attempt(
         tuple(routes),
@@ -1166,6 +1182,7 @@ def _routing_fingerprint(
             (
                 route.net,
                 route.connected,
+                route.deferred_to_zone,
                 tuple((access.pad.component, access.pad.pad,
                        access.node.layer_index, access.node.x_index, access.node.y_index,
                        access.region_only,
