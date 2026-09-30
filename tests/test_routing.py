@@ -42,7 +42,8 @@ from pcbir import (
     route_global,
     route_detailed,
 )
-from pcbir.routing_layers import dedicated_plane_layers, routing_layers
+from pcbir.routing_layers import (dedicated_plane_layers, routing_layers,
+                                  signal_layer_preferences)
 
 
 def _two_terminal_board() -> PhysicalBoard:
@@ -170,6 +171,48 @@ def test_board_wide_inner_ground_plane_is_reserved_for_ground() -> None:
     )),))
     assert dedicated_plane_layers(local) == {}
     assert CopperLayer.INTERNAL_1 in routing_layers(local, "SIGNAL")
+
+
+def test_six_layer_soft_preferences_follow_plane_and_alternate_headings() -> None:
+    base = _two_terminal_board()
+    plane = CopperZone(
+        "ground-plane", "GND", (CopperLayer.INTERNAL_1,),
+        PolygonWithHoles(PolygonRing((
+            Point.mm(1, 1), Point.mm(39, 1),
+            Point.mm(39, 29), Point.mm(1, 29),
+        ))),
+    )
+    board = replace(
+        base,
+        stackup=Stackup((
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.INTERNAL_3,
+            CopperLayer.INTERNAL_4, CopperLayer.BACK,
+        )),
+        nets=(*base.nets, PhysicalNet("GND", ())),
+        zones=(plane,),
+    )
+    ranks, headings = signal_layer_preferences(board)
+    assert ranks[CopperLayer.INTERNAL_2] == 0
+    assert ranks[CopperLayer.FRONT] == 1
+    assert ranks[CopperLayer.INTERNAL_3] == 2
+    assert headings == {
+        CopperLayer.INTERNAL_2: "h",
+        CopperLayer.INTERNAL_3: "n",
+        CopperLayer.INTERNAL_4: "h",
+    }
+    without_plane, _ = signal_layer_preferences(replace(board, zones=()))
+    assert set(without_plane.values()) == {0}
+    strongly_biased = route_global(
+        board, GlobalRouterOptions(
+            tile_size_nm=nm_from_mm("2.5"), layer_preference_cost=100,
+        ),
+    )
+    assert strongly_biased.status is GlobalRoutingStatus.SUCCESS
+    assert any(
+        segment.layer is CopperLayer.INTERNAL_2
+        for route in strongly_biased.routes for segment in route.segments
+    )
 
 
 def test_declared_ground_plane_consumes_no_global_wire_capacity() -> None:

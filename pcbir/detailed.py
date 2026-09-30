@@ -35,7 +35,7 @@ from .placement import (
 )
 from .routing import GlobalNetRoute, GlobalRoutingResult
 from .routing_clearance import RoutingClearanceIndex
-from .routing_layers import routing_layers
+from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
 
 
@@ -139,6 +139,8 @@ class DetailedRouterOptions:
     history_penalty: int = 30
     via_cost: int = 80
     bend_cost: int = 12
+    layer_preference_cost: int = 4
+    direction_preference_cost: int = 2
     guide_margin_nm: int = nm_from_mm("1")
     allow_guide_deviation: bool = True
     any_angle_cleanup: bool = True
@@ -165,6 +167,8 @@ class DetailedRouterOptions:
             self.history_penalty,
             self.via_cost,
             self.bend_cost,
+            self.layer_preference_cost,
+            self.direction_preference_cost,
             self.guide_margin_nm,
         ) < 0:
             raise ValueError("detailed router costs cannot be negative")
@@ -217,21 +221,28 @@ def route_detailed(
     *,
     fanout_accesses: Mapping[PadReference, Point] | None = None,
     fanout_created_vias: frozenset[tuple[str, Point]] | None = None,
+    only_nets: frozenset[str] | None = None,
 ) -> DetailedRoutingResult:
-    """Route all ordinary nets while preserving existing critical copper."""
+    """Route ordinary nets, optionally a repair subset, preserving locked copper."""
 
     options = options or DetailedRouterOptions()
     fanout_accesses = fanout_accesses or {}
     rules = {item.net: item for item in board.net_routing_rules}
     guides = {item.net: item for item in global_route.routes}
     zone_nets = {zone.net for zone in board.zones} if options.defer_zone_nets else set()
+    if only_nets is not None:
+        unknown = only_nets - {net.name for net in board.nets}
+        if unknown:
+            raise ValueError(f"unknown repair nets: {', '.join(sorted(unknown))}")
     deferred = [
         net for net in board.nets if len(net.pads) >= 2 and net.name in zone_nets
+        and (only_nets is None or net.name in only_nets)
     ]
     general_nets = [
         net
         for net in board.nets
         if len(net.pads) >= 2
+        and (only_nets is None or net.name in only_nets)
         and net.name not in zone_nets
         and (rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
     ]
@@ -326,6 +337,26 @@ def route_detailed(
         )
         if repaired.metrics.quality_vector < best.metrics.quality_vector:
             best = repaired
+    # Layer/direction preferences must not strand a signal merely because
+    # they changed search ordering within a finite state budget. Compare a
+    # neutral-cost reroute only when an ordinary net was left open; zone nets
+    # deliberately deferred to fill are not a search failure.
+    if ((options.layer_preference_cost or options.direction_preference_cost)
+            and any(not item.result.connected and item.result.net not in zone_nets
+                    for item in best.nets)):
+        neutral = route_detailed(
+            board, global_route,
+            replace(options, layer_preference_cost=0,
+                    direction_preference_cost=0),
+            fanout_accesses=fanout_accesses,
+            fanout_created_vias=fanout_created_vias,
+            only_nets=only_nets,
+        )
+        if (neutral.metrics.unrouted_net_count,
+                neutral.metrics.total_conflict_overflow) < (
+                best.metrics.unrouted_net_count,
+                best.metrics.total_conflict_overflow):
+            return neutral
     metrics = replace(best.metrics, passes=completed_passes)
     new_tracks = tuple(track for item in best.nets if item.result.connected for track in item.tracks)
     new_vias = tuple(via for item in best.nets if item.result.connected for via in item.vias)
@@ -977,6 +1008,7 @@ def _search_once(
     legal_edge_cache: dict[tuple[DetailedNode, DetailedNode], bool] = {}
     movable_edge_cache: dict[tuple[DetailedNode, DetailedNode], int] = {}
     edge_resource_cache: dict[tuple[DetailedNode, DetailedNode], tuple[str, ...]] = {}
+    layer_ranks, headings = signal_layer_preferences(grid.board)
 
     def heuristic(node: DetailedNode) -> int:
         value = heuristic_cache.get(node)
@@ -1085,12 +1117,27 @@ def _search_once(
                 continue
             if next_direction == "v":
                 base = options.via_cost
+                preference = 0
             else:
                 first_point, second_point = grid.point(node), grid.point(neighbor)
                 dx = first_point.x_nm - second_point.x_nm
                 dy = first_point.y_nm - second_point.y_nm
                 distance_nm = isqrt(dx * dx + dy * dy)
                 base = max(1, (10 * distance_nm + grid.pitch_nm - 1) // grid.pitch_nm)
+                layer = grid.layers[node.layer_index]
+                preference = layer_ranks[layer] * options.layer_preference_cost
+                heading = headings.get(layer)
+                if heading is not None:
+                    if options.octilinear_search:
+                        horizontal = next_direction in {"E", "W"}
+                        vertical = next_direction in {"N", "S"}
+                        if (horizontal and heading != "h"
+                                or vertical and heading != "n"):
+                            preference += options.direction_preference_cost
+                        elif not horizontal and not vertical:
+                            preference += options.direction_preference_cost // 2
+                    elif next_direction != heading:
+                        preference += options.direction_preference_cost
             if options.octilinear_search:
                 bend = _turn_steps(direction, next_direction) * options.bend_cost
             else:
@@ -1101,7 +1148,7 @@ def _search_once(
                     else 0
                 )
             step = (
-                base + bend + congestion + (50 if outside else 0)
+                base + bend + preference + congestion + (50 if outside else 0)
                 + 2 * options.present_penalty * movable_edge_cache[edge]
             )
             candidate_cost = cost + step

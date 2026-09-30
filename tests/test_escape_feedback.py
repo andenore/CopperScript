@@ -9,7 +9,7 @@ from pcbir import (
     PhysicalNet, Placement, PlacementPlannerOptions,
     PlacementRoutingFeedbackOptions, PlaneStitchOptions, Point, PolygonRing,
     PolygonWithHoles, Size, Stackup, improve_zone_escapes, nm_from_mm,
-    run_routing_pipeline,
+    run_routing_pipeline, stitch_zone_pads,
 )
 from pcbir.escape_feedback import _candidate_placements
 
@@ -161,3 +161,79 @@ def test_feedback_retargets_new_pending_pad_after_accepted_move() -> None:
     assert accepted[0].description.startswith("G1 move")
     assert accepted[1].description.startswith("G2 move")
     assert result.plane_stitch.complete
+
+
+def test_local_plane_escape_rips_up_and_reroutes_successful_signal() -> None:
+    footprint = PhysicalFootprint(
+        "test/single", (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),),
+        Size.mm(1, 1),
+    )
+    zone = CopperZone(
+        "ground", "GND", (CopperLayer.INTERNAL_1,),
+        PolygonWithHoles(PolygonRing((
+            Point.mm(1, 1), Point.mm(19, 1),
+            Point.mm(19, 11), Point.mm(1, 11),
+        ))),
+    )
+    # The signal's straight front-layer route crosses the only westward
+    # ground escape. The signal itself can legally detour around that escape.
+    via_keepout = CopperKeepout(
+        "right-side-via-block", (
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.BACK,
+        ),
+        PolygonWithHoles(PolygonRing((
+            Point.mm("3.9", 0), Point.mm(19, 0),
+            Point.mm(19, 12), Point.mm("3.9", 12),
+        ))),
+        block_tracks=False, block_zones=False,
+    )
+    board = PhysicalBoard(
+        "LocalRipup", BoardOutline.rectangle(20, 12),
+        {footprint.name: footprint},
+        (
+            Placement("G1", footprint.name, Point.mm(5, 6)),
+            Placement("S1", footprint.name, Point.mm(4, 3)),
+            Placement("S2", footprint.name, Point.mm(4, 9)),
+        ),
+        (
+            PhysicalNet("GND", (PadReference("G1", "1"),)),
+            PhysicalNet("SIGNAL", (
+                PadReference("S1", "1"), PadReference("S2", "1"),
+            )),
+        ),
+        stackup=Stackup((
+            CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2, CopperLayer.BACK,
+        )),
+        zones=(zone,), copper_keepouts=(via_keepout,),
+    )
+    fixed = PlacementPlannerOptions(
+        candidate_count=1, analytical_iterations=0, refinement_passes=0,
+        fixed_references=frozenset({"G1", "S1", "S2"}),
+    )
+    detail_options = DetailedRouterOptions(
+        pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
+        maximum_search_states=20_000,
+    )
+    initial = run_routing_pipeline(
+        board, placement_options=fixed,
+        global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
+        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
+        detailed_options=detail_options,
+    )
+    plane_options = PlaneStitchOptions(
+        step_nm=nm_from_mm("0.5"), maximum_radius_nm=nm_from_mm(2),
+    )
+    assert next(item for item in initial.detailed.nets
+                if item.net == "SIGNAL").connected
+    assert not stitch_zone_pads(initial.board, plane_options).complete
+    repaired = improve_zone_escapes(
+        initial, plane_options, detailed_options=detail_options,
+        options=EscapeFeedbackOptions(maximum_trials=0, maximum_local_trials=5),
+    )
+    assert repaired.plane_stitch.complete
+    assert repaired.attempts[0].description.startswith("local rip-up G1.1: SIGNAL")
+    assert next(item for item in repaired.pipeline.detailed.nets
+                if item.net == "SIGNAL").connected
+    assert repaired.pipeline.board.tracks != initial.board.tracks

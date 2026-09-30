@@ -355,6 +355,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["detailed"]["status"] in {"success", "partial"}
     assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
     assert "signal_track_length_nm" in document["route_geometry"]
+    assert "signal_layer_length_nm" in document["route_geometry"]
     assert document["plane_stitch"]["zone_fill_verified"] is False
     assert document["plane_stitch"]["step_nm"] == 250_000
     assert document["plane_stitch"]["maximum_radius_nm"] == 5_000_000

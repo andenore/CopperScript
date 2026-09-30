@@ -46,3 +46,36 @@ def routing_layers(
     selected = tuple(rule.allowed_layers) if rule and rule.allowed_layers else board.stackup.copper_layers
     planes = dedicated_plane_layers(board)
     return tuple(layer for layer in selected if layer not in planes or planes[layer] == net)
+
+
+def signal_layer_preferences(
+    board: PhysicalBoard,
+) -> tuple[dict[CopperLayer, int], dict[CopperLayer, str]]:
+    """Return soft run-cost ranks and complementary inner-layer headings.
+
+    Rank zero is an inner signal layer adjacent to a dedicated plane. A
+    surface layer with that reference gets rank one; layers without an
+    adjacent dedicated plane get rank two. With no declared full-board plane,
+    there is no speculative preference for inner over outer copper. Headings
+    alternate only when at least two inner *signal* layers exist. They are
+    costs, never routing restrictions, so 45-degree paths remain legal.
+    """
+
+    layers = board.stackup.copper_layers
+    planes = dedicated_plane_layers(board)
+    plane_indexes = {layers.index(layer) for layer in planes}
+    ranks: dict[CopperLayer, int] = {}
+    for index, layer in enumerate(layers):
+        if layer in planes or not plane_indexes:
+            ranks[layer] = 0
+        elif any(abs(index - plane_index) == 1 for plane_index in plane_indexes):
+            ranks[layer] = 1 if index in {0, len(layers) - 1} else 0
+        else:
+            ranks[layer] = 2
+    inner_signals = [layer for layer in layers[1:-1] if layer not in planes]
+    headings = (
+        {layer: "h" if index % 2 == 0 else "n"
+         for index, layer in enumerate(inner_signals)}
+        if len(inner_signals) >= 2 else {}
+    )
+    return ranks, headings

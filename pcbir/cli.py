@@ -271,6 +271,18 @@ def _parser() -> argparse.ArgumentParser:
         help="bounded full reroutes for late-failing plane pads, including local placement moves (default: 4; expensive)",
     )
     board_route_parser.add_argument(
+        "--zone-local-ripup-trials", type=int, default=6,
+        help="bounded blocker-aware local pad-escape reroutes before placement feedback (default: 6)",
+    )
+    board_route_parser.add_argument(
+        "--layer-preference-cost", type=int, default=4,
+        help="soft detailed-route layer cost; global-route cost is half (default: 4; 0 disables)",
+    )
+    board_route_parser.add_argument(
+        "--direction-preference-cost", type=int, default=2,
+        help="soft detailed-route inner-layer heading cost; global cost is half (default: 2; 0 disables)",
+    )
+    board_route_parser.add_argument(
         "--zone-escape-movement-mm", default="0.5", type=_positive_mm,
         help="local placement step for plane-pad escape feedback (default: 0.5 mm)",
     )
@@ -530,6 +542,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
                     maximum_iterations=args.router_iterations,
+                    layer_preference_cost=max(0, args.layer_preference_cost // 2),
+                    direction_preference_cost=max(0, args.direction_preference_cost // 2),
                 )
                 placement_options = PlacementPlannerOptions(
                     candidate_count=args.candidates,
@@ -549,6 +563,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     repair_budget_multiplier=args.repair_budget_multiplier,
                     defer_zone_nets=bool(physical_board.zones) or args.defer_zone_nets,
                     maximum_ripup_blockers=args.maximum_ripup_blockers,
+                    layer_preference_cost=args.layer_preference_cost,
+                    direction_preference_cost=args.direction_preference_cost,
                 )
                 fanout_options = FanoutOptions() if args.fanout else None
                 result = run_routing_pipeline(
@@ -571,9 +587,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         fanout_options=fanout_options,
                         options=EscapeFeedbackOptions(
                             maximum_trials=args.zone_escape_trials,
+                            maximum_local_trials=args.zone_local_ripup_trials,
+                            maximum_local_blockers=args.maximum_ripup_blockers,
                             movement_nm=nm_from_mm(args.zone_escape_movement_mm),
                         ),
-                    ) if stitch_enabled and args.zone_escape_trials else None
+                    ) if stitch_enabled and (args.zone_escape_trials
+                                             or args.zone_local_ripup_trials) else None
                 )
                 if escape_feedback is not None:
                     result = escape_feedback.pipeline
@@ -644,6 +663,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             zone_nets = {zone.net for zone in output_board.zones}
             signal_lengths = {"straight_nm": 0, "diagonal_45_nm": 0,
                               "other_angle_nm": 0}
+            signal_layer_lengths = {
+                layer.value: 0 for layer in output_board.stackup.copper_layers
+                if layer not in {zone_layer for zone in output_board.zones
+                                 for zone_layer in zone.layers}
+            }
             for track in output_board.tracks:
                 if track.net in zone_nets:
                     continue
@@ -651,9 +675,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dy = abs(track.end.y_nm - track.start.y_nm)
                 kind = ("straight_nm" if not dx or not dy else
                         "diagonal_45_nm" if dx == dy else "other_angle_nm")
-                signal_lengths[kind] += isqrt(dx * dx + dy * dy)
+                length_nm = isqrt(dx * dx + dy * dy)
+                signal_lengths[kind] += length_nm
+                signal_layer_lengths[track.layer.value] = (
+                    signal_layer_lengths.get(track.layer.value, 0) + length_nm
+                )
             report["route_geometry"] = {
                 "signal_track_length_nm": signal_lengths,
+                "signal_layer_length_nm": signal_layer_lengths,
                 "zone_net_track_count": sum(
                     track.net in zone_nets for track in output_board.tracks
                 ),

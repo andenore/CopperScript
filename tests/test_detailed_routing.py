@@ -566,6 +566,40 @@ def test_detailed_router_preserves_critical_copper() -> None:
     assert result.board.tracks == critical.board.tracks
 
 
+def test_soft_layer_costs_fall_back_when_they_strand_a_signal(monkeypatch) -> None:
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    original_route_net = detailed_module._route_net
+
+    def biased_search_exhausts(*args, **kwargs):
+        if args[9].layer_preference_cost:
+            return detailed_module._failed(args[2], "biased search exhausted")
+        return original_route_net(*args, **kwargs)
+
+    monkeypatch.setattr(detailed_module, "_route_net", biased_search_exhausts)
+    routed = route_detailed(
+        board, guide,
+        DetailedRouterOptions(
+            pitch_nm=nm_from_mm("0.5"), maximum_passes=1,
+            layer_preference_cost=4,
+        ),
+    )
+    assert routed.status is DetailedRoutingStatus.SUCCESS
+    assert routed.metrics.unrouted_net_count == 0
+
+
+def test_detailed_router_repair_subset_preserves_other_copper() -> None:
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    untouched = route_detailed(board, guide, only_nets=frozenset())
+    assert untouched.nets == ()
+    assert untouched.board.tracks == board.tracks
+    assert untouched.board.vias == board.vias
+    repaired = route_detailed(board, guide, only_nets=frozenset({"SIGNAL"}))
+    assert repaired.status is DetailedRoutingStatus.SUCCESS
+    assert [item.net for item in repaired.nets] == ["SIGNAL"]
+
+
 def test_detailed_router_fails_closed_without_a_connected_guide() -> None:
     board = replace(
         _board(),

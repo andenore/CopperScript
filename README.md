@@ -100,12 +100,17 @@ fill remains provisional until KiCad refills the zones and verifies physical
 connectivity. A net named GND without a declared zone receives no implicit
 plane.
 
-If a zone pad remains inaccessible, the default bounded escape feedback tries
-alternative via exits and legal local placement changes, rerouting signals from
-the clean placement before accepting an improvement. Use
-`--zone-escape-trials 0` to disable it, or adjust
-`--zone-escape-movement-mm` for the placement step. These trials never move
-components under existing copper. For intentional diagonal placement, add a
+If a zone pad remains inaccessible, the router first tries a bounded local
+rip-up: it reserves a legal plane escape, identifies the ordinary nets that
+block it, and reroutes only those nets. If that fails, escape feedback tries
+alternative via exits and legal local placement changes from a clean placement.
+Use `--zone-local-ripup-trials 0 --zone-escape-trials 0` to disable both, or
+adjust `--zone-escape-movement-mm` for the placement step. These trials never
+move components under existing copper. Soft plane-aware layer costs and
+alternating inner-layer directions can be tuned with
+`--layer-preference-cost` and `--direction-preference-cost` (zero disables
+either preference); they do not override explicit layer restrictions or DRC.
+For intentional diagonal placement, add a
 `constraint allowed_orientations(U1) { values = "0,45,90"; }`; unconstrained
 parts retain 0/90/180/270-degree candidates.
 

@@ -38,7 +38,7 @@ from .placement import (
     transformed_pad_position,
 )
 from .routing_clearance import RoutingClearanceIndex
-from .routing_layers import routing_layers
+from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
 
 
@@ -256,6 +256,8 @@ class GlobalRouterOptions:
     history_penalty: int = 20
     via_cost: int = 20
     bend_cost: int = 2
+    layer_preference_cost: int = 2
+    direction_preference_cost: int = 1
     guide_half_width_tiles: int = 1
     pin_access_candidates: int = 4
     escape_radius_nm: int = nm_from_mm("3")
@@ -272,6 +274,8 @@ class GlobalRouterOptions:
             self.history_penalty,
             self.via_cost,
             self.bend_cost,
+            self.layer_preference_cost,
+            self.direction_preference_cost,
         ) < 0:
             raise ValueError("global router costs cannot be negative")
         if self.guide_half_width_tiles < 0:
@@ -295,6 +299,8 @@ class _Graph:
     legal_nodes: frozenset[GridNode]
     resources: Mapping[tuple[GridNode, GridNode], _Resource]
     via_sites: Mapping[str, tuple[Point, ...]]
+    layer_ranks: Mapping[CopperLayer, int]
+    preferred_headings: Mapping[CopperLayer, str]
 
     def point(self, node: GridNode) -> Point:
         return Point(self.xs[node.x_index], self.ys[node.y_index])
@@ -521,6 +527,7 @@ def _route_net(
             if path is not None:
                 path_cost = sum(
                     (options.via_cost if a.layer_index != b.layer_index else 10)
+                    + _preference_cost(graph, a, b, options)
                     + present * max(0, usage[graph.resources[_edge_key(a, b)].identifier]
                                     + demand - graph.resources[_edge_key(a, b)].capacity)
                     + options.history_penalty * history[graph.resources[_edge_key(a, b)].identifier]
@@ -650,7 +657,9 @@ def _search(
             base = options.via_cost if next_direction == "v" else 10
             bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
             overflow = max(0, usage[resource.identifier] + demand - resource.capacity)
-            step = base + bend + present * overflow + options.history_penalty * history[resource.identifier]
+            preference = _preference_cost(graph, node, neighbor, options)
+            step = (base + bend + preference + present * overflow
+                    + options.history_penalty * history[resource.identifier])
             candidate_cost = cost + step
             candidate = (neighbor, next_direction, next_vias)
             if candidate_cost >= best.get(candidate, 1 << 60):
@@ -674,6 +683,24 @@ def _search(
         current = parent
     edges.reverse()
     return tuple(edges)
+
+
+def _preference_cost(
+    graph: _Graph, first: GridNode, second: GridNode,
+    options: GlobalRouterOptions,
+) -> int:
+    """Keep candidate scoring and path search on the same soft layer costs."""
+
+    direction = _direction(first, second)
+    if direction == "v":
+        return 0
+    layer = graph.layers[first.layer_index]
+    return (
+        graph.layer_ranks[layer] * options.layer_preference_cost
+        + (options.direction_preference_cost
+           if graph.preferred_headings.get(layer) not in {None, direction}
+           else 0)
+    )
 
 
 def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
@@ -754,8 +781,9 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
                               None, identifier=identifier)
     if not resources:
         raise ValueError("global routing capacity graph is empty")
+    layer_ranks, preferred_headings = signal_layer_preferences(board)
     return _Graph(tuple(board.stackup.copper_layers), xs, ys, frozenset(legal),
-                  resources, via_sites)
+                  resources, via_sites, layer_ranks, preferred_headings)
 
 
 def _add_resource(
@@ -1203,6 +1231,8 @@ def _routing_fingerprint(
             options.history_penalty,
             options.via_cost,
             options.bend_cost,
+            options.layer_preference_cost,
+            options.direction_preference_cost,
             options.guide_half_width_tiles,
             options.pin_access_candidates,
             options.escape_radius_nm,
