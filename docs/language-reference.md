@@ -489,6 +489,32 @@ selected layers must exist in the chosen physical stackup. A zone declaration
 does not establish electrical connectivity or fabrication readiness: its
 actual fill and connected copper require later verification.
 
+### Critical routing and qualification
+
+`routing` profiles, not net-name heuristics, select critical geometry. The
+full-vertical example explicitly declares both USB pairs on either side of its
+common-mode choke. Pair members are accepted together only after exact native
+geometry and connectivity checks. A rejected candidate contributes no locked
+tracks/vias and does not fall back to independent D+/D- routing. Reports state
+the routing `strategy` and whether a materialized candidate was rejected.
+Measured candidate lengths may remain in a rejection report for diagnosis;
+accepted track/via counts are zero.
+
+Aligned terminals use a midpoint channel with 45-degree tapers. Other pair
+geometries currently depend on coarse-guide candidates and can fail preflight;
+joint package-access search remains necessary. Single-ended critical nets can
+use bounded exact search while earlier critical copper stays immutable.
+General fanout/subset repair skips critical nets. Duplicate-land cleanup may
+reuse an existing critical connection but leaves new bridges pending for the
+owning critical router rather than altering pair skew or adding RF stubs.
+
+An impedance target is not proof that the provisional width/gap meets it.
+Missing stackup/field-solver evidence stays an explicit assumption. Nordic's
+chip-side matching connection is not labelled a generic 50-ohm RF feed; its
+multi-terminal antenna/matching network remains unqualified critical geometry.
+The prototype does not yet certify matching-network topology or reference
+layout, RF isolation, antenna keepouts, or the continuous return path.
+
 ### Native copper connectivity and package escape
 
 Native physical DRC checks contact between actual track/pad/via shapes on

@@ -3,10 +3,39 @@ from pathlib import Path
 from pcbir import ConnectionPolicy, PrototypePhysicalOptions, check, compile_file, prototype_physicalize
 from pcbir.elaborate import elaborate
 from pcbir.power import analyze_power_states
+from pcbir.physical import CopperLayer, RouteKind
 
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "full_vertical_board.copper"
+
+
+def test_full_vertical_explicit_critical_profiles_lower_without_claiming_qualification() -> None:
+    board = compile_file(EXAMPLE)
+    physical = prototype_physicalize(board, PrototypePhysicalOptions(copper_layers=6))
+    profiles = {rule.net: rule for rule in physical.net_routing_rules}
+    assert set(profiles) == {
+        "USB_DP_MCU", "USB_DM_MCU", "USB_DP_MODEM", "USB_DM_MODEM",
+        "CELL_RF", "GNSS_RF", "NRF_RF_RAW", "NRF_RF_ANT",
+    }
+    for suffix in ("MCU", "MODEM"):
+        positive, negative = profiles[f"USB_DP_{suffix}"], profiles[f"USB_DM_{suffix}"]
+        assert positive.kind is negative.kind is RouteKind.DIFFERENTIAL
+        assert positive.differential_partner == negative.net
+        assert negative.differential_partner == positive.net
+        assert positive.width_nm == negative.width_nm
+        assert positive.pair_gap_nm == negative.pair_gap_nm
+        assert positive.target_impedance_ohms == negative.target_impedance_ohms == 90
+    for name in ("CELL_RF", "GNSS_RF"):
+        assert profiles[name].kind is RouteKind.RF_FEED
+        assert profiles[name].target_impedance_ohms == 50
+    assert profiles["NRF_RF_RAW"].target_impedance_ohms is None
+    assert profiles["NRF_RF_ANT"].kind is RouteKind.CRITICAL
+    assert profiles["NRF_RF_ANT"].topology == "tree"
+    assert all(rule.allowed_layers == (CopperLayer.FRONT,) and rule.max_vias == 0
+               for rule in profiles.values())
+    assert all(rule.impedance_evidence_digest is None and rule.max_length_nm is None
+               and rule.max_skew_nm is None for rule in profiles.values())
 
 
 def test_full_vertical_example_compiles_and_passes_erc() -> None:

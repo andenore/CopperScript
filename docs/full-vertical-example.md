@@ -116,6 +116,49 @@ These networks still need vendor-reference-layout constraints, controlled
 impedance, keepouts, ground-via fencing, and final matching values in the
 physical design.
 
+## Explicit critical profiles and cheap preflight
+
+The source now declares separate symmetric USB pairs on the MCU and modem
+sides of FL_USB. Their target is 90 ohms differential, consistent with
+[Quectel EG800G QuecOpen Hardware Design V1.2, sections 4.1 and 5.3](https://developer.quectel.com/wp-content/uploads/2025/01/Quectel_EG800G%E7%B3%BB%E5%88%97_QuecOpen_%E7%A1%AC%E4%BB%B6%E8%AE%BE%E8%AE%A1%E6%89%8B%E5%86%8C_V1.2.pdf).
+The provisional 0.18 mm width / 0.20 mm gap is **not** a qualified 90-ohm
+geometry. Top-layer-only, zero-via routing is a conservative prototype choice,
+not Quectel's recommendation for an inner shielded USB route. No device length
+or skew limit has been invented. A production profile requires actual stackup,
+field-solver and return-path evidence.
+
+CELL_RF and GNSS_RF are explicit point-to-point 50-ohm targets. Quectel section
+5.3 describes controlled RF feeds; the [MAX-M10S integration manual](https://content.u-blox.com/sites/default/files/MAX-M10S_IntegrationManual_UBX-20053088.pdf)
+describes its matched 50-ohm RF input. Neither target qualifies a routed width.
+NRF_RF_RAW remains generic critical geometry with **no** 50-ohm claim; its
+three-terminal output is protected as a critical tree. [Nordic's reference
+circuitry and PCB guidelines](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/ref_circuitry.html)
+require close adherence to the matching layout, including its ground topology
+and inner-layer keepouts. This example has not qualified those requirements or
+the antenna; generic connected RF traces are insufficient.
+
+Before spending time on ordinary detailed routing, run the same initial
+placement/global/critical stages in isolation (after the README setup):
+
+```powershell
+uv run --no-sync python -m pcbir.critical_preflight examples/full_vertical_board.copper `
+  --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
+  --footprint-root "..\CopperLib\footprints" `
+  --candidates 1 --placement-candidate candidate-01 `
+  --feedback-iterations 1 --router-iterations 5 `
+  --report outputs/critical-preflight.json -o outputs/critical-board.kicad_pcb
+```
+
+The report checkpoints resolved inputs and global results, then records critical
+strategies, assumptions, rejection reasons and phase timings. Exit 1 means
+global/critical acceptance failed; exit 0 only means that early gate passed,
+**not** full-board signoff. Unrouted ordinary nets, unfilled planes and native
+route-incomplete findings remain expected. The [pass-4 review](routing-review-pass4.md)
+records the first real-footprint run: four connected RF nets, two rejected USB
+pairs, no committed unsafe pair copper. The earlier completely connected
+ordinary-routing draft remains a separate historical artifact.
+
 ## Acceptance stages
 
 1. **Electrical frontend (implemented):** parsing, package resolution,

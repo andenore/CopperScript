@@ -7,7 +7,7 @@ from pcbir import (
     stitch_duplicate_pads,
 )
 from dataclasses import replace
-from pcbir import (TrackSegment, Via, PadKind, NetRoutingRule, nm_from_mm,
+from pcbir import (TrackSegment, Via, PadKind, NetRoutingRule, RouteKind, nm_from_mm,
                    run_routing_pipeline, PlacementPlannerOptions,
                    PlacementRoutingFeedbackOptions, DetailedRouterOptions)
 
@@ -46,6 +46,22 @@ def test_stitches_separate_same_number_lands() -> None:
     assert repeated.stitched == result.stitched
     assert repeated.added_track_count == 0
     assert repeated.board == result.board
+
+
+def test_critical_land_closure_does_not_synthesize_unowned_geometry() -> None:
+    board = _board(blocking_middle=False)
+    board = replace(board, net_routing_rules=(NetRoutingRule("A", RouteKind.RF_FEED),))
+    result = stitch_duplicate_pads(board)
+    assert result.pending == (PadReference("U1", "1"),)
+    assert result.board == board
+    assert result.added_track_count == 0
+    connected = replace(board, tracks=(TrackSegment(
+        "A", Point.mm(10, 8), Point.mm(10, 12), nm_from_mm("0.25"), CopperLayer.FRONT,
+    ),))
+    result = stitch_duplicate_pads(connected)
+    assert result.pending == ()
+    assert result.already_connected == (PadReference("U1", "1"),)
+    assert result.board == connected
 
 
 def test_detours_around_foreign_pad_between_same_number_lands() -> None:

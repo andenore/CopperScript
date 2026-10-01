@@ -143,6 +143,13 @@ package-ground escape feedback, native DRC and independent KiCad plane-check
 workflow used for the [second routing review](docs/routing-review-pass2.md).
 It generates a **reviewable PCB draft**, not production Gerbers.
 
+The current example adds explicit critical USB/RF profiles. Those change the
+input intent relative to the recorded second/third-pass run: current critical
+preflight rejects both unsafe USB guide candidates. Consequently the command
+below is still the full workflow, but is not presently a reproduction of the
+historical zero-open copper. Run the [cheap critical preflight](docs/full-vertical-example.md#explicit-critical-profiles-and-cheap-preflight)
+first; [pass 4](docs/routing-review-pass4.md) records the next coupled-escape work.
+
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6
 and Python 3.12. Start in the directory where you want both repositories:

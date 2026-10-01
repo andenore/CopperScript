@@ -27,6 +27,7 @@ from .routing import GlobalNetRoute, GlobalRoutingResult, GlobalViaProposal
 from .geometry import segment_distance_squared
 from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
+from .drc import DrcSeverity, run_physical_drc
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -51,6 +52,8 @@ class CriticalNetResult:
     return_via_count: int = 0
     tuned_length_nm: int = 0
     evidence_digests: tuple[str, ...] = ()
+    strategy: str = "global_guide"
+    candidate_rejected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +88,8 @@ class CriticalRoutingResult:
                     "return_via_count": item.return_via_count,
                     "tuned_length_nm": item.tuned_length_nm,
                     "evidence_digests": list(item.evidence_digests),
+                    "strategy": item.strategy,
+                    "candidate_rejected": item.candidate_rejected,
                 }
                 for item in self.nets
             ],
@@ -140,6 +145,9 @@ def route_critical_nets(
             result, pair_tracks, pair_vias = _reject_reserved_plane_tracks(
                 board, result, pair_tracks, pair_vias, rules,
             )
+            result, pair_tracks, pair_vias = _validate_candidate(
+                board, result, pair_tracks, pair_vias, tracks, vias,
+            )
             processed.update((rule.net, partner_name))
             coupled_pairs.add(frozenset((rule.net, partner_name)))
             results.append(result)
@@ -152,6 +160,18 @@ def route_critical_nets(
             result, net_tracks, net_vias = _reject_reserved_plane_tracks(
                 board, result, net_tracks, net_vias, rules,
             )
+            result, net_tracks, net_vias = _validate_candidate(
+                board, result, net_tracks, net_vias, tracks, vias,
+            )
+            # Single-ended critical nets can reuse the exact octilinear maze
+            # engine. Pairs must NEVER be repaired as independent ordinary nets.
+            if (not result.connected and routes.get(rule.net) is not None
+                    and routes[rule.net].connected
+                    and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
+                         or len(routes[rule.net].accesses) == 2)):
+                result, net_tracks, net_vias = _route_single_exact(
+                    board, rule, global_route, tracks, vias,
+                )
             processed.add(rule.net)
             results.append(result)
             tracks.extend(net_tracks)
@@ -206,6 +226,46 @@ def route_critical_nets(
     )
 
 
+def _validate_candidate(
+    board: PhysicalBoard,
+    result: CriticalNetResult,
+    tracks: tuple[TrackSegment, ...],
+    vias: tuple[Via, ...],
+    committed_tracks: list[TrackSegment],
+    committed_vias: list[Via],
+) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
+    """Accept a critical group atomically, using authoritative native geometry.
+
+    A coarse guide is not clearance evidence. Check both members, return vias,
+    every physical land, and previously accepted critical groups together.
+    Unrelated open nets and route-completeness are expected at this stage; no
+    other hard finding is waived. Rejected copper never becomes an obstacle.
+    """
+    if not tracks and not vias:
+        return result, (), ()
+    candidate = replace(
+        board, tracks=(*committed_tracks, *tracks),
+        vias=(*committed_vias, *vias),
+    )
+    diagnostics = list(result.diagnostics)
+    for finding in run_physical_drc(candidate).findings:
+        if finding.severity is not DrcSeverity.ERROR:
+            continue
+        if finding.code == "DRC-ROUTE-INCOMPLETE":
+            continue
+        if finding.code == "DRC-OPEN-NET" and not set(finding.nets).intersection(result.nets):
+            continue
+        diagnostics.append(f"{finding.code}: {finding.message}")
+    diagnostics = list(dict.fromkeys(diagnostics))
+    if not result.connected or diagnostics:
+        return replace(
+            result, connected=False, track_count=0, via_count=0,
+            return_via_count=0, paired_via_transitions=0,
+            diagnostics=tuple(diagnostics), candidate_rejected=True,
+        ), (), ()
+    return result, tracks, vias
+
+
 def _reject_reserved_plane_tracks(
     board: PhysicalBoard,
     result: CriticalNetResult,
@@ -245,6 +305,41 @@ def _guide_via(
     )
 
 
+def _route_single_exact(
+    board: PhysicalBoard, rule: NetRoutingRule, global_route: GlobalRoutingResult,
+    committed_tracks: list[TrackSegment], committed_vias: list[Via],
+) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
+    """Bounded single-net repair against immutable earlier critical copper."""
+    from .detailed import DetailedRouterOptions, route_detailed
+
+    search_board = replace(
+        board, tracks=tuple(committed_tracks), vias=tuple(committed_vias),
+        net_routing_rules=tuple(
+            replace(item, kind=RouteKind.GENERAL) if item.net == rule.net else item
+            for item in board.net_routing_rules
+        ),
+    )
+    detailed = route_detailed(
+        search_board, global_route,
+        DetailedRouterOptions(
+            maximum_passes=2, maximum_search_states=20_000,
+            progressive_guides=True, constrained_pins_first=True,
+        ), only_nets=frozenset({rule.net}),
+    )
+    tracks = detailed.board.tracks[len(committed_tracks):]
+    vias = detailed.board.vias[len(committed_vias):]
+    net = next((item for item in detailed.nets if item.net == rule.net), None)
+    result = CriticalNetResult(
+        (rule.net,), net is not None and net.connected,
+        len(tracks), len(vias), (_track_length(tracks),), 0,
+        net.diagnostics if net is not None else ("no exact critical-net attempt",),
+        _external_assumptions(rule), evidence_digests=_external_evidence(rule),
+        strategy="exact_single_net",
+    )
+    return _validate_candidate(board, result, tracks, vias,
+                               committed_tracks, committed_vias)
+
+
 def _route_single(
     board: PhysicalBoard,
     rule: NetRoutingRule,
@@ -278,9 +373,10 @@ def _route_single(
         for item in guide.segments
     ]
     tracks.extend(_pin_stubs(rule.net, guide, width))
-    vias = tuple(dict.fromkeys(
-        _guide_via(board, rule.net, item, item.position) for item in guide.vias
-    ))
+    vias = tuple(dict.fromkeys((
+        *(_guide_via(board, rule.net, item, item.position) for item in guide.vias),
+        *(access.via for access in guide.accesses if access.via is not None),
+    )))
     diagnostics = _budget_diagnostics(rule, tuple(tracks), vias)
     assumptions = _external_assumptions(rule)
     evidence = _external_evidence(rule)
@@ -364,7 +460,12 @@ def _route_pair(
             (),
         )
     offset = (first_width + gap) // 2
-    positive, negative, junctions = _offset_guides(guide, offset)
+    aligned = _aligned_pair_paths(guide, partner_guide, offset)
+    if aligned is None:
+        positive, negative, junctions = _offset_guides(guide, offset)
+    else:
+        positive, negative = aligned
+        junctions = {}
     first_tracks = [
         TrackSegment(first.net, start, end, first_width, layer)
         for layer, start, end in positive
@@ -377,19 +478,16 @@ def _route_pair(
     ]
     _join_offset_junctions(first.net, first_width, 0, junctions, first_tracks)
     _join_offset_junctions(second.net, second_width, 1, junctions, second_tracks)
-    first_tracks.extend(
-        _pair_pin_stubs(first.net, guide, first_width, positive, 1, first_width + gap)
-    )
-    second_tracks.extend(
-        _pair_pin_stubs(
-            second.net,
-            partner_guide,
-            second_width,
-            negative,
-            0,
-            second_width + gap,
+    if aligned is None:
+        first_tracks.extend(
+            _pair_pin_stubs(first.net, guide, first_width, positive, 1, first_width + gap)
         )
-    )
+        second_tracks.extend(
+            _pair_pin_stubs(
+                second.net, partner_guide, second_width, negative, 0,
+                first_width + gap,
+            )
+        )
     max_skew = min(
         value
         for value in (first.max_skew_nm, second.max_skew_nm)
@@ -479,10 +577,68 @@ def _route_pair(
             len(return_vias),
             tuned_length,
             evidence,
+            strategy="aligned_pair" if aligned is not None else "global_guide",
         ),
         tracks,
         tuple((*pair_vias, *return_vias)),
     )
+
+
+def _aligned_pair_paths(
+    first: GlobalNetRoute, second: GlobalNetRoute, offset: int,
+) -> tuple[list[tuple[CopperLayer, Point, Point]], list[tuple[CopperLayer, Point, Point]]] | None:
+    """Try a straight coupled channel with symmetric 45-degree pin tapers.
+
+    Unlike offsetting one member's guide, this uses the midpoint of *both*
+    physical terminals. Only unambiguous, same-layer, aligned terminals are
+    supported here. Clearance and connectivity still gate the whole candidate.
+    """
+    if first.vias or second.vias:
+        return None
+    accesses = (*first.accesses, *second.accesses)
+    if len({access.layer for access in accesses}) != 1 or any(
+        access.via is not None or access.region_only for access in accesses
+    ):
+        return None
+    by_component = {access.pad.component: access for access in second.accesses}
+    if len(by_component) != 2 or set(by_component) != {
+        access.pad.component for access in first.accesses
+    }:
+        return None
+    pairs = [(access.pad_position, by_component[access.pad.component].pad_position)
+             for access in first.accesses]
+    for horizontal in (True, False):
+        def axial(point: Point) -> int:
+            return point.x_nm if horizontal else point.y_nm
+
+        def lateral(point: Point) -> int:
+            return point.y_nm if horizontal else point.x_nm
+
+        if any(axial(a) != axial(b) for a, b in pairs):
+            continue
+        ordered = sorted(pairs, key=lambda pair: axial(pair[0]))
+        (a, b), (c, d) = ordered
+        if lateral(a) != lateral(c) or lateral(b) != lateral(d):
+            continue
+        mid = (lateral(a) + lateral(b)) // 2
+        sign = 1 if lateral(a) > lateral(b) else -1
+        first_lane, second_lane = mid + sign * offset, mid - sign * offset
+        taper = max(abs(lateral(a) - first_lane), abs(lateral(b) - second_lane))
+        if axial(c) - axial(a) <= 2 * taper:
+            continue
+
+        def path(start: Point, end: Point, lane: int) -> list[tuple[CopperLayer, Point, Point]]:
+            def point(x: int, y: int) -> Point:
+                return Point(x, y) if horizontal else Point(y, x)
+
+            ramp = abs(lateral(start) - lane)
+            points = (start, point(axial(start) + ramp, lane),
+                      point(axial(end) - ramp, lane), end)
+            return [(accesses[0].layer, p, q) for p, q in zip(points, points[1:])
+                    if p != q]
+
+        return path(a, c, first_lane), path(b, d, second_lane)
+    return None
 
 
 def _tune_pair(first: list[TrackSegment], second: list[TrackSegment],
@@ -795,7 +951,9 @@ def _fingerprint(
             for item in vias
         ],
         "results": [
-            (item.nets, item.connected, item.lengths_nm, item.skew_nm, item.diagnostics, item.assumptions)
+            (item.nets, item.connected, item.lengths_nm, item.skew_nm,
+             item.diagnostics, item.assumptions, item.strategy,
+             item.candidate_rejected, item.evidence_digests)
             for item in results
         ],
     }

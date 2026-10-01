@@ -12,7 +12,7 @@ from .drc import explicit_copper_connectivity
 
 from .physical import (
     BoardSide, CopperLayer, PadKind, PadReference, PhysicalBoard, Point,
-    TrackSegment, nm_from_mm,
+    RouteKind, TrackSegment, nm_from_mm,
 )
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
@@ -77,6 +77,12 @@ def stitch_duplicate_pads(board: PhysicalBoard) -> DuplicatePadStitchResult:
                 else CopperLayer.BACK
             )
             rule = rules.get(net)
+            if rule and rule.kind is not RouteKind.GENERAL:
+                # Independent bridges can change pair skew, create RF stubs,
+                # or violate a critical topology. Only the owning critical
+                # router may synthesize new copper for these physical lands.
+                pending.append(reference)
+                continue
             if rule and rule.allowed_layers and side not in rule.allowed_layers:
                 pending.append(reference)
                 continue

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from hashlib import sha256
+import pytest
 
 from pcbir import (
     BoardOutline,
@@ -23,7 +24,10 @@ from pcbir import (
     nm_from_mm,
     route_critical_nets,
     route_global,
+    TrackSegment, CopperKeepout, PolygonRing, PolygonWithHoles,
+    DetailedRouterOptions, route_detailed, run_physical_drc,
 )
+from pcbir.critical import _route_pair, _tune_pair
 
 
 def _pair_board() -> PhysicalBoard:
@@ -85,6 +89,7 @@ def test_critical_pair_is_routed_as_locked_exact_copper() -> None:
     assert first.status is CriticalRoutingStatus.WARNING
     assert len(first.nets) == 1
     assert first.nets[0].connected
+    assert first.nets[0].strategy == "aligned_pair"
     assert first.nets[0].nets == ("USB_DM", "USB_DP")
     assert first.locked_tracks
     assert first.nets[0].coupled_length_nm > 0
@@ -92,6 +97,12 @@ def test_critical_pair_is_routed_as_locked_exact_copper() -> None:
     assert first.board.tracks == first.locked_tracks
     assert first.board.metadata["detailed_routing"] == "partial"
     assert "field-solver" in first.nets[0].assumptions[0]
+    assert not {finding.code for finding in run_physical_drc(first.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET",
+    }
+    assert all(track.start.x_nm == track.end.x_nm or track.start.y_nm == track.end.y_nm
+               or abs(track.start.x_nm - track.end.x_nm) == abs(track.start.y_nm - track.end.y_nm)
+               for track in first.locked_tracks)
 
 
 def test_critical_single_net_enforces_length_budget() -> None:
@@ -127,15 +138,16 @@ def test_pair_rules_must_be_symmetric() -> None:
 
 def test_pair_enforces_measured_uncoupled_budget() -> None:
     board = _pair_board()
-    rules = tuple(replace(rule, maximum_uncoupled_length_nm=nm_from_mm("1")) for rule in board.net_routing_rules)
+    rules = tuple(replace(rule, maximum_uncoupled_length_nm=nm_from_mm("0.5")) for rule in board.net_routing_rules)
     board = replace(board, net_routing_rules=rules)
     guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
     result = route_critical_nets(board, guides)
     assert result.status is CriticalRoutingStatus.FAILED
-    assert "uncoupled length" in result.nets[0].diagnostics[-1]
+    assert any("uncoupled length" in item for item in result.nets[0].diagnostics)
+    assert result.locked_tracks == result.locked_vias == ()
 
 
-def test_pair_uses_bounded_local_tuning_and_binds_external_evidence() -> None:
+def test_symmetric_pair_needs_no_tuning_and_binds_external_evidence() -> None:
     board = _pair_board()
     evidence = sha256(b"field solver report").hexdigest()
     rules = tuple(
@@ -151,12 +163,12 @@ def test_pair_uses_bounded_local_tuning_and_binds_external_evidence() -> None:
     pair = result.nets[0]
     assert pair.connected
     assert pair.skew_nm <= nm_from_mm("0.1")
-    assert pair.tuned_length_nm > 0
+    assert pair.tuned_length_nm == 0
     assert pair.evidence_digests == (evidence,)
     assert not any("field-solver" in item for item in pair.assumptions)
 
 
-def test_pair_transition_generates_bounded_return_via() -> None:
+def test_pair_rejects_overlapping_return_via_and_floating_transition() -> None:
     board = _pair_board()
     board = replace(
         board,
@@ -178,10 +190,111 @@ def test_pair_transition_generates_bounded_return_via() -> None:
         for route in guides.routes
     )
     guides = replace(guides, routes=routes)
+    proposed, _, proposed_vias = _route_pair(
+        board, *board.net_routing_rules, {route.net: route for route in guides.routes},
+    )
+    assert proposed.return_via_count == 1
+    assert sum(via.net == "GND" for via in proposed_vias) == 1
     result = route_critical_nets(board, guides)
     pair = result.nets[0]
-    assert pair.return_via_count == 1
-    assert sum(via.net == "GND" for via in result.locked_vias) == 1
+    assert result.status is CriticalRoutingStatus.FAILED
+    assert pair.candidate_rejected
+    assert pair.return_via_count == 0
+    assert any("DRC-SHORT" in item for item in pair.diagnostics)
+    assert result.locked_tracks == result.locked_vias == ()
+
+
+def test_tuning_is_bounded_but_requires_candidate_geometry_validation() -> None:
+    first = [TrackSegment("A", Point.mm(5, 5), Point.mm(15, 5), nm_from_mm("0.25"), CopperLayer.FRONT)]
+    second = [TrackSegment("B", Point.mm(5, 8), Point.mm(17, 8), nm_from_mm("0.25"), CopperLayer.FRONT)]
+    assert _tune_pair(first, second, nm_from_mm("0.1"), nm_from_mm("0.4")) == nm_from_mm("0.8")
+    assert max(track.end.y_nm for track in first) == nm_from_mm("5.4")
+
+
+@pytest.mark.parametrize("obstacle", ("pad", "keepout", "edge", "pair_clearance"))
+def test_pair_rejects_unsafe_exact_geometry_atomically(obstacle) -> None:
+    board = _pair_board()
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    if obstacle == "pad":
+        blocker = PhysicalFootprint(
+            "blocker", (FootprintPad("1", Point(0, 0), Size.mm(1, 1)),), Size.mm(1, 1),
+        )
+        board = replace(board, footprints={**board.footprints, "blocker": blocker},
+                        placements=(*board.placements, Placement("X", "blocker", Point.mm(20, 12))))
+    elif obstacle == "keepout":
+        wall = CopperKeepout("wall", (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+            Point.mm(19, 10), Point.mm(21, 10), Point.mm(21, 14), Point.mm(19, 14),
+        ))))
+        board = replace(board, copper_keepouts=(wall,))
+    elif obstacle == "edge":
+        board = replace(board, outline=BoardOutline.rectangle(40, "12.3"))
+    else:
+        board = replace(board, net_routing_rules=tuple(
+            replace(rule, pair_gap_nm=nm_from_mm("0.05")) for rule in board.net_routing_rules))
+    result = route_critical_nets(board, guides)
+    assert result.status is CriticalRoutingStatus.FAILED
+    assert result.nets[0].candidate_rejected
+    assert result.nets[0].diagnostics
+    assert result.board.tracks == result.locked_tracks == ()
+    assert result.board.vias == result.locked_vias == ()
+
+
+def test_subset_repair_cannot_reroute_or_prune_a_locked_pair() -> None:
+    board = _pair_board()
+    guides = route_global(board)
+    critical = route_critical_nets(board, guides)
+    assert critical.nets[0].connected
+    repaired = route_detailed(
+        critical.board, guides, DetailedRouterOptions(maximum_passes=1),
+        only_nets=frozenset({"USB_DP", "USB_DM"}),
+        fanout_accesses={PadReference("J1", "1"): Point.mm(6, 12)},
+    )
+    assert repaired.nets == ()
+    assert repaired.board.tracks == critical.locked_tracks
+    assert repaired.board.vias == critical.locked_vias
+
+
+def test_single_ended_critical_net_repairs_stale_guide_with_exact_clearance() -> None:
+    base = _pair_board()
+    board = replace(base, net_routing_rules=(NetRoutingRule(
+        "USB_DP", RouteKind.CRITICAL, allowed_layers=(CopperLayer.FRONT,), max_vias=0,
+    ),))
+    guides = route_global(board)
+    blocker = PhysicalFootprint(
+        "blocker", (FootprintPad("1", Point(0, 0), Size.mm(2, 2)),), Size.mm(2, 2),
+    )
+    board = replace(board, footprints={**board.footprints, "blocker": blocker},
+                    placements=(*board.placements, Placement("X", "blocker", Point.mm(20, "11.5"))))
+    result = route_critical_nets(board, guides)
+    assert result.nets[0].connected
+    assert result.nets[0].strategy == "exact_single_net"
+    assert result.locked_tracks
+    assert result.locked_vias == ()
+    assert not any(finding.code in {"DRC-SHORT", "DRC-CLEARANCE"}
+                   for finding in run_physical_drc(result.board).findings)
+
+
+def test_later_single_critical_route_cannot_cut_a_reserved_pair() -> None:
+    base = _pair_board()
+    terminal = PhysicalFootprint(
+        "terminal", (FootprintPad("1", Point(0, 0), Size.mm("0.4", "0.4")),), Size.mm(1, 1),
+    )
+    board = replace(
+        base, footprints={**base.footprints, "terminal": terminal},
+        placements=(*base.placements, Placement("S1", "terminal", Point.mm(20, 5)),
+                    Placement("S2", "terminal", Point.mm(20, 20))),
+        nets=(*base.nets, PhysicalNet("CROSS", (PadReference("S1", "1"), PadReference("S2", "1")))),
+        net_routing_rules=(*base.net_routing_rules, NetRoutingRule(
+            "CROSS", RouteKind.CRITICAL, allowed_layers=(CopperLayer.FRONT,), max_vias=0)),
+    )
+    guides = route_global(board)
+    result = route_critical_nets(board, guides)
+    pair = route_critical_nets(base, route_global(base))
+    assert result.nets[0].connected
+    assert tuple(track for track in result.locked_tracks if track.net != "CROSS") == pair.locked_tracks
+    assert not any(finding.code in {"DRC-SHORT", "DRC-CLEARANCE"}
+                   for finding in run_physical_drc(result.board).findings)
+    assert result.nets[1].strategy == "exact_single_net"
 
 
 def test_critical_transition_without_special_technology_is_through_via() -> None:

@@ -297,6 +297,50 @@ board FullVerticalTracker {
     constraint max_distance(C_GNSS, U_GNSS.VCC) { distance = 3mm; }
     constraint max_distance(C_MODEM_BULK, U_MODEM.VBAT_1) { distance = 5mm; }
 
+    // Explicit critical profiles; never inferred from net names. The choke
+    // divides USB into two pairs. Width/gap/layer choices below are provisional
+    // geometric intent, NOT impedance qualification (see full-vertical docs).
+    // No invented length/skew limits or fabricated field-solver evidence.
+    constraint routing(USB_DP_MCU) {
+        kind = differential; priority = 100; partner = USB_DM_MCU;
+        width = 0.18mm; pair_gap = 0.2mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu"; max_vias = 0;
+    }
+    constraint routing(USB_DM_MCU) {
+        kind = differential; priority = 100; partner = USB_DP_MCU;
+        width = 0.18mm; pair_gap = 0.2mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu"; max_vias = 0;
+    }
+    constraint routing(USB_DP_MODEM) {
+        kind = differential; priority = 100; partner = USB_DM_MODEM;
+        width = 0.18mm; pair_gap = 0.2mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu"; max_vias = 0;
+    }
+    constraint routing(USB_DM_MODEM) {
+        kind = differential; priority = 100; partner = USB_DP_MODEM;
+        width = 0.18mm; pair_gap = 0.2mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu"; max_vias = 0;
+    }
+    constraint routing(CELL_RF) {
+        kind = rf_feed; priority = 120; target_impedance_ohms = 50;
+        allowed_layers = "F.Cu"; max_vias = 0;
+    }
+    constraint routing(GNSS_RF) {
+        kind = rf_feed; priority = 120; target_impedance_ohms = 50;
+        allowed_layers = "F.Cu"; max_vias = 0;
+    }
+    // Nordic's chip-side matching geometry is not a generic 50-ohm feed.
+    // Its three-terminal output includes the shunt capacitor: protect it as
+    // critical copper without pretending the point-to-point RF router supports
+    // a qualified matching network/antenna reference layout.
+    constraint routing(NRF_RF_RAW) {
+        kind = critical; priority = 130; allowed_layers = "F.Cu"; max_vias = 0;
+    }
+    constraint routing(NRF_RF_ANT) {
+        kind = critical; priority = 130; topology = tree;
+        target_impedance_ohms = 50; allowed_layers = "F.Cu"; max_vias = 0;
+    }
+
     // A provisional inner-layer return plane. The exported zone is intent only;
     // KiCad refill and connected-copper signoff are still required.
     constraint copper_zone(GND) {

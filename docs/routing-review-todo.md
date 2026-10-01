@@ -38,6 +38,23 @@ Completion means tested implementation, not automatic manufacturing signoff.
 - [ ] R8: Exercise critical USB/RF profiles in the full-vertical example;
   reserve critical geometry and protect paired nets in repairs. Do not infer
   controlled impedance or invent electrical limits from names.
+  - [x] R8a: Declare explicit profiles; atomically validate critical candidates
+    against native geometry/connectivity; protect pair copper through subset
+    repairs and duplicate-land closure. Real-footprint preflight connects four
+    RF nets with no vias and rejects both unsafe USB pairs. See
+    [pass 4](routing-review-pass4.md); this does not complete R8.
+  - [ ] R8b (next): Joint paired package-access search. Enumerate legal paired
+    exits, preserve terminal order, search an orientation-aware common channel,
+    materialize 45-degree corners/tapers, and validate both members plus any
+    paired/return transitions together. Try bounded alternatives before asking
+    placement feedback to move/rotate the choke or MCU/modem cluster. Never
+    repair one member independently or lock a failed coarse guide.
+  - [ ] R8c: Enforce RF reference-layout/matching clusters and antenna keepouts;
+    shorten the Nordic and GNSS paths. Connected long top-layer feeds are not
+    evidence of RF performance, matching-ground topology or return continuity.
+  - [ ] R8d: After critical preflight passes, perform the complete rerun and
+    independent KiCad layer review. Bind actual impedance/return-path evidence
+    to the selected physical stackup before any critical-net signoff claim.
 - [ ] R9 (follow-up review): Record phase timings/checkpoints for long full
   reruns and cache equivalent physical-span via legality queries within one
   immutable search. A 15 s/734-sample profile during zone-escape feedback
