@@ -144,13 +144,14 @@ workflow used for the [second routing review](docs/routing-review-pass2.md).
 It generates a **reviewable PCB draft**, not production Gerbers.
 
 The current example adds explicit critical USB/RF profiles. Those change the
-input intent relative to the recorded second/third-pass run. Joint paired
-escape/search now connects both USB pairs without vias; independent KiCad finds
-no critical-net opens or hard copper violations on the partial-stage board.
+input intent relative to the recorded second/third-pass run. The
+[pass-5 joint paired search](docs/routing-review-pass5.md) connected both USB
+pairs without vias or hard copper violations. Subsequent source-backed
+[RF circuit corrections](docs/rf-layout-audit.md) change the netlist again:
+at the old placement, new critical reservations leave the modem pair pending.
 The command below is still the full workflow, not a reproduction of the
 historical zero-open copper. Run the [cheap critical preflight](docs/full-vertical-example.md#explicit-critical-profiles-and-cheap-preflight)
-first; [pass 5](docs/routing-review-pass5.md) records the result and remaining
-RF placement, return-path and complete-board rerun work.
+first; RF cluster placement, return-path and complete-board rerun work remain.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6

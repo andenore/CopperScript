@@ -26,7 +26,7 @@ board FullVerticalTracker {
     component J_DEBUG: vertical.DEBUG_UART_HEADER;
     component J_SWD_MCU: vertical.SWD_HEADER;
     component J_SWD_NRF: vertical.SWD_HEADER;
-    component ANT_BT: vertical.RF_ANTENNA;
+    component ANT_BT: vertical.JOHANSON_2450AT18A0100001E;
     component SW_USER: vertical.BUTTON;
     component LED_1: vertical.LED;
     component LED_2: vertical.LED;
@@ -194,7 +194,6 @@ board FullVerticalTracker {
         J_SWD_NRF.GND;
         J_SWD_NRF.GND_5;
         J_SWD_NRF.GND_DETECT;
-        ANT_BT.GND;
         SW_USER.B;
         LED_1.K;
         LED_2.K;
@@ -233,8 +232,9 @@ board FullVerticalTracker {
     net NRF_RESET { U_NRF.P0_21_NRESET; J_SWD_NRF.RESET; R_RESET_NRF.2; }
     net NRF_SWDIO { U_NRF.SWDIO; J_SWD_NRF.SWDIO; }
     net NRF_SWDCLK { U_NRF.SWDCLK; J_SWD_NRF.SWDCLK; }
-    net NRF_RF_RAW { U_NRF.ANT; L_BT_MATCH.1; }
-    net NRF_RF_ANT { L_BT_MATCH.2; C_BT_MATCH.1; ANT_BT.FEED; }
+    // Nordic QFAA reference v1.1: C3 is shunt on the chip side of L1.
+    net NRF_RF_RAW { U_NRF.ANT; C_BT_MATCH.1; L_BT_MATCH.1; }
+    net NRF_RF_ANT { L_BT_MATCH.2; ANT_BT.FEED; }
 
     net GNSS_TX { U_GNSS.TXD; U_MCU.PA3; }
     net GNSS_RX { U_GNSS.RXD; U_MCU.PA2; }
@@ -330,14 +330,15 @@ board FullVerticalTracker {
         allowed_layers = "F.Cu"; max_vias = 0;
     }
     // Nordic's chip-side matching geometry is not a generic 50-ohm feed.
-    // Its three-terminal output includes the shunt capacitor: protect it as
-    // critical copper without pretending the point-to-point RF router supports
-    // a qualified matching network/antenna reference layout.
+    // Its three-terminal chip-side net includes the shunt capacitor. The
+    // series inductor's output is the point-to-point antenna feed. Neither
+    // these profiles nor the provisional placement qualify the matching layout.
     constraint routing(NRF_RF_RAW) {
-        kind = critical; priority = 130; allowed_layers = "F.Cu"; max_vias = 0;
+        kind = critical; topology = tree;
+        priority = 130; allowed_layers = "F.Cu"; max_vias = 0;
     }
     constraint routing(NRF_RF_ANT) {
-        kind = critical; priority = 130; topology = tree;
+        kind = rf_feed; priority = 130;
         target_impedance_ohms = 50; allowed_layers = "F.Cu"; max_vias = 0;
     }
 

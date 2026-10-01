@@ -30,8 +30,9 @@ def test_full_vertical_explicit_critical_profiles_lower_without_claiming_qualifi
         assert profiles[name].kind is RouteKind.RF_FEED
         assert profiles[name].target_impedance_ohms == 50
     assert profiles["NRF_RF_RAW"].target_impedance_ohms is None
-    assert profiles["NRF_RF_ANT"].kind is RouteKind.CRITICAL
-    assert profiles["NRF_RF_ANT"].topology == "tree"
+    assert profiles["NRF_RF_RAW"].topology == "tree"
+    assert profiles["NRF_RF_ANT"].kind is RouteKind.RF_FEED
+    assert profiles["NRF_RF_ANT"].topology == "point_to_point"
     assert all(rule.allowed_layers == (CopperLayer.FRONT,) and rule.max_vias == 0
                for rule in profiles.values())
     assert all(rule.impedance_evidence_digest is None and rule.max_length_nm is None
@@ -111,6 +112,24 @@ def test_nordic_qfaa_package_has_all_footprint_pad_numbers() -> None:
     }
     assert part.pins["NC_44"].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
     assert all(pin.bonds for pin in part.pins.values() if pin.name != "NC_44")
+
+
+def test_bluetooth_antenna_keeps_nc_anchor_isolated() -> None:
+    board = compile_file(EXAMPLE)
+    part = board.library["vertical.JOHANSON_2450AT18A0100001E"]
+    assert part.manufacturer == "Johanson Technology"
+    assert part.pins["NC"].number == "2"
+    assert part.pins["NC"].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
+    assert not any(endpoint.component == "ANT_BT" and endpoint.pin == "NC"
+                   for net in board.nets for endpoint in net.endpoints)
+
+
+def test_nordic_matching_shunt_is_on_chip_side_of_series_inductor() -> None:
+    board = compile_file(EXAMPLE)
+    nets = {net.name: {(ep.component, ep.pin) for ep in net.endpoints} for net in board.nets}
+    assert nets["NRF_RF_RAW"] == {("U_NRF", "ANT"), ("C_BT_MATCH", "1"), ("L_BT_MATCH", "1")}
+    assert nets["NRF_RF_ANT"] == {("L_BT_MATCH", "2"), ("ANT_BT", "FEED")}
+    assert ("C_BT_MATCH", "2") in nets["GND"]
 
 
 def test_stm32g0c1re_standard_lqfp64_bonds_are_complete() -> None:

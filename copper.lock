@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:990fd7e2013566c06826a1bc6e1cf9d900063a835869639012fe8f071600aa2d",
+      "checksum": "sha256:5c26e8871c70978e9633afee9bea82e36d8b81c0d036cc787b2409a255b94a44",
       "files": [
         {
           "path": "copper.mod",
@@ -67,6 +67,11 @@
           "path": "data/case-studies/opa2197id/sources.json",
           "sha256": "9e72ab206eab2db1cbcfd6acae7f7c5ef7b1806c74de986f582dd31025428895",
           "size": 415
+        },
+        {
+          "path": "data/full-vertical/rf-audit.json",
+          "sha256": "081714cca5aea8614c0a1a3870198938323e625c5b6fdaf30819be7d3f877bfe",
+          "size": 2060
         },
         {
           "path": "data/requests.json",
@@ -160,8 +165,8 @@
         },
         {
           "path": "packages/full_vertical/rf_antenna.copper",
-          "sha256": "88f0caa5140d67f853e7ff72b74ac53e523da5466ff5b3d479a2515f64581479",
-          "size": 349
+          "sha256": "cdd68044c733355c0bb7f540836b54ac8639e1bf79d44ece4fff9f7263c7ad17",
+          "size": 933
         },
         {
           "path": "packages/full_vertical/rf_connector.copper",

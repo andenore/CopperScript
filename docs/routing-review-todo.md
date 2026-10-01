@@ -57,6 +57,18 @@ Completion means tested implementation, not automatic manufacturing signoff.
   - [ ] R8c (next): Enforce RF reference-layout/matching clusters and antenna keepouts;
     shorten the Nordic and GNSS paths. Connected long top-layer feeds are not
     evidence of RF performance, matching-ground topology or return continuity.
+    - [x] Audit electrical terminals/topology first: replace the generic antenna
+      with the source-backed Johanson part, isolate its NC anchor, and move the
+      Nordic 0.8 pF shunt to the chip side of the 3.9 nH series inductor.
+      Evidence and ERC regressions are in CopperLib/CopperScript.
+    - [ ] Complete the Nordic support circuit and extract a pin/pad-bound rigid
+      matching/reference-ground cluster from the vendor layout, not a guessed
+      distance threshold. Preserve its legal translation/rotation transforms.
+    - [ ] Implement antenna corner placement and qualified local layer-aware
+      copper/ground keepouts without deleting its isolated mechanical land.
+    - [ ] Optimize receiver/connector RF clusters and noise-source separation;
+      validate the new placement and reroute critical groups transactionally.
+      See [RF audit](rf-layout-audit.md). R8c remains open.
   - [ ] R8d: After critical preflight passes, perform the complete rerun and
     independent KiCad layer review. Bind actual impedance/return-path evidence
     to the selected physical stackup before any critical-net signoff claim.

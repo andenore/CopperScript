@@ -131,11 +131,20 @@ CELL_RF and GNSS_RF are explicit point-to-point 50-ohm targets. Quectel section
 5.3 describes controlled RF feeds; the [MAX-M10S integration manual](https://content.u-blox.com/sites/default/files/MAX-M10S_IntegrationManual_UBX-20053088.pdf)
 describes its matched 50-ohm RF input. Neither target qualifies a routed width.
 NRF_RF_RAW remains generic critical geometry with **no** 50-ohm claim; its
-three-terminal output is protected as a critical tree. [Nordic's reference
+chip-side matching net is protected as a critical tree. C_BT_MATCH shunts the
+chip-side ANT node before L_BT_MATCH, as in the QFAA reference schematic.
+NRF_RF_ANT is the point-to-point feed after that inductor. The Johanson
+2450AT18A0100001E antenna's terminal 2 is an isolated, soldered NC anchor,
+not ground. [Nordic's reference
 circuitry and PCB guidelines](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/ref_circuitry.html)
 require close adherence to the matching layout, including its ground topology
 and inner-layer keepouts. This example has not qualified those requirements or
 the antenna; generic connected RF traces are insufficient.
+
+The [RF audit and next implementation steps](rf-layout-audit.md) record these
+source-backed corrections. They change the acceptance netlist after pass 5;
+the old RF routing measurements are historical, not measurements of the
+corrected matching circuit. No complete board or RF signoff is claimed.
 
 Before spending time on ordinary detailed routing, run the same initial
 placement/global/critical stages in isolation (after the README setup):
@@ -161,12 +170,14 @@ ordinary-routing draft remains a separate historical artifact.
 
 The [pass-5 review](routing-review-pass5.md) adds joint paired package escape
 and heading-aware channel search with bounded 1/0.5/0.25 mm refinement. Both
-USB pairs now connect with zero vias and unchanged placement. Independent
+USB pairs connected with zero vias and unchanged placement in that run. Independent
 KiCad finds no critical-net opens, shorts, clearance or dangling-track findings;
 ordinary nets remain unrouted in this early artifact. The report includes
 search counts, expanded states, candidate attempts and measured coupled/
 uncoupled lengths. This is geometric progress, not qualified USB/RF performance
-or a completed full-board rerun. RF reference-layout clusters are next.
+or a completed full-board rerun. Subsequent RF topology corrections require a
+new rerun: at the old placement the modem pair is pending again, as recorded
+in the RF audit. RF reference-layout clusters are next.
 
 ## Acceptance stages
 
