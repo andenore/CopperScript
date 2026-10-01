@@ -152,17 +152,18 @@ than inferred solely from courtyard legality.
 
 ## Remaining full-vertical work
 
-Verification: 369 CopperScript tests pass, retaining the installed-KiCad 10.0.6
+Verification: 386 CopperScript tests pass, retaining the installed-KiCad 10.0.6
 differential keepout checks and adding scene identity/integration, exact board-edge
 equivalence, and matching-only real-footprint routing probes at 0 and 45 degrees.
 Those two probes connect the raw matching tree with no vias and less than 5 mm
 of copper, without critical opens or hard native findings. They are not complete
 operational MCU circuits. The suite retains 459 upstream CAM-library warnings.
 
-The fresh full-vertical placement/critical-stage run is recorded in
-[pass 7](routing-review-pass7.md). Its raw matching tree is still 17.19 mm because
-a legal coarse global guide can take a detour even inside a tight macro. The
-modem USB pair fails bounded search. Template placement does not imply local
+The source-backed placement run is recorded in [pass 7](routing-review-pass7.md).
+Its 17.19 mm raw matching-tree detour motivates the bounded local alternative
+implemented in [pass 8](routing-review-pass8.md): 2.31 mm with unchanged poses,
+complete terminal coverage and independent KiCad checking. The modem USB pair
+still fails bounded search. Template placement alone does not imply local
 route quality, and this is not a complete ordinary-net reroute or production
 signoff. No vendor ground copper was transplanted.
 

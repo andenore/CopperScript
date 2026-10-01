@@ -840,6 +840,10 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 
 | CS-118 | Accepted | Exact board-edge checks may recognize a four-vertex axis-aligned rectangle and test segment capsules/via disks against its convex erosion using doubled integer distances. Odd-nanometre diameters and boundary tangency retain the original predicate. Only immutable rectangle classification is cached; nonrectangular, concave and invalid vertex orders retain the original exact polygon/edge checks. This changes computation cost, not outline, clearance, search budget or copper acceptance. |
 
+| CS-119 | Accepted | Before accepting a surface-only single-ended critical guide, compare bounded via-free local alternatives on a layer common to every actual physical land and permitted by the routing/plane policy. For two to eight lands, straight/45-degree-first legal paths form a weighted terminal graph; a deterministic minimum spanning tree must include every land, including repeated pad numbers. Clock/RF feed point-to-point limits remain enforced. Original profile budgets and fresh complete-candidate native DRC gate acceptance; a connected incumbent changes only for strictly shorter copper, and failed proposals never displace it or earlier critical reservations. Differential/CAN pairs, global transition ownership and general-net maze routing retain their existing owners. This is not a Steiner solver, source-reference copper transplant or RF qualification. |
+
+| CS-120 | Accepted | Critical routing may emit observational started/finished group notifications. Preflight checkpoints record the running group, completed results and elapsed wall time separately from routing geometry/fingerprints, retaining incomplete status on interruption. Progress/timing telemetry cannot certify connectivity, relax budgets, or promote partial routing to production readiness. |
+
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same
 change.

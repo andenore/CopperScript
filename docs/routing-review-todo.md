@@ -27,6 +27,10 @@ Completion means tested implementation, not automatic manufacturing signoff.
   length; test split-edge and routing-pitch invariance.
 - [ ] R5: Bounded improvement of feasible routes: compare wider/projected
   guides for expensive incumbents, without sacrificing connectivity or DRC.
+  - [x] Compare bounded local surface-tree alternatives for small single-ended
+    critical nets against coarse guides; include all physical lands and preserve
+    incumbent copper on failed native/profile validation. General-net guide
+    widening and larger-tree optimization remain open.
 - [ ] R6a: Add clearance-aware local demand and failure pressure so spare
   signal layers can relieve congested channels; keep GND plane reserved and
   retain explicit layer/reference restrictions.
@@ -80,11 +84,14 @@ Completion means tested implementation, not automatic manufacturing signoff.
     - [ ] Optimize receiver/connector RF clusters and noise-source separation;
       validate the new placement and reroute critical groups transactionally.
       See [RF audit](rf-layout-audit.md). R8c remains open.
-    - [ ] Compare legal local matching-tree paths against accepted coarse guides:
+    - [x] Compare legal local matching-tree paths against accepted coarse guides:
       pass 7 preserves the macro but still emits a 17.19 mm raw matching tree.
       Protect terminals/branches, bound the search and retain atomic native/profile
       acceptance; do not confuse close placement with short committed copper.
       This is the critical-cluster application of R5, not a second cleanup mechanism.
+      [Pass 8](routing-review-pass8.md) reduces the raw tree to 2.31 mm without
+      placement changes or hard independent copper findings. RF qualification
+      and the wider R5 scope remain open.
     - [ ] Reevaluate paired package access/placement for the pass-7 modem USB
       failure (24 searches, 720,000 states, zero candidates), without increasing
       budgets blindly, routing members independently or discarding reservations.
@@ -102,8 +109,10 @@ Completion means tested implementation, not automatic manufacturing signoff.
     via disks, caching only immutable outline classification. Nonrectangular
     outlines retain the original exact predicate. Randomized/tangency regressions
     preserve clearance; the measured microbenchmark is not full-router timing.
-  - [ ] Add per-critical-group progress/timing checkpoints. Pass 7 has whole-phase
-    checkpoints but its 24 modem-pair searches leave a long opaque critical stage.
+  - [x] Add per-critical-group started/finished progress/timing checkpoints;
+    interrupted preflights retain the running group without claiming completion.
+    Notifications do not participate in route geometry or fingerprints.
+    Full ordinary-routing phase telemetry and within-pair search progress remain open.
 - [x] R10 (rerun finding, correctness priority): Replace endpoint-only native
   connectivity with layer-aware copper-contact connectivity. Detect interior
   T/cross junctions, track/via overlap, and pad-shape contacts; retain physical

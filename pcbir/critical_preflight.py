@@ -8,6 +8,7 @@ routing so a later interrupted critical search retains useful evidence.
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -76,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
             board = apply_placement_templates(board, args.placement_templates)
         report.update(source=str(args.board.resolve()),
                       source_sha256=sha256(args.board.read_bytes()).hexdigest())
+        if args.placement_templates:
+            report["placement_template_scene_sha256"] = board.metadata["placement_template_scene_sha256"]
         timings["load_and_resolve"] = perf_counter() - started
         checkpoint("resolved")
         started = perf_counter()
@@ -95,7 +98,22 @@ def main(argv: list[str] | None = None) -> int:
                       global_route=json.loads(placement.global_route.to_json()))
         checkpoint("global_complete")
         started = perf_counter()
-        critical = route_critical_nets(placement.board, placement.global_route)
+        progress = []
+        group_started = {}
+
+        def critical_progress(event, nets, result):
+            key = ",".join(nets)
+            if event == "started":
+                group_started[key] = perf_counter()
+                progress.append({"nets": list(nets), "state": "running"})
+            else:
+                progress[-1].update(state="finished", seconds=perf_counter() - group_started[key],
+                                    result=asdict(result))
+            report["critical_progress"] = progress
+            checkpoint("critical_group_running" if event == "started" else "critical_group_complete")
+            print(f"  {key}: {event}", flush=True)
+
+        critical = route_critical_nets(placement.board, placement.global_route, on_progress=critical_progress)
         timings["critical"] = perf_counter() - started
         report.update(complete=True, critical=json.loads(critical.to_json()),
                       native_drc=json.loads(run_physical_drc(critical.board).to_json()))

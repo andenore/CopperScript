@@ -13,6 +13,7 @@ from hashlib import sha256
 import json
 from math import hypot
 from types import MappingProxyType
+from typing import Callable
 
 from .physical import (
     CopperLayer,
@@ -29,6 +30,7 @@ from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
 from .drc import DrcSeverity, run_physical_drc
 from .pair_search import PairSearchStats, paired_candidates
+from .local_critical import local_surface_candidates
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -58,6 +60,8 @@ class CriticalNetResult:
     search_states: int = 0
     candidate_attempts: int = 0
     pair_searches: int = 0
+    local_candidate_attempts: int = 0
+    guide_length_nm: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +101,8 @@ class CriticalRoutingResult:
                     "search_states": item.search_states,
                     "candidate_attempts": item.candidate_attempts,
                     "pair_searches": item.pair_searches,
+                    "local_candidate_attempts": item.local_candidate_attempts,
+                    "guide_length_nm": item.guide_length_nm,
                 }
                 for item in self.nets
             ],
@@ -107,6 +113,7 @@ class CriticalRoutingResult:
 def route_critical_nets(
     board: PhysicalBoard,
     global_route: GlobalRoutingResult,
+    *, on_progress: Callable[[str, tuple[str, ...], CriticalNetResult | None], None] | None = None,
 ) -> CriticalRoutingResult:
     """Materialize exact locked copper for all non-general routing rules."""
 
@@ -125,6 +132,10 @@ def route_critical_nets(
     ):
         if rule.net in processed:
             continue
+        group = (tuple(sorted((rule.net, rule.differential_partner)))
+                 if rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS} else (rule.net,))
+        if on_progress:
+            on_progress("started", group, None)
         if rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
             partner_name = rule.differential_partner
             assert partner_name is not None
@@ -145,6 +156,8 @@ def route_critical_nets(
                 )
                 results.append(result)
                 processed.update((rule.net, partner_name))
+                if on_progress:
+                    on_progress("finished", group, result)
                 continue
             result, pair_tracks, pair_vias = _route_pair(
                 board, rule, partner_rule, routes
@@ -200,19 +213,26 @@ def route_critical_nets(
             result, net_tracks, net_vias = _validate_candidate(
                 board, result, net_tracks, net_vias, tracks, vias,
             )
+            result, net_tracks, net_vias = _improve_single_surface(
+                board, rule, routes.get(rule.net), result, net_tracks, net_vias, tracks, vias,
+            )
             # Single-ended critical nets can reuse the exact octilinear maze
             # engine. Pairs must NEVER be repaired as independent ordinary nets.
             if (not result.connected and routes.get(rule.net) is not None
                     and routes[rule.net].connected
                     and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
                          or len(routes[rule.net].accesses) == 2)):
-                result, net_tracks, net_vias = _route_single_exact(
+                repaired, net_tracks, net_vias = _route_single_exact(
                     board, rule, global_route, tracks, vias,
                 )
+                result = replace(repaired, local_candidate_attempts=result.local_candidate_attempts,
+                                 guide_length_nm=result.guide_length_nm)
             processed.add(rule.net)
             results.append(result)
             tracks.extend(net_tracks)
             vias.extend(net_vias)
+        if on_progress:
+            on_progress("finished", group, result)
 
     conflict_diagnostics = _intersection_diagnostics(tuple(tracks), coupled_pairs)
     if conflict_diagnostics:
@@ -375,6 +395,39 @@ def _route_single_exact(
     )
     return _validate_candidate(board, result, tracks, vias,
                                committed_tracks, committed_vias)
+
+
+def _improve_single_surface(
+    board: PhysicalBoard, rule: NetRoutingRule, guide: GlobalNetRoute | None,
+    incumbent: CriticalNetResult, incumbent_tracks: tuple[TrackSegment, ...],
+    incumbent_vias: tuple[Via, ...], committed_tracks: list[TrackSegment],
+    committed_vias: list[Via],
+) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
+    # Global transitions are handled by their existing owner. This initial
+    # improvement only compares surface-guide candidates, never paired nets.
+    if guide is None or not guide.connected or guide.vias or any(access.via for access in guide.accesses):
+        return incumbent, incumbent_tracks, incumbent_vias
+    guide_length = incumbent.lengths_nm[0] if incumbent.lengths_nm else None
+    search_board = replace(board, tracks=tuple(committed_tracks), vias=tuple(committed_vias))
+    best, best_tracks, best_vias = incumbent, incumbent_tracks, incumbent_vias
+    attempts = 0
+    for tracks in local_surface_candidates(search_board, rule):
+        attempts += 1
+        length = _track_length(tracks)
+        if best.connected and not best_vias and length >= best.lengths_nm[0]:
+            continue
+        candidate = CriticalNetResult(
+            (rule.net,), True, len(tracks), 0, (length,), 0,
+            diagnostics=_budget_diagnostics(rule, tracks, ()),
+            assumptions=_external_assumptions(rule), evidence_digests=_external_evidence(rule),
+            strategy="local_surface_tree",
+        )
+        candidate, tracks, vias = _validate_candidate(
+            board, candidate, tracks, (), committed_tracks, committed_vias,
+        )
+        if candidate.connected and (not best.connected or length < best.lengths_nm[0]):
+            best, best_tracks, best_vias = candidate, tracks, vias
+    return replace(best, local_candidate_attempts=attempts, guide_length_nm=guide_length), best_tracks, best_vias
 
 
 def _route_single(
@@ -1010,7 +1063,8 @@ def _fingerprint(
             (item.nets, item.connected, item.lengths_nm, item.skew_nm,
              item.diagnostics, item.assumptions, item.strategy,
              item.candidate_rejected, item.evidence_digests,
-             item.search_states, item.candidate_attempts, item.pair_searches)
+             item.search_states, item.candidate_attempts, item.pair_searches,
+             item.local_candidate_attempts, item.guide_length_nm)
             for item in results
         ],
     }

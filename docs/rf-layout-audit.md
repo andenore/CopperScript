@@ -138,6 +138,10 @@ find no hard copper violations in accepted geometry. The raw matching tree still
 takes a 17.19 mm coarse-guide detour, while the isolated 0/45-degree matching
 fixtures route below 5 mm. This exposes route-quality work independent of macro
 placement: compare local branch-safe paths before accepting expensive guides.
+That comparison is now implemented in [pass 8](routing-review-pass8.md): the
+raw tree is 2.31 mm with unchanged poses, complete terminal coverage and no
+independent hard copper findings. Antenna/reference-ground qualification and
+the modem pair failure remain open; this does not complete the RF circuit.
 
 Remaining Nordic reference support is not optional simply because ANT connects:
 DEC1 C4 100 nF, DEC3 C7 100 pF, DEC4 C10 1 uF, VDD13/VDD36 local 100 nF caps,
