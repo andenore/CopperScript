@@ -7,10 +7,36 @@ used. Filled-zone connectivity still requires independent fill verification.
 """
 from dataclasses import dataclass
 from collections import defaultdict
+from types import MappingProxyType
+from typing import Mapping
 
 from .geometry import (RoundedConvexShape, SpatialIndex, SpatialItem,
                        point_segment_distance_squared, shape_distance_squared)
-from .physical import CopperLayer
+from .physical import CopperLayer, PadReference, PhysicalNet
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalCopperConnectivity:
+    """Read-only physical-land roots; a repeated number is never a wire."""
+
+    roots: Mapping[str, str]
+    pad_nodes: Mapping[PadReference, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "roots", MappingProxyType(dict(self.roots)))
+        object.__setattr__(self, "pad_nodes", MappingProxyType(dict(self.pad_nodes)))
+
+    def pad_connected(self, pad: PadReference) -> bool:
+        nodes = self.pad_nodes.get(pad, ())
+        return bool(nodes) and len({self.roots[node] for node in nodes}) == 1
+
+    def net_connected(self, net: PhysicalNet) -> bool:
+        if not net.pads:
+            return True
+        if any(not self.pad_nodes.get(pad) for pad in net.pads):
+            return False
+        return len({self.roots[node] for pad in net.pads
+                    for node in self.pad_nodes[pad]}) == 1
 
 
 @dataclass(frozen=True, slots=True)

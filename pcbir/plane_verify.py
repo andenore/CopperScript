@@ -43,6 +43,21 @@ class PlaneVerification:
         ).hexdigest()
         return self.export_digest == current_export
 
+    def zone_connectivity_verified(self, board: PhysicalBoard) -> bool:
+        """Separate connected fill from overall signoff, bound to exact export.
+
+        Library-copy/lookup findings remain signoff failures, but do not erase
+        the independent zero-open observation. Any other violation, island,
+        malformed count, or stale source/export prevents reconciliation.
+        """
+        library_types = {"lib_footprint_issues", "lib_footprint_mismatch"}
+        return (
+            self.unconnected_count == self.island_count == 0
+            and self.other_violation_count == len(self.findings)
+            and all(item.split(":", 1)[0] in library_types for item in self.findings)
+            and self.matches(board)
+        )
+
     def to_json(self) -> str:
         return json.dumps({
             "schema": "copperscript-plane-verification/v0.1",

@@ -59,11 +59,15 @@ Completion means tested implementation, not automatic manufacturing signoff.
   Pass 2 implements automatic whole-package same-zone-net reservations;
   independent KiCad refill confirms zero unconnected items in pass 2, without
   moving components or relaxing fabrication limits.
-- [ ] R12 (pass-2 review): Evaluate duplicate-land closure consistently before
+- [x] R12 (pass-2 review): Evaluate duplicate-land closure consistently before
   feedback scoring and final reporting. USER_BUTTON is checked before final
   SW_USER land stitching; the finished board is connected. Reconcile pending
   shield-land helpers with digest-bound filled-zone evidence without inventing
   virtual contacts or suppressing footprint/manufacturing findings.
+  Implemented in pass 3: shared exact land roots, pre-scoring closure, measured
+  additions/status, and explicit surface-pending versus verified-zone reporting.
+  Fresh saved-board KiCad evidence resolves both shield references without
+  changing its copper; 313 tests pass. The matched rerun is recorded below.
 
 ## Matched rerun and repeated review
 
@@ -144,3 +148,26 @@ matched rerun: zero KiCad unconnected items, zero dangling/short/clearance
 findings, eight unchanged footprint-library findings. The accepted joint-package
 trial retains every component position and rotation. R5–R9 and R12 remain open;
 native zone deferral and library findings still prevent production-ready status.
+
+## Third implementation pass
+
+R12 closes duplicate physical lands before full and subset candidate scoring,
+using the native exact-contact graph. Existing multilayer/pad-edge paths are
+reused; bounded new bridges respect layer and width rules. Single-logical-pad
+nets with separated physical lands now correctly fail native connectivity.
+Search failure flags and zone deferrals remain failures; closure updates
+connectivity, actual added ordinary copper, routing metadata and fingerprints.
+
+Reports retain raw `surface_pending_pads` and identify `zone_verified_pads`
+separately. Only fresh board/export-bound KiCad evidence with zero opens/islands
+and no non-library violations resolves pending zone-net references. Eight
+library findings remain failures, and no native finding or signoff token is
+waived. Final-stage and selected-pipeline bridge counts are separate.
+
+All 313 tests pass (16 additions since pass 2, 459 upstream warnings), including
+installed-KiCad verification of a single-logical-pin duplicate-land open and its
+closure. A read-only replay of the saved pass-2 board adds zero tracks, recognizes
+four already-connected references, and resolves J_POWER.SH/J_SIM.SH through a
+fresh independent refill while retaining all eight library findings. A matched
+full-board rerun is in progress; its final results will be recorded separately.
+R8 is the next implementation priority; R5–R9 remain open.

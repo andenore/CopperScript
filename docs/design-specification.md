@@ -615,7 +615,12 @@ remain marked as non-fabrication-ready.
 Repeated physical lands with one pad number are one logical electrical pin,
 but they remain distinct copper objects for layout and independent KiCad DRC.
 The PCB flow SHOULD bridge them with exact-clearance copper where legal and
-MUST report any unbridgeable lands as pending. It MUST NOT interpret a shared
+MUST report any unbridgeable lands as pending. Existing exact copper paths on
+any common physical layers MUST be reused rather than demanding a redundant
+surface bridge. Land closure MUST precede full/subset candidate scoring and
+its actual added copper MUST be measured. Native checking MUST include multiple
+physical lands even when a net contains just one logical pad reference.
+It MUST NOT interpret a shared
 pad number alone as proof that all lands are externally connected. A future
 explicit, qualified internal-tie declaration may avoid unnecessary copper,
 but no such waiver is implied by the current footprint importer.
@@ -802,6 +807,8 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-110 | Accepted | Native explicit-copper connectivity is a layer-aware contact graph of rounded track shapes, placed pad shapes and vias over their actual spans. Interior T/cross contacts, pad-edge contacts and annular overlap count; a nonzero copper gap, foreign net or absent common layer does not. Open drills are not solid disks, while explicitly filled/capped vias have surface caps. Repeated pad numbers do not invent a connection between separate lands. Zone outlines and unverified fills never substitute for independent filled-zone connectivity evidence. Optional installed-KiCad differential regression tests exercise these predicates. |
 | CS-111 | Accepted | A late zone-escape feedback trial reserves the failing package's entire same-zone-net pin group, including already escaped neighbour pins, before fanout and ordinary routing. Reservations do not extend automatically to unrelated packages or rails. Accepted sequential trials retain those package reservations, compare fresh explicit-copper connectivity, and require independent filled-zone verification. No hard-coded reference or pin number determines this grouping. |
 | CS-112 | Accepted | Nonuniform-grid line-of-sight follows physical coordinates. Exact polygon containment detects even narrow concave-outline crossings; physical track-blocking keepouts and on-ray blocked nodes remain obstacles, while off-ray index-space nodes and via-only keepouts cannot remove a track ray. The actual width/clearance query remains mandatory. Cached ray results contain only static outline/keepout/node legality, bound to immutable geometry and axes, not mutable copper clearance. Physical-span via legality is cached only within a single immutable single-net search and never reused after a clearance-index mutation. Neither cache bypasses a check. |
+
+| CS-113 | Accepted | Duplicate-land closure runs before full and subset routing feedback evaluates connectivity. Stitching uses the same exact copper-contact graph as native DRC, reuses existing pad-edge/interior/track/via/multilayer paths, and only joins disconnected physical land groups with bounded, clearance-checked paths on allowed layers. Failed search flags, deferred zone nets and resource overflow are not promoted to success; added ordinary copper and fresh native opens update candidate metrics/status. Native checking includes separated lands on a single-logical-pad net. Final helper reports distinguish surface-pending work from independently verified zone contacts. Only fresh board/export-bound KiCad evidence with zero unconnected items/islands and no non-library violations may resolve pending zone-net references. Library issues remain visible signoff failures; native findings, signoff tokens and fabrication readiness are never waived by this reconciliation. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

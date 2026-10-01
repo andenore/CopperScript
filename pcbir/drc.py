@@ -34,7 +34,8 @@ from .geometry import (
     shapes_clear,
 )
 from .placement import placement_solution_is_legal
-from .copper_connectivity import CopperContact, copper_contact_roots
+from .copper_connectivity import (CopperContact, PhysicalCopperConnectivity,
+                                  copper_contact_roots)
 
 
 class DrcSeverity(str, Enum):
@@ -356,14 +357,21 @@ def physical_board_digest(board: PhysicalBoard) -> str:
     )
 
 
-def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+def explicit_copper_connectivity(
+    board: PhysicalBoard, *, only_nets: frozenset[str] | None = None,
+) -> PhysicalCopperConnectivity:
+    """Build the shared exact graph used by native DRC and land closure.
+
+    Zone outlines/fill claims do not join this explicit-copper graph. A net
+    filter saves work for local stitching without changing contact semantics.
+    """
     objects: list[CopperContact] = []
-    pads_by_net: dict[str, list[str]] = {}
-    conductive_references: set[PadReference] = set()
+    pad_nodes: dict[PadReference, list[str]] = {}
     # Include every physical land, even when a logical pin has repeated numbers.
     for placement in sorted(board.placements, key=lambda item: item.reference):
         footprint = board.footprints[placement.footprint]
-        assigned = {pad.pad: net.name for net in board.nets for pad in net.pads
+        assigned = {pad.pad: net.name for net in board.nets
+                    if only_nets is None or net.name in only_nets for pad in net.pads
                     if pad.component == placement.reference}
         for index, pad in enumerate(footprint.pads):
             net = assigned.get(pad.number)
@@ -380,12 +388,14 @@ def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> Non
                 drill = placed_pad_shape(position, drill_pad, placement)
             objects.append(CopperContact(identity, net, tuple(layers),
                                          placed_pad_shape(position, pad, placement), drill))
-            pads_by_net.setdefault(net, []).append(identity)
-            conductive_references.add(PadReference(placement.reference, pad.number))
+            pad_nodes.setdefault(PadReference(placement.reference, pad.number), []).append(identity)
     objects.extend(CopperContact(f"track:{index}", track.net, (track.layer,),
                                 RoundedConvexShape((track.start, track.end), track.width_nm // 2))
-                   for index, track in enumerate(board.tracks))
+                   for index, track in enumerate(board.tracks)
+                   if only_nets is None or track.net in only_nets)
     for index, via in enumerate(board.vias):
+        if only_nets is not None and via.net not in only_nets:
+            continue
         layers = tuple(layer for layer in board.stackup.copper_layers
                        if _via_covers_layer(board, via, layer))
         capped = ((board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
@@ -393,12 +403,14 @@ def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> Non
         objects.append(CopperContact(f"via:{index}", via.net, layers,
                                     RoundedConvexShape((via.position,), via.size_nm // 2),
                                     RoundedConvexShape((via.position,), via.drill_nm // 2), capped))
-    roots = copper_contact_roots(tuple(objects))
+    return PhysicalCopperConnectivity(copper_contact_roots(tuple(objects)),
+                                      {pad: tuple(nodes) for pad, nodes in pad_nodes.items()})
+
+
+def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+    graph = explicit_copper_connectivity(board)
     for net in sorted(board.nets, key=lambda item: item.name):
-        if len(net.pads) < 2:
-            continue
-        if (not set(net.pads).issubset(conductive_references)
-                or len({roots[identity] for identity in pads_by_net.get(net.name, ())}) > 1):
+        if not graph.net_connected(net):
             findings.append(
                 _finding(
                     "DRC-OPEN-NET",

@@ -500,6 +500,21 @@ verification. A late package-escape feedback trial reserves the entire failing
 package's same-zone-net pin group before ordinary routing, including neighbour
 pins that already escaped; other packages and rails remain unaffected.
 
+Full and subset routing candidates close duplicate lands before connectivity
+scoring. The stitcher reuses existing exact copper paths across physical layers
+and adds bounded surface bridges only between disconnected land groups. A net
+with one logical pin can still have disconnected physical lands and fail DRC.
+Failed searches and zone deferrals are not converted into routed signals.
+
+The route report separates `surface_pending_pads` from effective `pending_pads`
+and `zone_verified_pads`. A pending zone-pad reference can be resolved only by
+fresh board/export-bound KiCad fill evidence with zero opens/islands and no
+non-library violations. `zone_connectivity_verified` can be true while overall
+`zone_fill_verified` and signoff remain false because of library findings.
+Native open/route-completeness findings and fabrication gates remain unchanged.
+Duplicate-land `added_track_count` counts final-stage additions;
+`pipeline_added_track_count` records additions in the selected pipeline closure.
+
 45-degree search/shortcut rays follow physical coordinates, not distorted
 index-space diagonals. Narrow concave outline crossings and actual track
 keepouts block them; off-ray blocked coordinates and via-only keepouts do not.

@@ -9,6 +9,7 @@ import pytest
 
 from pcbir.fanout import FanoutOptions, route_fanout
 from pcbir.plane_verify import verify_filled_planes
+from pcbir.route_closure import reconcile_zone_lands
 from pcbir.detailed import DetailedRouterOptions, route_detailed
 from pcbir.manufacturing import CommandResult
 from pcbir.routing import GlobalRouterOptions, route_global
@@ -204,6 +205,45 @@ def test_plane_verification_fails_closed_on_tool_and_schema_errors() -> None:
     with pytest.raises(RuntimeError, match="lacks violations"):
         verify_filled_planes(board, kicad_cli=Path("kicad-cli"),
                              runner=_fake_runner({"violations": []}))
+
+
+def test_library_findings_do_not_hide_verified_connectivity_or_pass_signoff() -> None:
+    board = _dense_board()
+    evidence = verify_filled_planes(board, kicad_cli=Path("kicad-cli"), runner=_fake_runner({
+        "violations": [{"type": "lib_footprint_mismatch", "description": "library copy"}],
+        "unconnected_items": [],
+    }))
+    assert not evidence.passed
+    assert evidence.zone_connectivity_verified(board)
+    assert not evidence.zone_connectivity_verified(replace(board, name="Stale"))
+    assert not replace(evidence, other_violation_count=0).zone_connectivity_verified(board)
+
+
+@pytest.mark.parametrize("kind", ["clearance", "shorting_items", "isolated_copper", "unknown"])
+def test_other_violations_prevent_zone_land_reconciliation(kind: str) -> None:
+    board = _dense_board()
+    evidence = verify_filled_planes(board, kicad_cli=Path("kicad-cli"), runner=_fake_runner({
+        "violations": [{"type": kind, "description": "unresolved"}],
+        "unconnected_items": [],
+    }))
+    assert not evidence.zone_connectivity_verified(board)
+
+
+def test_reconciliation_only_resolves_zone_lands_with_fresh_matching_evidence() -> None:
+    board = _dense_board()
+    board = replace(board, zones=(CopperZone(
+        "signal-plane", "SIGNAL", (CopperLayer.FRONT,),
+        PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in (
+            (1, 1), (19, 1), (19, 19), (1, 19))))),
+    ),))
+    pending = (PadReference("U1", "1"), PadReference("unknown", "1"))
+    evidence = verify_filled_planes(board, kicad_cli=Path("kicad-cli"), runner=_fake_runner({
+        "violations": [], "unconnected_items": [],
+    }))
+    assert reconcile_zone_lands(board, pending, evidence) == (pending[1:], pending[:1])
+    assert reconcile_zone_lands(board, pending, None) == (pending, ())
+    assert reconcile_zone_lands(replace(board, name="Changed"), pending, evidence) == (pending, ())
+    assert reconcile_zone_lands(board, pending, replace(evidence, unconnected_count=1)) == (pending, ())
 
 
 def test_installed_kicad_can_verify_a_filled_connected_plane() -> None:

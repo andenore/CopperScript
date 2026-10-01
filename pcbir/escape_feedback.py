@@ -14,16 +14,17 @@ from hashlib import sha256
 from math import hypot
 
 from .critical import CriticalRoutingStatus
-from .detailed import DetailedRouterOptions, DetailedRoutingResult, route_detailed
-from .drc import PhysicalDrcPolicy, run_physical_drc
+from .detailed import DetailedRouterOptions, DetailedRoutingResult, DetailedRoutingStatus, route_detailed
+from .drc import DrcDecision, PhysicalDrcPolicy, run_physical_drc
 from .fanout import FanoutOptions
-from .flow import RoutingPipelineResult, run_routing_pipeline
+from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
 from .physical import PadReference, PhysicalBoard, Placement, Point, nm_from_mm
 from .placement import PlacementPlannerOptions, placement_solution_is_legal
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .routeflow import PlacementRoutingFeedbackOptions
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routing_clearance import RoutingClearanceIndex
+from .route_closure import close_detailed_lands
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,8 +359,10 @@ def _repair_with_local_ripup(
                     only_nets=displaced,
                 ) if displaced else None
             )
-            if reroute is not None and any(not item.connected for item in reroute.nets):
-                continue
+            if reroute is not None:
+                reroute, _, _ = close_detailed_lands(reroute)
+                if any(not item.connected for item in reroute.nets):
+                    continue
             routed_board = reroute.board if reroute is not None else trial_board
             # Subset routing is a transaction: copper belonging to every
             # unaffected net must survive exactly, not merely retain an old flag.
@@ -445,9 +448,16 @@ def _merge_local_detail(
         original.detailed, board=board, nets=nets, metrics=metrics,
         routing_fingerprint=fingerprint,
     )
+    detailed, drc, duplicate_stitch = close_detailed_lands(detailed)
+    passed = (original.placement_and_global.full_route_certified
+              and original.critical.status is not CriticalRoutingStatus.FAILED
+              and detailed.status is DetailedRoutingStatus.SUCCESS
+              and drc.decision is DrcDecision.PASS)
     return replace(
         original, detailed=detailed,
         drc=drc,
+        status=PhysicalFlowStatus.PASS if passed else PhysicalFlowStatus.FAIL,
+        duplicate_pad_stitch=duplicate_stitch,
     )
 
 

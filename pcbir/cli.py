@@ -31,6 +31,7 @@ from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
 from .pad_stitch import stitch_duplicate_pads
 from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
+from .route_closure import reconcile_zone_lands
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routeflow import (
     PlacementRoutingFeedbackOptions,
@@ -618,12 +619,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             except RuntimeError as exc:
                 print(f"PLANE VERIFICATION ERROR: {exc}")
                 return 2
+            duplicate_pending, duplicate_verified = reconcile_zone_lands(
+                output_board, duplicate_stitch.pending, plane_verification)
+            plane_pending, plane_verified = reconcile_zone_lands(
+                output_board, stitch.pending_pads if stitch is not None else (),
+                plane_verification)
             closure_status = (
                 PhysicalFlowStatus.PASS
                 if result.status is PhysicalFlowStatus.PASS
                 and output_drc.decision is DrcDecision.PASS
-                and not duplicate_stitch.pending
-                and (stitch is None or stitch.complete)
+                and not duplicate_pending
+                and not plane_pending
                 else PhysicalFlowStatus.FAIL
             )
             report_path = args.report or Path(f"{board.name}.route-report.json")
@@ -713,7 +719,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"{item.component}.{item.pad}" for item in stitch.stitched_pads
                     ],
                     "pending_pads": [
+                        f"{item.component}.{item.pad}" for item in plane_pending
+                    ],
+                    "surface_pending_pads": [
                         f"{item.component}.{item.pad}" for item in stitch.pending_pads
+                    ],
+                    "zone_verified_pads": [
+                        f"{item.component}.{item.pad}" for item in plane_verified
                     ],
                     "added_track_count": stitch.added_track_count,
                     "added_via_count": stitch.added_via_count,
@@ -749,14 +761,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"{item.component}.{item.pad}" for item in duplicate_stitch.stitched
                 ],
                 "pending_pads": [
+                    f"{item.component}.{item.pad}" for item in duplicate_pending
+                ],
+                "surface_pending_pads": [
                     f"{item.component}.{item.pad}" for item in duplicate_stitch.pending
                 ],
+                "zone_verified_pads": [
+                    f"{item.component}.{item.pad}" for item in duplicate_verified
+                ],
+                "already_connected_pads": [
+                    f"{item.component}.{item.pad}" for item in duplicate_stitch.already_connected
+                ],
                 "added_track_count": duplicate_stitch.added_track_count,
+                "pipeline_added_track_count": (
+                    result.duplicate_pad_stitch.added_track_count
+                    if result.duplicate_pad_stitch is not None else 0),
             }
             if plane_verification is not None:
                 report["plane_verification"] = json.loads(plane_verification.to_json())
                 if stitch is not None:
                     report["plane_stitch"]["zone_fill_verified"] = plane_verification.passed
+                    report["plane_stitch"]["zone_connectivity_verified"] = (
+                        plane_verification.zone_connectivity_verified(output_board))
             try:
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if args.output:

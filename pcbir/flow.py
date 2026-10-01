@@ -7,9 +7,11 @@ from enum import Enum
 
 from .critical import CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets
 from .detailed import DetailedRouterOptions, DetailedRoutingResult, DetailedRoutingStatus, route_detailed
-from .drc import DrcDecision, PhysicalDrcPolicy, PhysicalDrcReport, run_physical_drc
+from .drc import DrcDecision, PhysicalDrcPolicy, PhysicalDrcReport
 from .fanout import FanoutOptions, FanoutResult, route_fanout
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
+from .pad_stitch import DuplicatePadStitchResult
+from .route_closure import close_detailed_lands
 from .physical import PhysicalBoard, nm_from_mm
 from .placement import PlacementPlannerOptions
 from .routeflow import (PlacementRoutingFeedbackOptions, PlacementRoutingResult,
@@ -32,6 +34,7 @@ class RoutingPipelineResult:
     fanout: FanoutResult | None = None
     plane_stitch: PlaneStitchResult | None = None
     detailed_feedback_trials: int = 0
+    duplicate_pad_stitch: DuplicatePadStitchResult | None = None
 
     @property
     def board(self) -> PhysicalBoard:
@@ -55,6 +58,7 @@ def run_routing_pipeline(
 
     placement_options = placement_options or PlacementPlannerOptions()
     global_options = global_options or GlobalRouterOptions()
+    detailed_options = detailed_options or DetailedRouterOptions()
     feedback_options = feedback_options or PlacementRoutingFeedbackOptions(
         initial_movement_nm=global_options.tile_size_nm
     )
@@ -76,7 +80,7 @@ def run_routing_pipeline(
         fanout_created_vias=frozenset((item.net, item.position)
                                     for item in fanout.created_vias) if fanout else None,
     )
-    drc = run_physical_drc(detailed.board, policy=drc_policy)
+    detailed, drc, duplicate_stitch = close_detailed_lands(detailed, drc_policy)
     trials_run = 0
     # A deferred zone net is awaiting external fill evidence, not a detailed
     # maze-route failure. Moving components to "repair" it cannot improve the
@@ -120,7 +124,8 @@ def run_routing_pipeline(
                                             for item in trial_fanout.created_vias)
                 if trial_fanout else None,
             )
-            trial_drc = run_physical_drc(trial_detailed.board, policy=drc_policy)
+            trial_detailed, trial_drc, trial_duplicate = close_detailed_lands(
+                trial_detailed, drc_policy)
             score = _detailed_score(trial_detailed, trial_drc)
             if score < accepted_score:
                 accepted_score = score
@@ -131,6 +136,7 @@ def run_routing_pipeline(
                     trial_critical, trial_plane_stitch, trial_fanout,
                     trial_detailed, trial_drc,
                 )
+                duplicate_stitch = trial_duplicate
     passed = (
         placement.full_route_certified
         and critical.status is not CriticalRoutingStatus.FAILED
@@ -146,6 +152,7 @@ def run_routing_pipeline(
         fanout=fanout,
         plane_stitch=plane_stitch,
         detailed_feedback_trials=trials_run,
+        duplicate_pad_stitch=duplicate_stitch,
     )
 
 
