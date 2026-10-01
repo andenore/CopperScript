@@ -10,6 +10,28 @@ Completion means tested implementation, not automatic manufacturing signoff.
 
 ## Correctness first
 
+- [x] R13: Correct the Coilcraft USB choke internal winding mapping from a visual
+  official-source audit (1-2 and 4-3, dotted inputs 1/4). Add CopperLib winding
+  regressions and CopperScript physical-net tests, refresh the dependency lock,
+  and explicitly invalidate historical USB electrical acceptance. Copper DRC
+  cannot detect a part model's incorrect internal conduction. See
+  [pass 11](routing-review-pass11.md).
+- [ ] R13b: Rerun critical and then ordinary routing using that corrected library;
+  obtain fresh independent KiCad evidence. Old USB placements/copper are not a
+  valid baseline for electrical acceptance or route-quality optimization.
+  - [x] Fresh critical preflight: all eight critical nets connected, no placement
+    repair trial, zero vias; independent KiCad confirms zero critical opens and
+    no hard copper/dangling findings. Eight library findings remain.
+  - [ ] Full ordinary rerun and independent filled-zone/layer review.
+- [ ] R14 (pass-11 shape finding): Replace oblique exact single-ended RF
+  package/grid access links with clearance-checked straight/45-degree access.
+  Preserve original terminal contact, widths, layers, earlier reservations and
+  full native/profile acceptance; never silently snap endpoints off pads.
+- [ ] R15 (pass-11 shape finding): Remove small paired taper/spine collinear
+  reversals in the joint construction/refinement owner, rechecking both lanes
+  atomically. The corrected modem DP route backtracks about 0.034 mm; independent
+  pruning of one member or assuming fewer segments means fewer bends is unsafe.
+
 - [x] R1: Scope fanout cleanup to attempted nets; preserve unrelated copper,
   empty subsets, failed-subset rollback, and pre-existing/shared vias.
 - [x] R2: Check complete candidate connectivity during local/placement repair,

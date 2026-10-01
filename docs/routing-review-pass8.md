@@ -1,5 +1,9 @@
 # Pass 8: shorten critical matching-tree guides
 
+Electrical evidence superseded: the USB choke mapping used here was incorrect.
+The RF geometry comparison is historical, not full-board electrical approval.
+See [pass 11](routing-review-pass11.md).
+
 The bounded local single-ended improvement is integrated before critical copper
 is locked. See [algorithm/acceptance contract](local-critical-routing.md). Every
 physical terminal remains represented. Failed/equal-length proposals preserve

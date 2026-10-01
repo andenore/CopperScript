@@ -159,7 +159,11 @@ to `route-board` or the critical preflight. This bounded
 whole-unit rotations/moves and rebuilds all critical copper; it does not relax
 profile limits or imply fabrication readiness. Each trial can take minutes.
 The [pass-9 verification](docs/routing-review-pass9.md) connects both USB pairs
-with the RF scene intact; ordinary routing and electrical qualification remain open.
+geometrically, but used an incorrect choke winding mapping. **Do not fabricate
+those historical USB routes.** [Pass 11](docs/routing-review-pass11.md) corrects
+the CopperLib mapping from Coilcraft's schematic and reruns from fresh placement.
+Copper DRC cannot validate internal component connections. Ordinary routing and
+electrical qualification remain open.
 The [paired refinement pass](docs/routing-review-pass10.md) removes redundant
 search-step segments while preserving connectivity. It does not yet shorten
 the real-board USB detours.
@@ -172,8 +176,8 @@ and Python 3.12. Start in the directory where you want both repositories:
 # Use consistent package line endings in these new checkouts.
 git clone -c core.autocrlf=false -c core.eol=lf https://github.com/andenore/CopperScript.git
 git clone -c core.autocrlf=false -c core.eol=lf https://github.com/andenore/CopperLib.git
-# Pin the library used by the recorded run.
-git -C CopperLib checkout --detach 139d8106033a1e7c0cb0910c564e2c4f0259ce83
+# Pin the corrected library (historical runs used an incorrect USB choke map).
+git -C CopperLib checkout --detach 5bcbaa40504515e758f1bc9dba18c00f89b26939
 Set-Location CopperScript
 
 uv sync --python 3.12

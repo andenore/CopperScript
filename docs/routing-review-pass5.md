@@ -1,5 +1,9 @@
 # Pass 5: joint paired package escape and channel search
 
+Electrical evidence superseded: this run used an incorrect USB choke winding
+mapping. Its geometry measurements remain historical; USB wiring acceptance
+does not. See [the source correction and fresh run](routing-review-pass11.md).
+
 This is the R8b critical-stage rerun, not a complete board route. It retains
 pass 4's source profiles, all 51 placements/rotations, footprints and six-layer
 fabrication rules. The historical completed ordinary-routing board remains

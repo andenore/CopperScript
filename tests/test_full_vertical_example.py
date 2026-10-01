@@ -166,7 +166,20 @@ def test_usb_choke_uses_coilcraft_winding_pairs_and_land_pattern() -> None:
     )
     assert {
         name: pin.number for name, pin in part.pins.items()
-    } == {"DP_IN": "1", "DM_IN": "2", "DM_OUT": "3", "DP_OUT": "4"}
+    } == {"DP_IN": "1", "DM_IN": "4", "DM_OUT": "3", "DP_OUT": "2"}
+    # Each lane passes through one winding; the MCU pair shares the dotted side.
+    windings = {frozenset({"1", "2"}), frozenset({"4", "3"})}
+    assert {frozenset({part.pins[f"{lane}_IN"].number,
+                      part.pins[f"{lane}_OUT"].number}) for lane in ("DP", "DM")} == windings
+    physical = prototype_physicalize(board, PrototypePhysicalOptions(copper_layers=6))
+    choke_pads = {
+        net.name: {pad.pad for pad in net.pads if pad.component == "FL_USB"}
+        for net in physical.nets if any(pad.component == "FL_USB" for pad in net.pads)
+    }
+    assert choke_pads == {
+        "USB_DP_MCU": {"1"}, "USB_DM_MCU": {"4"},
+        "USB_DP_MODEM": {"2"}, "USB_DM_MODEM": {"3"},
+    }
 
 
 def test_usb_c_power_entry_detects_3a_source_and_defaults_modem_off() -> None:

@@ -83,6 +83,17 @@ allowed enum values, and row count. The rest is the selected CSV fragment.
 6. Generate `.copper`, run `check`, then run the compiler tests.
 7. Review semantic changes in the compact tables and generated-source diff.
 
+For multi-terminal passives, explicitly review internal signal paths and
+polarity as well as pin/land coverage. A common-mode choke must pass each
+signal through a separate winding with matching dot polarity; simply listing
+four passive pins cannot establish this. The source-backed
+[USB choke correction](routing-review-pass11.md) includes topology-specific
+CopperLib regressions and a physical-net integration test. Copper DRC cannot
+detect an incorrect internal winding mapping; such corrections invalidate old
+electrical acceptance and require regenerated routing. Visually inspect source
+schematics when PDF text order is ambiguous. This adds review guidance, not a
+mandatory-source requirement to the language or a general internal-circuit solver.
+
 For large MCUs, divide work by peripheral family or pin range. Merge compact
 CSV rows, not prose or generated CopperScript. Automatic PDF extraction should
 record a source revision when available, but missing provenance must not block

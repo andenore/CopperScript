@@ -1,5 +1,8 @@
 # Pass 7: source-backed Nordic matching placement scene
 
+Electrical evidence superseded: the USB choke mapping used here was incorrect.
+Do not reuse this PCB as valid USB wiring. See [pass 11](routing-review-pass11.md).
+
 This increment integrates the R8c three-member matching template, not the complete
 vendor reference circuit. The scene is explicit and data-only, pins source bytes
 and resolved footprint digests, verifies physical pad/net roles, and permits

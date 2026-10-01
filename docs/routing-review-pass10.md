@@ -1,5 +1,9 @@
 # Routing review pass 10: paired shared-spine refinement
 
+Electrical evidence superseded: the USB choke mapping used here was incorrect.
+The segment/length comparison remains geometric evidence only; regenerate USB
+copper from the corrected library. See [pass 11](routing-review-pass11.md).
+
 The critical stage now compares bounded shared-spine shortcuts with its accepted
 joint-search pair. It preserves both original package escapes and lane ordering,
 rebuilds the lanes together, and reapplies original profiles and full native DRC.

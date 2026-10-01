@@ -1,5 +1,10 @@
 # Routing review pass 9: critical placement feedback
 
+Electrical evidence superseded: the USB choke mapping used here was incorrect.
+Zero critical copper opens did not validate the internal winding connections.
+See [pass 11](routing-review-pass11.md); do not replay this rotation as a solution
+for the corrected component.
+
 The bounded controller repairs the source-backed RF scene's modem USB failure
 without manual example coordinates, independent member routing, extra vias or
 larger search budgets. Its first legal candidate rotates FL_USB from 90 to 270

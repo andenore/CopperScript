@@ -181,7 +181,10 @@ in the RF audit. RF reference-layout clusters are next.
 
 With the provisional source-backed RF scene, [pass 9](routing-review-pass9.md)
 uses `--critical-feedback-trials 1` to rotate the choke algorithmically and rebuild
-all critical groups. Independent KiCad verifies zero critical opens. The USB
+all critical groups. Independent KiCad verifies zero critical copper opens, but
+the library's USB choke winding mapping was incorrect. Those boards must not be
+fabricated: [pass 11](routing-review-pass11.md) corrects the source-backed model
+and reruns from fresh placement rather than replaying that rotation. The USB
 detours, remaining RF support/keepouts and complete ordinary rerun are still open;
 this does not qualify impedance or production readiness.
 

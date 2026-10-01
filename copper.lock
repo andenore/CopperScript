@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:81d9a5be1255dd9a4312c490c69aeb9bbe14d3f379616cc0d307d410ebd46429",
+      "checksum": "sha256:ff917621aaec19dd9004943f6a4610994e28b75e4920a788129f1fc3f101f156",
       "files": [
         {
           "path": "copper.mod",
@@ -77,6 +77,11 @@
           "path": "data/full-vertical/rf-audit.json",
           "sha256": "081714cca5aea8614c0a1a3870198938323e625c5b6fdaf30819be7d3f877bfe",
           "size": 2060
+        },
+        {
+          "path": "data/full-vertical/usb-choke-audit.json",
+          "sha256": "3fc689ac3a6b5bf6aec4a7ede31fe29ed68321cc83423bd9f9ff7ca77f01afb7",
+          "size": 1097
         },
         {
           "path": "data/requests.json",
@@ -225,8 +230,8 @@
         },
         {
           "path": "packages/full_vertical/usb_common_mode_choke.copper",
-          "sha256": "16233d06579c7028dc3686c31925691f8f76d2ac6f753c45f319aeaa5bd50ac5",
-          "size": 836
+          "sha256": "ef8d06c779045d4f727f550930f1eba1472592463cd4b8b6582035b3a0d66775",
+          "size": 1253
         },
         {
           "path": "packages/full_vertical/xal4020_222mec.copper",
