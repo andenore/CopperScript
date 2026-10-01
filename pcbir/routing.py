@@ -1171,6 +1171,7 @@ def _point_in_polygon(point: Point, polygon: tuple[Point, ...]) -> bool:
 def _placement_fingerprint(board: PhysicalBoard) -> str:
     document = {
         "board": board.name,
+        "rigid_clusters": [repr(item) for item in sorted(board.rigid_clusters, key=lambda item: item.name)],
         "outline": [(point.x_nm, point.y_nm) for point in board.outline.vertices],
         "placements": [
             (

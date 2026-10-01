@@ -69,6 +69,22 @@ layout qualification.
 
 ### Next steps
 
+The rigid physical-cluster mechanism is now implemented; see
+[rigid-placement-clusters.md](rigid-placement-clusters.md). This separates the
+tested placement/keepout transform from the still-unqualified vendor template.
+The original Nordic archive contains
+`Production files/nRF52832-QFAA/nrf52832_qfaa_pick_and_place.txt` beneath
+`nRF52832-QFAx Reference Layout 1_1/`. Its raw entry SHA-256 is
+`3f0d7860f9bf2156a40210e9991017a0cbfb7bf51422411aead01212772e0ad2`.
+Read-only extraction identifies the LDO population and explicit midpoint,
+reference and pad coordinates in mil, plus top-side rotation. U1's midpoint is
+the origin, C3's midpoint is (165, 0) mil and L1's is (221, -20) mil. These are
+source coordinates, **not** accepted KiCad transforms: cross-check axis sign,
+pad-1 orientation, actual resolved footprint differences, courtyard spacing
+and matching-ground copper before creating a bound template. The NC C6 row
+must not be mistaken for a fitted component. Raw archive assets stay cached,
+not committed.
+
 1. Complete the bounded Nordic support circuit from its reference schematic.
    Extract local member/pad transforms and matching-ground topology from the
    corresponding vendor PCB and placement data. Bind the template to specific

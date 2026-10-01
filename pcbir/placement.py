@@ -12,6 +12,14 @@ from decimal import Decimal
 from math import cos, exp, hypot, radians, sin
 from typing import Iterable, Mapping
 
+from .clusters import (
+    cluster_placement_matches, resolved_cluster_keepouts,
+)
+from .cluster_placement import (
+    place_rigid_clusters as _place_rigid_clusters,
+    refine_rigid_clusters as _refine_rigid_clusters,
+)
+
 from .physical import (
     AlignmentAxis,
     BoardOutline,
@@ -153,21 +161,26 @@ def generate_placement_candidates(
     for seed in range(seeds):
         continuous = _initial_seed(board, placements, options, seed)
         continuous = _analytical_place(board, continuous, options)
+        continuous, seeded_original, phase_options = _place_rigid_clusters(
+            board, continuous, placements, options
+        )
         legalized, exact_repairs = _legalize(
-            board, continuous, placements, options, seed
+            board, continuous, seeded_original, phase_options, seed
         )
         legalized, relative_before = _repair_relative_constraints(
-            board, legalized, options
+            board, legalized, phase_options
         )
         refined, moves, swaps, feedback_passes = _detailed_refine(
-            board, legalized, options, seed
+            board, legalized, phase_options, seed
         )
         refined, relative_after = _repair_relative_constraints(
-            board, refined, options
+            board, refined, phase_options
         )
+        refined, cluster_moves = _refine_rigid_clusters(board, refined, options)
+        moves += cluster_moves
         refined = _spread_high_pin_components(board, refined, options)
         metrics = placement_metrics(board, refined, options)
-        if metrics.constraint_penalty_nm:
+        if metrics.constraint_penalty_nm or not placement_solution_is_legal(board, refined, options):
             continue
         attempts.append(
             PlacementCandidate(
@@ -263,7 +276,9 @@ def transformed_local_point(placement: Placement, point: Point) -> Point:
 def resolved_copper_keepouts(board: PhysicalBoard) -> tuple[CopperKeepout, ...]:
     """Return board keepouts plus footprint-local keepouts at placed locations."""
 
-    result = list(board.copper_keepouts)
+    result = [*board.copper_keepouts, *resolved_cluster_keepouts(
+        board, {item.reference: item for item in board.placements}
+    )]
     seen = {keepout.id for keepout in result}
     for placement in sorted(board.placements, key=lambda item: item.reference):
         footprint = board.footprints[placement.footprint]
@@ -323,13 +338,19 @@ def placement_solution_is_legal(
     original = {item.reference: item for item in board.placements}
     if set(placements) != set(original):
         return False
+    if any(item.reference != reference or item.footprint != original[reference].footprint
+           for reference, item in placements.items()):
+        return False
+    if not cluster_placement_matches(board, placements):
+        return False
     fixed = _fixed_placements(board, original, options)
     if any(placements[reference] != expected for reference, expected in fixed.items()):
         return False
     accepted: dict[str, Placement] = {}
+    keepouts = resolved_cluster_keepouts(board, placements)
     for reference in sorted(placements):
         candidate = placements[reference]
-        if not _legal(candidate, accepted, board, options):
+        if not _legal(candidate, accepted, board, options, cluster_keepouts=keepouts):
             return False
         accepted[reference] = candidate
     return _relative_penalty(board, placements) == 0
@@ -1148,6 +1169,8 @@ def _legal(
     placed: Mapping[str, Placement],
     board: PhysicalBoard,
     options: PlacementPlannerOptions,
+    *,
+    cluster_keepouts: tuple[CopperKeepout, ...] | None = None,
 ) -> bool:
     rule = _rules(board).get(candidate.reference)
     if candidate.rotation_degrees not in _allowed_orientations(board, candidate.reference):
@@ -1172,7 +1195,9 @@ def _legal(
                 continue
         if _polygons_too_close(polygon, keepout.outline.vertices, 0):
             return False
-    for keepout in board.copper_keepouts:
+    if cluster_keepouts is None:
+        cluster_keepouts = resolved_cluster_keepouts(board, {**placed, candidate.reference: candidate})
+    for keepout in (*board.copper_keepouts, *cluster_keepouts):
         candidate_layer = CopperLayer.FRONT if candidate.side is BoardSide.FRONT else CopperLayer.BACK
         if keepout.block_footprints and candidate_layer in keepout.layers and _polygons_too_close(
             polygon, keepout.outline.outer.vertices, 0
@@ -1629,6 +1654,10 @@ def _spread_high_pin_components(
         return placements
     fixed = set(_fixed_placements(board, placements, options))
     companions: dict[str, set[str]] = {reference: {reference} for reference in placements}
+    for rigid in board.rigid_clusters:
+        members = {item.reference for item in rigid.members}
+        for reference in members:
+            companions[reference].update(members)
     for rule in board.relative_rules:
         if rule.kind is not RelativePlacementKind.MAX_DISTANCE:
             continue

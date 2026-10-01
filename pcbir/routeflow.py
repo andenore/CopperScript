@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from .physical import PhysicalBoard, Placement, Point, nm_from_mm
+from .clusters import move_placement_unit
 from .placement import (
     PlacementCandidate,
     PlacementPlannerOptions,
@@ -233,8 +234,10 @@ def _movement_trials(
                     current.position.y_nm + dy,
                 ),
             )
-            candidate = dict(placements)
-            candidate[reference] = moved
+            try:
+                candidate = move_placement_unit(board, placements, reference, moved)
+            except ValueError:
+                continue
             if not placement_solution_is_legal(board, candidate, placement_options):
                 continue
             ordered = tuple(candidate[item.reference] for item in board.placements)
@@ -305,7 +308,10 @@ def detailed_failure_trials(
             moved = replace(current, position=Point(
                 current.position.x_nm + dx, current.position.y_nm + dy,
             ))
-            candidate = {**placements, reference: moved}
+            try:
+                candidate = move_placement_unit(board, placements, reference, moved)
+            except ValueError:
+                continue
             if not placement_solution_is_legal(board, candidate, placement_options):
                 continue
             trials.append(replace(board, placements=tuple(

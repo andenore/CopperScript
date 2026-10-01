@@ -738,6 +738,63 @@ class PlacementGroup:
 
 
 @dataclass(frozen=True, slots=True)
+class RigidPlacementMember:
+    """A footprint pose in a reference template's anchor-pad frame."""
+
+    reference: str
+    footprint: str
+    footprint_digest: str
+    position: Point
+    rotation_degrees: Decimal | int | float | str = Decimal(0)
+
+    def __post_init__(self) -> None:
+        if not self.reference or not self.footprint:
+            raise ValueError("rigid member requires a reference and footprint")
+        if len(self.footprint_digest) != 64 or any(
+            char not in "0123456789abcdef" for char in self.footprint_digest
+        ):
+            raise ValueError("rigid member requires a SHA-256 footprint digest")
+        rotation = Decimal(str(self.rotation_degrees))
+        if not rotation.is_finite():
+            raise ValueError("rigid member rotation must be finite")
+        object.__setattr__(self, "rotation_degrees", (rotation % Decimal(360) + Decimal(360)) % Decimal(360))
+
+
+@dataclass(frozen=True, slots=True)
+class RigidPlacementCluster:
+    """Hard physical macro, not a soft proximity group or electrical hierarchy.
+
+    All poses and keepouts are local to the anchor pad (or footprint origin).
+    Initial support is same-side FRONT placement without mirroring. Source is
+    an evidence locator, not a claim that the template is RF-qualified.
+    """
+
+    name: str
+    anchor: PlacementTarget
+    members: tuple[RigidPlacementMember, ...]
+    source: str
+    allowed_rotations: tuple[Decimal | int | float | str, ...] = (0, 90, 180, 270)
+    keepouts: tuple[CopperKeepout, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "members", tuple(self.members))
+        object.__setattr__(self, "keepouts", tuple(self.keepouts))
+        references = [member.reference for member in self.members]
+        if not self.name or not self.source or len(references) < 2:
+            raise ValueError("rigid cluster requires a name, evidence source and two members")
+        if len(set(references)) != len(references) or self.anchor.reference not in references:
+            raise ValueError("rigid cluster requires unique members including its anchor")
+        rotations = tuple(Decimal(str(value)) for value in self.allowed_rotations)
+        if not rotations or any(not value.is_finite() for value in rotations):
+            raise ValueError("rigid cluster requires finite allowed rotations")
+        object.__setattr__(self, "allowed_rotations", tuple(sorted({
+            (value % Decimal(360) + Decimal(360)) % Decimal(360) for value in rotations
+        })))
+        if len({item.id for item in self.keepouts}) != len(self.keepouts):
+            raise ValueError("rigid cluster keepout ids must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class NetRoutingRule:
     """Physical routing intent for one net.
 
@@ -864,6 +921,7 @@ class PhysicalBoard:
     zones: tuple[CopperZone, ...] = ()
     copper_keepouts: tuple[CopperKeepout, ...] = ()
     zone_fills: tuple[ZoneFillResult, ...] = ()
+    rigid_clusters: tuple[RigidPlacementCluster, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -881,6 +939,7 @@ class PhysicalBoard:
         object.__setattr__(self, "zones", tuple(self.zones))
         object.__setattr__(self, "copper_keepouts", tuple(self.copper_keepouts))
         object.__setattr__(self, "zone_fills", tuple(self.zone_fills))
+        object.__setattr__(self, "rigid_clusters", tuple(self.rigid_clusters))
         self._validate_references()
 
     def _validate_references(self) -> None:
@@ -1033,6 +1092,10 @@ class PhysicalBoard:
                     f"placement group {group.name!r} references unknown component "
                     f"{min(unknown)!r}"
                 )
+
+        # Validate template identity even before initial grid poses are legalized.
+        from .clusters import validate_cluster_bindings
+        validate_cluster_bindings(self)
 
         routed_rule_nets: set[str] = set()
         for rule in self.net_routing_rules:

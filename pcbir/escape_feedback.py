@@ -14,6 +14,7 @@ from hashlib import sha256
 from math import hypot
 
 from .critical import CriticalRoutingStatus
+from .clusters import move_placement_unit
 from .detailed import DetailedRouterOptions, DetailedRoutingResult, DetailedRoutingStatus, route_detailed
 from .drc import DrcDecision, PhysicalDrcPolicy, run_physical_drc
 from .fanout import FanoutOptions
@@ -549,7 +550,10 @@ def _candidate_placements(
             for angle in orientations if angle != current.rotation_degrees
         )]
         for changed in changes:
-            candidate = {**placements, reference: changed}
+            try:
+                candidate = move_placement_unit(board, placements, reference, changed)
+            except ValueError:
+                continue
             if not placement_solution_is_legal(
                 board, candidate, placement_options,
             ):

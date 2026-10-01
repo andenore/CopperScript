@@ -61,6 +61,12 @@ Completion means tested implementation, not automatic manufacturing signoff.
       with the source-backed Johanson part, isolate its NC anchor, and move the
       Nordic 0.8 pF shunt to the chip side of the 3.9 nH series inductor.
       Evidence and ERC regressions are in CopperLib/CopperScript.
+    - [x] Implement identity-bound rigid physical clusters: anchor-pad local poses,
+      explicitly allowed rotations including 45 degrees, whole-unit legalization,
+      refinement and feedback, transformed layer-scoped keepouts and digest-bound
+      DRC/export. Synthetic regressions verify the mechanism; this does not supply
+      a Nordic/Johanson template or qualify RF performance. See
+      [rigid-cluster API](rigid-placement-clusters.md).
     - [ ] Complete the Nordic support circuit and extract a pin/pad-bound rigid
       matching/reference-ground cluster from the vendor layout, not a guessed
       distance threshold. Preserve its legal translation/rotation transforms.

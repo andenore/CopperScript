@@ -32,6 +32,7 @@ from ..physical import (
     ViaKind,
 )
 from .base import Artifact, ArtifactManifest
+from ..clusters import resolved_cluster_keepouts
 
 
 KICAD_PCB_FORMAT = "20240108"
@@ -226,7 +227,8 @@ def _render(board: PhysicalBoard) -> str:
         for layer in sorted(zone.layers, key=lambda item: item.value):
             lines.extend(_zone_lines(board, zone, layer, net_codes))
 
-    for keepout in sorted(board.copper_keepouts, key=lambda item: item.id):
+    cluster_keepouts = resolved_cluster_keepouts(board, {item.reference: item for item in board.placements})
+    for keepout in sorted((*board.copper_keepouts, *cluster_keepouts), key=lambda item: item.id):
         for layer in sorted(keepout.layers, key=lambda item: item.value):
             lines.extend(_copper_keepout_lines(board, keepout, layer))
 

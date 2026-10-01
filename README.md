@@ -453,6 +453,13 @@ minimum/maximum distance, and explicit placement groups become typed physical
 IR and are enforced by `plan-layout`. Hierarchy, interfaces, and proximity
 constraints also produce soft semantic placement groups.
 
+The physical Python API also supports [rigid reference-layout clusters](docs/rigid-placement-clusters.md).
+Unlike soft groups, these retain identity-bound local footprint poses and
+keepouts during whole-cluster placement/refinement and routing feedback,
+including explicitly permitted 45-degree rotations. Vendor RF templates and
+their qualification are separate work; the example does not yet use a qualified
+Nordic/Johanson cluster.
+
 ## KiCad schematic backend
 
 The initial backend targets KiCad 8's `20231120` `.kicad_sch` format. It embeds

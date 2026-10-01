@@ -549,6 +549,17 @@ alignment, and semantic groups. Groups derived from preserved module hierarchy,
 interfaces, and proximity constraints provide soft clustering intent without
 changing electrical connectivity.
 
+Reference-layout macros are separate **hard rigid physical clusters**. Their
+member poses MUST be bound to resolved footprint geometry and source identity,
+with an explicit evidence locator and anchor physical pad/origin. Translation
+and permitted rotation MUST preserve all local poses and layer-scoped keepouts.
+Fixed members freeze the unit; conflicting fixed poses, unsupported mirroring,
+incompatible footprints or overlap between rigid clusters MUST fail closed.
+Ordinary legalization, refinement and placement/routing feedback MUST NOT split
+a macro. No electrical net/pin mapping changes with a physical transform. See
+[rigid-placement-clusters.md](rigid-placement-clusters.md) for the initial API,
+bounded-search limitations and separation from RF qualification.
+
 The initial placement engine uses deterministic multi-seed analytical global
 placement, hybrid discrete legalization, hard relative-rule repair, and legal
 local refinement with coarse per-layer routing feedback. Wirelength and
@@ -813,6 +824,8 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-114 | Accepted | Critical copper is committed atomically only after fresh native physical DRC verifies the candidate together with all physical pads, keepouts, board edges, drill envelopes and previously accepted critical geometry. Only unrelated opens and full-route completeness are expected omissions in this early stage; no geometry error is waived. A failed candidate contributes no locked copper. Aligned differential terminals may use a midpoint channel with symmetric 45-degree tapers; non-aligned pair escapes still require joint search, never independent ordinary-net repair. Single-ended critical nets may use bounded exact maze search against immutable earlier reservations, with the original profile rechecked before acceptance. General fanout, subset repair and duplicate-land closure cannot synthesize or prune critical copper. Explicit USB/RF example profiles are geometric intent, not evidence of impedance, antenna performance or manufacturer reference-layout compliance. |
 
 | CS-115 | Accepted | Non-aligned differential terminals use a joint same-layer package escape and heading-aware common-spine search, never two independent maze routes. Legal paired exits preserve member order; coupled lanes use offset-line intersections at straight/45-degree corners. The package taper is actual reserved copper, not an invented straight extension behind its port. Search retries at 1/0.5/0.25 mm with at most eight port combinations and 30,000 expanded states per search at each pitch. Full cross-member geometry, existing critical reservations, original profile budgets and fresh native DRC gate atomic acceptance. Reports retain aggregate searches/states/candidate attempts, including unsuccessful searches. Parallel projected overlap is unioned when measuring coupling so split and unequal mitered edges do not erase or duplicate coupled length. This geometric proxy is not impedance or signal-integrity evidence. New paired layer transitions, non-octilinear pin rows and multi-terminal pairs remain unsupported by this search and fail closed; coarse-guide transitions are proposals, not mandatory copper. Explicitly permitted 45-degree placements are supported without changing electrical pin mapping. |
+
+| CS-116 | Accepted | Reference-layout macros are hard rigid clusters in the physical IR, distinct from soft semantic groups. Local member poses are bound to resolved footprint SHA-256 identities and an explicit source locator, with a unique physical anchor pad/origin. Bounded legalization and refinement transform complete units; fixed members freeze their unit, conflicting fixed poses fail, and ordinary component swaps/repairs cannot split it. Layer-scoped local copper keepouts follow the same transform into routing clearance, native DRC and KiCad export. Rules/templates participate in routing and signoff fingerprints. Front-side translation and explicitly permitted rotation, including 45 degrees, are initially supported; mirroring and overlapping macros fail closed. Reference copper is not transplanted, and no template/source locator is automatic RF, impedance, return-path or fabrication qualification. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same
