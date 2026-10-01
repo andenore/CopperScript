@@ -40,6 +40,7 @@ from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
 from .routing_costs import COST_UNIT, length_cost, preference_cost
+from .surface_path import _track_inside_board
 
 
 class DetailedRoutingStatus(str, Enum):
@@ -895,10 +896,11 @@ def _route_net(
         resources.update(_edge_resources(grid, first, second))
     for _, pad_position, access in chosen_accesses:
         access_position = grid.point(access)
-        if pad_position != access_position:
-            tracks.append(
-                TrackSegment(name, pad_position, access_position, width, grid.layers[access.layer_index])
-            )
+        escape = _access_path(board, clearance, name, pad_position, access_position,
+                              width, grid.layers[access.layer_index], allow_movable_conflicts)
+        if escape is None:
+            return _failed(name, "selected pin access no longer has a legal octilinear path")
+        tracks.extend(escape)
     tracks = list(_merge_collinear_tracks(tracks))
     length = sum(
         round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm))
@@ -1384,6 +1386,47 @@ def _build_grid(
     )
 
 
+def _access_path(
+    board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
+    start: Point, end: Point, width_nm: int, layer: CopperLayer,
+    allow_movable_conflicts: bool = False,
+) -> tuple[TrackSegment, ...] | None:
+    """Check the same exact octilinear escape during selection and emission.
+
+    Try both diagonal/straight orders, then orthogonal corners. Never fall back
+    to an oblique chord or snap a terminal; every emitted leg is checked.
+    Tentative rip-up may cross removable tracks, never immutable geometry.
+    """
+    if start == end:
+        return ()
+    dx, dy = end.x_nm - start.x_nm, end.y_nm - start.y_nm
+    if not dx or not dy or abs(dx) == abs(dy):
+        paths = ((start, end),)
+    else:
+        diagonal = min(abs(dx), abs(dy))
+        sx, sy = (1 if dx > 0 else -1), (1 if dy > 0 else -1)
+        paths = (
+            (start, Point(start.x_nm + sx * diagonal, start.y_nm + sy * diagonal), end),
+            (start, Point(end.x_nm - sx * diagonal, end.y_nm - sy * diagonal), end),
+            (start, Point(start.x_nm, end.y_nm), end),
+            (start, Point(end.x_nm, start.y_nm), end),
+        )
+    for points in paths:
+        tracks = tuple(TrackSegment(net, a, b, width_nm, layer)
+                       for a, b in zip(points, points[1:]) if a != b)
+        for track in tracks:
+            if not _track_inside_board(board, track.start, track.end, width_nm):
+                break
+            if allow_movable_conflicts:
+                if clearance.blocking_track_nets(track)[1]:
+                    break
+            elif not clearance.can_track(net, track.start, track.end, width_nm, layer):
+                break
+        else:
+            return tracks
+    return None
+
+
 def _access_candidates(
     board: PhysicalBoard,
     grid: _Grid,
@@ -1436,18 +1479,9 @@ def _access_candidates(
         )
         if sector in sectors:
             continue
-        if position == access:
-            legal = True
-        elif allow_movable_conflicts:
-            _, locked = clearance.blocking_track_nets(TrackSegment(
-                net, position, access, width_nm, grid.layers[node.layer_index],
-            ))
-            legal = not locked
-        else:
-            legal = clearance.can_track(
-                net, position, access, width_nm, grid.layers[node.layer_index],
-            )
-        if legal:
+        escape = _access_path(board, clearance, net, position, access, width_nm,
+                              grid.layers[node.layer_index], allow_movable_conflicts)
+        if escape is not None:
             result.append(node)
             sectors.add(sector)
             if len(result) == limit:

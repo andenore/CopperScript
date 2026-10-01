@@ -167,6 +167,10 @@ electrical qualification remain open.
 The [paired refinement pass](docs/routing-review-pass10.md) removes redundant
 search-step segments while preserving connectivity. It does not yet shorten
 the real-board USB detours.
+The [access/miter review](docs/routing-review-pass12.md) removes the oblique RF
+access segments and small USB backtrack at the unchanged corrected placement.
+All eight critical nets remain connected; the complete ordinary rerun and
+production gates are still outstanding.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6

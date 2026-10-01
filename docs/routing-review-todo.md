@@ -23,14 +23,22 @@ Completion means tested implementation, not automatic manufacturing signoff.
     repair trial, zero vias; independent KiCad confirms zero critical opens and
     no hard copper/dangling findings. Eight library findings remain.
   - [ ] Full ordinary rerun and independent filled-zone/layer review.
-- [ ] R14 (pass-11 shape finding): Replace oblique exact single-ended RF
+- [x] R14 (pass-11 shape finding): Replace oblique exact single-ended RF
   package/grid access links with clearance-checked straight/45-degree access.
   Preserve original terminal contact, widths, layers, earlier reservations and
   full native/profile acceptance; never silently snap endpoints off pads.
-- [ ] R15 (pass-11 shape finding): Remove small paired taper/spine collinear
+  Pass 12 checks identical selection/emission paths and removes all four real
+  oblique RF access segments at the unchanged placement. Independent KiCad
+  retains zero critical opens and no hard copper/dangling findings.
+- [x] R15 (pass-11 shape finding): Remove small paired taper/spine collinear
   reversals in the joint construction/refinement owner, rechecking both lanes
   atomically. The corrected modem DP route backtracks about 0.034 mm; independent
   pruning of one member or assuming fewer segments means fewer bends is unsafe.
+  Pass 12 rejects consumed/reversed offset edges and adds bounded two-leg
+  terminal collars. Fresh search closes both USB pairs at the unchanged
+  placement with zero reversals, original profiles and unchanged maze budgets.
+  Modem paths grow slightly; this is not completion of R5 route optimization.
+  See [the matched shape review](routing-review-pass12.md).
 
 - [x] R1: Scope fanout cleanup to attempted nets; preserve unrelated copper,
   empty subsets, failed-subset rollback, and pre-existing/shared vias.

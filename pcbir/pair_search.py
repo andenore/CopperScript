@@ -179,6 +179,14 @@ def _lane_paths(points: tuple[Point, ...], incoming: int, outgoing: int,
         following = outgoing if index == len(points) - 1 else headings[index]
         first.append(_miter(point, previous, following, offset, sign))
         second.append(_miter(point, previous, following, offset, -sign))
+    # Short spine edges may be consumed by adjacent miters. An offset lane
+    # can then collapse or run backward although every spine turn is legal.
+    # Reject the whole joint construction, not just one member's tiny edge.
+    # Search/refinement must find a different topology within its own bounds.
+    if any(_heading(a, b) != heading
+           for lane in (first, second)
+           for a, b, heading in zip(lane, lane[1:], headings)):
+        return None
     return tuple(first), tuple(second)
 
 
@@ -243,6 +251,35 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                 expanded, search_index, spine, start, end)
 
 
+def _goal_paths(point: Point, end: Point, heading: int, inward: int,
+                pitch: int) -> Iterator[tuple[Point, ...]]:
+    """Bounded terminal collars; allow a local S-turn instead of a tiny cusp.
+
+    Retain cheap historical bridges first. Then advance along allowed headings
+    before joining the fixed end collar. Two-leg collars can distribute a
+    sub-grid displacement across an S-turn without a consumed inner edge.
+    Full forward-miter, escape, width/gap and obstacle checks still own legality.
+    """
+    dx, dy = _HEADS[inward]
+    approach = Point(end.x_nm - dx * pitch, end.y_nm - dy * pitch)
+    yield from _paths(point, end)
+    yield from (path + (end,) for path in _paths(point, approach))
+    for direction in (heading, (heading - 1) % 8, (heading + 1) % 8):
+        dx, dy = _HEADS[direction]
+        for distance in (pitch, 2 * pitch):
+            advanced = Point(point.x_nm + dx * distance, point.y_nm + dy * distance)
+            for path in _paths(advanced, approach):
+                yield (point, *path, end)
+    for turn in (-1, 1):
+        dx, dy = _HEADS[(heading + turn) % 8]
+        fx, fy = _HEADS[heading]
+        for distance in (max(1, pitch // 2), pitch):
+            first = Point(point.x_nm + dx * distance, point.y_nm + dy * distance)
+            second = Point(first.x_nm + fx * distance, first.y_nm + fy * distance)
+            for path in _paths(second, approach):
+                yield (point, first, *path, end)
+
+
 def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str, second_name: str,
             start: _Port, end: _Port, width: int, offset: int, clearance: int,
             layer: CopperLayer, pitch: int, budget: int, stats: PairSearchStats) -> _SpineSearchResult | None:
@@ -280,17 +317,15 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
         expanded += 1
         stats.expanded_states += 1
         if hypot(point.x_nm - end.center.x_nm, point.y_nm - end.center.y_nm) <= 4 * pitch:
-            dx, dy = _HEADS[end.heading]
-            approach = Point(end.center.x_nm + dx * pitch, end.center.y_nm + dy * pitch)
-            for tail in (*_paths(point, end.center),
-                         *(path + (end.center,) for path in _paths(point, approach))):
+            for tail in _goal_paths(point, end.center, heading, inward, pitch):
                 spine = []
                 cursor = state
                 while cursor is not None:
                     spine.append(cursor[0])
                     cursor = previous[cursor]
                 points = tuple(reversed(spine)) + tail[1:]
-                if len(points) < 2 or _heading(points[-2], points[-1]) != inward:
+                if (len(points) < 2 or _heading(points[0], points[1]) != start.heading
+                        or _heading(points[-2], points[-1]) != inward):
                     continue
                 lanes = _lane_paths(points, start.heading, inward, offset, start.sign)
                 if lanes is None:
