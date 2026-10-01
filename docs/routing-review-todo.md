@@ -107,6 +107,14 @@ Completion means tested implementation, not automatic manufacturing signoff.
         60.37/62.88 mm paths, while the MCU pair becomes longer. This extends R5
         to paired quality comparison; a connected detour is not a minimum-length
         or electrically qualified route.
+        - [x] Add bounded shared-spine compaction and straight/45-degree shortcut
+          proposals, preserving both package escapes and full profile/native
+          acceptance. Synthetic detours shorten; the matched real placement
+          only loses redundant collinear segments (modem 214 to 38, MCU 36 to 26),
+          not meaningful wirelength. See [paired refinement](paired-route-refinement.md).
+        - [ ] Compare alternative joint port/placement topologies for the real
+          modem detour, retaining the accepted pair on failure. Fixed-port local
+          shortcuts alone have not shortened its 60.37/62.88 mm paths.
   - [ ] R8d: After critical preflight passes, perform the complete rerun and
     independent KiCad layer review. Bind actual impedance/return-path evidence
     to the selected physical stackup before any critical-net signoff claim.

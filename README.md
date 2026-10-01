@@ -160,6 +160,9 @@ whole-unit rotations/moves and rebuilds all critical copper; it does not relax
 profile limits or imply fabrication readiness. Each trial can take minutes.
 The [pass-9 verification](docs/routing-review-pass9.md) connects both USB pairs
 with the RF scene intact; ordinary routing and electrical qualification remain open.
+The [paired refinement pass](docs/routing-review-pass10.md) removes redundant
+search-step segments while preserving connectivity. It does not yet shorten
+the real-board USB detours.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6

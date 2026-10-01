@@ -12,7 +12,7 @@ from fractions import Fraction
 from heapq import heappop, heappush
 from itertools import product
 from math import ceil, hypot, sqrt
-from typing import Iterator
+from typing import Iterator, NamedTuple
 
 from .geometry import RoundedConvexShape, shapes_clear
 from .physical import CopperLayer, NetRoutingRule, PhysicalBoard, Point, TrackSegment, nm_from_mm
@@ -41,6 +41,16 @@ class PairSearchCandidate:
     second: tuple[TrackSegment, ...]
     expanded_states: int
     search_index: int
+    spine: tuple[Point, ...] = ()
+    start_port: _Port | None = None
+    end_port: _Port | None = None
+
+
+class _SpineSearchResult(NamedTuple):
+    first: tuple[TrackSegment, ...]
+    second: tuple[TrackSegment, ...]
+    expanded_states: int
+    spine: tuple[Point, ...]
 
 
 @dataclass(slots=True)
@@ -225,17 +235,17 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                             pitch_nm, maximum_states, stats)
         if candidate is not None:
             stats.candidates += 1
-            a, b, expanded = candidate
+            a, b, expanded, spine = candidate
             yield PairSearchCandidate((*start.first, *a, *tuple(
                 TrackSegment(t.net, t.end, t.start, t.width_nm, t.layer) for t in reversed(end.first))),
                 (*start.second, *b, *tuple(
                 TrackSegment(t.net, t.end, t.start, t.width_nm, t.layer) for t in reversed(end.second))),
-                expanded, search_index)
+                expanded, search_index, spine, start, end)
 
 
 def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str, second_name: str,
             start: _Port, end: _Port, width: int, offset: int, clearance: int,
-            layer: CopperLayer, pitch: int, budget: int, stats: PairSearchStats):
+            layer: CopperLayer, pitch: int, budget: int, stats: PairSearchStats) -> _SpineSearchResult | None:
     inward = (end.heading + 4) % 8
     initial = (start.center, start.heading)
     best = {initial: 0}
@@ -287,7 +297,7 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                     continue
                 a, b = _tracks(first_name, lanes[0], width, layer), _tracks(second_name, lanes[1], width, layer)
                 if _legal(board, index, a, b, clearance):
-                    return a, b, expanded
+                    return _SpineSearchResult(a, b, expanded, points)
         for new in ((heading - 1) % 8, heading, (heading + 1) % 8):
             if state == initial and new != heading:
                 continue  # The first lane endpoints must meet the exact port.

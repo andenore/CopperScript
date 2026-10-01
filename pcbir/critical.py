@@ -29,7 +29,8 @@ from .geometry import segment_distance_squared
 from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
 from .drc import DrcSeverity, run_physical_drc
-from .pair_search import PairSearchStats, paired_candidates
+from .pair_search import PairSearchCandidate, PairSearchStats, paired_candidates
+from .pair_refine import PairRefinementStats, paired_shortcuts
 from .local_critical import local_surface_candidates
 
 
@@ -62,6 +63,8 @@ class CriticalNetResult:
     pair_searches: int = 0
     local_candidate_attempts: int = 0
     guide_length_nm: int | None = None
+    pair_refinement_attempts: int = 0
+    pair_refinement_candidates: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +106,8 @@ class CriticalRoutingResult:
                     "pair_searches": item.pair_searches,
                     "local_candidate_attempts": item.local_candidate_attempts,
                     "guide_length_nm": item.guide_length_nm,
+                    "pair_refinement_attempts": item.pair_refinement_attempts,
+                    "pair_refinement_candidates": item.pair_refinement_candidates,
                 }
                 for item in self.nets
             ],
@@ -189,6 +194,10 @@ def route_critical_nets(
                         )
                         if attempt.connected:
                             result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
+                            result, pair_tracks, pair_vias = _improve_pair_spine(
+                                board, search_board, first, second, routes, candidate,
+                                result, pair_tracks, pair_vias, tracks, vias,
+                            )
                             break
                     if result.connected:
                         break
@@ -281,6 +290,35 @@ def route_critical_nets(
         global_route.routing_fingerprint,
         fingerprint,
     )
+
+
+def _improve_pair_spine(
+    board: PhysicalBoard, search_board: PhysicalBoard,
+    first: NetRoutingRule, second: NetRoutingRule, routes: dict[str, GlobalNetRoute],
+    candidate: PairSearchCandidate, incumbent: CriticalNetResult,
+    incumbent_tracks: tuple[TrackSegment, ...], incumbent_vias: tuple[Via, ...],
+    committed_tracks: list[TrackSegment], committed_vias: list[Via],
+) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
+    """A rejected shortcut retains the complete accepted pair and its metrics."""
+    stats = PairRefinementStats()
+    for lanes in paired_shortcuts(search_board, candidate, first, second, stats=stats):
+        # Do not silently resize, relabel or move a pair to a forbidden layer,
+        # even if a faulty proposer passes native minimum-geometry checks.
+        if any(t.net != rule.net or t.width_nm != (rule.width_nm or board.rules.default_track_width_nm)
+               or t.layer not in routing_layers(board, rule.net, rule)
+               for rule, lane in zip((first, second), lanes) for t in lane):
+            continue
+        proposed, tracks, vias = _route_pair(board, first, second, routes, exact_tracks=lanes)
+        proposed, tracks, vias = _reject_reserved_plane_tracks(
+            board, proposed, tracks, vias, {first.net: first, second.net: second},
+        )
+        proposed, tracks, vias = _validate_candidate(board, proposed, tracks, vias, committed_tracks, committed_vias)
+        if (proposed.connected and all(a <= b for a, b in zip(proposed.lengths_nm, incumbent.lengths_nm))
+                and (sum(proposed.lengths_nm), len(tracks)) < (sum(incumbent.lengths_nm), len(incumbent_tracks))):
+            incumbent = replace(proposed, strategy="joint_pair_refined")
+            incumbent_tracks, incumbent_vias = tracks, vias
+    return replace(incumbent, pair_refinement_attempts=stats.attempts,
+                   pair_refinement_candidates=stats.candidates), incumbent_tracks, incumbent_vias
 
 
 def _validate_candidate(
@@ -1064,7 +1102,8 @@ def _fingerprint(
              item.diagnostics, item.assumptions, item.strategy,
              item.candidate_rejected, item.evidence_digests,
              item.search_states, item.candidate_attempts, item.pair_searches,
-             item.local_candidate_attempts, item.guide_length_nm)
+             item.local_candidate_attempts, item.guide_length_nm,
+             item.pair_refinement_attempts, item.pair_refinement_candidates)
             for item in results
         ],
     }

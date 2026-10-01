@@ -207,7 +207,8 @@ def test_pair_rejects_overlapping_return_via_and_floating_transition() -> None:
     pair = result.nets[0]
     # Global transitions are guides, not mandatory copper. A legal surface-only
     # joint repair has no actual transition requiring a return via.
-    assert pair.connected and pair.strategy == "joint_pair_search"
+    assert pair.connected and pair.strategy == "joint_pair_refined"
+    assert pair.pair_refinement_candidates > 0
     assert pair.return_via_count == 0
     assert result.locked_vias == ()
     assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE"}
@@ -259,7 +260,7 @@ def test_joint_pair_search_handles_staggered_midpoints_and_pad_pitches() -> None
                                 footprint=footprint.name, position=Point.mm(35, 14))))
     result = route_critical_nets(board, route_global(board))
     assert result.nets[0].connected
-    assert result.nets[0].strategy == "joint_pair_search"
+    assert result.nets[0].strategy == "joint_pair_refined"
     assert result.nets[0].coupled_length_nm > nm_from_mm(20)
     assert result.locked_vias == ()
     assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
@@ -312,7 +313,7 @@ def test_joint_search_supports_45_degree_rotated_terminal_rows() -> None:
     first = route_critical_nets(board, guides)
     second = route_critical_nets(board, guides)
     assert first == second
-    assert first.nets[0].connected and first.nets[0].strategy == "joint_pair_search"
+    assert first.nets[0].connected and first.nets[0].strategy == "joint_pair_refined"
     assert first.nets[0].search_states > 0 and first.nets[0].candidate_attempts > 0
     assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
                    for f in run_physical_drc(first.board).findings)
