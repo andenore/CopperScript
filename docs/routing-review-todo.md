@@ -43,13 +43,18 @@ Completion means tested implementation, not automatic manufacturing signoff.
     repairs and duplicate-land closure. Real-footprint preflight connects four
     RF nets with no vias and rejects both unsafe USB pairs. See
     [pass 4](routing-review-pass4.md); this does not complete R8.
-  - [ ] R8b (next): Joint paired package-access search. Enumerate legal paired
-    exits, preserve terminal order, search an orientation-aware common channel,
-    materialize 45-degree corners/tapers, and validate both members plus any
-    paired/return transitions together. Try bounded alternatives before asking
-    placement feedback to move/rotate the choke or MCU/modem cluster. Never
-    repair one member independently or lock a failed coarse guide.
-  - [ ] R8c: Enforce RF reference-layout/matching clusters and antenna keepouts;
+  - [x] R8b: Joint same-layer paired package-access search. Enumerate legal
+    paired exits, preserve terminal order, search a heading-aware common spine,
+    and materialize clearance-checked straight/45-degree corners/tapers.
+    Bounded pitch refinement connects both real-footprint USB pairs without
+    vias or placement changes. Independent KiCad confirms no critical opens
+    or hard copper findings. See [pass 5](routing-review-pass5.md).
+    New paired layer transitions and non-octilinear/multi-terminal pairs remain
+    unsupported by this search, not silently approximated. Existing transition
+    candidates still require atomic native/profile/return-via acceptance.
+    Future profiles needing transitions require their owning paired search;
+    package-placement feedback follows if the bounded surface search fails.
+  - [ ] R8c (next): Enforce RF reference-layout/matching clusters and antenna keepouts;
     shorten the Nordic and GNSS paths. Connected long top-layer feeds are not
     evidence of RF performance, matching-ground topology or return continuity.
   - [ ] R8d: After critical preflight passes, perform the complete rerun and

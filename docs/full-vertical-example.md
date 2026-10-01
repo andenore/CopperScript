@@ -159,6 +159,15 @@ records the first real-footprint run: four connected RF nets, two rejected USB
 pairs, no committed unsafe pair copper. The earlier completely connected
 ordinary-routing draft remains a separate historical artifact.
 
+The [pass-5 review](routing-review-pass5.md) adds joint paired package escape
+and heading-aware channel search with bounded 1/0.5/0.25 mm refinement. Both
+USB pairs now connect with zero vias and unchanged placement. Independent
+KiCad finds no critical-net opens, shorts, clearance or dangling-track findings;
+ordinary nets remain unrouted in this early artifact. The report includes
+search counts, expanded states, candidate attempts and measured coupled/
+uncoupled lengths. This is geometric progress, not qualified USB/RF performance
+or a completed full-board rerun. RF reference-layout clusters are next.
+
 ## Acceptance stages
 
 1. **Electrical frontend (implemented):** parsing, package resolution,

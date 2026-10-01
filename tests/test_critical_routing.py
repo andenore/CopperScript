@@ -6,6 +6,7 @@ import pytest
 
 from pcbir import (
     BoardOutline,
+    ComponentPlacementRule,
     CriticalRoutingStatus,
     CopperLayer,
     FootprintPad,
@@ -27,7 +28,7 @@ from pcbir import (
     TrackSegment, CopperKeepout, PolygonRing, PolygonWithHoles,
     DetailedRouterOptions, route_detailed, run_physical_drc,
 )
-from pcbir.critical import _route_pair, _tune_pair
+from pcbir.critical import _route_pair, _tune_pair, _validate_candidate, _coupled_length
 
 
 def _pair_board() -> PhysicalBoard:
@@ -195,13 +196,22 @@ def test_pair_rejects_overlapping_return_via_and_floating_transition() -> None:
     )
     assert proposed.return_via_count == 1
     assert sum(via.net == "GND" for via in proposed_vias) == 1
+    rejected, rejected_tracks, rejected_vias = _validate_candidate(
+        board, proposed, _route_pair(board, *board.net_routing_rules,
+                                    {route.net: route for route in guides.routes})[1],
+        proposed_vias, [], [],
+    )
+    assert rejected.candidate_rejected and not rejected.connected
+    assert rejected_tracks == rejected_vias == ()
     result = route_critical_nets(board, guides)
     pair = result.nets[0]
-    assert result.status is CriticalRoutingStatus.FAILED
-    assert pair.candidate_rejected
+    # Global transitions are guides, not mandatory copper. A legal surface-only
+    # joint repair has no actual transition requiring a return via.
+    assert pair.connected and pair.strategy == "joint_pair_search"
     assert pair.return_via_count == 0
-    assert any("DRC-SHORT" in item for item in pair.diagnostics)
-    assert result.locked_tracks == result.locked_vias == ()
+    assert result.locked_vias == ()
+    assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE"}
+                   for f in run_physical_drc(result.board).findings)
 
 
 def test_tuning_is_bounded_but_requires_candidate_geometry_validation() -> None:
@@ -231,12 +241,131 @@ def test_pair_rejects_unsafe_exact_geometry_atomically(obstacle) -> None:
     else:
         board = replace(board, net_routing_rules=tuple(
             replace(rule, pair_gap_nm=nm_from_mm("0.05")) for rule in board.net_routing_rules))
-    result = route_critical_nets(board, guides)
-    assert result.status is CriticalRoutingStatus.FAILED
-    assert result.nets[0].candidate_rejected
-    assert result.nets[0].diagnostics
-    assert result.board.tracks == result.locked_tracks == ()
-    assert result.board.vias == result.locked_vias == ()
+    proposed, tracks, vias = _route_pair(board, *board.net_routing_rules,
+                                       {route.net: route for route in guides.routes})
+    result, tracks, vias = _validate_candidate(board, proposed, tracks, vias, [], [])
+    assert not result.connected and result.candidate_rejected and result.diagnostics
+    assert tracks == vias == ()
+
+
+def test_joint_pair_search_handles_staggered_midpoints_and_pad_pitches() -> None:
+    board = _pair_board()
+    footprint = replace(board.footprints[board.placements[0].footprint], name="wide-pair", pads=(
+        FootprintPad("1", Point.mm(0, "-0.8"), Size.mm("0.4", "0.4")),
+        FootprintPad("2", Point.mm(0, "0.8"), Size.mm("0.4", "0.4")),
+    ))
+    board = replace(board, footprints={**board.footprints, footprint.name: footprint},
+                    placements=(board.placements[0], replace(board.placements[1],
+                                footprint=footprint.name, position=Point.mm(35, 14))))
+    result = route_critical_nets(board, route_global(board))
+    assert result.nets[0].connected
+    assert result.nets[0].strategy == "joint_pair_search"
+    assert result.nets[0].coupled_length_nm > nm_from_mm(20)
+    assert result.locked_vias == ()
+    assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
+                   for f in run_physical_drc(result.board).findings)
+
+
+def test_coupled_measurement_is_invariant_under_split_parallel_edges() -> None:
+    width, spacing = nm_from_mm("0.2"), nm_from_mm("0.4")
+    a = [TrackSegment("A", Point.mm(5, 5), Point.mm(25, 5), width, CopperLayer.FRONT)]
+    b = [TrackSegment("B", Point.mm(7, "5.4"), Point.mm(23, "5.4"), width, CopperLayer.FRONT)]
+    split = [replace(b[0], end=Point.mm(15, "5.4")), replace(b[0], start=Point.mm(15, "5.4"))]
+    assert _coupled_length(a, b, spacing) == _coupled_length(a, split, spacing) == nm_from_mm(16)
+
+
+def test_joint_search_is_bounded_fail_closed_and_does_not_mutate_input() -> None:
+    from pcbir.pair_search import PairSearchStats, paired_candidates
+
+    board = _pair_board()
+    guides = {route.net: route for route in route_global(board).routes}
+    wall = CopperKeepout("full-wall", (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+        Point.mm(19, 0), Point.mm(21, 0), Point.mm(21, 25), Point.mm(19, 25),
+    ))))
+    board = replace(board, copper_keepouts=(wall,))
+    snapshot = board
+    stats = PairSearchStats()
+    assert list(paired_candidates(board, *board.net_routing_rules,
+                guides["USB_DP"], guides["USB_DM"], maximum_searches=2,
+                maximum_states=12, stats=stats)) == []
+    assert 0 < stats.searches <= 2
+    assert stats.searches <= stats.expanded_states <= 24
+    assert stats.candidates == 0
+    assert board == snapshot and board.tracks == board.vias == ()
+    with pytest.raises(ValueError, match="bounds"):
+        list(paired_candidates(board, *board.net_routing_rules,
+             guides["USB_DP"], guides["USB_DM"], maximum_states=0))
+
+
+def test_joint_search_supports_45_degree_rotated_terminal_rows() -> None:
+    board = _pair_board()
+    board = replace(board, placements=tuple(replace(placement, rotation_degrees=45)
+                                          for placement in board.placements),
+                    placement_rules=tuple(ComponentPlacementRule(placement.reference,
+                        allowed_orientations=(45,)) for placement in board.placements))
+    guides = route_global(board)
+    # A coarse floating transition is a proposal, not required copper. Force
+    # the joint fallback rather than accidentally exercising the old guide.
+    guides = replace(guides, routes=tuple(replace(route, vias=(GlobalViaProposal(
+        route.net, Point.mm(20, 12), CopperLayer.FRONT, CopperLayer.BACK,
+        "test-via"),)) if route.net == "USB_DM" else route for route in guides.routes))
+    first = route_critical_nets(board, guides)
+    second = route_critical_nets(board, guides)
+    assert first == second
+    assert first.nets[0].connected and first.nets[0].strategy == "joint_pair_search"
+    assert first.nets[0].search_states > 0 and first.nets[0].candidate_attempts > 0
+    assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
+                   for f in run_physical_drc(first.board).findings)
+
+
+def test_joint_miters_preserve_clearance_at_45_degree_corners() -> None:
+    from pcbir.pair_search import _lane_paths, _legal, _tracks
+    from pcbir.routing_clearance import RoutingClearanceIndex
+
+    board = _pair_board()
+    width, gap = nm_from_mm("0.25"), nm_from_mm("0.2")
+    lanes = _lane_paths((Point.mm(10, 5), Point.mm(15, 5),
+                         Point.mm(18, 8), Point.mm(18, 15)), 0, 2, (width + gap) // 2, 1)
+    assert lanes is not None
+    first, second = (_tracks("USB_DP", lanes[0], width, CopperLayer.FRONT),
+                     _tracks("USB_DM", lanes[1], width, CopperLayer.FRONT))
+    assert _legal(board, RoutingClearanceIndex(board), first, second,
+                  board.rules.minimum_clearance_nm)
+    assert _coupled_length(list(first), list(second), width + gap) > nm_from_mm(10)
+
+
+def test_joint_search_does_not_invent_copper_behind_a_tapered_port() -> None:
+    from pcbir.pair_search import PairSearchStats, _ports, _search, _lane_paths, _legal, _tracks
+    from pcbir.routing_clearance import RoutingClearanceIndex
+
+    board = _pair_board()
+    board = replace(board, copper_keepouts=(CopperKeepout("behind-port",
+        (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+            Point.mm("4.1", "11.7"), Point.mm("4.7", "11.7"),
+            Point.mm("4.7", "12.3"), Point.mm("4.1", "12.3"),
+        )))),))
+    width, offset = nm_from_mm("0.25"), nm_from_mm("0.225")
+    clearance, layer = board.rules.minimum_clearance_nm, CopperLayer.FRONT
+    index = RoutingClearanceIndex(board)
+    start = next(p for p in _ports(board, index, "USB_DP", "USB_DM",
+        Point.mm(5, "11.5"), Point.mm(5, "12.5"), "J1", width, offset, clearance, layer)
+        if p.center == Point.mm("5.5", 12))
+    end = next(p for p in _ports(board, index, "USB_DP", "USB_DM",
+        Point.mm(35, "11.5"), Point.mm(35, "12.5"), "J2", width, offset, clearance, layer)
+        if p.center == Point.mm("34.5", 12))
+    escaped = replace(board, tracks=(*start.first, *start.second, *end.first, *end.second))
+    index = RoutingClearanceIndex(escaped)
+    fictitious = _lane_paths((Point.mm("4.5", 12), start.center, Point.mm("6.5", 12)),
+                             0, 0, offset, start.sign)
+    assert not _legal(escaped, index,
+        _tracks("USB_DP", fictitious[0], width, layer),
+        _tracks("USB_DM", fictitious[1], width, layer), clearance)
+    candidate = _search(escaped, index, "USB_DP", "USB_DM", start, end,
+                        width, offset, clearance, layer, nm_from_mm(1), 100, PairSearchStats())
+    assert candidate is not None
+    routed = replace(escaped, tracks=(*escaped.tracks, *candidate[0], *candidate[1]))
+    assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
+                   for f in run_physical_drc(routed).findings)
 
 
 def test_subset_repair_cannot_reroute_or_prune_a_locked_pair() -> None:

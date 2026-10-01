@@ -28,6 +28,7 @@ from .geometry import segment_distance_squared
 from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
 from .drc import DrcSeverity, run_physical_drc
+from .pair_search import PairSearchStats, paired_candidates
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -54,6 +55,9 @@ class CriticalNetResult:
     evidence_digests: tuple[str, ...] = ()
     strategy: str = "global_guide"
     candidate_rejected: bool = False
+    search_states: int = 0
+    candidate_attempts: int = 0
+    pair_searches: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +94,9 @@ class CriticalRoutingResult:
                     "evidence_digests": list(item.evidence_digests),
                     "strategy": item.strategy,
                     "candidate_rejected": item.candidate_rejected,
+                    "search_states": item.search_states,
+                    "candidate_attempts": item.candidate_attempts,
+                    "pair_searches": item.pair_searches,
                 }
                 for item in self.nets
             ],
@@ -148,6 +155,36 @@ def route_critical_nets(
             result, pair_tracks, pair_vias = _validate_candidate(
                 board, result, pair_tracks, pair_vias, tracks, vias,
             )
+            if not result.connected and all(
+                routes.get(name) is not None and routes[name].connected
+                for name in (rule.net, partner_name)
+            ):
+                first, second = sorted((rule, partner_rule), key=lambda item: item.net)
+                search_board = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+                stats = PairSearchStats()
+                for pitch_nm in (1_000_000, 500_000, 250_000):
+                    for candidate in paired_candidates(
+                        search_board, first, second, routes[first.net], routes[second.net],
+                        stats=stats, pitch_nm=pitch_nm,
+                    ):
+                        attempt, proposed_tracks, proposed_vias = _route_pair(
+                            board, first, second, routes,
+                            exact_tracks=(candidate.first, candidate.second),
+                        )
+                        attempt, proposed_tracks, proposed_vias = _validate_candidate(
+                            board, attempt, proposed_tracks, proposed_vias, tracks, vias,
+                        )
+                        if attempt.connected:
+                            result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
+                            break
+                    if result.connected:
+                        break
+                result = replace(result, search_states=stats.expanded_states,
+                                 candidate_attempts=stats.candidates, pair_searches=stats.searches)
+                if not result.connected:
+                    result = replace(result, diagnostics=(*result.diagnostics,
+                        f"joint pair search: {stats.searches} searches, {stats.expanded_states} states, "
+                        f"{stats.candidates} candidates; none accepted"))
             processed.update((rule.net, partner_name))
             coupled_pairs.add(frozenset((rule.net, partner_name)))
             results.append(result)
@@ -408,6 +445,7 @@ def _route_pair(
     first_rule: NetRoutingRule,
     second_rule: NetRoutingRule,
     routes: dict[str, GlobalNetRoute],
+    *, exact_tracks: tuple[tuple[TrackSegment, ...], tuple[TrackSegment, ...]] | None = None,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     first_name, second_name = sorted((first_rule.net, second_rule.net))
     first = first_rule if first_rule.net == first_name else second_rule
@@ -460,7 +498,7 @@ def _route_pair(
             (),
         )
     offset = (first_width + gap) // 2
-    aligned = _aligned_pair_paths(guide, partner_guide, offset)
+    aligned = _aligned_pair_paths(guide, partner_guide, offset) if exact_tracks is None else ([], [])
     if aligned is None:
         positive, negative, junctions = _offset_guides(guide, offset)
     else:
@@ -478,6 +516,8 @@ def _route_pair(
     ]
     _join_offset_junctions(first.net, first_width, 0, junctions, first_tracks)
     _join_offset_junctions(second.net, second_width, 1, junctions, second_tracks)
+    if exact_tracks is not None:
+        first_tracks, second_tracks = list(exact_tracks[0]), list(exact_tracks[1])
     if aligned is None:
         first_tracks.extend(
             _pair_pin_stubs(first.net, guide, first_width, positive, 1, first_width + gap)
@@ -503,7 +543,7 @@ def _route_pair(
                                   else 0)
     pair_vias: list[Via] = []
     return_vias: list[Via] = []
-    for item in guide.vias:
+    for item in (() if exact_tracks is not None else guide.vias):
         for net, sign in ((first.net, 1), (second.net, -1)):
             pair_vias.append(_guide_via(
                 board, net, item,
@@ -577,7 +617,8 @@ def _route_pair(
             len(return_vias),
             tuned_length,
             evidence,
-            strategy="aligned_pair" if aligned is not None else "global_guide",
+            strategy=("joint_pair_search" if exact_tracks is not None else
+                      "aligned_pair" if aligned is not None else "global_guide"),
         ),
         tracks,
         tuple((*pair_vias, *return_vias)),
@@ -683,28 +724,43 @@ def _coupled_length(
     second_tracks: list[TrackSegment],
     center_spacing_nm: int,
 ) -> int:
-    """Measure the one-to-one parallel portion of an atomic pair route."""
-    used: set[int] = set()
-    total = 0
-    for first in first_tracks:
-        first_dx = first.end.x_nm - first.start.x_nm
-        first_dy = first.end.y_nm - first.start.y_nm
-        first_length = round(hypot(first_dx, first_dy))
-        for index, second in enumerate(second_tracks):
-            if index in used or first.layer is not second.layer:
-                continue
-            second_dx = second.end.x_nm - second.start.x_nm
-            second_dy = second.end.y_nm - second.start.y_nm
-            if first_dx * second_dy != first_dy * second_dx:
-                continue
-            if round(hypot(second_dx, second_dy)) != first_length:
-                continue
-            if segment_distance_squared(first.start, first.end, second.start, second.end) != center_spacing_nm ** 2:
-                continue
-            used.add(index)
-            total += first_length
-            break
-    return total
+    """Measure unioned parallel overlaps, including unequal mitered segments.
+
+    Integer diagonal offsets/intersections have at most a few nanometres of
+    quantization error. A 4 nm geometry tolerance is not an electrical tolerance
+    or permission to waive physical DRC. Split edges cannot double-count overlap.
+    """
+    def measure(tracks: list[TrackSegment], partners: list[TrackSegment]) -> int:
+        total = 0
+        for first in tracks:
+            dx, dy = first.end.x_nm - first.start.x_nm, first.end.y_nm - first.start.y_nm
+            length = hypot(dx, dy)
+            intervals = []
+            for second in partners:
+                if first.layer is not second.layer:
+                    continue
+                sx, sy = second.end.x_nm - second.start.x_nm, second.end.y_nm - second.start.y_nm
+                if abs(dx * sy - dy * sx) > 2 * max(length, hypot(sx, sy)):
+                    continue
+                distances = [abs(dx * (p.y_nm - first.start.y_nm)
+                                 - dy * (p.x_nm - first.start.x_nm)) / length
+                             for p in (second.start, second.end)]
+                if any(abs(distance - center_spacing_nm) > 4 for distance in distances):
+                    continue
+                projections = sorted((dx * (p.x_nm - first.start.x_nm)
+                                      + dy * (p.y_nm - first.start.y_nm)) / length
+                                     for p in (second.start, second.end))
+                low, high = max(0, projections[0]), min(length, projections[1])
+                if low < high:
+                    intervals.append((low, high))
+            edge_length, end = 0.0, 0.0
+            for low, high in sorted(intervals):
+                edge_length += max(0, high - max(low, end))
+                end = max(end, high)
+            total += round(edge_length)
+        return total
+
+    return min(measure(first_tracks, second_tracks), measure(second_tracks, first_tracks))
 
 
 def _paired_via_transitions(
@@ -953,7 +1009,8 @@ def _fingerprint(
         "results": [
             (item.nets, item.connected, item.lengths_nm, item.skew_nm,
              item.diagnostics, item.assumptions, item.strategy,
-             item.candidate_rejected, item.evidence_digests)
+             item.candidate_rejected, item.evidence_digests,
+             item.search_states, item.candidate_attempts, item.pair_searches)
             for item in results
         ],
     }
