@@ -34,3 +34,26 @@ direct neutral control, preferred/rejected/zone cases and mixed-policy local
 repair. A null or absent policy in historical results means **unavailable**,
 not an inferred zero-cost policy. The pass-13 full rerun started before this
 report-only addition and therefore cannot report which fallback won.
+
+## Physical guide-deviation cost
+
+Guide exposure is measured along the entire planar edge against the union of
+same-layer segment capsules (guide half-width plus search margin) and access
+squares (search margin). The cost is 50 units/mm outside that union, in addition
+to the baseline 10 units/mm and layer/direction preferences. Partly covered
+edges pay only for their uncovered length, even when the destination is inside.
+Overlaps do not double-count coverage. Straight-edge subdivision or routing-pitch
+changes no longer add fixed 50-unit charges. Intersection parameters use floats;
+rounding once per edge can change the sum by at most a nanometre per additional
+edge (50 integer micro-cost units), not 50 whole cost units.
+
+A via has no planar run length. Only a transition from guided to unguided
+membership pays a separate 50-unit guide-exit event; transitions already outside
+do not repeat it. Existing via/bend/congestion events remain separate. Projected
+guide search projects both membership and exposure across **allowed** layers;
+it does not open the reserved plane or override explicit net-layer restrictions.
+
+`guide_deviation_count` remains an endpoint/edge diagnostic. It is not the new
+wirelength-based cost, a grid-invariant quantity or a physical-rule finding.
+The first-feasible guided-stage policy and whole-scope neutral fallback still
+have their separately tracked R5/R6b limitations.

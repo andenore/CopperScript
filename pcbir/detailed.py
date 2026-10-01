@@ -40,6 +40,7 @@ from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
 from .routing_costs import COST_UNIT, length_cost, preference_cost
+from .routing_guides import GuideExposure, guide_transition_cost
 from .surface_path import _track_inside_board
 
 
@@ -1085,6 +1086,9 @@ def _search_once(
     movable_edge_cache: dict[tuple[DetailedNode, DetailedNode], int] = {}
     edge_resource_cache: dict[tuple[DetailedNode, DetailedNode], tuple[str, ...]] = {}
     layer_ranks, headings = signal_layer_preferences(grid.board)
+    guide_exposure = GuideExposure(guide, guide_margin_nm,
+                                   ignore_layer=project_guide_layers)
+    guide_edge_costs: dict[tuple[DetailedNode, DetailedNode], int] = {}
 
     def heuristic(node: DetailedNode) -> int:
         value = heuristic_cache.get(node)
@@ -1179,10 +1183,17 @@ def _search_once(
             if next_direction == "v":
                 base = options.via_cost * COST_UNIT
                 preference = 0
+                deviation = guide_transition_cost(inside_guide(node), not outside,
+                                                  50 * COST_UNIT)
             else:
                 first_point, second_point = grid.point(node), grid.point(neighbor)
                 base = length_cost(first_point, second_point)
                 layer = grid.layers[node.layer_index]
+                deviation = guide_edge_costs.get(edge)
+                if deviation is None:
+                    deviation = 50 * guide_exposure.outside_length_nm(
+                        first_point, second_point, layer)
+                    guide_edge_costs[edge] = deviation
                 wrong_way = 0
                 diagonal = False
                 heading = headings.get(layer)
@@ -1210,7 +1221,7 @@ def _search_once(
                     else 0
                 )
             step = (
-                base + preference + COST_UNIT * (bend + congestion + (50 if outside else 0)
+                base + preference + deviation + COST_UNIT * (bend + congestion
                 + 2 * options.present_penalty * movable_edge_cache[edge])
             )
             candidate_cost = cost + step

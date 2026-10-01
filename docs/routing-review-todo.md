@@ -79,11 +79,17 @@ Completion means tested implementation, not automatic manufacturing signoff.
     geometry/route fingerprints. See [policy reporting](routing-search-policy.md).
     The full pass-13 run loaded the previous source; its policy choice remains
     unavailable. Whole-scope fallback localization is still open.
-- [ ] R16 (layer-review code finding): Normalize guide-deviation run cost by
+- [x] R16 (layer-review code finding): Normalize guide-deviation run cost by
   physical length and separate actual guide-boundary events. The current fixed
   50-unit charge per outside edge varies with pad-inserted coordinate splits.
   Add split/pitch-invariance regressions and matched layer/route comparisons,
   preserving explicit layer rules, reference-plane reservation and acceptance.
+  Implemented analytic uncovered-length union and separate via guide-exit
+  events. [Pass 14](routing-review-pass14.md) tests split/pitch/search costs and
+  replays all three failed nets with identical saved copper/global guides.
+  No complete net closes; KiCad retains 34 open items/eight library findings.
+  Local package-escape blockage, not guide-cost normalization alone, is now
+  the next reproduced R6a case. This does not close R5/R6a/R6b/R7/R9.
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,
   including orthogonal-first/budget-fallback routes; protect pads, junctions,
   vias, and exact clearance. Improve topology without breaking existing trees.
