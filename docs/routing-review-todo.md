@@ -71,6 +71,11 @@ Completion means tested implementation, not automatic manufacturing signoff.
   toward U_MCU.64; V3V3 exhausts 200,000 states toward R_RESET_MCU.1. Global
   overflow is zero while these fine-access/tree failures remain. Reproduce
   failures with existing critical/ground copper before forcing layer balance.
+  - [x] Analyze immutable legal fanout candidate domains and prioritize low-slack
+    pins before easy neighbors, with exact incremental/final clearance and
+    per-pin diagnostics. [Pass 15](routing-review-pass15.md) improves 68 to 69
+    escapes on the same critical/GND-only checkpoint. MCU.62/.64 have zero
+    radial candidates even before ordinary fanout; R6a remains open.
 - [ ] R6b: Localize neutral-cost fallback and report effective policy rather
   than silently replacing the whole board with an unreported neutral rerun.
   - [x] Report requested/effective detailed costs and attempted/selected fallback
@@ -90,6 +95,14 @@ Completion means tested implementation, not automatic manufacturing signoff.
   No complete net closes; KiCad retains 34 open items/eight library findings.
   Local package-escape blockage, not guide-cost normalization alone, is now
   the next reproduced R6a case. This does not close R5/R6a/R6b/R7/R9.
+- [ ] R17 (pass-15 access finding): Add bounded two-leg straight/45-degree
+  package exits and explicitly verified multi-segment fanout anchors. Radial
+  allocation alone has zero legal candidates for MCU.62/.64 before ordinary
+  routing. Preserve exact pad/via contacts, complete physical span, ground and
+  critical reservations, no-via-in-pad rules and transactional ownership/cleanup.
+  Compare candidates against immutable geometry first; if no legal exit exists,
+  use owned-escape/placement feedback rather than weakening clearance. Then
+  rerun the entire pipeline and repeat independent KiCad/layer review.
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,
   including orthogonal-first/budget-fallback routes; protect pads, junctions,
   vias, and exact clearance. Improve topology without breaking existing trees.

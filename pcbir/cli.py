@@ -727,6 +727,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_via_count": result.fanout.added_via_count,
                     "escaped_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.accesses],
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
+                    "pin_access_analysis": [{
+                        "pad": f"{item.pad.component}.{item.pad.pad}",
+                        "legal_candidate_count": item.legal_candidate_count,
+                        "selected_candidate_index": item.selected_candidate_index,
+                        "diagnostic": item.diagnostic,
+                    } for item in result.fanout.pin_analysis],
                 }
             if stitch is not None:
                 report["plane_stitch"] = {

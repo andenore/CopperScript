@@ -34,12 +34,19 @@ retain deterministic output and must not weaken exact native or KiCad DRC.
   fanout, and detailed routing compatible with it.
 - [ ] Add focused QFP/QFN package tests and a physically realized nearest-
   access trap beyond the current synthetic candidate-selection fixture.
+  - [x] Pass-15 fanout regression uses real radial candidate generation and
+    rectangular via-only keepouts with two available sites. Low-slack ordering
+    escapes both pins; nearest/reference-first allocation strands one. Broader
+    QFP/QFN and joint escape coverage remains open.
 - [ ] Benchmark candidate count, completion, runtime, and KiCad DRC against the
   baseline; do not call an abstractly connected net physically routed.
 
 ## 3. Solve package escapes together
 
 - [ ] Build a conflict graph for candidates belonging to nearby pins and nets.
+  - [x] Enumerate immutable legal radial domains, prioritize low-slack pins,
+    recheck selected escapes incrementally and expose initial/consumed-domain
+    diagnostics. This is a tested first increment, not joint matching/search.
 - [ ] Select a compatible set with deterministic bounded matching/search, then
   negotiated swaps for larger clusters; include onward-route cost.
 - [ ] Keep escapes provisional until area routing succeeds and allow local

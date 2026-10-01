@@ -340,6 +340,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
             sys.executable, "-m", "copperscript", "route-board",
             "examples/valid_board.copper", "--allow-proxy-footprints",
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
+            "--fanout",
             "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
             "--plane-stitch-radius-mm", "5",
             "--critical-feedback-trials", "1",
@@ -352,6 +353,9 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     document = json.loads(report.read_text(encoding="utf-8"))
     assert document["schema"] == "copperscript-route-board/v0.1"
     assert document["erc_pass"]
+    assert isinstance(document["fanout"]["pin_access_analysis"], list)
+    assert all(set(item) == {"pad", "legal_candidate_count", "selected_candidate_index", "diagnostic"}
+               for item in document["fanout"]["pin_access_analysis"])
     assert document["fabrication_ready"] is False
     assert document["critical_placement_feedback"] == {"accepted_moves": 0, "trials": []}
     assert document["detailed"]["status"] in {"success", "partial"}

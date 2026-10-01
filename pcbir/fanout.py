@@ -28,11 +28,22 @@ class FanoutOptions:
     maximum_neighbor_distance_nm: int = nm_from_mm("1.5")
     step_nm: int = nm_from_mm("0.5")
     maximum_radius_nm: int = nm_from_mm("3")
+    constrained_pins_first: bool = True
 
     def __post_init__(self) -> None:
         if min(self.minimum_component_pads, self.maximum_neighbor_distance_nm,
                self.step_nm, self.maximum_radius_nm) <= 0:
             raise ValueError("fanout options must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class FanoutPinAnalysis:
+    """Initial immutable-domain slack and selected alternative; not signoff."""
+
+    pad: PadReference
+    legal_candidate_count: int
+    selected_candidate_index: int | None
+    diagnostic: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,14 +54,22 @@ class FanoutResult:
     added_track_count: int
     added_via_count: int
     created_vias: tuple[Via, ...] = ()
+    pin_analysis: tuple[FanoutPinAnalysis, ...] = ()
 
 
 def route_fanout(
     board: PhysicalBoard, options: FanoutOptions | None = None,
+    *, only_nets: frozenset[str] | None = None,
 ) -> FanoutResult:
     """Escape only crowded ordinary-net SMD pads to legal through-vias."""
 
     options = options or FanoutOptions()
+    if only_nets is not None:
+        unknown = only_nets - {net.name for net in board.nets}
+        if unknown:
+            raise ValueError(f"unknown fanout nets: {', '.join(sorted(unknown))}")
+        if not only_nets:
+            return FanoutResult(board, MappingProxyType({}), (), 0, 0)
     if len(board.stackup.copper_layers) < 2:
         return FanoutResult(board, MappingProxyType({}), (), 0, 0)
     clearance = RoutingClearanceIndex(board)
@@ -67,7 +86,8 @@ def route_fanout(
         for pad in surface:
             reference = PadReference(placement.reference, pad.number)
             net = net_by_pad.get(reference)
-            if net is None or net in zone_nets:
+            if (net is None or net in zone_nets
+                    or only_nets is not None and net not in only_nets):
                 continue
             rule = rules.get(net)
             if rule is not None and rule.kind is not RouteKind.GENERAL:
@@ -87,24 +107,26 @@ def route_fanout(
     pending: list[PadReference] = []
     via_size = board.rules.default_via_size_nm
     via_drill = board.rules.default_via_drill_nm
-    for _, reference, position, placement, pad in sorted(
-        pads, key=lambda item: (item[0], item[1])
-    ):
+    # Analyze every pin against the same immutable input before reserving an
+    # easy neighbor's escape. Domains are physically legal alternatives, not
+    # guaranteed mutually compatible routes or proof of onward connectivity.
+    domains: dict[PadReference, tuple[tuple[TrackSegment, Via | None], ...]] = {}
+    for _, reference, position, placement, pad in pads:
         net = net_by_pad[reference]
         side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
         rule = rules.get(net)
         allowed = routing_layers(board, net, rule)
         if side not in allowed or len(allowed) < 2:
-            pending.append(reference)
+            domains[reference] = ()
             continue
         other_layer = next((layer for layer in allowed if layer is not side), None)
         span = physical_via_span(board, side, other_layer) if other_layer else None
         if span is None:
-            pending.append(reference)
+            domains[reference] = ()
             continue
         width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
         bounds = placed_pad_shape(position, pad, placement).bounds
-        choice: tuple[TrackSegment, Via | None] | None = None
+        choices: list[tuple[TrackSegment, Via | None]] = []
         for candidate in _candidates(position, placement.position, options):
             margin = via_size // 2 + board.rules.minimum_clearance_nm
             if not point_in_polygon(candidate, board.outline.vertices):
@@ -116,7 +138,7 @@ def route_fanout(
                     and bounds.min_y - via_size // 2 <= candidate.y_nm <= bounds.max_y + via_size // 2):
                 continue
             track = TrackSegment(net, position, candidate, width, side)
-            coincident = tuple(item for item in (*board.vias, *vias)
+            coincident = tuple(item for item in board.vias
                                if item.position == candidate)
             existing = next((item for item in coincident
                              if item.net == net and item.from_layer == span[0]
@@ -127,8 +149,36 @@ def route_fanout(
             if (clearance.can_track(net, track.start, track.end, width, side)
                     and (existing is not None or clearance.can_via(
                         net, candidate, via_size, span[0], span[1]))):
+                choices.append((track, via))
+        domains[reference] = tuple(choices)
+
+    ordered = sorted(pads, key=lambda item: (
+        len(domains[item[1]]) if options.constrained_pins_first else 0,
+        item[0], item[1],
+    ))
+    analysis: list[FanoutPinAnalysis] = []
+    for _, reference, _, _, _ in ordered:
+        net = net_by_pad[reference]
+        choice = None
+        selected_index = None
+        for index, (track, via) in enumerate(domains[reference]):
+            existing = next((item for item in (*board.vias, *vias)
+                             if item.net == net and item.position == track.end
+                             and (via is None or (item.from_layer, item.to_layer)
+                                  == (via.from_layer, via.to_layer))), None)
+            if existing is not None:
+                via = None
+            if (clearance.can_track(net, track.start, track.end, track.width_nm, track.layer)
+                    and (via is None or clearance.can_via(net, via.position, via.size_nm,
+                                                        via.from_layer, via.to_layer))):
                 choice = track, via
+                selected_index = index
                 break
+        analysis.append(FanoutPinAnalysis(
+            reference, len(domains[reference]), selected_index,
+            ("no legal candidate against immutable input" if not domains[reference]
+             else "all initial candidates blocked by selected escapes") if choice is None else "",
+        ))
         if choice is None:
             pending.append(reference)
             continue
@@ -141,7 +191,8 @@ def route_fanout(
             clearance.add_via(via, locked=True)
 
     if not tracks:
-        return FanoutResult(board, MappingProxyType({}), tuple(pending), 0, 0)
+        return FanoutResult(board, MappingProxyType({}), tuple(pending), 0, 0,
+                            pin_analysis=tuple(analysis))
     routed = replace(board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias))
     # Geometry queries are the fast gate; native DRC is the final transactional
     # gate. A new manufacturing violation rejects the whole fanout proposal.
@@ -154,9 +205,12 @@ def route_fanout(
     if any(sum(item.code == code for item in after.findings) > before_count[code]
            for code in fatal):
         return FanoutResult(board, MappingProxyType({}),
-                            tuple(item[1] for item in pads), 0, 0)
+                            tuple(item[1] for item in pads), 0, 0, pin_analysis=tuple(
+                                replace(item, selected_candidate_index=None,
+                                        diagnostic="whole fanout proposal rejected by native DRC")
+                                for item in analysis))
     return FanoutResult(routed, MappingProxyType(accesses), tuple(pending),
-                        len(tracks), len(vias), tuple(vias))
+                        len(tracks), len(vias), tuple(vias), tuple(analysis))
 
 
 def _candidates(position: Point, center: Point, options: FanoutOptions):

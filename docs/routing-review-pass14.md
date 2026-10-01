@@ -51,6 +51,11 @@ items on the same three nets and eight unchanged library findings. No new hard
 copper violations, critical opens or GND opens appear. No committed copper or
 layer-use improvement is claimed; the prior six-layer shape/density review
 continues to apply to this unchanged geometry.
+Fresh installed-KiCad extraction also matches the original tracks, vias, pads,
+component poses, fills and board edges as complete multisets: 646 tracks,
+153 vias, 471 pads and one filled polygon. Recomputed per-layer lengths retain
+F.Cu 526.4714, In2.Cu 429.8056, In3.Cu 264.2810, In4.Cu 122.3036 and B.Cu
+37.5895 mm of signal copper; the reserved In1.Cu plane has no signal tracks.
 
 ## Access findings and next implementation
 
@@ -81,5 +86,7 @@ Evidence is in task outputs `routing-review-pass14-guide-costs/`: `retry.py`,
 `global.json`, six per-case route/native/export artifacts, `search-events.json`,
 `diagnose_access.py`, `access-diagnosis.json`, independent `physical-V3V3-drc.json`
 and source/baseline `provenance.json`. Task outputs are not library signoff.
+`verified-geometry.json` and `verified-layer-analysis.json` contain the fresh
+installed-KiCad re-extraction and repeated layer measurements.
 RF/support/stackup qualification, library findings and independent CAM remain
 production gates.
