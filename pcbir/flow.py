@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from .critical import CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets
+from .critical_feedback import CriticalPlacementFeedbackResult, improve_critical_placement
 from .detailed import DetailedRouterOptions, DetailedRoutingResult, DetailedRoutingStatus, route_detailed
 from .drc import DrcDecision, PhysicalDrcPolicy, PhysicalDrcReport
 from .fanout import FanoutOptions, FanoutResult, route_fanout
@@ -14,7 +15,7 @@ from .pad_stitch import DuplicatePadStitchResult
 from .route_closure import close_detailed_lands
 from .physical import PhysicalBoard, nm_from_mm
 from .placement import PlacementPlannerOptions
-from .routeflow import (PlacementRoutingFeedbackOptions, PlacementRoutingResult,
+from .routeflow import (FeedbackStatus, PlacementRoutingFeedbackOptions, PlacementRoutingResult,
                         detailed_failure_trials, optimize_placement_for_routing)
 from .routing import GlobalRouterOptions, GlobalRoutingStatus, route_global
 
@@ -35,6 +36,7 @@ class RoutingPipelineResult:
     plane_stitch: PlaneStitchResult | None = None
     detailed_feedback_trials: int = 0
     duplicate_pad_stitch: DuplicatePadStitchResult | None = None
+    critical_feedback: CriticalPlacementFeedbackResult | None = None
 
     @property
     def board(self) -> PhysicalBoard:
@@ -53,6 +55,7 @@ def run_routing_pipeline(
     plane_stitch_options: PlaneStitchOptions | None = None,
     detailed_feedback_trials: int = 0,
     detailed_feedback_movement_nm: int = nm_from_mm("0.5"),
+    critical_feedback_trials: int = 0,
 ) -> RoutingPipelineResult:
     """Run steps 4–8 in dependency order without weakening an earlier gate."""
 
@@ -62,12 +65,25 @@ def run_routing_pipeline(
     feedback_options = feedback_options or PlacementRoutingFeedbackOptions(
         initial_movement_nm=global_options.tile_size_nm
     )
-    if detailed_feedback_trials < 0 or detailed_feedback_movement_nm <= 0:
-        raise ValueError("detailed feedback bounds are invalid")
+    if detailed_feedback_trials < 0 or critical_feedback_trials < 0 or detailed_feedback_movement_nm <= 0:
+        raise ValueError("routing placement feedback bounds are invalid")
     placement = optimize_placement_for_routing(
         board, placement_options, global_options, feedback_options
     )
     critical = route_critical_nets(placement.board, placement.global_route)
+    critical_feedback = None
+    if critical_feedback_trials:
+        critical_feedback = improve_critical_placement(
+            placement.board, placement.global_route, critical, maximum_trials=critical_feedback_trials,
+            placement_options=placement_options, global_options=global_options,
+        )
+        critical = critical_feedback.critical
+        if critical_feedback.accepted_moves:
+            placement = replace(placement, board=critical_feedback.board,
+                                global_route=critical_feedback.global_route,
+                                status=FeedbackStatus.PASS,
+                                full_route_certified=True,
+                                placement_candidate=placement.placement_candidate + "-critical")
     plane_stitch = (
         stitch_zone_pads(critical.board, plane_stitch_options)
         if plane_stitch_options else None
@@ -153,6 +169,7 @@ def run_routing_pipeline(
         plane_stitch=plane_stitch,
         detailed_feedback_trials=trials_run,
         duplicate_pad_stitch=duplicate_stitch,
+        critical_feedback=critical_feedback,
     )
 
 

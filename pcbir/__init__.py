@@ -19,6 +19,11 @@ from .critical import (
     CriticalRoutingStatus,
     route_critical_nets,
 )
+from .critical_feedback import (
+    CriticalPlacementFeedbackResult,
+    CriticalPlacementTrial,
+    improve_critical_placement,
+)
 from .detailed import (
     DetailedNetResult,
     DetailedNode,
@@ -253,6 +258,9 @@ from .routing import (
 from .syntax import CopperScriptError, SourceLocation
 
 __all__ = [
+    "CriticalPlacementFeedbackResult",
+    "CriticalPlacementTrial",
+    "improve_critical_placement",
     "AlignmentAxis",
     "AnalysisStatus",
     "Artifact",

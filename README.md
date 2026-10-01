@@ -153,6 +153,14 @@ The command below is still the full workflow, not a reproduction of the
 historical zero-open copper. Run the [cheap critical preflight](docs/full-vertical-example.md#explicit-critical-profiles-and-cheap-preflight)
 first; RF cluster placement, return-path and complete-board rerun work remain.
 
+If exact critical routing fails, optionally add `--critical-feedback-trials 1`
+to `route-board` or the critical preflight. This bounded
+[critical placement feedback](docs/critical-placement-feedback.md) tries legal
+whole-unit rotations/moves and rebuilds all critical copper; it does not relax
+profile limits or imply fabrication readiness. Each trial can take minutes.
+The [pass-9 verification](docs/routing-review-pass9.md) connects both USB pairs
+with the RF scene intact; ordinary routing and electrical qualification remain open.
+
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6
 and Python 3.12. Start in the directory where you want both repositories:

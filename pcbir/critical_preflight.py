@@ -16,6 +16,7 @@ from time import perf_counter
 
 from .backends.kicad_pcb import KiCadPcbBackend
 from .critical import CriticalRoutingStatus, route_critical_nets
+from .critical_feedback import improve_critical_placement
 from .drc import run_physical_drc
 from .erc import check, has_errors
 from .footprints import FootprintResolver
@@ -41,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--placement-candidate")
     parser.add_argument("--placement-templates", type=Path)
     parser.add_argument("--feedback-iterations", type=int, default=1)
+    parser.add_argument("--critical-feedback-trials", type=int, default=0)
     parser.add_argument("--router-iterations", type=int, default=5)
     parser.add_argument("--tile-size-mm", default="5")
     parser.add_argument("--report", type=Path, required=True)
@@ -59,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"CRITICAL PREFLIGHT: {stage}", flush=True)
 
     try:
+        if args.critical_feedback_trials < 0:
+            raise ValueError("critical placement feedback trial count cannot be negative")
         started = perf_counter()
         electrical = load_board(args.board, locked=args.locked, offline=args.offline)
         diagnostics = check(electrical)
@@ -114,6 +118,31 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {key}: {event}", flush=True)
 
         critical = route_critical_nets(placement.board, placement.global_route, on_progress=critical_progress)
+        if args.critical_feedback_trials:
+            report["critical_baseline"] = json.loads(critical.to_json())
+            report["critical_placement_feedback"] = []
+            def trial_started(index, reference, trial_board):
+                pose = next(pose for pose in trial_board.placements if pose.reference == reference)
+                report["critical_placement_running"] = {
+                    "index": index, "reference": reference, "rotation_degrees": str(pose.rotation_degrees),
+                    "position_nm": [pose.position.x_nm, pose.position.y_nm],
+                }
+                checkpoint("critical_placement_trial_running")
+            def trial_progress(trial):
+                report["critical_placement_feedback"].append(asdict(trial))
+                report.pop("critical_placement_running", None)
+                checkpoint("critical_placement_trial_complete")
+            repaired = improve_critical_placement(
+                placement.board, placement.global_route, critical,
+                maximum_trials=args.critical_feedback_trials,
+                placement_options=PlacementPlannerOptions(candidate_count=args.candidates),
+                global_options=global_options, on_trial_started=trial_started,
+                on_trial=trial_progress, on_progress=critical_progress,
+            )
+            critical = repaired.critical
+            report.update(critical_placement_accepted_moves=repaired.accepted_moves,
+                          global_route=json.loads(repaired.global_route.to_json()),
+                          global_route_certified=repaired.global_route.status.value == "success")
         timings["critical"] = perf_counter() - started
         report.update(complete=True, critical=json.loads(critical.to_json()),
                       native_drc=json.loads(run_physical_drc(critical.board).to_json()))
@@ -127,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{','.join(item.nets)}: {'connected' if item.connected else 'FAILED'} ({item.strategy})")
             for diagnostic in item.diagnostics:
                 print(f"  {diagnostic}")
-        return 0 if placement.full_route_certified and critical.status is not CriticalRoutingStatus.FAILED else 1
+        return 0 if report["global_route_certified"] and critical.status is not CriticalRoutingStatus.FAILED else 1
     except (BoardLoadError, ValueError, OSError) as exc:
         print(f"CRITICAL PREFLIGHT ERROR: {exc}")
         return 2

@@ -342,6 +342,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
             "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
             "--plane-stitch-radius-mm", "5",
+            "--critical-feedback-trials", "1",
             "--report", str(report), "-o", str(pcb),
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -352,6 +353,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["schema"] == "copperscript-route-board/v0.1"
     assert document["erc_pass"]
     assert document["fabrication_ready"] is False
+    assert document["critical_placement_feedback"] == {"accepted_moves": 0, "trials": []}
     assert document["detailed"]["status"] in {"success", "partial"}
     assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
     assert "signal_track_length_nm" in document["route_geometry"]

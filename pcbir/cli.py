@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from decimal import InvalidOperation
 from math import isqrt
 from pathlib import Path
@@ -248,6 +249,8 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--tile-size-mm", default="5")
     board_route_parser.add_argument("--router-iterations", type=int, default=5)
     board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
+    board_route_parser.add_argument("--critical-feedback-trials", type=int, default=0,
+                                    help="bounded rotations/moves around failed critical nets, before ordinary routing")
     board_route_parser.add_argument("--pitch-mm", default="1")
     board_route_parser.add_argument("--passes", type=int, default=1)
     board_route_parser.add_argument("--search-budget", type=int, default=50_000)
@@ -583,6 +586,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     fanout_options=fanout_options,
                     plane_stitch_options=early_options,
                     detailed_feedback_trials=args.detailed_feedback_trials,
+                    critical_feedback_trials=args.critical_feedback_trials,
                 )
                 escape_feedback = (
                     improve_zone_escapes(
@@ -652,6 +656,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "detailed": json.loads(result.detailed.to_json()),
                 "drc": json.loads(output_drc.to_json()),
             }
+            if result.critical_feedback is not None:
+                report["critical_placement_feedback"] = {
+                    "accepted_moves": result.critical_feedback.accepted_moves,
+                    "trials": [asdict(trial) for trial in result.critical_feedback.trials],
+                }
             if escape_feedback is not None:
                 report["zone_escape_feedback"] = {
                     "trials": [

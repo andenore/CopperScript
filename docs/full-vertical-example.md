@@ -179,6 +179,12 @@ or a completed full-board rerun. Subsequent RF topology corrections require a
 new rerun: at the old placement the modem pair is pending again, as recorded
 in the RF audit. RF reference-layout clusters are next.
 
+With the provisional source-backed RF scene, [pass 9](routing-review-pass9.md)
+uses `--critical-feedback-trials 1` to rotate the choke algorithmically and rebuild
+all critical groups. Independent KiCad verifies zero critical opens. The USB
+detours, remaining RF support/keepouts and complete ordinary rerun are still open;
+this does not qualify impedance or production readiness.
+
 ## Acceptance stages
 
 1. **Electrical frontend (implemented):** parsing, package resolution,

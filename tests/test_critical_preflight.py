@@ -90,3 +90,46 @@ def test_completed_group_checkpoint_retains_metrics_but_not_full_signoff(tmp_pat
     assert group["result"]["guide_length_nm"] == 5000000
     assert group["result"]["local_candidate_attempts"] == 1
     assert data["fabrication_ready"] is False and "critical" not in data
+
+
+def test_preflight_forwards_opt_in_feedback_and_exports_selected_result(tmp_path, monkeypatch):
+    import pcbir.critical_preflight as preflight
+    from pcbir.critical_feedback import improve_critical_placement
+
+    seen = []
+    def observe(board, global_route, critical, **kwargs):
+        seen.append(kwargs["maximum_trials"])
+        return improve_critical_placement(board, global_route, critical, **kwargs)
+
+    monkeypatch.setattr(preflight, "improve_critical_placement", observe)
+    report = tmp_path / "feedback.json"
+    main([str(ROOT / "examples" / "valid_board.copper"), "--allow-proxy-footprints",
+          "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
+          "--critical-feedback-trials", "1", "--report", str(report)])
+    data = json.loads(report.read_text())
+    assert seen == [1] and data["critical_placement_accepted_moves"] == 0
+    assert data["complete"] and not data["fabrication_ready"]
+
+
+def test_feedback_interruption_retains_baseline_and_proposed_pose(tmp_path, monkeypatch):
+    import pcbir.critical_preflight as preflight
+
+    def interrupt(board, global_route, critical, *, on_trial_started, **kwargs):
+        on_trial_started(1, board.placements[0].reference, board)
+        raise ValueError("trial interrupted before global completion")
+
+    monkeypatch.setattr(preflight, "improve_critical_placement", interrupt)
+    report = tmp_path / "feedback.json"
+    assert main([str(ROOT / "examples" / "valid_board.copper"), "--allow-proxy-footprints",
+          "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
+          "--critical-feedback-trials", "1", "--report", str(report)]) == 2
+    data = json.loads(report.read_text())
+    assert data["stage"] == "critical_placement_trial_running" and not data["complete"]
+    assert "critical_baseline" in data and "critical" not in data
+    assert data["critical_placement_running"]["index"] == 1
+    assert data["critical_placement_feedback"] == [] and not data["fabrication_ready"]
+
+
+def test_preflight_rejects_negative_feedback_before_loading(tmp_path):
+    assert main([str(tmp_path / "does-not-exist.copper"), "--critical-feedback-trials", "-1",
+                 "--report", str(tmp_path / "report.json")]) == 2

@@ -92,9 +92,21 @@ Completion means tested implementation, not automatic manufacturing signoff.
       [Pass 8](routing-review-pass8.md) reduces the raw tree to 2.31 mm without
       placement changes or hard independent copper findings. RF qualification
       and the wider R5 scope remain open.
-    - [ ] Reevaluate paired package access/placement for the pass-7 modem USB
+    - [x] Reevaluate paired package access/placement for the pass-7 modem USB
       failure (24 searches, 720,000 states, zero candidates), without increasing
       budgets blindly, routing members independently or discarding reservations.
+      - [x] Implement opt-in bounded legal whole-unit critical placement feedback;
+        rebuild all critical reservations and require strictly fewer failed net
+        identities with no fresh hard native DRC. Fixed/rigid/45-degree and
+        rollback/integration tests are in place. See
+        [controller contract](critical-placement-feedback.md). [Pass 9](routing-review-pass9.md)
+        accepts an algorithmic FL_USB rotation, rebuilding all groups; KiCad finds
+        zero critical opens and no hard copper errors. Ordinary routing remains open.
+      - [ ] Improve the connected paired geometry without weakening profile or
+        atomic connectivity checks: pass 9's modem pair uses 214 segments and
+        60.37/62.88 mm paths, while the MCU pair becomes longer. This extends R5
+        to paired quality comparison; a connected detour is not a minimum-length
+        or electrically qualified route.
   - [ ] R8d: After critical preflight passes, perform the complete rerun and
     independent KiCad layer review. Bind actual impedance/return-path evidence
     to the selected physical stackup before any critical-net signoff claim.
