@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_left
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
 from heapq import heappop, heappush
@@ -37,6 +37,7 @@ from .routing import GlobalNetRoute, GlobalRoutingResult
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
+from .routing_costs import COST_UNIT, length_cost, preference_cost
 
 
 class DetailedRoutingStatus(str, Enum):
@@ -190,6 +191,9 @@ class _Grid:
     board: PhysicalBoard
     blocked: frozenset[DetailedNode]
     pitch_nm: int
+    diagonal_successors: dict[tuple[tuple[int, ...], tuple[int, ...], int, int], tuple[tuple[int, int], ...]] = field(
+        default_factory=dict, compare=False, repr=False,
+    )
 
     def point(self, node: DetailedNode) -> Point:
         return Point(self.xs[node.x_index], self.ys[node.y_index])
@@ -234,6 +238,14 @@ def route_detailed(
         unknown = only_nets - {net.name for net in board.nets}
         if unknown:
             raise ValueError(f"unknown repair nets: {', '.join(sorted(unknown))}")
+        # A bounded repair owns neither the fanout nor the vias of other nets.
+        selected_pads = {pad for net in board.nets if net.name in only_nets
+                         for pad in net.pads}
+        fanout_accesses = {pad: anchor for pad, anchor in fanout_accesses.items()
+                           if pad in selected_pads}
+        if fanout_created_vias is None:
+            # Without ownership evidence, locked input vias are not disposable.
+            fanout_created_vias = frozenset()
     deferred = [
         net for net in board.nets if len(net.pads) >= 2 and net.name in zone_nets
         and (only_nets is None or net.name in only_nets)
@@ -372,8 +384,16 @@ def route_detailed(
     all_tracks = tuple((*board.tracks, *new_tracks))
     all_vias = tuple((*board.vias, *new_vias))
     if fanout_accesses:
+        cleanup_accesses = fanout_accesses
+        if only_nets is not None:
+            # A failed repair must not remove the input net's locked escape.
+            successful_pads = {pad for net in board.nets
+                               if any(item.result.net == net.name and item.result.connected
+                                      for item in best.nets) for pad in net.pads}
+            cleanup_accesses = {pad: anchor for pad, anchor in fanout_accesses.items()
+                                if pad in successful_pads}
         all_tracks, all_vias = _prune_fanout_copper(
-            board, all_tracks, all_vias, fanout_accesses,
+            board, all_tracks, all_vias, cleanup_accesses,
             frozenset(item.result.net for item in best.nets if item.result.connected),
             fanout_created_vias,
         )
@@ -1116,16 +1136,14 @@ def _search_once(
             if outside and not options.allow_guide_deviation:
                 continue
             if next_direction == "v":
-                base = options.via_cost
+                base = options.via_cost * COST_UNIT
                 preference = 0
             else:
                 first_point, second_point = grid.point(node), grid.point(neighbor)
-                dx = first_point.x_nm - second_point.x_nm
-                dy = first_point.y_nm - second_point.y_nm
-                distance_nm = isqrt(dx * dx + dy * dy)
-                base = max(1, (10 * distance_nm + grid.pitch_nm - 1) // grid.pitch_nm)
+                base = length_cost(first_point, second_point)
                 layer = grid.layers[node.layer_index]
-                preference = layer_ranks[layer] * options.layer_preference_cost
+                wrong_way = 0
+                diagonal = False
                 heading = headings.get(layer)
                 if heading is not None:
                     if options.octilinear_search:
@@ -1133,11 +1151,14 @@ def _search_once(
                         vertical = next_direction in {"N", "S"}
                         if (horizontal and heading != "h"
                                 or vertical and heading != "n"):
-                            preference += options.direction_preference_cost
+                            wrong_way = options.direction_preference_cost
                         elif not horizontal and not vertical:
-                            preference += options.direction_preference_cost // 2
+                            wrong_way = options.direction_preference_cost
+                            diagonal = True
                     elif next_direction != heading:
-                        preference += options.direction_preference_cost
+                        wrong_way = options.direction_preference_cost
+                preference = preference_cost(first_point, second_point, layer_ranks[layer],
+                                             options.layer_preference_cost, wrong_way, diagonal)
             if options.octilinear_search:
                 bend = _turn_steps(direction, next_direction) * options.bend_cost
             else:
@@ -1148,8 +1169,8 @@ def _search_once(
                     else 0
                 )
             step = (
-                base + bend + preference + congestion + (50 if outside else 0)
-                + 2 * options.present_penalty * movable_edge_cache[edge]
+                base + preference + COST_UNIT * (bend + congestion + (50 if outside else 0)
+                + 2 * options.present_penalty * movable_edge_cache[edge])
             )
             candidate_cost = cost + step
             candidate = (neighbor, next_direction)
@@ -1390,10 +1411,6 @@ def _neighbors(
         (0, 0, -1),
         (0, 0, 1),
         (0, 1, 0),
-        (0, -1, -1),
-        (0, -1, 1),
-        (0, 1, -1),
-        (0, 1, 1),
     ):
         if dx and dy and not diagonals:
             continue
@@ -1409,6 +1426,32 @@ def _neighbors(
         ):
             continue
         result.append(candidate)
+    if diagonals:
+        key = (grid.xs, grid.ys, node.x_index, node.y_index)
+        successors = grid.diagonal_successors.get(key)
+        if successors is None:
+            found = []
+            # Find the nearest physical 45-degree successor on each ray.
+            # Inserted off-grid axes may split one dimension but not the other.
+            for dx, dy in ((-1, -1), (-1, 1), (1, -1), (1, 1)):
+                ix, iy = node.x_index + dx, node.y_index + dy
+                while 0 <= ix < len(grid.xs) and 0 <= iy < len(grid.ys):
+                    xdist = abs(grid.xs[ix] - grid.xs[node.x_index])
+                    ydist = abs(grid.ys[iy] - grid.ys[node.y_index])
+                    if xdist == ydist:
+                        found.append((ix, iy))
+                        break
+                    if xdist < ydist:
+                        ix += dx
+                    else:
+                        iy += dy
+            successors = tuple(found)
+            grid.diagonal_successors[key] = successors
+        for ix, iy in successors:
+            candidate = DetailedNode(node.layer_index, ix, iy)
+            if (candidate.layer_index in allowed_indexes and candidate not in grid.blocked
+                    and _grid_line_clear(grid, node, candidate)):
+                result.append(candidate)
     for layer_index in sorted(allowed_indexes):
         if layer_index == node.layer_index:
             continue
@@ -1546,10 +1589,10 @@ def _heuristic(
     dx = abs(first_point.x_nm - second_point.x_nm)
     dy = abs(first_point.y_nm - second_point.y_nm)
     if options.octilinear_search:
-        track_cost = (10 * max(dx, dy) + 4 * min(dx, dy)) // grid.pitch_nm
+        track_cost = 10 * max(dx, dy) + 4 * min(dx, dy)
     else:
-        track_cost = (10 * (dx + dy) + grid.pitch_nm - 1) // grid.pitch_nm
-    return track_cost + (options.via_cost if first.layer_index != second.layer_index else 0)
+        track_cost = 10 * (dx + dy)
+    return track_cost + (options.via_cost * COST_UNIT if first.layer_index != second.layer_index else 0)
 
 
 def _pad_position(board: PhysicalBoard, pad: PadReference) -> Point:

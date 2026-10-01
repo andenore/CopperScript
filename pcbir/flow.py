@@ -154,6 +154,9 @@ def _detailed_score(
 ) -> tuple[int, ...]:
     hard = sum(item.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
                and item.severity.value == "error" for item in drc.findings)
-    return (hard, detailed.metrics.unrouted_net_count,
+    zone_nets = {zone.net for zone in detailed.board.zones}
+    actual_opens = {net for item in drc.findings if item.code == "DRC-OPEN-NET"
+                    for net in item.nets if net not in zone_nets}
+    return (hard, len(actual_opens), detailed.metrics.unrouted_net_count,
             detailed.metrics.total_conflict_overflow,
             detailed.metrics.via_count, detailed.metrics.total_length_nm)

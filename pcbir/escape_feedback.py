@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from collections import Counter
 from hashlib import sha256
+from math import hypot
 
 from .critical import CriticalRoutingStatus
 from .detailed import DetailedRouterOptions, DetailedRoutingResult, route_detailed
@@ -333,12 +334,20 @@ def _repair_with_local_ripup(
                     detailed_options,
                     fanout_accesses=(initial.fanout.accesses
                                     if initial.fanout else None),
+                    fanout_created_vias=(frozenset((via.net, via.position)
+                                                  for via in initial.fanout.created_vias)
+                                         if initial.fanout else frozenset()),
                     only_nets=displaced,
                 ) if displaced else None
             )
             if reroute is not None and any(not item.connected for item in reroute.nets):
                 continue
             routed_board = reroute.board if reroute is not None else trial_board
+            # Subset routing is a transaction: copper belonging to every
+            # unaffected net must survive exactly, not merely retain an old flag.
+            if (_unaffected_copper(routed_board, displaced)
+                    != _unaffected_copper(trial_board, displaced)):
+                continue
             late = stitch_zone_pads(routed_board, plane_options)
             if (len(late.pending_pads) >= len(baseline.pending_pads)
                     or _hard_drc_findings(late.board) > baseline_hard):
@@ -381,21 +390,34 @@ def _merge_local_detail(
 ) -> RoutingPipelineResult:
     """Preserve full-board metrics while replacing a bounded net subset."""
 
-    old = {item.net: item for item in original.detailed.nets}
     new = {item.net: item for item in reroute.nets} if reroute is not None else {}
-    nets = tuple(new.get(item.net, item) for item in original.detailed.nets)
-    metrics = original.detailed.metrics
-    old_items = [old[name] for name in changed]
-    new_items = [new[name] for name in changed]
+    drc = run_physical_drc(board)
+    opens = {net for finding in drc.findings if finding.code == "DRC-OPEN-NET"
+             for net in finding.nets}
+    locked = (original.fanout.board if original.fanout else
+              original.plane_stitch.board if original.plane_stitch else
+              original.critical.board)
+    zone_nets = {zone.net for zone in board.zones}
+    tracks = Counter(track for track in board.tracks if track.net not in zone_nets)
+    tracks -= Counter(locked.tracks)
+    vias = Counter(via for via in board.vias if via.net not in zone_nets)
+    vias -= Counter(locked.vias)
+    nets = tuple(replace(
+        new.get(item.net, item),
+        connected=new.get(item.net, item).connected and item.net not in opens,
+        track_count=sum(count for track, count in tracks.items() if track.net == item.net),
+        via_count=sum(count for via, count in vias.items() if via.net == item.net),
+        length_nm=sum(round(hypot(track.end.x_nm-track.start.x_nm,
+                                 track.end.y_nm-track.start.y_nm)) * count
+                      for track, count in tracks.items() if track.net == item.net),
+    ) for item in original.detailed.nets)
     metrics = replace(
-        metrics,
-        track_count=metrics.track_count - sum(item.track_count for item in old_items)
-                    + sum(item.track_count for item in new_items),
-        via_count=metrics.via_count - sum(item.via_count for item in old_items)
-                  + sum(item.via_count for item in new_items),
-        total_length_nm=metrics.total_length_nm
-                        - sum(item.length_nm for item in old_items)
-                        + sum(item.length_nm for item in new_items),
+        original.detailed.metrics,
+        routed_net_count=sum(item.connected for item in nets),
+        unrouted_net_count=sum(not item.connected for item in nets),
+        track_count=sum(item.track_count for item in nets),
+        via_count=sum(item.via_count for item in nets),
+        total_length_nm=sum(item.length_nm for item in nets),
     )
     fingerprint = sha256(repr((
         original.detailed.routing_fingerprint, board.tracks,
@@ -407,17 +429,24 @@ def _merge_local_detail(
     )
     return replace(
         original, detailed=detailed,
-        drc=run_physical_drc(board),
+        drc=drc,
     )
 
 
 def _failed_signals(
     pipeline: RoutingPipelineResult, zone_nets: set[str],
 ) -> tuple[str, ...]:
-    return tuple(
-        net.net for net in pipeline.detailed.nets
-        if net.net not in zone_nets and not net.connected
-    )
+    reported = {net.net for net in pipeline.detailed.nets
+                if net.net not in zone_nets and not net.connected}
+    actual = {net for finding in pipeline.drc.findings
+              if finding.code == "DRC-OPEN-NET" for net in finding.nets
+              if net not in zone_nets}
+    return tuple(sorted(reported | actual))
+
+
+def _unaffected_copper(board: PhysicalBoard, changed: frozenset[str]):
+    return (Counter(track for track in board.tracks if track.net not in changed),
+            Counter(via for via in board.vias if via.net not in changed))
 
 
 def _hard_drc_findings(board: PhysicalBoard) -> int:

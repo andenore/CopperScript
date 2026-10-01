@@ -489,6 +489,18 @@ selected layers must exist in the chosen physical stackup. A zone declaration
 does not establish electrical connectivity or fabrication readiness: its
 actual fill and connected copper require later verification.
 
+### Routing search costs
+
+`route-board --layer-preference-cost` and `--direction-preference-cost` are
+soft physical-search rates per millimetre, not electrical properties or hard
+layer restrictions. Global search uses half the selected detailed rates.
+Both searches use a baseline distance rate of 10 cost units/mm; via and bend
+events have separate fixed costs. Changing grid pitch or inserting pad-access
+coordinates does not change the cost of an identical straight run. Physical
+45-degree successors can cross inserted axis splits, subject to blocked-grid
+and exact copper clearance checks. This does not guarantee that every route
+will be octilinear: short pad accesses and orthogonal-budget fallbacks remain.
+
 ## KiCad schematic export
 
 Generate a KiCad 8 schematic after ERC succeeds:

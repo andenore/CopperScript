@@ -40,6 +40,7 @@ from .placement import (
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
+from .routing_costs import COST_UNIT, length_cost, preference_cost
 
 
 class GlobalRoutingStatus(str, Enum):
@@ -526,14 +527,15 @@ def _route_net(
             )
             if path is not None:
                 path_cost = sum(
-                    (options.via_cost if a.layer_index != b.layer_index else 10)
+                    (options.via_cost * COST_UNIT if a.layer_index != b.layer_index
+                     else length_cost(graph.point(a), graph.point(b)))
                     + _preference_cost(graph, a, b, options)
-                    + present * max(0, usage[graph.resources[_edge_key(a, b)].identifier]
+                    + COST_UNIT * present * max(0, usage[graph.resources[_edge_key(a, b)].identifier]
                                     + demand - graph.resources[_edge_key(a, b)].capacity)
-                    + options.history_penalty * history[graph.resources[_edge_key(a, b)].identifier]
+                    + COST_UNIT * options.history_penalty * history[graph.resources[_edge_key(a, b)].identifier]
                     for a, b in path
                 )
-                found.append((path_cost + candidate.estimated_cost_nm // nm_from_mm("0.25"),
+                found.append((path_cost + 10 * candidate.estimated_cost_nm,
                               candidate, path))
         if not found:
             return GlobalNetRoute(
@@ -637,7 +639,7 @@ def _search(
         state = (start, "", 0)
         best[state] = 0
         previous[state] = None
-        heappush(queue, (_heuristic(start, target), 0, _heuristic(start, target), start, "", 0, serial))
+        heappush(queue, (_heuristic(graph, start, target), 0, _heuristic(graph, start, target), start, "", 0, serial))
         serial += 1
     final: tuple[GridNode, str, int] | None = None
     while queue:
@@ -654,19 +656,20 @@ def _search(
             next_vias = vias_used + (next_direction == "v") if track_vias else 0
             if remaining_vias is not None and next_vias > remaining_vias:
                 continue
-            base = options.via_cost if next_direction == "v" else 10
+            base = (options.via_cost * COST_UNIT if next_direction == "v"
+                    else length_cost(graph.point(node), graph.point(neighbor)))
             bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
             overflow = max(0, usage[resource.identifier] + demand - resource.capacity)
             preference = _preference_cost(graph, node, neighbor, options)
-            step = (base + bend + preference + present * overflow
-                    + options.history_penalty * history[resource.identifier])
+            step = (base + preference + COST_UNIT * (bend + present * overflow
+                    + options.history_penalty * history[resource.identifier]))
             candidate_cost = cost + step
             candidate = (neighbor, next_direction, next_vias)
             if candidate_cost >= best.get(candidate, 1 << 60):
                 continue
             best[candidate] = candidate_cost
             previous[candidate] = state
-            heuristic = _heuristic(neighbor, target)
+            heuristic = _heuristic(graph, neighbor, target)
             heappush(
                 queue,
                 (candidate_cost + heuristic, candidate_cost, heuristic, neighbor, next_direction, next_vias, serial),
@@ -695,11 +698,11 @@ def _preference_cost(
     if direction == "v":
         return 0
     layer = graph.layers[first.layer_index]
-    return (
-        graph.layer_ranks[layer] * options.layer_preference_cost
-        + (options.direction_preference_cost
-           if graph.preferred_headings.get(layer) not in {None, direction}
-           else 0)
+    return preference_cost(
+        graph.point(first), graph.point(second), graph.layer_ranks[layer],
+        options.layer_preference_cost,
+        options.direction_preference_cost
+        if graph.preferred_headings.get(layer) not in {None, direction} else 0,
     )
 
 
@@ -1130,11 +1133,9 @@ def _node_distance(first: GridNode, second: GridNode) -> int:
     )
 
 
-def _heuristic(first: GridNode, second: GridNode) -> int:
-    return 10 * (
-        abs(first.x_index - second.x_index)
-        + abs(first.y_index - second.y_index)
-    )
+def _heuristic(graph: _Graph, first: GridNode, second: GridNode) -> int:
+    a, b = graph.point(first), graph.point(second)
+    return 10 * (abs(a.x_nm - b.x_nm) + abs(a.y_nm - b.y_nm))
 
 
 def _bounds(points: Iterable[Point]) -> tuple[int, int, int, int]:
