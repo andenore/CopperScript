@@ -127,6 +127,9 @@ routing failures. These experiments do not waive physical DRC. Pass
 refill a disposable KiCad copy and include authoritative open-net/island
 findings in the report; a zone outline or stitched via alone is not proof of
 connectivity. See [routing research tasks](docs/routing-research-tasks.md).
+The [routing-review todo](docs/routing-review-todo.md) tracks correctness and
+optimization work; the [first-pass repeated review](docs/routing-review-pass1.md)
+records independent KiCad results and the remaining six-layer bottlenecks.
 
 Validate and inspect a KiCad footprint before resolving it into a physical
 design:
