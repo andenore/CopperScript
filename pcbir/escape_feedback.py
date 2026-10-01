@@ -105,6 +105,7 @@ def improve_zone_escapes(
     if options.maximum_trials == 0:
         return EscapeFeedbackResult(initial, baseline_stitch, ())
     targets = frozenset(baseline_stitch.pending_pads)
+    package_targets = _package_zone_targets(initial.board, targets)
     zone_nets = {zone.net for zone in initial.board.zones}
     baseline_signal_failures = frozenset(_failed_signals(initial, zone_nets))
     baseline_hard = _hard_drc_findings(baseline_stitch.board)
@@ -117,7 +118,7 @@ def improve_zone_escapes(
         base, targets, placement_options, options,
     ):
         early_options = replace(
-            plane_options, only_pads=targets | _reserved_pads,
+            plane_options, only_pads=package_targets | _reserved_pads,
             candidate_bias=bias,
         )
         preflight = stitch_zone_pads(trial_board, early_options)
@@ -206,7 +207,7 @@ def improve_zone_escapes(
                         maximum_trials=options.maximum_trials-routed_trials,
                     ),
                     _reserved_pads=(
-                        _reserved_pads | (targets - pending_early)
+                        _reserved_pads | (package_targets - pending_early)
                     ),
                 )
                 return EscapeFeedbackResult(
@@ -219,6 +220,23 @@ def improve_zone_escapes(
         if routed_trials >= options.maximum_trials:
             break
     return EscapeFeedbackResult(initial, baseline_stitch, tuple(attempts))
+
+
+def _package_zone_targets(
+    board: PhysicalBoard, pending: frozenset[PadReference],
+) -> frozenset[PadReference]:
+    """Reserve a failing package's entire same-zone-net pin group together.
+
+    A previously escaped neighbour pin must not lose its exit during a trial
+    that repairs another pin on the same package. Other packages/rails are not
+    indiscriminately reserved. Reservation precedes fanout/ordinary routing;
+    final native and filled-zone checks still decide whether the trial passes.
+    """
+    zone_nets = {zone.net for zone in board.zones}
+    groups = {(net.name, pad.component) for net in board.nets if net.name in zone_nets
+              for pad in net.pads if pad in pending}
+    return pending | frozenset(pad for net in board.nets for pad in net.pads
+                              if (net.name, pad.component) in groups)
 
 
 def _repair_with_local_ripup(

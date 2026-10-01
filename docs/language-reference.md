@@ -489,6 +489,24 @@ selected layers must exist in the chosen physical stackup. A zone declaration
 does not establish electrical connectivity or fabrication readiness: its
 actual fill and connected copper require later verification.
 
+### Native copper connectivity and package escape
+
+Native physical DRC checks contact between actual track/pad/via shapes on
+common copper layers, including interior T junctions and pad-edge contacts.
+Vias connect only their physical spans; open drill holes are not solid copper.
+Repeated pad numbers do not create virtual connections between separate lands.
+Zone outlines still do not establish connectivity: use independent filled-zone
+verification. A late package-escape feedback trial reserves the entire failing
+package's same-zone-net pin group before ordinary routing, including neighbour
+pins that already escaped; other packages and rails remain unaffected.
+
+45-degree search/shortcut rays follow physical coordinates, not distorted
+index-space diagonals. Narrow concave outline crossings and actual track
+keepouts block them; off-ray blocked coordinates and via-only keepouts do not.
+Width/clearance checks remain mandatory. Ray and search-local physical-span via
+caches do not change geometry rules. Ray caches contain only static obstacles;
+no copper-clearance result is reused after changing the clearance index.
+
 ### Routing search costs
 
 `route-board --layer-preference-cost` and `--direction-preference-cost` are

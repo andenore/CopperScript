@@ -13,10 +13,12 @@ from math import hypot, isqrt
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
-from .geometry import point_on_segment
+from .geometry import (RoundedConvexShape, point_on_segment, point_in_polygon,
+                       segment_in_polygon, shape_distance_squared)
 from .physical import (
     BoardSide,
     CopperLayer,
+    CopperKeepout,
     NetRoutingRule,
     PadKind,
     PadReference,
@@ -192,6 +194,12 @@ class _Grid:
     blocked: frozenset[DetailedNode]
     pitch_nm: int
     diagonal_successors: dict[tuple[tuple[int, ...], tuple[int, ...], int, int], tuple[tuple[int, int], ...]] = field(
+        default_factory=dict, compare=False, repr=False,
+    )
+    obstacle_cache: dict[int, tuple[PhysicalBoard, tuple[CopperKeepout, ...]]] = field(
+        default_factory=dict, compare=False, repr=False,
+    )
+    line_clear_cache: dict[tuple[object, ...], bool] = field(
         default_factory=dict, compare=False, repr=False,
     )
 
@@ -1026,6 +1034,7 @@ def _search_once(
     heuristic_cache: dict[DetailedNode, int] = {}
     guide_cache: dict[DetailedNode, bool] = {}
     legal_edge_cache: dict[tuple[DetailedNode, DetailedNode], bool] = {}
+    via_legality_cache: dict[tuple[Point, CopperLayer, CopperLayer], tuple[bool, int]] = {}
     movable_edge_cache: dict[tuple[DetailedNode, DetailedNode], int] = {}
     edge_resource_cache: dict[tuple[DetailedNode, DetailedNode], tuple[str, ...]] = {}
     layer_ranks, headings = signal_layer_preferences(grid.board)
@@ -1087,25 +1096,10 @@ def _search_once(
             if legal is None:
                 movable_count = 0
                 if next_direction == "v":
-                    via_span = physical_via_span(
-                        grid.board, grid.layers[node.layer_index],
-                        grid.layers[neighbor.layer_index],
+                    legal, movable_count = _cached_via_legality(
+                        grid, node, neighbor, clearance, net,
+                        allow_movable_conflicts, via_legality_cache,
                     )
-                    if via_span is None:
-                        legal = False
-                    elif allow_movable_conflicts:
-                        movable, locked = clearance.blocking_via_nets(Via(
-                            net, grid.point(node), grid.board.rules.default_via_size_nm,
-                            grid.board.rules.default_via_drill_nm,
-                            *via_span,
-                        ))
-                        legal = not locked
-                        movable_count = len(movable)
-                    else:
-                        legal = clearance.can_via(
-                            net, grid.point(node), grid.board.rules.default_via_size_nm,
-                            via_span[0], via_span[1],
-                        )
                 else:
                     if allow_movable_conflicts:
                         movable, locked = clearance.blocking_track_nets(TrackSegment(
@@ -1255,30 +1249,90 @@ def _compact_path(
     return tuple(result)
 
 
+def _cached_via_legality(
+    grid: _Grid, node: DetailedNode, neighbor: DetailedNode,
+    clearance: RoutingClearanceIndex, net: str, allow_movable_conflicts: bool,
+    cache: dict[tuple[Point, CopperLayer, CopperLayer], tuple[bool, int]],
+) -> tuple[bool, int]:
+    """Memoize identical physical spans within one immutable, single-net search."""
+    span = physical_via_span(grid.board, grid.layers[node.layer_index], grid.layers[neighbor.layer_index])
+    if span is None:
+        return False, 0
+    key = (grid.point(node), *span)
+    result = cache.get(key)
+    if result is None:
+        if allow_movable_conflicts:
+            movable, locked = clearance.blocking_via_nets(Via(
+                net, key[0], grid.board.rules.default_via_size_nm,
+                grid.board.rules.default_via_drill_nm, *span))
+            result = not locked, len(movable)
+        else:
+            result = clearance.can_via(net, key[0], grid.board.rules.default_via_size_nm, *span), 0
+        cache[key] = result
+    return result
+
+
 def _grid_line_clear(
+    grid: _Grid, start: DetailedNode, end: DetailedNode,
+) -> bool:
+    board_key = id(grid.board)
+    if board_key not in grid.obstacle_cache:
+        grid.obstacle_cache[board_key] = (grid.board, tuple(
+            item for item in resolved_copper_keepouts(grid.board) if item.block_tracks))
+    key = (id(grid.board), start.layer_index, end.layer_index,
+           grid.point(start), grid.point(end), grid.blocked, grid.xs, grid.ys)
+    result = grid.line_clear_cache.get(key)
+    if result is None:
+        result = _physical_grid_line_clear(grid, start, end)
+        grid.line_clear_cache[key] = result
+    return result
+
+
+def _physical_grid_line_clear(
     grid: _Grid,
     start: DetailedNode,
     end: DetailedNode,
 ) -> bool:
-    """Integer supercover traversal for obstacle-safe line-of-sight."""
-    x0, y0, x1, y1 = start.x_index, start.y_index, end.x_index, end.y_index
-    dx, dy = abs(x1 - x0), abs(y1 - y0)
-    sx, sy = (1 if x1 > x0 else -1), (1 if y1 > y0 else -1)
-    error = dx - dy
-    x, y = x0, y0
-    while True:
-        node = DetailedNode(start.layer_index, x, y)
-        if node not in {start, end} and node in grid.blocked:
+    """Test the physical ray, never a distorted index-space supercover."""
+    if start.layer_index != end.layer_index:
+        return False
+    first, second = grid.point(start), grid.point(end)
+    if not segment_in_polygon(first, second, grid.board.outline.vertices):
+        return False
+    key = id(grid.board)
+    cached = grid.obstacle_cache.get(key)
+    if cached is None:
+        obstacles = tuple(item for item in resolved_copper_keepouts(grid.board) if item.block_tracks)
+        # Hold the immutable board so id reuse cannot alias a replaced grid.
+        grid.obstacle_cache[key] = (grid.board, obstacles)
+    else:
+        obstacles = cached[1]
+    ray = RoundedConvexShape((first, second))
+    for obstacle in obstacles:
+        if (grid.layers[start.layer_index] in obstacle.layers
+                and ray.bounds.intersects(RoundedConvexShape(obstacle.outline.outer.vertices).bounds)
+                and shape_distance_squared(ray, RoundedConvexShape(obstacle.outline.outer.vertices)) == 0):
             return False
-        if (x, y) == (x1, y1):
-            return True
-        doubled = 2 * error
-        if doubled > -dy:
-            error -= dy
-            x += sx
-        if doubled < dx:
-            error += dx
-            y += sy
+    # Respect synthetic/on-ray blocked nodes too. Off-ray coordinates are
+    # irrelevant. Width/clearance are still checked by RoutingClearanceIndex.
+    dx, dy = second.x_nm - first.x_nm, second.y_nm - first.y_nm
+    if dx:
+        for ix in range(min(start.x_index, end.x_index), max(start.x_index, end.x_index) + 1):
+            numerator = (grid.xs[ix] - first.x_nm) * dy
+            if numerator % dx:
+                continue
+            y = first.y_nm + numerator // dx
+            iy = bisect_left(grid.ys, y)
+            if iy < len(grid.ys) and grid.ys[iy] == y:
+                node = DetailedNode(start.layer_index, ix, iy)
+                if node not in {start, end} and node in grid.blocked:
+                    return False
+    else:
+        for iy in range(min(start.y_index, end.y_index), max(start.y_index, end.y_index) + 1):
+            node = DetailedNode(start.layer_index, start.x_index, iy)
+            if node not in {start, end} and node in grid.blocked:
+                return False
+    return True
 
 
 def _build_grid(
@@ -1308,9 +1362,9 @@ def _build_grid(
     # Courtyards are assembly geometry, not copper obstacles. The clearance
     # index checks the actual placed pads and existing copper instead.
     copper_keepouts = tuple(
-        (item.layers, _bounds(item.outline.outer.vertices))
+        (item.layers, item.outline.outer.vertices)
         for item in resolved_copper_keepouts(board)
-        if item.block_tracks or item.block_vias
+        if item.block_tracks
     )
     blocked: set[DetailedNode] = set()
     for layer_index, layer in enumerate(board.stackup.copper_layers):
@@ -1320,8 +1374,8 @@ def _build_grid(
                 if not _point_in_polygon(point, board.outline.vertices):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
                 elif any(
-                    layer in layers and _in_box(point, box)
-                    for layers, box in copper_keepouts
+                    layer in layers and point_in_polygon(point, polygon)
+                    for layers, polygon in copper_keepouts
                 ):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
     return _Grid(
@@ -1412,8 +1466,6 @@ def _neighbors(
         (0, 0, 1),
         (0, 1, 0),
     ):
-        if dx and dy and not diagonals:
-            continue
         candidate = DetailedNode(node.layer_index + dl, node.x_index + dx, node.y_index + dy)
         if candidate.layer_index not in allowed_indexes:
             continue
@@ -1421,9 +1473,7 @@ def _neighbors(
             continue
         if candidate in grid.blocked:
             continue
-        if dx and dy and abs(grid.xs[candidate.x_index] - grid.xs[node.x_index]) != abs(
-            grid.ys[candidate.y_index] - grid.ys[node.y_index]
-        ):
+        if not _grid_line_clear(grid, node, candidate):
             continue
         result.append(candidate)
     if diagonals:

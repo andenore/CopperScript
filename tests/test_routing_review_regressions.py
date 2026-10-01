@@ -11,6 +11,11 @@ from pcbir import (
 from pcbir.escape_feedback import _failed_signals
 from pcbir.detailed import DetailedNode, _Grid, _neighbors, _heuristic
 from pcbir.routing_costs import length_cost, preference_cost
+from pcbir.detailed import _grid_line_clear
+from pcbir.geometry import segment_in_polygon
+from pcbir import CopperKeepout, PolygonRing, PolygonWithHoles, Stackup
+from pcbir.detailed import _cached_via_legality
+from pcbir.routing_clearance import RoutingClearanceIndex
 
 
 def fanout_board():
@@ -112,3 +117,54 @@ def test_distance_heuristic_does_not_change_with_grid_pitch():
     a, b = DetailedNode(0, 0, 0), DetailedNode(0, 1, 1)
     assert _heuristic(grid, a, b, DetailedRouterOptions()) == _heuristic(
         replace(grid, pitch_nm=nm_from_mm("0.1")), a, b, DetailedRouterOptions())
+
+
+def test_off_ray_blocked_node_does_not_suppress_physical_diagonal():
+    board = PhysicalBoard("Ray", BoardOutline.rectangle(2, 2), {}, (), ())
+    grid = _Grid((CopperLayer.FRONT,), (0, nm_from_mm("0.3"), nm_from_mm(1)),
+                 (0, nm_from_mm(1)), board, frozenset({DetailedNode(0, 1, 0)}), nm_from_mm(1))
+    assert _grid_line_clear(grid, DetailedNode(0, 0, 0), DetailedNode(0, 2, 1))
+    assert Point.mm(1, 1) in {grid.point(n) for n in _neighbors(grid, DetailedNode(0, 0, 0), {0})}
+
+
+def test_physical_keepout_between_grid_nodes_blocks_diagonal():
+    ring = PolygonRing((Point.mm("0.4", "0.4"), Point.mm("0.6", "0.4"),
+                        Point.mm("0.6", "0.6"), Point.mm("0.4", "0.6")))
+    board = PhysicalBoard("Ray", BoardOutline.rectangle(2, 2), {}, (), (),
+                          copper_keepouts=(CopperKeepout("K", (CopperLayer.FRONT,), PolygonWithHoles(ring)),))
+    grid = _Grid((CopperLayer.FRONT,), (0, nm_from_mm(1)), (0, nm_from_mm(1)), board, frozenset(), nm_from_mm(1))
+    assert not _grid_line_clear(grid, DetailedNode(0, 0, 0), DetailedNode(0, 1, 1))
+    via_only = replace(board.copper_keepouts[0], block_tracks=False)
+    assert _grid_line_clear(replace(grid, board=replace(board, copper_keepouts=(via_only,))),
+                            DetailedNode(0, 0, 0), DetailedNode(0, 1, 1))
+
+
+def test_exact_concave_outline_detects_narrow_exit_and_boundary_travel():
+    polygon = tuple(Point.mm(x, y) for x, y in ((0, 0), (2, 0), (2, 2),
+                    ("1.01", 2), ("1.01", "0.9"), (1, "0.9"), (1, 2), (0, 2)))
+    assert not segment_in_polygon(Point.mm("0.5", 1), Point.mm("1.5", 1), polygon)
+    assert segment_in_polygon(Point.mm(0, 0), Point.mm(2, 0), polygon)
+    board = PhysicalBoard("Concave", BoardOutline(polygon), {}, (), ())
+    grid = _Grid((CopperLayer.FRONT,), (nm_from_mm("0.5"), nm_from_mm("1.5")),
+                 (nm_from_mm(1),), board, frozenset(), nm_from_mm(1))
+    assert DetailedNode(0, 1, 0) not in _neighbors(grid, DetailedNode(0, 0, 0), {0})
+
+
+def test_via_cache_reuses_physical_span_not_logical_layer_pair(monkeypatch):
+    layers = (CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2, CopperLayer.BACK)
+    board = PhysicalBoard("ViaCache", BoardOutline.rectangle(5, 5), {}, (), (), stackup=Stackup(layers))
+    grid = _Grid(layers, (nm_from_mm(2),), (nm_from_mm(2),), board, frozenset(), nm_from_mm(1))
+    index = RoutingClearanceIndex(board)
+    calls = []
+    def can_via(*args):
+        calls.append(args)
+        return False
+    monkeypatch.setattr(index, "can_via", can_via)
+    cache = {}
+    for first, second in ((0, 2), (2, 3), (3, 1)):
+        assert _cached_via_legality(grid, DetailedNode(first, 0, 0), DetailedNode(second, 0, 0),
+                                   index, "N", False, cache) == (False, 0)
+    assert len(calls) == 1  # Failed checks are cached too.
+    assert _cached_via_legality(grid, DetailedNode(0, 0, 0), DetailedNode(2, 0, 0),
+                               index, "N", False, {}) == (False, 0)
+    assert len(calls) == 2  # Another search must use a fresh cache.

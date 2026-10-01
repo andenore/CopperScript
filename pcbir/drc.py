@@ -34,6 +34,7 @@ from .geometry import (
     shapes_clear,
 )
 from .placement import placement_solution_is_legal
+from .copper_connectivity import CopperContact, copper_contact_roots
 
 
 class DrcSeverity(str, Enum):
@@ -356,58 +357,48 @@ def physical_board_digest(board: PhysicalBoard) -> str:
 
 
 def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
-    layer_indexes = {layer: index for index, layer in enumerate(board.stackup.copper_layers)}
-    tracks = {name: [item for item in board.tracks if item.net == name] for name in (net.name for net in board.nets)}
-    vias = {name: [item for item in board.vias if item.net == name] for name in (net.name for net in board.nets)}
-    placements = {item.reference: item for item in board.placements}
+    objects: list[CopperContact] = []
+    pads_by_net: dict[str, list[str]] = {}
+    conductive_references: set[PadReference] = set()
+    # Include every physical land, even when a logical pin has repeated numbers.
+    for placement in sorted(board.placements, key=lambda item: item.reference):
+        footprint = board.footprints[placement.footprint]
+        assigned = {pad.pad: net.name for net in board.nets for pad in net.pads
+                    if pad.component == placement.reference}
+        for index, pad in enumerate(footprint.pads):
+            net = assigned.get(pad.number)
+            if net is None or pad.kind in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}:
+                continue
+            position = transformed_local_point(placement, pad.position)
+            layers = ((CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK,)
+                      if pad.kind is PadKind.SMD else board.stackup.copper_layers)
+            identity = f"pad:{placement.reference}.{pad.number}:{index}"
+            drill = None
+            if pad.kind is PadKind.THROUGH_HOLE and pad.drill is not None:
+                drill_pad = replace(pad, size=pad.drill, kind=PadKind.SMD, drill=None, shape=(
+                    PadShape.CIRCLE if pad.drill.width_nm == pad.drill.height_nm else PadShape.OVAL))
+                drill = placed_pad_shape(position, drill_pad, placement)
+            objects.append(CopperContact(identity, net, tuple(layers),
+                                         placed_pad_shape(position, pad, placement), drill))
+            pads_by_net.setdefault(net, []).append(identity)
+            conductive_references.add(PadReference(placement.reference, pad.number))
+    objects.extend(CopperContact(f"track:{index}", track.net, (track.layer,),
+                                RoundedConvexShape((track.start, track.end), track.width_nm // 2))
+                   for index, track in enumerate(board.tracks))
+    for index, via in enumerate(board.vias):
+        layers = tuple(layer for layer in board.stackup.copper_layers
+                       if _via_covers_layer(board, via, layer))
+        capped = ((board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
+                  if via.finish == "filled-capped" else ())
+        objects.append(CopperContact(f"via:{index}", via.net, layers,
+                                    RoundedConvexShape((via.position,), via.size_nm // 2),
+                                    RoundedConvexShape((via.position,), via.drill_nm // 2), capped))
+    roots = copper_contact_roots(tuple(objects))
     for net in sorted(board.nets, key=lambda item: item.name):
         if len(net.pads) < 2:
             continue
-        parent: dict[tuple[int, int, int], tuple[int, int, int]] = {}
-
-        def find(node: tuple[int, int, int]) -> tuple[int, int, int]:
-            parent.setdefault(node, node)
-            if parent[node] != node:
-                parent[node] = find(parent[node])
-            return parent[node]
-
-        def union(first: tuple[int, int, int], second: tuple[int, int, int]) -> None:
-            left, right = find(first), find(second)
-            if left != right:
-                parent[max(left, right)] = min(left, right)
-
-        for track in tracks[net.name]:
-            layer = layer_indexes[track.layer]
-            union((layer, track.start.x_nm, track.start.y_nm), (layer, track.end.x_nm, track.end.y_nm))
-        for via in vias[net.name]:
-            first = layer_indexes[via.from_layer]
-            second = layer_indexes[via.to_layer]
-            for layer in range(min(first, second), max(first, second)):
-                union((layer, via.position.x_nm, via.position.y_nm), (layer + 1, via.position.x_nm, via.position.y_nm))
-
-        pad_nodes: list[tuple[int, int, int]] = []
-        for pad_ref in sorted(net.pads):
-            placement = placements[pad_ref.component]
-            footprint = board.footprints[placement.footprint]
-            pad = next(item for item in footprint.pads if item.number == pad_ref.pad)
-            point = transformed_pad_position(board, placement, pad_ref.pad)
-            if pad.kind is PadKind.SMD:
-                layer = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
-                nodes = [(layer_indexes[layer], point.x_nm, point.y_nm)]
-            else:
-                nodes = [(index, point.x_nm, point.y_nm) for index in range(len(layer_indexes))]
-                for first, second in zip(nodes, nodes[1:]):
-                    union(first, second)
-            for node in nodes:
-                find(node)
-                for track in tracks[net.name]:
-                    if layer_indexes[track.layer] == node[0] and _point_segment_distance(point, track.start, track.end) <= track.width_nm / 2:
-                        union(node, (node[0], track.start.x_nm, track.start.y_nm))
-                for via in vias[net.name]:
-                    if via.position == point:
-                        union(node, (node[0], point.x_nm, point.y_nm))
-            pad_nodes.append(nodes[0])
-        if len({find(node) for node in pad_nodes}) > 1:
+        if (not set(net.pads).issubset(conductive_references)
+                or len({roots[identity] for identity in pads_by_net.get(net.name, ())}) > 1):
             findings.append(
                 _finding(
                     "DRC-OPEN-NET",

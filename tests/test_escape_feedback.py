@@ -11,7 +11,7 @@ from pcbir import (
     PolygonWithHoles, Size, Stackup, improve_zone_escapes, nm_from_mm,
     run_routing_pipeline, stitch_zone_pads,
 )
-from pcbir.escape_feedback import _candidate_placements
+from pcbir.escape_feedback import _candidate_placements, _package_zone_targets
 
 
 def _trapped_ground_board() -> PhysicalBoard:
@@ -57,6 +57,18 @@ def _trapped_ground_board() -> PhysicalBoard:
             "G1", allowed_orientations=(0, 45, 90),
         ),),
     )
+
+
+def test_package_reservation_includes_already_escaped_neighbour_not_other_package():
+    board = _trapped_ground_board()
+    footprint = board.footprints["test/one-pad"]
+    package = replace(footprint, name="test/package", pads=(
+        footprint.pads[0], replace(footprint.pads[0], number="2", position=Point.mm(1, 0)),))
+    board = replace(board, footprints={**board.footprints, package.name: package},
+                    placements=(replace(board.placements[0], footprint=package.name), board.placements[1]),
+                    nets=(replace(board.nets[0], pads=(*board.nets[0].pads, PadReference("G1", "2"))),))
+    assert _package_zone_targets(board, frozenset({PadReference("G1", "2")})) == frozenset({
+        PadReference("G1", "1"), PadReference("G1", "2")})
 
 
 def test_feedback_moves_only_from_unrouted_board_to_open_ground_exit() -> None:

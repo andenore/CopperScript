@@ -126,17 +126,25 @@ def capsules_clear(a: Point, b: Point, a_radius_nm: int, c: Point, d: Point,
 
 def point_in_polygon(point: Point, polygon: tuple[Point, ...]) -> bool:
     """Return True for points inside or on a simple polygon."""
+    return _coordinates_in_polygon(point.x_nm, point.y_nm, polygon)
+
+
+def _coordinates_in_polygon(x: int | Fraction, y: int | Fraction,
+                            polygon: tuple[Point, ...]) -> bool:
     if len(polygon) < 3:
         raise ValueError("polygon requires at least three points")
     inside = False
     for index, first in enumerate(polygon):
         second = polygon[(index + 1) % len(polygon)]
-        if point_on_segment(point, first, second):
+        if ((second.x_nm - first.x_nm) * (y - first.y_nm)
+                == (second.y_nm - first.y_nm) * (x - first.x_nm)
+                and min(first.x_nm, second.x_nm) <= x <= max(first.x_nm, second.x_nm)
+                and min(first.y_nm, second.y_nm) <= y <= max(first.y_nm, second.y_nm)):
             return True
-        if (first.y_nm > point.y_nm) == (second.y_nm > point.y_nm):
+        if (first.y_nm > y) == (second.y_nm > y):
             continue
-        lhs = (point.x_nm - first.x_nm) * (second.y_nm - first.y_nm)
-        rhs = (second.x_nm - first.x_nm) * (point.y_nm - first.y_nm)
+        lhs = (x - first.x_nm) * (second.y_nm - first.y_nm)
+        rhs = (second.x_nm - first.x_nm) * (y - first.y_nm)
         if lhs < rhs if second.y_nm > first.y_nm else lhs > rhs:
             inside = not inside
     return inside
@@ -146,6 +154,45 @@ def shape_distance_squared(first: RoundedConvexShape,
                            second: RoundedConvexShape) -> Fraction:
     """Distance between the unswept convex spines; radii are not subtracted."""
     return _spine_distance_squared(first.spine, second.spine)
+
+
+def segment_in_polygon(start: Point, end: Point, polygon: tuple[Point, ...]) -> bool:
+    """Exact containment, including nonconvex outlines and boundary travel.
+
+    Split at all rational boundary intersections and test each open interval.
+    No routing pitch or rounded sample can hide a narrow concavity.
+    """
+    if not point_in_polygon(start, polygon) or not point_in_polygon(end, polygon):
+        return False
+    turns = [orientation(polygon[i - 1], polygon[i], polygon[(i + 1) % len(polygon)])
+             for i in range(len(polygon))]
+    if not (any(turn < 0 for turn in turns) and any(turn > 0 for turn in turns)):
+        return True  # For a simple convex outline, endpoint containment suffices.
+    dx, dy = end.x_nm - start.x_nm, end.y_nm - start.y_nm
+    if dx == dy == 0:
+        return True
+    cuts = {Fraction(0), Fraction(1)}
+    for first, second in zip(polygon, (*polygon[1:], polygon[0])):
+        sx, sy = second.x_nm - first.x_nm, second.y_nm - first.y_nm
+        ax, ay = first.x_nm - start.x_nm, first.y_nm - start.y_nm
+        denominator = dx * sy - dy * sx
+        if denominator:
+            t = Fraction(ax * sy - ay * sx, denominator)
+            u = Fraction(ax * dy - ay * dx, denominator)
+            if 0 <= t <= 1 and 0 <= u <= 1:
+                cuts.add(t)
+        elif ax * dy == ay * dx:
+            for vertex in (first, second):
+                t = (Fraction(vertex.x_nm - start.x_nm, dx) if dx
+                     else Fraction(vertex.y_nm - start.y_nm, dy))
+                if 0 <= t <= 1:
+                    cuts.add(t)
+    ordered = sorted(cuts)
+    for left, right in zip(ordered, ordered[1:]):
+        t = (left + right) / 2
+        if not _coordinates_in_polygon(start.x_nm + t * dx, start.y_nm + t * dy, polygon):
+            return False
+    return True
 
 
 def shapes_clear(first: RoundedConvexShape, second: RoundedConvexShape,

@@ -20,7 +20,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
 
 - [x] R3: Preserve 45-degree reachability when pad coordinates split search
   axes; retain exact clearance checks and test split-axis invariance.
-- [ ] R3b (follow-up review): Replace index-space supercover sampling with
+- [x] R3b (follow-up review): Replace index-space supercover sampling with
   physical-space obstacle/outline sampling on nonuniform rays. An off-ray
   blocked node can still conservatively suppress a restored diagonal edge.
 - [x] R4: Normalize global/detailed layer and wrong-way costs by physical
@@ -43,7 +43,9 @@ Completion means tested implementation, not automatic manufacturing signoff.
   immutable search. A 15 s/734-sample profile during zone-escape feedback
   attributes 27.4% of samples to via checks, 13.1% to track checks, and 12.8%
   to neighbor generation (inclusive categories; not whole-run timing).
-- [ ] R10 (rerun finding, correctness priority): Replace endpoint-only native
+  Search-local physical-span via caching is implemented in pass 2; operational
+  timings/checkpoints are still outstanding, so this item remains open.
+- [x] R10 (rerun finding, correctness priority): Replace endpoint-only native
   connectivity with layer-aware copper-contact connectivity. Detect interior
   T/cross junctions, track/via overlap, and pad-shape contacts; retain physical
   via spans and independently verified zone evidence. Native checking flags
@@ -54,6 +56,8 @@ Completion means tested implementation, not automatic manufacturing signoff.
   group, reserve its escapes before ordinary routing, and evaluate bounded
   component/decoupler moves only after R10 makes trial acceptance reliable.
   Keep small-pad via drill/clearance rules and explicit fabrication limits.
+  Pass 2 implements automatic whole-package same-zone-net reservations;
+  actual filled-zone closure of the example must still be verified.
 
 ## Matched rerun and repeated review
 
@@ -109,5 +113,23 @@ The repeated review is in [routing-review-pass1.md](routing-review-pass1.md).
 Independent KiCad finds three GND unconnected items, zero dangling tracks,
 and eight library findings, versus 74/68/eight on the damaged baseline. All
 57 ordinary nets are connected under KiCad. The earlier best board still has
-fewer ground opens (one). R10 is the next correctness task before additional
-feedback/shape optimizations; R3b and R5–R11 remain explicitly unfinished.
+fewer ground opens (one). At the end of that pass, R10 was the next correctness
+task; R3b and R5–R11 were unfinished.
+
+## Second implementation pass
+
+R10 and R3b are implemented. Native connectivity uses exact rounded-shape
+contacts on common physical layers, including annular/pad-edge contacts and
+interior junctions; it preserves actual gaps and drill voids and does not infer
+filled zones. Static ray checks follow physical coordinates and exact polygon
+containment for both diagonal and orthogonal moves. R11's whole-package
+same-zone-net reservation is implemented; actual example ground closure remains
+an independent acceptance gate. R9's search-local physical-span via cache is
+implemented, while normal operational timings/checkpoints remain open.
+
+All 297 tests pass in the isolated Python 3.12 runtime, including 20 new tests
+since pass 1 and five optional installed-KiCad differential connectivity cases.
+Replaying the previous board's copper clears all four false ordinary-net opens;
+only GND remains open under native explicit-copper checking. No DRC check was
+waived and no geometry/fabrication limit was relaxed. Full-board rerun/review
+results are recorded separately once independent verification completes.
