@@ -556,7 +556,16 @@ and permitted rotation MUST preserve all local poses and layer-scoped keepouts.
 Fixed members freeze the unit; conflicting fixed poses, unsupported mirroring,
 incompatible footprints or overlap between rigid clusters MUST fail closed.
 Ordinary legalization, refinement and placement/routing feedback MUST NOT split
-a macro. No electrical net/pin mapping changes with a physical transform. See
+a macro. No electrical net/pin mapping changes with a physical transform.
+
+An explicit physical scene MAY bind a content-addressed vendor reference to
+resolved footprint hashes and declared physical pad/net roles. This binding MUST
+be data-only, reject mismatches and unknown rules, and leave connectivity in the
+electrical source. A source locator's local filesystem path is not asset identity.
+An explicit internal macro courtyard gap MAY differ from the ordinary additional
+gap; non-overlap, external spacing and all copper/fabrication checks still apply.
+Provisional footprint adaptation MUST NOT be reported as reference-layout or RF
+qualification. See
 [rigid-placement-clusters.md](rigid-placement-clusters.md) for the initial API,
 bounded-search limitations and separation from RF qualification.
 
@@ -826,6 +835,10 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-115 | Accepted | Non-aligned differential terminals use a joint same-layer package escape and heading-aware common-spine search, never two independent maze routes. Legal paired exits preserve member order; coupled lanes use offset-line intersections at straight/45-degree corners. The package taper is actual reserved copper, not an invented straight extension behind its port. Search retries at 1/0.5/0.25 mm with at most eight port combinations and 30,000 expanded states per search at each pitch. Full cross-member geometry, existing critical reservations, original profile budgets and fresh native DRC gate atomic acceptance. Reports retain aggregate searches/states/candidate attempts, including unsuccessful searches. Parallel projected overlap is unioned when measuring coupling so split and unequal mitered edges do not erase or duplicate coupled length. This geometric proxy is not impedance or signal-integrity evidence. New paired layer transitions, non-octilinear pin rows and multi-terminal pairs remain unsupported by this search and fail closed; coarse-guide transitions are proposals, not mandatory copper. Explicitly permitted 45-degree placements are supported without changing electrical pin mapping. |
 
 | CS-116 | Accepted | Reference-layout macros are hard rigid clusters in the physical IR, distinct from soft semantic groups. Local member poses are bound to resolved footprint SHA-256 identities and an explicit source locator, with a unique physical anchor pad/origin. Bounded legalization and refinement transform complete units; fixed members freeze their unit, conflicting fixed poses fail, and ordinary component swaps/repairs cannot split it. Layer-scoped local copper keepouts follow the same transform into routing clearance, native DRC and KiCad export. Rules/templates participate in routing and signoff fingerprints. Front-side translation and explicitly permitted rotation, including 45 degrees, are initially supported; mirroring and overlapping macros fail closed. Reference copper is not transplanted, and no template/source locator is automatic RF, impedance, return-path or fabrication qualification. |
+
+| CS-117 | Accepted | Opt-in physical JSON scenes bind content-addressed reference data to complete resolved footprint digests and declared physical pad/net roles before placement. They execute no template code, fetch no source and change no connectivity. Unknown fields or changed/missing identities fail closed. The machine-local footprint source_path is excluded from asset hashes; source bytes, geometry, library identity and remaining metadata stay bound. Explicit internal macro courtyard gaps never exempt courtyard overlap, external component spacing or copper/fabrication checks. The Nordic three-member example preserves reference midpoint/rotation/physical C3 numbering but is explicitly a provisional footprint adaptation; matching-ground copper, support circuit, antenna and actual stackup remain separate qualification requirements. |
+
+| CS-118 | Accepted | Exact board-edge checks may recognize a four-vertex axis-aligned rectangle and test segment capsules/via disks against its convex erosion using doubled integer distances. Odd-nanometre diameters and boundary tangency retain the original predicate. Only immutable rectangle classification is cached; nonrectangular, concave and invalid vertex orders retain the original exact polygon/edge checks. This changes computation cost, not outline, clearance, search budget or copper acceptance. |
 
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same

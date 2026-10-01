@@ -1,0 +1,19 @@
+{
+  "schema": "copperscript-placement-templates/v0.1",
+  "clusters": [
+    {
+      "name": "nordic-rf-matching",
+      "reference": "../../CopperLib/data/full-vertical/nrf52832-qfaa-rf-reference.json",
+      "reference_sha256": "207ff21dda6881717e252cbb9e7f4dadfb0a51827068f7c001d770b700557cac",
+      "bindings": {"U1": "U_NRF", "C3": "C_BT_MATCH", "L1": "L_BT_MATCH"},
+      "net_bindings": {"raw": "NRF_RF_RAW", "ground": "GND", "feed": "NRF_RF_ANT"},
+      "footprint_digests": {
+        "U1": "5573f44f5a1df036d8bc6e48b156fa3b5fac13152ce7c628de3e7e295eadd4a1",
+        "C3": "5a62c537e80dd0b467c6efe692e82724875ef7a68fa53b55dee5cbe53ff99723",
+        "L1": "1d3e892648d297f14d5f985b99ea1bbfcd1b7bda9fd3968879c06537ef1055ac"
+      },
+      "allowed_rotations": [0, 45, 90, 135, 180, 225, 270, 315],
+      "internal_clearance_nm": 0
+    }
+  ]
+}

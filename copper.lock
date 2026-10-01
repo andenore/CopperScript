@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:5c26e8871c70978e9633afee9bea82e36d8b81c0d036cc787b2409a255b94a44",
+      "checksum": "sha256:81d9a5be1255dd9a4312c490c69aeb9bbe14d3f379616cc0d307d410ebd46429",
       "files": [
         {
           "path": "copper.mod",
@@ -67,6 +67,11 @@
           "path": "data/case-studies/opa2197id/sources.json",
           "sha256": "9e72ab206eab2db1cbcfd6acae7f7c5ef7b1806c74de986f582dd31025428895",
           "size": 415
+        },
+        {
+          "path": "data/full-vertical/nrf52832-qfaa-rf-reference.json",
+          "sha256": "207ff21dda6881717e252cbb9e7f4dadfb0a51827068f7c001d770b700557cac",
+          "size": 2354
         },
         {
           "path": "data/full-vertical/rf-audit.json",

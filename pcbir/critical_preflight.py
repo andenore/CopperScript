@@ -22,6 +22,7 @@ from .loader import BoardLoadError, load_board
 from .physical import nm_from_mm
 from .physicalize import PrototypePhysicalOptions, prototype_physicalize, resolved_physicalize
 from .placement import PlacementPlannerOptions
+from .placement_templates import apply_placement_templates
 from .routeflow import PlacementRoutingFeedbackOptions, optimize_placement_for_routing
 from .routing import GlobalRouterOptions
 
@@ -37,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fab-profile", default="jlcpcb-six-layer")
     parser.add_argument("--candidates", type=int, default=1)
     parser.add_argument("--placement-candidate")
+    parser.add_argument("--placement-templates", type=Path)
     parser.add_argument("--feedback-iterations", type=int, default=1)
     parser.add_argument("--router-iterations", type=int, default=5)
     parser.add_argument("--tile-size-mm", default="5")
@@ -70,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
             resolved_physicalize(electrical, FootprintResolver(
                 args.board.resolve().parent, tuple(args.footprint_root)), options)
         )
+        if args.placement_templates:
+            board = apply_placement_templates(board, args.placement_templates)
         report.update(source=str(args.board.resolve()),
                       source_sha256=sha256(args.board.read_bytes()).hexdigest())
         timings["load_and_resolve"] = perf_counter() - started

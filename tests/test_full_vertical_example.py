@@ -127,9 +127,9 @@ def test_bluetooth_antenna_keeps_nc_anchor_isolated() -> None:
 def test_nordic_matching_shunt_is_on_chip_side_of_series_inductor() -> None:
     board = compile_file(EXAMPLE)
     nets = {net.name: {(ep.component, ep.pin) for ep in net.endpoints} for net in board.nets}
-    assert nets["NRF_RF_RAW"] == {("U_NRF", "ANT"), ("C_BT_MATCH", "1"), ("L_BT_MATCH", "1")}
+    assert nets["NRF_RF_RAW"] == {("U_NRF", "ANT"), ("C_BT_MATCH", "2"), ("L_BT_MATCH", "1")}
     assert nets["NRF_RF_ANT"] == {("L_BT_MATCH", "2"), ("ANT_BT", "FEED")}
-    assert ("C_BT_MATCH", "2") in nets["GND"]
+    assert ("C_BT_MATCH", "1") in nets["GND"]
 
 
 def test_stm32g0c1re_standard_lqfp64_bonds_are_complete() -> None:

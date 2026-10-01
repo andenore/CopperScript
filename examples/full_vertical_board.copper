@@ -197,7 +197,7 @@ board FullVerticalTracker {
         SW_USER.B;
         LED_1.K;
         LED_2.K;
-        C_BT_MATCH.2;
+        C_BT_MATCH.1;
         C_MCU.2;
         C_NRF.2;
         C_ACCEL.2;
@@ -233,7 +233,8 @@ board FullVerticalTracker {
     net NRF_SWDIO { U_NRF.SWDIO; J_SWD_NRF.SWDIO; }
     net NRF_SWDCLK { U_NRF.SWDCLK; J_SWD_NRF.SWDCLK; }
     // Nordic QFAA reference v1.1: C3 is shunt on the chip side of L1.
-    net NRF_RF_RAW { U_NRF.ANT; C_BT_MATCH.1; L_BT_MATCH.1; }
+    // Follow vendor physical C3 numbering: upper pad 1 GND, lower pad 2 ANT.
+    net NRF_RF_RAW { U_NRF.ANT; C_BT_MATCH.2; L_BT_MATCH.1; }
     net NRF_RF_ANT { L_BT_MATCH.2; ANT_BT.FEED; }
 
     net GNSS_TX { U_GNSS.TXD; U_MCU.PA3; }

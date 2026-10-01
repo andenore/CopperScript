@@ -1,16 +1,17 @@
 # Rigid physical placement clusters
 
 This implements the placement mechanism for R8c, not the vendor reference
-template or RF qualification. The electrical IR and `.copper` connectivity stay
-unchanged. Initial integration is through `PhysicalBoard.rigid_clusters`; there
-is no new language syntax or CLI template loader yet.
+template qualification. Integration is through `PhysicalBoard.rigid_clusters`
+or an explicit `--placement-templates` JSON scene. Electrical connectivity stays
+in `.copper`; the loader verifies pad/net bindings and never rewires a design.
 
 ## Contract
 
 `RigidPlacementCluster` is a hard macro. `PlacementGroup` remains a soft
 proximity/priority hint. Each `RigidPlacementMember` binds an instance reference,
 resolved footprint name, complete footprint SHA-256 and local center pose. The
-hash includes source library ID, pads, courtyard, graphics, keepouts and metadata;
+hash includes source library ID, pads, courtyard, graphics, keepouts and metadata
+except the machine-local `source_path` locator;
 changed assets require deliberate template revalidation, not name-only reuse.
 An evidence `source` locator is mandatory for this physical template but does
 not change the optional provenance policy for electrical parts/devices.
@@ -76,6 +77,48 @@ the physical pad from a logical pin name: use resolved package bindings first.
 Preserve source-specific matching ground topology separately; relative poses
 do not create tracks, return vias or ground connectivity.
 
+## Source-backed CLI scene
+
+`examples/full_vertical_placement_templates.json` binds CopperLib's extracted
+Nordic QFAA LDO U1/C3/L1 midpoint/rotation data to U_NRF/C_BT_MATCH/L_BT_MATCH.
+The scene pins both reference bytes and complete resolved footprint digests,
+then checks the declared physical pad/net roles. Changed source/footprints,
+missing members, mismatched nets, or unknown binding fields fail rather than
+being ignored. No scripts are loaded or executed by the scene loader. Paths
+are relative to the scene. Explicit component orientation restrictions are
+retained, not broadened. The scene allows 45-degree macro rotations when all
+members' component rules permit them.
+
+Example, from the CopperScript root with the sibling CopperLib checkout:
+
+```powershell
+uv run python -m pcbir.critical_preflight examples/full_vertical_board.copper `
+  --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
+  --placement-templates examples/full_vertical_placement_templates.json `
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
+  --footprint-root "..\CopperLib\footprints" `
+  --report build/rf-preflight.json -o build/rf-critical.kicad_pcb
+```
+
+The same option is accepted by `plan-layout`, `route-global`, `route-board` and
+`export-kicad-pcb`. Proxy/different footprints fail the pinned identity check.
+Templates are opt-in; there is no implicit filename-based discovery.
+
+This is an explicitly **provisional footprint adaptation**, not the vendor PCB:
+the installed QFN land centers differ by about 75 um, and C/L end-pad centers
+also differ from the reference. The macro preserves source component centers,
+top-view orientation and physical C3 numbering (pad 1 GND, pad 2 ANT). It does
+not transplant matching-ground copper, vias, crystal/DEC support or antenna
+keepouts. Those remain required work before RF qualification.
+
+`internal_clearance_nm` is an explicit additional courtyard gap inside a macro;
+`None` keeps the ordinary planner gap. The example uses zero additional gap
+because its source-backed C3/L1 positions leave only about 32 um between the
+installed courtyards. Courtyards must still not overlap; outside components
+retain the ordinary 0.5 mm additional gap. All pad/track/via/fabrication rules
+and native DRC are unchanged. This setting is not a copper-clearance waiver or
+manufacturer assembly approval.
+
 ## Placement and routing sequence
 
 1. Analytical placement estimates an anchor target. Macros with fixed members
@@ -109,18 +152,23 @@ than inferred solely from courtyard legality.
 
 ## Remaining full-vertical work
 
-Verification: 352 CopperScript tests pass, including 19 new cluster cases and
-two installed-KiCad 10.0.6 differential keepout checks. The F.Cu obstacle is
-reported as `items_not_allowed`; the same segment on B.Cu is not blocked.
-The suite retains 459 upstream CAM-library warnings. This increment does not
-move the full-vertical example, transplant vendor copper, or claim a full-board
-reroute or production signoff.
+Verification: 369 CopperScript tests pass, retaining the installed-KiCad 10.0.6
+differential keepout checks and adding scene identity/integration, exact board-edge
+equivalence, and matching-only real-footprint routing probes at 0 and 45 degrees.
+Those two probes connect the raw matching tree with no vias and less than 5 mm
+of copper, without critical opens or hard native findings. They are not complete
+operational MCU circuits. The suite retains 459 upstream CAM-library warnings.
 
-Nordic support circuit completion, vendor placement/pad extraction, local
-matching-ground reservations and Johanson corner/ground-clearance qualification
-remain open. The cached Nordic v1.1 archive includes a QFAA LDO pick-and-place
-file and Gerber/Altium assets, so offsets need not be guessed from a PDF image.
-Cross-check their package/pad orientation and schematic population before
-binding the template to our resolved footprints. No vendor macro was fabricated
-from the synthetic test coordinates above. GNSS noise-source separation and
-actual six-layer return-path/impedance evidence also remain separate gates.
+The fresh full-vertical placement/critical-stage run is recorded in
+[pass 7](routing-review-pass7.md). Its raw matching tree is still 17.19 mm because
+a legal coarse global guide can take a detour even inside a tight macro. The
+modem USB pair fails bounded search. Template placement does not imply local
+route quality, and this is not a complete ordinary-net reroute or production
+signoff. No vendor ground copper was transplanted.
+
+Nordic support/crystal completion, matching-ground reservations and Johanson
+corner/ground-clearance qualification remain open. Vendor three-member midpoint,
+orientation and pad-role extraction is now implemented; complete reference
+support/return geometry and actual part/value identity checks are not. GNSS
+noise-source separation and actual six-layer return-path/impedance evidence
+remain separate gates.

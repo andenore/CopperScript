@@ -36,7 +36,10 @@ def footprint_geometry_digest(footprint: PhysicalFootprint) -> str:
             return str(value)
         return value
 
-    return sha256(json.dumps(document(footprint), sort_keys=True,
+    content = document(footprint)
+    # A local cache/search-root location is provenance, not asset identity.
+    content["metadata"].pop("source_path", None)
+    return sha256(json.dumps(content, sort_keys=True,
                              separators=(",", ":")).encode()).hexdigest()
 
 

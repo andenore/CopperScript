@@ -67,6 +67,11 @@ Completion means tested implementation, not automatic manufacturing signoff.
       DRC/export. Synthetic regressions verify the mechanism; this does not supply
       a Nordic/Johanson template or qualify RF performance. See
       [rigid-cluster API](rigid-placement-clusters.md).
+    - [x] Extract/pin Nordic QFAA LDO U1/C3/L1 center/rotation data and implement
+      explicit CLI scene binding with footprint/pad-net identity checks. Retain
+      source physical C3 numbering and legal non-overlapping internal courtyards.
+      The example scene is a provisional KiCad-footprint adaptation, not the
+      vendor matching-ground circuit or complete support/reference layout.
     - [ ] Complete the Nordic support circuit and extract a pin/pad-bound rigid
       matching/reference-ground cluster from the vendor layout, not a guessed
       distance threshold. Preserve its legal translation/rotation transforms.
@@ -75,6 +80,14 @@ Completion means tested implementation, not automatic manufacturing signoff.
     - [ ] Optimize receiver/connector RF clusters and noise-source separation;
       validate the new placement and reroute critical groups transactionally.
       See [RF audit](rf-layout-audit.md). R8c remains open.
+    - [ ] Compare legal local matching-tree paths against accepted coarse guides:
+      pass 7 preserves the macro but still emits a 17.19 mm raw matching tree.
+      Protect terminals/branches, bound the search and retain atomic native/profile
+      acceptance; do not confuse close placement with short committed copper.
+      This is the critical-cluster application of R5, not a second cleanup mechanism.
+    - [ ] Reevaluate paired package access/placement for the pass-7 modem USB
+      failure (24 searches, 720,000 states, zero candidates), without increasing
+      budgets blindly, routing members independently or discarding reservations.
   - [ ] R8d: After critical preflight passes, perform the complete rerun and
     independent KiCad layer review. Bind actual impedance/return-path evidence
     to the selected physical stackup before any critical-net signoff claim.
@@ -85,6 +98,12 @@ Completion means tested implementation, not automatic manufacturing signoff.
   to neighbor generation (inclusive categories; not whole-run timing).
   Search-local physical-span via caching is implemented in pass 2; operational
   timings/checkpoints are still outstanding, so this item remains open.
+  - [x] Add exact doubled-integer rectangle edge checks for track capsules and
+    via disks, caching only immutable outline classification. Nonrectangular
+    outlines retain the original exact predicate. Randomized/tangency regressions
+    preserve clearance; the measured microbenchmark is not full-router timing.
+  - [ ] Add per-critical-group progress/timing checkpoints. Pass 7 has whole-phase
+    checkpoints but its 24 modem-pair searches leave a long opaque critical stage.
 - [x] R10 (rerun finding, correctness priority): Replace endpoint-only native
   connectivity with layer-aware copper-contact connectivity. Detect interior
   T/cross junctions, track/via overlap, and pad-shape contacts; retain physical

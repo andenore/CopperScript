@@ -1222,10 +1222,17 @@ def _legal(
                 0,
             ):
                 return False
+        clearance = options.component_clearance_nm
+        for cluster in board.rigid_clusters:
+            members = {item.reference for item in cluster.members}
+            if (candidate.reference in members and other.reference in members
+                    and cluster.internal_clearance_nm is not None):
+                clearance = cluster.internal_clearance_nm
+                break
         if _polygons_too_close(
             polygon,
             other_polygon,
-            options.component_clearance_nm,
+            clearance,
         ):
             return False
     return True

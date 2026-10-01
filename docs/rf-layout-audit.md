@@ -24,9 +24,14 @@ The example previously shunted the inductor output. It now correctly uses:
 
 | Net | Members | Routing intent |
 | --- | --- | --- |
-| NRF_RF_RAW | U_NRF.ANT, C_BT_MATCH.1, L_BT_MATCH.1 | Critical chip-side tree; no 50-ohm claim |
+| NRF_RF_RAW | U_NRF.ANT, C_BT_MATCH.2, L_BT_MATCH.1 | Critical chip-side tree; no 50-ohm claim |
 | NRF_RF_ANT | L_BT_MATCH.2, ANT_BT.FEED | Point-to-point provisional 50-ohm feed |
-| GND | C_BT_MATCH.2; not ANT_BT.NC | Shunt reference; actual return topology still unqualified |
+| GND | C_BT_MATCH.1; not ANT_BT.NC | Shunt reference; actual return topology still unqualified |
+
+The later placement-data/top-copper cross-check establishes C3's physical pad
+1 as ground (upper land), pad 2 as ANT (lower land). The non-polar capacitor's
+endpoint numbers now follow that reference orientation; the shunt topology is
+unchanged. Historical pass-5/6 copper measurements are not the new template run.
 
 Compact source hashes/locators are retained in CopperLib's
 `data/full-vertical/rf-audit.json`; original documents remain ignored cache
@@ -114,5 +119,31 @@ not committed.
    actual stackup/impedance/return-path qualification. Do not claim RF usability
    simply because an exact router connects the pads.
 
-The audit corrects electrical intent first; RF placement/keepout implementation
-and production qualification remain open on the routing working list.
+### Source-backed matching scene and fresh placement probe
+
+The three-member extraction and explicit scene binding are now implemented.
+`CopperLib/scripts/extract_nrf52832_rf_reference.py` verifies both archive and
+placement-entry hashes, reads data only and emits a compact provisional packet.
+The scene binds its bytes, resolved footprints and physical pad/net roles.
+Top-view Y reflection, C3's 270-degree orientation and its ground-side pad 1
+were cross-checked against the placement table, schematic and rendered top copper.
+The installed KiCad land patterns differ from the source; no claim of an exact
+vendor transplant or stackup qualification is made. See
+[rigid-cluster integration](rigid-placement-clusters.md).
+
+[Pass 7](routing-review-pass7.md) runs fresh placement with this scene, rather
+than replaying the old board. Its RF nets and MCU USB pair connect, but the modem
+pair fails within the bounded joint search. Native and independent KiCad checks
+find no hard copper violations in accepted geometry. The raw matching tree still
+takes a 17.19 mm coarse-guide detour, while the isolated 0/45-degree matching
+fixtures route below 5 mm. This exposes route-quality work independent of macro
+placement: compare local branch-safe paths before accepting expensive guides.
+
+Remaining Nordic reference support is not optional simply because ANT connects:
+DEC1 C4 100 nF, DEC3 C7 100 pF, DEC4 C10 1 uF, VDD13/VDD36 local 100 nF caps,
+VDD48 4.7 uF, and the 32 MHz crystal/load network need source/part-bound integration.
+The reference DEC2 C6 is NC, not a fitted capacitor; C13/C14 on unused GPIO are
+not substitutes for DEC caps. The exact crystal and board-specific load values
+remain unresolved and must not be invented. Optional LF-clock population must
+agree with the selected firmware clock policy. Matching ground/vias, Johanson
+corner keepouts, GNSS isolation and real stackup/return-path evidence stay open.

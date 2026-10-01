@@ -14,6 +14,7 @@ from .erc import check, has_errors
 from .footprints import FootprintResolver
 from .importers import KiCadModImportError, load_kicad_mod
 from .layout import PlacementPlannerOptions, plan_placement
+from .placement_templates import apply_placement_templates
 from .loader import BoardLoadError, load_board
 from .power import analyze_power_states
 from .physicalize import (
@@ -238,6 +239,9 @@ def _parser() -> argparse.ArgumentParser:
         "--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic"
     )
     board_route_parser.add_argument("--candidates", type=int, default=1)
+    for physical_parser in (pcb_parser, layout_parser, global_route_parser, board_route_parser):
+        physical_parser.add_argument("--placement-templates", type=Path,
+                                    help="explicit data-only, digest-bound physical template scene")
     board_route_parser.add_argument(
         "--placement-candidate", help="select a named legal candidate, e.g. candidate-01",
     )
@@ -494,6 +498,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
                     )
                     physical_board = resolved_physicalize(board, resolver, physical_options)
+                if args.placement_templates:
+                    physical_board = apply_placement_templates(physical_board, args.placement_templates)
                 stitch_enabled = args.stitch_zone_pads or bool(physical_board.zones)
                 early_pads: set[PadReference] = set()
                 if args.early_plane_pad and not stitch_enabled:
@@ -829,6 +835,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
                     maximum_iterations=args.router_iterations,
                 )
+                if args.placement_templates:
+                    physical_board = apply_placement_templates(physical_board, args.placement_templates)
                 flow = optimize_placement_for_routing(
                     physical_board,
                     PlacementPlannerOptions(candidate_count=args.candidates),
@@ -891,6 +899,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                             ),
                         )
                         physical_board = resolved_physicalize(board, resolver, physical_options)
+                    if args.placement_templates:
+                        physical_board = apply_placement_templates(physical_board, args.placement_templates)
                     layout_report = None
                     if args.command == "plan-layout":
                         try:

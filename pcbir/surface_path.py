@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from heapq import heappop, heappush
 from typing import Callable
 
@@ -207,6 +208,10 @@ def surface_path_to_via(
 
 def via_inside_board(board: PhysicalBoard, position: Point, size_nm: int) -> bool:
     outline = board.outline.vertices
+    rectangle = _rectangle_bounds(outline)
+    if rectangle is not None:
+        return _rectangle_capsule_inside(rectangle, position, position,
+                                         size_nm + 2 * board.rules.minimum_clearance_nm)
     if not point_in_polygon(position, outline):
         return False
     required_twice = size_nm + 2 * board.rules.minimum_clearance_nm
@@ -221,6 +226,10 @@ def _track_inside_board(
     board: PhysicalBoard, start: Point, end: Point, width_nm: int,
 ) -> bool:
     outline = board.outline.vertices
+    rectangle = _rectangle_bounds(outline)
+    if rectangle is not None:
+        return _rectangle_capsule_inside(rectangle, start, end,
+                                         width_nm + 2 * board.rules.minimum_clearance_nm)
     if not point_in_polygon(start, outline) or not point_in_polygon(end, outline):
         return False
     required_twice = width_nm + 2 * board.rules.minimum_clearance_nm
@@ -229,3 +238,35 @@ def _track_inside_board(
         >= required_twice * required_twice
         for first, second in zip(outline, (*outline[1:], outline[0]))
     )
+
+
+@lru_cache(maxsize=128)
+def _rectangle_bounds(outline: tuple[Point, ...]) -> tuple[int, int, int, int] | None:
+    """Recognize only an actual axis-aligned rectangle, never its bounding box."""
+
+    if len(outline) != 4 or len(set(outline)) != 4:
+        return None
+    if any((first.x_nm == second.x_nm) == (first.y_nm == second.y_nm)
+           for first, second in zip(outline, (*outline[1:], outline[0]))):
+        return None
+    xs = sorted({point.x_nm for point in outline})
+    ys = sorted({point.y_nm for point in outline})
+    if len(xs) != 2 or len(ys) != 2:
+        return None
+    return xs[0], ys[0], xs[1], ys[1]
+
+
+def _rectangle_capsule_inside(
+    rectangle: tuple[int, int, int, int], start: Point, end: Point, required_twice: int,
+) -> bool:
+    """Exact erosion by half a diameter, including odd-nanometre diameters.
+
+    A rectangle is convex: endpoint disks lie inside its erosion iff the whole
+    segment capsule does. Doubled integer distances avoid rounded radii/Fractions.
+    """
+
+    left, top, right, bottom = rectangle
+    return 2 * min(start.x_nm - left, end.x_nm - left,
+                   right - start.x_nm, right - end.x_nm,
+                   start.y_nm - top, end.y_nm - top,
+                   bottom - start.y_nm, bottom - end.y_nm) >= required_twice

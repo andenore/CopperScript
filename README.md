@@ -458,7 +458,12 @@ Unlike soft groups, these retain identity-bound local footprint poses and
 keepouts during whole-cluster placement/refinement and routing feedback,
 including explicitly permitted 45-degree rotations. Vendor RF templates and
 their qualification are separate work; the example does not yet use a qualified
-Nordic/Johanson cluster.
+Nordic/Johanson cluster. An opt-in
+`--placement-templates examples/full_vertical_placement_templates.json` scene
+now binds the source-extracted Nordic matching macro to pinned KiCad footprints.
+It is a provisional adaptation, not the complete vendor support/ground layout;
+use the [template preflight command](docs/rigid-placement-clusters.md#source-backed-cli-scene)
+before attempting the complete routing workflow with that option.
 
 ## KiCad schematic backend
 

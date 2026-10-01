@@ -775,6 +775,9 @@ class RigidPlacementCluster:
     source: str
     allowed_rotations: tuple[Decimal | int | float | str, ...] = (0, 90, 180, 270)
     keepouts: tuple[CopperKeepout, ...] = ()
+    # Additional courtyard-to-courtyard gap inside the audited macro only.
+    # None retains the planner's ordinary gap; copper DRC is never changed.
+    internal_clearance_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "members", tuple(self.members))
@@ -792,6 +795,8 @@ class RigidPlacementCluster:
         })))
         if len({item.id for item in self.keepouts}) != len(self.keepouts):
             raise ValueError("rigid cluster keepout ids must be unique")
+        if self.internal_clearance_nm is not None and self.internal_clearance_nm < 0:
+            raise ValueError("rigid cluster internal courtyard clearance cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
