@@ -211,8 +211,45 @@ or revisions rather than automatically relocking. Initial cloning and
 routing command itself uses the local packages offline. See uv's
 [project workflow](https://docs.astral.sh/uv/guides/projects/) for environment setup.
 
-Adjust the KiCad paths if your installation is elsewhere. From the CopperScript
-repository root, run:
+After the setup above, run the complete workflow with:
+
+```powershell
+uv run --no-sync python scripts/route_full_vertical.py
+```
+
+The script recomputes placement and routing from source with the six-layer
+settings below, including the pinned placement scene, critical routing, fanout,
+ordinary routing, ground feedback, native DRC and independent KiCad plane
+verification. Each run writes a fresh `build/full-vertical/<UTC-run-id>/` with
+`board.kicad_pcb`, `board.kicad_pro`, `route-report.json`, `routing.log` and
+`run.json` (command, timestamps, elapsed time and exit code). `build/` is ignored
+by Git. Errors/interruption may leave only logs/partial artifacts; file existence
+does not imply routing success. No Gerbers are generated.
+
+The script uses the current Python/uv environment and sibling CopperLib; it
+never updates `copper.lock` or fetches packages automatically. It discovers
+`kicad-cli` on PATH or the standard Windows KiCad 10 installation. Footprints
+use `KICAD10_FOOTPRINT_DIR`, the KiCad installation, or `/usr/share/kicad/footprints`.
+Override paths when needed, preview without routing using `--dry-run`, or
+select a new/empty directory inside `build/`:
+
+```powershell
+uv run --no-sync python scripts/route_full_vertical.py --dry-run
+uv run --no-sync python scripts/route_full_vertical.py `
+  --kicad-cli "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe" `
+  --kicad-footprints "C:/Program Files/KiCad/10.0/share/kicad/footprints" `
+  --copperlib-footprints "../CopperLib/footprints" `
+  --output-dir "build/my-routing-run"
+```
+
+The script preserves the router's exit code: **1** means unmet routing/DRC
+gates, **2** means setup/execution error, and **130** means interruption.
+An existing nonempty output directory is rejected so old results cannot be
+mistaken for a new run. Exit 0 still does not constitute manufacturing signoff.
+Allow tens of minutes; adding this script does not rerun the full board.
+
+For the equivalent explicit CLI invocation, adjust the KiCad paths if your
+installation is elsewhere. From the CopperScript repository root, run:
 
 ```powershell
 $kicadFootprints = "C:\Program Files\KiCad\10.0\share\kicad\footprints"
@@ -247,7 +284,7 @@ take substantially longer. No external timing wrapper is required. KiCad library
 versions can change geometry and results; record the installed version and
 footprint inputs when comparing runs.
 
-Outputs are `board.kicad_pcb`, its same-stem `board.kicad_pro`, and
+The explicit CLI outputs are `board.kicad_pcb`, its same-stem `board.kicad_pro`, and
 `route-report.json` under `build/full-vertical/`. Open the board with its project
 so KiCad uses the exported design rules. The report includes the independent
 `plane_verification` result. The historical profile-free run exited **1** despite
