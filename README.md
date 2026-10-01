@@ -177,6 +177,9 @@ the eight library findings. The review records spare inner/bottom capacity,
 guide-cost and tree/seam cleanup tasks. New [per-net policy telemetry](docs/routing-search-policy.md)
 reports requested/effective detailed layer costs without changing routing.
 Production gates remain outstanding.
+The [compatible-escape increment](docs/routing-review-pass17.md) improves the
+matched partial package stage from 72 to 74 exits. Two MCU exits remain pending;
+the latest full-board routing result above has not been replaced by a full rerun.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6

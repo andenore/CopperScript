@@ -26,6 +26,7 @@ def board():
 def options(**kwargs):
     return fanout.FanoutOptions(minimum_component_pads=2,
                                two_leg_escapes=False,
+                               joint_escapes=False,
                                maximum_neighbor_distance_nm=nm_from_mm(3), **kwargs)
 
 
@@ -121,6 +122,7 @@ def test_real_candidate_generation_with_two_physical_via_windows():
         copper_keepouts=keepouts)
     settings = fanout.FanoutOptions(minimum_component_pads=2,
                                     two_leg_escapes=False,
+                                    joint_escapes=False,
                                     maximum_neighbor_distance_nm=nm_from_mm(5))
     greedy = fanout.route_fanout(base, replace(settings, constrained_pins_first=False))
     selected = fanout.route_fanout(base, settings)

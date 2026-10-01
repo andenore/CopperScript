@@ -110,10 +110,20 @@ Completion means tested implementation, not automatic manufacturing signoff.
     improves matched partial fanout from 69 to 72 exits without changing prior
     critical/GND copper or any pose. MCU.62/.64 now have ten/three legal initial
     alternatives, but selected neighboring escapes consume them.
-  - [ ] Add local candidate conflicts and bounded compatible assignment, including
+  - [x] Add local candidate conflicts and bounded compatible assignment, including
     expansion of competing pins with already legal radial choices. Exact replay
     identifies MCU_NRF_RX / MCU_MODEM_TX blocking the MCU UART/enable exits;
     increasing the area-search budget is not the next experiment.
+    [Pass 17](routing-review-pass17.md) implements exact lazy conflicts, affected
+    domain expansion, MRV/forward-checking and bounded conflict-driven group
+    growth with incumbent rollback. Matched escapes improve 72 to 74 without
+    losing any prior identity. MCU.62/.64 still lack a compatible generated
+    pattern; endpoint coverage and fully locked local-search controls do not
+    close them. This completes the assignment increment, not full R6a/R17.
+  - [ ] Generate constrained multi-bend alternatives for both sides of those
+    remaining conflicts, with exact multi-leg anchor/ownership checks; compare
+    a complete compatible group before committing it. If none exists, use
+    bounded legal whole-unit placement/critical-reservation feedback.
   - [ ] After those exits survive allocation, rerun complete ordinary routing,
     independent filled-zone checks and every-layer geometry/congestion review.
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,

@@ -15,8 +15,20 @@ def checked_access_path(
     allow_movable_conflicts: bool = False, *, allow_orthogonal: bool = True,
 ) -> tuple[TrackSegment, ...] | None:
     """Try both diagonal/straight orders; emit precisely the checked legs."""
+    return next(checked_access_paths(board, clearance, net, start, end, width_nm,
+                                    layer, allow_movable_conflicts,
+                                    allow_orthogonal=allow_orthogonal), None)
+
+
+def checked_access_paths(
+    board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
+    start: Point, end: Point, width_nm: int, layer: CopperLayer,
+    allow_movable_conflicts: bool = False, *, allow_orthogonal: bool = True,
+):
+    """Lazily enumerate checked orders; ordinary access still takes the first."""
     if start == end:
-        return ()
+        yield ()
+        return
     dx, dy = end.x_nm - start.x_nm, end.y_nm - start.y_nm
     if not dx or not dy or abs(dx) == abs(dy):
         paths = ((start, end),)
@@ -42,8 +54,7 @@ def checked_access_path(
             elif not clearance.can_track(net, track.start, track.end, width_nm, layer):
                 break
         else:
-            return tracks
-    return None
+            yield tracks
 
 
 def verified_fanout_path(

@@ -13,14 +13,16 @@ from typing import Mapping
 from .drc import placed_pad_shape, run_physical_drc
 from .geometry import point_in_polygon
 from .physical import (
-    BoardSide, CopperLayer, PadKind, PadReference, PhysicalBoard, Point,
-    RouteKind, TrackSegment, Via, nm_from_mm,
+    BoardSide, CopperLayer, FootprintPad, PadKind, PadReference, PhysicalBoard,
+    Placement, Point, RouteKind, TrackSegment, Via, nm_from_mm,
 )
 from .placement import transformed_pad_position
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers
 from .routing_vias import physical_via_span
-from .pin_escape import checked_access_path
+from .pin_escape import checked_access_path, checked_access_paths
+from .escape_assignment import (EscapeAssignmentOptions, EscapeAssignmentReport,
+                                EscapeCandidate, improve_escape_assignment)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +34,8 @@ class FanoutOptions:
     constrained_pins_first: bool = True
     two_leg_escapes: bool = True
     maximum_two_leg_candidates: int = 256
+    joint_escapes: bool = True
+    assignment_options: EscapeAssignmentOptions = EscapeAssignmentOptions()
 
     def __post_init__(self) -> None:
         if min(self.minimum_component_pads, self.maximum_neighbor_distance_nm,
@@ -41,7 +45,7 @@ class FanoutOptions:
 
 @dataclass(frozen=True, slots=True)
 class FanoutPinAnalysis:
-    """Initial immutable-domain slack and selected alternative; not signoff."""
+    """Analyzed immutable-domain slack and selected alternative; not signoff."""
 
     pad: PadReference
     legal_candidate_count: int
@@ -60,6 +64,7 @@ class FanoutResult:
     created_vias: tuple[Via, ...] = ()
     pin_analysis: tuple[FanoutPinAnalysis, ...] = ()
     created_tracks: tuple[TrackSegment, ...] = ()
+    assignment: EscapeAssignmentReport | None = None
 
 
 def route_fanout(
@@ -106,112 +111,58 @@ def route_fanout(
                 continue
             pads.append((neighbor, reference, position, placement, pad))
 
-    tracks: list[TrackSegment] = []
-    vias: list[Via] = []
-    accesses: dict[PadReference, Point] = {}
-    pending: list[PadReference] = []
-    via_size = board.rules.default_via_size_nm
-    via_drill = board.rules.default_via_drill_nm
     # Analyze every pin against the same immutable input before reserving an
     # easy neighbor's escape. Domains are physically legal alternatives, not
     # guaranteed mutually compatible routes or proof of onward connectivity.
-    domains: dict[PadReference, tuple[tuple[tuple[TrackSegment, ...], Via | None], ...]] = {}
+    domains: dict[PadReference, tuple[EscapeCandidate, ...]] = {}
+    pin_by_ref = {item[1]: item for item in pads}
     for _, reference, position, placement, pad in pads:
         net = net_by_pad[reference]
-        side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
-        rule = rules.get(net)
-        allowed = routing_layers(board, net, rule)
-        if side not in allowed or len(allowed) < 2:
-            domains[reference] = ()
-            continue
-        other_layer = next((layer for layer in allowed if layer is not side), None)
-        span = physical_via_span(board, side, other_layer) if other_layer else None
-        if span is None:
-            domains[reference] = ()
-            continue
-        width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
-        bounds = placed_pad_shape(position, pad, placement).bounds
-        choices: list[tuple[tuple[TrackSegment, ...], Via | None]] = []
-        def candidates():
-            yield from _candidates(position, placement.position, options)
-            # Expand only an initially empty radial domain. Keep easy exits
-            # unchanged; do not turn every package pin into a fine area maze.
-            if options.two_leg_escapes and not choices:
-                yield from _two_leg_candidates(position, placement.position, options)
-        for candidate in candidates():
-            margin = via_size // 2 + board.rules.minimum_clearance_nm
-            if not point_in_polygon(candidate, board.outline.vertices):
-                continue
-            if _distance_to_outline(candidate, board.outline.vertices) < margin:
-                continue
-            # Never silently require an unqualified via-in-pad process.
-            if (bounds.min_x - via_size // 2 <= candidate.x_nm <= bounds.max_x + via_size // 2
-                    and bounds.min_y - via_size // 2 <= candidate.y_nm <= bounds.max_y + via_size // 2):
-                continue
-            coincident = tuple(item for item in board.vias
-                               if item.position == candidate)
-            existing = next((item for item in coincident
-                             if item.net == net and item.from_layer == span[0]
-                             and item.to_layer == span[1]), None)
-            if coincident and existing is None:
-                continue
-            via = None if existing else Via(net, candidate, via_size, via_drill, *span)
-            if existing is None and not clearance.can_via(net, candidate, via_size, span[0], span[1],
-                                                         drill_nm=via_drill):
-                continue
-            path = checked_access_path(board, clearance, net, position, candidate, width,
-                                       side, allow_orthogonal=False)
-            if path:
-                choices.append((path, via))
-        domains[reference] = tuple(choices)
+        choices = _legal_choices(board, clearance, net, position, placement, pad,
+                                 _candidates(position, placement.position, options))
+        if options.two_leg_escapes and not choices:
+            choices = _legal_choices(board, clearance, net, position, placement, pad,
+                                    _two_leg_candidates(position, placement.position, options))
+        domains[reference] = choices
 
     ordered = sorted(pads, key=lambda item: (
         len(domains[item[1]]) if options.constrained_pins_first else 0,
         item[0], item[1],
     ))
-    analysis: list[FanoutPinAnalysis] = []
+    ordered_refs = tuple(item[1] for item in ordered)
+    tracks: list[TrackSegment] = []
+    vias: list[Via] = []
+    selected: dict[PadReference, int] = {}
     for _, reference, _, _, _ in ordered:
-        net = net_by_pad[reference]
-        choice = None
-        selected_index = None
-        for index, (path, via) in enumerate(domains[reference]):
-            anchor = path[-1].end
-            existing = next((item for item in (*board.vias, *vias)
-                             if item.net == net and item.position == anchor
-                             and (via is None or (item.from_layer, item.to_layer)
-                                  == (via.from_layer, via.to_layer))), None)
-            if existing is not None:
-                via = None
-            if (all(clearance.can_track(net, t.start, t.end, t.width_nm, t.layer) for t in path)
-                    and (via is None or clearance.can_via(net, via.position, via.size_nm,
-                                                        via.from_layer, via.to_layer,
-                                                        drill_nm=via.drill_nm))):
-                choice = path, via
-                selected_index = index
+        for index, candidate in enumerate(domains[reference]):
+            if _reserve(board, clearance, tracks, vias, candidate):
+                selected[reference] = index
                 break
-        analysis.append(FanoutPinAnalysis(
-            reference, len(domains[reference]), selected_index,
-            ("no legal candidate against immutable input" if not domains[reference]
-             else "all initial candidates blocked by selected escapes") if choice is None else "",
-            sum(len(path) == 2 for path, _ in domains[reference]),
-        ))
-        if choice is None:
-            pending.append(reference)
-            continue
-        path, via = choice
-        accesses[reference] = path[-1].end
-        for track in path:
-            if track not in board.tracks and track not in tracks:
-                tracks.append(track)
-                clearance.add_track(track, locked=True)
-        if via is not None:
-            vias.append(via)
-            clearance.add_via(via, locked=True)
+    greedy = dict(selected)
+    assignment = None
+    if options.joint_escapes:
+        def expand(reference):
+            if not options.two_leg_escapes:
+                return ()
+            _, _, position, placement, pad = pin_by_ref[reference]
+            return _legal_choices(board, RoutingClearanceIndex(board), net_by_pad[reference],
+                position, placement, pad, _two_leg_candidates(position, placement.position, options),
+                multiple_orders=True)
+        selected, assignment = improve_escape_assignment(
+            board, ordered_refs, domains, selected, expand, options.assignment_options)
 
-    if not tracks and not vias and not accesses:
-        return FanoutResult(board, MappingProxyType({}), tuple(pending), 0, 0,
-                            pin_analysis=tuple(analysis))
-    routed = replace(board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias))
+    def materialize(selection):
+        index = RoutingClearanceIndex(board)
+        new_tracks, new_vias, accesses = [], [], {}
+        for reference in ordered_refs:
+            if reference in selection:
+                candidate = domains[reference][selection[reference]]
+                if _reserve(board, index, new_tracks, new_vias, candidate):
+                    accesses[reference] = candidate[0][-1].end
+        return (replace(board, tracks=(*board.tracks, *new_tracks), vias=(*board.vias, *new_vias))
+                if new_tracks or new_vias else board), new_tracks, new_vias, accesses
+
+    routed, tracks, vias, accesses = materialize(selected)
     # Geometry queries are the fast gate; native DRC is the final transactional
     # gate. A new manufacturing violation rejects the whole fanout proposal.
     fatal = {"DRC-SHORT", "DRC-CLEARANCE", "DRC-BOARD-EDGE", "DRC-HOLE-CLEARANCE",
@@ -220,15 +171,88 @@ def route_fanout(
     before = run_physical_drc(board)
     after = run_physical_drc(routed)
     before_count = {code: sum(item.code == code for item in before.findings) for code in fatal}
-    if any(sum(item.code == code for item in after.findings) > before_count[code]
-           for code in fatal):
+    def failed_gate(findings):
+        return any(sum(item.code == code for item in findings) > before_count[code] for code in fatal)
+    # Pairwise assignment is a proposal, not a substitute for exact whole-board
+    # materialization/native acceptance. A failed improvement retains greedy.
+    if assignment is not None and (set(accesses) != set(selected) or failed_gate(after.findings)):
+        selected = greedy
+        assignment = replace(assignment, native_accepted=False)
+        routed, tracks, vias, accesses = materialize(selected)
+        after = run_physical_drc(routed)
+    pending = tuple(reference for reference in ordered_refs if reference not in accesses)
+    analysis = tuple(FanoutPinAnalysis(reference, len(domains[reference]),
+        selected.get(reference) if reference in accesses else None,
+        ("no legal candidate against immutable input" if not domains[reference]
+         else "all initial candidates blocked by selected escapes") if reference not in accesses else "",
+        sum(len(path) == 2 for path, _ in domains[reference])) for reference in ordered_refs)
+    if failed_gate(after.findings):
         return FanoutResult(board, MappingProxyType({}),
                             tuple(item[1] for item in pads), 0, 0, pin_analysis=tuple(
                                 replace(item, selected_candidate_index=None,
                                         diagnostic="whole fanout proposal rejected by native DRC")
-                                for item in analysis))
+                                for item in analysis), assignment=assignment)
     return FanoutResult(routed, MappingProxyType(accesses), tuple(pending),
-                        len(tracks), len(vias), tuple(vias), tuple(analysis), tuple(tracks))
+                        len(tracks), len(vias), tuple(vias), tuple(analysis), tuple(tracks), assignment)
+
+
+def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
+                   position: Point, placement: Placement, pad: FootprintPad,
+                   endpoints, *, multiple_orders: bool = False) -> tuple[EscapeCandidate, ...]:
+    rule = next((r for r in board.net_routing_rules if r.net == net), None)
+    side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+    allowed = routing_layers(board, net, rule)
+    if side not in allowed or len(allowed) < 2:
+        return ()
+    span = physical_via_span(board, side, next(layer for layer in allowed if layer is not side))
+    if span is None:
+        return ()
+    width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+    size, drill = board.rules.default_via_size_nm, board.rules.default_via_drill_nm
+    bounds = placed_pad_shape(position, pad, placement).bounds
+    choices = []
+    for endpoint in endpoints:
+        margin = size // 2 + board.rules.minimum_clearance_nm
+        if (not point_in_polygon(endpoint, board.outline.vertices)
+                or _distance_to_outline(endpoint, board.outline.vertices) < margin):
+            continue
+        if (bounds.min_x - size // 2 <= endpoint.x_nm <= bounds.max_x + size // 2
+                and bounds.min_y - size // 2 <= endpoint.y_nm <= bounds.max_y + size // 2):
+            continue  # No unqualified ordinary via-in-pad process.
+        coincident = tuple(v for v in board.vias if v.position == endpoint)
+        existing = next((v for v in coincident if v.net == net
+                         and (v.from_layer, v.to_layer) == span[:2]), None)
+        if coincident and existing is None:
+            continue
+        via = None if existing else Via(net, endpoint, size, drill, *span)
+        if via is not None and not clearance.can_via(net, endpoint, size, span[0], span[1], drill_nm=drill):
+            continue
+        paths = (checked_access_paths(board, clearance, net, position, endpoint, width, side,
+                                     allow_orthogonal=False) if multiple_orders else
+                 (checked_access_path(board, clearance, net, position, endpoint, width, side,
+                                      allow_orthogonal=False),))
+        choices.extend((path, via) for path in paths if path)
+    return tuple(dict.fromkeys(choices))
+
+
+def _reserve(board, clearance, tracks, vias, candidate: EscapeCandidate) -> bool:
+    path, via = candidate
+    if via is not None and any(v.net == via.net and v.position == via.position
+                              and (v.from_layer, v.to_layer) == (via.from_layer, via.to_layer)
+                              for v in (*board.vias, *vias)):
+        via = None
+    if (not all(clearance.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in path)
+            or via is not None and not clearance.can_via(via.net, via.position, via.size_nm,
+                via.from_layer, via.to_layer, drill_nm=via.drill_nm)):
+        return False
+    for track in path:
+        if track not in board.tracks and track not in tracks:
+            tracks.append(track)
+            clearance.add_track(track, locked=True)
+    if via is not None:
+        vias.append(via)
+        clearance.add_via(via, locked=True)
+    return True
 
 
 def _candidates(position: Point, center: Point, options: FanoutOptions):

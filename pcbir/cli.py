@@ -735,6 +735,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "two_leg_candidate_count": item.two_leg_candidate_count,
                     } for item in result.fanout.pin_analysis],
                 }
+                if result.fanout.assignment is not None:
+                    assignment = result.fanout.assignment
+                    report["fanout"]["assignment"] = {
+                        "pair_checks": assignment.pair_checks,
+                        "native_accepted": assignment.native_accepted,
+                        "expanded_pads": [f"{p.component}.{p.pad}" for p in assignment.expanded_pads],
+                        "trials": [{"pad": f"{t.pad.component}.{t.pad.pad}",
+                            "cluster": [f"{p.component}.{p.pad}" for p in t.cluster],
+                            "search_states": t.search_states, "solution_found": t.solution_found,
+                            "diagnostic": t.diagnostic} for t in assignment.trials],
+                    }
             if stitch is not None:
                 report["plane_stitch"] = {
                     "stitched_pads": [

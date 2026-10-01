@@ -43,7 +43,7 @@ retain deterministic output and must not weaken exact native or KiCad DRC.
 
 ## 3. Solve package escapes together
 
-- [ ] Build a conflict graph for candidates belonging to nearby pins and nets.
+- [x] Build a conflict graph for candidates belonging to nearby pins and nets.
   - [x] Enumerate immutable legal radial domains, prioritize low-slack pins,
     recheck selected escapes incrementally and expose initial/consumed-domain
     diagnostics. This is a tested first increment, not joint matching/search.
@@ -51,11 +51,21 @@ retain deterministic output and must not weaken exact native or KiCad DRC.
     verify actual multi-segment anchor copper and propagate explicit cleanup
     ownership. Pass 16 improves 69 to 72 matched crowded-pin exits; MCU.62/.64
     alternatives are still consumed by selected neighbors.
-  - [ ] Attribute local candidate conflicts and expand competing selected-pin
+  - [x] Attribute local candidate conflicts and expand competing selected-pin
     domains, including pins with legal radial choices. Replay shows MCU_NRF_RX
     blocks every MODEM_EN exit and combines with MCU_MODEM_TX to block MCU_NRF_TX.
+    Pass 17 adds exact lazy pair conflicts, both path orders and bounded local
+    domain/group expansion, improving matched escapes from 72 to 74. MCU.62/.64
+    remain pending; this is not onward area connectivity.
 - [ ] Select a compatible set with deterministic bounded matching/search, then
   negotiated swaps for larger clusters; include onward-route cost.
+  - [x] Implement bounded MRV/forward-checking with conflict-driven group growth
+    and exact materialization/native rollback, preserving prior escaped
+    identities and fixed outside/input copper. Onward cost and area-driven
+    replacement remain open.
+  - [ ] Constrain multi-bend alternatives around competing selected escapes for
+    the remaining MCU conflict groups, or legal whole-unit placement feedback;
+    reverify multi-leg contacts/ownership before attempting the full rerun.
 - [ ] Keep escapes provisional until area routing succeeds and allow local
   replacement of an escape that blocks a later net.
 
