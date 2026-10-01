@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_left
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
 from heapq import heappop, heappush
@@ -56,6 +56,26 @@ class DetailedNode:
 
 
 @dataclass(frozen=True, slots=True)
+class DetailedSearchPolicy:
+    """Search-owner telemetry, not geometry, signoff or final closure metrics.
+
+    Attach to individual net results so accepted subset repairs can retain a
+    mixture of policies without claiming one effective policy for the board.
+    Failure/overflow pairs are measured before physical-land/native closure.
+    """
+
+    requested_layer_preference_cost: int
+    requested_direction_preference_cost: int
+    effective_layer_preference_cost: int
+    effective_direction_preference_cost: int
+    neutral_fallback_attempted: bool
+    neutral_fallback_selected: bool
+    scored_nets: tuple[str, ...]
+    preferred_failure_overflow: tuple[int, int]
+    neutral_failure_overflow: tuple[int, int] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DetailedNetResult:
     net: str
     connected: bool
@@ -65,6 +85,7 @@ class DetailedNetResult:
     guide_deviation_count: int
     diagnostics: tuple[str, ...] = ()
     orthogonal_mode_used: bool = False
+    search_policy: DetailedSearchPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +149,7 @@ class DetailedRoutingResult:
                     "guide_deviation_count": item.guide_deviation_count,
                     "diagnostics": list(item.diagnostics),
                     "orthogonal_mode_used": item.orthogonal_mode_used,
+                    "search_policy": asdict(item.search_policy) if item.search_policy else None,
                 }
                 for item in self.nets
             ],
@@ -362,6 +384,7 @@ def route_detailed(
     # they changed search ordering within a finite state budget. Compare a
     # neutral-cost reroute only when an ordinary net was left open; zone nets
     # deliberately deferred to fill are not a search failure.
+    neutral_metrics = None
     if ((options.layer_preference_cost or options.direction_preference_cost)
             and any(not item.result.connected and item.result.net not in zone_nets
                     for item in best.nets)):
@@ -373,11 +396,14 @@ def route_detailed(
             fanout_created_vias=fanout_created_vias,
             only_nets=only_nets,
         )
+        neutral_metrics = neutral.metrics
         if (neutral.metrics.unrouted_net_count,
                 neutral.metrics.total_conflict_overflow) < (
                 best.metrics.unrouted_net_count,
                 best.metrics.total_conflict_overflow):
-            return neutral
+            return replace(neutral, nets=_with_search_policy(
+                neutral.nets, zone_nets, options, best.metrics, neutral_metrics, True,
+            ))
     metrics = replace(best.metrics, passes=completed_passes)
     new_tracks = tuple(track for item in best.nets if item.result.connected for track in item.tracks)
     new_vias = tuple(via for item in best.nets if item.result.connected for via in item.vias)
@@ -416,13 +442,32 @@ def route_detailed(
     return DetailedRoutingResult(
         DetailedRoutingStatus.SUCCESS if success else DetailedRoutingStatus.PARTIAL,
         routed,
-        tuple(item.result for item in best.nets),
+        _with_search_policy(tuple(item.result for item in best.nets), zone_nets,
+                            options, best.metrics, neutral_metrics, False),
         metrics,
         len(board.tracks),
         len(board.vias),
         global_route.routing_fingerprint,
         fingerprint,
     )
+
+
+def _with_search_policy(
+    nets: tuple[DetailedNetResult, ...], zone_nets: set[str],
+    options: DetailedRouterOptions, preferred: DetailedRoutingMetrics,
+    neutral: DetailedRoutingMetrics | None, selected: bool,
+) -> tuple[DetailedNetResult, ...]:
+    policy = DetailedSearchPolicy(
+        options.layer_preference_cost, options.direction_preference_cost,
+        0 if selected else options.layer_preference_cost,
+        0 if selected else options.direction_preference_cost,
+        neutral is not None, selected,
+        tuple(sorted(item.net for item in nets)),
+        (preferred.unrouted_net_count, preferred.total_conflict_overflow),
+        (neutral.unrouted_net_count, neutral.total_conflict_overflow) if neutral else None,
+    )
+    return tuple(replace(item, search_policy=policy) if item.net not in zone_nets
+                 else replace(item, search_policy=None) for item in nets)
 
 
 def _pass_heuristic_weight(options: DetailedRouterOptions, pass_index: int) -> int:

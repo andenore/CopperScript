@@ -169,8 +169,14 @@ search-step segments while preserving connectivity. It does not yet shorten
 the real-board USB detours.
 The [access/miter review](docs/routing-review-pass12.md) removes the oblique RF
 access segments and small USB backtrack at the unchanged corrected placement.
-All eight critical nets remain connected; the complete ordinary rerun and
-production gates are still outstanding.
+All eight critical nets remain connected. The corrected-input
+[full rerun and six-layer review](docs/routing-review-pass13.md) keeps their
+copper and all 51 placements unchanged: KiCad finds zero GND/critical opens,
+but three ordinary signal nets remain open (34 unconnected items), alongside
+the eight library findings. The review records spare inner/bottom capacity,
+guide-cost and tree/seam cleanup tasks. New [per-net policy telemetry](docs/routing-search-policy.md)
+reports requested/effective detailed layer costs without changing routing.
+Production gates remain outstanding.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6
@@ -216,10 +222,11 @@ New-Item -ItemType Directory -Force "build/full-vertical" | Out-Null
 
 uv run --no-sync python -m copperscript route-board examples/full_vertical_board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
+  --placement-templates examples/full_vertical_placement_templates.json `
   --footprint-root $kicadFootprints `
   --footprint-root $copperLibFootprints `
   --candidates 1 --placement-candidate candidate-01 `
-  --feedback-iterations 1 --router-iterations 5 `
+  --feedback-iterations 1 --router-iterations 5 --critical-feedback-trials 0 `
   --pitch-mm 1 --passes 2 --search-budget 20000 `
   --soft-ripup --fanout --constrained-pins-first --progressive-guides `
   --repair-budget-multiplier 10 --ground-via-in-pad `
@@ -243,10 +250,12 @@ footprint inputs when comparing runs.
 Outputs are `board.kicad_pcb`, its same-stem `board.kicad_pro`, and
 `route-report.json` under `build/full-vertical/`. Open the board with its project
 so KiCad uses the exported design rules. The report includes the independent
-`plane_verification` result. The recorded run exited **1**, despite zero KiCad
-unconnected items, because native zone/route-completeness gates and eight
-footprint-library findings remained unresolved. An output file or zero airwires
-is not manufacturing signoff. USB/RF qualification is also still outstanding.
+`plane_verification` result. The historical profile-free run exited **1** despite
+zero KiCad unconnected items. The latest corrected-library/template run also
+exits **1**, with three ordinary open nets (`MCU_NRF_TX`, `MODEM_EN`, `V3V3`),
+34 KiCad unconnected items, zero GND/critical opens and eight library findings.
+Neither run is production signoff. An output file or zero airwires is not
+manufacturing acceptance; USB/RF/return-path qualification remains outstanding.
 `--ground-via-in-pad` permits filled-and-capped GND vias for this six-layer
 profile; that process must be explicitly qualified with the fabricator before
 ordering a board.

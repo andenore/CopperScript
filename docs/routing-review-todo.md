@@ -16,13 +16,16 @@ Completion means tested implementation, not automatic manufacturing signoff.
   and explicitly invalidate historical USB electrical acceptance. Copper DRC
   cannot detect a part model's incorrect internal conduction. See
   [pass 11](routing-review-pass11.md).
-- [ ] R13b: Rerun critical and then ordinary routing using that corrected library;
+- [x] R13b: Rerun critical and then ordinary routing using that corrected library;
   obtain fresh independent KiCad evidence. Old USB placements/copper are not a
   valid baseline for electrical acceptance or route-quality optimization.
   - [x] Fresh critical preflight: all eight critical nets connected, no placement
     repair trial, zero vias; independent KiCad confirms zero critical opens and
     no hard copper/dangling findings. Eight library findings remain.
-  - [ ] Full ordinary rerun and independent filled-zone/layer review.
+  - [x] Full ordinary rerun and independent filled-zone/layer review in
+    [pass 13](routing-review-pass13.md): unchanged critical copper/51 poses,
+    zero GND/critical opens and no hard copper findings. Three ordinary nets
+    remain open (34 KiCad items); this completes the rerun, not routing closure.
 - [x] R14 (pass-11 shape finding): Replace oblique exact single-ended RF
   package/grid access links with clearance-checked straight/45-degree access.
   Preserve original terminal contact, widths, layers, earlier reservations and
@@ -64,11 +67,30 @@ Completion means tested implementation, not automatic manufacturing signoff.
 - [ ] R6a: Add clearance-aware local demand and failure pressure so spare
   signal layers can relieve congested channels; keep GND plane reserved and
   retain explicit layer/reference restrictions.
+  Pass-13 cases: MCU_NRF_TX cannot reach U_NRF.10; MODEM_EN exhausts search
+  toward U_MCU.64; V3V3 exhausts 200,000 states toward R_RESET_MCU.1. Global
+  overflow is zero while these fine-access/tree failures remain. Reproduce
+  failures with existing critical/ground copper before forcing layer balance.
 - [ ] R6b: Localize neutral-cost fallback and report effective policy rather
   than silently replacing the whole board with an unreported neutral rerun.
+  - [x] Report requested/effective detailed costs and attempted/selected fallback
+    per net, with scored scope and pre-closure failure/overflow comparisons.
+    Preserve mixed policies through subset repair and keep telemetry out of
+    geometry/route fingerprints. See [policy reporting](routing-search-policy.md).
+    The full pass-13 run loaded the previous source; its policy choice remains
+    unavailable. Whole-scope fallback localization is still open.
+- [ ] R16 (layer-review code finding): Normalize guide-deviation run cost by
+  physical length and separate actual guide-boundary events. The current fixed
+  50-unit charge per outside edge varies with pad-inserted coordinate splits.
+  Add split/pitch-invariance regressions and matched layer/route comparisons,
+  preserving explicit layer rules, reference-plane reservation and acceptance.
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,
   including orthogonal-first/budget-fallback routes; protect pads, junctions,
   vias, and exact clearance. Improve topology without breaking existing trees.
+  Pass 13 retains 57 degree-two 90-degree turns, eight acute 135-degree turns
+  and a 1.5 mm GNSS_RX fanout/maze overlap. Preserve real pad/via contacts and
+  owned-copper scope when testing seam cleanup; MCU_RESET reports orthogonal
+  mode and retains a right-angle staircase on sparse In4.Cu.
 - [ ] R8: Exercise critical USB/RF profiles in the full-vertical example;
   reserve critical geometry and protect paired nets in repairs. Do not infer
   controlled impedance or invent electrical limits from names.
@@ -142,12 +164,16 @@ Completion means tested implementation, not automatic manufacturing signoff.
           acceptance. Synthetic detours shorten; the matched real placement
           only loses redundant collinear segments (modem 214 to 38, MCU 36 to 26),
           not meaningful wirelength. See [paired refinement](paired-route-refinement.md).
-        - [ ] Compare alternative joint port/placement topologies for the real
-          modem detour, retaining the accepted pair on failure. Fixed-port local
-          shortcuts alone have not shortened its 60.37/62.88 mm paths.
+        - [ ] Compare alternative joint port/placement topologies on the corrected
+          library, retaining the accepted pair on failure. Historical 60.37/62.88 mm
+          paths used the incorrect choke model and are superseded, not current
+          optimization targets. Pass 12/13 retains 22.98/23.61 mm modem and
+          28.30/27.04 mm MCU paths; bounded quality comparison remains R5 work.
   - [ ] R8d: After critical preflight passes, perform the complete rerun and
     independent KiCad layer review. Bind actual impedance/return-path evidence
     to the selected physical stackup before any critical-net signoff claim.
+  - [x] Complete corrected-input rerun and all-six-layer review (pass 13).
+    Three ordinary opens and production/return-path qualification remain.
 - [ ] R9 (follow-up review): Record phase timings/checkpoints for long full
   reruns and cache equivalent physical-span via legality queries within one
   immutable search. A 15 s/734-sample profile during zone-escape feedback
