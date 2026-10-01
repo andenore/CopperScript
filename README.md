@@ -133,6 +133,8 @@ records independent KiCad results and the remaining six-layer bottlenecks.
 The [second-pass review](docs/routing-review-pass2.md) verifies joint ground
 escapes with zero KiCad unconnected items; critical-net and production signoff
 remain outstanding.
+The [third-pass review](docs/routing-review-pass3.md) confirms consistent
+duplicate-land closure and feedback reports without changing the verified copper.
 
 ### Full-vertical routing from a fresh checkout (Windows / PowerShell)
 

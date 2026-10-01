@@ -168,6 +168,11 @@ All 313 tests pass (16 additions since pass 2, 459 upstream warnings), including
 installed-KiCad verification of a single-logical-pin duplicate-land open and its
 closure. A read-only replay of the saved pass-2 board adds zero tracks, recognizes
 four already-connected references, and resolves J_POWER.SH/J_SIM.SH through a
-fresh independent refill while retaining all eight library findings. A matched
-full-board rerun is in progress; its final results will be recorded separately.
-R8 is the next implementation priority; R5–R9 remain open.
+fresh independent refill while retaining all eight library findings.
+Implementation commit: `c1d5e52`. The [third repeated review](routing-review-pass3.md)
+records the completed matched rerun: zero KiCad unconnected items, no hard copper
+findings, identical physical track/via/pad/placement geometry to pass 2, and
+zero reported signal failures in the accepted feedback trial. Sixteen bridges
+are now installed before scoring; final stitching adds none. Eight library
+findings and native zone deferral remain signoff failures. R8 is the next
+implementation priority; R5–R9 remain open.
