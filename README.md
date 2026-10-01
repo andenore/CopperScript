@@ -130,6 +130,9 @@ connectivity. See [routing research tasks](docs/routing-research-tasks.md).
 The [routing-review todo](docs/routing-review-todo.md) tracks correctness and
 optimization work; the [first-pass repeated review](docs/routing-review-pass1.md)
 records independent KiCad results and the remaining six-layer bottlenecks.
+The [second-pass review](docs/routing-review-pass2.md) verifies joint ground
+escapes with zero KiCad unconnected items; critical-net and production signoff
+remain outstanding.
 
 Validate and inspect a KiCad footprint before resolving it into a physical
 design:

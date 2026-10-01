@@ -52,12 +52,18 @@ Completion means tested implementation, not automatic manufacturing signoff.
   V3V3, V3V8, MODEM_EN, and PWR/MODEM_FB as open on a board where KiCad finds
   none of those opens. An interior-T regression reproduces the defect. Do not
   waive open-net checking or assume every rejected placement trial was valid.
-- [ ] R11 (rerun finding): Resolve U_CC.3/.10/.11 GND as a joint package-access
+- [x] R11 (rerun finding): Resolve U_CC.3/.10/.11 GND as a joint package-access
   group, reserve its escapes before ordinary routing, and evaluate bounded
   component/decoupler moves only after R10 makes trial acceptance reliable.
   Keep small-pad via drill/clearance rules and explicit fabrication limits.
   Pass 2 implements automatic whole-package same-zone-net reservations;
-  actual filled-zone closure of the example must still be verified.
+  independent KiCad refill confirms zero unconnected items in pass 2, without
+  moving components or relaxing fabrication limits.
+- [ ] R12 (pass-2 review): Evaluate duplicate-land closure consistently before
+  feedback scoring and final reporting. USER_BUTTON is checked before final
+  SW_USER land stitching; the finished board is connected. Reconcile pending
+  shield-land helpers with digest-bound filled-zone evidence without inventing
+  virtual contacts or suppressing footprint/manufacturing findings.
 
 ## Matched rerun and repeated review
 
@@ -82,7 +88,8 @@ from signal connectivity. Independent filled-zone KiCad verification remains
 mandatory. All production, return-path, footprint qualification, and CAM
 requirements remain separate from route completion.
 
-- [ ] Clear remaining filled-zone GND opens (R11); do not claim routing complete.
+- [x] Clear remaining filled-zone GND opens (R11). Pass-2 independent KiCad
+  reports zero unconnected items. This is connectivity, not production signoff.
 - [ ] Qualify footprints and resolve the eight independent library findings;
   none were suppressed or fixed by this routing pass.
 - [ ] Complete critical-net, return-path, fabrication and independent CAM
@@ -123,13 +130,17 @@ contacts on common physical layers, including annular/pad-edge contacts and
 interior junctions; it preserves actual gaps and drill voids and does not infer
 filled zones. Static ray checks follow physical coordinates and exact polygon
 containment for both diagonal and orthogonal moves. R11's whole-package
-same-zone-net reservation is implemented; actual example ground closure remains
-an independent acceptance gate. R9's search-local physical-span via cache is
+same-zone-net reservation is implemented and the example's ground closure is
+independently verified. R9's search-local physical-span via cache is
 implemented, while normal operational timings/checkpoints remain open.
 
 All 297 tests pass in the isolated Python 3.12 runtime, including 20 new tests
 since pass 1 and five optional installed-KiCad differential connectivity cases.
 Replaying the previous board's copper clears all four false ordinary-net opens;
 only GND remains open under native explicit-copper checking. No DRC check was
-waived and no geometry/fabrication limit was relaxed. Full-board rerun/review
-results are recorded separately once independent verification completes.
+waived and no geometry/fabrication limit was relaxed. Implementation commit:
+`4839b90`. The [second repeated review](routing-review-pass2.md) records the
+matched rerun: zero KiCad unconnected items, zero dangling/short/clearance
+findings, eight unchanged footprint-library findings. The accepted joint-package
+trial retains every component position and rotation. R5–R9 and R12 remain open;
+native zone deferral and library findings still prevent production-ready status.
