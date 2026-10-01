@@ -103,6 +103,19 @@ Completion means tested implementation, not automatic manufacturing signoff.
   Compare candidates against immutable geometry first; if no legal exit exists,
   use owned-escape/placement feedback rather than weakening clearance. Then
   rerun the entire pipeline and repeat independent KiCad/layer review.
+  - [x] Implement bounded off-ray two-leg alternatives, shared exact access
+    checking, verified existing multi-segment anchors and explicit track/via
+    ownership through cleanup and pipeline/repair callers. Installed-KiCad
+    regression accepts the routed two-leg fixture. [Pass 16](routing-review-pass16.md)
+    improves matched partial fanout from 69 to 72 exits without changing prior
+    critical/GND copper or any pose. MCU.62/.64 now have ten/three legal initial
+    alternatives, but selected neighboring escapes consume them.
+  - [ ] Add local candidate conflicts and bounded compatible assignment, including
+    expansion of competing pins with already legal radial choices. Exact replay
+    identifies MCU_NRF_RX / MCU_MODEM_TX blocking the MCU UART/enable exits;
+    increasing the area-search budget is not the next experiment.
+  - [ ] After those exits survive allocation, rerun complete ordinary routing,
+    independent filled-zone checks and every-layer geometry/congestion review.
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,
   including orthogonal-first/budget-fallback routes; protect pads, junctions,
   vias, and exact clearance. Improve topology without breaking existing trees.

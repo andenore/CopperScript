@@ -95,6 +95,7 @@ def run_routing_pipeline(
         detailed_options, fanout_accesses=fanout.accesses if fanout else None,
         fanout_created_vias=frozenset((item.net, item.position)
                                     for item in fanout.created_vias) if fanout else None,
+        fanout_created_tracks=fanout.created_tracks if fanout else None,
     )
     detailed, drc, duplicate_stitch = close_detailed_lands(detailed, drc_policy)
     trials_run = 0
@@ -139,6 +140,7 @@ def run_routing_pipeline(
                 fanout_created_vias=frozenset((item.net, item.position)
                                             for item in trial_fanout.created_vias)
                 if trial_fanout else None,
+                fanout_created_tracks=trial_fanout.created_tracks if trial_fanout else None,
             )
             trial_detailed, trial_drc, trial_duplicate = close_detailed_lands(
                 trial_detailed, drc_policy)

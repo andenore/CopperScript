@@ -47,6 +47,13 @@ retain deterministic output and must not weaken exact native or KiCad DRC.
   - [x] Enumerate immutable legal radial domains, prioritize low-slack pins,
     recheck selected escapes incrementally and expose initial/consumed-domain
     diagnostics. This is a tested first increment, not joint matching/search.
+  - [x] Expand zero-radial domains with bounded straight/45-degree two-leg exits,
+    verify actual multi-segment anchor copper and propagate explicit cleanup
+    ownership. Pass 16 improves 69 to 72 matched crowded-pin exits; MCU.62/.64
+    alternatives are still consumed by selected neighbors.
+  - [ ] Attribute local candidate conflicts and expand competing selected-pin
+    domains, including pins with legal radial choices. Replay shows MCU_NRF_RX
+    blocks every MODEM_EN exit and combines with MCU_MODEM_TX to block MCU_NRF_TX.
 - [ ] Select a compatible set with deterministic bounded matching/search, then
   negotiated swaps for larger clusters; include onward-route cost.
 - [ ] Keep escapes provisional until area routing succeeds and allow local

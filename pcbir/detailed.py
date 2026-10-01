@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_left
+from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
@@ -42,6 +43,7 @@ from .routing_vias import physical_via_span
 from .routing_costs import COST_UNIT, length_cost, preference_cost
 from .routing_guides import GuideExposure, guide_transition_cost
 from .surface_path import _track_inside_board
+from .pin_escape import checked_access_path, verified_fanout_path
 
 
 class DetailedRoutingStatus(str, Enum):
@@ -257,6 +259,7 @@ def route_detailed(
     *,
     fanout_accesses: Mapping[PadReference, Point] | None = None,
     fanout_created_vias: frozenset[tuple[str, Point]] | None = None,
+    fanout_created_tracks: tuple[TrackSegment, ...] | None = None,
     only_nets: frozenset[str] | None = None,
 ) -> DetailedRoutingResult:
     """Route ordinary nets, optionally a repair subset, preserving locked copper."""
@@ -395,6 +398,7 @@ def route_detailed(
                     direction_preference_cost=0),
             fanout_accesses=fanout_accesses,
             fanout_created_vias=fanout_created_vias,
+            fanout_created_tracks=fanout_created_tracks,
             only_nets=only_nets,
         )
         neutral_metrics = neutral.metrics
@@ -432,6 +436,7 @@ def route_detailed(
             board, all_tracks, all_vias, cleanup_accesses,
             frozenset(item.result.net for item in best.nets if item.result.connected),
             fanout_created_vias,
+            fanout_created_tracks,
         )
     routed = replace(
         board,
@@ -486,24 +491,31 @@ def _prune_fanout_copper(
     accesses: Mapping[PadReference, Point],
     successful_nets: frozenset[str],
     created_vias: frozenset[tuple[str, Point]] | None,
+    created_tracks: tuple[TrackSegment, ...] | None = None,
 ) -> tuple[tuple[TrackSegment, ...], tuple[Via, ...]]:
-    """Remove abandoned stubs and vias unused on a second copper layer."""
+    """Prune only explicitly owned lead-ins and unused owned anchor vias."""
 
     net_by_pad = {pad: net.name for net in board.nets for pad in net.pads}
-    placement_by_ref = {item.reference: item for item in board.placements}
-    abandoned: set[tuple[str, Point, Point]] = set()
+    abandoned_nets: set[str] = set()
     anchors: set[tuple[str, Point]] = set()
     for pad, anchor in accesses.items():
         net = net_by_pad[pad]
         anchors.add((net, anchor))
         if net not in successful_nets:
-            original = transformed_pad_position(
-                board, placement_by_ref[pad.component], pad.pad,
-            )
-            abandoned.add((net, original, anchor))
-            abandoned.add((net, anchor, original))
-    tracks = tuple(track for track in tracks
-                   if (track.net, track.start, track.end) not in abandoned)
+            abandoned_nets.add(net)
+    if created_tracks is None:
+        # Without ownership evidence, no input lead-in (one or two legs) is
+        # disposable. A failed subset already excludes its anchors above.
+        owned = Counter()
+    else:
+        owned = Counter(created_tracks)
+    retained = []
+    for track in tracks:
+        if owned[track] and track.net in abandoned_nets:
+            owned[track] -= 1
+        else:
+            retained.append(track)
+    tracks = tuple(retained)
     used_layers: dict[tuple[str, Point], set[CopperLayer]] = {
         anchor: set() for anchor in anchors
     }
@@ -512,7 +524,7 @@ def _prune_fanout_copper(
             net, point = key
             if track.net == net and point_on_segment(point, track.start, track.end):
                 used_layers[key].add(track.layer)
-    prunable = anchors if created_vias is None else anchors & created_vias
+    prunable = anchors & (created_vias or frozenset())
     vias = tuple(via for via in vias
                  if (via.net, via.position) not in prunable
                  or len(used_layers[(via.net, via.position)]) >= 2)
@@ -795,12 +807,7 @@ def _route_net(
         if anchor is not None:
             via = next((item for item in board.vias
                         if item.net == name and item.position == anchor), None)
-            original = _pad_position(board, pad)
-            stub = next((item for item in board.tracks
-                         if item.net == name
-                         and ((item.start == original and item.end == anchor)
-                              or (item.end == original and item.start == anchor))), None)
-            if via is None or stub is None:
+            if via is None or verified_fanout_path(board, pad, name, anchor, clearance) is None:
                 return _failed(name, f"unverified fanout anchor for {pad.component}.{pad.pad}")
             layer_indexes = tuple(range(
                 grid.layers.index(via.from_layer), grid.layers.index(via.to_layer) + 1,
@@ -1453,34 +1460,8 @@ def _access_path(
     to an oblique chord or snap a terminal; every emitted leg is checked.
     Tentative rip-up may cross removable tracks, never immutable geometry.
     """
-    if start == end:
-        return ()
-    dx, dy = end.x_nm - start.x_nm, end.y_nm - start.y_nm
-    if not dx or not dy or abs(dx) == abs(dy):
-        paths = ((start, end),)
-    else:
-        diagonal = min(abs(dx), abs(dy))
-        sx, sy = (1 if dx > 0 else -1), (1 if dy > 0 else -1)
-        paths = (
-            (start, Point(start.x_nm + sx * diagonal, start.y_nm + sy * diagonal), end),
-            (start, Point(end.x_nm - sx * diagonal, end.y_nm - sy * diagonal), end),
-            (start, Point(start.x_nm, end.y_nm), end),
-            (start, Point(end.x_nm, start.y_nm), end),
-        )
-    for points in paths:
-        tracks = tuple(TrackSegment(net, a, b, width_nm, layer)
-                       for a, b in zip(points, points[1:]) if a != b)
-        for track in tracks:
-            if not _track_inside_board(board, track.start, track.end, width_nm):
-                break
-            if allow_movable_conflicts:
-                if clearance.blocking_track_nets(track)[1]:
-                    break
-            elif not clearance.can_track(net, track.start, track.end, width_nm, layer):
-                break
-        else:
-            return tracks
-    return None
+    return checked_access_path(board, clearance, net, start, end, width_nm, layer,
+                               allow_movable_conflicts)
 
 
 def _access_candidates(

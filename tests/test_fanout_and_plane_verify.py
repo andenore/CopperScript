@@ -59,7 +59,9 @@ def test_detailed_router_uses_fanout_via_as_access() -> None:
     routed = route_detailed(fanout.board, guide,
                             DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"),
                                                   maximum_passes=2),
-                            fanout_accesses=fanout.accesses)
+                            fanout_accesses=fanout.accesses,
+                            fanout_created_vias=frozenset((v.net, v.position) for v in fanout.created_vias),
+                            fanout_created_tracks=fanout.created_tracks)
     assert routed.metrics.routed_net_count == 1
     assert routed.locked_via_count == 1
     assert routed.board.tracks[0] == fanout.board.tracks[0]
@@ -286,6 +288,8 @@ def test_installed_kicad_accepts_pruned_fanout_route() -> None:
     detailed = route_detailed(
         fanout.board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm("0.5")),
         fanout_accesses=fanout.accesses,
+        fanout_created_vias=frozenset((v.net, v.position) for v in fanout.created_vias),
+        fanout_created_tracks=fanout.created_tracks,
     )
     evidence = verify_filled_planes(detailed.board, kicad_cli=Path(executable))
     assert evidence.passed, evidence.findings

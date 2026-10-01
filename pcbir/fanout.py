@@ -1,7 +1,7 @@
 """Deterministic, optional component-level SMD escape planning.
 
 This is physical copper, not electrical intent. Each escape is checked as a
-track/via pair before reservation; unsuccessful pads are reported explicitly.
+lead-in/via proposal before reservation; unsuccessful pads are reported explicitly.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from .placement import transformed_pad_position
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers
 from .routing_vias import physical_via_span
+from .pin_escape import checked_access_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,10 +30,12 @@ class FanoutOptions:
     step_nm: int = nm_from_mm("0.5")
     maximum_radius_nm: int = nm_from_mm("3")
     constrained_pins_first: bool = True
+    two_leg_escapes: bool = True
+    maximum_two_leg_candidates: int = 256
 
     def __post_init__(self) -> None:
         if min(self.minimum_component_pads, self.maximum_neighbor_distance_nm,
-               self.step_nm, self.maximum_radius_nm) <= 0:
+               self.step_nm, self.maximum_radius_nm, self.maximum_two_leg_candidates) <= 0:
             raise ValueError("fanout options must be positive")
 
 
@@ -44,6 +47,7 @@ class FanoutPinAnalysis:
     legal_candidate_count: int
     selected_candidate_index: int | None
     diagnostic: str = ""
+    two_leg_candidate_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +59,7 @@ class FanoutResult:
     added_via_count: int
     created_vias: tuple[Via, ...] = ()
     pin_analysis: tuple[FanoutPinAnalysis, ...] = ()
+    created_tracks: tuple[TrackSegment, ...] = ()
 
 
 def route_fanout(
@@ -110,7 +115,7 @@ def route_fanout(
     # Analyze every pin against the same immutable input before reserving an
     # easy neighbor's escape. Domains are physically legal alternatives, not
     # guaranteed mutually compatible routes or proof of onward connectivity.
-    domains: dict[PadReference, tuple[tuple[TrackSegment, Via | None], ...]] = {}
+    domains: dict[PadReference, tuple[tuple[tuple[TrackSegment, ...], Via | None], ...]] = {}
     for _, reference, position, placement, pad in pads:
         net = net_by_pad[reference]
         side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
@@ -126,8 +131,14 @@ def route_fanout(
             continue
         width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
         bounds = placed_pad_shape(position, pad, placement).bounds
-        choices: list[tuple[TrackSegment, Via | None]] = []
-        for candidate in _candidates(position, placement.position, options):
+        choices: list[tuple[tuple[TrackSegment, ...], Via | None]] = []
+        def candidates():
+            yield from _candidates(position, placement.position, options)
+            # Expand only an initially empty radial domain. Keep easy exits
+            # unchanged; do not turn every package pin into a fine area maze.
+            if options.two_leg_escapes and not choices:
+                yield from _two_leg_candidates(position, placement.position, options)
+        for candidate in candidates():
             margin = via_size // 2 + board.rules.minimum_clearance_nm
             if not point_in_polygon(candidate, board.outline.vertices):
                 continue
@@ -137,7 +148,6 @@ def route_fanout(
             if (bounds.min_x - via_size // 2 <= candidate.x_nm <= bounds.max_x + via_size // 2
                     and bounds.min_y - via_size // 2 <= candidate.y_nm <= bounds.max_y + via_size // 2):
                 continue
-            track = TrackSegment(net, position, candidate, width, side)
             coincident = tuple(item for item in board.vias
                                if item.position == candidate)
             existing = next((item for item in coincident
@@ -146,10 +156,13 @@ def route_fanout(
             if coincident and existing is None:
                 continue
             via = None if existing else Via(net, candidate, via_size, via_drill, *span)
-            if (clearance.can_track(net, track.start, track.end, width, side)
-                    and (existing is not None or clearance.can_via(
-                        net, candidate, via_size, span[0], span[1]))):
-                choices.append((track, via))
+            if existing is None and not clearance.can_via(net, candidate, via_size, span[0], span[1],
+                                                         drill_nm=via_drill):
+                continue
+            path = checked_access_path(board, clearance, net, position, candidate, width,
+                                       side, allow_orthogonal=False)
+            if path:
+                choices.append((path, via))
         domains[reference] = tuple(choices)
 
     ordered = sorted(pads, key=lambda item: (
@@ -161,36 +174,41 @@ def route_fanout(
         net = net_by_pad[reference]
         choice = None
         selected_index = None
-        for index, (track, via) in enumerate(domains[reference]):
+        for index, (path, via) in enumerate(domains[reference]):
+            anchor = path[-1].end
             existing = next((item for item in (*board.vias, *vias)
-                             if item.net == net and item.position == track.end
+                             if item.net == net and item.position == anchor
                              and (via is None or (item.from_layer, item.to_layer)
                                   == (via.from_layer, via.to_layer))), None)
             if existing is not None:
                 via = None
-            if (clearance.can_track(net, track.start, track.end, track.width_nm, track.layer)
+            if (all(clearance.can_track(net, t.start, t.end, t.width_nm, t.layer) for t in path)
                     and (via is None or clearance.can_via(net, via.position, via.size_nm,
-                                                        via.from_layer, via.to_layer))):
-                choice = track, via
+                                                        via.from_layer, via.to_layer,
+                                                        drill_nm=via.drill_nm))):
+                choice = path, via
                 selected_index = index
                 break
         analysis.append(FanoutPinAnalysis(
             reference, len(domains[reference]), selected_index,
             ("no legal candidate against immutable input" if not domains[reference]
              else "all initial candidates blocked by selected escapes") if choice is None else "",
+            sum(len(path) == 2 for path, _ in domains[reference]),
         ))
         if choice is None:
             pending.append(reference)
             continue
-        track, via = choice
-        tracks.append(track)
-        accesses[reference] = track.end
-        clearance.add_track(track, locked=True)
+        path, via = choice
+        accesses[reference] = path[-1].end
+        for track in path:
+            if track not in board.tracks and track not in tracks:
+                tracks.append(track)
+                clearance.add_track(track, locked=True)
         if via is not None:
             vias.append(via)
             clearance.add_via(via, locked=True)
 
-    if not tracks:
+    if not tracks and not vias and not accesses:
         return FanoutResult(board, MappingProxyType({}), tuple(pending), 0, 0,
                             pin_analysis=tuple(analysis))
     routed = replace(board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias))
@@ -210,7 +228,7 @@ def route_fanout(
                                         diagnostic="whole fanout proposal rejected by native DRC")
                                 for item in analysis))
     return FanoutResult(routed, MappingProxyType(accesses), tuple(pending),
-                        len(tracks), len(vias), tuple(vias), tuple(analysis))
+                        len(tracks), len(vias), tuple(vias), tuple(analysis), tuple(tracks))
 
 
 def _candidates(position: Point, center: Point, options: FanoutOptions):
@@ -230,3 +248,24 @@ def _distance_to_outline(point: Point, vertices: tuple[Point, ...]) -> float:
     from .geometry import point_segment_distance_squared
     return min(float(point_segment_distance_squared(point, first, second)) ** 0.5
                for first, second in zip(vertices, (*vertices[1:], vertices[0])))
+
+
+def _two_leg_candidates(position: Point, center: Point, options: FanoutOptions):
+    """Bounded off-ray sites, in near-to-far shells on a half-step lattice."""
+    step_nm = max(1, options.step_nm // 2)
+    emitted = 0
+    for ring in range(1, options.maximum_radius_nm // step_nm + 1):
+        offsets = set()
+        for along in range(-ring + 1, ring):
+            for dx, dy in ((ring, along), (-ring, along), (along, ring), (along, -ring)):
+                if dx and dy and abs(dx) != abs(dy):
+                    offsets.add((dx, dy))
+        for dx, dy in sorted(offsets, key=lambda pair: (
+            pair[0] * pair[0] + pair[1] * pair[1],
+            -(pair[0] * (position.x_nm - center.x_nm)
+              + pair[1] * (position.y_nm - center.y_nm)), pair,
+        )):
+            if emitted >= options.maximum_two_leg_candidates:
+                return
+            emitted += 1
+            yield Point(position.x_nm + dx * step_nm, position.y_nm + dy * step_nm)

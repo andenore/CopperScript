@@ -732,6 +732,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "legal_candidate_count": item.legal_candidate_count,
                         "selected_candidate_index": item.selected_candidate_index,
                         "diagnostic": item.diagnostic,
+                        "two_leg_candidate_count": item.two_leg_candidate_count,
                     } for item in result.fanout.pin_analysis],
                 }
             if stitch is not None:

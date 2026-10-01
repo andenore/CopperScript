@@ -357,6 +357,8 @@ def _repair_with_local_ripup(
                     fanout_created_vias=(frozenset((via.net, via.position)
                                                   for via in initial.fanout.created_vias)
                                          if initial.fanout else frozenset()),
+                    fanout_created_tracks=(initial.fanout.created_tracks
+                                           if initial.fanout else ()),
                     only_nets=displaced,
                 ) if displaced else None
             )
