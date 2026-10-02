@@ -57,6 +57,43 @@ function instrumentation:
 uv run --no-sync python scripts/route_full_vertical.py --profile none
 ```
 
+Inspect a run (including an unfinished run) without modifying its artifacts:
+
+```powershell
+uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/<run-id>"
+```
+
+For the O1b comparison, first complete the function-profile run, then run these
+uninstrumented variants sequentially on the same otherwise idle machine. Repeat
+in alternating order before drawing a wall-time conclusion:
+
+```powershell
+uv run --no-sync python scripts/route_full_vertical.py --profile none --no-incremental-placement-repair
+uv run --no-sync python scripts/route_full_vertical.py --profile none
+uv run --no-sync python -m pcbir.routing_benchmark compare "build/full-vertical/<baseline-id>" "build/full-vertical/<candidate-id>"
+```
+
+`routing_benchmark` checks named failed signal/critical nets, pending ground,
+duplicate-land and fanout pads, native hard finding categories/affected nets,
+required native-check coverage, overflow and independent KiCad findings. It
+reports selected-route length/via/layer metrics rather than trading them away
+implicitly. A comparison with new failures, missing final data, changed recorded
+inputs/tools/settings or either run function-profiled produces **no timing ratio**.
+Exit 0 means eligible for timing review, 1 means a quality regression, and 2 means
+incomparable/incomplete data or an input error; none means manufacturing signoff.
+The standalone `summarize` command returns 0 for valid observations, even if a run
+is still active, and clearly marks its completion state.
+
+The two explicit repair switches (`--no-incremental-placement-repair` and
+`--zone-dependency-expansions`) are interventions under test and may differ. Other
+settings, including search budgets, must match. Runtime provenance does not hash
+all footprint files or capture machine load, so an eligible ratio still requires
+external-library verification and repeated measurements. This is a review aid,
+not automatic optimization acceptance. Structured progress provides completed
+full/incremental trial and subset/probe counts, including rejected work; a legacy
+plain log uses a clearly labelled final-report lower bound instead of inventing
+zero work. Expanded maze states and peak memory are not yet recorded by this tool.
+
 Compare repeated runs with identical source/lock, actual footprint files, options,
 KiCad/Python versions and machine load. The recorded hashes do not fingerprint
 every footprint or external tool; record CopperLib revision and KiCad version
@@ -183,7 +220,9 @@ been enabled by this profiling change.
 - [x] Provenance, explicit unprofiled mode and truthful routing exit status.
 - [x] Real-module failure and routed-artifact byte-identity regression tests.
 - [ ] Capture a complete current-board function profile and uninstrumented baseline.
-- [ ] Extend affected-net transactional repair; compare full-pipeline evaluation count.
+- [x] Extend affected-net transactional repair; compare full-pipeline count on retained fixtures.
+- [x] Add read-only, regression/provenance-aware run summaries and comparison gates.
+- [ ] Finish profiled current-board routing and repeated uninstrumented O1b comparisons.
 - [ ] Optimize confirmed allocation/geometry hot spots with exact-predicate regressions.
 - [ ] Evaluate adaptive search changes against expanded-state and routability metrics.
 - [ ] Prototype bounded deterministic process-level candidate evaluation; measure

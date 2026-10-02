@@ -277,6 +277,8 @@ Local repair now supports bounded blocker-cone expansion; use
 Small noncritical placement moves also try bounded incremental repair. Use
 `--no-incremental-placement-repair` to compare against full placement reroutes;
 unsupported moves always retain that fallback.
+Inspect a run without changing it using `uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/<run-id>"`.
+The [performance guide](docs/routing-performance.md) explains guarded before/after comparisons.
 
 For the equivalent explicit CLI invocation, adjust the KiCad paths if your
 installation is elsewhere. From the CopperScript repository root, run:

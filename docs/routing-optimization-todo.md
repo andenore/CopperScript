@@ -8,6 +8,11 @@ See [the assessment](routing-performance.md) for evidence, limitations and sourc
 ## O0 — Reproducible measurements
 
 - [x] Enable full-run function profiles, phase timings, provenance and exit-status checks.
+- [x] Add read-only run summaries and comparison gates that reject new named-net,
+  pad, hard-DRC, coverage and independent-verification failures. Require matching
+  recorded inputs/tools/settings and two uninstrumented runs for a timing ratio.
+  `tests/test_routing_benchmark.py` covers missing/stale data, mixed profiling,
+  dropped or exchanged failed nets, swapped finding categories and legacy logs.
 - [ ] Capture a current full-board profile and an uninstrumented comparison run.
 - [ ] Record expanded states, affected-net count, local/probe searches, full-pipeline
   evaluations and peak memory; distinguish selected work from rejected trials.
@@ -52,6 +57,9 @@ See [the assessment](routing-performance.md) for evidence, limitations and sourc
   retain already-accepted contacts. Evaluate whether this avoids late feedback.
 - [ ] O1d: Benchmark successful and failed repair cases, then the full board. Require
   fewer full evaluations or lower uninstrumented time without worse closure/DRC.
+  The read-only comparison harness is implemented. Current-board profile launched
+  from routing commit `39a44d7` on 2026-10-02; completion and uninstrumented paired
+  measurements must be recorded before this benchmark item can be checked off.
 
 ## O2 — Reduce geometry/allocation overhead
 
