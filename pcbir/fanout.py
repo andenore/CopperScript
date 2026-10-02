@@ -167,7 +167,7 @@ def route_fanout(
     # gate. A new manufacturing violation rejects the whole fanout proposal.
     fatal = {"DRC-SHORT", "DRC-CLEARANCE", "DRC-BOARD-EDGE", "DRC-HOLE-CLEARANCE",
              "DRC-DRILL-SPACING", "DRC-COPPER-KEEPOUT", "DRC-VIA-SPAN",
-             "DRC-TRACK-WIDTH"}
+             "DRC-TRACK-WIDTH", "DRC-VIA-PAD-OVERLAP"}
     before = run_physical_drc(board)
     after = run_physical_drc(routed)
     before_count = {code: sum(item.code == code for item in before.findings) for code in fatal}

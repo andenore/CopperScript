@@ -52,6 +52,21 @@ def test_dense_fanout_is_legal_deterministic_and_exposes_anchor() -> None:
     assert first.board.vias[0].position != first.board.tracks[0].start
 
 
+def test_native_via_pad_overlap_rejects_entire_fanout_proposal(monkeypatch) -> None:
+    from types import SimpleNamespace
+    import pcbir.fanout as module
+    def drc(candidate):
+        findings = () if not candidate.vias else (
+            SimpleNamespace(code="DRC-VIA-PAD-OVERLAP"),)
+        return SimpleNamespace(findings=findings)
+    monkeypatch.setattr(module, "run_physical_drc", drc)
+    board = _dense_board()
+    result = route_fanout(board)
+    assert result.board == board
+    assert result.added_via_count == result.added_track_count == 0
+    assert result.pending_pads
+
+
 def test_detailed_router_uses_fanout_via_as_access() -> None:
     board = _dense_board()
     guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))

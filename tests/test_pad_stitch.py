@@ -70,7 +70,9 @@ def test_detours_around_foreign_pad_between_same_number_lands() -> None:
 
     assert result.stitched == (PadReference("U1", "1"),)
     assert result.pending == ()
-    assert result.added_track_count == 3
+    assert result.added_track_count == 5  # Two legal 45-degree detour chamfers.
+    assert sum(abs(t.start.x_nm-t.end.x_nm) == abs(t.start.y_nm-t.end.y_nm)
+               and t.start.x_nm != t.end.x_nm for t in result.board.tracks) == 2
     assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
         "DRC-SHORT", "DRC-CLEARANCE", "DRC-BOARD-EDGE",
     }
