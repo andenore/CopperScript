@@ -43,3 +43,40 @@ degree-two sharp turns (90 degrees or greater), branches, non-octilinear segment
 and coarse 10mm local track-area estimates. Plane fill is not recomputed by the
 audit. Refill/DRC separately before interpreting plane connectivity. These style
 and density metrics are not electrical, impedance or manufacturing signoff.
+
+## Historical baseline, 2026-10-02
+
+Audited `build/full-vertical/20261002T080102482942Z/board.kicad_pcb`, then
+independently refilled a disposable copy. This predates the fixed mechanical
+floorplan and strict via policy; it is not a controlled single-change benchmark.
+KiCad found zero unconnected items but ten other findings (eight library findings
+and two dangling copper findings). It is not production signoff.
+
+The native shape audit found 37 via/pad contacts: 14 on GND and 23 on other nets.
+The ordinary router's same-net exemption, not just opt-in GND via-in-pad, mattered.
+
+| Layer | Track length (mm) | Sharp-turn candidates | Free-corner candidates | Highest 10mm track-area estimate |
+| --- | ---: | ---: | ---: | ---: |
+| F.Cu | 857.618 | 106 | 76 | 16.38% |
+| In1.Cu | 0 | 0 | 0 | 0% (GND plane) |
+| In2.Cu | 597.025 | 33 | 31 | 12.64% |
+| In3.Cu | 129.765 | 8 | 8 | 6.35% |
+| In4.Cu | 142.340 | 12 | 12 | 5.38% |
+| B.Cu | 181.813 | 13 | 13 | 6.22% |
+
+Candidates include 153 right-angle turns, eight 135-degree direction changes and
+eleven overlapping/backtracking endpoint junctions. A degree-two endpoint is not
+necessarily a simple bend: fanout/terminal copper may also meet a track interior.
+Free-corner counts exclude pad-center and exact via-center junctions, but do not
+prove a legal alternative exists. F.Cu also has two oblique GND closure segments.
+
+Visual inspection: F.Cu is dominated by package access and central component
+density; In2.Cu carries the most long inner-layer runs and several detours;
+In3.Cu/In4.Cu/B.Cu have spare-looking regions but some local doglegs. The saved
+board has no plane fill until independently refilled. In1.Cu then shows the GND
+plane rather than missing routing. Sparse signal layers are not automatically
+free capacity near terminals: through-via collisions also involve outer pads.
+The current preference model favors In2.Cu because it borders the declared plane,
+and applies complementary soft headings to the inner signal layers. Congestion
+balancing must preserve reference-plane constraints rather than simply equalize
+track length on all layers.

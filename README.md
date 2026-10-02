@@ -339,6 +339,9 @@ The complete-routing script does not enable via-in-pad. Explicit
 profile; that process must be explicitly qualified with the fabricator before
 ordering a board.
 
+For independent copper-layer plots and via/pad/bend metrics, see
+[the layer-review workflow](docs/routing-layer-review.md).
+
 To repeat the final independent refill/DRC on a saved copy without modifying
 the routed draft:
 
