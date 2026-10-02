@@ -39,6 +39,59 @@ pin 9 is grounded as GNDDetect, pin 6 (SWO) is optional, and pin 8 is unused.
 The headers are BOM items. Their CopperLib footprint uses nine SMD pads and
 the connector land pattern must receive normal assembly review.
 
+## Fixed mechanical floorplan
+
+The source declares hard `fixed_placement` constraints for the requested
+mechanical floorplan on the provisional **100 x 80 mm** outline. Coordinates
+are in millimetres from the top-left board origin: x increases rightwards and
+y downwards. They locate the **footprint origin**, not necessarily its body
+centre (notably, the CAN connector origin is pin 1). All these parts are on
+the front side; positive rotation follows KiCad's counterclockwise convention.
+
+| Part | Origin (x, y), mm | Rotation | Intent |
+| --- | --- | --- | --- |
+| J_POWER | (12, 74) | 0° | USB-C at bottom left, opening toward bottom |
+| J_CAN | (25, 72) | 0° | CAN beside USB-C at bottom left |
+| U_MODEM | (20, 20) | 90° | Modem at top left, ANT_MAIN pad 35 facing north |
+| J_CELL | (13.4, 6) | 90° | Cellular U.FL above modem, signal land toward modem |
+| J_SIM | (10, 44) | 270° | SIM holder on left, insertion toward left |
+| U_NRF | (86, 12) | 0° | Nordic at top right, ANT pad facing right |
+| ANT_BT | (95.7, 12.508) | 0° | Bluetooth antenna at right edge, feed facing inward |
+| U_GNSS | (86, 67) | 0° | GNSS at bottom right |
+
+The antenna courtyard stops at x = 98 mm, retaining the planner's current
+2 mm edge clearance. These are legal inset prototype positions, not a claim
+that connector bodies are flush with an enclosure or that RF keepouts are
+qualified. Antenna ground clearance, feed geometry, enclosure access and
+mechanical tolerances still need review. Changing the outline requires
+reviewing these coordinates.
+
+`J_GNSS` remains automatic but must be within 5 mm of the GNSS RF input.
+Other components remain automatic and retain their existing proximity rules.
+Use `examples/full_vertical_placement_templates.json` when planning or routing:
+it preserves the source-backed Nordic matching components as a rigid unit
+with the fixed U_NRF anchor. Placement/routing feedback cannot move a hard
+lock; incompatible constraints must fail rather than silently relax it.
+
+To generate an **unrouted** placement preview with installed footprints, after
+the README setup:
+
+```powershell
+New-Item -ItemType Directory -Force build/constrained-placement | Out-Null
+uv run --no-sync python -m copperscript plan-layout examples/full_vertical_board.copper `
+  --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
+  --placement-templates examples/full_vertical_placement_templates.json `
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
+  --footprint-root "..\CopperLib\footprints" --candidates 1 `
+  --report build/constrained-placement/layout-report.json `
+  -o build/constrained-placement/placed.kicad_pcb
+```
+
+The README's complete `scripts/route_full_vertical.py` workflow consumes these
+source constraints too. Previous routed boards and any run started before
+these constraints were added are historical results, not routing validation
+of this floorplan. A fresh full routing/signoff run is required.
+
 ## Main MCU allocation
 
 | Function | STM32 peripheral | Pins |

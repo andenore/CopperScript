@@ -1,13 +1,88 @@
+from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 from pcbir import ConnectionPolicy, PrototypePhysicalOptions, check, compile_file, prototype_physicalize
 from pcbir.elaborate import elaborate
 from pcbir.power import analyze_power_states
-from pcbir.physical import CopperLayer, RouteKind, nm_from_mm
+from pcbir.physical import BoardSide, CopperLayer, Point, RouteKind, nm_from_mm
 
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "full_vertical_board.copper"
+
+FIXED_FLOORPLAN = {
+    "J_POWER": ("12", "74", 0),
+    "J_CAN": ("25", "72", 0),
+    "U_MODEM": ("20", "20", 90),
+    "J_CELL": ("13.4", "6", 90),
+    "J_SIM": ("10", "44", 270),
+    "U_NRF": ("86", "12", 0),
+    "ANT_BT": ("95.7", "12.508", 0),
+    "U_GNSS": ("86", "67", 0),
+}
+
+
+def test_full_vertical_mechanical_intent_lowers_to_hard_physical_rules() -> None:
+    physical = prototype_physicalize(compile_file(EXAMPLE), PrototypePhysicalOptions(copper_layers=6))
+    fixed = {rule.reference: rule for rule in physical.placement_rules
+             if rule.fixed_position is not None}
+    assert fixed.keys() == FIXED_FLOORPLAN.keys()
+    for ref, (x, y, rotation) in FIXED_FLOORPLAN.items():
+        assert fixed[ref].fixed_position == Point.mm(x, y)
+        assert fixed[ref].fixed_rotation_degrees == Decimal(rotation)
+        assert fixed[ref].side is BoardSide.FRONT
+    assert any(rule.targets[0].reference == "J_GNSS"
+               and rule.targets[1].reference == "U_GNSS"
+               and rule.targets[1].pad == "11"
+               and rule.distance_nm == nm_from_mm(5)
+               for rule in physical.relative_rules)
+
+
+def test_fixed_floorplan_is_legal_on_installed_footprints_and_preserves_rf_macro() -> None:
+    from pcbir import FootprintResolver, PhysicalBoard, resolved_physicalize
+    from pcbir.clusters import cluster_placements
+    from pcbir.placement import placement_solution_is_legal, transformed_footprint_polygon, transformed_pad_position
+    from pcbir.placement_templates import apply_placement_templates
+
+    footprints = Path("C:/Program Files/KiCad/10.0/share/kicad/footprints")
+    library = ROOT.parent / "CopperLib"
+    if not footprints.is_dir() or not library.is_dir():
+        pytest.skip("optional mechanical regression requires installed KiCad and sibling CopperLib")
+    physical = resolved_physicalize(compile_file(EXAMPLE),
+        FootprintResolver(EXAMPLE.parent, (footprints, library / "footprints")),
+        PrototypePhysicalOptions(copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
+    physical = apply_placement_templates(physical, EXAMPLE.parent / "full_vertical_placement_templates.json")
+    refs = set(FIXED_FLOORPLAN) | {"C_BT_MATCH", "L_BT_MATCH"}
+    poses = {pose.reference: pose for pose in physical.placements if pose.reference in refs}
+    for rule in physical.placement_rules:
+        if rule.fixed_position is not None:
+            poses[rule.reference] = replace(poses[rule.reference], position=rule.fixed_position,
+                rotation_degrees=rule.fixed_rotation_degrees, side=rule.side)
+    poses.update(cluster_placements(physical, physical.rigid_clusters[0], poses["U_NRF"]))
+    # This bounded mechanical fixture checks the locked parts plus the RF macro;
+    # complete-board placement is checked separately through plan-layout.
+    fixture = PhysicalBoard("FixedFloorplan", physical.outline, physical.footprints,
+        tuple(poses.values()), (), placement_rules=tuple(rule for rule in physical.placement_rules
+            if rule.reference in refs), rigid_clusters=physical.rigid_clusters)
+    assert placement_solution_is_legal(fixture, poses)
+    modem_rf = transformed_pad_position(fixture, poses["U_MODEM"], "35")
+    modem = transformed_footprint_polygon(fixture, poses["U_MODEM"])
+    cellular = transformed_footprint_polygon(fixture, poses["J_CELL"])
+    assert modem_rf.y_nm < poses["U_MODEM"].position.y_nm
+    assert max(point.y_nm for point in cellular) < min(point.y_nm for point in modem)
+    assert transformed_pad_position(fixture, poses["J_CELL"], "1").y_nm > poses["J_CELL"].position.y_nm
+    antenna_feed = transformed_pad_position(fixture, poses["ANT_BT"], "1")
+    assert poses["L_BT_MATCH"].position.x_nm < antenna_feed.x_nm < poses["ANT_BT"].position.x_nm
+    antenna = transformed_footprint_polygon(fixture, poses["ANT_BT"])
+    assert max(point.x_nm for point in antenna) == nm_from_mm(98)
+    # Hard locks cannot be violated by later optimization/feedback.
+    for ref in FIXED_FLOORPLAN:
+        changed = {**poses, ref: replace(poses[ref], position=Point(
+            poses[ref].position.x_nm + nm_from_mm(1), poses[ref].position.y_nm))}
+        assert not placement_solution_is_legal(fixture, changed)
 
 
 def test_full_vertical_explicit_critical_profiles_lower_without_claiming_qualification() -> None:

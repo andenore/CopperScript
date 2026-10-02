@@ -291,6 +291,41 @@ board FullVerticalTracker {
         bind U_ACCEL { sda = SDA; scl = SCL; }
     }
 
+    // Mechanical intent for the provisional 100 x 80 mm outline. Coordinates
+    // are footprint origins, x right / y down; all fixed parts are on front.
+    // Connector/antenna courtyards retain the planner's 2 mm edge clearance.
+    // Bottom-left entry: USB-C and CAN openings face the bottom edge.
+    constraint fixed_placement(J_POWER) {
+        x = 12mm; y = 74mm; rotation = 0; side = front;
+    }
+    constraint fixed_placement(J_CAN) {
+        x = 25mm; y = 72mm; rotation = 0; side = front;
+    }
+    // ANT_MAIN (pad 35) moves to the modem's north edge at this rotation.
+    // The U.FL signal land faces south, toward that pad, above the modem.
+    constraint fixed_placement(U_MODEM) {
+        x = 20mm; y = 20mm; rotation = 90; side = front;
+    }
+    constraint fixed_placement(J_CELL) {
+        x = 13.4mm; y = 6mm; rotation = 90; side = front;
+    }
+    // SIM insertion faces left; contact lands face right, toward the modem.
+    constraint fixed_placement(J_SIM) {
+        x = 10mm; y = 44mm; rotation = 270; side = front;
+    }
+    // The RF scene moves C_BT_MATCH/L_BT_MATCH as a rigid unit with U_NRF.
+    // ANT faces right; antenna feed pad 1 faces inward toward the network.
+    constraint fixed_placement(U_NRF) {
+        x = 86mm; y = 12mm; rotation = 0; side = front;
+    }
+    constraint fixed_placement(ANT_BT) {
+        x = 95.7mm; y = 12.508mm; rotation = 0; side = front;
+    }
+    constraint fixed_placement(U_GNSS) {
+        x = 86mm; y = 67mm; rotation = 0; side = front;
+    }
+    constraint max_distance(J_GNSS, U_GNSS.RF_IN) { distance = 5mm; }
+
     constraint max_distance(C_MCU, U_MCU.VDD) { distance = 3mm; }
     constraint max_distance(C_CC, U_CC.VDD) { distance = 3mm; }
     constraint max_distance(C_NRF, U_NRF.VDD_1) { distance = 3mm; }
