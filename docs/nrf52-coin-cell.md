@@ -8,24 +8,23 @@ not in the compiler repository.
 
 ## Reproduce
 
-Keep CopperLib checked out alongside CopperScript. The repository's `copper.mod`
-has a local replacement pointing there. Install KiCad footprints, then run
+CopperLib parts, footprints and macro assets download automatically from its
+pinned GitHub revision through `copper.mod`/`copper.lock`. No library checkout or
+lock refresh is required. Install KiCad footprints, then run
 from CopperScript's root (PowerShell):
 
 ```powershell
 uv sync --extra test
-uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked --offline
+uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked
 uv run python -m pcbir.nrf52_example `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
-  --footprint-root "..\CopperLib\footprints"
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
 `build/nrf52-coin-cell/` is ignored by Git. It contains a self-contained KiCad
 PCB/project/local footprint library, electrical and physical reports, a physical
 snapshot and `profile.pstats`/`profile.txt`. `--output-dir` changes the destination.
-If intentionally editing library sources, update their identity with
-`uv run python -m copperscript lock examples/nrf52_coin_cell.copper --offline`.
-Never refresh a lock just to suppress an unexplained mismatch.
+Add `--offline` to `check` after the cache is populated. Never refresh a lock
+just to suppress an unexplained mismatch.
 
 ## What is implemented
 
@@ -42,12 +41,26 @@ SHA, footprint identities, C3's protected VSS31 return, antenna fill exclusions
 and isolated antenna pad 2 are retained unchanged. Electrical connectivity
 remains exclusively in the `.copper` file; physical assets cannot redefine it.
 
-**This is a placed board, not a fully routed board.** Non-RF nets retain airwires.
-The dedicated builder does not bypass the full routing pipeline's explicit
-hard-macro integration guard. Independent KiCad checking currently finds no
-geometry violations but does report the intentionally unrouted connections.
-No zone filling, complete ground stitching, fabrication signoff or Gerbers are
-claimed. See [the hard-macro contract](physical-hard-macros.md).
+Without `--route` this remains a placed draft. To attempt the full standard
+placement/global/package-access/critical/plane/detailed pipeline:
+
+```powershell
+uv run python -m pcbir.nrf52_example --route `
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
+  --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
+  --output-dir build/nrf52-routed
+```
+
+The run preserves immutable RF copper, uses the actual off-pad ground via
+as a macro boundary terminal and retains an In1.Cu ground-fill intent. Reports
+and profiles are saved on partial completion; exit 1 means failed gates.
+The initial routed attempt is **not complete**: U_NRF.26 (SWDIO) and U_NRF.33
+(DEC3) have no compatible package exits, and BT1.2 lacks a plane escape.
+Ordinary area routing is correctly blocked rather than bypassing the protected
+macro. Independent KiCad reports the resulting opens/dangling reservations.
+Adapting the RF reservation/adjacent support placement and the wide battery-pad
+escape remains required. No manufacturing signoff or Gerbers are claimed.
+See [the hard-macro contract](physical-hard-macros.md).
 
 ## Circuit and firmware assumptions
 

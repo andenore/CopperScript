@@ -322,20 +322,23 @@ def route_global(
     """Route all multi-terminal nets into deterministic multilayer guides."""
 
     options = options or GlobalRouterOptions()
-    if board.tracks or board.vias:
-        raise ValueError("global routing requires a board without detailed copper")
+    from .hard_macros import macro_source, materialize_hard_macros, macro_routing_pads
+    board = materialize_hard_macros(macro_source(board))
     graph = _build_graph(board, options)
     rules = {rule.net: rule for rule in board.net_routing_rules}
     clearance = RoutingClearanceIndex(board)
     zone_nets = {zone.net for zone in board.zones}
+    from .drc import explicit_copper_connectivity
+    owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
+    owner_connected = {net.name for net in board.nets if owner_graph is not None and owner_graph.net_connected(net)}
     access_options = {
         (net.name, pad): _pin_access_candidates(
             board, graph, pad, net.name,
             routing_layers(board, net.name, rules.get(net.name)),
             rules.get(net.name), clearance, options,
         )
-        for net in board.nets if len(net.pads) >= 2 and net.name not in zone_nets
-        for pad in net.pads
+        for net in board.nets if len(net.pads) >= 2 and net.name not in zone_nets and net.name not in owner_connected
+        for pad in macro_routing_pads(board, net)
     }
     capacities = {
         resource.identifier: resource.capacity
@@ -413,7 +416,14 @@ def _route_iteration(
         (net for net in board.nets if len(net.pads) >= 2),
         key=lambda net: _net_order(net.name, rules.get(net.name)),
     )
+    from .hard_macros import macro_routing_pads
+    from .drc import explicit_copper_connectivity
+    owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
     for net in ordered_nets:
+        if owner_graph is not None and owner_graph.net_connected(net):
+            routes.append(GlobalNetRoute(net.name, True, (), (), (), 0,
+                          ("connected by immutable hard-macro copper",)))
+            continue
         if any(zone.net == net.name for zone in board.zones):
             routes.append(GlobalNetRoute(
                 net.name, False, (), (), (), 0,
@@ -426,7 +436,7 @@ def _route_iteration(
             board,
             graph,
             net.name,
-            net.pads,
+            macro_routing_pads(board, net),
             rule,
             access_options,
             demand,
@@ -714,7 +724,8 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
     xs = _axis_centers(min_x, max_x, options.tile_size_nm)
     ys = _axis_centers(min_y, max_y, options.tile_size_nm)
     # Courtyards are assembly geometry; they are not copper obstructions.
-    copper_keepouts = tuple(resolved_copper_keepouts(board))
+    from .hard_macros import macro_reservations
+    copper_keepouts = (*resolved_copper_keepouts(board), *macro_reservations(board))
     track_keepouts = tuple(
         (item.layers, _bounds(item.outline.outer.vertices))
         for item in copper_keepouts if item.block_tracks
@@ -731,6 +742,16 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
                       if pad.kind is PadKind.SMD else board.stackup.copper_layers)
             pad_obstacles.append((layers, (bounds.min_x, bounds.min_y,
                                            bounds.max_x, bounds.max_y)))
+    for track in board.tracks:
+        radius = track.width_nm // 2
+        pad_obstacles.append(((track.layer,), (min(track.start.x_nm, track.end.x_nm)-radius,
+            min(track.start.y_nm, track.end.y_nm)-radius, max(track.start.x_nm, track.end.x_nm)+radius,
+            max(track.start.y_nm, track.end.y_nm)+radius)))
+    for via in board.vias:
+        a, b = sorted((board.stackup.copper_layers.index(via.from_layer), board.stackup.copper_layers.index(via.to_layer)))
+        radius = via.size_nm // 2
+        pad_obstacles.append((board.stackup.copper_layers[a:b+1], (via.position.x_nm-radius,
+            via.position.y_nm-radius, via.position.x_nm+radius, via.position.y_nm+radius)))
     legal: set[GridNode] = set()
     for layer_index, layer in enumerate(board.stackup.copper_layers):
         for x_index, x in enumerate(xs):
@@ -882,6 +903,25 @@ def _pin_access_candidates(
     clearance: RoutingClearanceIndex,
     options: GlobalRouterOptions,
 ) -> tuple[PinAccess, ...]:
+    from .hard_macros import macro_routing_ports, macro_port_layers
+    port = macro_routing_ports(board, net).get(pad)
+    if port is not None:
+        width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+        layers = set(macro_port_layers(board, port)).intersection(allowed_layers)
+        nearby = sorted((n for n in graph.legal_nodes if graph.layers[n.layer_index] in layers
+            and _node_distance_nm(graph.point(n), port.position) <= max(options.tile_size_nm*2, options.escape_radius_nm)),
+            key=lambda n: (_node_distance_nm(graph.point(n), port.position), n))
+        found = []
+        for node in nearby:
+            layer = graph.layers[node.layer_index]
+            path = local_access_path(board, clearance, net, port.position, graph.point(node), layer, width,
+                step_nm=min(options.escape_step_nm, nm_from_mm("0.25")),
+                detour_nm=options.escape_radius_nm, maximum_states=600)
+            if path is not None:
+                found.append(PinAccess(pad, port.position, node, graph.point(node), layer, path))
+            if len(found) >= options.pin_access_candidates:
+                break
+        return tuple(found)
     placements = {item.reference: item for item in board.placements}
     placement = placements[pad.component]
     footprint = board.footprints[placement.footprint]
@@ -1173,7 +1213,7 @@ def _placement_fingerprint(board: PhysicalBoard) -> str:
         "board": board.name,
         "rigid_clusters": [repr(item) for item in sorted(board.rigid_clusters, key=lambda item: item.name)],
         "hard_macros": [repr(item) for item in sorted(board.hard_macros, key=lambda item: item.cluster)],
-        "materialized_macros": board.materialized_macros,
+        # Materialization does not change placement or topology identity.
         "outline": [(point.x_nm, point.y_nm) for point in board.outline.vertices],
         "placements": [
             (

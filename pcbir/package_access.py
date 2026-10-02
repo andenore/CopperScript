@@ -84,12 +84,13 @@ def preflight_package_access(
     plane contacts are built against both signal exits and critical copper.
     No ordinary area search is launched by this function.
     """
-    if board.tracks or board.vias or board.zone_fills:
-        raise ValueError("package-access preflight requires an unrouted, unfilled source")
+    from .hard_macros import macro_source, materialize_hard_macros
+    board = macro_source(board)
+    owner_board = materialize_hard_macros(board)
     if global_route.placement_fingerprint != _placement_fingerprint(board):
         raise ValueError("package-access global guides are stale")
     emit(on_progress, "ordinary_package_exits", "started")
-    fanout = route_fanout(board, fanout_options)
+    fanout = route_fanout(owner_board, fanout_options)
     emit(on_progress, "ordinary_package_exits", "finished",
          escaped=len(fanout.accesses), pending=len(fanout.pending_pads))
     critical = route_critical_nets(board, global_route, reserved_accesses=fanout,
@@ -164,9 +165,11 @@ def improve_package_access(
     options = options or PackageAccessOptions()
     placement_options = placement_options or PlacementPlannerOptions()
     global_options = global_options or GlobalRouterOptions()
+    from .hard_macros import materialize_hard_macros
+    owner_board = materialize_hard_macros(baseline.source)
     if (baseline.source.tracks or baseline.source.vias or baseline.source.zone_fills
             or baseline.global_route.placement_fingerprint != _placement_fingerprint(baseline.source)
-            or replace(baseline.fanout.board, tracks=(), vias=()) != baseline.source
+            or replace(baseline.fanout.board, tracks=owner_board.tracks, vias=owner_board.vias) != owner_board
             or baseline.critical.board.placements != baseline.source.placements):
         raise ValueError("package-access feedback source or global guides are stale")
     accepted = baseline

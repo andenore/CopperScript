@@ -16,7 +16,7 @@ from .backends.kicad_project import write_kicad_project
 from .clusters import cluster_placements
 from .drc import run_physical_drc, PhysicalDrcPolicy
 from .erc import check
-from .hard_macros import bind_hard_macro, materialize_hard_macros
+from .hard_macros import apply_hard_macro_scene, materialize_hard_macros
 from .physical import Point
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,16 +24,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def make_trial(footprint_roots, rotation=0):
     source = ROOT / "examples/nrf_antenna_macro.copper"
-    electrical = compile_file(source,locked=True,offline=True)
+    electrical = compile_file(source,locked=True)
     diagnostics = check(electrical)
-    board = resolved_physicalize(electrical, FootprintResolver(source.parent, tuple(footprint_roots)),
+    board = resolved_physicalize(electrical, FootprintResolver(source.parent, tuple(footprint_roots), locked=True),
         PrototypePhysicalOptions(board_width_mm=50, board_height_mm=40,
                                  copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     scene_path = ROOT / "examples/nrf_antenna_hard_macro.json"
-    scene = json.loads(scene_path.read_text())
-    board = bind_hard_macro(board, scene_path.parent / scene["asset"],
-        expected_sha256=scene["asset_sha256"], name=scene["name"],
-        bindings=scene["bindings"], net_bindings=scene["net_bindings"])
+    board = apply_hard_macro_scene(board, scene_path)
     current = {p.reference: p for p in board.placements}
     # Default assembly mounts at the upper-right corner of a 50x40 mm probe.
     # The 45-degree transform uses a larger centred probe: corner mounting is

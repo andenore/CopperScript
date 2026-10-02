@@ -1,9 +1,9 @@
 """Explicit binding, pose transforms and transactional hard-macro copper.
 
 This is a deliberately staged prototype: bind -> place -> materialize -> route
-ordinary external connections. The complete package-access/critical pipeline
-does not yet allocate macro boundary ports. It must not silently flatten a
-macro into disposable fanout or claim RF/manufacturing qualification.
+ordinary external connections. Planning materializes an immutable scratch
+prefix; feedback rebuilds it after moving complete placement units. This must
+not flatten owner copper into disposable fanout or claim RF qualification.
 """
 from collections import Counter
 from dataclasses import replace
@@ -14,6 +14,8 @@ from pathlib import Path
 
 from .clusters import cluster_placement_matches, footprint_geometry_digest
 from .geometry import RoundedConvexShape, shapes_clear
+from .placement import transformed_local_point
+from .syntax import CopperScriptError
 from .physical import (
     BoardSide, ComponentPlacementRule, CopperKeepout, CopperLayer, MacroPadBinding, MacroPort, PadReference,
     PhysicalBoard, PhysicalHardMacro, PhysicalNet, PlacementTarget,
@@ -315,27 +317,87 @@ def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
 
 
 def macro_routing_pads(board, net):
-    """Use a pad-backed external port instead of routing private pads again.
+    """Collapse proved private groups without modifying the actual netlist.
 
-    Only ports at an actual unique pad centre are presently consumed by the
-    ordinary detailed router. Via/free ports are validated/exported but are
-    not yet router terminals; their pad groups stay untouched (fail closed).
+    The retained PadReference is a stable routing identity, NOT a request to
+    start copper at that pad. Position and layers come from the boundary port.
     """
-    from .placement import transformed_local_point
     remove = set()
-    poses = {p.reference: p for p in board.placements}
+    for representative, port in macro_routing_ports(board, net.name).items():
+        remove.update(set(port.pads) - {representative})
+    return tuple(p for p in net.pads if p not in remove)
+
+
+def macro_routing_ports(board, net_name):
+    """Pad, free-track and plated-via terminals after owner continuity proof."""
+    result = {}
+    covered = set()
     for m in board.hard_macros:
         if m.cluster not in board.materialized_macros:
             continue
-        for port in resolved_macro_geometry(board, m)[2]:
-            if port.net != net.name:
+        for port in sorted(resolved_macro_geometry(board, m)[2], key=lambda p: p.name):
+            if port.net != net_name or not port.pads:
                 continue
-            candidates = []
-            for padref in port.pads:
-                pose = poses[padref.component]
-                lands = [p for p in board.footprints[pose.footprint].pads if p.number == padref.pad]
-                if len(lands) == 1 and transformed_local_point(pose, lands[0].position) == port.position:
-                    candidates.append(padref)
-            if candidates:
-                remove.update(set(port.pads) - {min(candidates)})
-    return tuple(p for p in net.pads if p not in remove)
+            if covered.intersection(port.pads):
+                raise ValueError("overlapping macro routing port pad groups are unsupported")
+            covered.update(port.pads)
+            poses = {p.reference: p for p in board.placements}
+            at_port = [ref for ref in port.pads if any(
+                transformed_local_point(poses[ref.component], pad.position) == port.position
+                for pad in board.footprints[poses[ref.component].footprint].pads
+                if pad.number == ref.pad)]
+            result[at_port[0] if len(at_port) == 1 else min(port.pads)] = port
+    return result
+
+
+def macro_port_layers(board, port):
+    """Only actual port copper layers: a via barrel exposes its full span."""
+    layers = {port.layer}
+    for via in board.vias:
+        if via.net == port.net and via.position == port.position:
+            a, b = sorted((board.stackup.copper_layers.index(via.from_layer),
+                           board.stackup.copper_layers.index(via.to_layer)))
+            layers.update(board.stackup.copper_layers[a:b+1])
+    return tuple(layer for layer in board.stackup.copper_layers if layer in layers)
+
+
+def macro_owned_pads(board):
+    return frozenset(b.pad for m in board.hard_macros
+                     if m.cluster in board.materialized_macros for b in m.pad_bindings)
+
+
+def macro_source(board):
+    """Recover an unrouted source; NEVER discard ordinary or critical copper."""
+    if board.zone_fills:
+        raise ValueError("routing planning requires an unfilled source")
+    if not board.tracks and not board.vias and not board.materialized_macros:
+        return board
+    validate_hard_macros(board)
+    tracks, vias = Counter(), Counter()
+    for macro in board.hard_macros:
+        if macro.cluster in board.materialized_macros:
+            t, v, _, _ = resolved_macro_geometry(board, macro)
+            tracks.update(t)
+            vias.update(v)
+    if Counter(board.tracks) != tracks or Counter(board.vias) != vias:
+        raise ValueError("routing planning requires no copper except immutable hard macros")
+    return replace(board, tracks=(), vias=(), materialized_macros=())
+
+
+def apply_hard_macro_scene(board, scene_path, *, locked=True, offline=False):
+    """Explicit pinned data binding; URL assets share the package cache/lock."""
+    scene_path = Path(scene_path).resolve()
+    try:
+        scene = json.loads(scene_path.read_text(encoding="utf-8"))
+        _keys(scene, "asset asset_sha256 name bindings net_bindings")
+        asset = scene["asset"]
+        if asset.startswith(("github.com/", "https://github.com/")):
+            from .packages import resolve_module_asset
+            asset_path = resolve_module_asset(scene_path, asset, locked=locked, offline=offline)
+        else:
+            asset_path = scene_path.parent / asset
+        return bind_hard_macro(board, asset_path,
+            expected_sha256=scene["asset_sha256"], name=scene["name"],
+            bindings=scene["bindings"], net_bindings=scene["net_bindings"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, CopperScriptError) as exc:
+        raise ValueError(f"invalid hard-macro scene: {exc}") from exc

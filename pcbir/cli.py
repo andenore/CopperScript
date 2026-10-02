@@ -244,6 +244,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument("--candidates", type=int, default=1)
     for physical_parser in (pcb_parser, layout_parser, global_route_parser, board_route_parser):
+        physical_parser.add_argument("--width-mm", type=float, default=100)
+        physical_parser.add_argument("--height-mm", type=float, default=80)
+        physical_parser.add_argument("--hard-macro", action="append", default=[], type=Path,
+                                    help="explicit pinned immutable-copper macro scene (repeatable)")
         physical_parser.add_argument("--placement-templates", type=Path,
                                     help="explicit data-only, digest-bound physical template scene")
     board_route_parser.add_argument(
@@ -450,6 +454,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 base_directory=args.board.resolve().parent,
                 search_roots=tuple(root.resolve() for root in args.footprint_root),
                 strict=args.strict,
+                    locked=args.locked, offline=args.offline,
             )
             audit = audit_resolved_footprints(board, resolver)
             if args.json:
@@ -508,7 +513,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             try:
                 physical_options = PrototypePhysicalOptions(
-                    copper_layers=args.layers, fabrication_profile=args.fab_profile
+                    copper_layers=args.layers, fabrication_profile=args.fab_profile,
+                    board_width_mm=args.width_mm, board_height_mm=args.height_mm
                 )
                 if args.allow_proxy_footprints:
                     physical_board = prototype_physicalize(board, physical_options)
@@ -516,10 +522,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     resolver = FootprintResolver(
                         base_directory=args.board.resolve().parent,
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
+                        locked=args.locked, offline=args.offline,
                     )
                     physical_board = resolved_physicalize(board, resolver, physical_options)
                 if args.placement_templates:
-                    physical_board = apply_placement_templates(physical_board, args.placement_templates)
+                    physical_board = apply_placement_templates(physical_board, args.placement_templates,
+                        locked=args.locked, offline=args.offline)
+                from .hard_macros import apply_hard_macro_scene
+                for scene in args.hard_macro:
+                    physical_board = apply_hard_macro_scene(physical_board, scene,
+                        locked=args.locked, offline=args.offline)
                 stitch_enabled = args.stitch_zone_pads or bool(physical_board.zones)
                 early_pads: set[PadReference] = set()
                 if args.early_plane_pad and not stitch_enabled:
@@ -904,7 +916,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             try:
                 physical_options = PrototypePhysicalOptions(
-                    copper_layers=args.layers, fabrication_profile=args.fab_profile
+                    copper_layers=args.layers, fabrication_profile=args.fab_profile,
+                    board_width_mm=args.width_mm, board_height_mm=args.height_mm
                 )
                 if args.allow_proxy_footprints:
                     physical_board = prototype_physicalize(board, physical_options)
@@ -912,6 +925,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     resolver = FootprintResolver(
                         base_directory=args.board.resolve().parent,
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
+                        locked=args.locked, offline=args.offline,
                     )
                     physical_board = resolved_physicalize(board, resolver, physical_options)
                 router_options = GlobalRouterOptions(
@@ -919,7 +933,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     maximum_iterations=args.router_iterations,
                 )
                 if args.placement_templates:
-                    physical_board = apply_placement_templates(physical_board, args.placement_templates)
+                    physical_board = apply_placement_templates(physical_board, args.placement_templates,
+                        locked=args.locked, offline=args.offline)
+                from .hard_macros import apply_hard_macro_scene, materialize_hard_macros
+                for scene in args.hard_macro:
+                    physical_board = apply_hard_macro_scene(physical_board,scene,
+                        locked=args.locked,offline=args.offline)
                 flow = optimize_placement_for_routing(
                     physical_board,
                     PlacementPlannerOptions(candidate_count=args.candidates),
@@ -938,7 +957,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 output.write_text(route.to_json(), encoding="utf-8")
                 if args.pcb_output:
-                    pcb_manifest = KiCadPcbBackend().generate(flow.board)
+                    pcb_manifest = KiCadPcbBackend().generate(materialize_hard_macros(flow.board))
                     write_kicad_project(pcb_manifest, args.pcb_output)
             except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")
@@ -967,7 +986,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 if args.command in {"export-kicad-pcb", "plan-layout"}:
                     physical_options = PrototypePhysicalOptions(
-                        copper_layers=args.layers, fabrication_profile=args.fab_profile
+                        copper_layers=args.layers, fabrication_profile=args.fab_profile,
+                        board_width_mm=args.width_mm, board_height_mm=args.height_mm
                     )
                     if args.allow_proxy_footprints:
                         physical_board = prototype_physicalize(board, physical_options)
@@ -977,10 +997,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                             search_roots=tuple(
                                 root.resolve() for root in args.footprint_root
                             ),
+                            locked=args.locked, offline=args.offline,
                         )
                         physical_board = resolved_physicalize(board, resolver, physical_options)
                     if args.placement_templates:
-                        physical_board = apply_placement_templates(physical_board, args.placement_templates)
+                        physical_board = apply_placement_templates(physical_board, args.placement_templates,
+                            locked=args.locked,offline=args.offline)
+                    from .hard_macros import apply_hard_macro_scene, materialize_hard_macros
+                    for scene in args.hard_macro:
+                        physical_board = apply_hard_macro_scene(physical_board,scene,
+                            locked=args.locked,offline=args.offline)
                     layout_report = None
                     if args.command == "plan-layout":
                         try:
@@ -993,7 +1019,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         plan = plan_placement(physical_board, planner_options)
                         physical_board = plan.board
                         layout_report = plan.report
-                    manifest = KiCadPcbBackend().generate(physical_board)
+                    manifest = KiCadPcbBackend().generate(materialize_hard_macros(physical_board))
                     artifact_kind = "PCB"
                 else:
                     manifest = KiCadSchematicBackend().generate(board)

@@ -1,7 +1,7 @@
-"""Generate the placed coin-cell example with immutable RF macro copper.
+"""Generate a placed nRF52 example, or attempt the standard pipeline with --route.
 
-The non-RF circuit intentionally remains unrouted. This is a bounded example,
-not an alternate implementation of the full route-board pipeline.
+Immutable RF macro copper survives both modes. Partial routing fails its gates
+and retains diagnostics; neither mode implies RF/manufacturing qualification.
 """
 import argparse
 import cProfile
@@ -17,7 +17,7 @@ from .backends.kicad_project import write_kicad_project
 from .clusters import cluster_placements
 from .drc import run_physical_drc
 from .erc import check
-from .hard_macros import bind_hard_macro, materialize_hard_macros
+from .hard_macros import apply_hard_macro_scene, materialize_hard_macros
 from .hard_macro_trial import document
 from .placement import placement_solution_is_legal
 
@@ -25,20 +25,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "examples/nrf52_coin_cell.copper"
 
 
-def make_example(footprint_roots):
-    electrical = compile_file(SOURCE, locked=True, offline=True)
+def make_example(footprint_roots, *, offline=False):
+    electrical = compile_file(SOURCE, locked=True, offline=offline)
     diagnostics = check(electrical)
     if diagnostics:
         raise ValueError(f"coin-cell example must pass ERC: {diagnostics}")
     board = resolved_physicalize(electrical,
-        FootprintResolver(SOURCE.parent, tuple(footprint_roots)),
+        FootprintResolver(SOURCE.parent, tuple(footprint_roots), locked=True, offline=offline),
         PrototypePhysicalOptions(board_width_mm=50, board_height_mm=40,
             copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     scene_path = ROOT / "examples/nrf_antenna_hard_macro.json"
-    scene = json.loads(scene_path.read_text(encoding="utf-8"))
-    board = bind_hard_macro(board, scene_path.parent / scene["asset"],
-        expected_sha256=scene["asset_sha256"], name=scene["name"],
-        bindings=scene["bindings"], net_bindings=scene["net_bindings"])
+    board = apply_hard_macro_scene(board, scene_path, offline=offline)
     poses = {p.reference: p for p in board.placements}
     for rule in board.placement_rules:
         if rule.fixed_position is not None:
@@ -58,9 +55,37 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--footprint-root", action="append", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/nrf52-coin-cell")
+    parser.add_argument("--route", action="store_true", help="run the complete standard routing pipeline")
+    parser.add_argument("--offline", action="store_true", help="use only an already verified package cache")
+    parser.add_argument("--kicad-cli", type=Path, help="independent plane refill/DRC executable")
     args = parser.parse_args(argv)
     profiler = cProfile.Profile()
-    board = profiler.runcall(make_example, args.footprint_root)
+    if args.route:
+        from .cli import main as cli_main
+        args.output_dir.mkdir(parents=True,exist_ok=True)
+        command = ["route-board",str(SOURCE),"--locked","--width-mm","50","--height-mm","40",
+            "--layers","6","--fab-profile","jlcpcb-six-layer","--hard-macro",
+            str(ROOT / "examples/nrf_antenna_hard_macro.json"),
+            "--pitch-mm","0.5","--passes","2","--search-budget","20000","--soft-ripup",
+            "--fanout","--package-access-trials","0","--zone-escape-trials","0",
+            "--zone-local-ripup-trials","0","--constrained-pins-first","--progressive-guides",
+            "--plane-contact-radius-mm","5","--early-plane-stitch","--progress",
+            "--report",str(args.output_dir / "route-report.json"),
+            "-o",str(args.output_dir / "nrf52-coin-cell.kicad_pcb")]
+        for root in args.footprint_root:
+            command.extend(("--footprint-root",str(root)))
+        if args.kicad_cli:
+            command.extend(("--verify-plane-fill",str(args.kicad_cli)))
+        if args.offline:
+            command.append("--offline")
+        try:
+            return profiler.runcall(cli_main,command)
+        finally:
+            profiler.dump_stats(args.output_dir / "profile.pstats")
+            stats = io.StringIO()
+            pstats.Stats(profiler,stream=stats).sort_stats("cumulative").print_stats(40)
+            (args.output_dir / "profile.txt").write_text(stats.getvalue(),encoding="utf-8")
+    board = profiler.runcall(make_example, args.footprint_root, offline=args.offline)
     # Preserve the default completeness gate in the delivered report. Only
     # macro materialization's bounded acceptance ignores unrelated airwires.
     report = run_physical_drc(board)

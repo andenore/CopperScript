@@ -1431,7 +1431,10 @@ def _build_grid(
         transformed_pad_position(board, placements[pad.component], pad.pad)
         for pad in pads
     )
-    pin_points = tuple(pin_points) + tuple(
+    from .hard_macros import macro_routing_ports
+    port_points = tuple(port.position for net in board.nets
+                        for port in macro_routing_ports(board, net.name).values())
+    pin_points = tuple(pin_points) + port_points + tuple(
         fanout_accesses[pad] for pad in pads
         if fanout_accesses is not None and pad in fanout_accesses
     )
@@ -1496,7 +1499,11 @@ def _access_candidates(
     placement = next(item for item in board.placements if item.reference == pad.component)
     footprint = board.footprints[placement.footprint]
     physical_pad = next(item for item in footprint.pads if item.number == pad.pad)
-    if physical_pad.kind is PadKind.SMD:
+    from .hard_macros import macro_routing_ports, macro_port_layers
+    port = macro_routing_ports(board, net).get(pad)
+    if port is not None:
+        layers = tuple(layer for layer in macro_port_layers(board, port) if layer in allowed)
+    elif physical_pad.kind is PadKind.SMD:
         side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
         if side not in allowed:
             return ()
@@ -1734,6 +1741,12 @@ def _heuristic(
 
 
 def _pad_position(board: PhysicalBoard, pad: PadReference) -> Point:
+    from .hard_macros import macro_routing_ports
+    for net in board.nets:
+        if pad in net.pads:
+            port = macro_routing_ports(board, net.name).get(pad)
+            if port is not None:
+                return port.position
     placement = next(item for item in board.placements if item.reference == pad.component)
     return transformed_pad_position(board, placement, pad.pad)
 

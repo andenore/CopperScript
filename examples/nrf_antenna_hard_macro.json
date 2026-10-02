@@ -1,6 +1,6 @@
 {
-  "asset": "../../CopperLib/data/full-vertical/nrf-antenna-hard-macro.json",
-  "asset_sha256": "efe80a431713048aafff9b549792181b8cb0133bb37c12390ac3c615dae02b13",
+  "asset": "github.com/andenore/CopperLib/data/full-vertical/nrf-antenna-hard-macro.json",
+  "asset_sha256": "3f0906b1d1088af3f58550ebd3595ff1d5e21ca96bbb420ef83e6c74b2ebb4f4",
   "name": "nordic-antenna-trial",
   "bindings": {
     "U1": "U_NRF", "C3": "C_BT_MATCH", "L1": "L_BT_MATCH",

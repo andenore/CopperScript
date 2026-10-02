@@ -90,7 +90,7 @@ def test_asset_binding_is_independent_of_checkout_location():
 @pytest.mark.parametrize("command", ["route-board", "route-global", "plan-layout", "export-kicad-pcb"])
 def test_cli_physical_paths_apply_templates_once(command, tmp_path, monkeypatch, capsys):
     calls = []
-    def probe(board, path):
+    def probe(board, path, **options):
         calls.append(path)
         raise ValueError("template integration probe")
     monkeypatch.setattr("pcbir.cli.apply_placement_templates", probe)

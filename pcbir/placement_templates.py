@@ -11,13 +11,14 @@ import json
 from pathlib import Path
 
 from .clusters import footprint_geometry_digest
+from .syntax import CopperScriptError
 from .physical import (
     ComponentPlacementRule, PhysicalBoard, PlacementTarget, Point,
     RigidPlacementCluster, RigidPlacementMember,
 )
 
 
-def apply_placement_templates(board: PhysicalBoard, scene_path: Path) -> PhysicalBoard:
+def apply_placement_templates(board: PhysicalBoard, scene_path: Path, *, locked=True, offline=False) -> PhysicalBoard:
     if board.tracks or board.vias or board.zone_fills:
         raise ValueError("placement templates require an unrouted, unfilled board")
     try:
@@ -35,7 +36,13 @@ def apply_placement_templates(board: PhysicalBoard, scene_path: Path) -> Physica
             if set(binding) != {"name", "reference", "reference_sha256", "bindings", "net_bindings",
                                 "footprint_digests", "allowed_rotations", "internal_clearance_nm"}:
                 raise ValueError("unsupported placement-template binding fields")
-            reference_raw = (Path(scene_path).resolve().parent / binding["reference"]).read_bytes()
+            asset = binding["reference"]
+            if asset.startswith(("github.com/", "https://github.com/")):
+                from .packages import resolve_module_asset
+                reference_path = resolve_module_asset(scene_path,asset,locked=locked,offline=offline)
+            else:
+                reference_path = Path(scene_path).resolve().parent / asset
+            reference_raw = reference_path.read_bytes()
             if sha256(reference_raw).hexdigest() != binding["reference_sha256"]:
                 raise ValueError("placement reference identity changed")
             reference = json.loads(reference_raw)
@@ -100,5 +107,5 @@ def apply_placement_templates(board: PhysicalBoard, scene_path: Path) -> Physica
         metadata = {**board.metadata, "placement_template_scene_sha256": sha256(raw).hexdigest(),
                     "placement_template_status": "provisional-footprint-adaptation", "fabrication_ready": "false"}
         return replace(board, rigid_clusters=tuple(clusters), placement_rules=tuple(rules.values()), metadata=metadata)
-    except (KeyError, TypeError, IndexError, StopIteration, OSError, InvalidOperation, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError, IndexError, StopIteration, OSError, InvalidOperation, json.JSONDecodeError, CopperScriptError) as exc:
         raise ValueError(f"invalid placement template {scene_path}: {exc}") from exc

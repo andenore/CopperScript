@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:a0d8d7ab381b3b86388d3ac890afc57884e7432ddf15a451e1f4b511a4514cc7",
+      "checksum": "sha256:40999cdb10ccfec6adfae1ce2f1b7606b6d570e86eed260a29aba71c7befbf47",
       "files": [
         {
           "path": "copper.mod",
@@ -10,13 +10,13 @@
         },
         {
           "path": "data/bundles/stm32g0b1/device.json",
-          "sha256": "9d64f43fa419f73edeeb2bca4e84ff099eb8b53cd41d530697138fa9321b5511",
-          "size": 696
+          "sha256": "e84194b02d72d3c61bad00f58d839fa6f868c5dfe2b5b829f992060c0fe6428d",
+          "size": 680
         },
         {
           "path": "data/bundles/stm32g0b1/mux.csv",
-          "sha256": "8c9f35057c38ecd24da3a0ffa980c8b337c0f1271f17a8ec0b486f50329ecb0e",
-          "size": 49
+          "sha256": "a6546060f87e8e5f69f4625c1e2b1eb34bc9ade82d7774e87406a24ec97c5e3f",
+          "size": 48
         },
         {
           "path": "data/bundles/stm32g0b1/pads.csv",
@@ -25,8 +25,8 @@
         },
         {
           "path": "data/bundles/stm32g0b1/parts/stm32g0b1cbt6/part.json",
-          "sha256": "e61168c64d35933b7b95d3a4adec135aad67e8e9596aa1ba5eebc77bea874d2f",
-          "size": 473
+          "sha256": "163230b8f209027c41a6bbfc921502a74665a075a682fad6b6d4572935ed98f4",
+          "size": 464
         },
         {
           "path": "data/bundles/stm32g0b1/parts/stm32g0b1cbt6/pins.csv",
@@ -35,43 +35,43 @@
         },
         {
           "path": "data/bundles/stm32g0b1/peripherals.csv",
-          "sha256": "fdeba0bcdfe1c292aab20d2fff6ba47501515ab6c69b3f1dfffbba53c5e02f44",
-          "size": 38
+          "sha256": "746a85b7e190365b1c8beb28b5566b1eca8f73545210a6c59042caa079f5f0b7",
+          "size": 37
         },
         {
           "path": "data/case-studies/ad4134bcpz/sources.json",
-          "sha256": "ff2474c75acd2bab81e102312dbe6156ad43865a6e58879b069d3a107c93644a",
-          "size": 340
+          "sha256": "47fe83002e2117665acda0ef21104c29445c040819e17d3b8216ad7b315d3248",
+          "size": 334
         },
         {
           "path": "data/case-studies/cases.json",
-          "sha256": "25f69ae9156a6104968631a33d903d33251d4ead0c90051fc46ab9a74868bfab",
-          "size": 8341
+          "sha256": "aeda88a2d0c00601b5c1bab7156b3ac84ed0b069dd2e019334887cf6313bcd48",
+          "size": 8257
         },
         {
           "path": "data/case-studies/cyusb4014-fcaxi/sources.json",
-          "sha256": "70cfbb84bca85e37b1f9b961e8544cdaf3e3b98d610672fa015cac46972a3b82",
-          "size": 499
+          "sha256": "964c82f475a41a7f6403dc36f3b8bc303a705f7648c3bae16f1a189e49a59fca",
+          "size": 493
         },
         {
           "path": "data/case-studies/index.json",
-          "sha256": "7fb96d59208e224adc26a07ae48964753b2c4d69a79e477795ba66fb29147fef",
-          "size": 197
+          "sha256": "40510e783de00732dac14583e667b5519ef2123b13d8bfbc694e913bacd5771c",
+          "size": 187
         },
         {
           "path": "data/case-studies/nrf52840-qiaa/sources.json",
-          "sha256": "0db5f54a7bb91f3cef8ceb2a075092d6383a84bec345f389bcc0fae41078d21e",
-          "size": 773
+          "sha256": "717869acad56824085948d94a1d652842702977794a5c76cacf6fcae7745c056",
+          "size": 765
         },
         {
           "path": "data/case-studies/opa2197id/sources.json",
-          "sha256": "9e72ab206eab2db1cbcfd6acae7f7c5ef7b1806c74de986f582dd31025428895",
-          "size": 415
+          "sha256": "833b1a864369bed4ee0d99e60d4943ab37b3839f0599cc1a72da0b649ba74c57",
+          "size": 409
         },
         {
           "path": "data/full-vertical/nrf-antenna-hard-macro.json",
-          "sha256": "efe80a431713048aafff9b549792181b8cb0133bb37c12390ac3c615dae02b13",
-          "size": 12447
+          "sha256": "3f0906b1d1088af3f58550ebd3595ff1d5e21ca96bbb420ef83e6c74b2ebb4f4",
+          "size": 12424
         },
         {
           "path": "data/full-vertical/nrf52832-qfaa-rf-reference.json",
@@ -90,13 +90,13 @@
         },
         {
           "path": "data/requests.json",
-          "sha256": "3e5ac772ec66c0fae5d6e9992d3da7bf7e4abdb96a31890ed118990a70990be1",
-          "size": 367
+          "sha256": "1aeba0a701b7e1937198ea08f5d9445cf8addeec0395a71bd0dfbb4b322085e3",
+          "size": 352
         },
         {
           "path": "data/sources.json",
-          "sha256": "7629817c92822636df3b6467f3fb464687c9895ed96497a097005ac12852795e",
-          "size": 540
+          "sha256": "7bb20db33168638211872360e0442e23cbf24e1721970aa95afbbcd80c0af9b3",
+          "size": 533
         },
         {
           "path": "footprints/Connector_Debug.pretty/FTSH-105-01-L-DV-007-K.kicad_mod",
@@ -105,23 +105,23 @@
         },
         {
           "path": "footprints/RF_Module.pretty/Quectel_EG800G.kicad_mod",
-          "sha256": "1a45d714a7697d0476566333e1aac52e774c8e151df434075cc86caf30e8fb7e",
-          "size": 12525
+          "sha256": "04c7d4959775476212750edb1ed2fc78bc98a30c086a8c183304b86d838b8747",
+          "size": 12400
         },
         {
           "path": "footprints/RF_Module.pretty/u-blox_MAX-M10S.kicad_mod",
-          "sha256": "6a87118c12a8b2a09eb5fab7b729489db47b0989d293fc24d129a673854101c5",
-          "size": 4453
+          "sha256": "724ada78323cfac5ad22bdbf96c675f4a8a880340c96e5d194ad09aee330871e",
+          "size": 4385
         },
         {
           "path": "generated/stm32g0b1_device.copper",
-          "sha256": "b3c61d228055b6b74eee17058086ab49381e5fb6c8d482b470b9380ff1f72457",
-          "size": 1141
+          "sha256": "793e08fc8af337e1fe3e0a892a0fa9aa567c8cc8370f6b2cdf1460f566d33ce0",
+          "size": 1102
         },
         {
           "path": "generated/stm32g0b1cbt6.copper",
-          "sha256": "6953837209f59d9c6c21b65982a175d27bb2593fed03ca09f5b546aa967eacdc",
-          "size": 1276
+          "sha256": "861271cd0e5eb020a733933657af0f8a04634d05abe05c02273c10743ddb1e72",
+          "size": 1230
         },
         {
           "path": "packages/full_vertical/button.copper",
@@ -260,26 +260,26 @@
         },
         {
           "path": "reports/compatibility.json",
-          "sha256": "48df25a7afcbd5d5b494b3226292f975987e3f57fb49ef623a32260cc5100c3f",
-          "size": 13341
+          "sha256": "6f0677d43cd8608d31fe0099fc6df53b50543c312628010a8eb4dc60f68e181e",
+          "size": 13026
         },
         {
           "path": "tests/fixtures/compiler_smoke.copper",
-          "sha256": "119c8d3a8b514d11f1472da3db1a5e3aaa74f52ec5245a93b257e616d78b9478",
-          "size": 44
+          "sha256": "06ca9511940f4d2aa3abbc7ac27c92559f1d2a6603bc7e9c1149ec10e56e71a8",
+          "size": 42
         },
         {
           "path": "work-packets/stm32g0b1cbt6-lqfp48-gpio-core.json",
-          "sha256": "aa9f5c41482626290bea85cf0327be402b0aa67abb2a3b05c99e86837fe1819a",
-          "size": 209
+          "sha256": "97022738c66b7321c284bcf24eb43542f3fa255b3ce2d75943dab563cb702c2b",
+          "size": 208
         }
       ],
       "module": "github.com/andenore/CopperLib",
-      "source": "replace:../CopperLib",
-      "version": "v0.1.0"
+      "source": "git:https://github.com/andenore/CopperLib.git",
+      "version": "263445a98f6630537225d83899319e24590b3204"
     },
     {
-      "checksum": "sha256:f4b82a2583d7772e185cc3644c9d9232fbb31f69901c3a1b41b7025b4a4ff058",
+      "checksum": "sha256:cb30d8a525c1f1fa625976d8e37cb87264c676e7ef696e50edc619cb90847f25",
       "files": [
         {
           "path": "compatibility/ad4134_device.copper",
@@ -353,13 +353,13 @@
         },
         {
           "path": "stm32/stm32g0b1_device.copper",
-          "sha256": "ec9138b99e8d5214b9259d836051cd207cf5958ec3c68967aa0c5364a246e2ea",
-          "size": 2532
+          "sha256": "9c2f576892c0f60668b90cde9f52ee95d2af688d9f9fd912f5bcf7545731faed",
+          "size": 2432
         },
         {
           "path": "stm32/stm32g0b1cbt6.copper",
-          "sha256": "ef61b81011255085772f73ea74a71bf3f2c81ebb58ec4d14dc94c12609b98893",
-          "size": 794
+          "sha256": "eb8913333fc9b41fe1172d44168034fa3275acf320142b0bdf161b8f62a1fe24",
+          "size": 754
         }
       ],
       "module": "github.com/copperscript/examples",

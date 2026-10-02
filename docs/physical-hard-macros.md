@@ -44,9 +44,12 @@ Rigid-unit/private-region placement checks apply before materialization.
 Afterwards owner copper must remain exactly present at its transformed pose.
 Movement requires rebuilding from the unrouted source, never stripping arbitrary
 existing input copper. Ordinary detailed routing preserves the locked prefix,
-recognizes connected owner nets, and substitutes supported **pad-backed ports**
-for private terminals. Free/via ports are validated but are not yet router
-terminals. Default no-via/pad-overlap and ordinary DRC rules remain mandatory.
+recognizes connected owner nets, and substitutes proved **pad, free-track and
+plated-via ports** for private terminal groups. Via terminals expose only their
+actual barrel span. Actual electrical/physical netlists retain every private
+pad; collapsing groups is a routing view, not rewiring. Overlapping port pad
+groups and ports without proved owner connectivity fail closed. Default
+no-via/pad-overlap and ordinary DRC rules remain mandatory.
 
 KiCad export locks member footprints, tracks and vias and emits ordinary
 layer-specific keepout/fill exclusions in the self-contained project. Private
@@ -54,11 +57,24 @@ owner-aware access reservations are enforced by CopperScript, not exported as
 blanket track keepouts that would reject owner copper. Manually unlocking/editing
 KiCad output does not preserve this contract; revalidate authoritative physical IR.
 
-The normal `route-board` package-access/critical/placement-feedback pipeline
-**does not yet consume macros** and rejects them explicitly. Future boundary
-allocation must account for local occupancy, retain RF/critical ownership,
-rebuild whole macros after accepted moves, and recheck boundary connections.
-This trial is not automatic full-vertical integration.
+The normal `route-board` pipeline accepts repeatable `--hard-macro SCENE.json`.
+Planning materializes owner copper in a scratch board, includes occupied copper
+and private reservations in capacity/access searches, and recognizes already
+connected internal nets. Package fanout skips bound private pads. Critical and
+detailed stages retain the immutable prefix; feedback rebuilds the entire macro
+at the accepted unit pose. Source recovery rejects arbitrary non-owner copper
+and filled input boards, rather than discarding it. Fingerprints identify the
+same pose/net topology before and after materialization.
+
+Plane stitching reuses exact private-pad-to-existing-via graph continuity; it
+never creates shortcuts through protected ground returns. Without a usable
+existing macro via, private ground pads remain pending. A prospective contact
+does not prove filled-plane connectivity: independent KiCad refill is required.
+Single-ended pre-routed critical owner nets retain length/via budgets. Entirely
+pre-routed differential macros fail closed until paired geometry/return-path
+certificates are supported. Multiple alternative ports for one private group,
+automatic boundary allocation and RF/stackup qualification remain out of scope.
+This does not automatically replace the full-vertical board's electrical circuit.
 
 ## Nordic/Johanson trial
 
@@ -82,13 +98,12 @@ tee values and enclosure/radiation behavior remain unqualified. Copying
 evaluation values does not tune the combined system. The normal full-vertical
 board remains unchanged pending qualification and pipeline integration.
 
-From CopperScript with sibling CopperLib and installed KiCad footprints:
+From CopperScript with installed KiCad footprints (CopperLib is URL-resolved):
 
 ```powershell
 uv sync --extra test
 uv run python -m pcbir.hard_macro_trial `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
-  --footprint-root "..\CopperLib\footprints"
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
 Ignored `build/nrf-hard-macro/` contains PCB/project/local library, a diagnostic
@@ -97,11 +112,12 @@ physical snapshot, native DRC report, explicit `erc.json` and default cumulative
 build/nrf-hard-macro-45` for a larger centred transform probe, **not** qualified
 45-degree corner mounting.
 
-Regenerate the asset deterministically without network/model tokens:
+Library-author maintenance only (not required for using the examples): from
+the CopperLib repository, regenerate using the locally cached official source:
 
 ```powershell
-uv run python ..\CopperLib\scripts\extract_nrf_antenna_hard_macro.py `
-  ..\CopperLib\cache\rf-reference\nrf52832qfaxreflayoutv11.zip
+python scripts/extract_nrf_antenna_hard_macro.py `
+  cache/rf-reference/nrf52832qfaxreflayoutv11.zip
 ```
 
 On 2026-10-02 the 0°/45° probes passed native physical and KiCad 10.0.6 DRC with

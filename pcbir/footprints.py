@@ -26,6 +26,8 @@ class FootprintResolver:
     base_directory: Path
     search_roots: tuple[Path, ...] = ()
     strict: bool = False
+    locked: bool = False
+    offline: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_directory", self.base_directory.resolve())
@@ -42,6 +44,21 @@ class FootprintResolver:
             raise FootprintResolutionError("footprint reference cannot be empty")
         candidates = self._candidate_paths(reference)
         matches = tuple(path for path in candidates if path.is_file())
+        if not matches:
+            # Imported library footprints are data in the same managed cache.
+            # Explicit/system roots retain precedence; no sibling discovery.
+            from .packages import find_manifest, read_manifest, resolve_module_root
+            from .syntax import CopperScriptError
+            manifest_path = find_manifest(self.base_directory)
+            if manifest_path:
+                for module in read_manifest(manifest_path).requirements:
+                    try:
+                        root = resolve_module_root(self.base_directory, module,
+                            locked=self.locked, offline=self.offline) / "footprints"
+                    except CopperScriptError as exc:
+                        raise FootprintResolutionError(str(exc)) from exc
+                    managed = replace(self, search_roots=(root,))._candidate_paths(reference)
+                    matches += tuple(p for p in managed if p.is_file() and p not in matches)
         if not matches:
             searched = ", ".join(str(path) for path in candidates[:6])
             suffix = f"; searched {searched}" if searched else ""

@@ -9,16 +9,27 @@ claim fabrication readiness from routing guidance. Its prototype physical
 workflow can place components and attempt geometry-checked detailed routing,
 but a routed board still requires independent physical and KiCad DRC signoff.
 
+## GitHub inspection builds
+
+The [board-routing workflow](.github/workflows/board-routing.yml) attempts the
+complete full-vertical routing flow on relevant `main` pushes and manual runs.
+Every pushed tag also routes the nRF52 hard-macro example and publishes an
+experimental prerelease with source distributions, KiCad projects/local
+footprints, six layer SVG previews, reports, logs, profiling and checksums.
+CopperLib is fetched by pinned URL into the managed cache; no separate checkout
+is required. Failed or timed-out attempts remain inspection drafts, never
+manufacturing releases. See [CI setup and downloads](docs/github-board-builds.md).
+
 ## Quick start
 
 An opt-in [physical hard-macro trial](docs/physical-hard-macros.md) preserves
 Nordic RF matching copper and demonstrates a separate Johanson antenna tee,
-corner fill exclusions and whole-assembly rotations. With sibling CopperLib:
+corner fill exclusions and whole-assembly rotations. CopperLib downloads through
+the pinned URL dependency automatically:
 
 ```powershell
 uv run python -m pcbir.hard_macro_trial `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
-  --footprint-root "..\CopperLib\footprints"
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
 Output: ignored `build/nrf-hard-macro/`. This is an RF-only geometry probe,
@@ -28,14 +39,15 @@ A [small powered nRF52/CR2032 example](docs/nrf52-coin-cell.md) adds a 10-pin
 SWD connector, two LEDs, two buttons and the radio support circuit:
 
 ```powershell
-uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked --offline
+uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked
 uv run python -m pcbir.nrf52_example `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
-  --footprint-root "..\CopperLib\footprints"
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
 Output: `build/nrf52-coin-cell/`. The RF macro is locked and pre-routed;
-the remaining circuit is placed but unrouted. This is not production signoff.
+the remaining circuit is placed but unrouted. Add `--route` to attempt the full
+pipeline (the current nRF example still fails package-access gates; see its
+linked report/remaining-work guide). This is not production signoff.
 
 Python 3.11 or newer is required. From the repository root:
 
@@ -45,11 +57,11 @@ python -m copperscript check examples/invalid_board.copper
 python -m copperscript power-check examples/valid_board.copper
 ```
 
-Lock all imported source and physical assets, then reproduce without network
-access:
+The examples already have a committed lock. Populate the URL dependency cache,
+then reproduce without network access:
 
 ```console
-python -m copperscript lock examples/full_vertical_board.copper --offline
+python -m copperscript check examples/full_vertical_board.copper --locked
 python -m copperscript check examples/full_vertical_board.copper --locked --offline
 python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints
 ```
@@ -76,8 +88,9 @@ All PCB export commands automatically write a same-stem `.kicad_pro`, a
 project-local `fp-lib-table`, and a `CopperScript.pretty/` footprint library
 beside the PCB. No manual KiCad library registration is needed: keep that
 generated directory together when sharing or moving it. These are generated
-outputs, not user-maintained source libraries. Export does not download assets
-or modify your global KiCad configuration. See [generated KiCad
+outputs, not user-maintained source libraries. Backend export uses resolved
+assets and does not modify your global KiCad configuration. Input resolution
+may fetch pinned URL dependencies before generation. See [generated KiCad
 projects](docs/kicad-project-export.md) for portability and safety details.
 
 Direct `.kicad_mod` references are resolved relative to the board file. KiCad
@@ -231,35 +244,27 @@ gate correctly blocks area routing; this is not a new full-board success.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6
-and Python 3.12. Start in the directory where you want both repositories:
+and Python 3.12. Only CopperScript needs checking out:
 
 ```powershell
 # Use consistent package line endings in these new checkouts.
 git clone -c core.autocrlf=false -c core.eol=lf https://github.com/andenore/CopperScript.git
-git clone -c core.autocrlf=false -c core.eol=lf https://github.com/andenore/CopperLib.git
-# Pin the corrected library (historical runs used an incorrect USB choke map).
-git -C CopperLib checkout --detach 5bcbaa40504515e758f1bc9dba18c00f89b26939
 Set-Location CopperScript
 
 uv sync --python 3.12
-# Bootstrap a byte-exact local package lock for these pinned checkouts.
-uv run --no-sync python -m copperscript lock examples/full_vertical_board.copper --offline
-uv run --no-sync python -m copperscript check examples/full_vertical_board.copper --locked --offline
+# Fetch the exact locked URL dependency (subsequent runs can use --offline).
+uv run --no-sync python -m copperscript check examples/full_vertical_board.copper --locked
 ```
 
-The sibling directory is required by `copper.mod`'s `../CopperLib` replacement.
-The committed `copper.lock` currently reflects mixed LF/CRLF bytes in the
-development working copies, so even a clean checkout can differ. The explicit
-bootstrap `lock` step updates only your local `copper.lock` for the pinned source
-and assets; inspect that diff and retain it for subsequent runs. The clone
-settings are repository-local and avoid Windows LF-to-CRLF conversion without
-changing your global Git configuration. This reproduces the routing inputs and
-options, not byte-identical historical artifacts. After bootstrap,
-`--locked --offline` verifies every package byte without updating the lock or
-fetching packages. If a later run reports a mismatch, investigate changed files
-or revisions rather than automatically relocking. Initial cloning and
-`uv sync` need network access unless their inputs are already cached. The
-routing command itself uses the local packages offline. See uv's
+`copper.mod` pins CopperLib's GitHub commit; `copper.lock` verifies its exact
+part, footprint and physical-asset inventory in `.copper-cache/pkg/`. No manual
+library checkout, footprint download or lock refresh is required. Canonical
+package line endings are declared in `.gitattributes`. This reproduces routing
+inputs/options, not byte-identical historical output. After fetching,
+`--locked --offline` verifies every package byte without changing the lock.
+If resolution fails, investigate changed bytes/revisions rather than relocking.
+Initial cloning, `uv sync` and uncached URL dependencies need network access.
+See uv's
 [project workflow](https://docs.astral.sh/uv/guides/projects/) for environment setup.
 
 After the setup above, run the complete workflow with:
@@ -277,8 +282,9 @@ verification. Each run writes a fresh `build/full-vertical/<UTC-run-id>/` with
 by Git. Errors/interruption may leave only logs/partial artifacts; file existence
 does not imply routing success. No Gerbers are generated.
 
-The script uses the current Python/uv environment and sibling CopperLib; it
-never updates `copper.lock` or fetches packages automatically. It discovers
+The script uses the current Python/uv environment and downloads the locked
+CopperLib dependency if uncached; it never updates `copper.lock`. Add `--offline`
+to prohibit fetching. It discovers
 `kicad-cli` on PATH or the standard Windows KiCad 10 installation. Footprints
 use `KICAD10_FOOTPRINT_DIR`, the KiCad installation, or `/usr/share/kicad/footprints`.
 Override paths when needed, preview without routing using `--dry-run`, or
@@ -289,7 +295,6 @@ uv run --no-sync python scripts/route_full_vertical.py --dry-run
 uv run --no-sync python scripts/route_full_vertical.py `
   --kicad-cli "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe" `
   --kicad-footprints "C:/Program Files/KiCad/10.0/share/kicad/footprints" `
-  --copperlib-footprints "../CopperLib/footprints" `
   --output-dir "build/my-routing-run"
 ```
 
@@ -320,14 +325,12 @@ installation is elsewhere. From the CopperScript repository root, run:
 ```powershell
 $kicadFootprints = "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 $kicadCli = "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe"
-$copperLibFootprints = Join-Path (Resolve-Path "../CopperLib").Path "footprints"
 New-Item -ItemType Directory -Force "build/full-vertical" | Out-Null
 
 uv run --no-sync python -m copperscript route-board examples/full_vertical_board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
   --placement-templates examples/full_vertical_placement_templates.json `
   --footprint-root $kicadFootprints `
-  --footprint-root $copperLibFootprints `
   --candidates 1 --placement-candidate candidate-01 `
   --feedback-iterations 1 --router-iterations 5 --critical-feedback-trials 0 `
   --pitch-mm 1 --passes 2 --search-budget 20000 `
@@ -468,7 +471,7 @@ replace github.com/copperscript/examples => ./examples/packages
 
 The compiler resolves the longest matching required module, loads all
 `.copper` part and module definitions in the selected package directory, and
-records downloaded content in `copper.sum`. Without a `replace`, v0.1 fetches
+records the complete downloaded asset inventory in `copper.lock`. Without a `replace`, v0.1 fetches
 tagged GitHub modules into `.copper-cache`; package source is parsed as data and
 no package code is executed. Local replacements remain editable and retain
 their current content hash as IR provenance without being locked in the sum

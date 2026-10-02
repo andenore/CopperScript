@@ -1,7 +1,8 @@
 """Run the complete full-vertical draft-routing workflow into ignored build/.
 
 From the checkout: uv run --no-sync python scripts/route_full_vertical.py
-Requires the bootstrapped copper.lock, sibling CopperLib and KiCad footprints.
+Requires the committed copper.lock and KiCad footprints. CopperLib is fetched
+from its pinned URL into the verified package cache; no manual checkout needed.
 No relocking, fabrication-rule relaxation or manufacturing export is performed.
 """
 from __future__ import annotations
@@ -138,7 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kicad-cli", type=Path, default=_default_kicad_cli())
     parser.add_argument("--kicad-footprints", type=Path, help="KiCad footprint-library directory")
     parser.add_argument("--copperlib-footprints", type=Path,
-                        default=REPOSITORY.parent / "CopperLib/footprints")
+                        help="optional explicit footprint override (default: locked URL library cache)")
+    parser.add_argument("--offline", action="store_true", help="require an already populated package cache")
     parser.add_argument("--output-dir", type=Path,
                         help="new/empty directory inside repository build/ (default: timestamped run)")
     parser.add_argument("--dry-run", action="store_true", help="validate paths and print command; write nothing")
@@ -151,7 +153,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cli = args.kicad_cli.resolve()
     footprints = (args.kicad_footprints or _default_footprints(cli)).resolve()
-    copperlib = args.copperlib_footprints.resolve()
+    from pcbir.packages import resolve_module_root
+    from pcbir.syntax import CopperScriptError
+    try:
+        copperlib = (args.copperlib_footprints.resolve() if args.copperlib_footprints else
+            resolve_module_root(REPOSITORY / "examples/full_vertical_board.copper",
+                "github.com/andenore/CopperLib",locked=True,offline=args.offline or args.dry_run) / "footprints")
+    except (OSError,ValueError,CopperScriptError) as exc:
+        print(f"SETUP ERROR: {exc}",file=sys.stderr)
+        return 2
     started = datetime.now(timezone.utc)
     output = args.output_dir or Path("build/full-vertical") / started.strftime("%Y%m%dT%H%M%S%fZ")
     if not output.is_absolute():

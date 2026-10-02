@@ -129,11 +129,13 @@ def test_general_router_connects_only_external_port_and_preserves_owner(tmp_path
     assert again.metrics.track_count==0
 
 
-def test_unimplemented_full_pipeline_cannot_drop_macro_geometry(tmp_path):
+def test_full_pipeline_preserves_macro_geometry(tmp_path):
     _,_,bind=fixture(tmp_path)
     from pcbir.flow import run_routing_pipeline
-    with pytest.raises(ValueError,match="port allocation is not implemented"):
-        run_routing_pipeline(bind())
+    result = run_routing_pipeline(bind())
+    assert result.board.materialized_macros == ("unit",)
+    assert len(result.board.tracks) == 1
+    assert result.board.tracks[0].net == "N"
 
 
 def test_macro_geometry_changes_invalidate_physical_digest(tmp_path):
@@ -145,7 +147,7 @@ def test_macro_geometry_changes_invalidate_physical_digest(tmp_path):
     assert physical_board_digest(board)!=physical_board_digest(changed)
 
 
-def test_free_via_port_is_proved_but_not_silently_used_as_a_pad(tmp_path):
+def test_free_via_port_is_proved_and_exposed_as_routing_terminal(tmp_path):
     _,asset,bind=fixture(tmp_path)
     asset["tracks"].append(dict(net="signal",width_nm=200000,layer="F.Cu",
         points=[{"pad":["chip","1"]},[-1000000,0]]))
@@ -154,7 +156,98 @@ def test_free_via_port_is_proved_but_not_silently_used_as_a_pad(tmp_path):
     asset["ports"][0]["point"]=[-1000000,0]
     asset["ports"][0]["layer"]="B.Cu"
     board=materialize_hard_macros(bind())
-    assert macro_routing_pads(board,board.nets[0])==board.nets[0].pads
+    from pcbir.hard_macros import macro_routing_ports, macro_port_layers
+    pads = macro_routing_pads(board,board.nets[0])
+    assert len(pads) == 1
+    port = macro_routing_ports(board,"N")[pads[0]]
+    assert port.position == Point.mm(9,10)
+    assert macro_port_layers(board,port) == (CopperLayer.FRONT,CopperLayer.BACK)
+
+
+@pytest.mark.parametrize("via_port", [False, True])
+@pytest.mark.parametrize("rotation", [0,45])
+def test_complete_pipeline_routes_external_free_ports_without_replacing_owner(tmp_path, via_port, rotation):
+    original, asset, bind = fixture(tmp_path)
+    asset["tracks"].append(dict(net="signal",width_nm=200000,layer="F.Cu",
+        points=[{"pad":["chip","1"]},[-1000000,0]]))
+    asset["ports"][0]["point"] = [-1000000,0]
+    if via_port:
+        asset["vias"] = [dict(net="signal",position_nm=[-1000000,0],size_nm=600000,
+            drill_nm=300000,from_layer="F.Cu",to_layer="B.Cu",technology=None)]
+        asset["ports"][0]["layer"] = "B.Cu"
+    from pcbir.physical import ComponentPlacementRule
+    input_board = replace(original,
+        placements=(*original.placements, Placement("J1","test",Point.mm(7,12))),
+        placement_rules=(ComponentPlacementRule("U1",allowed_orientations=(0,45),fixed_position=Point.mm(10,10),fixed_rotation_degrees=rotation),
+                         ComponentPlacementRule("J1",fixed_position=Point.mm(7,12),fixed_rotation_degrees=0)),
+        nets=(replace(original.nets[0],pads=(*original.nets[0].pads,PadReference("J1","1"))),))
+    source = bind(input_board=input_board)
+    poses = {p.reference:p for p in source.placements}
+    poses.update(cluster_placements(source,source.rigid_clusters[0],replace(poses["U1"],rotation_degrees=rotation)))
+    source = replace(source,placements=tuple(poses.values()))
+    owner = materialize_hard_macros(source)
+    from pcbir.flow import run_routing_pipeline
+    from pcbir.fanout import FanoutOptions
+    from pcbir.detailed import DetailedRouterOptions
+    result = run_routing_pipeline(source, fanout_options=FanoutOptions(),
+        detailed_options=DetailedRouterOptions(maximum_search_states=20000))
+    assert result.status.value == "pass", result.detailed.nets
+    assert result.board.tracks[:len(owner.tracks)] == owner.tracks
+    assert result.board.vias[:len(owner.vias)] == owner.vias
+    assert result.board.nets == source.nets
+
+
+@pytest.mark.parametrize("limit,connected", [(3000000,True),(1000000,False)])
+def test_single_ended_critical_owner_is_reused_and_budgeted(tmp_path,limit,connected):
+    original,_,bind = fixture(tmp_path)
+    from pcbir.physical import NetRoutingRule, RouteKind
+    from pcbir.routing import route_global
+    from pcbir.critical import route_critical_nets
+    source = bind(input_board=replace(original,net_routing_rules=(NetRoutingRule(
+        "N",RouteKind.CRITICAL,max_length_nm=limit),)))
+    if not connected:
+        with pytest.raises(ValueError,match="DRC-MAX-LENGTH"):
+            route_global(source)
+        assert not source.tracks
+        return
+    result = route_critical_nets(source,route_global(source))
+    assert result.nets[0].connected == connected
+    assert result.nets[0].strategy == "immutable_hard_macro"
+    assert result.nets[0].lengths_nm == (2000000,)
+    assert result.board.tracks == materialize_hard_macros(source).tracks
+
+
+def test_plane_stitch_reuses_macro_return_without_shortcutting_private_pads(tmp_path):
+    original, asset, bind = fixture(tmp_path)
+    from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles, Stackup
+    from pcbir.plane import stitch_zone_pads
+    zone = CopperZone("plane","N",(CopperLayer.INTERNAL_1,), PolygonWithHoles(PolygonRing(
+        (Point.mm(1,1),Point.mm(29,1),Point.mm(29,29),Point.mm(1,29)))))
+    source = replace(original,stackup=Stackup((CopperLayer.FRONT,CopperLayer.INTERNAL_1,
+        CopperLayer.INTERNAL_2,CopperLayer.BACK)),zones=(zone,))
+    without_contact = materialize_hard_macros(bind(input_board=source))
+    pending = stitch_zone_pads(without_contact)
+    assert pending.pending_pads == tuple(sorted(source.nets[0].pads))
+    assert pending.board.tracks == without_contact.tracks and not pending.board.vias
+    asset["tracks"].append(dict(net="signal",width_nm=200000,layer="F.Cu",
+        points=[{"pad":["chip","1"]},[-1000000,0]]))
+    asset["vias"] = [dict(net="signal",position_nm=[-1000000,0],size_nm=600000,
+        drill_nm=300000,from_layer="F.Cu",to_layer="B.Cu",technology=None)]
+    asset["ports"][0].update(point=[-1000000,0],layer="B.Cu")
+    board = materialize_hard_macros(bind(input_board=source))
+    result = stitch_zone_pads(board)
+    assert result.complete and result.added_track_count == result.added_via_count == 0
+    assert result.board.tracks == board.tracks and result.board.vias == board.vias
+    assert not result.board.zone_fills  # A real contact is NOT filled-plane proof.
+
+
+def test_planning_never_discards_arbitrary_existing_copper(tmp_path):
+    _,_,bind = fixture(tmp_path)
+    board = materialize_hard_macros(bind())
+    extra = TrackSegment("N",Point.mm(10,10),Point.mm(9,10),200000,CopperLayer.FRONT)
+    from pcbir.hard_macros import macro_source
+    with pytest.raises(ValueError,match="no copper except immutable"):
+        macro_source(replace(board,tracks=(*board.tracks,extra)))
 
 
 def test_later_electrical_edits_cannot_reassign_private_pads(tmp_path):

@@ -3,7 +3,7 @@
   "clusters": [
     {
       "name": "nordic-rf-matching",
-      "reference": "../../CopperLib/data/full-vertical/nrf52832-qfaa-rf-reference.json",
+      "reference": "github.com/andenore/CopperLib/data/full-vertical/nrf52832-qfaa-rf-reference.json",
       "reference_sha256": "207ff21dda6881717e252cbb9e7f4dadfb0a51827068f7c001d770b700557cac",
       "bindings": {"U1": "U_NRF", "C3": "C_BT_MATCH", "L1": "L_BT_MATCH"},
       "net_bindings": {"raw": "NRF_RF_RAW", "ground": "GND", "feed": "NRF_RF_ANT"},

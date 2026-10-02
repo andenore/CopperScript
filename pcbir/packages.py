@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -216,8 +217,14 @@ class PackageResolver:
                 "v0.1 remote fetching supports github.com module paths only; use replace for other sources",
                 location,
             )
+        if not re.fullmatch(r"github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", module_path):
+            raise CopperScriptError("PKG005", "invalid GitHub module path", location)
+        if not version or version.startswith("-"):
+            raise CopperScriptError("PKG006", "invalid Git revision", location)
         cache_key = hashlib.sha256(f"{module_path}@{version}".encode()).hexdigest()[:20]
         destination = self.cache_root / cache_key
+        if destination.is_symlink():
+            raise CopperScriptError("PKG012", "package cache roots may not be symlinks", location)
         if destination.is_dir():
             return destination.resolve()
         if self.offline:
@@ -229,15 +236,18 @@ class PackageResolver:
         self.cache_root.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=f"{cache_key}-", dir=self.cache_root))
         try:
+            # Exact commit requirements are immutable and cannot be passed to
+            # clone --branch. Disable host checkout conversions: the lock pins
+            # repository bytes, not a platform-specific CRLF representation.
             completed = subprocess.run(
                 [
                     "git",
+                    "-c", "core.autocrlf=false",
                     "clone",
                     "--quiet",
                     "--depth",
                     "1",
-                    "--branch",
-                    version,
+                    *([] if re.fullmatch(r"[0-9a-fA-F]{40}", version) else ["--branch", version]),
                     f"https://{module_path}.git",
                     str(temporary),
                 ],
@@ -248,33 +258,64 @@ class PackageResolver:
             if completed.returncode != 0:
                 detail = completed.stderr.strip() or "git clone failed"
                 raise CopperScriptError("PKG006", detail, location)
+            if re.fullmatch(r"[0-9a-fA-F]{40}", version):
+                for arguments in (("fetch", "--quiet", "--depth", "1", "origin", version),
+                                  ("checkout", "--quiet", "--detach", version)):
+                    completed = subprocess.run(["git", "-c", "core.autocrlf=false",
+                        "-C", str(temporary), *arguments], capture_output=True, text=True)
+                    if completed.returncode:
+                        raise CopperScriptError("PKG006", completed.stderr.strip(), location)
             temporary.replace(destination)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
         return destination.resolve()
 
-    def _verify_or_record_lock(
-        self, entry: LockedModule, location: SourceLocation
-    ) -> None:
+    def _verify_or_record_lock(self, entry: LockedModule, location: SourceLocation) -> None:
         key = (entry.module_path, entry.version)
         expected = self._lock_entries.get(key)
-        if expected == entry:
+        declared = {(module, version) for module, version in self.manifest.requirements.items()}
+        if expected == entry and (self.locked or set(self._lock_entries).issubset(declared)):
             return
         if self.locked:
             expected_digest = expected.checksum if expected else "missing"
-            raise CopperScriptError(
-                "PKG008",
-                f"lock mismatch for {entry.module_path}@{entry.version}: "
-                f"expected {expected_digest}, got {entry.checksum}",
-                location,
-            )
+            raise CopperScriptError("PKG008", f"lock mismatch for {entry.module_path}@{entry.version}: "
+                f"expected {expected_digest}, got {entry.checksum}", location)
         self._lock_entries[key] = entry
+        self._lock_entries = {k:v for k,v in self._lock_entries.items() if k in declared}
         try:
             _write_lock(self.lock_path, self._lock_entries)
         except OSError as exc:
             raise CopperScriptError("PKG007", f"cannot write copper.lock: {exc}", location) from exc
 
+
+def resolve_module_asset(source: Path, import_path: str, *, locked: bool = True,
+                         offline: bool = False) -> Path:
+    """Resolve data through the same revision/inventory lock as .copper parts.
+
+    Accept Go-style paths or https GitHub paths, never execute downloaded data.
+    Paths must stay within the selected module, and symlinks are rejected by
+    the normal full inventory validation.
+    """
+    import_path = import_path.removeprefix("https://")
+    if "\\" in import_path or any(p in {".", "..", ""} for p in import_path.split("/")):
+        raise CopperScriptError("PKG004", "invalid module asset path", SourceLocation(str(source),0,1,1))
+    location = SourceLocation(str(source),0,1,1)
+    resolver = PackageResolver.for_source(Path(source), location, locked=locked, offline=offline)
+    parent, _, name = import_path.rpartition("/")
+    package = resolver.resolve(parent, location)
+    asset = (package.directory / name).resolve()
+    if not asset.is_relative_to(package.directory) or not asset.is_file():
+        raise CopperScriptError("PKG004", f"module asset does not exist: {import_path}", location)
+    return asset
+
+
+def resolve_module_root(source: Path, module_path: str, *, locked: bool = True,
+                        offline: bool = False) -> Path:
+    """Public managed-cache lookup; callers never need a sibling checkout."""
+    location = SourceLocation(str(source),0,1,1)
+    return PackageResolver.for_source(Path(source),location,locked=locked,offline=offline).resolve(
+        module_path.removeprefix("https://").removesuffix(".git"), location).directory
 
 _LOCKED_SUFFIXES = frozenset({
     ".copper", ".kicad_mod", ".step", ".stp", ".wrl", ".json", ".csv"

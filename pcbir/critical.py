@@ -171,20 +171,22 @@ def route_critical_nets(
     Reservations cannot be arbitrary prior area copper or critical-net stubs.
     """
 
-    if board.tracks or board.vias:
-        raise ValueError("critical routing requires a board without existing copper")
+    from .hard_macros import macro_source, materialize_hard_macros
+    board = materialize_hard_macros(macro_source(board))
+    if board.hard_macros and global_route.placement_fingerprint != _placement_fingerprint(board):
+        raise ValueError("critical global guides are stale")
     routes = {item.net: item for item in global_route.routes}
     rules = {item.net: item for item in board.net_routing_rules}
     processed: set[str] = set()
     coupled_pairs: set[frozenset[str]] = set()
-    tracks: list[TrackSegment] = []
-    vias: list[Via] = []
+    tracks: list[TrackSegment] = list(board.tracks)
+    vias: list[Via] = list(board.vias)
     if reserved_accesses is not None:
         if global_route.placement_fingerprint != _placement_fingerprint(board):
             raise ValueError("package-access critical guides are stale")
-        if (replace(reserved_accesses.board, tracks=(), vias=()) != board
-                or reserved_accesses.board.tracks != reserved_accesses.created_tracks
-                or reserved_accesses.board.vias != reserved_accesses.created_vias):
+        if (replace(reserved_accesses.board, tracks=board.tracks, vias=board.vias) != board
+                or reserved_accesses.board.tracks != (*board.tracks, *reserved_accesses.created_tracks)
+                or reserved_accesses.board.vias != (*board.vias, *reserved_accesses.created_vias)):
             raise ValueError("package-access reservations are stale or contain unowned copper")
         protected = {rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
         protected.update(zone.net for zone in board.zones)
@@ -199,7 +201,7 @@ def route_critical_nets(
             # design result, not an API misuse. Keep evidence; never route over it.
             nets = (CriticalNetResult(("<package-reservations>",), False, 0, 0, (), 0,
                                       tuple(f"{f.code}: {f.message}" for f in fatal)),)
-            tracks, vias = list(reserved_accesses.created_tracks), list(reserved_accesses.created_vias)
+            tracks, vias = list(reserved_accesses.board.tracks), list(reserved_accesses.board.vias)
             failed_board = replace(reserved_accesses.board,
                 metadata={**board.metadata, "critical_routing": "failed", "detailed_routing": "partial",
                           "fabrication_ready": "false"})
@@ -209,6 +211,9 @@ def route_critical_nets(
         tracks.extend(reserved_accesses.created_tracks)
         vias.extend(reserved_accesses.created_vias)
     results: list[CriticalNetResult] = []
+    from .drc import explicit_copper_connectivity
+    owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
+    net_by_name = {n.name: n for n in board.nets}
     for rule in sorted(
         (item for item in board.net_routing_rules if item.kind is not RouteKind.GENERAL),
         key=lambda item: (-item.priority, item.kind.value, item.net),
@@ -219,6 +224,24 @@ def route_critical_nets(
                  if rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS} else (rule.net,))
         if on_progress:
             on_progress("started", group, None)
+        if owner_graph is not None and any(t.net == rule.net for t in board.tracks):
+            if all(name in net_by_name and owner_graph.net_connected(net_by_name[name]) for name in group):
+                # Preserve pre-routed copper and still measure actual budgets.
+                # Differential macros need paired access/return certificates;
+                # single-ended RF/clock/power owner nets are accepted here.
+                owned_tracks = tuple(t for t in board.tracks if t.net == rule.net)
+                owned_vias = tuple(v for v in board.vias if v.net == rule.net)
+                diagnostics = _budget_diagnostics(rule, owned_tracks, owned_vias)
+                if rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
+                    diagnostics += ("pre-routed differential macro requires a paired geometry/return certificate",)
+                result = CriticalNetResult(group, not diagnostics, len(owned_tracks), len(owned_vias),
+                    (_track_length(owned_tracks),), 0, diagnostics, _external_assumptions(rule),
+                    evidence_digests=_external_evidence(rule), strategy="immutable_hard_macro")
+                processed.update(group)
+                results.append(result)
+                if on_progress:
+                    on_progress("finished", group, result)
+                continue
         if rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
             partner_name = rule.differential_partner
             assert partner_name is not None
@@ -434,10 +457,14 @@ def _validate_candidate(
     """
     if not tracks and not vias:
         return result, (), ()
-    candidate = replace(
-        board, tracks=(*committed_tracks, *tracks),
-        vias=(*committed_vias, *vias),
-    )
+    try:
+        candidate = replace(board, tracks=(*committed_tracks, *tracks),
+                            vias=(*committed_vias, *vias))
+    except ValueError as exc:
+        if "hard-macro" not in str(exc):
+            raise
+        return replace(result, connected=False, track_count=0, via_count=0,
+            diagnostics=(*result.diagnostics, str(exc)), candidate_rejected=True), (), ()
     diagnostics = list(result.diagnostics)
     for finding in run_physical_drc(candidate).findings:
         if finding.severity is not DrcSeverity.ERROR:

@@ -73,6 +73,8 @@ def route_fanout(
 ) -> FanoutResult:
     """Escape only crowded ordinary-net SMD pads to legal through-vias."""
 
+    if board.hard_macros and not board.materialized_macros:
+        raise ValueError("materialize hard macros before package escape")
     options = options or FanoutOptions()
     if only_nets is not None:
         unknown = only_nets - {net.name for net in board.nets}
@@ -87,6 +89,8 @@ def route_fanout(
                   if len(net.pads) >= 2}
     rules = {item.net: item for item in board.net_routing_rules}
     zone_nets = {zone.net for zone in board.zones}
+    from .hard_macros import macro_owned_pads
+    owned = macro_owned_pads(board)
     pads: list[tuple[int, PadReference, Point, object, object]] = []
     for placement in board.placements:
         footprint = board.footprints[placement.footprint]
@@ -96,7 +100,7 @@ def route_fanout(
         for pad in surface:
             reference = PadReference(placement.reference, pad.number)
             net = net_by_pad.get(reference)
-            if (net is None or net in zone_nets
+            if (reference in owned or net is None or net in zone_nets
                     or only_nets is not None and net not in only_nets):
                 continue
             rule = rules.get(net)

@@ -87,6 +87,8 @@ def stitch_zone_pads(
 ) -> PlaneStitchResult:
     """Escape SMD pads to legal through-vias inside their declared zone."""
 
+    if board.hard_macros and not board.materialized_macros:
+        raise ValueError("materialize hard macros before plane stitching")
     options = options or PlaneStitchOptions()
     if options.ground_via_in_pad and board.metadata.get("fabrication_profile") != "jlcpcb-six-layer":
         raise ValueError("filled/capped ground via-in-pad requires the JLCPCB six-layer profile")
@@ -112,6 +114,13 @@ def stitch_zone_pads(
     outer_layers = (board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
 
     zones_by_net: dict[str, list[CopperZone]] = {}
+    from .hard_macros import macro_owned_pads
+    from .drc import explicit_copper_connectivity
+    owned_pads = macro_owned_pads(board)
+    from .placement import resolved_copper_keepouts
+    keepouts = resolved_copper_keepouts(board)
+    owner_graph = explicit_copper_connectivity(board) if owned_pads else None
+    owned_pending = set()
     for zone in sorted(board.zones, key=lambda item: item.id):
         if any(layer not in outer_layers for layer in zone.layers):
             zones_by_net.setdefault(zone.net, []).append(zone)
@@ -128,6 +137,27 @@ def stitch_zone_pads(
             if not lands:
                 continue
             targets.append(reference)
+            if reference in owned_pads:
+                # Reuse actual immutable copper, never create a shortcut inside
+                # the private region. This proves only a prospective plane
+                # contact; external refill still has to prove filled copper.
+                nodes = owner_graph.pad_nodes.get(reference, ())
+                roots = {owner_graph.roots[node] for node in nodes}
+                contacts = set()
+                for i, via in enumerate(board.vias):
+                    a, b = sorted((board.stackup.copper_layers.index(via.from_layer),
+                                   board.stackup.copper_layers.index(via.to_layer)))
+                    span = set(board.stackup.copper_layers[a:b+1])
+                    if via.net == net and any(span.intersection(zone.layers)
+                            and _point_in_zone(via.position, zone.outline)
+                            and not any(k.block_zones and span.intersection(k.layers)
+                                        and _point_in_zone(via.position, k.outline)
+                                        for k in keepouts)
+                            for zone in zones):
+                        contacts.add(owner_graph.roots[f"via:{i}"])
+                if not roots or not roots.issubset(contacts):
+                    owned_pending.add(reference)
+                continue
             side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
             rule = rules.get(net)
             width = max(
@@ -196,7 +226,7 @@ def stitch_zone_pads(
             break
         unresolved = remaining
 
-    pending_refs = {item.reference for item in unresolved}
+    pending_refs = {item.reference for item in unresolved} | owned_pending
     stitched = [reference for reference in targets if reference not in pending_refs]
     pending = [reference for reference in targets if reference in pending_refs]
 

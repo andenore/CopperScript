@@ -1,0 +1,6 @@
+{
+  "python": "3.12.12",
+  "kicad_version": "10.0.6",
+  "kicad_installer_url": "https://github.com/KiCad/kicad-source-mirror/releases/download/10.0.6/kicad-10.0.6-x86_64.exe",
+  "kicad_installer_sha256": "9e24dc47119f7c472128c2f293c5e3f35569274a44c905e60a7514d47c16ce48"
+}
