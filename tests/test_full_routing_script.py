@@ -53,6 +53,7 @@ def test_workflow_command_uses_real_cli_options_and_complete_reviewed_settings(t
     assert args.progress
     assert args.ground_via_in_pad and args.plane_contact_radius_mm == "5"
     assert (args.zone_escape_trials, args.zone_local_ripup_trials) == (4, 6)
+    assert args.zone_dependency_expansions == 2
     assert args.verify_plane_fill == tmp_path / "cli"
     assert args.footprint_root == [tmp_path / "fp", tmp_path / "lib"]
     assert args.report == tmp_path / "route-report.json" and args.output == tmp_path / "board.kicad_pcb"
@@ -206,3 +207,12 @@ def test_corrupt_profile_is_reported_without_replacing_router_status(setup_paths
     assert SCRIPT.main(arguments) == 1
     manifest = json.loads((repository / "build/test-run/run.json").read_text())
     assert manifest["profiling"]["status"] == "error" and manifest["exit_code"] == 1
+
+
+def test_dependency_comparison_mode_is_forwarded_to_router(setup_paths, monkeypatch):
+    _, arguments = setup_paths
+    def route(command, cwd, log):
+        assert command[command.index("--zone-dependency-expansions") + 1] == "0"
+        return 1
+    monkeypatch.setattr(SCRIPT, "_run_logged", route)
+    assert SCRIPT.main([*arguments, "--zone-dependency-expansions", "0"]) == 1

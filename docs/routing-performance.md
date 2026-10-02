@@ -155,7 +155,8 @@ they must not be counted again as proposed new optimizations.
    before replacing it. This is higher implementation risk than avoiding reruns.
 
 These are ranked code-informed recommendations, not implemented router changes or
-measured speedup claims. Profile collection is the implemented change in this pass.
+measured speedup claims for the full board. Implementation status and the detailed
+sequence are tracked in the [optimization todos](routing-optimization-todo.md).
 
 ## Where parallelism is unsafe or unlikely to help first
 
@@ -195,3 +196,31 @@ uninstrumented measurements show improvement. Changed routing algorithms may
 produce different legal geometry; profiling alone must not change artifact bytes.
 The latest board still has non-library dangling-copper warnings and signoff work;
 performance telemetry does not remove those remaining gates.
+
+## First optimization: bounded local dependencies
+
+O1a is implemented in `escape_feedback.py`. The existing local ground repair first
+displaces the exact ordinary-net blockers of a prospective escape. If rerouting
+that subset fails, it can now make a temporary probe without other ordinary area
+copper, identify further blockers with the exact clearance index, and retry the
+expanded net set with all unrelated copper restored. The probe itself is never
+committed. Critical copper, fanout and accepted ground contacts remain fixed.
+The existing hard-DRC/connectivity comparisons and full-reroute fallback remain.
+
+The default allows two dependency expansions and respects the existing total local
+blocker limit. `--zone-dependency-expansions 0` disables just the new expansion,
+not the original local repair. The complete workflow exposes the same option:
+
+```powershell
+uv run --no-sync python scripts/route_full_vertical.py --profile none --zone-dependency-expansions 0
+uv run --no-sync python scripts/route_full_vertical.py --profile none --zone-dependency-expansions 2
+```
+
+Compare on the same inputs and machine load, recording both accepted geometry and
+rejected work. Progress adds inclusive `zone_subset_search` spans with `kind`
+(`transaction` or `probe_only`), affected nets, expansion count, failed nets and
+overflow. Reports identify `local_dependency`, `full_pipeline` or `early_screen`
+strategies; accepted local attempts record repaired nets and expansion rounds.
+Failed local searches are visible in progress/profile data, not fabricated as
+accepted report attempts. Placement-changing incremental repair (O1b), process
+parallelism and full-board before/after measurements are still pending.

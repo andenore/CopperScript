@@ -82,7 +82,8 @@ def _default_footprints(cli: Path) -> Path:
 
 
 def routing_command(repository: Path, output: Path, cli: Path,
-                    footprints: Path, copperlib_footprints: Path) -> list[str]:
+                    footprints: Path, copperlib_footprints: Path,
+                    *, dependency_expansions: int = 2) -> list[str]:
     """Keep the reviewed workflow explicit; paths are never shell-expanded."""
     return [
         sys.executable, "-u", "-m", "copperscript", "route-board",
@@ -96,6 +97,7 @@ def routing_command(repository: Path, output: Path, cli: Path,
         "--soft-ripup", "--fanout", "--constrained-pins-first", "--progressive-guides",
         "--repair-budget-multiplier", "10", "--ground-via-in-pad",
         "--plane-contact-radius-mm", "5", "--zone-escape-trials", "4", "--zone-local-ripup-trials", "6",
+        "--zone-dependency-expansions", str(dependency_expansions),
         "--verify-plane-fill", str(cli),
         "--report", str(output / "route-report.json"), "-o", str(output / "board.kicad_pcb"),
     ]
@@ -138,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="validate paths and print command; write nothing")
     parser.add_argument("--profile", choices=("cprofile", "none"), default="cprofile",
                         help="function profiling (default: cprofile); none for uninstrumented benchmarks")
+    parser.add_argument("--zone-dependency-expansions", type=int, choices=range(9), default=2,
+                        help="local blocker-cone expansion rounds (default: 2; 0 for comparison)")
     args = parser.parse_args(argv)
     cli = args.kicad_cli.resolve()
     footprints = (args.kicad_footprints or _default_footprints(cli)).resolve()
@@ -164,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(f"SETUP ERROR: {exc}", file=sys.stderr)
         return 2
-    command = routing_command(REPOSITORY, output, cli, footprints, copperlib)
+    command = routing_command(REPOSITORY, output, cli, footprints, copperlib,
+                              dependency_expansions=args.zone_dependency_expansions)
     routing_arguments = command
     if args.profile == "cprofile":
         command = profiled_command(command, output / "routing.prof")

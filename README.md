@@ -271,6 +271,9 @@ directory. Instrumentation adds overhead; use `--profile none` for uninstrumente
 speed comparisons (phase events are still saved). See
 [profiling and optimization assessment](docs/routing-performance.md) for details,
 current evidence and the prioritized optimization work list.
+The detailed [optimization todos](docs/routing-optimization-todo.md) track implementation.
+Local repair now supports bounded blocker-cone expansion; use
+`--zone-dependency-expansions 0` on the full-run script to compare without that extension.
 
 For the equivalent explicit CLI invocation, adjust the KiCad paths if your
 installation is elsewhere. From the CopperScript repository root, run:

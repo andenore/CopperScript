@@ -246,6 +246,9 @@ def test_local_plane_escape_rips_up_and_reroutes_successful_signal() -> None:
     )
     assert repaired.plane_stitch.complete
     assert repaired.attempts[0].description.startswith("local rip-up G1.1: SIGNAL")
+    assert repaired.attempts[0].strategy == "local_dependency"
+    assert repaired.attempts[0].repair_nets == ("SIGNAL",)
+    assert repaired.attempts[0].dependency_expansions == 0
     assert next(item for item in repaired.pipeline.detailed.nets
                 if item.net == "SIGNAL").connected
     assert repaired.pipeline.board.tracks != initial.board.tracks

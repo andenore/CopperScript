@@ -375,6 +375,9 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["plane_stitch"]["maximum_radius_nm"] == 5_000_000
     assert document["plane_stitch"]["maximum_contact_radius_nm"] == 0
     assert "trials" in document["zone_escape_feedback"]
+    assert document["zone_escape_feedback"]["dependency_expansion_limit"] == 2
+    assert all("repair_nets" in trial and "dependency_expansions" in trial and "strategy" in trial
+               for trial in document["zone_escape_feedback"]["trials"])
     assert all("failed_signals" in trial and "decision" in trial
                for trial in document["zone_escape_feedback"]["trials"])
     assert pcb.read_text(encoding="utf-8").startswith("(kicad_pcb")

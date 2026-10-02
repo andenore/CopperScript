@@ -291,6 +291,10 @@ def _parser() -> argparse.ArgumentParser:
         help="bounded blocker-aware local pad-escape reroutes before placement feedback (default: 6)",
     )
     board_route_parser.add_argument(
+        "--zone-dependency-expansions", type=int, choices=range(9), default=2,
+        help="extra bounded local blocker-cone rounds; 0 disables dependency expansion (default: 2)",
+    )
+    board_route_parser.add_argument(
         "--layer-preference-cost", type=int, default=4,
         help="soft detailed-route layer cost; global-route cost is half (default: 4; 0 disables)",
     )
@@ -615,6 +619,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         options=EscapeFeedbackOptions(
                             maximum_trials=args.zone_escape_trials,
                             maximum_local_trials=args.zone_local_ripup_trials,
+                            maximum_dependency_expansions=args.zone_dependency_expansions,
                             maximum_local_blockers=args.maximum_ripup_blockers,
                             movement_nm=nm_from_mm(args.zone_escape_movement_mm),
                         ),
@@ -701,6 +706,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
             if escape_feedback is not None:
                 report["zone_escape_feedback"] = {
+                    "dependency_expansion_limit": args.zone_dependency_expansions,
+                    "local_blocker_limit": args.maximum_ripup_blockers,
                     "trials": [
                         {
                             "description": attempt.description,
@@ -713,6 +720,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                             ),
                             "signal_failures": attempt.signal_failures,
                             "failed_signals": list(attempt.failed_signals),
+                            "repair_nets": list(attempt.repair_nets),
+                            "dependency_expansions": attempt.dependency_expansions,
+                            "strategy": attempt.strategy,
                             "accepted": attempt.accepted,
                             "decision": attempt.decision,
                         }

@@ -34,3 +34,8 @@ phase/trial intervals from the persisted log. See
 [routing performance](routing-performance.md) for artifacts, profiling overhead,
 unprofiled comparisons and the optimization assessment. Direct CLI routing is not
 automatically function-profiled.
+
+Local repair dependency searches emit `zone_subset_search` start/finish events:
+`kind` distinguishes actual transactions from noncommitting probes; `affected_nets`,
+`expansion`, `failed_nets` and `overflow` expose bounded work. A successful probe
+is only a proposal, not a selected route or connectivity/signoff result.
