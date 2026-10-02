@@ -54,6 +54,7 @@ def test_workflow_command_uses_real_cli_options_and_complete_reviewed_settings(t
     assert args.ground_via_in_pad and args.plane_contact_radius_mm == "5"
     assert (args.zone_escape_trials, args.zone_local_ripup_trials) == (4, 6)
     assert args.zone_dependency_expansions == 2
+    assert not args.no_incremental_placement_repair
     assert args.verify_plane_fill == tmp_path / "cli"
     assert args.footprint_root == [tmp_path / "fp", tmp_path / "lib"]
     assert args.report == tmp_path / "route-report.json" and args.output == tmp_path / "board.kicad_pcb"
@@ -216,3 +217,12 @@ def test_dependency_comparison_mode_is_forwarded_to_router(setup_paths, monkeypa
         return 1
     monkeypatch.setattr(SCRIPT, "_run_logged", route)
     assert SCRIPT.main([*arguments, "--zone-dependency-expansions", "0"]) == 1
+
+
+def test_full_placement_comparison_mode_is_forwarded_to_router(setup_paths, monkeypatch):
+    _, arguments = setup_paths
+    def route(command, cwd, log):
+        assert _parser().parse_args(command[command.index("route-board"):]).no_incremental_placement_repair
+        return 1
+    monkeypatch.setattr(SCRIPT, "_run_logged", route)
+    assert SCRIPT.main([*arguments, "--no-incremental-placement-repair"]) == 1

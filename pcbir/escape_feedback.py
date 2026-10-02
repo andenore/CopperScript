@@ -1,8 +1,8 @@
 """Transactional package-escape and placement feedback for zone-net pads.
 
 Only a small set of late-failing pads is reserved early. Each candidate starts
-from an unrouted placement; no component is moved beneath accepted copper.
-The ordinary routes and late plane contacts are then rebuilt and compared.
+from an unrouted placement. Incremental transactions rebuild affected copper
+and revalidate preserved copper; unsupported candidates use the full pipeline.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ class EscapeFeedbackOptions:
     movement_nm: int = nm_from_mm("0.5")
     nearby_components: int = 3
     maximum_dependency_expansions: int = 2
+    incremental_placement: bool = True
 
     def __post_init__(self) -> None:
         if (self.maximum_trials < 0 or self.maximum_local_trials < 0
@@ -59,6 +60,8 @@ class EscapeFeedbackAttempt:
     repair_nets: tuple[str, ...] = ()
     dependency_expansions: int = 0
     strategy: str = "full_pipeline"
+    changed_references: tuple[str, ...] = ()
+    rebuilt_zone_nets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,25 +171,42 @@ def improve_zone_escapes(
                 item.reference for item in trial_board.placements
             ),
         )
-        emit(on_progress, "zone_full_trial", "started", index=routed_trials + 1,
-             description=description)
-        trial_pipeline = run_routing_pipeline(
-            trial_board,
-            placement_options=fixed,
-            global_options=global_options,
-            feedback_options=replace(
-                feedback_options or PlacementRoutingFeedbackOptions(),
-                preferred_candidate_id=None, maximum_iterations=1,
-            ),
-            detailed_options=detailed_options,
-            drc_policy=drc_policy,
-            fanout_options=fanout_options,
-            package_access_options=package_access_options,
-            plane_stitch_options=early_options,
-            on_progress=on_progress,
-        )
+        incremental = None
+        if options.incremental_placement and trial_board.placements != initial.board.placements:
+            from .incremental_placement import repair_placement_trial
+            emit(on_progress, "zone_incremental_trial", "started", index=routed_trials + 1,
+                 description=description)
+            incremental = repair_placement_trial(initial, trial_board, baseline_stitch,
+                early_options, plane_options, options=options,
+                detailed_options=detailed_options or DetailedRouterOptions(),
+                placement_options=placement_options, global_options=global_options,
+                fanout_options=fanout_options, drc_policy=drc_policy, on_progress=on_progress)
+            if incremental is None:
+                emit(on_progress, "zone_incremental_trial", "finished", index=routed_trials + 1,
+                     description=description,
+                     decision="fallback to full pipeline")
+        phase = "zone_incremental_trial" if incremental else "zone_full_trial"
+        if incremental is None:
+            emit(on_progress, phase, "started", index=routed_trials + 1, description=description)
+            trial_pipeline = run_routing_pipeline(
+                trial_board,
+                placement_options=fixed,
+                global_options=global_options,
+                feedback_options=replace(
+                    feedback_options or PlacementRoutingFeedbackOptions(),
+                    preferred_candidate_id=None, maximum_iterations=1,
+                ),
+                detailed_options=detailed_options,
+                drc_policy=drc_policy,
+                fanout_options=fanout_options,
+                package_access_options=package_access_options,
+                plane_stitch_options=early_options,
+                on_progress=on_progress,
+            )
+        else:
+            trial_pipeline = incremental.pipeline
         routed_trials += 1
-        late = stitch_zone_pads(trial_pipeline.board, plane_options)
+        late = incremental.plane_stitch if incremental else stitch_zone_pads(trial_pipeline.board, plane_options)
         failed_signals = _failed_signals(trial_pipeline, zone_nets)
         signal_failures = len(failed_signals)
         hard = _hard_drc_findings(late.board)
@@ -213,8 +233,13 @@ def improve_zone_escapes(
         attempts.append(EscapeFeedbackAttempt(
             description, preflight.pending_pads, late.pending_pads,
             signal_failures, accepted, decision, failed_signals,
+            repair_nets=incremental.repair_nets if incremental else (),
+            dependency_expansions=incremental.dependency_expansions if incremental else 0,
+            strategy="incremental_placement" if incremental else "full_pipeline",
+            changed_references=incremental.changed_references if incremental else (),
+            rebuilt_zone_nets=incremental.rebuilt_zone_nets if incremental else (),
         ))
-        emit(on_progress, "zone_full_trial", "finished", index=routed_trials,
+        emit(on_progress, phase, "finished", index=routed_trials,
              description=description, decision=decision,
              pending_pads=[f"{p.component}.{p.pad}" for p in late.pending_pads],
              failed_signals=list(failed_signals))
@@ -514,11 +539,12 @@ def _merge_local_detail(
     board: PhysicalBoard,
     reroute: DetailedRoutingResult | None,
     changed: frozenset[str],
+    *, drc_policy: PhysicalDrcPolicy | None = None,
 ) -> RoutingPipelineResult:
     """Preserve full-board metrics while replacing a bounded net subset."""
 
     new = {item.net: item for item in reroute.nets} if reroute is not None else {}
-    drc = run_physical_drc(board)
+    drc = run_physical_drc(board, policy=drc_policy)
     opens = {net for finding in drc.findings if finding.code == "DRC-OPEN-NET"
              for net in finding.nets}
     locked = (original.fanout.board if original.fanout else
@@ -554,7 +580,7 @@ def _merge_local_detail(
         original.detailed, board=board, nets=nets, metrics=metrics,
         routing_fingerprint=fingerprint,
     )
-    detailed, drc, duplicate_stitch = close_detailed_lands(detailed)
+    detailed, drc, duplicate_stitch = close_detailed_lands(detailed, policy=drc_policy)
     passed = (original.placement_and_global.full_route_certified
               and original.critical.status is not CriticalRoutingStatus.FAILED
               and detailed.status is DetailedRoutingStatus.SUCCESS

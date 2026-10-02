@@ -71,7 +71,7 @@ def test_package_reservation_includes_already_escaped_neighbour_not_other_packag
         PadReference("G1", "1"), PadReference("G1", "2")})
 
 
-def test_feedback_moves_only_from_unrouted_board_to_open_ground_exit() -> None:
+def test_feedback_moves_only_from_unrouted_board_to_open_ground_exit(monkeypatch) -> None:
     board = _trapped_ground_board()
     fixed = PlacementPlannerOptions(
         candidate_count=1, analytical_iterations=0, refinement_passes=0,
@@ -86,6 +86,10 @@ def test_feedback_moves_only_from_unrouted_board_to_open_ground_exit() -> None:
             pitch_nm=nm_from_mm(1), maximum_passes=1,
         ),
     )
+    def unexpected_full_reroute(*args, **kwargs):
+        raise AssertionError("eligible placement repair must not rerun the full pipeline")
+
+    monkeypatch.setattr("pcbir.escape_feedback.run_routing_pipeline", unexpected_full_reroute)
     result = improve_zone_escapes(
         initial, PlaneStitchOptions(maximum_radius_nm=nm_from_mm(1)),
         placement_options=PlacementPlannerOptions(
@@ -104,6 +108,11 @@ def test_feedback_moves_only_from_unrouted_board_to_open_ground_exit() -> None:
     assert any(attempt.accepted for attempt in result.attempts)
     assert any(attempt.decision.startswith("accepted:") for attempt in result.attempts)
     assert result.pipeline.placement_and_global.board.placements[0].position != Point.mm(5, 6)
+    accepted = next(attempt for attempt in result.attempts if attempt.accepted)
+    assert accepted.strategy == "incremental_placement"
+    assert accepted.changed_references == ("G1",)
+    assert accepted.rebuilt_zone_nets == ("GND",)
+    assert result.pipeline.board.metadata["global_routing_fingerprint"] == result.pipeline.placement_and_global.global_route.routing_fingerprint
     assert board.placements[0].position == Point.mm(5, 6)
 
 

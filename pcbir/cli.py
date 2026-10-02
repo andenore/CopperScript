@@ -284,7 +284,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument(
         "--zone-escape-trials", type=int, default=4,
-        help="bounded full reroutes for late-failing plane pads, including local placement moves (default: 4; expensive)",
+        help="bounded placement trials for late-failing plane pads; unsupported incremental repairs use full reroutes (default: 4)",
     )
     board_route_parser.add_argument(
         "--zone-local-ripup-trials", type=int, default=6,
@@ -293,6 +293,10 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument(
         "--zone-dependency-expansions", type=int, choices=range(9), default=2,
         help="extra bounded local blocker-cone rounds; 0 disables dependency expansion (default: 2)",
+    )
+    board_route_parser.add_argument(
+        "--no-incremental-placement-repair", action="store_true",
+        help="use full-pipeline placement trials instead of bounded incremental repairs",
     )
     board_route_parser.add_argument(
         "--layer-preference-cost", type=int, default=4,
@@ -620,6 +624,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             maximum_trials=args.zone_escape_trials,
                             maximum_local_trials=args.zone_local_ripup_trials,
                             maximum_dependency_expansions=args.zone_dependency_expansions,
+                            incremental_placement=not args.no_incremental_placement_repair,
                             maximum_local_blockers=args.maximum_ripup_blockers,
                             movement_nm=nm_from_mm(args.zone_escape_movement_mm),
                         ),
@@ -707,6 +712,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if escape_feedback is not None:
                 report["zone_escape_feedback"] = {
                     "dependency_expansion_limit": args.zone_dependency_expansions,
+                    "incremental_placement_enabled": not args.no_incremental_placement_repair,
                     "local_blocker_limit": args.maximum_ripup_blockers,
                     "trials": [
                         {
@@ -723,6 +729,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "repair_nets": list(attempt.repair_nets),
                             "dependency_expansions": attempt.dependency_expansions,
                             "strategy": attempt.strategy,
+                            "changed_references": list(attempt.changed_references),
+                            "rebuilt_zone_nets": list(attempt.rebuilt_zone_nets),
                             "accepted": attempt.accepted,
                             "decision": attempt.decision,
                         }

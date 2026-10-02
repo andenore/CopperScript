@@ -83,9 +83,10 @@ def _default_footprints(cli: Path) -> Path:
 
 def routing_command(repository: Path, output: Path, cli: Path,
                     footprints: Path, copperlib_footprints: Path,
-                    *, dependency_expansions: int = 2) -> list[str]:
+                    *, dependency_expansions: int = 2,
+                    incremental_placement: bool = True) -> list[str]:
     """Keep the reviewed workflow explicit; paths are never shell-expanded."""
-    return [
+    command = [
         sys.executable, "-u", "-m", "copperscript", "route-board",
         str(repository / "examples/full_vertical_board.copper"),
         "--locked", "--offline", "--layers", "6", "--fab-profile", "jlcpcb-six-layer",
@@ -101,6 +102,9 @@ def routing_command(repository: Path, output: Path, cli: Path,
         "--verify-plane-fill", str(cli),
         "--report", str(output / "route-report.json"), "-o", str(output / "board.kicad_pcb"),
     ]
+    if not incremental_placement:
+        command.append("--no-incremental-placement-repair")
+    return command
 
 
 def _run_logged(command: list[str], repository: Path, log: Path) -> int:
@@ -142,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="function profiling (default: cprofile); none for uninstrumented benchmarks")
     parser.add_argument("--zone-dependency-expansions", type=int, choices=range(9), default=2,
                         help="local blocker-cone expansion rounds (default: 2; 0 for comparison)")
+    parser.add_argument("--no-incremental-placement-repair", action="store_true",
+                        help="compare using full-pipeline placement trials")
     args = parser.parse_args(argv)
     cli = args.kicad_cli.resolve()
     footprints = (args.kicad_footprints or _default_footprints(cli)).resolve()
@@ -169,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"SETUP ERROR: {exc}", file=sys.stderr)
         return 2
     command = routing_command(REPOSITORY, output, cli, footprints, copperlib,
-                              dependency_expansions=args.zone_dependency_expansions)
+                              dependency_expansions=args.zone_dependency_expansions,
+                              incremental_placement=not args.no_incremental_placement_repair)
     routing_arguments = command
     if args.profile == "cprofile":
         command = profiled_command(command, output / "routing.prof")

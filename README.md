@@ -274,6 +274,9 @@ current evidence and the prioritized optimization work list.
 The detailed [optimization todos](docs/routing-optimization-todo.md) track implementation.
 Local repair now supports bounded blocker-cone expansion; use
 `--zone-dependency-expansions 0` on the full-run script to compare without that extension.
+Small noncritical placement moves also try bounded incremental repair. Use
+`--no-incremental-placement-repair` to compare against full placement reroutes;
+unsupported moves always retain that fallback.
 
 For the equivalent explicit CLI invocation, adjust the KiCad paths if your
 installation is elsewhere. From the CopperScript repository root, run:

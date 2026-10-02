@@ -9,7 +9,7 @@ Each event has `phase`, `event`, monotonic `elapsed_seconds` since routing
 started, and a `details` object. Events cover placement/global routing, ordinary
 package exits, critical groups, package-access decisions and placement trials,
 ordinary area routing, physical-land closure/native DRC, ground contacts,
-local ground repairs, full ground-feedback trials, final native checks,
+local ground repairs, incremental/full ground-feedback trials, final native checks,
 independent KiCad refill/DRC, and export. Trial decisions expose failures rather
 than reporting a candidate as the selected completed board.
 
@@ -39,3 +39,9 @@ Local repair dependency searches emit `zone_subset_search` start/finish events:
 `kind` distinguishes actual transactions from noncommitting probes; `affected_nets`,
 `expansion`, `failed_nets` and `overflow` expose bounded work. A successful probe
 is only a proposal, not a selected route or connectivity/signoff result.
+
+Placement transactions emit `zone_incremental_trial` spans and a fresh
+`zone_moved_global` span. `zone_incremental_guard` records why an unsupported or
+unsuccessful transaction falls back to `zone_full_trial`. An incremental start
+does not imply acceptance; closure/DRC and ground-contact improvement are checked
+before its finish decision. Nested phase times are inclusive and overlap.

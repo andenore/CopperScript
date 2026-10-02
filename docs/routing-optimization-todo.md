@@ -30,10 +30,24 @@ See [the assessment](routing-performance.md) for evidence, limitations and sourc
   B; A+B repair succeeds after one expansion while C and the fixed reservation
   survive unchanged. Further controller tests check inner-layer via blockers and
   noncommitting probes. This proves bounded repair behavior, not full-board speedup.
-- [ ] O1b: Extend the transaction to legal small placement moves/rotations. Invalidate
-  incident nets and stale package exits; detect moved-pad/keepout collisions; preserve
-  unrelated copper and recompute changed-placement global/access fingerprints.
-  Initially fallback for moved critical groups, rigid clusters or excessive cones.
+- [x] O1b: Extend the transaction to legal small placement moves/rotations. Invalidate
+  incident ordinary nets and detect moved-pad/keepout or early-contact collisions;
+  preserve unrelated copper and recompute global guides/fingerprints. Rebase access
+  evidence, clearing obsolete domain statistics rather than treating them as fresh.
+  Rebuild contacts on affected zone nets, retaining critical return vias. Initially
+  fallback for moved critical endpoints, rigid clusters, crowded package-access
+  owners, unsupported geometry changes or excessive cones. Package exits belonging
+  to a moved crowded owner are not reused: that candidate takes the full pipeline.
+- [x] O1b tests: real incident-net reroute, unchanged critical copper, deterministic
+  replay, explicit 45-degree rotation, refreshed stage evidence, collision/ownership
+  and dependency-limit rollback. A controlled real-router comparison performs zero
+  full-pipeline evaluations with incremental repair enabled and one when disabled.
+  `tests/test_incremental_placement.py` and `tests/test_escape_feedback.py` retain
+  these fixtures. This is a work-count measurement, not a full-board timing claim.
+- [x] O1b telemetry/comparison: report changed references and rebuilt zone nets;
+  `--no-incremental-placement-repair` retains full-pipeline placement trials.
+- [ ] Extend incremental ownership to moved crowded packages/rigid macros only after
+  explicit pad-level exit ownership and joint access revalidation are available.
 - [ ] O1c: Reserve failing package ground groups jointly with required access and
   retain already-accepted contacts. Evaluate whether this avoids late feedback.
 - [ ] O1d: Benchmark successful and failed repair cases, then the full board. Require

@@ -219,8 +219,46 @@ uv run --no-sync python scripts/route_full_vertical.py --profile none --zone-dep
 Compare on the same inputs and machine load, recording both accepted geometry and
 rejected work. Progress adds inclusive `zone_subset_search` spans with `kind`
 (`transaction` or `probe_only`), affected nets, expansion count, failed nets and
-overflow. Reports identify `local_dependency`, `full_pipeline` or `early_screen`
+overflow. Reports identify `local_dependency`, `incremental_placement`, `full_pipeline` or `early_screen`
 strategies; accepted local attempts record repaired nets and expansion rounds.
 Failed local searches are visible in progress/profile data, not fabricated as
-accepted report attempts. Placement-changing incremental repair (O1b), process
-parallelism and full-board before/after measurements are still pending.
+accepted report attempts. Process parallelism and full-board before/after
+measurements are still pending.
+
+## Incremental placement repair
+
+O1b adds conservative placement transactions in `incremental_placement.py`.
+For a legal move or allowed rotation of a noncritical, noncrowded component,
+invalidate its incident ordinary nets. Rebuild affected zone-net contact trees
+(there is not yet pad-level ownership for shared ground contacts), retaining
+critical return vias. Exact clearance checks discover further ordinary nets
+blocked by moved pads, footprint keepouts or the new early contacts. Repair that
+bounded dependency cone with unrelated copper restored and critical copper fixed.
+
+Global guides are recomputed from the new clean placement, not relabelled from
+old coordinates. Critical/access stages are rebased on their retained actual
+copper; obsolete fanout domain statistics and historical placement trials are
+cleared. Whole-board land closure, hard DRC and signal-connectivity nonregression
+still gate acceptance, which requires fewer pending ground contacts. Independent
+KiCad refill/DRC is still performed on final exported geometry; no fill/signoff
+evidence is reused across placements.
+
+Moved critical endpoints, rigid macros, crowded package-access owners, missing
+ownership evidence, illegal placement, failed fresh global routing and excessive
+or unsuccessful repair cones take the original full-pipeline fallback. This first
+scope avoids rebuilding unrelated ordinary maze routes, not all global/DRC work.
+To compare against full placement trials while retaining local same-placement
+repair, run:
+
+```powershell
+uv run --no-sync python scripts/route_full_vertical.py --profile none --no-incremental-placement-repair
+uv run --no-sync python scripts/route_full_vertical.py --profile none
+```
+
+Progress records `zone_incremental_trial`, `zone_moved_global` and fallback reasons
+in `zone_incremental_guard`. Report trials record `changed_references`, `repair_nets`,
+`rebuilt_zone_nets` and dependency expansions. Regression fixtures exercise real
+incident-net routing, unchanged critical geometry, a 45-degree rotation and access
+rebasing. The same controlled improving move needs zero full-pipeline evaluations
+with incremental repair and one without it. No full-board wall-time speedup has
+yet been measured; O1d benchmarking remains open.
