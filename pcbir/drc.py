@@ -576,9 +576,19 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
                 findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and {pad.identity} violate copper spacing", objects=(f"track:{track_index}", pad.identity), nets=tuple(sorted((track.net, pad.net))), layers=(track.layer.value,), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
     for via_index, via in enumerate(board.vias):
         for pad in pads:
-            if via.net == pad.net or not any(_via_covers_layer(board, via, layer) for layer in pad.layers):
+            if not any(_via_covers_layer(board, via, layer) for layer in pad.layers):
                 continue
             via_shape = RoundedConvexShape((via.position,), via.size_nm // 2)
+            if via.net == pad.net:
+                if via.finish != "filled-capped" and not shapes_clear(via_shape, pad.shape, 1):
+                    findings.append(_finding(
+                        "DRC-VIA-PAD-OVERLAP", DrcSeverity.ERROR,
+                        f"ordinary via {via_index} overlaps {pad.identity}; via-in-pad requires explicit qualification",
+                        objects=(f"via:{via_index}", pad.identity), nets=(via.net,),
+                        layers=tuple(layer.value for layer in pad.layers
+                                     if _via_covers_layer(board, via, layer)),
+                    ))
+                continue
             clearance = max(pad.clearance_nm, _clearance(board, rules.get(via.net), rules.get(pad.net)))
             distance_squared = shape_distance_squared(via_shape, pad.shape)
             required = via_shape.radius_nm + pad.shape.radius_nm + clearance

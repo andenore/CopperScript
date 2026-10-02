@@ -35,6 +35,7 @@ class _CopperObject:
     shape: RoundedConvexShape
     clearance_nm: int = 0
     locked: bool = True
+    is_pad: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +58,7 @@ class _DrilledHole:
 
 
 class RoutingClearanceIndex:
-    """Query and incrementally reserve physical copper, excluding the same net."""
+    """Reserve copper; same-net tracks may join, but vias must avoid pads."""
 
     def __init__(self, board: PhysicalBoard, bin_size_nm: int = nm_from_mm(2)) -> None:
         self.board = board
@@ -107,6 +108,7 @@ class RoutingClearanceIndex:
                 self._add(_CopperObject(
                     net, tuple(layers), placed_pad_shape(position, pad, placement),
                     footprint.clearance_nm or 0,
+                    is_pad=True,
                 ))
         for _, hole in non_plated_holes(board):
             self._add(_CopperObject(
@@ -128,11 +130,12 @@ class RoutingClearanceIndex:
         self, net: str, position: Point, size_nm: int,
         from_layer: CopperLayer, to_layer: CopperLayer,
         drill_nm: int | None = None,
-        *, check_hole_copper: bool = False,
+        *, check_hole_copper: bool = False, allow_pad_overlap: bool = False,
     ) -> bool:
         layers = self._via_layers(from_layer, to_layer)
         shape = RoundedConvexShape((position,), size_nm // 2)
         return (self._keepout_clear(shape, layers, for_via=True)
+                and (allow_pad_overlap or self.pad_copper_clear(shape, layers))
                 and self._clear(net, shape, layers)
                 and (not check_hole_copper or self._clear(
                     net, RoundedConvexShape(
@@ -168,6 +171,7 @@ class RoutingClearanceIndex:
             else:
                 legal = self.can_via(
                     via.net, via.position, via.size_nm, via.from_layer, via.to_layer,
+                    drill_nm=via.drill_nm,
                 )
             if not legal:
                 return via
@@ -183,6 +187,15 @@ class RoutingClearanceIndex:
                 if distance_squared < required * required:
                     return via
         return None
+
+    def pad_copper_clear(self, shape: RoundedConvexShape,
+                         layers: tuple[CopperLayer, ...]) -> bool:
+        """No pad contact, independent of net (including the full annulus)."""
+        # Include same-net and unassigned pads, and the complete annulus rather
+        # than only the drill/center. A one-nanometre separation rejects contact
+        # too; foreign copper still observes the ordinary clearance rule.
+        return all(not other.is_pad or shapes_clear(shape, other.shape, 1)
+                   for other in self._overlapping_objects(shape, layers))
 
     def _hole_clear(
         self, net: str, position: Point, radius_nm: int,
@@ -245,6 +258,7 @@ class RoutingClearanceIndex:
         layers = self._via_layers(via.from_layer, via.to_layer)
         shape = RoundedConvexShape((via.position,), via.size_nm // 2)
         movable, locked = self._blockers(via.net, shape, layers, for_via=True)
+        locked = locked or not self.pad_copper_clear(shape, layers)
         movable = set(movable)
         for hole in self._holes:
             distance_squared = ((via.position.x_nm - hole.position.x_nm) ** 2

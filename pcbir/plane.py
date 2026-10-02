@@ -333,6 +333,7 @@ def _stitch_land(
                 and clearance.can_via(
                     net, position, size, outer_layers[0], outer_layers[1], drill,
                     check_hole_copper=True,
+                    allow_pad_overlap=True,
                 )):
             return (), Via(
                 net, position, size, drill, outer_layers[0], outer_layers[1],

@@ -16,6 +16,7 @@ from typing import Iterable, Mapping
 
 from .geometry import (RoundedConvexShape, point_on_segment, point_in_polygon,
                        segment_in_polygon, shape_distance_squared)
+from .route_style import chamfer_ordinary_corners
 from .physical import (
     BoardSide,
     CopperLayer,
@@ -955,6 +956,10 @@ def _route_net(
             return _failed(name, "selected pin access no longer has a legal octilinear path")
         tracks.extend(escape)
     tracks = list(_merge_collinear_tracks(tracks))
+    tracks = list(chamfer_ordinary_corners(
+        board, tuple(tracks), tuple(vias), clearance,
+        allow_movable_conflicts=allow_movable_conflicts,
+    ))
     length = sum(
         round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm))
         for item in tracks

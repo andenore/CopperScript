@@ -51,7 +51,7 @@ def test_workflow_command_uses_real_cli_options_and_complete_reviewed_settings(t
     assert (args.pitch_mm, args.passes, args.search_budget, args.repair_budget_multiplier) == ("1", 2, 20000, 10)
     assert args.soft_ripup and args.fanout and args.constrained_pins_first and args.progressive_guides
     assert args.progress
-    assert args.ground_via_in_pad and args.plane_contact_radius_mm == "5"
+    assert not args.ground_via_in_pad and args.plane_contact_radius_mm == "5"
     assert (args.zone_escape_trials, args.zone_local_ripup_trials) == (4, 6)
     assert args.zone_dependency_expansions == 2
     assert not args.no_incremental_placement_repair

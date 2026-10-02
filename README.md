@@ -306,7 +306,7 @@ uv run --no-sync python -m copperscript route-board examples/full_vertical_board
   --feedback-iterations 1 --router-iterations 5 --critical-feedback-trials 0 `
   --pitch-mm 1 --passes 2 --search-budget 20000 `
   --soft-ripup --fanout --constrained-pins-first --progressive-guides `
-  --repair-budget-multiplier 10 --ground-via-in-pad `
+  --repair-budget-multiplier 10 `
   --plane-contact-radius-mm 5 `
   --zone-escape-trials 4 --zone-local-ripup-trials 6 `
   --verify-plane-fill $kicadCli `
@@ -333,6 +333,8 @@ exits **1**, with three ordinary open nets (`MCU_NRF_TX`, `MODEM_EN`, `V3V3`),
 34 KiCad unconnected items, zero GND/critical opens and eight library findings.
 Neither run is production signoff. An output file or zero airwires is not
 manufacturing acceptance; USB/RF/return-path qualification remains outstanding.
+Vias avoid all pads by default, including same-net pads and annulus-edge contact.
+The complete-routing script does not enable via-in-pad. Explicit
 `--ground-via-in-pad` permits filled-and-capped GND vias for this six-layer
 profile; that process must be explicitly qualified with the fabricator before
 ordering a board.

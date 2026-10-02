@@ -150,7 +150,9 @@ def test_existing_via_can_be_reached_with_legal_two_segment_escape() -> None:
                for track in result.board.tracks) == 1
     assert any(Point.mm(3, 6) in (track.start, track.end)
                for track in result.board.tracks)
-    assert len(result.board.tracks) == 3  # Two for J1, one for J2.
+    assert len(result.board.tracks) == 4  # Chamfered elbow for J1, one leg for J2.
+    assert any(abs(t.end.x_nm-t.start.x_nm) == abs(t.end.y_nm-t.start.y_nm)
+               and t.end.x_nm != t.start.x_nm for t in result.board.tracks)
     assert len(result.board.vias) == 2
     repeated = stitch_zone_pads(result.board)
     assert repeated.added_track_count == 0
@@ -194,7 +196,9 @@ def test_blocked_elbows_can_use_bounded_three_segment_escape() -> None:
                         track.start.x_nm, track.end.x_nm,
                     ) < nm_from_mm(10)]
     assert result.complete
-    assert len(first_escape) == 3
+    assert len(first_escape) == 5  # Two clear detour corners become 45-degree chamfers.
+    assert sum(abs(t.end.x_nm-t.start.x_nm) == abs(t.end.y_nm-t.start.y_nm)
+               and t.end.x_nm != t.start.x_nm for t in first_escape) == 2
     assert any(Point.mm(3, 6) in (track.start, track.end)
                for track in first_escape)
     assert any(existing.position in (track.start, track.end)

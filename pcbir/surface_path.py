@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from functools import lru_cache
 from heapq import heappop, heappush
 from typing import Callable
@@ -25,6 +26,28 @@ def surface_path(
     """
 
     if start == end:
+        return ()
+    # Reuse an explicit same-layer endpoint-connected copper chain, including
+    # chamfered multi-leg escapes. Exact-segment pattern matching alone would
+    # recreate the old elbow on subsequent stitching calls.
+    adjacency = defaultdict(list)
+    for track in committed:
+        if track.net == net and track.layer is layer and track.width_nm >= width_nm:
+            adjacency[track.start].append((track.end, track))
+            adjacency[track.end].append((track.start, track))
+    reached = {start}
+    queue = deque((start,))
+    while queue and end not in reached:
+        current = queue.popleft()
+        for neighbor, track in adjacency[current]:
+            if neighbor in reached:
+                continue
+            if (not _track_inside_board(board, track.start, track.end, track.width_nm)
+                    or not clearance.can_track(net, track.start, track.end, track.width_nm, layer)):
+                continue
+            reached.add(neighbor)
+            queue.append(neighbor)
+    if end in reached:
         return ()
     dx = end.x_nm - start.x_nm
     dy = end.y_nm - start.y_nm
@@ -88,7 +111,14 @@ def surface_path(
                 break
             additions.append(TrackSegment(net, first, second, width_nm, layer))
         else:
-            return tuple(additions)
+            # Import lazily: route_style shares this module's board-edge test.
+            # Include committed branches when deciding whether a corner is
+            # movable; never polish another owner's existing copper.
+            from dataclasses import replace
+            from .route_style import chamfer_ordinary_corners
+            return chamfer_ordinary_corners(
+                replace(board, tracks=committed), tuple(additions), (), clearance,
+            )
     return None
 
 
