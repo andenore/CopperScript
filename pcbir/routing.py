@@ -1172,6 +1172,8 @@ def _placement_fingerprint(board: PhysicalBoard) -> str:
     document = {
         "board": board.name,
         "rigid_clusters": [repr(item) for item in sorted(board.rigid_clusters, key=lambda item: item.name)],
+        "hard_macros": [repr(item) for item in sorted(board.hard_macros, key=lambda item: item.cluster)],
+        "materialized_macros": board.materialized_macros,
         "outline": [(point.x_nm, point.y_nm) for point in board.outline.vertices],
         "placements": [
             (

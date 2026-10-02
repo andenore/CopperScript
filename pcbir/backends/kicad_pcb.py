@@ -65,6 +65,10 @@ class KiCadPcbBackend:
             raise ValueError("generated footprint names collide")
         content = _render(board, names)
         warnings: list[str] = []
+        if board.hard_macros:
+            if set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
+                raise ValueError("cannot export a hard macro without its immutable copper")
+            warnings.append("Experimental physical hard macros are not RF or manufacturing qualification.")
         if board.metadata.get("prototype_footprints") == "true":
             warnings.append(
                 "The board uses generated proxy footprints and is for inspection only; "
@@ -187,6 +191,11 @@ def _render_project(board: PhysicalBoard) -> str:
 
 
 def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
+    from ..hard_macros import resolved_macro_geometry
+    owner_geometry = [resolved_macro_geometry(board, m) for m in board.hard_macros
+                      if m.cluster in board.materialized_macros]
+    macro_tracks = {t for geometry in owner_geometry for t in geometry[0]}
+    macro_vias = {v for geometry in owner_geometry for v in geometry[1]}
     net_codes = {
         net.name: index
         for index, net in enumerate(sorted(board.nets, key=lambda item: item.name), 1)
@@ -241,6 +250,7 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
         lines.extend(
             [
                 "  (segment",
+                *( ["    (locked yes)"] if track in macro_tracks else [] ),
                 f"    (start {_point(track.start)})",
                 f"    (end {_point(track.end)})",
                 f"    (width {_mm(track.width_nm)})",
@@ -261,6 +271,7 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
         lines.extend(
             [
                 f"  (via{via_kind}",
+                *( ["    (locked yes)"] if via in macro_vias else [] ),
                 f"    (at {_point(via.position)})",
                 f"    (size {_mm(via.size_nm)})",
                 f"    (drill {_mm(via.drill_nm)})",
@@ -421,6 +432,9 @@ def _footprint_lines(
     footprint_uuid = _stable_uuid(board.name, "footprint", placement.reference)
     lines = [
         f"  (footprint {_quote(export_name)}",
+        *( ["    (locked yes)"] if any(
+            cluster.name in board.materialized_macros and any(m.reference == placement.reference for m in cluster.members)
+            for cluster in board.rigid_clusters) else [] ),
         f"    (layer {_quote(side_layer)})",
         f'    (uuid "{footprint_uuid}")',
         f"    (at {_point(placement.position)} {_decimal(_placement_rotation(placement))})",

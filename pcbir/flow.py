@@ -65,6 +65,9 @@ def run_routing_pipeline(
 ) -> RoutingPipelineResult:
     """Run steps 4–8 in dependency order without weakening an earlier gate."""
 
+    if board.hard_macros:
+        raise ValueError("experimental hard macros require the explicit bind/place/materialize trial; "
+                         "package-access/critical port allocation is not implemented")
     placement_options = placement_options or PlacementPlannerOptions()
     global_options = global_options or GlobalRouterOptions()
     detailed_options = detailed_options or DetailedRouterOptions()

@@ -1,8 +1,9 @@
 """Identity-bound rigid physical templates and deterministic pose transforms.
 
-No electrical coordinates, inferred RF dimensions, connectivity changes or
-reference copper are introduced here. Routing always rebuilds copper after a
-placement move; a connected template alone is not manufacturing qualification.
+No electrical coordinates, inferred RF dimensions or connectivity changes are
+introduced here. Copper-bearing hard macros use these transforms through
+hard_macros.py; materialized owner copper must be rebuilt before placement
+moves. A connected template alone is not manufacturing qualification.
 """
 
 from __future__ import annotations

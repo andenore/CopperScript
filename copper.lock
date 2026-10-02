@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:ff917621aaec19dd9004943f6a4610994e28b75e4920a788129f1fc3f101f156",
+      "checksum": "sha256:3d2b92066cf5f3ebd21d2e7af7449af1acbbec698eb548e1e4200417a742369c",
       "files": [
         {
           "path": "copper.mod",
@@ -67,6 +67,11 @@
           "path": "data/case-studies/opa2197id/sources.json",
           "sha256": "9e72ab206eab2db1cbcfd6acae7f7c5ef7b1806c74de986f582dd31025428895",
           "size": 415
+        },
+        {
+          "path": "data/full-vertical/nrf-antenna-hard-macro.json",
+          "sha256": "efe80a431713048aafff9b549792181b8cb0133bb37c12390ac3c615dae02b13",
+          "size": 12447
         },
         {
           "path": "data/full-vertical/nrf52832-qfaa-rf-reference.json",

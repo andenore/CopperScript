@@ -266,6 +266,8 @@ def route_detailed(
     """Route ordinary nets, optionally a repair subset, preserving locked copper."""
 
     options = options or DetailedRouterOptions()
+    if board.hard_macros and set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
+        raise ValueError("materialize hard-macro copper before detailed routing")
     fanout_accesses = fanout_accesses or {}
     rules = {item.net: item for item in board.net_routing_rules}
     guides = {item.net: item for item in global_route.routes}
@@ -798,6 +800,16 @@ def _route_net(
     via_repair_round: int = 0,
 ) -> _NetAttempt:
     options = _net_search_options(options, len(pads))
+    if board.materialized_macros:
+        from .drc import explicit_copper_connectivity
+        from .hard_macros import macro_routing_pads
+        # Preserve an already connected owner net instead of routing a second
+        # parallel matching network. This measures explicit copper, not labels.
+        net = PhysicalNet(name, pads)
+        if explicit_copper_connectivity(board, only_nets=frozenset((name,))).net_connected(net):
+            return _NetAttempt(DetailedNetResult(name, True, 0, 0, 0, 0,
+                ("connected by immutable input copper",)), (), (), frozenset())
+        pads = macro_routing_pads(board, net)
     if guide is None or not guide.connected:
         return _failed(name, "missing connected global guide")
     allowed = routing_layers(board, name, rule)

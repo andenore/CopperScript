@@ -231,6 +231,25 @@ roadmap does not change the current board, routing run, or manufacturing gate.
       Record profiled full rerouting and individual-layer plots; zone creation
       alone is neither continuity evidence nor manufacturing signoff.
 
+### Physical hard-macro follow-up (CS-136)
+
+- [x] Specify separate electrical/physical ownership, pinned footprint/net roles,
+      rigid rotations, immutable copper, ports and protected return paths.
+- [x] Implement transactional bind/place/materialize, pad-backed ordinary-router
+      ports, private same-net/rip-up reservations and locked KiCad export.
+- [x] Test Nordic matching Gerber strokes plus a provisional Johanson tee/corner
+      probe at 0/45 degrees with native and KiCad DRC.
+- [ ] Support arbitrary via/free boundary ports in global, package-access,
+      critical and detailed routing. Account for macro occupancy before coarse
+      guides; do not treat owner copper as disposable fanout.
+- [ ] Add hierarchical module-to-macro frontend selection and movable-macro
+      placement feedback with complete boundary revalidation.
+- [ ] Qualify complete Nordic support circuit, actual reference ground/copper,
+      Johanson land/tee/corner geometry, via fence, stackup, impedance, tuning and
+      enclosure; then integrate into the full-vertical design and reroute.
+- [ ] Add explicit qualified local zones/arcs/mirrored macro variants and
+      independent export/fill/CAM verification; never infer RF qualification.
+
 ### Program completion criteria
 
 - [x] Research recommendation and source record exists for P1–P9.

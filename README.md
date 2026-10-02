@@ -11,6 +11,19 @@ but a routed board still requires independent physical and KiCad DRC signoff.
 
 ## Quick start
 
+An opt-in [physical hard-macro trial](docs/physical-hard-macros.md) preserves
+Nordic RF matching copper and demonstrates a separate Johanson antenna tee,
+corner fill exclusions and whole-assembly rotations. With sibling CopperLib:
+
+```powershell
+uv run python -m pcbir.hard_macro_trial `
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
+  --footprint-root "..\CopperLib\footprints"
+```
+
+Output: ignored `build/nrf-hard-macro/`. This is an RF-only geometry probe,
+not an operational radio or full-vertical routing integration.
+
 Python 3.11 or newer is required. From the repository root:
 
 ```console

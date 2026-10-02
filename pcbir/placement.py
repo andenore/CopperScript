@@ -1178,7 +1178,9 @@ def _legal(
     if rule is not None and rule.side is not None and candidate.side is not rule.side:
         return False
     polygon = _placement_polygon(board, candidate)
-    if not _polygon_inside(polygon, board.outline.vertices, options.edge_clearance_nm):
+    edge_clearance = (rule.edge_clearance_nm if rule and rule.edge_clearance_nm is not None
+                      else options.edge_clearance_nm)
+    if not _polygon_inside(polygon, board.outline.vertices, edge_clearance):
         return False
     if rule is not None and rule.region is not None:
         region = next(item for item in board.regions if item.name == rule.region)
@@ -1187,6 +1189,22 @@ def _legal(
         if not _polygon_inside(polygon, region.outline.vertices, 0):
             return False
     footprint = board.footprints[candidate.footprint]
+    from .hard_macros import resolved_macro_geometry
+    macro_poses = {**placed, candidate.reference: candidate}
+    for macro in board.hard_macros:
+        cluster = next(c for c in board.rigid_clusters if c.name == macro.cluster)
+        if cluster.anchor.reference not in macro_poses:
+            continue
+        members = {m.reference for m in cluster.members}
+        outsiders = ([p for ref,p in placed.items() if ref not in members]
+                     if candidate.reference in members else [candidate])
+        for region in resolved_macro_geometry(board, macro, macro_poses)[3]:
+            for outsider in outsiders:
+                layer = CopperLayer.FRONT if outsider.side is BoardSide.FRONT else CopperLayer.BACK
+                if layer in region.layers and _polygons_too_close(
+                    _placement_polygon(board, outsider), region.outline.outer.vertices, 0
+                ):
+                    return False
     for keepout in board.keepouts:
         if keepout.side is not None and candidate.side is not keepout.side:
             continue

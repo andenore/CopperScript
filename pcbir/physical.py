@@ -680,10 +680,14 @@ class ComponentPlacementRule:
     fixed_rotation_degrees: Decimal | int | float | str | None = None
     side: BoardSide | None = None
     priority: int = 0
+    # Explicit physical edge-mounted exception, never a copper DRC waiver.
+    edge_clearance_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         if not self.reference:
             raise ValueError("component placement rule requires a reference")
+        if self.edge_clearance_nm is not None and self.edge_clearance_nm <= 0:
+            raise ValueError("component edge clearance must be positive")
         orientations = tuple(
             sorted({Decimal(str(value)) % Decimal(360) for value in self.allowed_orientations})
         )
@@ -904,6 +908,67 @@ class Via:
 
 
 @dataclass(frozen=True, slots=True)
+class MacroPort:
+    """Explicit physical access; electrical connectivity remains in Board.nets."""
+
+    name: str
+    net: str
+    position: Point
+    layer: CopperLayer
+    pads: tuple[PadReference, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "pads", tuple(self.pads))
+        if not self.name or not self.net:
+            raise ValueError("macro port requires a name and net")
+
+
+@dataclass(frozen=True, slots=True)
+class MacroPadBinding:
+    pad: PadReference
+    net: str
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalHardMacro:
+    """Local immutable copper attached to an identity-bound rigid cluster.
+
+    Coordinates use the cluster's anchor frame. Protected regions reserve
+    *all* new track/via access, including same-net shortcuts. Ports therefore
+    sit outside those regions; owner copper alone may cross the boundary.
+    Zone exclusion is separate, explicit CopperKeepout intent on the cluster.
+    This experimental subset does not yet import local pours or mirrored poses.
+    """
+
+    cluster: str
+    asset_sha256: str
+    tracks: tuple[TrackSegment, ...]
+    vias: tuple[Via, ...] = ()
+    ports: tuple[MacroPort, ...] = ()
+    protected_regions: tuple[CopperKeepout, ...] = ()
+    required_layers: tuple[CopperLayer, ...] = ()
+    pad_bindings: tuple[MacroPadBinding, ...] = ()
+    isolated_pads: tuple[PadReference, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("tracks", "vias", "ports", "protected_regions", "required_layers", "pad_bindings", "isolated_pads"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+        if not self.cluster or len(self.asset_sha256) != 64 or any(
+            c not in "0123456789abcdef" for c in self.asset_sha256
+        ):
+            raise ValueError("hard macro requires a cluster and SHA-256 asset identity")
+        if not self.tracks and not self.vias:
+            raise ValueError("hard macro requires explicit copper")
+        if len({p.name for p in self.ports}) != len(self.ports):
+            raise ValueError("hard macro port names must be unique")
+        if len({r.id for r in self.protected_regions}) != len(self.protected_regions):
+            raise ValueError("hard macro protected region IDs must be unique")
+        if any(r.outline.holes or not r.block_tracks or not r.block_vias
+               for r in self.protected_regions):
+            raise ValueError("macro access reservations require solid track/via-blocking polygons")
+
+
+@dataclass(frozen=True, slots=True)
 class PhysicalBoard:
     """A complete, backend-neutral physical realization of one PCB."""
 
@@ -927,6 +992,8 @@ class PhysicalBoard:
     copper_keepouts: tuple[CopperKeepout, ...] = ()
     zone_fills: tuple[ZoneFillResult, ...] = ()
     rigid_clusters: tuple[RigidPlacementCluster, ...] = ()
+    hard_macros: tuple[PhysicalHardMacro, ...] = ()
+    materialized_macros: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -945,6 +1012,8 @@ class PhysicalBoard:
         object.__setattr__(self, "copper_keepouts", tuple(self.copper_keepouts))
         object.__setattr__(self, "zone_fills", tuple(self.zone_fills))
         object.__setattr__(self, "rigid_clusters", tuple(self.rigid_clusters))
+        object.__setattr__(self, "hard_macros", tuple(self.hard_macros))
+        object.__setattr__(self, "materialized_macros", tuple(self.materialized_macros))
         self._validate_references()
 
     def _validate_references(self) -> None:
@@ -1101,6 +1170,8 @@ class PhysicalBoard:
         # Validate template identity even before initial grid poses are legalized.
         from .clusters import validate_cluster_bindings
         validate_cluster_bindings(self)
+        from .hard_macros import validate_hard_macros
+        validate_hard_macros(self)
 
         routed_rule_nets: set[str] = set()
         for rule in self.net_routing_rules:

@@ -350,6 +350,8 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "relative_rules": [repr(item) for item in board.relative_rules],
             "placement_groups": [repr(item) for item in sorted(board.placement_groups, key=lambda item: item.name)],
             "rigid_clusters": [repr(item) for item in sorted(board.rigid_clusters, key=lambda item: item.name)],
+            "hard_macros": [repr(item) for item in sorted(board.hard_macros, key=lambda item: item.cluster)],
+            "materialized_macros": board.materialized_macros,
             "zones": [repr(item) for item in sorted(board.zones, key=lambda item: item.id)],
             "copper_keepouts": [repr(item) for item in sorted(board.copper_keepouts, key=lambda item: item.id)],
             "zone_fills": [repr(item) for item in sorted(board.zone_fills, key=lambda item: (item.zone_id, item.layer.value))],

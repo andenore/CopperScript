@@ -5,6 +5,11 @@ template qualification. Integration is through `PhysicalBoard.rigid_clusters`
 or an explicit `--placement-templates` JSON scene. Electrical connectivity stays
 in `.copper`; the loader verifies pad/net bindings and never rewires a design.
 
+This original template path remains placement-only. The experimental
+[physical hard-macro extension](physical-hard-macros.md) adds separately bound
+immutable copper, ports and private access regions; it must be explicitly
+materialized and is not yet consumed by the full routing pipeline.
+
 ## Contract
 
 `RigidPlacementCluster` is a hard macro. `PlacementGroup` remains a soft

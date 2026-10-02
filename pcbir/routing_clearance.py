@@ -66,6 +66,11 @@ class RoutingClearanceIndex:
         self.rules: dict[str, NetRoutingRule] = {
             rule.net: rule for rule in board.net_routing_rules
         }
+        from .hard_macros import macro_reservations
+        self._macro_regions = tuple(
+            (frozenset(r.layers), RoundedConvexShape(r.outline.outer.vertices))
+            for r in macro_reservations(board)
+        )
         self._objects: list[_CopperObject] = []
         self._holes: list[_DrilledHole] = []
         self._bins: dict[tuple[CopperLayer, int, int], list[int]] = {}
@@ -216,6 +221,9 @@ class RoutingClearanceIndex:
         self, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...], *, for_via: bool
     ) -> bool:
         layer_set = set(layers)
+        if any(layer_set.intersection(region_layers) and not shapes_clear(shape, region_shape, 1)
+               for region_layers, region_shape in self._macro_regions):
+            return False  # immutable access reservation, including same-net rip-up
         for keepout in self._keepouts:
             if not (keepout.block_vias if for_via else keepout.block_tracks):
                 continue

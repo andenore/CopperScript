@@ -1,0 +1,10 @@
+{
+  "asset": "../../CopperLib/data/full-vertical/nrf-antenna-hard-macro.json",
+  "asset_sha256": "efe80a431713048aafff9b549792181b8cb0133bb37c12390ac3c615dae02b13",
+  "name": "nordic-antenna-trial",
+  "bindings": {
+    "U1": "U_NRF", "C3": "C_BT_MATCH", "L1": "L_BT_MATCH",
+    "CA": "C_ANT_SERIES", "LA": "L_ANT_SHUNT", "LB": "L_ANT_SERIES", "ANT": "ANT_BT"
+  },
+  "net_bindings": {"raw": "NRF_RF_RAW", "ground": "GND", "feed": "NRF_RF_ANT", "tee": "ANT_TEE", "antenna": "ANT_FEED"}
+}
