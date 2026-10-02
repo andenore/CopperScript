@@ -20,6 +20,7 @@ from .fanout import FanoutResult
 from .physical import (
     CopperLayer,
     NetRoutingRule,
+    PadKind,
     PhysicalBoard,
     Point,
     RouteKind,
@@ -68,6 +69,7 @@ class CriticalNetResult:
     guide_length_nm: int | None = None
     pair_refinement_attempts: int = 0
     pair_refinement_candidates: int = 0
+    pair_search_order: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +112,7 @@ class CriticalRoutingResult:
                     "candidate_rejected": item.candidate_rejected,
                     "search_states": item.search_states,
                     "candidate_attempts": item.candidate_attempts,
+                    "pair_search_order": item.pair_search_order,
                     "pair_searches": item.pair_searches,
                     "local_candidate_attempts": item.local_candidate_attempts,
                     "guide_length_nm": item.guide_length_nm,
@@ -120,6 +123,40 @@ class CriticalRoutingResult:
             ],
         }
         return json.dumps(document, indent=2, sort_keys=True) + "\n"
+
+
+def _pair_prefers_via_escape(
+    board: PhysicalBoard, first: GlobalNetRoute, second: GlobalNetRoute,
+) -> bool:
+    """Prefer matched via portals for an internally located SMD terminal pair.
+
+    Local copper-pad center bounds are an inexpensive ordering heuristic, not
+    proof that surface escape is impossible. Both members and every same-number
+    land at one endpoint must be internal. Perimeter/THT/ambiguous cases retain
+    surface-first search; all exact/native gates and fallback budgets remain.
+    """
+    placements = {item.reference: item for item in board.placements}
+    partners = {access.pad.component: access for access in second.accesses}
+    margin = board.rules.default_via_size_nm + 2*board.rules.minimum_clearance_nm
+    for access in first.accesses:
+        other = partners.get(access.pad.component)
+        placement = placements.get(access.pad.component)
+        if other is None or placement is None:
+            continue
+        pads = tuple(p for p in board.footprints[placement.footprint].pads
+                     if p.kind not in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE})
+        if not pads:
+            continue
+        min_x, max_x = min(p.position.x_nm for p in pads), max(p.position.x_nm for p in pads)
+        min_y, max_y = min(p.position.y_nm for p in pads), max(p.position.y_nm for p in pads)
+        matches = [tuple(p for p in pads if p.number == terminal.pad.pad)
+                   for terminal in (access, other)]
+        if all(lands and all(p.kind is PadKind.SMD
+                and min_x+margin < p.position.x_nm < max_x-margin
+                and min_y+margin < p.position.y_nm < max_y-margin for p in lands)
+               for lands in matches):
+            return True
+    return False
 
 
 def route_critical_nets(
@@ -221,9 +258,13 @@ def route_critical_nets(
                 first, second = sorted((rule, partner_rule), key=lambda item: item.net)
                 search_board = replace(board, tracks=tuple(tracks), vias=tuple(vias))
                 stats = PairSearchStats()
-                # Prefer no transitions, then jointly escaped via pairs. Each
-                # alternative retains the original profiles and atomic gate.
-                for searcher in (paired_candidates, paired_via_candidates):
+                # The failed coarse-guide candidate has already had an atomic
+                # gate. Internal lands should not consume all surface maze
+                # resolutions before exploring a legal paired layer escape.
+                prefer_vias = _pair_prefers_via_escape(search_board, routes[first.net], routes[second.net])
+                searchers = ((paired_via_candidates, paired_candidates) if prefer_vias
+                             else (paired_candidates, paired_via_candidates))
+                for searcher in searchers:
                     for pitch_nm in (1_000_000, 500_000, 250_000):
                         for candidate in searcher(
                             search_board, first, second, routes[first.net], routes[second.net],
@@ -254,7 +295,8 @@ def route_critical_nets(
                     if result.connected:
                         break
                 result = replace(result, search_states=stats.expanded_states,
-                                 candidate_attempts=stats.candidates, pair_searches=stats.searches)
+                                 candidate_attempts=stats.candidates, pair_searches=stats.searches,
+                                 pair_search_order=("via_first_internal_lands" if prefer_vias else "surface_first"))
                 if not result.connected:
                     result = replace(result, diagnostics=(*result.diagnostics,
                         f"joint pair search: {stats.searches} searches, {stats.expanded_states} states, "

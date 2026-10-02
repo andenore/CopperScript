@@ -10,6 +10,9 @@
   chamfers; preserve branches, pads, vias and locked input copper. Joint USB
   pair refinement retains responsibility for differential-pair shape.
 - [x] Add a reproducible read-only KiCad per-layer audit and SVG plots.
+- [x] Prefer matched via escapes for internal SMD pairs after the coarse-guide
+  route fails; retain surface-first search for perimeter terminals and all
+  original profile, clearance and atomic acceptance gates.
 - [ ] Finish profiled full-board rerun with current placement and strict policy.
 - [ ] Independently refill/DRC and inspect every saved copper layer.
 - [ ] Record remaining bends, local density, opens and escape failures without

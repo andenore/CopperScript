@@ -10,6 +10,18 @@ These guides are design guidance, not qualification of our provisional board.
 
 ## Implemented bounded topology
 
+After the coarse-guide pair candidate fails its atomic gate, package geometry
+orders searches. Internal SMD pairs (for example internal LGA rows) try legal
+matched via escapes before consuming every surface maze resolution. A pair is
+classified internal only when both members and every matching same-number land
+at one endpoint lie beyond a margin of one default via diameter plus twice
+minimum clearance inside the local copper-pad-center envelope on all sides.
+Perimeter and ambiguous pairs retain surface-first search. This is an ordering
+heuristic, not proof that a transition is necessary or via-count optimal. It
+uses no component-name special cases and is independent of placement rotation.
+The report's `pair_search_order` records the choice. All search bounds and atomic
+acceptance gates are unchanged; the other topology remains fallback.
+
 `pcbir/pair_vias.py` proposes complete paired candidates after the surface-only
 joint search fails. It never modifies locked input copper or routes members
 independently. The sequence is:
