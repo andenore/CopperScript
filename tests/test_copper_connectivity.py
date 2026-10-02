@@ -144,8 +144,8 @@ def test_native_connectivity_agrees_with_installed_kicad(case, tmp_path):
         if case == "via_overlap":
             board = replace(board, vias=(Via("N", Point.mm(5, "5.2"), nm_from_mm("0.6"), nm_from_mm("0.3")),))
     board = replace(board, tracks=tracks)
-    for artifact in KiCadPcbBackend().generate(board).artifacts:
-        (tmp_path / artifact.name).write_text(artifact.content, encoding="utf-8")
+    from pcbir.backends.kicad_project import write_kicad_project
+    write_kicad_project(KiCadPcbBackend().generate(board), tmp_path / "Contacts.kicad_pcb")
     output = tmp_path / "drc.json"
     result = subprocess.run([cli, "pcb", "drc", "--format", "json", "--severity-all", "--output",
                              str(output), str(tmp_path / "Contacts.kicad_pcb")], capture_output=True, text=True, timeout=60)

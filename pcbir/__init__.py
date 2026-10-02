@@ -8,6 +8,7 @@ from .backends import (
     KiCadSchematicBackend,
     KiCadSchematicOptions,
     PhysicalBackend,
+    write_kicad_project,
 )
 from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source
@@ -366,6 +367,7 @@ __all__ = [
     "KiCadSchematicBackend",
     "KiCadSchematicOptions",
     "KiCadPcbBackend",
+    "write_kicad_project",
     "KiCadModImportError",
     "LayoutFinding",
     "LayoutGate",

@@ -91,7 +91,7 @@ def test_cli_progress_is_opt_in_and_does_not_change_exports(tmp_path, capsys):
     command = ['route-board', str(root/'examples/valid_board.copper'), '--allow-proxy-footprints',
                '--candidates', '1', '--zone-escape-trials', '0', '--zone-local-ripup-trials', '0']
     plain_report, observed_report = tmp_path/'plain.json', tmp_path/'observed.json'
-    plain_pcb, observed_pcb = tmp_path/'plain.kicad_pcb', tmp_path/'observed.kicad_pcb'
+    plain_pcb, observed_pcb = tmp_path/'plain'/'board.kicad_pcb', tmp_path/'observed'/'board.kicad_pcb'
     plain_exit = main([*command, '--report', str(plain_report), '-o', str(plain_pcb)])
     assert 'PROGRESS ' not in capsys.readouterr().out
     observed_exit = main([*command, '--progress', '--report', str(observed_report), '-o', str(observed_pcb)])
@@ -101,3 +101,7 @@ def test_cli_progress_is_opt_in_and_does_not_change_exports(tmp_path, capsys):
     assert plain_report.read_bytes() == observed_report.read_bytes()
     assert plain_pcb.read_bytes() == observed_pcb.read_bytes()
     assert plain_pcb.with_suffix('.kicad_pro').read_bytes() == observed_pcb.with_suffix('.kicad_pro').read_bytes()
+    assert {path.relative_to(plain_pcb.parent): path.read_bytes()
+            for path in plain_pcb.parent.rglob('*') if path.is_file()} == {
+        path.relative_to(observed_pcb.parent): path.read_bytes()
+        for path in observed_pcb.parent.rglob('*') if path.is_file()}

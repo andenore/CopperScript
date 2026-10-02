@@ -15,6 +15,7 @@ from pathlib import Path
 from time import perf_counter
 
 from .backends.kicad_pcb import KiCadPcbBackend
+from .backends.kicad_project import write_kicad_project
 from .critical import CriticalRoutingStatus, route_critical_nets
 from .critical_feedback import improve_critical_placement
 from .drc import run_physical_drc
@@ -149,9 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint("critical_complete")
         if args.output:
             manifest = KiCadPcbBackend().generate(critical.board)
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(manifest.artifacts[0].content, encoding="utf-8")
-            args.output.with_suffix(".kicad_pro").write_text(manifest.artifacts[1].content, encoding="utf-8")
+            write_kicad_project(manifest, args.output)
         for item in critical.nets:
             print(f"{','.join(item.nets)}: {'connected' if item.connected else 'FAILED'} ({item.strategy})")
             for diagnostic in item.diagnostics:

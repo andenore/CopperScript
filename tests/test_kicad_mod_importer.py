@@ -83,7 +83,7 @@ def test_imported_footprint_round_trips_through_kicad_pcb_backend() -> None:
 
     pcb = KiCadPcbBackend().generate(board).artifacts[0].content
 
-    assert '(footprint "R_0402_Test"' in pcb
+    assert '(footprint "CopperScript:R_0402_Test__' in pcb
     assert '(fp_line' in pcb
     assert '(fp_rect' in pcb
     assert '(fp_circle' in pcb
@@ -316,8 +316,9 @@ def test_footprint_keepout_moves_with_front_and_back_placements() -> None:
     assert keepouts[1].layers == (CopperLayer.BACK,)
     assert keepouts[1].outline.outer.vertices[0] == Point.mm(19, 5)
     pcb = KiCadPcbBackend().generate(board).artifacts[0].content
-    assert '(name "J1/keepout-0")' in pcb
-    assert '(name "J2/keepout-0")' in pcb
+    assert pcb.count('(name "keepout-0")') == 2
+    assert "(xy 11 5)" in pcb
+    assert "(xy 19 5)" in pcb
     assert pcb.count("\n    (zone") == 2
     assert "\n  (zone" not in pcb
     assert '(layer "B.Cu")' in pcb

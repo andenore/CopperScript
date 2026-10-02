@@ -285,7 +285,7 @@ def _parse_footprint_keepout(
         raise KiCadModImportError(f"{source}: invalid keepout polygon: {exc}") from exc
     allowed = {
         "layer", "layers", "uuid", "name", "hatch", "connect_pads",
-        "min_thickness", "keepout", "placement", "fill", "polygon",
+        "min_thickness", "keepout", "placement", "fill", "polygon", "net", "net_name",
     }
     for child in _lists(node[1:]):
         if _tag(child) not in allowed:

@@ -88,11 +88,18 @@ def test_real_routing_geometry_reports_and_project_bytes_identical(tmp_path):
     commands = []
     for name in ("plain", "observed"):
         commands.append([*base, "--report", str(tmp_path / f"{name}.json"),
-                         "-o", str(tmp_path / f"{name}.kicad_pcb")])
+                         "-o", str(tmp_path / name / "board.kicad_pcb")])
     plain = subprocess.run(commands[0], cwd=ROOT, capture_output=True, text=True)
     observed = subprocess.run(profiling.profiled_command(commands[1], tmp_path / "routing.prof"),
                               cwd=ROOT, capture_output=True, text=True)
     assert plain.returncode == observed.returncode
     assert (tmp_path / "routing.prof").is_file()
-    for suffix in (".json", ".kicad_pcb", ".kicad_pro"):
-        assert (tmp_path / ("plain" + suffix)).read_bytes() == (tmp_path / ("observed" + suffix)).read_bytes()
+    assert (tmp_path / "plain.json").read_bytes() == (tmp_path / "observed.json").read_bytes()
+    # Use the same output stem: custom project metadata now correctly records
+    # that stem. Profiling must leave every generated project asset identical.
+    plain_root, observed_root = tmp_path / "plain", tmp_path / "observed"
+    plain_files = {path.relative_to(plain_root): path.read_bytes()
+                   for path in plain_root.rglob("*") if path.is_file()}
+    observed_files = {path.relative_to(observed_root): path.read_bytes()
+                      for path in observed_root.rglob("*") if path.is_file()}
+    assert plain_files == observed_files

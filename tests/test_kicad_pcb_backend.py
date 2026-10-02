@@ -48,7 +48,7 @@ def test_kicad_pcb_backend_emits_deterministic_board_geometry() -> None:
     assert pcb.startswith("(kicad_pcb\n  (version 20240108)")
     assert '(net 1 "GND")' in pcb
     assert '(net 2 "VIN")' in pcb
-    assert '(footprint "test/two_pin"' in pcb
+    assert '(footprint "CopperScript:two_pin__' in pcb
     assert '(pad "1" smd roundrect' in pcb
     assert re.search(
         r'\(property "Reference" "R1"\s+\(at [^\n]+\)\s+\(layer "F\.Fab"\)', pcb

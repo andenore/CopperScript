@@ -92,6 +92,13 @@ source constraints too. Previous routed boards and any run started before
 these constraints were added are historical results, not routing validation
 of this floorplan. A fresh full routing/signoff run is required.
 
+The [project-local library exporter](kicad-project-export.md) now writes the
+same-stem KiCad project, `fp-lib-table` and canonical `CopperScript.pretty`
+footprints automatically. A fresh KiCad 10.0.6 check of this six-layer placed
+preview reports zero non-connectivity violations (the previous eight library
+warnings are gone) and 204 expected unconnected items. This is still unrouted;
+neither that result nor library matching qualifies RF or fabrication readiness.
+
 ## Main MCU allocation
 
 | Function | STM32 peripheral | Pins |

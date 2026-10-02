@@ -126,6 +126,8 @@ def test_release_is_gated_verified_manifested_and_atomic(tmp_path: Path) -> None
     assert document["signoff_token_digest"] == signoff.token_digest
     assert any(item["path"].endswith(".d356") for item in document["artifacts"])
     assert any(item["path"].endswith(".kicad_pro") for item in document["artifacts"])
+    assert any(item["path"] == "fp-lib-table" for item in document["artifacts"])
+    assert any(item["path"].startswith("CopperScript.pretty/") for item in document["artifacts"])
     assert not any(item.name.startswith(".release-") for item in tmp_path.iterdir())
 
 

@@ -211,8 +211,8 @@ def test_cluster_keepout_agrees_with_installed_kicad(layer, blocked, tmp_path):
     board = replace(board,
                     nets=(PhysicalNet("RF", (PadReference("L1", "1"), PadReference("J1", "1"))),),
                     tracks=(TrackSegment("RF", Point.mm(14.5, 8), Point.mm(14.5, 12), nm_from_mm(0.2), layer),))
-    for artifact in KiCadPcbBackend().generate(board).artifacts:
-        (tmp_path / artifact.name).write_text(artifact.content, encoding="utf-8")
+    from pcbir.backends.kicad_project import write_kicad_project
+    write_kicad_project(KiCadPcbBackend().generate(board), tmp_path / "RigidTest.kicad_pcb")
     report = tmp_path / "drc.json"
     result = subprocess.run([cli, "pcb", "drc", "--format", "json", "--severity-all", "--output",
                              str(report), str(tmp_path / "RigidTest.kicad_pcb")],

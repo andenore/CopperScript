@@ -182,7 +182,9 @@ def test_cli_exports_pcb_with_resolved_kicad_mod(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout
     assert "proxy footprints" not in result.stdout
     content = output.read_text(encoding="utf-8")
-    assert '(footprint "footprints/R_0402_CopperScript.kicad_mod"' in content
+    assert '(footprint "CopperScript:R_0402_CopperScript_kicad_mod__' in content
+    assert (tmp_path / "fp-lib-table").is_file()
+    assert len(list((tmp_path / "CopperScript.pretty").glob("*.kicad_mod"))) == 1
     assert '(fp_rect' in content
 
 

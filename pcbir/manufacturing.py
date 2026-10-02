@@ -13,6 +13,7 @@ import tempfile
 from typing import Callable
 
 from .backends import KiCadPcbBackend
+from .backends.kicad_project import write_kicad_project
 from .drc import DrcCompleteness, DrcDecision, SignoffToken, physical_board_digest
 from .physical import PhysicalBoard
 from .process_drc import ProcessDrcReport
@@ -166,9 +167,7 @@ def build_manufacturing_release(
         manifest = KiCadPcbBackend().generate(board)
         board_artifact = manifest.artifacts[0]
         board_path = stage / board_artifact.name
-        board_path.write_text(board_artifact.content, encoding="utf-8")
-        project_artifact = manifest.artifacts[1]
-        (stage / project_artifact.name).write_text(project_artifact.content, encoding="utf-8")
+        write_kicad_project(manifest, board_path)
         drc_path = stage / "kicad-drc.json"
         drc_command = [
                 str(kicad_cli),

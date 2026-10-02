@@ -15,6 +15,7 @@ import re
 import tempfile
 
 from .backends import KiCadPcbBackend
+from .backends.kicad_project import kicad_export_digest, write_kicad_project
 from .drc import physical_board_digest
 from .manufacturing import CommandRunner, _subprocess_runner
 from .physical import PhysicalBoard
@@ -37,11 +38,7 @@ class PlaneVerification:
         """Reject evidence reused after any source-board geometry change."""
         if self.board_digest != physical_board_digest(board):
             return False
-        pcb, project = KiCadPcbBackend().generate(board).artifacts[:2]
-        current_export = sha256(
-            pcb.content.encode("utf-8") + project.content.encode("utf-8")
-        ).hexdigest()
-        return self.export_digest == current_export
+        return self.export_digest == kicad_export_digest(KiCadPcbBackend().generate(board))
 
     def zone_connectivity_verified(self, board: PhysicalBoard) -> bool:
         """Separate connected fill from overall signoff, bound to exact export.
@@ -98,13 +95,11 @@ def verify_filled_planes(
         manifest = KiCadPcbBackend().generate(board)
         if len(manifest.artifacts) < 2:
             raise RuntimeError("KiCad backend omitted the same-stem project")
-        pcb_artifact, project_artifact = manifest.artifacts[:2]
+        pcb_artifact = manifest.artifacts[0]
         pcb_path = stage / pcb_artifact.name
-        project_path = stage / project_artifact.name
         # Preserve the backend's exact UTF-8 bytes on Windows as well as Unix.
-        pcb_path.write_bytes(pcb_artifact.content.encode("utf-8"))
-        project_path.write_bytes(project_artifact.content.encode("utf-8"))
-        export_digest = sha256(pcb_path.read_bytes() + project_path.read_bytes()).hexdigest()
+        write_kicad_project(manifest, pcb_path)
+        export_digest = kicad_export_digest(manifest)
         report_path = stage / "drc.json"
         command = [str(kicad_cli), "pcb", "drc", "--format", "json",
                    "--severity-all", "--output", str(report_path)]

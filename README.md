@@ -43,8 +43,16 @@ python -m copperscript export-kicad examples/valid_board.copper -o valid_board.k
 Generate a KiCad 8 PCB draft with resolved footprint geometry:
 
 ```console
-python -m copperscript export-kicad-pcb examples/resolved_footprint_board.copper -o resolved.kicad_pcb
+python -m copperscript export-kicad-pcb examples/resolved_footprint_board.copper -o build/resolved/board.kicad_pcb
 ```
+
+All PCB export commands automatically write a same-stem `.kicad_pro`, a
+project-local `fp-lib-table`, and a `CopperScript.pretty/` footprint library
+beside the PCB. No manual KiCad library registration is needed: keep that
+generated directory together when sharing or moving it. These are generated
+outputs, not user-maintained source libraries. Export does not download assets
+or modify your global KiCad configuration. See [generated KiCad
+projects](docs/kicad-project-export.md) for portability and safety details.
 
 Direct `.kicad_mod` references are resolved relative to the board file. KiCad
 `Library:Footprint` identifiers can be resolved through explicit roots:

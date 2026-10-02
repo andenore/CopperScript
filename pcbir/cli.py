@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
+from .backends.kicad_project import write_kicad_project
 from .erc import check, has_errors
 from .footprints import FootprintResolver
 from .importers import KiCadModImportError, load_kicad_mod
@@ -877,10 +878,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if args.output:
                     pcb_manifest = KiCadPcbBackend().generate(output_board)
-                    args.output.write_text(pcb_manifest.artifacts[0].content, encoding="utf-8")
-                    args.output.with_suffix(".kicad_pro").write_text(
-                        pcb_manifest.artifacts[1].content, encoding="utf-8"
-                    )
+                    write_kicad_project(pcb_manifest, args.output)
                 emit(progress, "export", "finished", report=str(report_path), status=closure_status.value)
             except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")
@@ -941,11 +939,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output.write_text(route.to_json(), encoding="utf-8")
                 if args.pcb_output:
                     pcb_manifest = KiCadPcbBackend().generate(flow.board)
-                    args.pcb_output.write_text(pcb_manifest.artifacts[0].content, encoding="utf-8")
-                    args.pcb_output.with_suffix(".kicad_pro").write_text(
-                        pcb_manifest.artifacts[1].content, encoding="utf-8"
-                    )
-            except OSError as exc:
+                    write_kicad_project(pcb_manifest, args.pcb_output)
+            except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2
             metrics = route.metrics
@@ -1009,14 +1004,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifact = manifest.artifacts[0]
             output = args.output or Path(artifact.name)
             try:
-                output.write_text(artifact.content, encoding="utf-8")
                 if artifact_kind == "PCB":
-                    output.with_suffix(".kicad_pro").write_text(
-                        manifest.artifacts[1].content, encoding="utf-8"
-                    )
+                    write_kicad_project(manifest, output)
+                else:
+                    output.write_text(artifact.content, encoding="utf-8")
                 if args.command == "plan-layout" and args.report:
                     args.report.write_text(layout_report.to_json(), encoding="utf-8")
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2
             for warning in manifest.warnings:
