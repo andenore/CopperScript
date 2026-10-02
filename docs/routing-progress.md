@@ -28,3 +28,9 @@ its final exit status and elapsed time remain authoritative for completion.
 
 Telemetry does not yet expose each ordinary-net search, within-pair maze progress
 or reusable serialized stage geometry. Those parts of R9 remain open.
+
+The full-run wrapper also enables function profiling and derives inclusive
+phase/trial intervals from the persisted log. See
+[routing performance](routing-performance.md) for artifacts, profiling overhead,
+unprofiled comparisons and the optimization assessment. Direct CLI routing is not
+automatically function-profiled.

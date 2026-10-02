@@ -1,5 +1,6 @@
 """Workflow arguments, ignored outputs and honest routing-script exit status."""
 import importlib.util
+import cProfile
 import json
 from pathlib import Path
 import subprocess
@@ -85,6 +86,11 @@ def test_results_logs_and_exit_status_stay_in_build(setup_paths, monkeypatch, ex
     assert manifest["exit_code"] == exit_code and manifest["status"] == status
     assert manifest["elapsed_seconds"] >= 0
     assert manifest["started_utc"] and manifest["finished_utc"]
+    assert manifest["profiling"]["mode"] == "cprofile"
+    assert manifest["profiling"]["status"] == "missing"  # This mock deliberately creates no profile.
+    assert manifest["command"][3] == "pcbir.profiling"
+    assert manifest["routing_command"][3] == "copperscript"
+    assert manifest["provenance"]["input_sha256"]["copper.lock"]
     assert (repository / "copper.lock").read_bytes() == lock_before
     assert not (repository / "board.kicad_pcb").exists()
 
@@ -157,3 +163,46 @@ def test_generated_outputs_are_ignored_by_repository():
                              "build/full-vertical/run/route-report.json", "build/full-vertical/run/run.json"],
                             cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0 and len(result.stdout.splitlines()) == 3
+
+
+def test_profile_and_phase_artifacts_saved_even_when_gates_fail(setup_paths, monkeypatch):
+    repository, arguments = setup_paths
+    def route(command, cwd, log):
+        profile = cProfile.Profile()
+        profile.runcall(lambda: sum(range(10)))
+        profile.dump_stats(str(log.parent / "routing.prof"))
+        log.write_text('PROGRESS {"phase":"area","event":"started","elapsed_seconds":1}\n'
+                       'PROGRESS {"phase":"area","event":"finished","elapsed_seconds":3}\n',
+                       encoding="utf-8")
+        return 1
+    monkeypatch.setattr(SCRIPT, "_run_logged", route)
+    assert SCRIPT.main(arguments) == 1
+    output = repository / "build/test-run"
+    manifest = json.loads((output / "run.json").read_text())
+    assert manifest["status"] == "unmet_gates" and manifest["profiling"]["status"] == "saved"
+    assert (output / "profile-summary.txt").is_file()
+    assert json.loads((output / "phase-timings.json").read_text())["intervals"][0]["duration_seconds"] == 2
+
+
+def test_unprofiled_baseline_keeps_phase_timings(setup_paths, monkeypatch):
+    repository, arguments = setup_paths
+    def route(command, cwd, log):
+        assert command[3] == "copperscript" and "pcbir.profiling" not in command
+        log.write_text("baseline\n", encoding="utf-8")
+        return 1
+    monkeypatch.setattr(SCRIPT, "_run_logged", route)
+    assert SCRIPT.main([*arguments, "--profile", "none"]) == 1
+    manifest = json.loads((repository / "build/test-run/run.json").read_text())
+    assert manifest["profiling"]["status"] == "disabled"
+    assert manifest["profiling"]["phase_timings"] == "phase-timings.json"
+
+
+def test_corrupt_profile_is_reported_without_replacing_router_status(setup_paths, monkeypatch):
+    repository, arguments = setup_paths
+    def route(command, cwd, log):
+        (log.parent / "routing.prof").write_bytes(b"not stats")
+        return 1
+    monkeypatch.setattr(SCRIPT, "_run_logged", route)
+    assert SCRIPT.main(arguments) == 1
+    manifest = json.loads((repository / "build/test-run/run.json").read_text())
+    assert manifest["profiling"]["status"] == "error" and manifest["exit_code"] == 1

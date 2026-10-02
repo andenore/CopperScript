@@ -234,7 +234,8 @@ Completion means tested implementation, not automatic manufacturing signoff.
   attributes 27.4% of samples to via checks, 13.1% to track checks, and 12.8%
   to neighbor generation (inclusive categories; not whole-run timing).
   Search-local physical-span via caching is implemented in pass 2; operational
-  timings/checkpoints are still outstanding, so this item remains open.
+  phase timing/checkpoints and default full-run profiles are now implemented.
+  Per-net/search telemetry and resumable geometry remain outstanding.
   - [x] Add exact doubled-integer rectangle edge checks for track capsules and
     via disks, caching only immutable outline classification. Nonrectangular
     outlines retain the original exact predicate. Randomized/tangency regressions
@@ -249,6 +250,11 @@ Completion means tested implementation, not automatic manufacturing signoff.
     geometry, fingerprints, reports, project bytes and exit status.
     See [routing progress](routing-progress.md). This does not make stage geometry
     resumable; per-ordinary-net and within-pair search telemetry remain open.
+  - [x] Enable function profiling by default in the complete workflow, retain raw
+    statistics and top self/cumulative summaries, derive phase/trial elapsed spans,
+    record provenance and preserve failure exit codes. Provide `--profile none`
+    for fair wall-time baselines. See [performance assessment](routing-performance.md)
+    for measured evidence and algorithm/process-parallel optimization priorities.
 - [x] R10 (rerun finding, correctness priority): Replace endpoint-only native
   connectivity with layer-aware copper-contact connectivity. Detect interior
   T/cross junctions, track/via overlap, and pad-shape contacts; retain physical

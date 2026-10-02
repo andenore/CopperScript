@@ -8,17 +8,62 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import shlex
 import shutil
 import subprocess
 import sys
 import time
 
+from pcbir.profiling import phase_summary, profiled_command, profile_summary
+
 
 REPOSITORY = Path(__file__).resolve().parents[1]
+
+
+def _provenance(repository: Path) -> dict:
+    def git(*arguments):
+        try:
+            result = subprocess.run(["git", *arguments], cwd=repository,
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                    timeout=10, check=False)
+            return result.stdout.strip() if result.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    diff = git("diff", "HEAD", "--no-ext-diff")
+    return {"python": sys.version, "executable": sys.executable, "platform": platform.platform(),
+            "logical_cpus": os.cpu_count(), "processor": platform.processor(),
+            "git_commit": git("rev-parse", "HEAD"),
+            "tracked_changes": git("status", "--porcelain", "--untracked-files=no"),
+            "tracked_diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest() if diff is not None else None,
+            "input_sha256": {name: hashlib.sha256((repository / name).read_bytes()).hexdigest()
+                             for name in ("copper.lock", "examples/full_vertical_board.copper",
+                                          "examples/full_vertical_placement_templates.json")}}
+
+
+def _save_performance(output: Path, mode: str, exit_code: int) -> dict:
+    """Telemetry failure must not replace the actual router exit status."""
+    result = {"mode": mode, "status": "disabled" if mode == "none" else "missing",
+              "process_interrupted": exit_code == 130}
+    try:
+        if (output / "routing.log").is_file():
+            (output / "phase-timings.json").write_text(
+                json.dumps(phase_summary(output / "routing.log"), indent=2) + "\n", encoding="utf-8")
+            result["phase_timings"] = "phase-timings.json"
+        if mode == "cprofile" and (output / "routing.prof").is_file():
+            summary, report = profile_summary(output / "routing.prof")
+            (output / "profile-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+            (output / "profile-summary.txt").write_text(report, encoding="utf-8")
+            result.update(status="saved", raw="routing.prof", summary="profile-summary.json",
+                          text="profile-summary.txt")
+    except Exception as exc:
+        result.update(status="error", error=str(exc))
+        print(f"PERFORMANCE REPORT ERROR: {exc}", file=sys.stderr)
+    return result
 
 
 def _default_kicad_cli() -> Path:
@@ -91,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path,
                         help="new/empty directory inside repository build/ (default: timestamped run)")
     parser.add_argument("--dry-run", action="store_true", help="validate paths and print command; write nothing")
+    parser.add_argument("--profile", choices=("cprofile", "none"), default="cprofile",
+                        help="function profiling (default: cprofile); none for uninstrumented benchmarks")
     args = parser.parse_args(argv)
     cli = args.kicad_cli.resolve()
     footprints = (args.kicad_footprints or _default_footprints(cli)).resolve()
@@ -118,12 +165,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"SETUP ERROR: {exc}", file=sys.stderr)
         return 2
     command = routing_command(REPOSITORY, output, cli, footprints, copperlib)
+    routing_arguments = command
+    if args.profile == "cprofile":
+        command = profiled_command(command, output / "routing.prof")
     print(f"Output: {output}", flush=True)
     print(subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command), flush=True)
     if args.dry_run:
         return 0
     manifest = {"started_utc": started.isoformat(), "repository": str(REPOSITORY),
-                "command": command, "status": "running", "exit_code": None}
+                "command": command, "routing_command": routing_arguments,
+                "profiling": {"mode": args.profile, "status": "pending"},
+                "provenance": _provenance(REPOSITORY), "status": "running", "exit_code": None}
     manifest_path = output / "run.json"
     tick = time.perf_counter()
     exit_code = 2
@@ -138,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest["error"] = str(exc)
         print(f"RUN ERROR: {exc}", file=sys.stderr)
     finally:
+        manifest["profiling"] = _save_performance(output, args.profile, exit_code)
         status = {0: "passed", 1: "unmet_gates", 130: "interrupted"}.get(exit_code, "error")
         manifest.update(finished_utc=datetime.now(timezone.utc).isoformat(),
                         elapsed_seconds=round(time.perf_counter() - tick, 3),

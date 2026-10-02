@@ -265,6 +265,13 @@ An existing nonempty output directory is rejected so old results cannot be
 mistaken for a new run. Exit 0 still does not constitute manufacturing signoff.
 Allow tens of minutes; adding this script does not rerun the full board.
 
+Function profiling is enabled by default. Each run also saves `routing.prof`,
+readable/JSON hotspot summaries and `phase-timings.json` under the same ignored
+directory. Instrumentation adds overhead; use `--profile none` for uninstrumented
+speed comparisons (phase events are still saved). See
+[profiling and optimization assessment](docs/routing-performance.md) for details,
+current evidence and the prioritized optimization work list.
+
 For the equivalent explicit CLI invocation, adjust the KiCad paths if your
 installation is elsewhere. From the CopperScript repository root, run:
 
