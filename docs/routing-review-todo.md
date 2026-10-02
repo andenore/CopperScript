@@ -242,7 +242,13 @@ Completion means tested implementation, not automatic manufacturing signoff.
   - [x] Add per-critical-group started/finished progress/timing checkpoints;
     interrupted preflights retain the running group without claiming completion.
     Notifications do not participate in route geometry or fingerprints.
-    Full ordinary-routing phase telemetry and within-pair search progress remain open.
+  - [x] Stream optional elapsed phase/group/trial events in the normal CLI and
+    persist them in the complete workflow's `routing.log`. Include ordinary-area
+    start/finish or access-blocked events, ground feedback decisions, native DRC,
+    independent KiCad checks and export. Regressions compare observed/unobserved
+    geometry, fingerprints, reports, project bytes and exit status.
+    See [routing progress](routing-progress.md). This does not make stage geometry
+    resumable; per-ordinary-net and within-pair search telemetry remain open.
 - [x] R10 (rerun finding, correctness priority): Replace endpoint-only native
   connectivity with layer-aware copper-contact connectivity. Detect interior
   T/cross junctions, track/via overlap, and pad-shape contacts; retain physical

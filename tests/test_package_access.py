@@ -44,11 +44,11 @@ def test_ordinary_exits_precede_critical_routes_and_survive_exact_acceptance(mon
         assert not source.tracks and not source.vias
         calls.append("exits")
         return real_fanout(source, settings)
-    def critical(source, route, *, reserved_accesses):
+    def critical(source, route, *, reserved_accesses, on_progress=None):
         assert calls == ["exits"]
         assert reserved_accesses.accesses and not reserved_accesses.pending_pads
         calls.append("critical")
-        return real_critical(source, route, reserved_accesses=reserved_accesses)
+        return real_critical(source, route, reserved_accesses=reserved_accesses, on_progress=on_progress)
     monkeypatch.setattr(access, "route_fanout", escape)
     monkeypatch.setattr(access, "route_critical_nets", critical)
     result = access.preflight_package_access(board, guides, options)
@@ -146,8 +146,8 @@ def test_unsafe_feedback_proposal_rolls_back_with_trial_budget(monkeypatch, defe
     baseline = replace(complete, fanout=replace(complete.fanout,
         pending_pads=(pending,), accesses={p:v for p,v in complete.fanout.accesses.items() if p != pending}))
     real = access.preflight_package_access
-    def unsafe(source, route, *args):
-        result = real(source, route, *args)
+    def unsafe(source, route, *args, **kwargs):
+        result = real(source, route, *args, **kwargs)
         if defect == "lost_exit":
             return replace(result, fanout=replace(result.fanout, accesses={pending: result.fanout.accesses[pending]}))
         if defect == "hard_drc":

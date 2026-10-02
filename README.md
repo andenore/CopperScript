@@ -116,6 +116,10 @@ parts retain 0/90/180/270-degree candidates.
 
 The command exits nonzero when routing or DRC is incomplete. Even a successful
 native check does not qualify proxy footprints or replace KiCad and CAM review.
+Use `--progress` for flushed phase/group/trial events during long runs; the
+complete routing script enables this automatically and saves them in
+`routing.log`. Full ground-feedback trials can each rebuild the routing.
+Progress is not completion or signoff evidence; see [routing progress](docs/routing-progress.md).
 `--pitch-mm`, `--passes`, and `--search-budget` bound detailed-routing work;
 exhausting the search budget is reported per net rather than silently accepting
 an unfinished path.

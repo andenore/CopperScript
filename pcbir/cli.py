@@ -41,6 +41,7 @@ from .routeflow import (
     optimize_placement_for_routing,
 )
 from .serializer import board_to_json, write_json
+from .progress import console_progress, emit
 
 
 def _positive_mm(value: str) -> str:
@@ -255,6 +256,8 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--pitch-mm", default="1")
     board_route_parser.add_argument("--passes", type=int, default=1)
     board_route_parser.add_argument("--search-budget", type=int, default=50_000)
+    board_route_parser.add_argument("--progress", action="store_true",
+        help="stream elapsed phase/group/trial events; telemetry is not completion or signoff evidence")
     board_route_parser.add_argument(
         "--heuristic-weight", type=int, default=100,
         help="A* heuristic weight in percent (100=shortest-search baseline, up to 300)",
@@ -582,6 +585,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     direction_preference_cost=args.direction_preference_cost,
                 )
                 fanout_options = FanoutOptions() if args.fanout else None
+                progress = console_progress() if args.progress else None
                 result = run_routing_pipeline(
                     physical_board,
                     placement_options=placement_options,
@@ -595,6 +599,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     package_access_options=PackageAccessOptions(
                         maximum_trials=args.package_access_trials,
                         movement_nm=nm_from_mm(args.package_access_movement_mm)),
+                    on_progress=progress,
                 )
                 escape_feedback = (
                     improve_zone_escapes(
@@ -613,6 +618,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             maximum_local_blockers=args.maximum_ripup_blockers,
                             movement_nm=nm_from_mm(args.zone_escape_movement_mm),
                         ),
+                        on_progress=progress,
                     ) if stitch_enabled and (args.zone_escape_trials
                                              or args.zone_local_ripup_trials) else None
                 )
@@ -621,6 +627,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             except ValueError as exc:
                 print(f"ROUTING ERROR: {exc}")
                 return 2
+            emit(progress, "final_contacts_native_drc", "started")
             stitch = (escape_feedback.plane_stitch if escape_feedback is not None
                       else stitch_zone_pads(result.board, plane_options) if stitch_enabled
                       else result.plane_stitch)
@@ -633,10 +640,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 or duplicate_stitch.added_track_count
                 else result.drc
             )
+            emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
             try:
+                if args.verify_plane_fill:
+                    emit(progress, "independent_kicad", "started")
                 plane_verification = (verify_filled_planes(
                     output_board, kicad_cli=args.verify_plane_fill,
                 ) if args.verify_plane_fill else None)
+                if plane_verification is not None:
+                    emit(progress, "independent_kicad", "finished", passed=plane_verification.passed,
+                         unconnected=plane_verification.unconnected_count,
+                         other_violations=plane_verification.other_violation_count)
             except RuntimeError as exc:
                 print(f"PLANE VERIFICATION ERROR: {exc}")
                 return 2
@@ -841,6 +855,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     report["plane_stitch"]["zone_connectivity_verified"] = (
                         plane_verification.zone_connectivity_verified(output_board))
             try:
+                emit(progress, "export", "started")
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if args.output:
                     pcb_manifest = KiCadPcbBackend().generate(output_board)
@@ -848,6 +863,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.output.with_suffix(".kicad_pro").write_text(
                         pcb_manifest.artifacts[1].content, encoding="utf-8"
                     )
+                emit(progress, "export", "finished", report=str(report_path), status=closure_status.value)
             except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2

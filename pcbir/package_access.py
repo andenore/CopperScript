@@ -20,6 +20,7 @@ from .placement import PlacementPlannerOptions, _allowed_orientations, placement
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .routing import (GlobalRouterOptions, GlobalRoutingResult, GlobalRoutingStatus,
                       _placement_fingerprint, route_global)
+from .progress import ProgressCallback, critical_progress, emit
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +76,7 @@ class PackageAccessResult:
 def preflight_package_access(
     board: PhysicalBoard, global_route: GlobalRoutingResult, fanout_options: FanoutOptions,
     plane_options: PlaneStitchOptions | None = None,
+    *, on_progress: ProgressCallback | None = None,
 ) -> PackageAccessResult:
     """Reserve compatible ordinary exits before any critical long route.
 
@@ -86,8 +88,12 @@ def preflight_package_access(
         raise ValueError("package-access preflight requires an unrouted, unfilled source")
     if global_route.placement_fingerprint != _placement_fingerprint(board):
         raise ValueError("package-access global guides are stale")
+    emit(on_progress, "ordinary_package_exits", "started")
     fanout = route_fanout(board, fanout_options)
-    critical = route_critical_nets(board, global_route, reserved_accesses=fanout)
+    emit(on_progress, "ordinary_package_exits", "finished",
+         escaped=len(fanout.accesses), pending=len(fanout.pending_pads))
+    critical = route_critical_nets(board, global_route, reserved_accesses=fanout,
+                                   on_progress=critical_progress(on_progress))
     plane = stitch_zone_pads(critical.board, plane_options) if plane_options else None
     failed, hard = _failures(board, critical)
     if plane is not None:
@@ -95,7 +101,11 @@ def preflight_package_access(
         hard = sum(finding.severity.value == "error"
                    and finding.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
                    for finding in run_physical_drc(plane.board).findings)
-    return PackageAccessResult(board, global_route, fanout, critical, plane, failed, hard)
+    result = PackageAccessResult(board, global_route, fanout, critical, plane, failed, hard)
+    emit(on_progress, "package_access", "finished", ready=result.ready,
+         pending_pads=[f"{p.component}.{p.pad}" for p in sorted(result.pending_pads)],
+         failed_critical_nets=sorted(failed), hard_findings=hard)
+    return result
 
 
 def package_placement_trials(
@@ -148,6 +158,7 @@ def improve_package_access(
     placement_options: PlacementPlannerOptions | None = None,
     global_options: GlobalRouterOptions | None = None,
     plane_options: PlaneStitchOptions | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> PackageAccessResult:
     """Accept only identity-preserving access/critical improvements; rollback others."""
     options = options or PackageAccessOptions()
@@ -169,11 +180,14 @@ def improve_package_access(
             if signature in seen:
                 continue
             seen.add(signature)
+            emit(on_progress, "package_access_trial", "started",
+                 index=len(records) + 1, reference=reference)
             guides = route_global(trial, global_options)
             candidate = None
             outcome = "global_failed"
             if guides.status is GlobalRoutingStatus.SUCCESS:
-                candidate = preflight_package_access(trial, guides, fanout_options, plane_options)
+                candidate = preflight_package_access(trial, guides, fanout_options, plane_options,
+                                                      on_progress=on_progress)
                 required = {item.pad for item in accepted.fanout.pin_analysis}
                 tested = {item.pad for item in candidate.fanout.pin_analysis}
                 # Eligibility changing with placement must not hide a lost exit.
@@ -195,6 +209,8 @@ def improve_package_access(
                 (pose.position.x_nm, pose.position.y_nm), str(pose.rotation_degrees),
                 tuple(sorted(candidate.pending_pads if candidate else accepted.pending_pads)),
                 tuple(sorted(candidate.failed_critical_nets if candidate else accepted.failed_critical_nets)), outcome))
+            emit(on_progress, "package_access_trial", "finished", index=len(records),
+                 reference=reference, outcome=outcome)
             if outcome == "accepted":
                 accepted = candidate
                 moves += 1

@@ -148,7 +148,7 @@ def test_pipeline_routes_ordinary_copper_from_the_accepted_critical_pose(monkeyp
     board, guides, baseline, options = fixture()
     monkeypatch.setattr("pcbir.flow.optimize_placement_for_routing", lambda *_:
         PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
-    monkeypatch.setattr("pcbir.flow.route_critical_nets", lambda *_: baseline)
+    monkeypatch.setattr("pcbir.flow.route_critical_nets", lambda *_, **__: baseline)
     result = run_routing_pipeline(board, global_options=options, critical_feedback_trials=1,
         detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=1))
     assert result.critical_feedback.accepted_moves == 1

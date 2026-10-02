@@ -27,6 +27,7 @@ from .routeflow import PlacementRoutingFeedbackOptions
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routing_clearance import RoutingClearanceIndex
 from .route_closure import close_detailed_lands
+from .progress import ProgressCallback, emit
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,22 +76,27 @@ def improve_zone_escapes(
     package_access_options: PackageAccessOptions | None = None,
     options: EscapeFeedbackOptions | None = None,
     _reserved_pads: frozenset[PadReference] = frozenset(),
+    on_progress: ProgressCallback | None = None,
 ) -> EscapeFeedbackResult:
     """Repair late pad escapes without sacrificing completed signal routes."""
 
     options = options or EscapeFeedbackOptions()
     placement_options = placement_options or PlacementPlannerOptions()
     baseline_stitch = stitch_zone_pads(initial.board, plane_options)
+    emit(on_progress, "zone_contacts", "finished",
+         pending_pads=[f"{p.component}.{p.pad}" for p in baseline_stitch.pending_pads])
     if initial.package_access is not None and not initial.package_access.ready:
         # A late-plane repair cannot bypass the earlier package-access gate.
         return EscapeFeedbackResult(initial, baseline_stitch, ())
     if not baseline_stitch.pending_pads:
         return EscapeFeedbackResult(initial, baseline_stitch, ())
     if options.maximum_local_trials:
+        emit(on_progress, "zone_local_repair", "started")
         local = _repair_with_local_ripup(
             initial, baseline_stitch, plane_options,
             detailed_options or DetailedRouterOptions(), options,
         )
+        emit(on_progress, "zone_local_repair", "finished", improved=local is not None)
         if local is not None:
             if local.plane_stitch.complete or options.maximum_trials == 0:
                 return local
@@ -105,6 +111,7 @@ def improve_zone_escapes(
                 package_access_options=package_access_options,
                 options=replace(options, maximum_local_trials=0),
                 _reserved_pads=_reserved_pads,
+                on_progress=on_progress,
             )
             return EscapeFeedbackResult(
                 continuation.pipeline, continuation.plane_stitch,
@@ -155,6 +162,8 @@ def improve_zone_escapes(
                 item.reference for item in trial_board.placements
             ),
         )
+        emit(on_progress, "zone_full_trial", "started", index=routed_trials + 1,
+             description=description)
         trial_pipeline = run_routing_pipeline(
             trial_board,
             placement_options=fixed,
@@ -168,6 +177,7 @@ def improve_zone_escapes(
             fanout_options=fanout_options,
             package_access_options=package_access_options,
             plane_stitch_options=early_options,
+            on_progress=on_progress,
         )
         routed_trials += 1
         late = stitch_zone_pads(trial_pipeline.board, plane_options)
@@ -198,6 +208,10 @@ def improve_zone_escapes(
             description, preflight.pending_pads, late.pending_pads,
             signal_failures, accepted, decision, failed_signals,
         ))
+        emit(on_progress, "zone_full_trial", "finished", index=routed_trials,
+             description=description, decision=decision,
+             pending_pads=[f"{p.component}.{p.pad}" for p in late.pending_pads],
+             failed_signals=list(failed_signals))
         if accepted:
             accepted_pending = len(late.pending_pads)
             baseline_hard = hard
@@ -219,6 +233,7 @@ def improve_zone_escapes(
                     _reserved_pads=(
                         _reserved_pads | (package_targets - pending_early)
                     ),
+                    on_progress=on_progress,
                 )
                 return EscapeFeedbackResult(
                     continuation.pipeline, continuation.plane_stitch,
