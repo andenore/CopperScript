@@ -1,0 +1,100 @@
+// Powered electrical example with a separately bound physical RF hard macro.
+// Not production-qualified. See docs/nrf52-coin-cell.md for hardware/FW limits.
+board Nrf52CoinCell {
+    use library "tiny";
+    import vertical "github.com/andenore/CopperLib/packages/full_vertical";
+    import demo "github.com/andenore/CopperLib/packages/nrf52_demo";
+
+    component U_NRF: vertical.NRF52832_QFAA;
+    component ANT_BT: vertical.JOHANSON_2450AT18A0100001E;
+    component BT1: demo.KEYSTONE_3034;
+    component J_SWD: vertical.SWD_HEADER;
+    component LED_1: demo.REFERENCE_LED_0603;
+    component LED_2: demo.REFERENCE_LED_0603;
+    component SW_1: vertical.BUTTON;
+    component SW_2: vertical.BUTTON;
+    component X1: demo.REFERENCE_XTAL_2016 { value = 32MHz; }
+
+    // RF component values/geometry are the existing experimental hard macro.
+    component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
+    component C_ANT_SERIES: CAPACITOR { value = 1pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component L_ANT_SHUNT: INDUCTOR { value = 2.7nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
+    component L_ANT_SERIES: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
+
+    // Nordic QFAA LDO reference: DEC2 is unconnected (C6 not mounted),
+    // DCC is unconnected and firmware MUST leave the DC/DC regulator disabled.
+    component C_DEC1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_DEC3: CAPACITOR { value = 100pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_DEC4: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_VDD1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_VDD2: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_X1: CAPACITOR { value = 12pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_X2: CAPACITOR { value = 12pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component R_LED1: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_LED2: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_BUTTON1: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_BUTTON2: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_RESET: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+
+    net VBAT {
+        BT1.POS; U_NRF.VDD_1; U_NRF.VDD_2; U_NRF.VDD_3;
+        J_SWD.VREF; C_VDD1.1; C_VDD2.1; C_BULK.1;
+        R_BUTTON1.1; R_BUTTON2.1; R_RESET.1;
+    }
+    net GND {
+        BT1.NEG; U_NRF.VSS_1; U_NRF.VSS_2; U_NRF.VSS_EP;
+        J_SWD.GND; J_SWD.GND_5; J_SWD.GND_DETECT;
+        SW_1.B; SW_2.B; LED_1.K; LED_2.K; X1.CASE_2; X1.CASE_4;
+        C_BT_MATCH.1; L_ANT_SHUNT.1;
+        C_DEC1.2; C_DEC3.2; C_DEC4.2; C_VDD1.2; C_VDD2.2;
+        C_BULK.2; C_X1.2; C_X2.2;
+    }
+    net DEC1 { U_NRF.DEC1; C_DEC1.1; }
+    net DEC3 { U_NRF.DEC3; C_DEC3.1; }
+    net DEC4 { U_NRF.DEC4; C_DEC4.1; }
+    net XTAL_1 { U_NRF.XC1; X1.X1; C_X1.1; }
+    net XTAL_2 { U_NRF.XC2; X1.X2; C_X2.1; }
+    net SWDIO { U_NRF.SWDIO; J_SWD.SWDIO; }
+    net SWDCLK { U_NRF.SWDCLK; J_SWD.SWDCLK; }
+    net RESET { U_NRF.P0_21_NRESET; J_SWD.RESET; R_RESET.2; }
+    net LED1 { U_NRF.P0_13; R_LED1.1; }
+    net LED1_A { R_LED1.2; LED_1.A; }
+    net LED2 { U_NRF.P0_14; R_LED2.1; }
+    net LED2_A { R_LED2.2; LED_2.A; }
+    net BUTTON1 { U_NRF.P0_11; R_BUTTON1.2; SW_1.A; }
+    net BUTTON2 { U_NRF.P0_12; R_BUTTON2.2; SW_2.A; }
+    net NRF_RF_RAW { U_NRF.ANT; C_BT_MATCH.2; L_BT_MATCH.1; }
+    net NRF_RF_ANT { L_BT_MATCH.2; C_ANT_SERIES.1; }
+    net ANT_TEE { C_ANT_SERIES.2; L_ANT_SHUNT.2; L_ANT_SERIES.1; }
+    net ANT_FEED { L_ANT_SERIES.2; ANT_BT.FEED; }
+
+    // Installed primary cell, nominal value only, not a regulator or charger.
+    supply VBAT { voltage = 3V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+
+    // Provisional 50 x 40 mm placement. Antenna/RF member poses come from
+    // nrf_antenna_hard_macro.json, as one rigid unit anchored at U_NRF.
+    constraint fixed_placement(U_NRF) { x = 34mm; y = 12mm; rotation = 0; side = front; }
+    constraint fixed_placement(BT1) { x = 15mm; y = 25mm; rotation = 0; side = front; }
+    constraint fixed_placement(J_SWD) { x = 12mm; y = 7mm; rotation = 0; side = front; }
+    constraint fixed_placement(SW_1) { x = 33mm; y = 32mm; rotation = 0; side = front; }
+    constraint fixed_placement(SW_2) { x = 43mm; y = 32mm; rotation = 0; side = front; }
+    constraint fixed_placement(LED_1) { x = 33mm; y = 25mm; rotation = 0; side = front; }
+    constraint fixed_placement(LED_2) { x = 43mm; y = 25mm; rotation = 0; side = front; }
+    constraint fixed_placement(R_LED1) { x = 33mm; y = 23mm; rotation = 0; side = front; }
+    constraint fixed_placement(R_LED2) { x = 43mm; y = 23mm; rotation = 0; side = front; }
+    constraint fixed_placement(R_BUTTON1) { x = 33mm; y = 28mm; rotation = 0; side = front; }
+    constraint fixed_placement(R_BUTTON2) { x = 43mm; y = 28mm; rotation = 0; side = front; }
+    constraint fixed_placement(R_RESET) { x = 30mm; y = 17mm; rotation = 0; side = front; }
+    constraint fixed_placement(C_DEC1) { x = 29mm; y = 10.5mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_DEC3) { x = 38.7mm; y = 14.5mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_DEC4) { x = 31.5mm; y = 6mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_VDD1) { x = 29mm; y = 14mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_VDD2) { x = 42mm; y = 14.5mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_BULK) { x = 35mm; y = 7mm; rotation = 0; side = front; }
+    constraint fixed_placement(X1) { x = 39.8mm; y = 17.7mm; rotation = 0; side = front; }
+    constraint fixed_placement(C_X1) { x = 38mm; y = 21mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_X2) { x = 41mm; y = 21mm; rotation = 90; side = front; }
+}

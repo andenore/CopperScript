@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:3d2b92066cf5f3ebd21d2e7af7449af1acbbec698eb548e1e4200417a742369c",
+      "checksum": "sha256:a0d8d7ab381b3b86388d3ac890afc57884e7432ddf15a451e1f4b511a4514cc7",
       "files": [
         {
           "path": "copper.mod",
@@ -242,6 +242,21 @@
           "path": "packages/full_vertical/xal4020_222mec.copper",
           "sha256": "004d96510d7d3f362a7fd625799e59b73810b48e5ae235f21c406f6bad44005c",
           "size": 627
+        },
+        {
+          "path": "packages/nrf52_demo/cr2032_holder.copper",
+          "sha256": "f2d51509e98aa1b45ae738a41edf08ca8bec0090421ce1bd15c05eb712a5e221",
+          "size": 641
+        },
+        {
+          "path": "packages/nrf52_demo/crystal.copper",
+          "sha256": "20ba56a7d295e8f069075dedb6076b6b5bc1f1c7a41564dff758d682bb45035d",
+          "size": 854
+        },
+        {
+          "path": "packages/nrf52_demo/led.copper",
+          "sha256": "7a020a2413004b687ccaaef66f96d75f2d7523cedf2cee99f02e0afa4218bacc",
+          "size": 394
         },
         {
           "path": "reports/compatibility.json",

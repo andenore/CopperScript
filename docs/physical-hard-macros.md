@@ -123,6 +123,11 @@ or full-board RF qualification.
 
 ## Sources
 
+The [coin-cell example](nrf52-coin-cell.md) adds the powered MCU support
+circuit, SWD and user controls without changing this macro's electrical or
+physical contract. It remains a placed draft; the non-RF connections are not
+routed by its dedicated builder.
+
 - [Nordic reference guidance](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/ref_circuitry.html?contentId=Deg~HuyXWjteAChpH2NzWw):
   chip matching, C3 return through VSS 31 and inner-layer exclusions.
 - [Nordic QFAx archive](https://nsscprodmedia.blob.core.windows.net/prod/software-and-other-downloads/reference-layouts/nrf52832qfaxreflayoutv11.zip):

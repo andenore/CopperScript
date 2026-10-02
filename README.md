@@ -24,6 +24,19 @@ uv run python -m pcbir.hard_macro_trial `
 Output: ignored `build/nrf-hard-macro/`. This is an RF-only geometry probe,
 not an operational radio or full-vertical routing integration.
 
+A [small powered nRF52/CR2032 example](docs/nrf52-coin-cell.md) adds a 10-pin
+SWD connector, two LEDs, two buttons and the radio support circuit:
+
+```powershell
+uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked --offline
+uv run python -m pcbir.nrf52_example `
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
+  --footprint-root "..\CopperLib\footprints"
+```
+
+Output: `build/nrf52-coin-cell/`. The RF macro is locked and pre-routed;
+the remaining circuit is placed but unrouted. This is not production signoff.
+
 Python 3.11 or newer is required. From the repository root:
 
 ```console
