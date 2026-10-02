@@ -14,7 +14,7 @@
   route fails; retain surface-first search for perimeter terminals and all
   original profile, clearance and atomic acceptance gates.
 - [ ] Finish profiled full-board rerun with current placement and strict policy.
-- [ ] Independently refill/DRC and inspect every saved copper layer.
+- [ ] Independently refill/DRC and inspect every copper layer of the fresh rerun.
 - [ ] Record remaining bends, local density, opens and escape failures without
   relaxing defaults to obtain closure.
 
@@ -83,3 +83,30 @@ The current preference model favors In2.Cu because it borders the declared plane
 and applies complementary soft headings to the inner signal layers. Congestion
 balancing must preserve reference-plane constraints rather than simply equalize
 track length on all layers.
+
+## Strict-policy rerun, validation in progress
+
+Full regression suite: **657 passed, 1 skipped**. The default annulus/pad
+rejection, immutable-pad behavior during rip-up, transactional fanout gate,
+checked corner cleanup, closure idempotence and paired search-order reporting
+have regression coverage. This does not substitute for inspecting a new board.
+
+The profiled current-placement run started from commit `a2659e4` and writes to
+`build/full-vertical/20261002T160832468344Z/`. At the 2026-10-02 16:59 UTC
+checkpoint it had completed placement/global routing, reserved 76 ordinary
+package escapes with none pending, and accepted four RF routes and the MCU USB
+pair. The MCU pair used surface-first search and expanded 210,502 states. The
+modem USB pair search was still active: **no final board, final DRC, profile or
+fresh per-layer zero-overlap result was available yet**. These intermediate
+events are not full-route completion evidence.
+
+The superseded `ef1da49` surface-first comparison was explicitly interrupted
+after spending over 58 minutes on the modem pair. Its partial log is not a
+completed comparison or profiling benchmark. The revised internal-land search
+keeps the same clearance, allowed layers, return-via requirements, paired
+geometry and native acceptance gates. Timings are instrumented and initially
+concurrent; do not infer a speedup without completed comparable evidence.
+
+The independently refilled historical layer plots above are saved under
+`build/baseline-filled-review/layers/` on this workstation. They deliberately
+remain labeled as the pre-fix baseline, not the new fixed-placement board.
