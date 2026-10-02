@@ -15,6 +15,8 @@ from math import hypot
 from types import MappingProxyType
 from typing import Callable
 
+from .fanout import FanoutResult
+
 from .physical import (
     CopperLayer,
     NetRoutingRule,
@@ -24,7 +26,7 @@ from .physical import (
     TrackSegment,
     Via,
 )
-from .routing import GlobalNetRoute, GlobalRoutingResult, GlobalViaProposal
+from .routing import GlobalNetRoute, GlobalRoutingResult, GlobalViaProposal, _placement_fingerprint
 from .geometry import segment_distance_squared
 from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
@@ -76,6 +78,8 @@ class CriticalRoutingResult:
     locked_vias: tuple[Via, ...]
     global_routing_fingerprint: str
     routing_fingerprint: str
+    reserved_track_count: int = 0
+    reserved_via_count: int = 0
 
     def to_json(self) -> str:
         document = {
@@ -83,6 +87,8 @@ class CriticalRoutingResult:
             "status": self.status.value,
             "global_routing_fingerprint": self.global_routing_fingerprint,
             "routing_fingerprint": self.routing_fingerprint,
+            "reserved_track_count": self.reserved_track_count,
+            "reserved_via_count": self.reserved_via_count,
             "nets": [
                 {
                     "nets": list(item.nets),
@@ -119,8 +125,13 @@ def route_critical_nets(
     board: PhysicalBoard,
     global_route: GlobalRoutingResult,
     *, on_progress: Callable[[str, tuple[str, ...], CriticalNetResult | None], None] | None = None,
+    reserved_accesses: FanoutResult | None = None,
 ) -> CriticalRoutingResult:
-    """Materialize exact locked copper for all non-general routing rules."""
+    """Route critical groups around explicit, immutable ordinary package access.
+
+    The locked prefix includes reservations, but ownership remains with fanout.
+    Reservations cannot be arbitrary prior area copper or critical-net stubs.
+    """
 
     if board.tracks or board.vias:
         raise ValueError("critical routing requires a board without existing copper")
@@ -130,6 +141,35 @@ def route_critical_nets(
     coupled_pairs: set[frozenset[str]] = set()
     tracks: list[TrackSegment] = []
     vias: list[Via] = []
+    if reserved_accesses is not None:
+        if global_route.placement_fingerprint != _placement_fingerprint(board):
+            raise ValueError("package-access critical guides are stale")
+        if (replace(reserved_accesses.board, tracks=(), vias=()) != board
+                or reserved_accesses.board.tracks != reserved_accesses.created_tracks
+                or reserved_accesses.board.vias != reserved_accesses.created_vias):
+            raise ValueError("package-access reservations are stale or contain unowned copper")
+        protected = {rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
+        protected.update(zone.net for zone in board.zones)
+        if any(item.net in protected for item in (*reserved_accesses.created_tracks,
+                                                  *reserved_accesses.created_vias)):
+            raise ValueError("ordinary package-access reservations cannot contain critical or zone copper")
+        fatal = tuple(finding for finding in run_physical_drc(reserved_accesses.board).findings
+                      if finding.severity is DrcSeverity.ERROR
+                      and finding.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"})
+        if fatal:
+            # A structurally valid but physically failed preflight is a partial
+            # design result, not an API misuse. Keep evidence; never route over it.
+            nets = (CriticalNetResult(("<package-reservations>",), False, 0, 0, (), 0,
+                                      tuple(f"{f.code}: {f.message}" for f in fatal)),)
+            tracks, vias = list(reserved_accesses.created_tracks), list(reserved_accesses.created_vias)
+            failed_board = replace(reserved_accesses.board,
+                metadata={**board.metadata, "critical_routing": "failed", "detailed_routing": "partial",
+                          "fabrication_ready": "false"})
+            return CriticalRoutingResult(CriticalRoutingStatus.FAILED, failed_board, nets,
+                tuple(tracks), tuple(vias), global_route.routing_fingerprint,
+                _fingerprint(global_route.routing_fingerprint, tracks, vias, list(nets)), len(tracks), len(vias))
+        tracks.extend(reserved_accesses.created_tracks)
+        vias.extend(reserved_accesses.created_vias)
     results: list[CriticalNetResult] = []
     for rule in sorted(
         (item for item in board.net_routing_rules if item.kind is not RouteKind.GENERAL),
@@ -289,6 +329,8 @@ def route_critical_nets(
         tuple(vias),
         global_route.routing_fingerprint,
         fingerprint,
+        len(reserved_accesses.created_tracks) if reserved_accesses else 0,
+        len(reserved_accesses.created_vias) if reserved_accesses else 0,
     )
 
 

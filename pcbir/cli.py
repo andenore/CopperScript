@@ -29,6 +29,7 @@ from .detailed import DetailedRouterOptions
 from .drc import DrcDecision, run_physical_drc
 from .flow import PhysicalFlowStatus, run_routing_pipeline
 from .fanout import FanoutOptions
+from .package_access import PackageAccessOptions
 from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
 from .pad_stitch import stitch_duplicate_pads
 from .plane import PlaneStitchOptions, stitch_zone_pads
@@ -250,7 +251,7 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--router-iterations", type=int, default=5)
     board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
     board_route_parser.add_argument("--critical-feedback-trials", type=int, default=0,
-                                    help="bounded rotations/moves around failed critical nets, before ordinary routing")
+                                    help="bounded critical placement trials; with --fanout adds budget to the package-access controller")
     board_route_parser.add_argument("--pitch-mm", default="1")
     board_route_parser.add_argument("--passes", type=int, default=1)
     board_route_parser.add_argument("--search-budget", type=int, default=50_000)
@@ -268,8 +269,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument(
         "--fanout", action="store_true",
-        help="pre-escape crowded SMD pins to legal vias before detailed routing",
+        help="reserve crowded ordinary-pin escapes before critical routes; gate ordinary area routing on access",
     )
+    board_route_parser.add_argument("--package-access-trials", type=int, default=8,
+        help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
+    board_route_parser.add_argument("--package-access-movement-mm", type=_positive_mm, default="0.5",
+        help="initial package-access placement repair distance (default: 0.5 mm)")
     board_route_parser.add_argument(
         "--detailed-feedback-trials", type=int, default=0,
         help="bounded legal placement retries guided by detailed-route failures",
@@ -587,6 +592,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     plane_stitch_options=early_options,
                     detailed_feedback_trials=args.detailed_feedback_trials,
                     critical_feedback_trials=args.critical_feedback_trials,
+                    package_access_options=PackageAccessOptions(
+                        maximum_trials=args.package_access_trials,
+                        movement_nm=nm_from_mm(args.package_access_movement_mm)),
                 )
                 escape_feedback = (
                     improve_zone_escapes(
@@ -596,6 +604,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         feedback_options=feedback_options,
                         detailed_options=detailed_options,
                         fanout_options=fanout_options,
+                        package_access_options=PackageAccessOptions(
+                            maximum_trials=args.package_access_trials,
+                            movement_nm=nm_from_mm(args.package_access_movement_mm)),
                         options=EscapeFeedbackOptions(
                             maximum_trials=args.zone_escape_trials,
                             maximum_local_trials=args.zone_local_ripup_trials,
@@ -660,6 +671,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report["critical_placement_feedback"] = {
                     "accepted_moves": result.critical_feedback.accepted_moves,
                     "trials": [asdict(trial) for trial in result.critical_feedback.trials],
+                }
+            if result.package_access is not None:
+                access = result.package_access
+                report["package_access"] = {
+                    "status": "ready" if access.ready else "blocked",
+                    "stage_order": ["ordinary_package_exits", "critical_routes", "selected_plane_contacts", "ordinary_area"],
+                    "pending_pads": [f"{pad.component}.{pad.pad}" for pad in sorted(access.pending_pads)],
+                    "failed_critical_nets": sorted(access.failed_critical_nets),
+                    "hard_findings": access.hard_findings,
+                    "accepted_moves": access.accepted_moves,
+                    "trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
+                               for trial in access.trials],
+                    "ordinary_area_started": access.ready,
                 }
             if escape_feedback is not None:
                 report["zone_escape_feedback"] = {

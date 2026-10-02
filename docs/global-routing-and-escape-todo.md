@@ -1,9 +1,16 @@
 # Global routing and package escape implementation
 
 This is a staged implementation checklist, not a claim that the full board is
-routed. The full-vertical board's current baseline is 51/58 detailed nets, with
-one global via-resource overflow and seven pending fanouts. Each stage must
+routed. The original baseline was 51/58 detailed nets, with one global
+via-resource overflow and seven pending fanouts. The latest full-route outcome
+is [pass 13](routing-review-pass13.md), with three ordinary nets open.
+[Pass 18](routing-review-pass18.md) is a partial escape-first experiment: all
+76 ordinary exits allocate, but the modem USB pair fails compatibility. Each stage must
 retain deterministic output and must not weaken exact native or KiCad DRC.
+
+The new [package-access-first sequence](package-access-first.md#remaining-implementation-sequence)
+tracks preflight gating, bounded legal placement repair, joint critical/power/GND
+pattern allocation, onward ports and directional demand-derived margins.
 
 ## 1. Make global resources physically meaningful
 

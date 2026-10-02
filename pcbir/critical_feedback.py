@@ -102,6 +102,8 @@ def improve_critical_placement(
         raise ValueError("critical placement feedback bounds are invalid")
     if board.tracks or board.vias or board.zone_fills:
         raise ValueError("critical placement feedback requires an unrouted, unfilled source")
+    if critical.reserved_track_count or critical.reserved_via_count:
+        raise ValueError("critical-only placement feedback cannot rebuild package access; use the package-access controller")
     if (replace(critical.board, tracks=(), vias=(), metadata=board.metadata) != board
             or global_route.placement_fingerprint != _placement_fingerprint(board)
             or critical.global_routing_fingerprint != global_route.routing_fingerprint

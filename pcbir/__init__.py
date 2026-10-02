@@ -24,6 +24,8 @@ from .critical_feedback import (
     CriticalPlacementTrial,
     improve_critical_placement,
 )
+from .package_access import (PackageAccessOptions, PackageAccessResult, PackageAccessTrial,
+                             preflight_package_access, improve_package_access)
 from .detailed import (
     DetailedNetResult,
     DetailedNode,
@@ -516,6 +518,11 @@ __all__ = [
     "optimize_placement_for_routing",
     "route_global",
     "route_critical_nets",
+    "PackageAccessOptions",
+    "PackageAccessResult",
+    "PackageAccessTrial",
+    "preflight_package_access",
+    "improve_package_access",
     "route_any_angle",
     "route_detailed",
     "segment_distance_squared",

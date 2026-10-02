@@ -180,6 +180,16 @@ Production gates remain outstanding.
 The [compatible-escape increment](docs/routing-review-pass17.md) improves the
 matched partial package stage from 72 to 74 exits. Two MCU exits remain pending;
 the latest full-board routing result above has not been replaced by a full rerun.
+The [escape-first increment](docs/package-access-first.md) now reserves ordinary
+package exits before critical long routes with `--fanout`. If package access or
+critical compatibility fails, ordinary area routing is blocked with zero search
+passes. Bounded legal placement feedback rebuilds the reservations; use
+`--package-access-trials 0` to disable moves without disabling the gate.
+Joint critical/power/ground access and directional placement margins remain
+follow-up work; an allocated fanout via is not complete-board connectivity.
+[Pass 18](docs/routing-review-pass18.md) allocates all 76 ordinary exits at the
+unchanged saved placement, but the modem-side USB pair then fails. The access
+gate correctly blocks area routing; this is not a new full-board success.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6

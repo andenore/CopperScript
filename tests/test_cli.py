@@ -358,7 +358,14 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert all(set(item) == {"pad", "legal_candidate_count", "selected_candidate_index", "diagnostic", "two_leg_candidate_count"}
                for item in document["fanout"]["pin_access_analysis"])
     assert document["fabrication_ready"] is False
-    assert document["critical_placement_feedback"] == {"accepted_moves": 0, "trials": []}
+    # With fanout, critical/access failures share the escape-first controller.
+    assert "critical_placement_feedback" not in document
+    assert document["package_access"]["status"] in {"ready", "blocked"}
+    assert document["package_access"]["stage_order"][0] == "ordinary_package_exits"
+    assert "trials" in document["package_access"]
+    if document["package_access"]["status"] == "blocked":
+        assert document["package_access"]["ordinary_area_started"] is False
+        assert document["detailed"]["metrics"]["passes"] == 0
     assert document["detailed"]["status"] in {"success", "partial"}
     assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
     assert "signal_track_length_nm" in document["route_geometry"]

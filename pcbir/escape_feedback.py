@@ -18,6 +18,7 @@ from .clusters import move_placement_unit
 from .detailed import DetailedRouterOptions, DetailedRoutingResult, DetailedRoutingStatus, route_detailed
 from .drc import DrcDecision, PhysicalDrcPolicy, run_physical_drc
 from .fanout import FanoutOptions
+from .package_access import PackageAccessOptions
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
 from .physical import PadReference, PhysicalBoard, Placement, Point, nm_from_mm
 from .placement import PlacementPlannerOptions, placement_solution_is_legal
@@ -71,6 +72,7 @@ def improve_zone_escapes(
     detailed_options: DetailedRouterOptions | None = None,
     drc_policy: PhysicalDrcPolicy | None = None,
     fanout_options: FanoutOptions | None = None,
+    package_access_options: PackageAccessOptions | None = None,
     options: EscapeFeedbackOptions | None = None,
     _reserved_pads: frozenset[PadReference] = frozenset(),
 ) -> EscapeFeedbackResult:
@@ -79,6 +81,9 @@ def improve_zone_escapes(
     options = options or EscapeFeedbackOptions()
     placement_options = placement_options or PlacementPlannerOptions()
     baseline_stitch = stitch_zone_pads(initial.board, plane_options)
+    if initial.package_access is not None and not initial.package_access.ready:
+        # A late-plane repair cannot bypass the earlier package-access gate.
+        return EscapeFeedbackResult(initial, baseline_stitch, ())
     if not baseline_stitch.pending_pads:
         return EscapeFeedbackResult(initial, baseline_stitch, ())
     if options.maximum_local_trials:
@@ -97,6 +102,7 @@ def improve_zone_escapes(
                 detailed_options=detailed_options,
                 drc_policy=drc_policy,
                 fanout_options=fanout_options,
+                package_access_options=package_access_options,
                 options=replace(options, maximum_local_trials=0),
                 _reserved_pads=_reserved_pads,
             )
@@ -160,6 +166,7 @@ def improve_zone_escapes(
             detailed_options=detailed_options,
             drc_policy=drc_policy,
             fanout_options=fanout_options,
+            package_access_options=package_access_options,
             plane_stitch_options=early_options,
         )
         routed_trials += 1
@@ -204,6 +211,7 @@ def improve_zone_escapes(
                     detailed_options=detailed_options,
                     drc_policy=drc_policy,
                     fanout_options=fanout_options,
+                    package_access_options=package_access_options,
                     options=replace(
                         options,
                         maximum_trials=options.maximum_trials-routed_trials,

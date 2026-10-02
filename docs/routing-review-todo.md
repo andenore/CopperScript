@@ -126,6 +126,13 @@ Completion means tested implementation, not automatic manufacturing signoff.
     bounded legal whole-unit placement/critical-reservation feedback.
   - [ ] After those exits survive allocation, rerun complete ordinary routing,
     independent filled-zone checks and every-layer geometry/congestion review.
+  - [x] Add [escape-first preflight](package-access-first.md), reserving ordinary
+    local exits before critical long routes, explicit area-routing gate and
+    bounded identity-preserving whole-unit placement feedback. This first
+    increment does not co-allocate critical or all power/GND domains.
+  - [ ] Co-allocate critical/ordinary/plane package access, verify onward ports,
+    derive directional placement margins, then perform the full rerun. See the
+    implementation sequence in package-access-first; a legal via is not closure.
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,
   including orthogonal-first/budget-fallback routes; protect pads, junctions,
   vias, and exact clearance. Improve topology without breaking existing trees.

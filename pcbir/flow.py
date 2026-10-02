@@ -8,8 +8,8 @@ from enum import Enum
 from .critical import CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets
 from .critical_feedback import CriticalPlacementFeedbackResult, improve_critical_placement
 from .detailed import DetailedRouterOptions, DetailedRoutingResult, DetailedRoutingStatus, route_detailed
-from .drc import DrcDecision, PhysicalDrcPolicy, PhysicalDrcReport
-from .fanout import FanoutOptions, FanoutResult, route_fanout
+from .drc import DrcDecision, PhysicalDrcPolicy, PhysicalDrcReport, run_physical_drc
+from .fanout import FanoutOptions, FanoutResult
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .pad_stitch import DuplicatePadStitchResult
 from .route_closure import close_detailed_lands
@@ -18,6 +18,8 @@ from .placement import PlacementPlannerOptions
 from .routeflow import (FeedbackStatus, PlacementRoutingFeedbackOptions, PlacementRoutingResult,
                         detailed_failure_trials, optimize_placement_for_routing)
 from .routing import GlobalRouterOptions, GlobalRoutingStatus, route_global
+from .package_access import (PackageAccessOptions, PackageAccessResult, blocked_area_result,
+                             improve_package_access, preflight_package_access)
 
 
 class PhysicalFlowStatus(str, Enum):
@@ -37,6 +39,7 @@ class RoutingPipelineResult:
     detailed_feedback_trials: int = 0
     duplicate_pad_stitch: DuplicatePadStitchResult | None = None
     critical_feedback: CriticalPlacementFeedbackResult | None = None
+    package_access: PackageAccessResult | None = None
 
     @property
     def board(self) -> PhysicalBoard:
@@ -56,6 +59,7 @@ def run_routing_pipeline(
     detailed_feedback_trials: int = 0,
     detailed_feedback_movement_nm: int = nm_from_mm("0.5"),
     critical_feedback_trials: int = 0,
+    package_access_options: PackageAccessOptions | None = None,
 ) -> RoutingPipelineResult:
     """Run steps 4–8 in dependency order without weakening an earlier gate."""
 
@@ -70,9 +74,33 @@ def run_routing_pipeline(
     placement = optimize_placement_for_routing(
         board, placement_options, global_options, feedback_options
     )
-    critical = route_critical_nets(placement.board, placement.global_route)
+    access = None
+    if fanout_options is not None:
+        access = preflight_package_access(placement.board, placement.global_route,
+                                         fanout_options, plane_stitch_options)
+        access_options = package_access_options or PackageAccessOptions()
+        # With fanout enabled, critical failures belong to the same escape-first
+        # placement transaction, not a second critical-first controller.
+        access_options = replace(access_options,
+            maximum_trials=access_options.maximum_trials + critical_feedback_trials)
+        access = improve_package_access(access, fanout_options,
+            options=access_options, placement_options=placement_options,
+            global_options=global_options, plane_options=plane_stitch_options)
+        placement = replace(placement, board=access.source, global_route=access.global_route,
+            status=FeedbackStatus.PASS if access.global_route.status is GlobalRoutingStatus.SUCCESS else FeedbackStatus.WARNING,
+            full_route_certified=access.global_route.status is GlobalRoutingStatus.SUCCESS,
+            placement_candidate=placement.placement_candidate + ("-access" if access.accepted_moves else ""))
+        if not access.ready:
+            detailed = blocked_area_result(access)
+            return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, access.critical,
+                detailed, run_physical_drc(detailed.board, policy=drc_policy),
+                fanout=replace(access.fanout, board=access.board), plane_stitch=access.plane_stitch,
+                package_access=access)
+        critical = access.critical
+    else:
+        critical = route_critical_nets(placement.board, placement.global_route)
     critical_feedback = None
-    if critical_feedback_trials:
+    if critical_feedback_trials and access is None:
         critical_feedback = improve_critical_placement(
             placement.board, placement.global_route, critical, maximum_trials=critical_feedback_trials,
             placement_options=placement_options, global_options=global_options,
@@ -84,12 +112,12 @@ def run_routing_pipeline(
                                 status=FeedbackStatus.PASS,
                                 full_route_certified=True,
                                 placement_candidate=placement.placement_candidate + "-critical")
-    plane_stitch = (
+    plane_stitch = access.plane_stitch if access else (
         stitch_zone_pads(critical.board, plane_stitch_options)
         if plane_stitch_options else None
     )
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
-    fanout = route_fanout(pre_fanout, fanout_options) if fanout_options else None
+    fanout = replace(access.fanout, board=pre_fanout) if access else None
     detailed = route_detailed(
         fanout.board if fanout else pre_fanout, placement.global_route,
         detailed_options, fanout_accesses=fanout.accesses if fanout else None,
@@ -121,18 +149,21 @@ def run_routing_pipeline(
             trial_global = route_global(trial_board, global_options)
             if trial_global.status is not GlobalRoutingStatus.SUCCESS:
                 continue
-            trial_critical = route_critical_nets(trial_board, trial_global)
+            trial_access = (preflight_package_access(trial_board, trial_global, fanout_options,
+                                                     plane_stitch_options) if fanout_options else None)
+            if trial_access is not None and not trial_access.ready:
+                continue
+            trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global)
             if trial_critical.status is CriticalRoutingStatus.FAILED:
                 continue
-            trial_plane_stitch = (
+            trial_plane_stitch = trial_access.plane_stitch if trial_access else (
                 stitch_zone_pads(trial_critical.board, plane_stitch_options)
                 if plane_stitch_options else None
             )
             trial_pre_fanout = (
                 trial_plane_stitch.board if trial_plane_stitch else trial_critical.board
             )
-            trial_fanout = (route_fanout(trial_pre_fanout, fanout_options)
-                            if fanout_options else None)
+            trial_fanout = replace(trial_access.fanout, board=trial_pre_fanout) if trial_access else None
             trial_detailed = route_detailed(
                 trial_fanout.board if trial_fanout else trial_pre_fanout,
                 trial_global, detailed_options,
@@ -155,6 +186,7 @@ def run_routing_pipeline(
                     trial_detailed, trial_drc,
                 )
                 duplicate_stitch = trial_duplicate
+                access = trial_access
     passed = (
         placement.full_route_certified
         and critical.status is not CriticalRoutingStatus.FAILED
@@ -172,6 +204,7 @@ def run_routing_pipeline(
         detailed_feedback_trials=trials_run,
         duplicate_pad_stitch=duplicate_stitch,
         critical_feedback=critical_feedback,
+        package_access=access,
     )
 
 
