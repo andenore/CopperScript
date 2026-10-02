@@ -185,6 +185,52 @@ where relevant. It does not imply third-party certification.
   - [ ] Resolve the reported real CopperLib/KiCad footprint gaps and complete
         acceptance-board placement, routing, DRC, manufacturing, and CAM closure.
 
+### Future improvement: full-vertical stackup and copper-fill policy
+
+Proposed on 2026-10-02; not implemented or qualified. Adding this work to the
+roadmap does not change the current board, routing run, or manufacturing gate.
+
+- [ ] Evaluate and qualify a six-layer `Signal / GND / Signal / Signal / GND /
+      Signal` stack against an actual JLCPCB laminate/copper specification.
+      Reserve In1.Cu and In4.Cu as common-GND reference planes, with only
+      manufacturer-required RF exclusions. Moving In4.Cu from signal routing
+      to GND reduces routing capacity and requires a complete fresh reroute.
+- [ ] Express explicit layer roles and distinguish dedicated reference planes
+      from auxiliary signal-layer pours; replace plane-role inference from
+      zone coverage. Add frontend support for local zone boundaries, stitching
+      policy, island removal, and per-pad connection overrides, lowered into
+      physical IR rather than electrical connectivity or schematic geometry.
+- [ ] Add selective stitched GND fill on F.Cu/B.Cu, retaining the provisional
+      0.5 mm board-edge inset. Remove all unconnected fill islands and reject
+      ineffective narrow slivers. Use assembly-appropriate thermal reliefs for
+      ordinary solder pads and solid connections for ground vias and explicitly
+      designated RF/power ground lands. Keep default via/pad overlap forbidden;
+      qualified via-in-pad remains an explicit opt-in, never a fill side effect.
+- [ ] Keep In2.Cu primarily for signals/USB, without blanket fill initially.
+      Use In3.Cu for general signals and localized power distribution; evaluate
+      any auxiliary inner-layer GND fill only after routing and reference-path
+      review, not as a substitute for a continuous plane.
+- [ ] Define local V5 input, V3V8 modem, and V3V3 distribution regions. Size
+      copper necks and vias against the declared 2 A input budget, actual rail
+      currents, modem transients, voltage drop and thermal requirements. Protect
+      the selected regulator's switching-node, feedback and capacitor-return
+      geometry; do not flood low-current SIM/1.8 V nets indiscriminately.
+- [ ] Add source-backed Johanson antenna clearances and Nordic RF matching
+      keepouts before enabling generic fill. Preserve the reference C3
+      (`C_BT_MATCH`) ground path through nRF52832 VSS pin 31 rather than allowing
+      automatic fill to bypass it; honor required inner-layer copper exclusions.
+      Review cellular and GNSS feed ground geometry separately.
+- [ ] Qualify USB 90-ohm differential and applicable RF 50-ohm feed geometry
+      using the selected stackup, including nearby-fill clearance. Existing USB
+      width/gap values remain provisional; the Nordic chip-side matching net
+      must not be treated as a generic 50-ohm transmission line.
+- [ ] Reserve off-pad ground access and return vias during routing, then refill
+      and iterate on actual connected copper. Accept only fresh native/KiCad
+      DRC, zero unintended via/pad contacts, connected GND regions/planes,
+      reviewed critical return paths, and assembly/copper-balance checks.
+      Record profiled full rerouting and individual-layer plots; zone creation
+      alone is neither continuity evidence nor manufacturing signoff.
+
 ### Program completion criteria
 
 - [x] Research recommendation and source record exists for P1–P9.
