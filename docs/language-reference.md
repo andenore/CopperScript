@@ -471,6 +471,16 @@ placement/routing defaults when neither is stated. Routing parameters lower to
 `tuning_amplitude_limit`, `require_return_vias`, `return_via_net`,
 `maximum_return_via_distance`, and `impedance_evidence_digest`.
 
+USB/differential profiles need not be top-layer-only. For example,
+`allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;` permits matched terminal
+transitions and another-layer paired middle route. `max_vias` counts signal
+vias **per member**, not across both nets; return-net vias are reported
+separately. Required return vias must satisfy `return_via_net` and
+`maximum_return_via_distance` at each transition. Dedicated plane layers
+remain unavailable to foreign signal tracks. See
+[paired layer transitions](paired-layer-transitions.md) for the bounded
+implementation and its impedance/return-path limitations.
+
 A provisional plane can be declared separately from electrical connectivity:
 
 ```copper

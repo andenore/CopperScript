@@ -32,6 +32,7 @@ from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
 from .drc import DrcSeverity, run_physical_drc
 from .pair_search import PairSearchCandidate, PairSearchStats, paired_candidates
+from .pair_vias import paired_via_candidates, transition_spacing
 from .pair_refine import PairRefinementStats, paired_shortcuts
 from .local_critical import local_surface_candidates
 
@@ -220,24 +221,35 @@ def route_critical_nets(
                 first, second = sorted((rule, partner_rule), key=lambda item: item.net)
                 search_board = replace(board, tracks=tuple(tracks), vias=tuple(vias))
                 stats = PairSearchStats()
-                for pitch_nm in (1_000_000, 500_000, 250_000):
-                    for candidate in paired_candidates(
-                        search_board, first, second, routes[first.net], routes[second.net],
-                        stats=stats, pitch_nm=pitch_nm,
-                    ):
-                        attempt, proposed_tracks, proposed_vias = _route_pair(
-                            board, first, second, routes,
-                            exact_tracks=(candidate.first, candidate.second),
-                        )
-                        attempt, proposed_tracks, proposed_vias = _validate_candidate(
-                            board, attempt, proposed_tracks, proposed_vias, tracks, vias,
-                        )
-                        if attempt.connected:
-                            result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
-                            result, pair_tracks, pair_vias = _improve_pair_spine(
-                                board, search_board, first, second, routes, candidate,
-                                result, pair_tracks, pair_vias, tracks, vias,
+                # Prefer no transitions, then jointly escaped via pairs. Each
+                # alternative retains the original profiles and atomic gate.
+                for searcher in (paired_candidates, paired_via_candidates):
+                    for pitch_nm in (1_000_000, 500_000, 250_000):
+                        for candidate in searcher(
+                            search_board, first, second, routes[first.net], routes[second.net],
+                            stats=stats, pitch_nm=pitch_nm,
+                        ):
+                            attempt, proposed_tracks, proposed_vias = _route_pair(
+                                board, first, second, routes,
+                                exact_tracks=(candidate.first, candidate.second),
+                                exact_via_pairs=candidate.via_pairs,
+                                exact_return_vias=candidate.return_vias,
                             )
+                            attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
+                                board, attempt, proposed_tracks, proposed_vias, rules,
+                            )
+                            attempt, proposed_tracks, proposed_vias = _validate_candidate(
+                                board, attempt, proposed_tracks, proposed_vias, tracks, vias,
+                            )
+                            if attempt.connected:
+                                result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
+                                if not candidate.via_pairs:
+                                    result, pair_tracks, pair_vias = _improve_pair_spine(
+                                        board, search_board, first, second, routes, candidate,
+                                        result, pair_tracks, pair_vias, tracks, vias,
+                                    )
+                                break
+                        if result.connected:
                             break
                     if result.connected:
                         break
@@ -579,6 +591,8 @@ def _route_pair(
     second_rule: NetRoutingRule,
     routes: dict[str, GlobalNetRoute],
     *, exact_tracks: tuple[tuple[TrackSegment, ...], tuple[TrackSegment, ...]] | None = None,
+    exact_via_pairs: tuple[tuple[Via, Via], ...] = (),
+    exact_return_vias: tuple[Via, ...] = (),
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     first_name, second_name = sorted((first_rule.net, second_rule.net))
     first = first_rule if first_rule.net == first_name else second_rule
@@ -674,8 +688,8 @@ def _route_pair(
                                       if value is not None)
                                   if first.tuning_amplitude_limit_nm is not None or second.tuning_amplitude_limit_nm is not None
                                   else 0)
-    pair_vias: list[Via] = []
-    return_vias: list[Via] = []
+    pair_vias: list[Via] = [v for pair in exact_via_pairs for v in pair]
+    return_vias: list[Via] = list(exact_return_vias)
     for item in (() if exact_tracks is not None else guide.vias):
         for net, sign in ((first.net, 1), (second.net, -1)):
             pair_vias.append(_guide_via(
@@ -701,6 +715,33 @@ def _route_pair(
     diagnostics.extend(
         _budget_diagnostics(second, tuple(second_tracks), tuple(v for v in pair_vias if v.net == second.net))
     )
+    if exact_via_pairs:
+        # Via-pad spacing is deliberately wider than trace pitch. Require
+        # explicit matched transition provenance; never infer a pair from two
+        # arbitrary distant vias. Native DRC independently verifies contacts,
+        # every through-span layer, drill envelopes and complete connectivity.
+        pitch = transition_spacing(board, first, second)
+        valid = all(a.net == first.net and b.net == second.net
+            and (a.from_layer,a.to_layer,a.size_nm,a.drill_nm,a.technology)
+                == (b.from_layer,b.to_layer,b.size_nm,b.drill_nm,b.technology)
+            and abs(hypot(a.position.x_nm-b.position.x_nm,
+                          a.position.y_nm-b.position.y_nm)-pitch) <= 4
+            for a,b in exact_via_pairs)
+        valid = valid and len(set(pair_vias)) == len(pair_vias)
+        paired_transitions = len(exact_via_pairs) if valid else 0
+        if not valid:
+            diagnostics.append("explicit differential transition geometry is not paired")
+        if exact_tracks is None:
+            diagnostics.append("explicit via transitions require exact joint tracks")
+        if first.require_return_vias or second.require_return_vias:
+            requested = [r for r in (first,second) if r.require_return_vias]
+            for a,b in exact_via_pairs:
+                if not any(all(v.net == r.return_via_net
+                    and (v.from_layer,v.to_layer) == (a.from_layer,a.to_layer)
+                    and max(hypot(v.position.x_nm-s.position.x_nm,v.position.y_nm-s.position.y_nm)
+                            for s in (a,b)) <= r.maximum_return_via_distance_nm
+                    for r in requested) for v in return_vias):
+                    diagnostics.append("paired transition lacks a permitted nearby return via")
     if max_skew is not None and skew > max_skew:
         diagnostics.append(f"pair skew {skew} nm exceeds {max_skew} nm")
     uncoupled_limit = min(
@@ -719,7 +760,7 @@ def _route_pair(
                             second.maximum_return_via_distance_nm)
         if value is not None
     ) if first.maximum_return_via_distance_nm is not None or second.maximum_return_via_distance_nm is not None else None
-    if return_vias and return_limit is not None and offset > return_limit:
+    if not exact_via_pairs and return_vias and return_limit is not None and offset > return_limit:
         diagnostics.append(
             f"return via distance {offset} nm exceeds {return_limit} nm"
         )
@@ -732,6 +773,10 @@ def _route_pair(
             )
         )
     )
+    if exact_via_pairs:
+        assumptions = (*assumptions,
+            "layer transitions require layer-specific impedance and via-stub qualification",
+            "reference-via placement does not verify refilled ground-plane continuity")
     evidence = tuple(dict.fromkeys((*_external_evidence(first), *_external_evidence(second))))
     tracks = tuple((*first_tracks, *second_tracks))
     return (
@@ -750,7 +795,8 @@ def _route_pair(
             len(return_vias),
             tuned_length,
             evidence,
-            strategy=("joint_pair_search" if exact_tracks is not None else
+            strategy=("joint_pair_via_search" if exact_via_pairs else
+                      "joint_pair_search" if exact_tracks is not None else
                       "aligned_pair" if aligned is not None else "global_guide"),
         ),
         tracks,

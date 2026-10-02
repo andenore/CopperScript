@@ -53,6 +53,8 @@ def paired_shortcuts(
     if maximum_attempts <= 0:
         raise ValueError("pair refinement bound must be positive")
     stats = stats if stats is not None else PairRefinementStats()
+    if candidate.via_pairs or candidate.return_vias:
+        return  # Surface-spine compaction cannot own multilayer transitions.
     start, end = candidate.start_port, candidate.end_port
     if not candidate.spine or start is None or end is None:
         return

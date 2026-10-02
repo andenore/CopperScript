@@ -316,6 +316,13 @@ this does not qualify impedance or production readiness.
 
 ## Running the example
 
+USB profiles now permit matched terminal vias to `In2.Cu`, adjacent to the
+declared `In1.Cu` GND plane, instead of requiring zero-via top-only routing.
+The limit is two signal vias per member with nearby GND return vias. This is
+provisional geometric intent; common nominal width/gap does not establish
+layer-specific 90-ohm impedance or filled-plane continuity. RF profiles remain
+unchanged. See [paired layer transitions](paired-layer-transitions.md).
+
 ```text
 python -m copperscript check examples/full_vertical_board.copper
 python -m copperscript power-check examples/full_vertical_board.copper

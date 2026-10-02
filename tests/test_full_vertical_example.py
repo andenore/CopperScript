@@ -3,7 +3,7 @@ from pathlib import Path
 from pcbir import ConnectionPolicy, PrototypePhysicalOptions, check, compile_file, prototype_physicalize
 from pcbir.elaborate import elaborate
 from pcbir.power import analyze_power_states
-from pcbir.physical import CopperLayer, RouteKind
+from pcbir.physical import CopperLayer, RouteKind, nm_from_mm
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +26,11 @@ def test_full_vertical_explicit_critical_profiles_lower_without_claiming_qualifi
         assert positive.width_nm == negative.width_nm
         assert positive.pair_gap_nm == negative.pair_gap_nm
         assert positive.target_impedance_ohms == negative.target_impedance_ohms == 90
+        for rule in (positive,negative):
+            assert rule.allowed_layers == (CopperLayer.FRONT,CopperLayer.INTERNAL_2)
+            assert rule.max_vias == 2
+            assert rule.require_return_vias and rule.return_via_net == 'GND'
+            assert rule.maximum_return_via_distance_nm == nm_from_mm(2)
     for name in ("CELL_RF", "GNSS_RF"):
         assert profiles[name].kind is RouteKind.RF_FEED
         assert profiles[name].target_impedance_ohms == 50
@@ -34,7 +39,7 @@ def test_full_vertical_explicit_critical_profiles_lower_without_claiming_qualifi
     assert profiles["NRF_RF_ANT"].kind is RouteKind.RF_FEED
     assert profiles["NRF_RF_ANT"].topology == "point_to_point"
     assert all(rule.allowed_layers == (CopperLayer.FRONT,) and rule.max_vias == 0
-               for rule in profiles.values())
+               for name,rule in profiles.items() if not name.startswith('USB_'))
     assert all(rule.impedance_evidence_digest is None and rule.max_length_nm is None
                and rule.max_skew_nm is None for rule in profiles.values())
 

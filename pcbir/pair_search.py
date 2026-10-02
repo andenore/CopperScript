@@ -15,7 +15,7 @@ from math import ceil, hypot, sqrt
 from typing import Iterator, NamedTuple
 
 from .geometry import RoundedConvexShape, shapes_clear
-from .physical import CopperLayer, NetRoutingRule, PhysicalBoard, Point, TrackSegment, nm_from_mm
+from .physical import BoardSide, CopperLayer, NetRoutingRule, PhysicalBoard, Point, TrackSegment, Via, nm_from_mm
 from .routing import GlobalNetRoute
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers
@@ -44,6 +44,8 @@ class PairSearchCandidate:
     spine: tuple[Point, ...] = ()
     start_port: _Port | None = None
     end_port: _Port | None = None
+    via_pairs: tuple[tuple[Via, Via], ...] = ()
+    return_vias: tuple[Via, ...] = ()
 
 
 class _SpineSearchResult(NamedTuple):
@@ -124,7 +126,7 @@ def _legal(board: PhysicalBoard, index: RoutingClearanceIndex,
             return False
     return all(shapes_clear(RoundedConvexShape((a.start, a.end), a.width_nm // 2),
                             RoundedConvexShape((b.start, b.end), b.width_nm // 2), clearance)
-               for a in first for b in second)
+               for a in first for b in second if a.layer is b.layer)
 
 
 def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
@@ -210,7 +212,12 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
     partners = {access.pad.component: access for access in second_guide.accesses}
     if len(partners) != 2 or set(partners) != {access.pad.component for access in first_guide.accesses}:
         return
-    layers = {access.layer for access in (*first_guide.accesses, *second_guide.accesses)}
+    # A guide's access layer can be reached only through its tentative via.
+    # Surface-only alternatives start on actual pad-side copper, not an inner
+    # grid layer mistaken for a physical terminal contact.
+    placements = {p.reference:p for p in board.placements}
+    layers = {CopperLayer.FRONT if placements[access.pad.component].side is BoardSide.FRONT
+              else CopperLayer.BACK for access in first_guide.accesses}
     if len(layers) != 1:
         return
     layer = next(iter(layers))

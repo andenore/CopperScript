@@ -154,11 +154,16 @@ Completion means tested implementation, not automatic manufacturing signoff.
     Bounded pitch refinement connects both real-footprint USB pairs without
     vias or placement changes. Independent KiCad confirms no critical opens
     or hard copper findings. See [pass 5](routing-review-pass5.md).
-    New paired layer transitions and non-octilinear/multi-terminal pairs remain
-    unsupported by this search, not silently approximated. Existing transition
-    candidates still require atomic native/profile/return-via acceptance.
-    Future profiles needing transitions require their owning paired search;
-    package-placement feedback follows if the bounded surface search fails.
+    Non-octilinear/multi-terminal pairs remain unsupported by this search,
+    not silently approximated. Paired terminal transitions now have a bounded
+    owning search; see R8d. Package-placement feedback remains available if
+    these finite joint searches fail.
+  - [x] R8d: Matched terminal-via collars plus a common-spine route on another
+    permitted signal layer. Retain full-span drill/copper and reference-via
+    checks, explicit pairing provenance, original budgets and atomic native
+    acceptance. USB example profiles allow F.Cu/In2.Cu with two vias/member;
+    actual impedance/return-plane qualification remains unfinished. See
+    [paired-layer-transitions](paired-layer-transitions.md).
   - [ ] R8c (next): Enforce RF reference-layout/matching clusters and antenna keepouts;
     shorten the Nordic and GNSS paths. Connected long top-layer feeds are not
     evidence of RF performance, matching-ground topology or return continuity.
