@@ -352,6 +352,10 @@ def _parser() -> argparse.ArgumentParser:
         help="explicitly request the default DRC-checked pad escapes for declared zones",
     )
     board_route_parser.add_argument(
+        "--stitch-surface-zones", action="store_true",
+        help="allow legal plane-pad escapes to opposite-side surface pours on two-layer boards",
+    )
+    board_route_parser.add_argument(
         "--plane-stitch-step-mm", default="0.5", type=_positive_mm,
         help="spacing of provisional plane-via candidates (default: 0.5 mm)",
     )
@@ -603,6 +607,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     escape_width_nm=(nm_from_mm(args.plane_escape_width_mm)
                                      if args.plane_escape_width_mm else None),
                     ground_via_in_pad=args.ground_via_in_pad,
+                    include_surface_zones=args.stitch_surface_zones,
                 )
                 if (plane_options.escape_width_nm is not None
                         and plane_options.escape_width_nm
@@ -617,6 +622,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         maximum_detour_nm=plane_options.maximum_detour_nm,
                         escape_width_nm=plane_options.escape_width_nm,
                         ground_via_in_pad=plane_options.ground_via_in_pad,
+                        include_surface_zones=plane_options.include_surface_zones,
                         only_pads=frozenset(early_pads) if early_pads else None,
                     ) if args.early_plane_stitch or early_pads else None
                 )
@@ -885,6 +891,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "maximum_detour_nm": plane_options.maximum_detour_nm,
                     "escape_width_nm": plane_options.escape_width_nm,
                     "ground_via_in_pad": plane_options.ground_via_in_pad,
+                    "include_surface_zones": plane_options.include_surface_zones,
                     "filled_capped_via_count": sum(
                         via.finish == "filled-capped" for via in stitch.board.vias
                     ),

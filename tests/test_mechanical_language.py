@@ -157,3 +157,11 @@ def test_fixed_rotation_cannot_override_explicit_allowed_angles(reverse):
                                   + " ".join(constraints) + " }")
     with pytest.raises(ValueError, match="fixed rotation must be one of"):
         prototype_physicalize(result)
+
+
+def test_surface_zone_escape_is_an_explicit_generic_cli_option():
+    from pcbir.cli import _parser
+    default = _parser().parse_args(["route-board", "board.copper"])
+    enabled = _parser().parse_args(["route-board", "board.copper", "--stitch-surface-zones"])
+    assert not default.stitch_surface_zones
+    assert enabled.stitch_surface_zones
