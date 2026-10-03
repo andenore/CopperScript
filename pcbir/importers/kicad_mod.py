@@ -1,8 +1,9 @@
 """Import KiCad ``.kicad_mod`` files into normalized physical IR.
 
 The importer intentionally supports a conservative subset of KiCad 6 through
-8 footprints.  Fabrication-relevant constructs that cannot yet be represented
-raise an error instead of being silently discarded.  Presentation-only items
+10 footprints, including explicit jumper-pad groups. Fabrication-relevant
+constructs that cannot yet be represented raise an error instead of being
+silently discarded. Presentation-only items
 such as 3D models and user text are reported as warnings and can be promoted to
 errors with ``strict=True``.
 """
@@ -15,6 +16,7 @@ from hashlib import sha256
 from math import hypot, isqrt
 from pathlib import Path
 from typing import Iterator, TypeAlias
+from ..pad_connections import InternalPadGroup, merge_internal_pad_groups
 
 from ..physical import (
     CopperKeepout,
@@ -130,6 +132,8 @@ def parse_kicad_mod(
     graphics: list[FootprintGraphic] = []
     keepouts: list[CopperKeepout] = []
     footprint_attributes: set[str] = set()
+    duplicate_jumpers = False
+    internal_groups = []
     for child in _lists(root[2:]):
         child_tag = _tag(child)
         if child_tag == "pad":
@@ -147,10 +151,18 @@ def parse_kicad_mod(
         elif child_tag == "model":
             warnings.append("ignored 3D model reference")
         elif child_tag == "duplicate_pad_numbers_are_jumpers":
-            if _required_atom(child, 1, source, "duplicate pad jumper setting") != "no":
-                raise KiCadModImportError(
-                    f"{source}: jumper-linked duplicate pads are unsupported"
-                )
+            value = _required_atom(child, 1, source, "duplicate pad jumper setting")
+            if value not in {"yes", "no"}:
+                raise KiCadModImportError(f"{source}: invalid duplicate pad jumper setting")
+            duplicate_jumpers = value == "yes"
+        elif child_tag == "jumper_pad_groups":
+            try:
+                for group in child[1:]:
+                    if not isinstance(group, list) or any(not isinstance(n, str) for n in group):
+                        raise ValueError("jumper groups require lists of pad numbers")
+                    internal_groups.append(InternalPadGroup(tuple(group)))
+            except ValueError as exc:
+                raise KiCadModImportError(f"{source}: {exc}") from exc
         elif child_tag == "embedded_fonts":
             if _required_atom(child, 1, source, "embedded fonts setting") != "no":
                 warnings.append("ignored embedded footprint fonts")
@@ -212,19 +224,28 @@ def parse_kicad_mod(
     if warnings:
         metadata["import_warnings"] = " | ".join(warnings)
 
-    footprint = PhysicalFootprint(
-        name=name,
-        pads=tuple(pads),
-        body_size=_bounding_size(pads, graphics),
-        source_library_id=name,
-        graphics=tuple(graphics),
-        keepouts=tuple(keepouts),
-        metadata=metadata,
-        courtyard=_courtyard_polygon(graphics),
-        clearance_nm=clearance_nm,
-        exclude_from_bom="exclude_from_bom" in footprint_attributes,
-        exclude_from_pos_files="exclude_from_pos_files" in footprint_attributes,
-    )
+    if duplicate_jumpers:
+        from collections import Counter
+        counts = Counter(p.number for p in pads if p.number and p.kind not in {
+            PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE})
+        internal_groups.extend(InternalPadGroup((number,)) for number, count in counts.items() if count > 1)
+    try:
+        footprint = PhysicalFootprint(
+            name=name,
+            pads=tuple(pads),
+            body_size=_bounding_size(pads, graphics),
+            source_library_id=name,
+            graphics=tuple(graphics),
+            keepouts=tuple(keepouts),
+            metadata=metadata,
+            courtyard=_courtyard_polygon(graphics),
+            clearance_nm=clearance_nm,
+            exclude_from_bom="exclude_from_bom" in footprint_attributes,
+            exclude_from_pos_files="exclude_from_pos_files" in footprint_attributes,
+            internal_pad_groups=merge_internal_pad_groups(internal_groups),
+        )
+    except ValueError as exc:
+        raise KiCadModImportError(f"{source}: {exc}") from exc
     return FootprintImportResult(footprint, tuple(warnings), version)
 
 

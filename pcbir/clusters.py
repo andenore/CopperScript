@@ -38,6 +38,9 @@ def footprint_geometry_digest(footprint: PhysicalFootprint) -> str:
         return value
 
     content = document(footprint)
+    # No internal edges means unchanged geometry/connectivity identity.
+    if not footprint.internal_pad_groups:
+        content.pop("internal_pad_groups", None)
     # A local cache/search-root location is provenance, not asset identity.
     content["metadata"].pop("source_path", None)
     return sha256(json.dumps(content, sort_keys=True,

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from .library import tiny_library
+from .pad_connections import InternalPadGroup
 from .model import (
     BondDefinition,
     Board,
@@ -1023,6 +1024,7 @@ def _compile_part(
             "source_location",
             "source_url",
             "source_checksum",
+            "internal_pad_groups",
         },
         document.location,
     )
@@ -1064,6 +1066,16 @@ def _compile_part(
     pin_numbers = [pin.number for pin in pins.values()]
     if len(pin_numbers) != len(set(pin_numbers)):
         _error("CMP087", "part contains duplicate physical pin numbers", document.location)
+    raw_groups = properties.get("internal_pad_groups", "")
+    if not isinstance(raw_groups, str):
+        _error("CMP088", "internal_pad_groups must be a quoted string", document.location)
+    try:
+        groups = tuple(InternalPadGroup(tuple(value.replace(",", " ").split()))
+                       for value in raw_groups.split(";")) if raw_groups else ()
+        from .pad_connections import validate_internal_pad_groups
+        groups = validate_internal_pad_groups(groups, pin_numbers)
+    except ValueError as exc:
+        _error("CMP088", str(exc), document.location)
     return PartDefinition(
         name=qualified_name,
         pins=pins,
@@ -1074,6 +1086,7 @@ def _compile_part(
         assembled=assembled,
         device=resolved_device,
         source=_source_reference(properties, document.location),
+        internal_pad_groups=groups,
     )
 
 

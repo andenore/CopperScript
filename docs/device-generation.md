@@ -1,5 +1,20 @@
 # Device and part generation workflow
 
+## Internal contact review
+
+Optional `part.json` field `"internal_pad_groups": [["1"], ["2"]]` generates
+`internal_pad_groups = "1; 2";`. Unknown numbers and overlapping groups fail
+bundle validation. Review the exact manufacturer's internal circuit and map it
+to the selected footprint; repeated land numbers are not sufficient evidence.
+Keep momentary switch contact pairs separate and never treat required thermal
+or parallel-power contacts as optional external connections.
+
+CopperLib's [agent checklist](https://github.com/andenore/CopperLib/blob/main/internal-pad-connectivity.md)
+records the Keystone 3034 and TL3342 examples, source drawings and ground-contact
+layout comparisons. Source fields remain optional in CopperScript, but agents
+must not invent internal shorts. Groups are installed-component electrical facts
+and carry no coordinates or routing geometry.
+
 Real devices should be maintained as compact normalized data, not as large
 hand-written `.copper` files or repeated model output. The generator turns a
 small bundle of JSON metadata and CSV tables into deterministic CopperScript

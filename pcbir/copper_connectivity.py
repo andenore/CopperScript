@@ -2,8 +2,9 @@
 
 Each plated object is one node spanning only its physical copper layers.
 Broad-phase bounds select pairs; exact rounded-shape contact joins nodes.
-No grid, clearance tolerance, net-name shortcut or virtual pad-number join is
-used. Filled-zone connectivity still requires independent fill verification.
+No grid, clearance tolerance or implicit pad-number join is used. Explicit
+component-internal edges are separate facts, never fabricated copper.
+Filled-zone connectivity still requires independent fill verification.
 """
 from dataclasses import dataclass
 from collections import defaultdict
@@ -17,10 +18,11 @@ from .physical import CopperLayer, PadReference, PhysicalNet
 
 @dataclass(frozen=True, slots=True)
 class PhysicalCopperConnectivity:
-    """Read-only physical-land roots; a repeated number is never a wire."""
+    """Read-only land roots including only explicitly declared internal edges."""
 
     roots: Mapping[str, str]
     pad_nodes: Mapping[PadReference, tuple[str, ...]]
+    internal_connections: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "roots", MappingProxyType(dict(self.roots)))
@@ -59,7 +61,10 @@ def _inside_drill(shape: RoundedConvexShape, drill: RoundedConvexShape | None) -
                for point in shape.spine)
 
 
-def copper_contact_roots(objects: tuple[CopperContact, ...]) -> dict[str, str]:
+def copper_contact_roots(
+    objects: tuple[CopperContact, ...],
+    internal_connections: tuple[tuple[str, ...], ...] = (),
+) -> dict[str, str]:
     """Return deterministic component roots for explicit track/via/pad copper."""
     by_id = {item.identity: item for item in objects}
     if len(by_id) != len(objects):
@@ -101,4 +106,12 @@ def copper_contact_roots(objects: tuple[CopperContact, ...]) -> dict[str, str]:
                     continue
                 left, right = find(first.identity), find(identity)
                 parent[max(left, right)] = min(left, right)
+    for group in internal_connections:
+        if len(group) < 2 or any(node not in by_id for node in group):
+            raise ValueError("internal copper graph edge has missing contacts")
+        if len({by_id[node].net for node in group}) != 1:
+            raise ValueError("internal connection cannot bridge different nets")
+        for node in group[1:]:
+            left, right = find(group[0]), find(node)
+            parent[max(left, right)] = min(left, right)
     return {identity: find(identity) for identity in sorted(by_id)}

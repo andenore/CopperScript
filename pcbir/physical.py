@@ -17,6 +17,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from types import MappingProxyType
 from typing import Mapping
+from .pad_connections import InternalPadGroup, validate_internal_pad_groups
 
 
 Nanometres = int
@@ -576,9 +577,17 @@ class PhysicalFootprint:
     clearance_nm: Nanometres | None = None
     exclude_from_bom: bool = False
     exclude_from_pos_files: bool = False
+    internal_pad_groups: tuple[InternalPadGroup, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pads", tuple(self.pads))
+        object.__setattr__(self, "internal_pad_groups", validate_internal_pad_groups(
+            self.internal_pad_groups, {pad.number for pad in self.pads if pad.kind not in {
+                PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}}))
+        for group in self.internal_pad_groups:
+            if sum(p.number in group.numbers for p in self.pads
+                   if p.kind not in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}) < 2:
+                raise ValueError("internal pad group requires at least two electrical lands")
         object.__setattr__(self, "graphics", tuple(self.graphics))
         object.__setattr__(self, "keepouts", tuple(self.keepouts))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
@@ -1107,6 +1116,15 @@ class PhysicalBoard:
                 assigned_pads[pad_ref] = net.name
 
         known_nets = set(net_names)
+        for placement in self.placements:
+            footprint = self.footprints[placement.footprint]
+            for group in footprint.internal_pad_groups:
+                nets = {assigned_pads.get(PadReference(placement.reference, number))
+                        for number in group.numbers}
+                if len(nets - {None}) > 1:
+                    raise ValueError("internally connected pads belong to different nets")
+                if None in nets and len(nets) > 1:
+                    raise ValueError("all numbered pads in an internal group must share a net")
         permitted_pads = set()
         for rule in self.via_in_pad_rules:
             if rule.pad in permitted_pads:

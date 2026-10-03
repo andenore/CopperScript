@@ -815,7 +815,19 @@ def _route_net(
     allowed = routing_layers(board, name, rule)
     width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
     access_options: list[tuple[PadReference, Point, tuple[DetailedNode, ...]]] = []
+    access_origins: dict[tuple[PadReference, DetailedNode], Point] = {}
+    processed_groups = set()
+    from .hard_macros import macro_routing_ports
+    macro_ports = macro_routing_ports(board, name)
     for pad in sorted(pads):
+        placement = next(p for p in board.placements if p.reference == pad.component)
+        footprint = board.footprints[placement.footprint]
+        group = next((g for g in footprint.internal_pad_groups if pad.pad in g.numbers), None)
+        if group is not None and pad not in macro_ports:
+            key = (pad.component, group.numbers)
+            if key in processed_groups:
+                continue
+            processed_groups.add(key)
         anchor = (fanout_accesses or {}).get(pad)
         if anchor is not None:
             via = next((item for item in board.vias
@@ -835,10 +847,24 @@ def _route_net(
             pad_position = anchor
         else:
             pad_position = _pad_position(board, pad)
-            candidates = _access_candidates(
-                board, grid, pad, pad_position, allowed, clearance, name, width,
-                options.pin_access_candidates, allow_movable_conflicts,
-            )
+            if group is None or pad in macro_ports:
+                origins = ((pad, pad_position, None),)
+            else:
+                from .placement import transformed_local_point
+                origins = tuple((PadReference(pad.component, land.number),
+                                 transformed_local_point(placement, land.position), land)
+                                for land in footprint.pads if land.number in group.numbers)
+            all_candidates = []
+            for physical_reference, origin, land in origins:
+                for candidate in _access_candidates(
+                    board, grid, physical_reference, origin, allowed, clearance, name, width,
+                    options.pin_access_candidates, allow_movable_conflicts, physical_pad=land,
+                ):
+                    all_candidates.append(candidate)
+                    access_origins.setdefault((pad, candidate), origin)
+            candidates = tuple(dict.fromkeys(all_candidates))
+        for candidate in candidates:
+            access_origins.setdefault((pad, candidate), pad_position)
         if not candidates:
             return _failed(name, f"no legal pin access for {pad.component}.{pad.pad}")
         access_options.append((pad, pad_position, candidates))
@@ -904,12 +930,13 @@ def _route_net(
         path, root, target = found
         if not tree:
             tree.add(root)
-            chosen_accesses.append((access_options[0][0], access_options[0][1], root))
+            root_pad = access_options[0][0]
+            chosen_accesses.append((root_pad, access_origins[root_pad, root], root))
         for first, second, outside in path:
             tree.update((first, second))
             deviations += outside
         tree.add(target)
-        chosen_accesses.append((target_entry[0], target_entry[1], target))
+        chosen_accesses.append((target_entry[0], access_origins[target_entry[0], target], target))
         # Shortcuts can remove nodes used later as branch junctions. Keep the
         # exact grid tree for multi-terminal nets until topology-aware cleanup.
         materialized = (
@@ -1495,10 +1522,11 @@ def _access_candidates(
     width_nm: int,
     limit: int,
     allow_movable_conflicts: bool = False,
+    *, physical_pad=None,
 ) -> tuple[DetailedNode, ...]:
     placement = next(item for item in board.placements if item.reference == pad.component)
     footprint = board.footprints[placement.footprint]
-    physical_pad = next(item for item in footprint.pads if item.number == pad.pad)
+    physical_pad = physical_pad or next(item for item in footprint.pads if item.number == pad.pad)
     from .hard_macros import macro_routing_ports, macro_port_layers
     port = macro_routing_ports(board, net).get(pad)
     if port is not None:

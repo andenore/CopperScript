@@ -36,6 +36,20 @@ def test_device_bundle_is_valid_and_generated_sources_are_current() -> None:
     }
 
 
+def test_internal_pad_groups_are_validated_and_generated():
+    bundle = load_bundle(BUNDLE)
+    part = bundle.parts[0]
+    number = part.pins[0]["number"]
+    rich = replace(bundle, parts=(replace(part, manifest={**part.manifest,
+        "internal_pad_groups": [[number]]}),))
+    assert validate_bundle(rich) == ()
+    assert f'internal_pad_groups = "{number}";' in render_bundle(rich)["stm32g0b1cbt6.copper"]
+    for groups in ([["MISSING"]], [[number], [number]], "bad"):
+        invalid = replace(bundle, parts=(replace(part, manifest={**part.manifest,
+            "internal_pad_groups": groups}),))
+        assert any("internal_pad_groups" in error for error in validate_bundle(invalid))
+
+
 def test_work_packet_contains_only_requested_rows_and_legend() -> None:
     bundle = load_bundle(BUNDLE)
 

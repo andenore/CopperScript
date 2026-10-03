@@ -882,3 +882,40 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 Changes to an accepted decision require updating this document, its decision-log
 entry, relevant tests, and any affected language-reference material in the same
 change.
+
+## CS-141 — Permanent component-internal pad connectivity (Accepted)
+
+| Decision | Status | Summary |
+| --- | --- | --- |
+| CS-141 | Accepted | Explicit permanent package pad groups distinguish assembled connectivity from bare copper; route any usable group land, preserve all solder lands, reject conflicting nets and export KiCad 10 jumper groups. Never infer from duplicate numbers or waive required power/thermal contacts. |
+
+`PartDefinition.internal_pad_groups` contains typed `InternalPadGroup` facts,
+referencing package pad numbers without coordinates. A singleton joins duplicate
+lands; a multi-number group joins all those numbered terminals. Permanent
+installed-component connectivity is explicit, never inferred from repeated
+numbers and never applied to `assembled = false` parts. Group membership is
+validated against the selected footprint; net conflicts fail ERC/physical IR.
+Physical lowering expands otherwise unassigned numbered aliases onto the net.
+
+Assembly-aware connectivity unions these proven groups after actual copper
+contacts. Bare copper queries can disable internal edges; neither graph invents
+tracks or filled zones. Package escape and detailed access consider alternative
+lands and plane stitching needs only one proven prospective contact per group.
+Independent refill still proves plane connectivity. Duplicate-pad closure adds
+bridges only where neither real copper nor a declared internal path suffices.
+
+KiCad exports preserve explicit jumper groups in project-local footprint assets,
+PCB and schematic symbols, conditionally requiring KiCad 10. They are not net
+ties or DRC exclusions. Connectivity metadata participates in physical/signoff
+identity; empty groups preserve pre-existing hard-macro geometry identity.
+Singleton groups are no-ops for single-land proxy geometry, never extra invented
+lands. Import errors on invalid fabrication-critical group data are fatal.
+
+Declare a group only if a single external connection is sufficient for its
+intended use. It must not waive mandatory thermal, current-sharing or power
+contacts. Switch actuation, passive impedance and semiconductor conduction are
+not permanent shorts. Via-in-pad remains a separate explicit, process-qualified
+constraint. Battery contact via count follows electrical/mechanical requirements,
+not an automatic large-pad-area heuristic; the nRF52 prototype retains its
+explicit filled/capped BT1.NEG ground-contact exception. Source references remain
+optional; generation guidance requires evidence before asserting a connection.

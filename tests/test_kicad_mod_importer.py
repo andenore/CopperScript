@@ -280,14 +280,13 @@ def test_footprint_local_placement_keepout_blocks_other_component() -> None:
     assert '(footprints not_allowed)' in pcb
 
 
-def test_kicad10_jumper_setting_must_not_change_pad_connectivity() -> None:
+def test_kicad10_jumper_setting_without_duplicate_lands_is_a_noop() -> None:
     source = """(footprint "Jumpers" (layer "F.Cu")
       (duplicate_pad_numbers_are_jumpers no) (embedded_fonts no)
       (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask")))
     """
     assert parse_kicad_mod(source).warnings == ()
-    with pytest.raises(KiCadModImportError, match="jumper-linked duplicate pads"):
-        parse_kicad_mod(source.replace("jumpers no", "jumpers yes"))
+    assert parse_kicad_mod(source.replace("jumpers no", "jumpers yes")).footprint.internal_pad_groups == ()
 
 
 def test_footprint_keepout_moves_with_front_and_back_placements() -> None:

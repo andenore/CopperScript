@@ -362,14 +362,18 @@ def physical_board_digest(board: PhysicalBoard) -> str:
 
 def explicit_copper_connectivity(
     board: PhysicalBoard, *, only_nets: frozenset[str] | None = None,
+    include_internal_connections: bool = True,
 ) -> PhysicalCopperConnectivity:
     """Build the shared exact graph used by native DRC and land closure.
 
     Zone outlines/fill claims do not join this explicit-copper graph. A net
     filter saves work for local stitching without changing contact semantics.
+    Declared installed-component groups join roots by default; disable them
+    for bare-board continuity. Internal edges never add fabrication geometry.
     """
     objects: list[CopperContact] = []
     pad_nodes: dict[PadReference, list[str]] = {}
+    internal_connections = []
     # Include every physical land, even when a logical pin has repeated numbers.
     for placement in sorted(board.placements, key=lambda item: item.reference):
         footprint = board.footprints[placement.footprint]
@@ -392,6 +396,12 @@ def explicit_copper_connectivity(
             objects.append(CopperContact(identity, net, tuple(layers),
                                          placed_pad_shape(position, pad, placement), drill))
             pad_nodes.setdefault(PadReference(placement.reference, pad.number), []).append(identity)
+        if include_internal_connections:
+            for group in footprint.internal_pad_groups:
+                nodes = tuple(node for number in group.numbers for node in
+                              pad_nodes.get(PadReference(placement.reference, number), ()))
+                if len(nodes) > 1:
+                    internal_connections.append(nodes)
     objects.extend(CopperContact(f"track:{index}", track.net, (track.layer,),
                                 RoundedConvexShape((track.start, track.end), track.width_nm // 2))
                    for index, track in enumerate(board.tracks)
@@ -406,8 +416,9 @@ def explicit_copper_connectivity(
         objects.append(CopperContact(f"via:{index}", via.net, layers,
                                     RoundedConvexShape((via.position,), via.size_nm // 2),
                                     RoundedConvexShape((via.position,), via.drill_nm // 2), capped))
-    return PhysicalCopperConnectivity(copper_contact_roots(tuple(objects)),
-                                      {pad: tuple(nodes) for pad, nodes in pad_nodes.items()})
+    groups = tuple(internal_connections)
+    return PhysicalCopperConnectivity(copper_contact_roots(tuple(objects), groups),
+                                      {pad: tuple(nodes) for pad, nodes in pad_nodes.items()}, groups)
 
 
 def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
@@ -418,7 +429,7 @@ def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> Non
                 _finding(
                     "DRC-OPEN-NET",
                     DrcSeverity.ERROR,
-                    f"net {net.name!r} is not electrically connected by exact copper",
+                    f"net {net.name!r} is not connected by exact copper and declared internal connections",
                     nets=(net.name,),
                     objects=tuple(f"pad:{item.component}.{item.pad}" for item in sorted(net.pads)),
                 )
@@ -1051,6 +1062,7 @@ def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:
     return (
         name,
         getattr(footprint, "source_library_id"),
+        tuple(group.numbers for group in getattr(footprint, "internal_pad_groups")),
         (getattr(footprint, "body_size").width_nm, getattr(footprint, "body_size").height_nm),
         tuple(
             (

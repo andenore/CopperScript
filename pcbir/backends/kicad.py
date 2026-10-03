@@ -87,7 +87,7 @@ class KiCadSchematicBackend:
         ) if board.module_instances else ()
         return ArtifactManifest(
             backend=self.name,
-            target_version=self.target_version,
+            target_version="10.0" if any(flat.library[c.part].internal_pad_groups for c in flat.components) else self.target_version,
             artifacts=(Artifact(filename, "application/x-kicad-schematic", content),),
             warnings=warnings,
         )
@@ -127,7 +127,7 @@ def _render(
 
     lines = [
         "(kicad_sch",
-        f"  (version {KICAD_SCHEMATIC_FORMAT})",
+        f"  (version {'20250610' if any(s.part.internal_pad_groups for s in symbols.values()) else KICAD_SCHEMATIC_FORMAT})",
         '  (generator "copperscript")',
         '  (generator_version "0.1.0")',
         f'  (uuid "{root_uuid}")',
@@ -280,6 +280,11 @@ def _library_symbol_lines(symbol: _PartSymbol) -> list[str]:
         f"      (in_bom {'yes' if part.assembled else 'no'})",
         "      (on_board yes)",
     ]
+    if part.internal_pad_groups and part.assembled:
+        groups = " ".join("(" + " ".join(_quote(n) for n in g.numbers) + ")"
+                          for g in part.internal_pad_groups)
+        lines.extend(["      (duplicate_pin_numbers_are_jumpers no)",
+                      f"      (jumper_pin_groups {groups})"])
     lines.extend(
         _property_lines(
             6,

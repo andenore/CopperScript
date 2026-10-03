@@ -1,4 +1,5 @@
 """Public API for the CopperScript v0.1 compiler and PCB IR."""
+from .pad_connections import InternalPadGroup
 
 from .backends import (
     Artifact,
@@ -266,6 +267,7 @@ from .routing import (
 from .syntax import CopperScriptError, SourceLocation
 
 __all__ = [
+    "InternalPadGroup",
     "CriticalPlacementFeedbackResult",
     "CriticalPlacementTrial",
     "improve_critical_placement",

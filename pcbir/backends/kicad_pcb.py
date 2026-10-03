@@ -91,7 +91,7 @@ class KiCadPcbBackend:
             warnings.append("The board contains no routed tracks.")
         return ArtifactManifest(
             backend=self.name,
-            target_version=self.target_version,
+            target_version="10.0" if _uses_internal_connections(board) else self.target_version,
             artifacts=(
                 Artifact(
                     f"{_safe_name(board.name)}.kicad_pcb",
@@ -137,8 +137,13 @@ def _render_library_footprint(board: PhysicalBoard, footprint: PhysicalFootprint
     pose = Placement("REF", footprint.name, Point(0, 0), value=name)
     canonical_board = replace(board, name=f"{GENERATED_LIBRARY}:{name}")
     lines = _footprint_lines(canonical_board, pose, footprint, {}, {}, export_name=name)
-    lines[1:1] = [f"    (version {KICAD_PCB_FORMAT})", '    (generator "copperscript")']
+    version = "20260206" if footprint.internal_pad_groups else KICAD_PCB_FORMAT
+    lines[1:1] = [f"    (version {version})", '    (generator "copperscript")']
     return "\n".join(lines) + "\n"
+
+
+def _uses_internal_connections(board: PhysicalBoard) -> bool:
+    return any(board.footprints[p.footprint].internal_pad_groups for p in board.placements)
 
 
 def _render_project(board: PhysicalBoard) -> str:
@@ -207,7 +212,7 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
     }
     lines = [
         "(kicad_pcb",
-        f"  (version {KICAD_PCB_FORMAT})",
+        f"  (version {'20260206' if _uses_internal_connections(board) else KICAD_PCB_FORMAT})",
         '  (generator "copperscript")',
         '  (generator_version "0.1.0")',
         "  (general",
@@ -485,6 +490,13 @@ def _footprint_lines(
         + (" exclude_from_pos_files" if footprint.exclude_from_pos_files else "")
     )
     lines.append(f"    (attr {attribute}{exclusions})")
+    if footprint.internal_pad_groups:
+        # KiCad 10 explicit groups preserve scope: do not globally turn every
+        # duplicate number into a jumper. A singleton means its repeated lands.
+        lines.append("    (duplicate_pad_numbers_are_jumpers no)")
+        groups = " ".join("(" + " ".join(_quote(n) for n in g.numbers) + ")"
+                          for g in footprint.internal_pad_groups)
+        lines.append(f"    (jumper_pad_groups {groups})")
     if footprint.clearance_nm is not None:
         lines.append(f"    (clearance {_mm(footprint.clearance_nm)})")
     if footprint.graphics:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Callable, Iterable, TypeVar
 
@@ -140,8 +140,9 @@ def check(board: Board | FlatElectricalView) -> list[Diagnostic]:
             context.pin_to_nets[context.canonical_endpoint(endpoint) or endpoint].append(net.name)
 
     diagnostics.extend(_check_duplicates(board))
-    diagnostics.extend(_check_references(context))
     diagnostics.extend(_check_pin_membership(context))
+    diagnostics.extend(_check_internal_pad_groups(context))
+    diagnostics.extend(_check_references(context))
     diagnostics.extend(_check_output_conflicts(context))
     diagnostics.extend(_check_supplies(context))
     diagnostics.extend(_check_power_inputs(context))
@@ -320,6 +321,38 @@ def _check_pin_membership(context: _Context) -> list[Diagnostic]:
                     str(endpoint),
                 )
             )
+    return diagnostics
+
+
+def _check_internal_pad_groups(context: _Context) -> list[Diagnostic]:
+    diagnostics = []
+    inferred = set()
+    for component in context.components.values():
+        part = context.board.library.get(component.part)
+        if part is None or not part.assembled:
+            continue
+        for group in part.internal_pad_groups:
+            pins = [p for p in part.pins.values() if p.number in group.numbers]
+            nets = {net for p in pins for net in context.pin_to_nets.get(Endpoint(component.ref, p.name), ())}
+            if len(nets) > 1:
+                diagnostics.append(Diagnostic(Severity.ERROR, "INTERNAL_PAD_NET_CONFLICT",
+                    "internally connected package pads are assigned to different nets: " + ", ".join(sorted(nets)), component.ref))
+            elif nets:
+                for pin in pins:
+                    endpoint = Endpoint(component.ref, pin.name)
+                    if not context.pin_to_nets.get(endpoint):
+                        context.pin_to_nets[endpoint].extend(sorted(nets))
+                        inferred.add(endpoint)
+    # Downstream voltage/driver/source checks must see inferred aliases too.
+    # This is a private derived ERC view, not a mutation of source connectivity.
+    expanded = []
+    for net in context.board.nets:
+        aliases = tuple(sorted(endpoint for endpoint in inferred
+                               if net.name in context.pin_to_nets[endpoint]
+                               and endpoint not in net.endpoints))
+        expanded.append(replace(net, endpoints=(*net.endpoints, *aliases)))
+    context.board = replace(context.board, nets=tuple(expanded))
+    context.nets = _first_by(context.board.nets, lambda item: item.name)
     return diagnostics
 
 

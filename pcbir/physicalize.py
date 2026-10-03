@@ -14,6 +14,7 @@ import re
 from typing import Callable, Mapping
 
 from .elaborate import elaborate
+from .pad_connections import merge_internal_pad_groups
 from .footprints import FootprintResolver
 from .importers import FootprintImportResult
 from .model import (
@@ -277,6 +278,20 @@ def _physicalize(
     )
     for index, (component, part, selected) in enumerate(selected_components):
         footprint = footprint_provider(part, component, selected)
+        if not part.assembled and footprint.internal_pad_groups:
+            footprint = replace(footprint, name=f"{footprint.name}__unassembled",
+                                internal_pad_groups=())
+        elif part.internal_pad_groups and part.assembled:
+            groups = merge_internal_pad_groups(footprint.internal_pad_groups, part.internal_pad_groups)
+            # Proxy geometry has only one land per number. A duplicate-land
+            # declaration is a no-op there, never invented extra geometry.
+            if metadata.get("prototype_footprints") == "true":
+                groups = tuple(g for g in groups if len(g.numbers) > 1)
+            # Package facts can differ for components using identical land
+            # geometry. Give the derived footprint its own canonical identity.
+            suffix = sha256(repr(groups).encode()).hexdigest()[:12]
+            footprint = replace(footprint, name=f"{footprint.name}__internal_{suffix}",
+                                internal_pad_groups=groups)
         existing = footprints.get(footprint.name)
         if existing is not None and existing != footprint:
             raise ValueError(
@@ -298,6 +313,7 @@ def _physicalize(
         )
 
     nets: list[PhysicalNet] = []
+    placement_index = {p.reference: p for p in placements}
     for net in sorted(flat.nets, key=lambda item: item.name):
         pad_refs: list[PadReference] = []
         for endpoint in net.endpoints:
@@ -310,6 +326,13 @@ def _physicalize(
             )
             if pin_number is not None:
                 pad_refs.append(PadReference(component.ref, pin_number))
+        # An unmentioned alternate numbered terminal inherits its declared
+        # internal group's net. Conflicting explicit nets are rejected by IR.
+        for reference in tuple(pad_refs):
+            fp = footprints[placement_index[reference.component].footprint]
+            for group in fp.internal_pad_groups:
+                if reference.pad in group.numbers:
+                    pad_refs.extend(PadReference(reference.component, n) for n in group.numbers)
         if pad_refs:
             nets.append(PhysicalNet(net.name, tuple(sorted(set(pad_refs)))))
 

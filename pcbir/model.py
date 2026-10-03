@@ -16,6 +16,7 @@ from typing import Generic, Mapping, TypeVar
 
 from .constraint_coverage import ConstraintMode
 from .quantities import Current, Quantity, Voltage
+from .pad_connections import InternalPadGroup, validate_internal_pad_groups
 
 
 class PinType(str, Enum):
@@ -327,6 +328,7 @@ class PartDefinition:
     device: str | None = None
     source: SourceReference | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
+    internal_pad_groups: tuple[InternalPadGroup, ...] = ()
 
     def __post_init__(self) -> None:
         # Defensive copies keep an otherwise frozen IR from being mutated via a
@@ -334,6 +336,8 @@ class PartDefinition:
         if not isinstance(self.assembled, bool):
             raise ValueError("part assembled must be a boolean")
         object.__setattr__(self, "pins", MappingProxyType(dict(self.pins)))
+        object.__setattr__(self, "internal_pad_groups", validate_internal_pad_groups(
+            self.internal_pad_groups, {pin.number for pin in self.pins.values()}))
         object.__setattr__(self, "traits", frozenset(self.traits))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 

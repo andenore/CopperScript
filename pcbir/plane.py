@@ -115,6 +115,7 @@ def stitch_zone_pads(
     outer_layers = (board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
 
     zones_by_net: dict[str, list[CopperZone]] = {}
+    processed_internal_groups = set()
     from .hard_macros import macro_owned_pads
     from .drc import explicit_copper_connectivity
     owned_pads = macro_owned_pads(board)
@@ -160,23 +161,31 @@ def stitch_zone_pads(
                     owned_pending.add(reference)
                 continue
             side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+            group = next((g for g in footprint.internal_pad_groups if reference.pad in g.numbers), None)
+            if group is not None:
+                key = (placement.reference, group.numbers)
+                if key in processed_internal_groups:
+                    continue
+                processed_internal_groups.add(key)
+                lands = tuple(p for p in footprint.pads if p.number in group.numbers and p.kind is PadKind.SMD)
             rule = rules.get(net)
             width = max(
                 rule.width_nm if rule and rule.width_nm is not None else 0,
                 options.escape_width_nm or board.rules.default_track_width_nm,
             )
+            internal_contact = False
             for pad in lands:
                 position = transformed_local_point(placement, pad.position)
                 choice = _stitch_land(
                     board, clearance, net, zones, pad, placement, position,
                     side, width, via_size, via_drill, outer_layers,
-                    replace(options, ground_via_in_pad=True) if reference in permitted_pads else options,
+                    replace(options, ground_via_in_pad=True)
+                    if PadReference(reference.component, pad.number) in permitted_pads else options,
                     (*board.tracks, *added_tracks), (*board.vias, *added_vias),
                 )
                 if choice is None:
-                    pending_lands.append(_PendingContact(
-                        net, reference, position, side, width,
-                    ))
+                    if group is None:
+                        pending_lands.append(_PendingContact(net, reference, position, side, width))
                     continue
                 tracks, via = choice
                 for track in tracks:
@@ -186,6 +195,12 @@ def stitch_zone_pads(
                     added_vias.append(via)
                     clearance.add_via(via)
                 anchors_by_net.setdefault(net, []).append((position, side))
+                internal_contact = True
+                if group is not None:
+                    break  # One verified prospective contact serves this group.
+            if group is not None and not internal_contact and lands:
+                pending_lands.append(_PendingContact(net, reference,
+                    transformed_local_point(placement, lands[0].position), side, width))
 
     # A blocked land may still reach the plane through an already escaped
     # same-net land. Retry until no further local chain can be proven.
@@ -229,6 +244,12 @@ def stitch_zone_pads(
         unresolved = remaining
 
     pending_refs = {item.reference for item in unresolved} | owned_pending
+    # Report every alias of a failed internal group, not just its representative.
+    for reference in tuple(pending_refs):
+        footprint = board.footprints[placements[reference.component].footprint]
+        for group in footprint.internal_pad_groups:
+            if reference.pad in group.numbers:
+                pending_refs.update(PadReference(reference.component, n) for n in group.numbers)
     stitched = [reference for reference in targets if reference not in pending_refs]
     pending = [reference for reference in targets if reference in pending_refs]
 

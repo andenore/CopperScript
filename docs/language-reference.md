@@ -1,5 +1,27 @@
 # CopperScript v0.1 language reference
 
+## Permanent component-internal pad connections
+
+Parts may declare `internal_pad_groups = "1; 2";`. Semicolons separate
+independent groups; commas/spaces separate numbers within a group. A singleton
+joins every physical land with that number. `"1, 3; 2, 4"` joins lands numbered
+1/3 and, independently, 2/4. Numbers must exist and groups must not overlap.
+Different-net assignments fail ERC and physical validation. An otherwise
+unmentioned numbered terminal inherits its group's net during physical lowering.
+
+This is a verified installed-component connection, not a net tie, switched
+connection, resistor or copper-clearance waiver. Do not declare groups where
+every external land is required for power/current sharing or thermal reasons.
+Source references remain optional. With `assembled = false`, component-internal
+connections are disabled. Repeated footprint numbers alone never imply a group.
+
+The router may reach any land of a declared group and does not add a redundant
+PCB bridge. All solder lands remain in the footprint. Assembly-aware and bare
+copper connectivity are separate (`include_internal_connections=False` requests
+the latter). Exports containing groups require KiCad 10 and preserve explicit
+jumper-pad/pin groups in generated PCB, footprint and schematic files. Via-in-pad
+permission is independent and remains explicitly scoped.
+
 CopperScript source is UTF-8. Comments begin with `//` or `#` and continue to
 the end of the line. Identifiers are case-sensitive.
 

@@ -8,6 +8,11 @@ not in the compiler repository.
 
 ## Reproduce
 
+Permanent battery/switch contact groups and their routing verification are
+documented in [internal pad connectivity](internal-pad-connectivity.md). They
+remove redundant airwires without inventing PCB copper; bare-board continuity
+and installed-component continuity remain distinct.
+
 CopperLib parts, footprints and macro assets download automatically from its
 pinned GitHub revision through `copper.mod`/`copper.lock`. No library checkout or
 lock refresh is required. Install KiCad footprints, then run

@@ -4,7 +4,7 @@ This owns only bounded lead-ins, not package allocation, via generation or
 area routing. Callers retain their own candidate and transaction budgets.
 """
 from .physical import BoardSide, CopperLayer, PadKind, PadReference, PhysicalBoard, Point, TrackSegment
-from .placement import transformed_pad_position
+from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
 from .surface_path import _track_inside_board
 
@@ -68,8 +68,19 @@ def verified_fanout_path(
     Input tracks are returned without rewriting their orientation/identity.
     """
     placement = next(p for p in board.placements if p.reference == pad.component)
-    terminal = next(p for p in board.footprints[placement.footprint].pads if p.number == pad.pad)
-    start = transformed_pad_position(board, placement, pad.pad)
+    footprint = board.footprints[placement.footprint]
+    group = next((g for g in footprint.internal_pad_groups if pad.pad in g.numbers), None)
+    terminals = tuple(p for p in footprint.pads
+                      if p.number in (group.numbers if group else (pad.pad,)))
+    for terminal in terminals:
+        path = _verified_land_path(board, terminal, placement, net, anchor, clearance)
+        if path is not None:
+            return path
+    return None
+
+
+def _verified_land_path(board, terminal, placement, net, anchor, clearance):
+    start = transformed_local_point(placement, terminal.position)
     vias = tuple(v for v in board.vias if v.net == net and v.position == anchor
                  and v.from_layer in board.stackup.copper_layers
                  and v.to_layer in board.stackup.copper_layers)

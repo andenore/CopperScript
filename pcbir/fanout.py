@@ -16,7 +16,7 @@ from .physical import (
     BoardSide, CopperLayer, FootprintPad, PadKind, PadReference, PhysicalBoard,
     Placement, Point, RouteKind, TrackSegment, Via, nm_from_mm,
 )
-from .placement import transformed_pad_position
+from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers
 from .routing_vias import physical_via_span
@@ -105,6 +105,12 @@ def route_fanout(
         surface = [pad for pad in footprint.pads if pad.kind is PadKind.SMD]
         for pad in surface:
             reference = PadReference(placement.reference, pad.number)
+            group = next((g for g in footprint.internal_pad_groups if pad.number in g.numbers), None)
+            if group is not None:
+                members = tuple(PadReference(placement.reference, n) for n in group.numbers)
+                if any(member in owned for member in members):
+                    continue
+                reference = next((member for member in members if member in net_by_pad), reference)
             net = net_by_pad.get(reference)
             if (reference in owned or net is None or net in zone_nets
                     or only_nets is not None and net not in only_nets):
@@ -112,11 +118,11 @@ def route_fanout(
             rule = rules.get(net)
             if rule is not None and rule.kind is not RouteKind.GENERAL:
                 continue
-            position = transformed_pad_position(board, placement, pad.number)
+            position = transformed_local_point(placement, pad.position)
             neighbor = min((abs(position.x_nm - other.x_nm) + abs(position.y_nm - other.y_nm)
                             for other_pad in surface if other_pad.number != pad.number
-                            for other in (transformed_pad_position(
-                                board, placement, other_pad.number),)), default=10**18)
+                            for other in (transformed_local_point(
+                                placement, other_pad.position),)), default=10**18)
             if neighbor > options.maximum_neighbor_distance_nm:
                 continue
             pads.append((neighbor, reference, position, placement, pad))
@@ -126,37 +132,40 @@ def route_fanout(
     # guaranteed mutually compatible routes or proof of onward connectivity.
     domains: dict[PadReference, tuple[EscapeCandidate, ...]] = {}
     refined_counts: dict[PadReference, int] = {}
-    pin_by_ref = {item[1]: item for item in pads}
+    pin_by_ref = {}
+    for item in pads:
+        pin_by_ref.setdefault(item[1], []).append(item)
+    def choices_for(reference, index, candidate_options, *, elbows=False, multiple_orders=False):
+        choices = []
+        for _, _, position, placement, pad in pin_by_ref[reference]:
+            sites = (_two_leg_candidates if elbows else _candidates)(position, placement.position, candidate_options)
+            choices.extend(_legal_choices(board, index, net_by_pad[reference], position,
+                placement, pad, sites, multiple_orders=multiple_orders))
+        return tuple(dict.fromkeys(choices))
     refinement_cache = {}
     def refine(reference):
         if reference in refinement_cache:
             return refinement_cache[reference]
         if options.refinement_step_nm == options.step_nm:
             return ()
-        _, _, position, placement, pad = pin_by_ref[reference]
         fine = replace(options, step_nm=options.refinement_step_nm,
                        maximum_two_leg_candidates=options.maximum_refined_two_leg_candidates)
         index = RoutingClearanceIndex(board)
-        radial = _legal_choices(board, index, net_by_pad[reference], position, placement, pad,
-                                _candidates(position, placement.position, fine))
-        elbows = (_legal_choices(board, index, net_by_pad[reference], position, placement, pad,
-                                 _two_leg_candidates(position, placement.position, fine),
-                                 multiple_orders=True) if options.two_leg_escapes else ())
+        radial = choices_for(reference, index, fine)
+        elbows = (choices_for(reference, index, fine, elbows=True, multiple_orders=True)
+                  if options.two_leg_escapes else ())
         refinement_cache[reference] = tuple(dict.fromkeys((*radial, *elbows)))
         return refinement_cache[reference]
-    for _, reference, position, placement, pad in pads:
-        net = net_by_pad[reference]
-        choices = _legal_choices(board, clearance, net, position, placement, pad,
-                                 _candidates(position, placement.position, options))
+    for reference in pin_by_ref:
+        choices = choices_for(reference, clearance, options)
         if options.two_leg_escapes and not choices:
-            choices = _legal_choices(board, clearance, net, position, placement, pad,
-                                    _two_leg_candidates(position, placement.position, options))
+            choices = choices_for(reference, clearance, options, elbows=True)
         if not choices:
             choices = refine(reference)
             refined_counts[reference] = len(choices)
         domains[reference] = choices
 
-    ordered = sorted(pads, key=lambda item: (
+    ordered = sorted((min(items, key=lambda item: item[0]) for items in pin_by_ref.values()), key=lambda item: (
         len(domains[item[1]]) if options.constrained_pins_first else 0,
         item[0], item[1],
     ))
@@ -175,10 +184,8 @@ def route_fanout(
         def expand(reference):
             if not options.two_leg_escapes:
                 return refine(reference)
-            _, _, position, placement, pad = pin_by_ref[reference]
-            coarse = _legal_choices(board, RoutingClearanceIndex(board), net_by_pad[reference],
-                position, placement, pad, _two_leg_candidates(position, placement.position, options),
-                multiple_orders=True)
+            coarse = choices_for(reference, RoutingClearanceIndex(board), options,
+                                 elbows=True, multiple_orders=True)
             fine = refine(reference)
             refined_counts[reference] = len(fine)
             return tuple(dict.fromkeys((*coarse, *fine)))

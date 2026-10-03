@@ -205,6 +205,7 @@ def _part_to_dict(part: PartDefinition) -> dict[str, object]:
         "device": part.device,
         "source": _source_to_dict(part.source),
         "footprints": list(part.footprints),
+        "internal_pad_groups": [list(group.numbers) for group in part.internal_pad_groups],
         "metadata": dict(part.metadata),
         "pins": [
             {

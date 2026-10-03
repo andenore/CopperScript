@@ -17,6 +17,7 @@ import re
 from typing import Mapping, Sequence
 
 from .model import Direction, DriveMode, PinType, SignalDomain, UnpoweredBehavior
+from .pad_connections import InternalPadGroup, validate_internal_pad_groups
 
 
 BUNDLE_SCHEMA = "copperscript-device-bundle/v0.1"
@@ -471,6 +472,13 @@ def _validate_part(
         _validate_voltage(row.get("voltage_max", ""), f"{row_label}: voltage_max", errors)
     if not part.pins:
         errors.append(f"{part.directory.name}/pins.csv: at least one pin is required")
+    try:
+        raw_groups = manifest.get("internal_pad_groups", [])
+        if not isinstance(raw_groups, list) or any(not isinstance(g, list) for g in raw_groups):
+            raise ValueError("internal_pad_groups must be a list of pad-number lists")
+        validate_internal_pad_groups(tuple(InternalPadGroup(tuple(g)) for g in raw_groups), pin_numbers)
+    except ValueError as exc:
+        errors.append(f"{label}.internal_pad_groups: {exc}")
     return tuple(errors)
 
 
@@ -597,6 +605,9 @@ def _render_part(bundle: DeviceBundle, part: PartBundle) -> str:
         ]
     )
     _append_source(lines, manifest.get("source", {}), 4)
+    if manifest.get("internal_pad_groups"):
+        groups = "; ".join(", ".join(g) for g in manifest["internal_pad_groups"])
+        lines.append(f"    internal_pad_groups = {_quote(groups)};")
     lines.append("")
     for row in part.pins:
         lines.append(f"    pin {row['name']} {{")
