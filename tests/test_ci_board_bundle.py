@@ -184,6 +184,10 @@ def test_workflow_is_trusted_sha_pinned_and_routes_instead_of_dry_running():
     assert "tags: ['*']" in workflow and "timeout-minutes: 360" in workflow
     assert "--dry-run" not in workflow and "ci_board_bundle.py route" in workflow
     assert "ppa:kicad/kicad-10.0-releases" in workflow
+    assert "run: python -m pytest" in workflow
+    assert "pygerber==2.4.3" in workflow
+    assert workflow.index("Install KiCad 10") < workflow.index("Run complete test suite")
+    assert "pytest tests/test_ci_board_bundle.py" not in workflow
     assert "INCLUDE_NRF: ${{ inputs.include_nrf || false }}" in workflow
     assert "contents: write" in workflow.split("  publish:")[1]
     assert "contents: write" not in workflow.split("  publish:")[0]
