@@ -176,7 +176,7 @@ def route(output: Path, cli: Path, footprints: Path, minutes: int,
                         {0: "passed", 1: "unmet_gates"}.get(result["exit_code"], "error"))
     save(board_dir / "run.json", result)
     if include_nrf:
-        run_logged([sys.executable, "-u", "-c", WORKER, "pcbir.nrf52_example", "--route", "--offline",
+        run_logged([sys.executable, "-u", "-c", WORKER, "examples.nrf52_example", "--route", "--offline",
             "--kicad-cli", str(cli),
             "--footprint-root", str(footprints),
             "--output-dir", str(output / "nrf52-coin-cell")], output / "nrf52-coin-cell", 20 * 60)

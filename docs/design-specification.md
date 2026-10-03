@@ -969,3 +969,30 @@ surface zones. Reserve legal ground escapes before ordinary package escapes
 and detailed signals. A same-side pour is not by itself a reason to invent a
 via. Existing via/pad exclusions and exact material/clearance predicates still
 apply; prospective zone contacts never count as verified filled connectivity.
+
+## CS-144 — Mechanical frontend and generic engine boundary (Accepted)
+
+Board outlines are source intent, not hidden example-builder geometry. A board
+may declare one separate `mechanical` block with one circle, rectangle or polygon
+outline, polygonal cutouts, named round NPTH holes and physical rule overrides.
+Use typed lengths, exact integer-nanometre lowering and source-located topology
+diagnostics. Electrical modules cannot contain board geometry. A `Design`
+aggregate keeps electrical `Board` and `MechanicalDesign` separate; no outline,
+hole or presentation coordinates enter connectivity or schematic IR. Complete
+design compilation/JSON and physical CLI commands preserve mechanics; explicit
+electrical-projection APIs validate them but return only the electrical board.
+
+Source outlines take precedence over legacy rectangle fallback dimensions.
+Generic physicalization applies source fixed poses and side/rotation constraints.
+Circle/rectangle zone insets and zero-inset polygons use actual material geometry;
+reject unsupported general offsets or intersecting inset/void contours instead
+of inventing a bounding-box fill. Native refill remains an independent proof.
+
+`pcbir` contains generic engine code only: no board-specific builder modules,
+component fixtures, example imports, example paths or special-case reference
+names. Repository-only builders are in `examples/`; concrete bundled fixture
+libraries are outside the engine and resolved through a generic library registry
+or installed `copperscript.libraries` entry points. Examples are not wheel packages.
+The LED-ring source declares its circle, rules, ground zone and all placements.
+See [mechanical language specification](mechanical-language.md). Curved slots,
+datums and nonrectangular production CAM qualification remain explicitly deferred.

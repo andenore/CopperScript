@@ -14,7 +14,7 @@ import pytest
 
 from pcbir.backends.ngspice import NgspiceBackend, generate_deck
 from pcbir.elaborate import elaborate
-from pcbir.library import tiny_library
+from copperscript.library_data import tiny_library
 from pcbir.loader import load_board
 from pcbir.model import Board, ComponentInstance, Endpoint, ModuleDefinition, ModuleInstance, Net, PackagePinDefinition, PartDefinition, PinType
 from pcbir.quantities import Current, Frequency, Time, Voltage

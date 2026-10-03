@@ -212,6 +212,21 @@ class ConstraintDecl:
     parameters: dict[str, Scalar]
 
 
+@dataclass(frozen=True, slots=True)
+class MechanicalItemDecl:
+    location: SourceLocation
+    kind: str
+    name: str
+    shape: str
+    parameters: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class MechanicalDecl:
+    location: SourceLocation
+    items: tuple[MechanicalItemDecl, ...]
+
+
 Declaration = (
     ComponentDecl
     | PortDecl
@@ -235,6 +250,7 @@ Declaration = (
     | SupplyDecl
     | InterfaceDecl
     | ConstraintDecl
+    | MechanicalDecl
 )
 
 

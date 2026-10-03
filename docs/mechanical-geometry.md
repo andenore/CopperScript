@@ -96,8 +96,10 @@ stackup/process; published limits can change.
    routes crossing a notch/hole/cutout must be rejected, including soft rip-up.
 3. [x] KiCad polygon/cutout and round NPTH export with deterministic assets,
    native outline/clearance DRC and round-hole Excellon reconciliation tests.
-4. [ ] Mechanical language block, compiler lowering, datums and placement
-   references. Update language reference, CLI outline precedence and diagnostics.
+4. [x] Mechanical language block and compiler lowering: circle/rectangle/polygon,
+   cutouts, NPTH holes, physical rules, source diagnostics and CLI precedence.
+   See [mechanical language](mechanical-language.md). Named placement datums and
+   datum-relative placement references remain deferred, not implemented syntax.
 5. [ ] Nonrectangular copper-zone generation/refill and manufacturing outline
    reconciliation. Do not claim closure from unfilled polygons or KiCad alone.
 6. [ ] Complete routed L-shaped example with cutout/mounting holes, malformed
@@ -130,7 +132,7 @@ the exporter warns when present, so manual movement requires renewed legality.
 Run the physical-IR probe from the repository root:
 
 ```console
-uv run python -m pcbir.mechanical_example
+uv run python -m examples.mechanical_example
 ```
 
 Ignored `build/mechanical-example/` contains a routed L-shaped KiCad project,

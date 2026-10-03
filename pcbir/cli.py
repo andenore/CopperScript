@@ -17,7 +17,7 @@ from .footprints import FootprintResolver
 from .importers import KiCadModImportError, load_kicad_mod
 from .layout import PlacementPlannerOptions, plan_placement
 from .placement_templates import apply_placement_templates
-from .loader import BoardLoadError, load_board
+from .loader import BoardLoadError, load_board, load_design
 from .power import analyze_power_states
 from .physicalize import (
     PrototypePhysicalOptions,
@@ -478,7 +478,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "audit-footprints",
     }:
         try:
-            board = load_board(
+            design = load_design(
                 args.board,
                 locked=getattr(args, "locked", False),
                 offline=getattr(args, "offline", False),
@@ -486,6 +486,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except BoardLoadError as exc:
             print(f"COMPILE ERROR: {exc}")
             return 2
+        board = design.electrical
         if args.command == "lock":
             print(f"Locked package content for {board.name} -> copper.lock")
             return 0
@@ -554,17 +555,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 physical_options = PrototypePhysicalOptions(
                     copper_layers=args.layers, fabrication_profile=args.fab_profile,
-                    board_width_mm=args.width_mm, board_height_mm=args.height_mm
+                    board_width_mm=args.width_mm if design.mechanical is None else 100,
+                    board_height_mm=args.height_mm if design.mechanical is None else 80,
                 )
                 if args.allow_proxy_footprints:
-                    physical_board = prototype_physicalize(board, physical_options)
+                    physical_board = prototype_physicalize(design, physical_options)
                 else:
                     resolver = FootprintResolver(
                         base_directory=args.board.resolve().parent,
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
                         locked=args.locked, offline=args.offline,
                     )
-                    physical_board = resolved_physicalize(board, resolver, physical_options)
+                    physical_board = resolved_physicalize(design, resolver, physical_options)
                 if args.placement_templates:
                     physical_board = apply_placement_templates(physical_board, args.placement_templates,
                         locked=args.locked, offline=args.offline)
@@ -963,17 +965,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 physical_options = PrototypePhysicalOptions(
                     copper_layers=args.layers, fabrication_profile=args.fab_profile,
-                    board_width_mm=args.width_mm, board_height_mm=args.height_mm
+                    board_width_mm=args.width_mm if design.mechanical is None else 100,
+                    board_height_mm=args.height_mm if design.mechanical is None else 80,
                 )
                 if args.allow_proxy_footprints:
-                    physical_board = prototype_physicalize(board, physical_options)
+                    physical_board = prototype_physicalize(design, physical_options)
                 else:
                     resolver = FootprintResolver(
                         base_directory=args.board.resolve().parent,
                         search_roots=tuple(root.resolve() for root in args.footprint_root),
                         locked=args.locked, offline=args.offline,
                     )
-                    physical_board = resolved_physicalize(board, resolver, physical_options)
+                    physical_board = resolved_physicalize(design, resolver, physical_options)
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
                     maximum_iterations=args.router_iterations,
@@ -1033,10 +1036,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.command in {"export-kicad-pcb", "plan-layout"}:
                     physical_options = PrototypePhysicalOptions(
                         copper_layers=args.layers, fabrication_profile=args.fab_profile,
-                        board_width_mm=args.width_mm, board_height_mm=args.height_mm
+                        board_width_mm=args.width_mm if design.mechanical is None else 100,
+                        board_height_mm=args.height_mm if design.mechanical is None else 80,
                     )
                     if args.allow_proxy_footprints:
-                        physical_board = prototype_physicalize(board, physical_options)
+                        physical_board = prototype_physicalize(design, physical_options)
                     else:
                         resolver = FootprintResolver(
                             base_directory=args.board.resolve().parent,
@@ -1045,7 +1049,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             ),
                             locked=args.locked, offline=args.offline,
                         )
-                        physical_board = resolved_physicalize(board, resolver, physical_options)
+                        physical_board = resolved_physicalize(design, resolver, physical_options)
                     if args.placement_templates:
                         physical_board = apply_placement_templates(physical_board, args.placement_templates,
                             locked=args.locked,offline=args.offline)
@@ -1114,12 +1118,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         if args.output:
             try:
-                write_json(board, args.output)
+                write_json(design, args.output)
             except OSError as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2
             print(f"Compiled {board.name} -> {args.output}")
         else:
-            print(board_to_json(board), end="")
+            print(board_to_json(design), end="")
         return 0
     return 2

@@ -6,7 +6,7 @@ independent active-low LED channels, nRF52832 QFAA, Keystone 3034 CR2032 holder,
 parts reuse the pinned GitHub CopperLib dependency; no sibling checkout or new
 compiler-local part definitions are required.
 
-The physical builder produces a **50 mm true circular board**. LEDs are on the
+The source's `mechanical` section declares a **50 mm true circular board**. LEDs are on the
 front at radius 22 mm, clockwise from 12 o'clock, at 30-degree intervals. Their
 10 kohm resistors form an inner ring at radius 18.2 mm. The MCU is on the
 front at (13.5, 25) mm, 11.5 mm left of centre; the rear holder is at (29, 25)
@@ -15,7 +15,7 @@ rear holder contacts, including its positive contact as well as the large
 ground square. It does not promise that every nearby via escape will succeed.
 The board stays two-layer and **LED controller only**, with no antenna/RF
 macro or external crystal; radio operation is deliberately excluded. SWD and bypass/reset
-components have explicit source placement constraints. Ring poses become fixed
+components and all ring poses have explicit source placement constraints. These become fixed
 physical rules, including their 30-degree orientations and a 1 mm LED courtyard
 edge margin; other components keep the ordinary 2 mm margin. These are not
 copper-clearance exemptions.
@@ -31,9 +31,19 @@ not DRC exclusions or a claim of a qualified fabrication process.
 
 From the repository root, with installed KiCad footprints (PowerShell):
 
+Use the generic compiler directly (no example builder required):
+
+```powershell
+uv run copper export-kicad-pcb examples/round_led_ring.copper --locked `
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
+  -o build/round-led-ring/round_led_ring.kicad_pcb
+```
+
+The optional repository-only wrapper adds previews, profiling and native checks:
+
 ```powershell
 uv run python -m copperscript check examples/round_led_ring.copper --locked
-uv run python -m pcbir.round_led_example `
+uv run python -m examples.round_led_example `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe"
 ```
@@ -47,7 +57,7 @@ destination. Performance profiling is always enabled.
 To attempt package escapes and detailed signal routing with native ground refill:
 
 ```powershell
-uv run python -m pcbir.round_led_example --route `
+uv run python -m examples.round_led_example --route `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
   --output-dir build/round-led-ring-routed
@@ -135,9 +145,10 @@ coin cell inaccessible to children in the final enclosure.
 
 ## Mechanical implementation and limitations
 
-Electrical connectivity stays in `.copper`; the separate Python builder owns
-the physical circle, ring placement and round fill polygons while dedicated
-mechanical language/datums are pending. `BoardOutline.circle()` retains an
+Electrical connectivity, the separate mechanical section, fixed ring placements
+and ground-pour intent are all in `.copper`. The optional Python wrapper is
+repository-only rendering/verification tooling, not a hidden design input.
+Named placement datums remain future work. `BoardOutline.circle()` retains an
 authoritative `CircularBoardBoundary` and an explicitly bounded inscribed query
 ring (default chord error 0.01 mm). Every ring edge is integer/Fraction-certified
 inside the circle with that radial bound. Shared material/copper predicates use

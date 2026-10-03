@@ -1,6 +1,6 @@
 """Read-only routing-run comparisons; measurements are never signoff evidence.
 
-Usage: python -m pcbir.routing_benchmark summarize build/full-vertical/<run>
+Usage: python -m pcbir.routing_benchmark summarize build/my-board/<run>
        python -m pcbir.routing_benchmark compare <baseline-run> <candidate-run>
 """
 from __future__ import annotations

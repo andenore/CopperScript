@@ -45,7 +45,7 @@ class Lexer:
                 tokens.append(self._number())
             elif character == '"':
                 tokens.append(self._string())
-            elif character in "{}():;=,.":
+            elif character in "{}[]():;=,.+-":
                 location = self._location()
                 tokens.append(Token(TokenKind.SYMBOL, self._advance(), location))
             else:

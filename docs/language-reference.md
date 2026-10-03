@@ -2,16 +2,20 @@
 
 ## Mechanical geometry status
 
-Polygonal board outlines, named interior cutouts and round NPTH mounting holes
-are currently available through the separate physical IR (`BoardOutline`,
-`BoardCutout`, `PhysicalBoard.mechanical_holes`, `MechanicalHole`). They do not
-add coordinates to the electrical IR. A dedicated `.copper` mechanical block
-and placement datums are planned, **not yet supported syntax**. See the accepted
-[mechanical specification and checklist](mechanical-geometry.md) and run
-`uv run python -m pcbir.mechanical_example` for the routed physical-IR probe.
-`BoardOutline.circle()` is also available through physical IR, with a native
-KiCad circle and explicit bounded grid geometry; it is not yet `.copper` syntax.
-See [the round LED/coin-cell example](round-led-ring.md).
+A board may declare a separate `mechanical` section containing a circular,
+rectangular or polygonal outline, polygonal cutouts, NPTH holes and physical
+rule overrides. See [the mechanical language specification](mechanical-language.md)
+for the complete grammar, validation rules and API separation.
+
+```copper
+mechanical {
+    outline circle { diameter = 50mm; center = (25mm, 25mm); }
+}
+```
+
+Electrical connectivity remains geometry-free. Generic `export-kicad-pcb`,
+`plan-layout`, `route-global` and `route-board` consume the source outline.
+Source geometry takes precedence over rectangle fallback dimensions.
 
 ## Permanent component-internal pad connections
 

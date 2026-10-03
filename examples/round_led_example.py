@@ -1,8 +1,8 @@
 """Build a 50 mm, twelve-LED coin-cell board with a true circular outline.
 
-Electrical connectivity is entirely in examples/round_led_ring.copper. This
-builder owns the mechanical circle, fixed ring geometry and a rear ground pour
-until dedicated mechanical language syntax exists. No firmware or manufacturing
+Connectivity, mechanical geometry, fixed placements and pour intent are entirely
+in examples/round_led_ring.copper. This optional wrapper renders the example.
+No firmware or manufacturing
 qualification is implied. Profiling is enabled for every run.
 """
 from __future__ import annotations
@@ -10,71 +10,39 @@ from __future__ import annotations
 import argparse
 import cProfile
 from dataclasses import replace
-from decimal import Decimal
 from html import escape
 import io
 import json
-from math import cos, pi, sin
 from pathlib import Path
 import pstats
 import subprocess
 
-from .compiler import compile_file
-from .erc import check
-from .footprints import FootprintResolver
-from .physicalize import PrototypePhysicalOptions, resolved_physicalize
-from .physical import (BoardOutline, BoardSide, ComponentPlacementRule, CopperLayer,
-                       CopperZone, IslandPolicy, Point, PolygonRing, PolygonWithHoles,
-                       nm_from_mm)
-from .placement import placement_solution_is_legal, transformed_local_point
-from .backends.kicad_pcb import KiCadPcbBackend
-from .backends.kicad_project import write_kicad_project
-from .drc import run_physical_drc
+from pcbir.compiler import compile_design_file
+from pcbir.erc import check
+from pcbir.footprints import FootprintResolver
+from pcbir.physicalize import PrototypePhysicalOptions, resolved_physicalize
+from pcbir.physical import BoardSide, nm_from_mm
+from pcbir.placement import placement_solution_is_legal, transformed_local_point
+from pcbir.backends.kicad_pcb import KiCadPcbBackend
+from pcbir.backends.kicad_project import write_kicad_project
+from pcbir.drc import run_physical_drc
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "examples/round_led_ring.copper"
 
 
 def make_example(footprint_roots, *, offline=False):
-    electrical = compile_file(SOURCE, locked=True, offline=offline)
-    diagnostics = check(electrical)
+    design = compile_design_file(SOURCE, locked=True, offline=offline)
+    diagnostics = check(design.electrical)
     if diagnostics:
         raise ValueError(f"round LED example must pass ERC: {diagnostics}")
-    board = resolved_physicalize(electrical,
+    board = resolved_physicalize(design,
         FootprintResolver(SOURCE.parent, tuple(footprint_roots), locked=True, offline=offline),
-        PrototypePhysicalOptions(board_width_mm=50, board_height_mm=50, copper_layers=2))
-    poses = {p.reference: p for p in board.placements}
-    rules = {r.reference: r for r in board.placement_rules}
-    for rule in board.placement_rules:
-        if rule.fixed_position is not None:
-            poses[rule.reference] = replace(poses[rule.reference], position=rule.fixed_position,
-                rotation_degrees=rule.fixed_rotation_degrees, side=rule.side)
-    for number in range(1, 13):
-        angle = (number - 1) * pi / 6
-        rotation = Decimal((90 - (number - 1) * 30) % 360)
-        for ref, radius in ((f"LED{number}", 22), (f"R_LED{number}", 18.2)):
-            point = Point.mm(str(25 + radius * sin(angle)), str(25 - radius * cos(angle)))
-            poses[ref] = replace(poses[ref], position=point, rotation_degrees=rotation)
-            rules[ref] = ComponentPlacementRule(ref, allowed_orientations=(rotation,),
-                fixed_position=point, fixed_rotation_degrees=rotation, side=BoardSide.FRONT,
-                edge_clearance_nm=nm_from_mm(1) if ref.startswith("LED") else None)
-    # Circular, explicitly inset fill intent. Native refill clips further around
-    # actual copper. No filled copper or ground connectivity is invented here.
-    fill_ring = BoardOutline.circle(49, center=Point.mm(25, 25)).vertices
-    zone = CopperZone("ground-pours", "GND", (CopperLayer.BACK,),
-                      PolygonWithHoles(PolygonRing(fill_ring)), island_policy=IslandPolicy.REMOVE_ALL)
-    # The generic 0.25 mm track floor cannot legally launch from this QFN's
-    # 0.20 mm-wide, 0.40 mm-pitch pads. Explicit 0.15/0.15 mm prototype rules
-    # permit ordinary off-pad escapes; this is not a fabrication qualification.
-    board = replace(board, outline=BoardOutline.circle(50, center=Point.mm(25, 25)),
-        rules=replace(board.rules, minimum_track_width_nm=nm_from_mm("0.15"),
-                      minimum_clearance_nm=nm_from_mm("0.15")),
-        placements=tuple(poses.values()), placement_rules=tuple(rules.values()), zones=(zone,),
-        metadata={**board.metadata, "prototype_placement": "false", "fabrication_ready": "false",
-                  "example_scope": "nRF52832 LED ring; primary CR2032; radio unused; firmware not supplied"})
-    if not placement_solution_is_legal(board, poses):
+        PrototypePhysicalOptions(copper_layers=2))
+    if not placement_solution_is_legal(board, {p.reference: p for p in board.placements}):
         raise ValueError("round LED example placement violates material/courtyard constraints")
-    return board
+    return replace(board, metadata={**board.metadata, "prototype_placement": "false",
+        "example_scope": "nRF52832 LED ring; primary CR2032; radio unused; firmware not supplied"})
 
 
 def stitch_ground_pours(board):
@@ -83,7 +51,7 @@ def stitch_ground_pours(board):
     Only prospective plane contacts are created. Native refill must prove
     connectivity, and IR fill evidence/manufacturing remain independent gates.
     """
-    from .plane import PlaneStitchOptions, stitch_zone_pads
+    from pcbir.plane import PlaneStitchOptions, stitch_zone_pads
     front_refs = {p.reference for p in board.placements if p.side is BoardSide.FRONT}
     targets = frozenset(p for n in board.nets if n.name == "GND" for p in n.pads
                         if p.component in front_refs)
@@ -173,9 +141,9 @@ def main(argv=None):
         status = "placed"
         ground_stitch_count = 0
         if args.route:
-            from .fanout import FanoutOptions, route_fanout
-            from .routing import GlobalRouterOptions, route_global
-            from .detailed import DetailedRouterOptions, route_detailed
+            from pcbir.fanout import FanoutOptions, route_fanout
+            from pcbir.routing import GlobalRouterOptions, route_global
+            from pcbir.detailed import DetailedRouterOptions, route_detailed
             print("Planning global guides (5 mm access radius around the battery contact)...", flush=True)
             global_route = profiler.runcall(route_global, board,
                 GlobalRouterOptions(tile_size_nm=nm_from_mm(5), maximum_iterations=6,

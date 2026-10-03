@@ -21,6 +21,10 @@ simulation = ["matplotlib>=3.10,<4", "plotly>=6.3,<7"]
 copper = "pcbir.cli:main"
 copper-devicegen = "pcbir.devicegen:main"
 
+[project.entry-points."copperscript.libraries"]
+tiny = "copperscript.library_data:tiny_library"
+standard = "copperscript.library_data:tiny_library"
+
 [tool.setuptools]
 packages = ["copperscript", "pcbir", "pcbir.backends", "pcbir.importers", "pcbir.simulation"]
 

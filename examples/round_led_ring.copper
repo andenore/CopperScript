@@ -1,5 +1,5 @@
 // 12 independent, low-current red LED channels on a 50 mm circular board.
-// Board outline / ring poses are separate physical intent in pcbir.round_led_example.
+// Board outline / ring poses are separate physical intent in examples.round_led_example.
 // CR2032 is primary (not rechargeable). SWD VREF is sense only; no power injection.
 board RoundLedRing {
     use library "tiny";
@@ -101,4 +101,35 @@ board RoundLedRing {
     constraint fixed_placement(C_VDD2) { x = 18.3mm; y = 24mm; rotation = 90; side = front; }
     constraint fixed_placement(C_BULK) { x = 14.5mm; y = 20mm; rotation = 0; side = front; }
     constraint fixed_placement(R_RESET) { x = 9.5mm; y = 30mm; rotation = 0; side = front; }
+
+    mechanical {
+        outline circle { center = (25mm, 25mm); diameter = 50mm; }
+        rules { minimum_track_width = 0.15mm; minimum_clearance = 0.15mm; }
+    }
+    constraint copper_zone(GND) { layers = "B.Cu"; inset = 0.5mm; pad_connection = solid; }
+
+    constraint fixed_placement(LED1) { x = 25.000000mm; y = 3.000000mm; rotation = 90; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED1) { x = 25.000000mm; y = 6.800000mm; rotation = 90; side = front; }
+    constraint fixed_placement(LED2) { x = 36.000000mm; y = 5.947441mm; rotation = 60; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED2) { x = 34.100000mm; y = 9.238338mm; rotation = 60; side = front; }
+    constraint fixed_placement(LED3) { x = 44.052559mm; y = 14.000000mm; rotation = 30; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED3) { x = 40.761662mm; y = 15.900000mm; rotation = 30; side = front; }
+    constraint fixed_placement(LED4) { x = 47.000000mm; y = 25.000000mm; rotation = 0; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED4) { x = 43.200000mm; y = 25.000000mm; rotation = 0; side = front; }
+    constraint fixed_placement(LED5) { x = 44.052559mm; y = 36.000000mm; rotation = 330; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED5) { x = 40.761662mm; y = 34.100000mm; rotation = 330; side = front; }
+    constraint fixed_placement(LED6) { x = 36.000000mm; y = 44.052559mm; rotation = 300; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED6) { x = 34.100000mm; y = 40.761662mm; rotation = 300; side = front; }
+    constraint fixed_placement(LED7) { x = 25.000000mm; y = 47.000000mm; rotation = 270; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED7) { x = 25.000000mm; y = 43.200000mm; rotation = 270; side = front; }
+    constraint fixed_placement(LED8) { x = 14.000000mm; y = 44.052559mm; rotation = 240; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED8) { x = 15.900000mm; y = 40.761662mm; rotation = 240; side = front; }
+    constraint fixed_placement(LED9) { x = 5.947441mm; y = 36.000000mm; rotation = 210; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED9) { x = 9.238338mm; y = 34.100000mm; rotation = 210; side = front; }
+    constraint fixed_placement(LED10) { x = 3.000000mm; y = 25.000000mm; rotation = 180; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED10) { x = 6.800000mm; y = 25.000000mm; rotation = 180; side = front; }
+    constraint fixed_placement(LED11) { x = 5.947441mm; y = 14.000000mm; rotation = 150; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED11) { x = 9.238338mm; y = 15.900000mm; rotation = 150; side = front; }
+    constraint fixed_placement(LED12) { x = 14.000000mm; y = 5.947441mm; rotation = 120; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED12) { x = 15.900000mm; y = 9.238338mm; rotation = 120; side = front; }
 }

@@ -23,9 +23,29 @@ from .model import (
     Supply,
 )
 from .quantities import Quantity
+from .design import Design
 
 
-def board_to_dict(board: Board) -> dict[str, object]:
+def board_to_dict(board: Board | Design) -> dict[str, object]:
+    if isinstance(board, Design):
+        result = board_to_dict(board.electrical)
+        if board.mechanical is not None:
+            m = board.mechanical
+            point = lambda p: {"x_nm": p.x_nm, "y_nm": p.y_nm}
+            circle = m.outline.circular_boundary
+            result["mechanical"] = {
+                "outline": {
+                    "vertices": [point(p) for p in m.outline.vertices],
+                    "circle": ({"center": point(circle.center), "radius_nm": circle.radius_nm,
+                                "maximum_chord_error_nm": circle.maximum_chord_error_nm} if circle else None),
+                    "cutouts": [{"id": c.id, "vertices": [point(p) for p in c.vertices]}
+                                for c in m.outline.cutouts],
+                },
+                "holes": [{"id": h.id, "position": point(h.position), "diameter_nm": h.diameter_nm,
+                           "head_clearance_radius_nm": h.head_clearance_radius_nm} for h in m.holes],
+                "rule_overrides": dict(m.rule_overrides),
+            }
+        return result
     result = {
         "schema": "copperscript-ir/v0.1",
         "kind": "board",
@@ -61,11 +81,11 @@ def board_to_dict(board: Board) -> dict[str, object]:
     return result
 
 
-def board_to_json(board: Board, *, indent: int = 2) -> str:
+def board_to_json(board: Board | Design, *, indent: int = 2) -> str:
     return json.dumps(board_to_dict(board), indent=indent, sort_keys=True) + "\n"
 
 
-def write_json(board: Board, path: str | Path) -> None:
+def write_json(board: Board | Design, path: str | Path) -> None:
     Path(path).write_text(board_to_json(board), encoding="utf-8")
 
 

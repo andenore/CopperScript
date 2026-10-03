@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
-from .library import tiny_library
+from .library import LIBRARIES, library_factory
+from .design import Design, lower_mechanical
 from .pad_connections import InternalPadGroup
 from .model import (
     BondDefinition,
@@ -100,7 +101,6 @@ from .syntax import (
 
 
 LibraryFactory = Callable[[], dict[str, PartDefinition]]
-LIBRARIES: dict[str, LibraryFactory] = {"tiny": tiny_library, "standard": tiny_library}
 
 QUANTITY_TYPES: dict[str, type[Quantity]] = {
     unit: quantity_type
@@ -118,16 +118,15 @@ QUANTITY_TYPES: dict[str, type[Quantity]] = {
 }
 
 
-def compile_source(
-    source: str,
-    filename: str = "<memory>",
+def _compile_electrical_document(
+    document: Document,
     *,
     locked: bool = False,
     offline: bool = False,
 ) -> Board:
     """Compile source into the authoritative hierarchical :class:`Board` IR."""
 
-    document = parse(source, filename)
+    filename = document.location.filename
     if document.kind != "board":
         _error("CMP019", "compiler entry source must declare a board", document.location)
     if document.imports and filename.startswith("<"):
@@ -144,23 +143,31 @@ def compile_source(
     )
 
 
-def compile_file(
-    path: str | Path, *, locked: bool = False, offline: bool = False
-) -> Board:
+def compile_design_source(source: str, filename: str = "<memory>", *,
+                          locked: bool = False, offline: bool = False) -> Design:
+    """Compile a complete design, with mechanics separate from electrical IR."""
+    document = parse(source, filename)
+    mechanical = lower_mechanical(document)
+    return Design(_compile_electrical_document(document, locked=locked, offline=offline), mechanical)
+
+
+def compile_source(source: str, filename: str = "<memory>", *,
+                   locked: bool = False, offline: bool = False) -> Board:
+    """Electrical projection of a validated design, for ERC/schematics/simulation."""
+    return compile_design_source(source, filename, locked=locked, offline=offline).electrical
+
+
+def compile_design_file(path: str | Path, *, locked: bool = False, offline: bool = False) -> Design:
     source_path = Path(path).resolve()
-    document = _read_document(source_path)
-    if document.kind != "board":
-        _error("CMP019", "compiler entry file must declare a board", document.location)
-    if document.imports:
-        resolver = PackageResolver.for_source(
-            source_path, document.location, locked=locked, offline=offline
-        )
-        imported = _load_imports(document, resolver, ())
-    else:
-        imported = PackageContents({}, {}, {}, ())
-    return _compile_board(
-        document, imported.modules, imported.parts, imported.devices, imported.dependencies
-    )
+    try:
+        source = source_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _error("CMP001", str(exc), SourceLocation(str(source_path), 0, 1, 1))
+    return compile_design_source(source, str(source_path), locked=locked, offline=offline)
+
+
+def compile_file(path: str | Path, *, locked: bool = False, offline: bool = False) -> Board:
+    return compile_design_file(path, locked=locked, offline=offline).electrical
 
 
 def lower(document: Document) -> Board:
@@ -170,6 +177,7 @@ def lower(document: Document) -> Board:
         _error("CMP019", "lowering entry must declare a board", document.location)
     if document.imports:
         _error("CMP020", "lower() cannot resolve package imports", document.location)
+    lower_mechanical(document)
     return _compile_board(document, {}, {}, {}, ())
 
 
@@ -534,7 +542,10 @@ def _lower_unit(
 def _load_libraries(document: Document) -> dict[str, PartDefinition]:
     library: dict[str, PartDefinition] = {}
     for library_name in document.libraries:
-        factory = LIBRARIES.get(library_name)
+        try:
+            factory = library_factory(library_name)
+        except ValueError as exc:
+            _error("CMP002", str(exc), document.location)
         if factory is None:
             _error("CMP002", f"unknown library {library_name!r}", document.location)
         _merge_library(library, factory(), document.location)

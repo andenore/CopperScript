@@ -57,6 +57,7 @@ from .physical import (
     nm_from_mm,
 )
 from .quantities import Length, Quantity
+from .design import Design
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +153,7 @@ def audit_resolved_footprints(board: Board, resolver: FootprintResolver) -> Foot
 
 
 def prototype_physicalize(
-    board: Board, options: PrototypePhysicalOptions | None = None
+    board: Board | Design, options: PrototypePhysicalOptions | None = None
 ) -> PhysicalBoard:
     """Create a deterministic, inspectable PCB draft from electrical IR.
 
@@ -177,7 +178,7 @@ def prototype_physicalize(
 
 
 def resolved_physicalize(
-    board: Board,
+    board: Board | Design,
     resolver: FootprintResolver,
     options: PrototypePhysicalOptions | None = None,
 ) -> PhysicalBoard:
@@ -232,11 +233,15 @@ _FootprintProvider = Callable[
 
 
 def _physicalize(
-    board: Board,
+    board: Board | Design,
     footprint_provider: _FootprintProvider,
     options: PrototypePhysicalOptions,
     metadata: dict[str, str],
 ) -> PhysicalBoard:
+    mechanical = board.mechanical if isinstance(board, Design) else None
+    board = board.electrical if isinstance(board, Design) else board
+    outline = mechanical.outline if mechanical else BoardOutline.rectangle(
+        options.board_width_mm, options.board_height_mm)
     flat = elaborate(board)
     if options.fabrication_profile in {"jlcpcb-four-layer", "jlcpcb-six-layer"}:
         # JLCPCB's published multilayer minimum is 0.09 mm; this is an
@@ -250,6 +255,8 @@ def _physicalize(
         metadata["fabrication_profile"] = options.fabrication_profile
     else:
         rules = DesignRules()
+    if mechanical:
+        rules = replace(rules, **mechanical.rule_overrides)
     selected_components = tuple(
         sorted(
             (
@@ -271,8 +278,16 @@ def _physicalize(
     footprints: dict[str, PhysicalFootprint] = {}
     placements: list[Placement] = []
 
-    usable_width = options.board_width_mm - 2 * options.margin_mm
-    usable_height = options.board_height_mm - 2 * options.margin_mm
+    xs, ys = [p.x_nm for p in outline.vertices], [p.y_nm for p in outline.vertices]
+    if outline.circular_boundary is not None:
+        circle = outline.circular_boundary
+        xs = [circle.center.x_nm-circle.radius_nm, circle.center.x_nm+circle.radius_nm]
+        ys = [circle.center.y_nm-circle.radius_nm, circle.center.y_nm+circle.radius_nm]
+    left, top = min(xs) / 1e6, min(ys) / 1e6
+    width, height = (max(xs)-min(xs)) / 1e6, (max(ys)-min(ys)) / 1e6
+    margin = min(options.margin_mm, min(width, height) / 4)
+    usable_width = width - 2 * margin
+    usable_height = height - 2 * margin
     rows = max(
         1, (len(selected_components) + options.columns - 1) // options.columns
     )
@@ -300,8 +315,8 @@ def _physicalize(
         footprints.setdefault(footprint.name, footprint)
         column = index % options.columns
         row = index // options.columns
-        x = options.margin_mm + usable_width * (column + 0.5) / options.columns
-        y = options.margin_mm + usable_height * (row + 0.5) / rows
+        x = left + margin + usable_width * (column + 0.5) / options.columns
+        y = top + margin + usable_height * (row + 0.5) / rows
         placements.append(
             Placement(
                 reference=component.ref,
@@ -342,7 +357,6 @@ def _physicalize(
         if _selected_footprint(component, flat.library[component.part]) is None
     )
     metadata["omitted_components"] = ",".join(omitted)
-    outline = BoardOutline.rectangle(options.board_width_mm, options.board_height_mm)
     (
         regions,
         keepouts,
@@ -353,6 +367,11 @@ def _physicalize(
         zones,
         via_in_pad_rules,
     ) = _lower_physical_constraints(flat, component_index, metadata, outline)
+    fixed_rules = {r.reference: r for r in placement_rules if r.fixed_position is not None}
+    placements = [replace(p, position=fixed_rules[p.reference].fixed_position,
+                         rotation_degrees=fixed_rules[p.reference].fixed_rotation_degrees,
+                         side=fixed_rules[p.reference].side or p.side)
+                  if p.reference in fixed_rules else p for p in placements]
     return PhysicalBoard(
         name=board.name,
         outline=outline,
@@ -382,6 +401,7 @@ def _physicalize(
         net_routing_rules=net_routing_rules,
         zones=zones,
         via_in_pad_rules=via_in_pad_rules,
+        mechanical_holes=mechanical.holes if mechanical else (),
     )
 
 
@@ -468,19 +488,32 @@ def _lower_physical_constraints(
             top, bottom = min(ys) + inset, max(ys) - inset
             if left >= right or top >= bottom:
                 raise ValueError("copper_zone inset consumes the board outline")
-            if set(outline.vertices) != {
+            if outline.circular_boundary is not None:
+                circle = outline.circular_boundary
+                radius = circle.radius_nm - inset
+                if radius <= 0:
+                    raise ValueError("copper_zone inset consumes the board outline")
+                zone_vertices = BoardOutline.circle(Decimal(2*radius) / 1_000_000,
+                    center=circle.center,
+                    maximum_chord_error_mm=Decimal(circle.maximum_chord_error_nm) / 1_000_000).vertices
+            elif set(outline.vertices) == {
                 Point(min(xs), min(ys)), Point(max(xs), min(ys)),
                 Point(max(xs), max(ys)), Point(min(xs), max(ys)),
             }:
-                raise ValueError("copper_zone inset currently requires a rectangular board outline")
+                zone_vertices = (Point(left, top), Point(right, top), Point(right, bottom), Point(left, bottom))
+            elif inset == 0:
+                zone_vertices = outline.vertices
+            else:
+                raise ValueError("nonzero copper_zone inset requires a rectangular or circular board outline")
+            # Without a general polygon-boolean engine, reject an inset which
+            # intersects a void instead of exporting an invalid hole contour.
+            BoardOutline(zone_vertices, cutouts=outline.cutouts)
             zone = CopperZone(
                 id=constraint.constraint_id or f"zone:{net}:{index}",
                 net=net,
                 layers=layers,
-                outline=PolygonWithHoles(PolygonRing((
-                    Point(left, top), Point(right, top),
-                    Point(right, bottom), Point(left, bottom),
-                ))),
+                outline=PolygonWithHoles(PolygonRing(zone_vertices),
+                    tuple(PolygonRing(c.vertices) for c in outline.cutouts)),
                 clearance_nm=_optional_constraint_length(parameters, "clearance"),
                 minimum_width_nm=_optional_constraint_length(parameters, "minimum_width") or nm_from_mm("0.25"),
                 pad_connection=ZoneConnection(str(parameters.get("pad_connection", "thermal"))),
@@ -586,6 +619,13 @@ def _lower_physical_constraints(
                 raise ValueError("fixed_placement requires exactly one component")
             target = lowered_targets[0]
             rotation = Decimal(str(parameters.get("rotation", 0)))
+            # Explicit orientation constraints must not be silently overridden
+            # by a fixed pose merely because declarations occur in that order.
+            orientations = (rotation,)
+            for c in flat.constraints:
+                if c.kind is ConstraintKind.ALLOWED_ORIENTATIONS and any(
+                        t.reference == target.reference for t in (targets(c.targets) or ())):
+                    orientations = _constraint_orientations(c.parameters.get("values"))
             rules[target.reference] = _merge_rule(
                 rules.get(target.reference),
                 target.reference,
@@ -594,6 +634,8 @@ def _lower_physical_constraints(
                     _constraint_length(parameters, "y"),
                 ),
                 fixed_rotation_degrees=rotation,
+                allowed_orientations=orientations,
+                edge_clearance_nm=_optional_constraint_length(parameters, "edge_clearance"),
                 side=_constraint_side(parameters.get("side")),
                 priority=_constraint_int(parameters, "priority", 1000),
             )

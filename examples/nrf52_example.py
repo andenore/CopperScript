@@ -11,15 +11,15 @@ import json
 from pathlib import Path
 import pstats
 
-from . import compile_file, resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
-from .backends.kicad_pcb import KiCadPcbBackend
-from .backends.kicad_project import write_kicad_project
-from .clusters import cluster_placements
-from .drc import run_physical_drc
-from .erc import check
-from .hard_macros import apply_hard_macro_scene, materialize_hard_macros
+from pcbir import compile_file, resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
+from pcbir.backends.kicad_pcb import KiCadPcbBackend
+from pcbir.backends.kicad_project import write_kicad_project
+from pcbir.clusters import cluster_placements
+from pcbir.drc import run_physical_drc
+from pcbir.erc import check
+from pcbir.hard_macros import apply_hard_macro_scene, materialize_hard_macros
 from .hard_macro_trial import document
-from .placement import placement_solution_is_legal
+from pcbir.placement import placement_solution_is_legal
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "examples/nrf52_coin_cell.copper"
@@ -61,7 +61,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     profiler = cProfile.Profile()
     if args.route:
-        from .cli import main as cli_main
+        from pcbir.cli import main as cli_main
         args.output_dir.mkdir(parents=True,exist_ok=True)
         command = ["route-board",str(SOURCE),"--locked","--width-mm","50","--height-mm","40",
             "--layers","6","--fab-profile","jlcpcb-six-layer","--hard-macro",

@@ -14,20 +14,33 @@ adds polygonal outlines, cutouts and round mounting holes to the physical IR.
 Try the routed L-shaped inspection probe (including performance profiling):
 
 ```console
-uv run python -m pcbir.mechanical_example
+uv run python -m examples.mechanical_example
 ```
 
-Output: ignored `build/mechanical-example/`. Dedicated `.copper` mechanical
-syntax, general curved paths, slots and complete manufacturing qualification are
-follow-up work; this probe does not claim production readiness.
+Output: ignored `build/mechanical-example/`. The frontend supports a separate
+[`mechanical` section](docs/mechanical-language.md) for circle/rectangle/polygon
+outlines, cutouts, NPTH holes and physical rules. General curved paths, slots and
+complete manufacturing qualification remain follow-up work. Board-specific
+builders live under `examples/`, never in the generic `pcbir` package.
 
 A [50 mm circular LED-ring example](docs/round-led-ring.md) uses an offset nRF52832
 as a non-radio controller, twelve GPIO-controlled LEDs and a rear CR2032 holder.
 It exports a true KiCad circle and fixed radial placement, with profiling and an
 optional routing run:
 
+Its circle, rear ground pour and all fixed placements are declared directly in
+`examples/round_led_ring.copper`. No Python builder is needed to export it:
+
 ```powershell
-uv run python -m pcbir.round_led_example `
+uv run copper export-kicad-pcb examples/round_led_ring.copper --locked `
+  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
+  -o build/round-led-ring/round_led_ring.kicad_pcb
+```
+
+The optional example wrapper adds placement previews, profiling and native checks:
+
+```powershell
+uv run python -m examples.round_led_example `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
@@ -53,7 +66,7 @@ corner fill exclusions and whole-assembly rotations. CopperLib downloads through
 the pinned URL dependency automatically:
 
 ```powershell
-uv run python -m pcbir.hard_macro_trial `
+uv run python -m examples.hard_macro_trial `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
@@ -65,7 +78,7 @@ SWD connector, two LEDs, two buttons and the radio support circuit:
 
 ```powershell
 uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked
-uv run python -m pcbir.nrf52_example `
+uv run python -m examples.nrf52_example `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 

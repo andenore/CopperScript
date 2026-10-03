@@ -1,6 +1,6 @@
 """Routed physical-IR mechanical probe, pending dedicated .copper syntax.
 
-Run ``python -m pcbir.mechanical_example`` from the project root. All outputs
+Run ``python -m examples.mechanical_example`` from the project root. All outputs
 and routing profiles go into ignored build/mechanical-example by default.
 This is inspection geometry, not a component library or manufacturing release.
 """
@@ -12,16 +12,16 @@ import json
 from pathlib import Path
 from time import perf_counter
 
-from .backends.kicad_pcb import KiCadPcbBackend
-from .backends.kicad_project import write_kicad_project
-from .detailed import DetailedRouterOptions, route_detailed
-from .drc import run_physical_drc
-from .physical import (
+from pcbir.backends.kicad_pcb import KiCadPcbBackend
+from pcbir.backends.kicad_project import write_kicad_project
+from pcbir.detailed import DetailedRouterOptions, route_detailed
+from pcbir.drc import run_physical_drc
+from pcbir.physical import (
     BoardCutout, BoardOutline, FootprintLayer, FootprintLine, FootprintPad,
     MechanicalHole, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet,
     Placement, Point, Size, nm_from_mm,
 )
-from .routing import GlobalRouterOptions, route_global
+from pcbir.routing import GlobalRouterOptions, route_global
 
 
 def build_mechanical_example() -> PhysicalBoard:

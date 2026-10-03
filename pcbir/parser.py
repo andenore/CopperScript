@@ -15,6 +15,8 @@ from .syntax import (
     ImportDecl,
     InterfaceDecl,
     ModuleInstanceDecl,
+    MechanicalDecl,
+    MechanicalItemDecl,
     MuxDecl,
     NetDecl,
     PartPropertyDecl,
@@ -82,6 +84,10 @@ class Parser:
                         self.tokens[self.index - 2],
                     )
                 self._expect_symbol(";")
+            elif keyword == "mechanical":
+                if root.text != "board":
+                    self._error("PAR012", "mechanical blocks are board-only", self.tokens[self.index - 1])
+                declarations.append(self._mechanical())
             elif root.text == "part" and keyword == "pin":
                 declarations.append(self._pin())
             elif root.text == "part":
@@ -150,6 +156,49 @@ class Parser:
             tuple(imports),
             tuple(declarations),
         )
+
+    def _mechanical(self) -> MechanicalDecl:
+        location = self.tokens[self.index - 1].location
+        self._expect_symbol("{")
+        items = []
+        while not self._at_symbol("}"):
+            start = self.current.location
+            kind = self._name("outline, cutout, hole, or rules")
+            name = self._name("mechanical feature id") if kind in {"hole", "cutout"} else ""
+            shape = self._name("outline shape") if kind in {"outline", "cutout"} else ""
+            if kind not in {"outline", "cutout", "hole", "rules"}:
+                self._error("PAR013", f"unknown mechanical declaration {kind!r}")
+            self._expect_symbol("{")
+            parameters = {}
+            while not self._at_symbol("}"):
+                token = self.current
+                key = self._name("mechanical property")
+                if key in parameters:
+                    self._error("PAR004", f"duplicate property {key!r}", token)
+                self._expect_symbol("=")
+                if self._accept_symbol("["):
+                    value = [self._mechanical_point()]
+                    while self._accept_symbol(","):
+                        value.append(self._mechanical_point())
+                    self._expect_symbol("]")
+                    parameters[key] = tuple(value)
+                elif self._at_symbol("("):
+                    parameters[key] = self._mechanical_point()
+                else:
+                    parameters[key] = self._scalar()
+                self._expect_symbol(";")
+            self._expect_symbol("}")
+            items.append(MechanicalItemDecl(start, kind, name, shape, parameters))
+        self._expect_symbol("}")
+        return MechanicalDecl(location, tuple(items))
+
+    def _mechanical_point(self):
+        self._expect_symbol("(")
+        x = self._scalar()
+        self._expect_symbol(",")
+        y = self._scalar()
+        self._expect_symbol(")")
+        return (x, y)
 
     def _component(self) -> ComponentDecl:
         location = self.current.location
@@ -349,6 +398,12 @@ class Parser:
         return attributes
 
     def _scalar(self) -> Scalar:
+        if self._at_symbol("-") or self._at_symbol("+"):
+            sign = self._advance().text
+            number = sign + self._expect(TokenKind.NUMBER, "number after sign").text
+            if self.current.kind is TokenKind.IDENTIFIER:
+                return RawQuantity(number, self._advance().text)
+            return float(number) if "." in number else int(number)
         if self.current.kind is TokenKind.STRING:
             return self._advance().text
         if self.current.kind is TokenKind.NUMBER:

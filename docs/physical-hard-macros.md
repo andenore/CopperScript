@@ -102,7 +102,7 @@ From CopperScript with installed KiCad footprints (CopperLib is URL-resolved):
 
 ```powershell
 uv sync --extra test
-uv run python -m pcbir.hard_macro_trial `
+uv run python -m examples.hard_macro_trial `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 

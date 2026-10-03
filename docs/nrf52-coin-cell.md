@@ -21,7 +21,7 @@ from CopperScript's root (PowerShell):
 ```powershell
 uv sync --extra test
 uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked
-uv run python -m pcbir.nrf52_example `
+uv run python -m examples.nrf52_example `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
@@ -50,7 +50,7 @@ Without `--route` this remains a placed draft. To attempt the full standard
 placement/global/package-access/critical/plane/detailed pipeline:
 
 ```powershell
-uv run python -m pcbir.nrf52_example --route `
+uv run python -m examples.nrf52_example --route `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
   --output-dir build/nrf52-routed

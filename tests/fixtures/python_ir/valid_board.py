@@ -14,7 +14,7 @@ from pcbir import (
     nanofarads,
     volts,
 )
-from pcbir.library import tiny_library
+from copperscript.library_data import tiny_library
 
 
 board = Board(

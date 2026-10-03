@@ -10,14 +10,14 @@ from pathlib import Path
 import pstats
 from typing import Mapping
 
-from . import compile_file, resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
-from .backends.kicad_pcb import KiCadPcbBackend
-from .backends.kicad_project import write_kicad_project
-from .clusters import cluster_placements
-from .drc import run_physical_drc, PhysicalDrcPolicy
-from .erc import check
-from .hard_macros import apply_hard_macro_scene, materialize_hard_macros
-from .physical import Point
+from pcbir import compile_file, resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
+from pcbir.backends.kicad_pcb import KiCadPcbBackend
+from pcbir.backends.kicad_project import write_kicad_project
+from pcbir.clusters import cluster_placements
+from pcbir.drc import run_physical_drc, PhysicalDrcPolicy
+from pcbir.erc import check
+from pcbir.hard_macros import apply_hard_macro_scene, materialize_hard_macros
+from pcbir.physical import Point
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,7 +39,7 @@ def make_trial(footprint_roots, rotation=0):
                      rotation_degrees=rotation)
     current.update(cluster_placements(board, board.rigid_clusters[0], anchor))
     if rotation != 0:
-        from .physical import BoardOutline
+        from pcbir.physical import BoardOutline
         board = replace(board, outline=BoardOutline.rectangle(70,70))
     board = replace(board, placements=tuple(current.values()),
         metadata={**board.metadata, "prototype_placement": "false", "rf_probe_only": "true",
@@ -60,7 +60,7 @@ def document(value):
 
 def annotation_svg(board):
     """Inspection overlay in physical mm, never an alternative copper model."""
-    from .placement import resolved_copper_keepouts
+    from pcbir.placement import resolved_copper_keepouts
     def polygon(points): return " ".join(f"{p.x_nm/1e6},{p.y_nm/1e6}" for p in points)
     lines=[]
     for keepout in resolved_copper_keepouts(board):

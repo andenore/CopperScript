@@ -7,7 +7,7 @@ import pytest
 
 from pcbir import check, compile_file
 from pcbir.drc import PhysicalDrcPolicy, run_physical_drc
-from pcbir.nrf52_example import SOURCE, make_example
+from examples.nrf52_example import SOURCE, make_example
 from pcbir.physical import PadReference, Point
 from pcbir.placement import placement_solution_is_legal
 
@@ -104,7 +104,7 @@ def test_actual_package_access_and_battery_ground_no_longer_block():
 
 
 def test_example_cli_retains_incomplete_signoff_and_performance_profile(tmp_path):
-    from pcbir.nrf52_example import main
+    from examples.nrf52_example import main
     args = ["--output-dir", str(tmp_path)]
     for root in installed_roots():
         args.extend(("--footprint-root", str(root)))
