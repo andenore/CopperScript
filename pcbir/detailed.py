@@ -585,7 +585,7 @@ def _repair_from_passes(
             key=lambda item: (item.result.via_count, item.result.length_nm),
         )
         if options.enable_soft_ripup:
-            soft_candidate = _route_net(
+            soft_candidate = _route_repair_net(
                 board, _build_grid(board, options, net.pads, fanout_accesses), net.name, net.pads,
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
                 options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
@@ -624,7 +624,7 @@ def _repair_from_passes(
             key=lambda item: (item.result.via_count, item.result.length_nm),
         )
         if options.enable_soft_ripup:
-            soft_candidate = _route_net(
+            soft_candidate = _route_repair_net(
                 board, _build_grid(board, options, net.pads, fanout_accesses), net.name, net.pads,
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
                 options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
@@ -691,7 +691,7 @@ def _repair_from_passes(
                 rerouted = {}
                 for blocker_name in order:
                     blocker = net_by_name[blocker_name]
-                    attempt = _route_net(
+                    attempt = _route_repair_net(
                         board, _build_grid(board, options, blocker.pads, fanout_accesses),
                         blocker.name, blocker.pads, rules.get(blocker.name),
                         guides.get(blocker.name), {}, {}, trial_clearance, options,
@@ -724,28 +724,11 @@ def _repair_from_passes(
                 options.maximum_search_states * options.repair_budget_multiplier
             ),
         )
-        attempt = _route_net(
+        attempt = _route_repair_net(
             board, _build_grid(board, repair_options, net.pads, fanout_accesses), net.name, net.pads,
             rules.get(net.name), guides.get(net.name), usage, {}, clearance,
             repair_options, fanout_accesses=fanout_accesses,
         )
-        # A coarse global grid can be topologically disconnected around fine
-        # pitch pads even when exact copper clearance permits a route. Refine
-        # only a proven no-path search; a budget-exhausted search needs more
-        # states, not a larger graph.
-        for _ in range(4):
-            if (attempt.result.connected
-                    or not any("cannot reach" in message for message in attempt.result.diagnostics)
-                    or repair_options.pitch_nm <= options.minimum_repair_pitch_nm):
-                break
-            repair_options = replace(repair_options,
-                pitch_nm=max(options.minimum_repair_pitch_nm, repair_options.pitch_nm // 2))
-            attempt = _route_net(
-                board, _build_grid(board, repair_options, net.pads, fanout_accesses),
-                net.name, net.pads, rules.get(net.name), guides.get(net.name),
-                usage, {}, clearance, repair_options,
-                fanout_accesses=fanout_accesses,
-            )
         if not attempt.result.connected:
             selected[net.name] = attempt
             continue
@@ -773,6 +756,40 @@ def _repair_from_passes(
         passes=best.metrics.passes,
     )
     return _Pass(attempts, usage, metrics)
+
+
+def _route_repair_net(
+    board: PhysicalBoard, grid: _Grid, name: str, pads: tuple[PadReference, ...],
+    rule: NetRoutingRule | None, guide: GlobalNetRoute | None,
+    usage: Mapping[str, int], history: Mapping[str, int],
+    clearance: RoutingClearanceIndex, options: DetailedRouterOptions,
+    *, allow_movable_conflicts: bool = False,
+    fanout_accesses: Mapping[PadReference, Point] | None = None,
+) -> _NetAttempt:
+    """Bounded fine-grid search shared by every transactional repair stage.
+
+    Refining only the final strict search cannot repair narrow channels blocked
+    by movable copper. Soft proposals and each evicted net must have the same
+    opportunity, while immutable copper and commit-time clearance remain exact.
+    Budget exhaustion never triggers refinement; at most four halvings occur.
+    """
+    attempt = _route_net(board, grid, name, pads, rule, guide, usage, history,
+                         clearance, options, allow_movable_conflicts=allow_movable_conflicts,
+                         fanout_accesses=fanout_accesses)
+    for _ in range(4):
+        if (attempt.result.connected
+                or not any("cannot reach" in message for message in attempt.result.diagnostics)
+                or options.pitch_nm <= options.minimum_repair_pitch_nm):
+            break
+        options = replace(options,
+            pitch_nm=max(options.minimum_repair_pitch_nm, options.pitch_nm // 2))
+        attempt = _route_net(
+            board, _build_grid(board, options, pads, fanout_accesses), name, pads,
+            rule, guide, usage, history, clearance, options,
+            allow_movable_conflicts=allow_movable_conflicts,
+            fanout_accesses=fanout_accesses,
+        )
+    return attempt
 
 
 def _ripup_orders(blockers: set[str]) -> tuple[tuple[str, ...], ...]:

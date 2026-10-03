@@ -1037,5 +1037,9 @@ rounds, with a configurable resolution floor (`--minimum-repair-pitch-mm`,
 default 0.1 mm). A fixed 0.25 mm floor cannot represent all legal narrow launch
 channels. Each trial preserves immutable copper, exact clearance checks and
 search-state bounds; exhausted budgets alone do not trigger a larger graph.
+Apply that same bounded refinement to soft-conflict proposals and evicted-net
+reroutes, not just the final strict search. A narrow launch can be blocked by
+ordinary movable copper. Accept a rip-up transaction only after every displaced
+net reroutes legally; otherwise roll back all trial copper.
 Do not repeat a neutral layer-cost fallback when all layer ranks and heading
 preferences are inactive: that is an identical search, not a new strategy.

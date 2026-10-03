@@ -548,6 +548,62 @@ def test_transactional_repair_can_displace_three_blockers(monkeypatch) -> None:
     assert limited.metrics.unrouted_net_count >= 1
 
 
+def test_fine_grid_soft_candidate_and_evicted_net_commit_atomically(monkeypatch) -> None:
+    base = _board()
+    footprint = next(iter(base.footprints))
+    board = replace(base, placements=base.placements + (
+        Placement("B1", footprint, Point.mm(10, 3)),
+        Placement("B2", footprint, Point.mm(10, 9))),
+        nets=base.nets + (PhysicalNet("BLOCKER", (
+            PadReference("B1", "1"), PadReference("B2", "1"))),))
+    wall = TrackSegment("BLOCKER", Point.mm(10, 3), Point.mm(10, 9),
+                        nm_from_mm(.25), CopperLayer.FRONT)
+    old_blocker = _NetAttempt(DetailedNetResult("BLOCKER", True, 1, 0, nm_from_mm(6), 0),
+                              (wall,), (), frozenset())
+    signal_track = TrackSegment("SIGNAL", Point.mm(3, 6), Point.mm(17, 6),
+                                nm_from_mm(.25), CopperLayer.FRONT)
+    signal = _NetAttempt(DetailedNetResult("SIGNAL", True, 1, 0, nm_from_mm(14), 0),
+                         (signal_track,), (), frozenset())
+    detour = (
+        TrackSegment("BLOCKER", Point.mm(10, 3), Point.mm(11.5, 3), nm_from_mm(.25), CopperLayer.FRONT),
+        TrackSegment("BLOCKER", Point.mm(11.5, 3), Point.mm(11.5, 9), nm_from_mm(.25), CopperLayer.BACK),
+        TrackSegment("BLOCKER", Point.mm(11.5, 9), Point.mm(10, 9), nm_from_mm(.25), CopperLayer.FRONT))
+    vias = tuple(Via("BLOCKER", Point.mm(11.5, y), nm_from_mm(.8), nm_from_mm(.4),
+                     CopperLayer.FRONT, CopperLayer.BACK) for y in (3, 9))
+    new_blocker = _NetAttempt(DetailedNetResult("BLOCKER", True, 3, 2, nm_from_mm(9), 0),
+                              detour, vias, frozenset())
+    best = _Pass((detailed_module._failed("SIGNAL", "unrouted"), old_blocker), {},
+                 DetailedRoutingMetrics(1, 1, 0, 0, 1, 0, nm_from_mm(6), 1))
+    observations = []
+    permit_blocker = [True]
+
+    def constrained_search(*args, **kwargs):
+        name, options = args[2], args[9]
+        soft = kwargs.get("allow_movable_conflicts", False)
+        observations.append((name, soft, options.pitch_nm))
+        if name == "BLOCKER" and not permit_blocker[0]:
+            return detailed_module._failed(name, "search budget exhausted")
+        if options.pitch_nm > nm_from_mm(.1) or name == "SIGNAL" and not soft:
+            return detailed_module._failed(name, "detailed search cannot reach target")
+        return signal if name == "SIGNAL" else new_blocker
+
+    monkeypatch.setattr(detailed_module, "_route_net", constrained_search)
+    options = DetailedRouterOptions(enable_soft_ripup=True)
+    repaired = _repair_from_passes(board, list(board.nets), {}, {}, best, [best], options)
+    assert repaired.metrics.routed_net_count == 2
+    assert ("SIGNAL", True, nm_from_mm(.1)) in observations
+    assert ("BLOCKER", False, nm_from_mm(.1)) in observations
+    copper = replace(board, tracks=tuple(t for item in repaired.nets for t in item.tracks),
+                      vias=tuple(v for item in repaired.nets for v in item.vias))
+    assert not {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"} & {
+        finding.code for finding in run_physical_drc(copper).findings}
+    permit_blocker[0] = False
+    rolled_back = _repair_from_passes(board, list(board.nets), {}, {}, best, [best], options)
+    assert rolled_back.metrics.routed_net_count == 1
+    assert rolled_back.nets[1] == old_blocker
+    assert board.tracks == () and board.vias == ()
+
+
 def test_detailed_router_preserves_critical_copper() -> None:
     board = replace(
         _board(),
