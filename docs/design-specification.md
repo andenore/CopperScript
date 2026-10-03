@@ -1048,5 +1048,9 @@ Carry the successful candidate's mesh resolution as internal search provenance.
 Displaced nets start on that mesh (within the configured resolution floor), not
 on a coarser grid that may hide the narrow channel again. This does not change
 the physical IR, geometry, clearances, ownership, or transactional acceptance.
+After attaching an unanchored, declared internally conductive multi-land terminal, make its
+other legal physical accesses available as routing-tree branch origins. Emit
+off-pad access stubs only when actually used. Duplicate numbers alone, device
+functionality and undeclared internal paths never create such connectivity.
 Do not repeat a neutral layer-cost fallback when all layer ranks and heading
 preferences are inactive: that is an identical search, not a new strategy.

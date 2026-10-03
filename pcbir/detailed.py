@@ -859,6 +859,7 @@ def _route_net(
     access_options: list[tuple[PadReference, Point, tuple[DetailedNode, ...]]] = []
     access_origins: dict[tuple[PadReference, DetailedNode], Point] = {}
     processed_groups = set()
+    interconnected_accesses: set[PadReference] = set()
     from .hard_macros import macro_routing_ports
     macro_ports = macro_routing_ports(board, name)
     for pad in sorted(pads):
@@ -896,6 +897,8 @@ def _route_net(
                 origins = tuple((PadReference(pad.component, land.number),
                                  transformed_local_point(placement, land.position), land)
                                 for land in footprint.pads if land.number in group.numbers)
+                if len(origins) > 1:
+                    interconnected_accesses.add(pad)
             all_candidates = []
             for physical_reference, origin, land in origins:
                 for candidate in _access_candidates(
@@ -914,6 +917,19 @@ def _route_net(
         access_options.sort(key=lambda item: (len(item[2]), item[0]))
     tree: set[DetailedNode] = set()
     chosen_accesses: list[tuple[PadReference, Point, DetailedNode]] = []
+    pending_internal_accesses: dict[DetailedNode, tuple[PadReference, Point, DetailedNode]] = {}
+
+    def attach_internal_accesses(entry: tuple[PadReference, Point, tuple[DetailedNode, ...]]) -> None:
+        # Only declared conductive groups can create virtual tree roots.
+        # Materialize an off-pad access stub only if a later branch uses it.
+        if entry[0] not in interconnected_accesses:
+            return
+        for candidate in entry[2]:
+            if candidate not in tree:
+                tree.add(candidate)
+                pending_internal_accesses.setdefault(candidate,
+                    (entry[0], access_origins[entry[0], candidate], candidate))
+
     remaining = access_options[1:]
     route_edges: set[tuple[DetailedNode, DetailedNode]] = set()
     deviations = 0
@@ -970,15 +986,20 @@ def _route_net(
         if found is None:
             return _failed(name, f"detailed search cannot reach {target_entry[0].component}.{target_entry[0].pad}")
         path, root, target = found
+        internal_root = pending_internal_accesses.pop(root, None)
+        if internal_root is not None:
+            chosen_accesses.append(internal_root)
         if not tree:
             tree.add(root)
             root_pad = access_options[0][0]
             chosen_accesses.append((root_pad, access_origins[root_pad, root], root))
+            attach_internal_accesses(access_options[0])
         for first, second, outside in path:
             tree.update((first, second))
             deviations += outside
         tree.add(target)
         chosen_accesses.append((target_entry[0], access_origins[target_entry[0], target], target))
+        attach_internal_accesses(target_entry)
         # Shortcuts can remove nodes used later as branch junctions. Keep the
         # exact grid tree for multi-terminal nets until topology-aware cleanup.
         materialized = (
