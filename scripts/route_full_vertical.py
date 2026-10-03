@@ -85,13 +85,13 @@ def _default_footprints(cli: Path) -> Path:
 def routing_command(repository: Path, output: Path, cli: Path,
                     footprints: Path, copperlib_footprints: Path,
                     *, dependency_expansions: int = 2,
-                    incremental_placement: bool = True) -> list[str]:
+                    incremental_placement: bool = True,
+                    include_placement_templates: bool = True) -> list[str]:
     """Keep the reviewed workflow explicit; paths are never shell-expanded."""
     command = [
         sys.executable, "-u", "-m", "copperscript", "route-board",
         str(repository / "examples/full_vertical_board.copper"),
         "--locked", "--offline", "--layers", "6", "--fab-profile", "jlcpcb-six-layer",
-        "--placement-templates", str(repository / "examples/full_vertical_placement_templates.json"),
         "--footprint-root", str(footprints), "--footprint-root", str(copperlib_footprints),
         "--candidates", "1", "--placement-candidate", "candidate-01",
         "--feedback-iterations", "1", "--router-iterations", "5", "--critical-feedback-trials", "0",
@@ -103,6 +103,8 @@ def routing_command(repository: Path, output: Path, cli: Path,
         "--verify-plane-fill", str(cli),
         "--report", str(output / "route-report.json"), "-o", str(output / "board.kicad_pcb"),
     ]
+    if include_placement_templates:
+        command.extend(("--placement-templates", str(repository / "examples/full_vertical_placement_templates.json")))
     if not incremental_placement:
         command.append("--no-incremental-placement-repair")
     return command

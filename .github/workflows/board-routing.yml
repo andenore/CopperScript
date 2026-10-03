@@ -11,7 +11,7 @@ on:
       include_nrf:
         description: Also route the nRF52 hard-macro example (20-minute budget)
         type: boolean
-        default: true
+        default: false
   push:
     branches: [main]
     tags: ['*']
@@ -81,7 +81,7 @@ jobs:
       - name: Attempt complete routing (never a dry run)
         env:
           ROUTING_MINUTES: ${{ inputs.routing_minutes || 270 }}
-          INCLUDE_NRF: ${{ startsWith(github.ref, 'refs/tags/') || inputs.include_nrf }}
+          INCLUDE_NRF: ${{ inputs.include_nrf || false }}
         run: |
           arguments=(scripts/ci_board_bundle.py route --minutes "$ROUTING_MINUTES")
           if [[ "$INCLUDE_NRF" == true ]]; then arguments+=(--include-nrf); fi

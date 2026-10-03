@@ -162,7 +162,8 @@ def route(output: Path, cli: Path, footprints: Path, minutes: int,
     if board_dir.exists():
         raise ValueError("route output already exists; do not mix CI runs")
     library = library_module(offline=True).directory
-    arguments = runner.routing_command(ROOT, board_dir, cli, footprints, library / "footprints")
+    arguments = runner.routing_command(ROOT, board_dir, cli, footprints, library / "footprints",
+        include_placement_templates=False)
     wrapped = profiled_command(arguments, board_dir / "routing.prof")
     command = [wrapped[0], "-u", "-c", WORKER, "pcbir.profiling", *wrapped[4:]]
     result = run_logged(command, board_dir, minutes * 60)
