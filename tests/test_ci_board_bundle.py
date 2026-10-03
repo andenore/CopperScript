@@ -179,9 +179,10 @@ def test_gates_require_both_complete_router_and_independent_kicad_results(tmp_pa
 def test_workflow_is_trusted_sha_pinned_and_routes_instead_of_dry_running():
     workflow = (ROOT / ".github/workflows/board-routing.yml").read_text()
     assert "pull_request_target" not in workflow.replace("# No pull_request_target", "# No")
-    assert "runs-on: windows-2022" in workflow and "self-hosted" not in workflow.split("jobs:")[1]
+    assert "runs-on: ubuntu-24.04" in workflow and "self-hosted" not in workflow.split("jobs:")[1]
     assert "tags: ['*']" in workflow and "timeout-minutes: 360" in workflow
-    assert "--dry-run" not in workflow and "'route'" in workflow
+    assert "--dry-run" not in workflow and "ci_board_bundle.py route" in workflow
+    assert "ppa:kicad/kicad-10.0-releases" in workflow
     assert "contents: write" in workflow.split("  publish:")[1]
     assert "contents: write" not in workflow.split("  publish:")[0]
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in re.findall(r"uses: \S+@([^\s]+)", workflow))
