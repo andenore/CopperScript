@@ -141,6 +141,29 @@ class Impedance(Quantity):
     UNITS: ClassVar[dict[str, Decimal]] = Resistance.UNITS
 
 
+@dataclass(frozen=True, slots=True)
+class Time(Quantity):
+    UNITS: ClassVar[dict[str, Decimal]] = {
+        "s": Decimal("1"), "ms": Decimal("1e-3"),
+        "us": Decimal("1e-6"), "ns": Decimal("1e-9"),
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class Power(Quantity):
+    UNITS: ClassVar[dict[str, Decimal]] = {"W": Decimal("1"), "mW": Decimal("1e-3")}
+
+
+@dataclass(frozen=True, slots=True)
+class Energy(Quantity):
+    UNITS: ClassVar[dict[str, Decimal]] = {"J": Decimal("1"), "mJ": Decimal("1e-3"), "uJ": Decimal("1e-6")}
+
+
+@dataclass(frozen=True, slots=True)
+class Charge(Quantity):
+    UNITS: ClassVar[dict[str, Decimal]] = {"C": Decimal("1"), "mC": Decimal("1e-3"), "uC": Decimal("1e-6")}
+
+
 def volts(value: Number) -> Voltage:
     return Voltage.of(value, "V")
 
