@@ -374,7 +374,10 @@ def route_detailed(
         completed.append(current)
         if best is None or current.metrics.quality_vector < best.metrics.quality_vector:
             best = current
-        if metrics.unrouted_net_count == 0 and metrics.total_conflict_overflow == 0:
+        # Zone nets intentionally await native refill, not another maze pass.
+        # Stop once every ordinary signal is connected without conflicts;
+        # deferred zones remain explicitly partial until independent closure.
+        if metrics.unrouted_net_count == len(deferred) and metrics.total_conflict_overflow == 0:
             best = current
             break
         for resource, value in usage.items():

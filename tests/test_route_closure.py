@@ -126,3 +126,34 @@ def test_default_zone_deferral_does_not_trigger_placement_repair() -> None:
     )
     assert pipeline.detailed_feedback_trials == 0
     assert pipeline.detailed.metrics.unrouted_net_count == 1
+    assert pipeline.detailed.metrics.passes == 1
+
+
+def test_completed_signals_stop_before_deferred_fill_but_failed_signals_retry() -> None:
+    from pcbir.detailed import DetailedRouterOptions, route_detailed
+    from pcbir.routing import GlobalRouterOptions, route_global
+
+    board = _result(reported=False, copper=False).board
+    footprint = board.placements[0].footprint
+    board = replace(
+        board,
+        placements=(*board.placements,
+                    Placement("G1", footprint, Point.mm(3, 3)),
+                    Placement("G2", footprint, Point.mm(7, 3))),
+        nets=(*board.nets, PhysicalNet("GND", (
+            PadReference("G1", "1"), PadReference("G2", "1")))),
+        zones=(CopperZone("plane", "GND", (CopperLayer.BACK,),
+            PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in (
+                (1, 1), (9, 1), (9, 9), (1, 9)))))),),
+        metadata={},
+    )
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    options = DetailedRouterOptions(maximum_passes=3)
+    routed = route_detailed(board, guide, options)
+    assert next(net for net in routed.nets if net.net == "A").connected
+    assert routed.metrics.passes == 1
+    assert routed.metrics.unrouted_net_count == 1
+    assert routed.status is DetailedRoutingStatus.PARTIAL
+    failed = route_detailed(board, replace(guide, routes=()), options)
+    assert not next(net for net in failed.nets if net.net == "A").connected
+    assert failed.metrics.passes == 3
