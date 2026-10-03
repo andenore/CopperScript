@@ -699,6 +699,26 @@ def test_failed_net_refines_below_quarter_mm_without_relaxing_clearance() -> Non
         finding.code for finding in run_physical_drc(refined.board).findings}
 
 
+def test_failed_first_pass_refines_before_neighbours_are_committed(monkeypatch) -> None:
+    board = _board()
+    guide = route_global(board)
+    observed = []
+    def narrow_launch(*args, **kwargs):
+        options = args[9]
+        observed.append(options.pitch_nm)
+        if options.pitch_nm > nm_from_mm(.1):
+            return detailed_module._failed(args[2], "detailed search cannot reach target")
+        track = TrackSegment("SIGNAL", Point.mm(3, 6), Point.mm(17, 6),
+                             board.rules.default_track_width_nm, CopperLayer.FRONT)
+        return _NetAttempt(DetailedNetResult("SIGNAL", True, 1, 0, nm_from_mm(14), 0),
+                           (track,), (), frozenset())
+    monkeypatch.setattr(detailed_module, "_route_net", narrow_launch)
+    result = route_detailed(board, guide, DetailedRouterOptions(maximum_passes=3))
+    assert result.metrics.passes == 3
+    assert result.nets[0].connected
+    assert observed == [nm_from_mm(p) for p in (.5, .5, .5, .25, .125, .1)]
+
+
 def test_refinement_is_bounded_and_never_triggered_by_budget_exhaustion(monkeypatch) -> None:
     board = _board()
     guide = route_global(board)

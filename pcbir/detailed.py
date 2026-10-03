@@ -314,6 +314,8 @@ def route_detailed(
         )
         clearance = RoutingClearanceIndex(board)
         usage: dict[str, int] = {}
+        failed = ({item.result.net for item in best.nets if not item.result.connected}
+                  if best is not None else set())
         attempts: list[_NetAttempt] = [
             _failed(net.name, "zone net awaits verified fill and pad stitching")
             for net in deferred
@@ -325,7 +327,6 @@ def route_detailed(
         if pass_index == 2:
             ordered_nets.reverse()
         elif pass_index >= 3 and best is not None:
-            failed = {item.result.net for item in best.nets if not item.result.connected}
             if pass_index <= 4:
                 ordered_nets.sort(key=lambda item: (
                     item.name not in failed,
@@ -343,7 +344,11 @@ def route_detailed(
         for net in ordered_nets:
             grid = _build_grid(board, pass_options, net.pads, fanout_accesses)
             guide = guides.get(net.name)
-            attempt = _route_net(
+            # A failed-first pass must reserve legal narrow launches before
+            # ordinary neighbours close them. Fine repair after all other
+            # copper is committed is too late for some package corridors.
+            search = _route_repair_net if pass_index >= 3 and net.name in failed else _route_net
+            attempt = search(
                 board,
                 grid,
                 net.name,

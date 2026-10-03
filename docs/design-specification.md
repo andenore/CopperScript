@@ -1041,5 +1041,8 @@ Apply that same bounded refinement to soft-conflict proposals and evicted-net
 reroutes, not just the final strict search. A narrow launch can be blocked by
 ordinary movable copper. Accept a rip-up transaction only after every displaced
 net reroutes legally; otherwise roll back all trial copper.
+Failed-first passes (third and later) also refine proven no-path searches before
+ordinary neighbours are installed. Reserve the difficult legal package channel
+early instead of relying exclusively on post-route rip-up to recover it.
 Do not repeat a neutral layer-cost fallback when all layer ranks and heading
 preferences are inactive: that is an identical search, not a new strategy.
