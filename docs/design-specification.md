@@ -996,3 +996,20 @@ or installed `copperscript.libraries` entry points. Examples are not wheel packa
 The LED-ring source declares its circle, rules, ground zone and all placements.
 See [mechanical language specification](mechanical-language.md). Curved slots,
 datums and nonrectangular production CAM qualification remain explicitly deferred.
+
+## CS-145 — Exact assembly identities and independent availability (Prototype)
+
+Pin library content and procurement identity independently. An offline assembly
+lock binds compiled hierarchical electrical IR to one manufacturer/full orderable
+MPN and supplier ordering code per populated component. No implicit substitutions
+or inventory-dependent circuit changes. Derive qualified component paths for BOM
+consumers without flattening the authoritative IR. Unresolved, unreviewed, stale
+or conflicting selections block selection-BOM export; ERC must also pass.
+
+Reusable part identities/offers belong in libraries eventually; the initial
+board-side prototype does not alter the electrical grammar. Source references
+are optional. Supplier availability is a separately timestamped observation,
+not compilation input, reservation or manufacturing signoff. JLCPCB integration
+requires approved access and its actual integration documentation; public
+catalogue evidence is not an authenticated API call. Keep credentials out of Git.
+See [assembly pinning](assembly-pinning.md) for scope, CLI and open release gates.

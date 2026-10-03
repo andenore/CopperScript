@@ -70,6 +70,20 @@ def _nonnegative_mm(value: str) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    assembly_parser = subparsers.add_parser("assembly", help="pin and check explicit assembly selections offline")
+    assembly_commands = assembly_parser.add_subparsers(dest="assembly_command", required=True)
+    for action in ("snapshot", "check", "bom"):
+        assembly = assembly_commands.add_parser(action)
+        assembly.add_argument("board", type=Path, help="a .copper source file")
+        _add_resolution_options(assembly)
+        if action == "snapshot":
+            assembly.add_argument("-o", "--output", type=Path, required=True, help="new assembly.lock file; never overwritten")
+        else:
+            assembly.add_argument("--lock", type=Path, required=True, help="explicit assembly.lock path")
+        if action == "check":
+            assembly.add_argument("--report", type=Path, help="write offline selection diagnostics as JSON")
+        if action == "bom":
+            assembly.add_argument("-o", "--output", type=Path, required=True, help="JLCPCB selection BOM CSV")
     sim_parser = subparsers.add_parser("sim", help="export or run a separate analog/power simulation plan")
     sim_commands = sim_parser.add_subparsers(dest="sim_command", required=True)
     for action in ("export", "run"):
@@ -431,6 +445,40 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "assembly":
+        from .assembly import AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_jlcpcb_bom
+        try:
+            board = load_board(args.board, locked=args.locked, offline=args.offline)
+            diagnostics = check(board)
+            if has_errors(diagnostics):
+                for diagnostic in diagnostics:
+                    print(diagnostic)
+                print("Assembly stopped because ERC reported errors.")
+                return 1
+            if args.assembly_command == "snapshot":
+                content = lock_to_json(snapshot(board))
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                with args.output.open("x", encoding="utf-8") as stream:
+                    stream.write(content)
+                print(f"Created unreviewed assembly snapshot -> {args.output}")
+                return 0
+            lock = load_lock(args.lock)
+            report = check_assembly(board, lock)
+            if args.assembly_command == "check":
+                if args.report:
+                    args.report.parent.mkdir(parents=True, exist_ok=True)
+                    args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                print(f"Assembly selections: {report['exact_selection_count']}/{report['component_count']} exact; "
+                      f"{report['reviewed_count']} reviewed; availability not checked")
+                for issue in report["issues"]:
+                    print(f"{issue['code']}: {issue['reference'] or board.name}: {issue['message']}")
+                return 0 if report["passed"] else 1
+            write_jlcpcb_bom(board, lock, args.output)
+            print(f"Generated selection BOM -> {args.output}; stock and manufacturing signoff not checked")
+            return 0
+        except (AssemblyError, BoardLoadError, OSError) as exc:
+            print(f"ASSEMBLY ERROR: {exc}")
+            return 2
     if args.command == "sim":
         from datetime import datetime, timezone
         from .simulation import SimulationError, load_plan

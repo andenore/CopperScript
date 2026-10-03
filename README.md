@@ -642,6 +642,13 @@ It is a provisional adaptation, not the complete vendor support/ground layout;
 use the [template preflight command](docs/rigid-placement-clusters.md#source-backed-cli-scene)
 before attempting the complete routing workflow with that option.
 
+## Exact assembly-selection prototype
+
+Exact board-side manufacturer/MPN and supplier selections can be prototyped with
+`copper assembly snapshot`, `copper assembly check` and `copper assembly bom`.
+These are offline checks, not stock lookup or production approval. See
+[assembly pinning](docs/assembly-pinning.md) for the workflow and JLCPCB API scope.
+
 ## KiCad schematic backend
 
 The initial backend targets KiCad 8's `20231120` `.kicad_sch` format. It embeds
