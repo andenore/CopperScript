@@ -1,0 +1,11 @@
+// Lumped input capacitor and ESR fixture, not a regulator or whole-board model.
+board SimulationInrush {
+    use library "tiny";
+    component R_ESR: RESISTOR { value = 0.05ohm; }
+    component C_BULK: CAPACITOR { value = 100uF; }
+    net VIN { R_ESR.1; }
+    net VCAP { R_ESR.2; C_BULK.1; }
+    net GND { C_BULK.2; }
+    supply INPUT { voltage = 5V; net = VIN; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}

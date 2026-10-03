@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "name": "rc-filter",
+  "circuit": { "all": true, "reference_node": "GND" },
+  "sources": {
+    "input": {
+      "kind": "voltage", "positive": "VIN", "negative": "GND", "dc": "0 V",
+      "ac": { "magnitude": "1 V", "phase": "0 deg" },
+      "waveform": { "kind": "ramp", "from": "0 V", "to": "1 V", "duration": "1 us" }
+    }
+  },
+  "analyses": {
+    "frequency": { "kind": "ac", "sweep": "decade", "start": "10 Hz", "stop": "1 MHz", "points_per_decade": 100 },
+    "startup": { "kind": "transient", "stop": "1 ms", "max_step": "1 us" }
+  },
+  "probes": {
+    "input_voltage": { "kind": "voltage", "positive": "VIN", "negative": "GND" },
+    "output_voltage": { "kind": "voltage", "positive": "VOUT", "negative": "GND" },
+    "input_current": { "kind": "source_current", "source": "input", "positive_direction": "delivered" }
+  },
+  "derived_signals": {
+    "gain": { "kind": "ratio", "analysis": "frequency", "numerator": "output_voltage", "denominator": "input_voltage" }
+  },
+  "cases": {
+    "nominal": {},
+    "high_capacitance": { "values": { "C1": "120 nF" } }
+  },
+  "checks": [
+    { "name": "gain_at_1kHz", "analysis": "frequency", "probe": "gain", "operation": "at", "at": "1 kHz", "representation": "dB", "minimum": "-2.1 dB", "maximum": "-1.3 dB" },
+    { "name": "phase_at_1kHz", "analysis": "frequency", "probe": "gain", "operation": "at", "at": "1 kHz", "representation": "phase", "minimum": "-38 deg", "maximum": "-30 deg" },
+    { "name": "bandwidth", "analysis": "frequency", "probe": "gain", "operation": "crossing", "representation": "dB", "level": "-3.01029995664 dB", "direction": "falling", "minimum": "1.2 kHz", "maximum": "1.7 kHz" },
+    { "name": "settled_voltage", "analysis": "startup", "probe": "output_voltage", "operation": "at", "at": "1 ms", "minimum": "0.995 V", "maximum": "1.001 V" }
+  ],
+  "plots": [
+    { "name": "bode", "kind": "bode", "analysis": "frequency", "signal": "gain", "unwrap_phase": true },
+    { "name": "startup", "kind": "timeseries", "analysis": "startup", "panels": [
+      { "title": "Voltage", "unit": "V", "signals": ["input_voltage", "output_voltage"] },
+      { "title": "Delivered input current", "unit": "A", "signals": ["input_current"] }
+    ] }
+  ],
+  "assumptions": ["Ideal native resistor and capacitor; no PCB parasitics.", "The high-capacitance case changes only the simulated C1 value."]
+}

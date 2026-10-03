@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "name": "capacitor-inrush",
+  "circuit": { "all": true, "reference_node": "GND" },
+  "sources": {
+    "input": {
+      "kind": "voltage", "positive": "VIN", "negative": "GND", "series_resistance": "0.25 ohm",
+      "waveform": { "kind": "ramp", "from": "0 V", "to": "5 V", "duration": "1 ms" }
+    }
+  },
+  "loads": {
+    "downstream": { "kind": "current_sink", "positive": "VCAP", "negative": "GND", "current": "100 mA", "enable_at": "2 ms", "rise_time": "50 us" }
+  },
+  "initial_state": { "method": "operating_point" },
+  "analysis": { "kind": "transient", "stop": "3 ms", "max_step": "2 us" },
+  "probes": {
+    "input_voltage": { "kind": "voltage", "positive": "VIN", "negative": "GND" },
+    "capacitor_voltage": { "kind": "voltage", "positive": "VCAP", "negative": "GND" },
+    "input_current": { "kind": "source_current", "source": "input", "positive_direction": "delivered" }
+  },
+  "derived_signals": { "input_power": { "kind": "product", "left": "input_voltage", "right": "input_current" } },
+  "cases": {
+    "nominal": {},
+    "high_capacitance": { "values": { "C_BULK": "120 uF", "R_ESR": "0.1 ohm" } }
+  },
+  "checks": [
+    { "name": "peak_inrush", "probe": "input_current", "operation": "max", "window": ["0 s", "1.5 ms"], "maximum": "0.75 A" },
+    { "name": "output_under_load", "probe": "capacitor_voltage", "operation": "min", "window": ["1.5 ms", "3 ms"], "minimum": "4.9 V" },
+    { "name": "charging_charge", "probe": "input_current", "operation": "integral", "window": ["0 s", "1.5 ms"], "minimum": "450 uC", "maximum": "650 uC" },
+    { "name": "charging_energy", "probe": "input_power", "operation": "integral", "window": ["0 s", "1.5 ms"], "minimum": "1.2 mJ", "maximum": "1.7 mJ" }
+  ],
+  "plots": [
+    { "name": "startup", "kind": "timeseries", "panels": [
+      { "title": "Voltage", "unit": "V", "signals": ["input_voltage", "capacitor_voltage"] },
+      { "title": "Delivered input current", "unit": "A", "signals": ["input_current"] },
+      { "title": "Input power", "unit": "W", "signals": ["input_power"] }
+    ] }
+  ],
+  "assumptions": ["Illustrative lumped capacitor/ESR model with entered source resistance and load timing.", "No regulator, switch current limit, firmware, or temperature behavior is modeled."]
+}

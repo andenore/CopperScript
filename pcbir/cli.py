@@ -70,6 +70,18 @@ def _nonnegative_mm(value: str) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    sim_parser = subparsers.add_parser("sim", help="export or run a separate analog/power simulation plan")
+    sim_commands = sim_parser.add_subparsers(dest="sim_command", required=True)
+    for action in ("export", "run"):
+        sim = sim_commands.add_parser(action, help="generate SPICE decks" if action == "export" else "run ngspice and generate graphs/data")
+        sim.add_argument("board", type=Path, help="a .copper source file")
+        sim.add_argument("--plan", type=Path, required=True, help="separate simulation JSON plan")
+        sim.add_argument("-o", "--output", type=Path, help="empty output directory (default: a new directory under build/sim)")
+        _add_resolution_options(sim)
+        if action == "run":
+            sim.add_argument("--engine", choices=("ngspice",), default="ngspice")
+            sim.add_argument("--ngspice", help="ngspice executable or Windows DLL; defaults to NGSPICE or PATH")
+            sim.add_argument("--timeout", type=float, default=60, help="maximum seconds per simulator process")
     check_parser = subparsers.add_parser("check", help="run electrical-rules checks")
     check_parser.add_argument("board", type=Path, help="a .copper source file")
     _add_resolution_options(check_parser)
@@ -415,6 +427,30 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "sim":
+        from datetime import datetime, timezone
+        from .simulation import SimulationError, load_plan
+        from .simulation.ngspice import export_simulation, run_simulation
+        try:
+            board = load_board(args.board, locked=args.locked, offline=args.offline)
+            plan = load_plan(args.plan)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            output = (args.output or Path("build") / "sim" / plan.name / stamp).resolve()
+            if args.sim_command == "export":
+                export_simulation(board, plan, output)
+                print(f"Exported simulation decks: {output}")
+                return 0
+            result = run_simulation(board, plan, output, ngspice=args.ngspice, timeout=args.timeout, source_path=args.board)
+            print(f"Simulation {result['status']}: {result['report']}")
+            for run in result["runs"]:
+                if run.get("error"):
+                    print(f"  {run['case']}/{run['analysis']}: {run['error']}")
+            if result.get("output_error"):
+                print(f"  Report error: {result['output_error']}")
+            return 0 if result["status"] in {"passed", "completed"} and result["output_status"] == "complete" else 1
+        except (BoardLoadError, SimulationError, OSError) as exc:
+            print(f"SIMULATION ERROR: {exc}")
+            return 2
     if args.command == "check-footprint":
         try:
             result = load_kicad_mod(args.footprint, strict=args.strict)

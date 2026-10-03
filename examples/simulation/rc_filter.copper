@@ -1,0 +1,11 @@
+// Native RC fixture: nominal tau = 100 us, corner frequency about 1.59 kHz.
+board SimulationRCFilter {
+    use library "tiny";
+    component R1: RESISTOR { value = 1kohm; }
+    component C1: CAPACITOR { value = 100nF; }
+    net VIN { R1.1; }
+    net VOUT { R1.2; C1.1; }
+    net GND { C1.2; }
+    supply INPUT { voltage = 1V; net = VIN; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}
