@@ -63,10 +63,15 @@ def make_example(footprint_roots, *, offline=False):
     fill_ring = BoardOutline.circle(49, center=Point.mm(25, 25)).vertices
     zone = CopperZone("ground-pours", "GND", (CopperLayer.BACK,),
                       PolygonWithHoles(PolygonRing(fill_ring)), island_policy=IslandPolicy.REMOVE_ALL)
+    # The generic 0.25 mm track floor cannot legally launch from this QFN's
+    # 0.20 mm-wide, 0.40 mm-pitch pads. Explicit 0.15/0.15 mm prototype rules
+    # permit ordinary off-pad escapes; this is not a fabrication qualification.
     board = replace(board, outline=BoardOutline.circle(50, center=Point.mm(25, 25)),
+        rules=replace(board.rules, minimum_track_width_nm=nm_from_mm("0.15"),
+                      minimum_clearance_nm=nm_from_mm("0.15")),
         placements=tuple(poses.values()), placement_rules=tuple(rules.values()), zones=(zone,),
         metadata={**board.metadata, "prototype_placement": "false", "fabrication_ready": "false",
-                  "example_scope": "circular LED ring; primary CR2032; firmware not supplied"})
+                  "example_scope": "nRF52832 LED ring; primary CR2032; radio unused; firmware not supplied"})
     if not placement_solution_is_legal(board, poses):
         raise ValueError("round LED example placement violates material/courtyard constraints")
     return board
@@ -97,6 +102,20 @@ def placement_svg(board, *, side=BoardSide.FRONT) -> str:
     def xy(point):
         x, y = point.x_nm / 1e6, point.y_nm / 1e6
         return (50 - x if side is BoardSide.BACK else x), y
+    # Opposite-side courtyards are an inspection overlay, not copper on this
+    # face. Make the deliberate MCU/holder offset visible from either view.
+    for pose in board.placements:
+        if pose.side is side or pose.reference not in {"U1", "BT1"}:
+            continue
+        fp = board.footprints[pose.footprint]
+        points = " ".join(f"{x:.4f},{y:.4f}" for x, y in
+                          (xy(transformed_local_point(pose, p)) for p in fp.courtyard))
+        parts.append(f'<polygon points="{points}" fill="none" stroke="#91b3a2" '
+                     f'stroke-width="0.1" stroke-dasharray="0.4,0.3"/>')
+        x, y = xy(pose.position)
+        label = "rear CR2032 holder" if pose.reference == "BT1" else "front nRF52832"
+        parts.append(f'<text x="{x}" y="{y+1}" font-size="0.8" text-anchor="middle" '
+                     f'fill="#91b3a2" font-family="sans-serif">{label}</text>')
     for pose in board.placements:
         if pose.side is not side:
             continue
@@ -122,12 +141,14 @@ def placement_svg(board, *, side=BoardSide.FRONT) -> str:
             continue  # Keep the narrow LED/resistor gap free of duplicate labels.
         else:
             y -= 1
-        label = f"{pose.reference}" if pose.reference != "U1" else "STM32G0C1"
+        label = f"{pose.reference}" if pose.reference != "U1" else "nRF52832"
         size = "0.65" if pose.reference.startswith("LED") else "0.95"
         parts.append(f'<text x="{x:.4f}" y="{y:.4f}" font-size="{size}" text-anchor="middle" '
                      f'fill="white" font-family="sans-serif">{escape(label)}</text>')
     parts.append(f'<text x="25" y="54" text-anchor="middle" font-family="sans-serif" font-size="1.5">'
-                 f'50 mm LED ring — {side.value} placement — inspection only</text></svg>')
+                 f'50 mm LED ring — {side.value} placement — inspection only</text>'
+                 '<text x="25" y="55.5" text-anchor="middle" font-family="sans-serif" font-size="0.9">'
+                 'Dashed: opposite-side courtyard</text></svg>')
     return "\n".join(parts) + "\n"
 
 

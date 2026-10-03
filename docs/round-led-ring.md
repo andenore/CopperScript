@@ -1,19 +1,31 @@
 # Round MCU / CR2032 LED-ring example
 
 `examples/round_led_ring.copper` defines a small inspection design: twelve
-independent active-low LED channels, STM32G0C1RET6, Keystone 3034 CR2032 holder,
-10-pin Cortex-M SWD header, bypass/bulk capacitors and reset network. All device
+independent active-low LED channels, nRF52832 QFAA, Keystone 3034 CR2032 holder,
+10-pin Cortex-M SWD header, LDO support/bypass/bulk capacitors and reset pull-up. All device
 parts reuse the pinned GitHub CopperLib dependency; no sibling checkout or new
 compiler-local part definitions are required.
 
 The physical builder produces a **50 mm true circular board**. LEDs are on the
 front at radius 22 mm, clockwise from 12 o'clock, at 30-degree intervals. Their
-10 kohm resistors form an inner ring at radius 18.2 mm. The MCU is centred on
-the front and the battery holder centred on the back. SWD and bypass/reset
+10 kohm resistors form an inner ring at radius 18.2 mm. The MCU is on the
+front at (13.5, 25) mm, 11.5 mm left of centre; the rear holder is at (29, 25)
+mm, 4 mm right of centre. This separates the MCU pad projection from **all**
+rear holder contacts, including its positive contact as well as the large
+ground square. It does not promise that every nearby via escape will succeed.
+The board stays two-layer and **LED controller only**, with no antenna/RF
+macro or external crystal; radio operation is deliberately excluded. SWD and bypass/reset
 components have explicit source placement constraints. Ring poses become fixed
 physical rules, including their 30-degree orientations and a 1 mm LED courtyard
 edge margin; other components keep the ordinary 2 mm margin. These are not
 copper-clearance exemptions.
+
+Front/back previews include a dashed opposite-side courtyard to show the
+MCU/holder offset; this overlay is not copper on the viewed face. Explicit
+0.15 mm minimum track width and clearance permit launches from the QFN's
+0.20 mm-wide, 0.40 mm-pitch pads; the previous generic 0.25 mm track floor was
+too wide. These prototype rules are checked by the same exact clearance gates,
+not DRC exclusions or a claim of a qualified fabrication process.
 
 ## Reproduce
 
@@ -41,9 +53,10 @@ uv run python -m pcbir.round_led_example --route `
   --output-dir build/round-led-ring-routed
 ```
 
-Package/global access radius is explicitly 5 mm for this example: the holder's
-17.8 mm square underside ground contact blocks through-vias beneath the MCU.
-Vias must escape that contact, not short through it. Ordinary via/pad overlap
+Package/global access radius remains explicitly 5 mm for this example. The
+holder's 17.8 mm square underside ground contact and positive contacts still
+block through-vias in their areas, though not beneath the offset MCU pads.
+Vias must escape those contacts, not short through them. Ordinary via/pad overlap
 remains forbidden. No via-in-pad permission, hidden routing or clearance waiver
 is added. Front GND-pad escapes are reserved **before** signal package escapes
 and detailed routing. Ground uses a circularly inset rear fill intent and legal
@@ -66,23 +79,36 @@ filled-zone evidence from an unfilled intent.
 ### Verified baseline
 
 The placed example passes electrical ERC and placement legality. Native KiCad
-10.0.6 reports **zero geometry/library violations and 57 unconnected items**
-for this deliberately unrouted baseline. The focused circle/mechanical/plane
-regression suite passes 84 tests. The GND-first optional routing attempt was
-interrupted after 20 minutes without a completed result; do not treat the
-example as fully routed. The large rear battery contact restricts through-via
-access beneath the MCU. Further routing/placement tuning is follow-up work,
+10.0.6 reports **zero geometry/library violations and 63 unconnected items**
+for this deliberately unrouted 34-component nRF52832 baseline. Regression tests
+cover all twelve distinct GPIOs, LDO support, SWD/reset, fixed two-layer placement
+and MCU/holder pad-projection separation. No full routing run is claimed for this
+revision. The earlier centred STM32 version's 20-minute interrupted attempt does
+not validate this circuit. Further package escape/routing tuning is follow-up work,
 not a clearance or via/pad-overlap exemption.
+The early ground-escape check reaches prospective rear-plane contacts for all
+front GND pads, including the exposed MCU ground pad, without via-in-pad. Actual
+filled connectivity and ordinary signal routing remain separate checks.
 
 ## Electrical / firmware assumptions
 
 Supply is an installed, non-rechargeable 3 V nominal CR2032. There is no charger,
 external power connector or regulator. SWD pin 1 is **target-voltage sense**:
 disable debugger power injection and do not connect an externally powered supply
-with the primary cell installed. The MCU uses its internal oscillator. Preserve
-SWD on PA13/PA14, normal user-flash boot configuration and brownout protection;
-unused pins should be configured for low leakage in firmware. No firmware is
-provided.
+with the primary cell installed. Preserve the dedicated SWDIO/SWDCLK pins.
+Configure P0.21 as reset using both matching
+[UICR PSELRESET registers](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/uicr.html).
+Unused GPIOs should be configured for low leakage. No firmware is provided.
+
+The regulator support follows the
+[Nordic QFAA LDO reference](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/ref_circuitry.html):
+DEC1 100 nF, DEC3 100 pF, DEC4 1 uF, two 100 nF VDD bypasses and 4.7 uF bulk.
+DEC2 and DCC are unconnected; firmware must leave DC/DC disabled. ANT, XC1 and
+XC2 are also unconnected in this explicitly non-radio variant. Use HFINT and,
+if needed, uncalibrated LFRC for timing; do not start HFXO, RADIO, NFC, a BLE
+stack or LFRC calibration. [Nordic's clock contract](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/clock.html)
+requires an external high-frequency crystal for radio/NFC and LFRC calibration.
+Internal-RC timing is not precision timing or a substitute for Bluetooth hardware.
 
 Each channel is `VBAT -> 10 kohm -> LED anode`, with the cathode on an MCU GPIO.
 LOW turns it on; HIGH (or a suitable high-impedance state) turns it off. Drive
@@ -95,11 +121,11 @@ forward voltage, usable brightness and leakage. For illustration, at 3 V and
 Vf=1.8 V, a 10 kohm resistor gives roughly 120 uA before GPIO voltage drop.
 Brightness falls with cell voltage. This is a low-duty-cycle indicator/chaser,
 not a high-brightness, continuously illuminated ring. Prefer one LED at a time
-and sleep the MCU between short low-clock-rate updates; all LEDs plus a busy MCU
+and sleep the MCU between short updates; all LEDs plus a busy MCU
 can quickly dominate battery drain. No lifetime or battery pulse qualification
 is claimed.
 
-[ST specifies a 1.7–3.6 V operating supply for STM32G0C1RE](https://www.st.com/en/microcontrollers-microprocessors/stm32g0c1re.html).
+[Nordic specifies a 1.7–3.6 V operating supply for nRF52832](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/recommended_op_conditions.html).
 [Panasonic's CR2032 data](https://energy.panasonic.com/na/business/products/lithium/coin-cr-standard/models/CR2032)
 lists 0.2 mA continuous drain for its standard specification; that is not a
 universal maximum-current rating for every CR2032. Verify discharge, sag,

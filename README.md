@@ -21,9 +21,10 @@ Output: ignored `build/mechanical-example/`. Dedicated `.copper` mechanical
 syntax, general curved paths, slots and complete manufacturing qualification are
 follow-up work; this probe does not claim production readiness.
 
-A [50 mm circular LED-ring example](docs/round-led-ring.md) uses an STM32G0C1,
-twelve GPIO-controlled LEDs and a rear CR2032 holder. It exports a true KiCad
-circle and fixed radial placement, with profiling and an optional routing run:
+A [50 mm circular LED-ring example](docs/round-led-ring.md) uses an offset nRF52832
+as a non-radio controller, twelve GPIO-controlled LEDs and a rear CR2032 holder.
+It exports a true KiCad circle and fixed radial placement, with profiling and an
+optional routing run:
 
 ```powershell
 uv run python -m pcbir.round_led_example `

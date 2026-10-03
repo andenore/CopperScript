@@ -1,4 +1,5 @@
 from dataclasses import replace
+from decimal import Decimal
 import json
 from math import hypot
 from pathlib import Path
@@ -11,11 +12,11 @@ from pcbir import (
     BoardCutout, BoardOutline, BoardSide, CopperLayer, KiCadPcbBackend, MechanicalHole,
     Point, TrackSegment, check, compile_file, nm_from_mm, write_kicad_project,
 )
-from pcbir.drc import PhysicalDrcPolicy, physical_board_digest, run_physical_drc
-from pcbir.geometry import RoundedConvexShape, segment_distance_squared
+from pcbir.drc import PhysicalDrcPolicy, physical_board_digest, placed_pad_shape, run_physical_drc
+from pcbir.geometry import RoundedConvexShape, segment_distance_squared, shapes_clear
 from pcbir.mechanical import point_in_material, ring_edges, shape_in_board
 from pcbir.mechanical_example import build_mechanical_example
-from pcbir.placement import placement_solution_is_legal
+from pcbir.placement import placement_solution_is_legal, transformed_local_point
 from pcbir.round_led_example import SOURCE, main, make_example, placement_svg, stitch_ground_pours
 from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.surface_path import _track_inside_board, via_inside_board
@@ -95,7 +96,8 @@ def test_circle_manufacturing_gate_stays_closed(tmp_path):
 def test_round_example_has_twelve_unique_active_low_channels_and_primary_supply():
     board = compile_file(SOURCE, locked=True, offline=True)
     assert check(board) == []
-    assert len(board.components) == 32
+    assert len(board.components) == 34
+    assert next(c for c in board.components if c.ref == "U1").part == "vertical.NRF52832_QFAA"
     assert {s.net for s in board.supplies} == {"VBAT", "GND"}
     assert all(s.externally_driven for s in board.supplies)
     pins = set()
@@ -103,12 +105,30 @@ def test_round_example_has_twelve_unique_active_low_channels_and_primary_supply(
         cathode = next(n for n in board.nets if n.name == f"LED{i}_K")
         assert (f"LED{i}", "K") in {(p.component, p.pin) for p in cathode.endpoints}
         pin = next(p.pin for p in cathode.endpoints if p.component == "U1")
-        assert pin not in pins and pin not in {"PA13", "PA14"}
+        assert pin not in pins and pin not in {"SWDIO", "SWDCLK", "P0_21_NRESET", "P0_09_NFC1", "P0_10_NFC2"}
+        assert pin.startswith("P0_")
         pins.add(pin)
         anode = next(n for n in board.nets if n.name == f"LED{i}_A")
         assert {(p.component, p.pin) for p in anode.endpoints} == {(f"LED{i}", "A"), (f"R_LED{i}", "2")}
         resistor = next(c for c in board.components if c.ref == f"R_LED{i}")
         assert resistor.value.base_value == 10000
+
+
+def test_round_nrf_ldo_support_and_debug_leave_radio_and_dcdc_unused():
+    board = compile_file(SOURCE, locked=True, offline=True)
+    def endpoints(name):
+        return {(p.component, p.pin) for n in board.nets if n.name == name for p in n.endpoints}
+    assert endpoints("VBAT") >= {("U1", "VDD_1"), ("U1", "VDD_2"), ("U1", "VDD_3")}
+    assert endpoints("GND") >= {("U1", "VSS_1"), ("U1", "VSS_2"), ("U1", "VSS_EP")}
+    for name, value in (("DEC1", "1E-7"), ("DEC3", "1E-10"), ("DEC4", "1E-6")):
+        assert endpoints(name) == {("U1", name), (f"C_{name}", "1")}
+        assert (f"C_{name}", "2") in endpoints("GND")
+        assert next(c for c in board.components if c.ref == f"C_{name}").value.base_value == Decimal(value)
+    assert endpoints("SWDIO") == {("U1", "SWDIO"), ("J_SWD", "SWDIO")}
+    assert endpoints("SWDCLK") == {("U1", "SWDCLK"), ("J_SWD", "SWDCLK")}
+    assert endpoints("RESET") == {("U1", "P0_21_NRESET"), ("J_SWD", "RESET"), ("R_RESET", "2")}
+    used = set().union(*(endpoints(n.name) for n in board.nets))
+    assert not {("U1", p) for p in ("ANT", "XC1", "XC2", "DEC2", "DCC", "NC_44")} & used
 
 
 @pytest.fixture(scope="module")
@@ -127,12 +147,29 @@ def test_round_placement_and_battery_side_are_fixed_not_baked_into_electrical_ir
             assert abs(hypot(pose.position.x_nm-nm_from_mm(25), pose.position.y_nm-nm_from_mm(25))
                        - nm_from_mm(22)) < 2
         if pose.reference == "BT1":
-            assert pose.side is BoardSide.BACK and pose.position == Point.mm(25, 25)
-    assert len(board.placement_rules) == 32
+            assert pose.side is BoardSide.BACK and pose.position == Point.mm(29, 25)
+        if pose.reference == "U1":
+            assert pose.side is BoardSide.FRONT and pose.position == Point.mm("13.5", 25)
+    assert len(board.placement_rules) == 34
+    assert board.stackup.copper_layers == (CopperLayer.FRONT, CopperLayer.BACK)
+    assert board.rules.minimum_track_width_nm == nm_from_mm("0.15")
+    assert board.rules.minimum_clearance_nm == nm_from_mm("0.15")
     assert not board.via_in_pad_rules
     assert not board.tracks and not board.vias and not board.zone_fills
     assert {l for z in board.zones for l in z.layers} == {CopperLayer.BACK}
     assert "inspection only" in placement_svg(board)
+    assert "nRF52832" in placement_svg(board)
+    assert "rear CR2032 holder" in placement_svg(board)
+
+
+def test_offset_mcu_pad_projection_is_clear_of_every_rear_battery_contact(placed_board):
+    poses = {p.reference: p for p in placed_board.placements}
+    def shapes(ref):
+        pose = poses[ref]
+        return tuple(placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose)
+                     for pad in placed_board.footprints[pose.footprint].pads)
+    assert all(shapes_clear(mcu, contact, placed_board.rules.minimum_clearance_nm)
+               for mcu in shapes("U1") for contact in shapes("BT1"))
 
 
 def test_round_native_circle_export_and_placed_drc(placed_board, tmp_path):
