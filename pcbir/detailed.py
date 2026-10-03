@@ -221,13 +221,16 @@ class _Grid:
     board: PhysicalBoard
     blocked: frozenset[DetailedNode]
     pitch_nm: int
-    diagonal_successors: dict[tuple[tuple[int, ...], tuple[int, ...], int, int], tuple[tuple[int, int], ...]] = field(
+    diagonal_successors: dict[tuple[int, ...], tuple[tuple[int, int], ...]] = field(
         default_factory=dict, compare=False, repr=False,
     )
     obstacle_cache: dict[int, tuple[PhysicalBoard, tuple[CopperKeepout, ...]]] = field(
         default_factory=dict, compare=False, repr=False,
     )
     line_clear_cache: dict[tuple[object, ...], bool] = field(
+        default_factory=dict, compare=False, repr=False,
+    )
+    query_contexts: dict[tuple[int, int, int], tuple[object, ...]] = field(
         default_factory=dict, compare=False, repr=False,
     )
 
@@ -872,7 +875,7 @@ def _route_net(
         if not candidates:
             return _failed(name, f"no legal pin access for {pad.component}.{pad.pad}")
         access_options.append((pad, pad_position, candidates))
-    if options.constrained_pins_first and len(access_options) > 2:
+    if options.constrained_pins_first and len(access_options) > 1:
         access_options.sort(key=lambda item: (len(item[2]), item[0]))
     tree: set[DetailedNode] = set()
     chosen_accesses: list[tuple[PadReference, Point, DetailedNode]] = []
@@ -1385,6 +1388,17 @@ def _cached_via_legality(
     return result
 
 
+def _grid_query_context(grid: _Grid) -> tuple[int, int, int]:
+    """Constant-size cache identity, retaining immutable inputs against ID reuse.
+
+    Replaced grids share caches, so coordinates and blocked nodes are part of
+    the identity. Hashing full coordinate tuples on every search edge is not.
+    """
+    key = (id(grid.xs), id(grid.ys), id(grid.blocked))
+    grid.query_contexts.setdefault(key, (grid.xs, grid.ys, grid.blocked))
+    return key
+
+
 def _grid_line_clear(
     grid: _Grid, start: DetailedNode, end: DetailedNode,
 ) -> bool:
@@ -1392,8 +1406,7 @@ def _grid_line_clear(
     if board_key not in grid.obstacle_cache:
         grid.obstacle_cache[board_key] = (grid.board, tuple(
             item for item in resolved_copper_keepouts(grid.board) if item.block_tracks))
-    key = (id(grid.board), start.layer_index, end.layer_index,
-           grid.point(start), grid.point(end), grid.blocked, grid.xs, grid.ys)
+    key = (board_key, *_grid_query_context(grid), start, end)
     result = grid.line_clear_cache.get(key)
     if result is None:
         result = _physical_grid_line_clear(grid, start, end)
@@ -1604,7 +1617,7 @@ def _neighbors(
             continue
         result.append(candidate)
     if diagonals:
-        key = (grid.xs, grid.ys, node.x_index, node.y_index)
+        key = (*_grid_query_context(grid), node.x_index, node.y_index)
         successors = grid.diagonal_successors.get(key)
         if successors is None:
             found = []

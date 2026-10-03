@@ -882,6 +882,31 @@ def test_multiterminal_cleanup_keeps_exact_branch_junctions() -> None:
     }
 
 
+def test_constrained_first_starts_at_restricted_terminal_on_two_pin_nets(monkeypatch) -> None:
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    restricted = max(board.nets[0].pads)
+    original_access = detailed_module._access_candidates
+    original_search = detailed_module._search
+    observed = []
+
+    def access(*args, **kwargs):
+        candidates = original_access(*args, **kwargs)
+        return candidates[:1] if args[2] == restricted else candidates
+
+    def search(grid, starts, targets, *args, **kwargs):
+        observed.append((len(starts), len(targets)))
+        return original_search(grid, starts, targets, *args, **kwargs)
+
+    monkeypatch.setattr(detailed_module, "_access_candidates", access)
+    monkeypatch.setattr(detailed_module, "_search", search)
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        maximum_passes=1, constrained_pins_first=True,
+    ))
+    assert result.nets[0].connected
+    assert observed[0][0] == 1 and observed[0][1] > 1
+
+
 def test_detailed_router_does_not_cut_through_track_keepout() -> None:
     base = _board()
     keepout = CopperKeepout(

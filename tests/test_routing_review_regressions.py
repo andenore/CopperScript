@@ -102,6 +102,25 @@ def test_axis_split_preserves_physical_diagonal_successor():
     assert Point.mm(1, 1) in {split.point(n) for n in _neighbors(split, start, {0})}
 
 
+def test_grid_query_caches_do_not_hash_coordinate_arrays_or_reuse_changed_inputs():
+    class UnhashedAxis(tuple):
+        def __hash__(self):
+            raise AssertionError("query caches must not hash entire coordinate arrays")
+
+    board = PhysicalBoard("Cache", BoardOutline.rectangle(2, 2), {}, (), ())
+    axis = UnhashedAxis((0, nm_from_mm(1), nm_from_mm(2)))
+    grid = _Grid((CopperLayer.FRONT,), axis, axis, board, frozenset(), nm_from_mm(1))
+    start, end = DetailedNode(0, 0, 0), DetailedNode(0, 2, 0)
+    assert _grid_line_clear(grid, start, end)
+    assert DetailedNode(0, 1, 1) in _neighbors(grid, start, {0})
+    blocked = replace(grid, blocked=frozenset({DetailedNode(0, 1, 0)}))
+    assert not _grid_line_clear(blocked, start, end)
+    outside = replace(grid, xs=UnhashedAxis((0, nm_from_mm(1), nm_from_mm(3))))
+    assert not _grid_line_clear(outside, start, end)
+    assert any(context[0] is axis for context in grid.query_contexts.values())
+    assert any(context[0] is outside.xs for context in grid.query_contexts.values())
+
+
 def test_costs_are_physical_and_invariant_to_edge_splitting():
     a, b, c = Point.mm(0, 0), Point.mm("0.3", 0), Point.mm(1, 0)
     def cost(first, second):
