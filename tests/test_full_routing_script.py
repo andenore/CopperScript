@@ -47,7 +47,7 @@ def test_workflow_command_uses_real_cli_options_and_complete_reviewed_settings(t
     assert args.layers == 6 and args.fab_profile == "jlcpcb-six-layer"
     assert args.placement_templates == ROOT / "examples/full_vertical_placement_templates.json"
     assert (args.candidates, args.placement_candidate, args.feedback_iterations,
-            args.router_iterations, args.critical_feedback_trials) == (1, "candidate-01", 1, 5, 0)
+            args.router_iterations, args.critical_feedback_trials) == (1, "candidate-00", 1, 5, 0)
     assert (args.pitch_mm, args.passes, args.search_budget, args.repair_budget_multiplier) == ("1", 2, 20000, 10)
     assert args.soft_ripup and args.fanout and args.constrained_pins_first and args.progressive_guides
     assert args.progress
