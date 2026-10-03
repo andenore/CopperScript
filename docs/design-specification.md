@@ -1013,3 +1013,21 @@ not compilation input, reservation or manufacturing signoff. JLCPCB integration
 requires approved access and its actual integration documentation; public
 catalogue evidence is not an authenticated API call. Keep credentials out of Git.
 See [assembly pinning](assembly-pinning.md) for scope, CLI and open release gates.
+
+## CS-146 — Multi-bend package access and native-filled routing closure (Accepted)
+
+Straight/refined elbow escape domains are not complete local-access searches.
+An explicit `--fanout-maze` fallback may search a bounded octilinear neighborhood
+for a compatible multi-bend launch and legal off-pad through-via. Reuse the exact
+surface-path predicates, source track/via sizes, crossed-layer pad exclusions,
+joint assignment and whole-board geometric acceptance. Never snap terminals,
+relax clearance, or infer via-in-pad permission. Verify an actual endpoint-linked
+copper chain and physical via when the detailed router consumes any anchor.
+
+Routing completion and fabrication signoff are different outcomes. An intent-only
+zone is not copper in the internal connectivity graph. An exact-board/export-bound
+native refill with zero opens and zero violations can complete only genuinely
+deferred zone nets after all signal searches, package access and geometric checks
+pass. Failed signal searches, stale evidence, waivers and hard findings remain
+failures. Do not alter the physical DRC token or mark the board fabrication-ready;
+independent CAM, assembly and mechanical production qualification remain separate.

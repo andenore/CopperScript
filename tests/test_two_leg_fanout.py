@@ -76,6 +76,45 @@ def test_two_leg_site_budget_is_bounded_near_to_far_and_has_no_radial_duplicates
         opts(maximum_two_leg_candidates=0)
 
 
+def test_bounded_maze_fallback_retains_exact_clearance_and_determinism(monkeypatch):
+    import pcbir.fanout as module
+    board = base_board()
+    # Isolate the fallback owner: empty straight/elbow domains do not grant a
+    # via permission or bypass any physical obstacles.
+    monkeypatch.setattr(module, "_legal_choices", lambda *args, **kwargs: ())
+    settings = opts(maze_escapes=True, joint_escapes=False)
+    result = route_fanout(board, settings)
+    assert not result.pending_pads and result.added_via_count == 1
+    assert result == route_fanout(board, settings)
+    anchor = result.accesses[PadReference("U", "1")]
+    assert verified_fanout_path(result.board, PadReference("U", "1"), "A", anchor,
+                               RoutingClearanceIndex(result.board))
+    assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-VIA-PAD-OVERLAP",
+                              "DRC-COPPER-KEEPOUT", "DRC-BOARD-EDGE"}
+                   for f in run_physical_drc(result.board).findings)
+    bounded = route_fanout(board, replace(settings, maze_state_budget=1))
+    assert bounded.pending_pads and not bounded.created_vias
+
+
+@pytest.mark.parametrize("defect", [None, "gap", "layer", "net"])
+def test_multi_bend_anchor_is_verified_only_through_actual_connected_copper(defect):
+    initial = route_fanout(base_board(False), opts())
+    board = initial.board
+    width = board.rules.default_track_width_nm
+    points = tuple(Point.mm(x,y) for x,y in ((5,6),(5,5.5),(4.5,5),(4.5,4.5),(4,4)))
+    tracks = tuple(TrackSegment("A", a,b,width,CopperLayer.FRONT) for a,b in zip(points,points[1:]))
+    if defect == "gap":
+        tracks = (tracks[0], *tracks[2:])
+    elif defect == "layer":
+        tracks = tuple(replace(t,layer=CopperLayer.BACK) for t in tracks)
+    elif defect == "net":
+        board = replace(board,nets=(*board.nets,PhysicalNet("other",())))
+        tracks = tuple(replace(t,net="other") for t in tracks)
+    board = replace(board,tracks=tracks)
+    path = verified_fanout_path(board,PadReference("U","1"),"A",Point.mm(4,4),RoutingClearanceIndex(board))
+    assert (path == tracks) if defect is None else path is None
+
+
 @pytest.mark.parametrize("mutation", ["missing", "gap", "layer", "net", "via-net", "span", "oblique"])
 def test_claimed_anchor_cannot_skip_missing_wrong_layer_or_net_legs(mutation):
     fanout = route_fanout(base_board(), opts())

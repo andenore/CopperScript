@@ -61,7 +61,7 @@ def verified_fanout_path(
     board: PhysicalBoard, pad: PadReference, net: str, anchor: Point,
     clearance: RoutingClearanceIndex,
 ) -> tuple[TrackSegment, ...] | None:
-    """Recognize one/two existing legs and an actual same-net physical via.
+    """Recognize a connected existing launch chain and a same-net physical via.
 
     Endpoints must meet exactly on a common terminal layer. Proximity, a via
     alone, an off-layer trace or a claimed anchor is not connectivity evidence.
@@ -94,20 +94,24 @@ def _verified_land_path(board, terminal, placement, net, anchor, clearance):
                                                via.from_layer, via.to_layer, drill_nm=via.drill_nm):
             continue
         tracks = tuple(t for t in board.tracks if t.net == net and t.layer is layer)
-        for first in tracks:
-            if start not in (first.start, first.end):
-                continue
-            middle = first.end if first.start == start else first.start
-            candidates = ((first,),) if middle == anchor else tuple(
-                (first, second) for second in tracks if second != first
-                and (second.start == middle and second.end == anchor
-                     or second.end == middle and second.start == anchor))
-            for path in candidates:
-                if all((t.start.x_nm == t.end.x_nm or t.start.y_nm == t.end.y_nm
-                        or abs(t.start.x_nm-t.end.x_nm) == abs(t.start.y_nm-t.end.y_nm))
-                       and t.width_nm >= board.rules.minimum_track_width_nm
-                       and _track_inside_board(board, t.start, t.end, t.width_nm)
-                       and clearance.can_track(net, t.start, t.end, t.width_nm, layer)
-                       for t in path):
-                    return path
+        from collections import defaultdict, deque
+        adjacency = defaultdict(list)
+        for track in tracks:
+            if ((track.start.x_nm == track.end.x_nm or track.start.y_nm == track.end.y_nm
+                 or abs(track.start.x_nm-track.end.x_nm) == abs(track.start.y_nm-track.end.y_nm))
+                    and track.width_nm >= board.rules.minimum_track_width_nm
+                    and _track_inside_board(board, track.start, track.end, track.width_nm)
+                    and clearance.can_track(net, track.start, track.end, track.width_nm, layer)):
+                adjacency[track.start].append((track.end, track))
+                adjacency[track.end].append((track.start, track))
+        paths = {start: ()}
+        queue = deque((start,))
+        while queue:
+            point = queue.popleft()
+            if point == anchor:
+                return paths[point]
+            for neighbor, track in adjacency[point]:
+                if neighbor not in paths:
+                    paths[neighbor] = (*paths[point], track)
+                    queue.append(neighbor)
     return None

@@ -35,7 +35,7 @@ from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
 from .pad_stitch import stitch_duplicate_pads
 from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
-from .route_closure import reconcile_zone_lands
+from .route_closure import reconcile_zone_lands, routing_complete_with_fill
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routeflow import (
     PlacementRoutingFeedbackOptions,
@@ -309,6 +309,8 @@ def _parser() -> argparse.ArgumentParser:
         help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
     board_route_parser.add_argument("--fanout-step-mm", type=_positive_mm, default="0.5",
         help="coarse package escape candidate step (default: 0.5 mm)")
+    board_route_parser.add_argument("--fanout-maze", action="store_true",
+        help="bounded exact-clearance multi-bend package escapes when straight/elbow candidates fail")
     board_route_parser.add_argument("--fanout-refinement-step-mm", type=_positive_mm, default="0.1",
         help="adaptive step for empty/conflicting escape domains; <= coarse step (default: 0.1 mm)")
     board_route_parser.add_argument("--package-access-movement-mm", type=_positive_mm, default="0.5",
@@ -704,6 +706,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 fanout_options = FanoutOptions(
                     step_nm=nm_from_mm(args.fanout_step_mm),
                     refinement_step_nm=nm_from_mm(args.fanout_refinement_step_mm),
+                    maze_escapes=args.fanout_maze,
                 ) if args.fanout else None
                 progress = console_progress() if args.progress else None
                 result = run_routing_pipeline(
@@ -783,8 +786,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plane_verification)
             closure_status = (
                 PhysicalFlowStatus.PASS
-                if result.status is PhysicalFlowStatus.PASS
-                and output_drc.decision is DrcDecision.PASS
+                if routing_complete_with_fill(result, output_board, output_drc, plane_verification)
                 and not duplicate_pending
                 and not plane_pending
                 else PhysicalFlowStatus.FAIL
@@ -796,6 +798,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 "fabrication_ready": False,
+                "routing_complete": closure_status is PhysicalFlowStatus.PASS,
                 "placement_candidate": result.placement_and_global.placement_candidate,
                 "detailed_feedback_trials": result.detailed_feedback_trials,
                 "global": json.loads(result.placement_and_global.global_route.to_json()),
@@ -1002,7 +1005,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 f"BOARD ROUTE: {closure_status.value} - "
                 f"routed={metrics.routed_net_count}, unrouted={metrics.unrouted_net_count}, "
-                f"DRC={output_drc.decision.value}"
+                f"explicit-copper DRC={output_drc.decision.value}; "
+                f"native filled-board DRC={'pass' if plane_verification and plane_verification.passed else 'not passed'}"
             )
             print(f"Report -> {report_path}")
             if args.output:

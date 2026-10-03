@@ -38,11 +38,14 @@ class FanoutOptions:
     assignment_options: EscapeAssignmentOptions = EscapeAssignmentOptions()
     refinement_step_nm: int = nm_from_mm("0.1")
     maximum_refined_two_leg_candidates: int = 1500
+    maze_escapes: bool = False
+    maze_state_budget: int = 12_000
 
     def __post_init__(self) -> None:
         if min(self.minimum_component_pads, self.maximum_neighbor_distance_nm,
                self.step_nm, self.maximum_radius_nm, self.maximum_two_leg_candidates,
-               self.refinement_step_nm, self.maximum_refined_two_leg_candidates) <= 0:
+               self.refinement_step_nm, self.maximum_refined_two_leg_candidates,
+               self.maze_state_budget) <= 0:
             raise ValueError("fanout options must be positive")
         if self.refinement_step_nm > self.step_nm:
             raise ValueError("fanout refinement step must not exceed coarse step")
@@ -163,6 +166,9 @@ def route_fanout(
         if not choices:
             choices = refine(reference)
             refined_counts[reference] = len(choices)
+        if not choices and options.maze_escapes:
+            choices = _maze_choices(board, clearance, net_by_pad[reference],
+                                    pin_by_ref[reference], options)
         domains[reference] = choices
 
     ordered = sorted((min(items, key=lambda item: item[0]) for items in pin_by_ref.values()), key=lambda item: (
@@ -188,7 +194,9 @@ def route_fanout(
                                  elbows=True, multiple_orders=True)
             fine = refine(reference)
             refined_counts[reference] = len(fine)
-            return tuple(dict.fromkeys((*coarse, *fine)))
+            maze = (_maze_choices(board, RoutingClearanceIndex(board), net_by_pad[reference],
+                                 pin_by_ref[reference], options) if options.maze_escapes else ())
+            return tuple(dict.fromkeys((*coarse, *fine, *maze)))
         selected, assignment = improve_escape_assignment(
             board, ordered_refs, domains, selected, expand, options.assignment_options)
 
@@ -236,6 +244,42 @@ def route_fanout(
                                 for item in analysis), assignment=assignment)
     return FanoutResult(routed, MappingProxyType(accesses), tuple(pending),
                         len(tracks), len(vias), tuple(vias), tuple(analysis), tuple(tracks), assignment)
+
+
+def _maze_choices(board, clearance, net, pins, options) -> tuple[EscapeCandidate, ...]:
+    """Bounded multi-bend launch when straight/refined elbow domains fail.
+
+    Reuse the same exact octilinear local search as plane escapes. Its via
+    predicate retains whole-annulus pad exclusions on every crossed layer;
+    candidates still go through joint assignment and whole-board acceptance.
+    """
+    from .surface_path import surface_path_to_via
+    rule = next((r for r in board.net_routing_rules if r.net == net), None)
+    width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+    size, drill = board.rules.default_via_size_nm, board.rules.default_via_drill_nm
+    choices = []
+    for _, _, position, placement, pad in pins:
+        side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+        allowed = routing_layers(board, net, rule)
+        if side not in allowed or len(allowed) < 2:
+            continue
+        span = physical_via_span(board, side, next(layer for layer in allowed if layer is not side))
+        if span is None:
+            continue
+        bounds = placed_pad_shape(position, pad, placement).bounds
+        result = surface_path_to_via(
+            board, clearance, net, position, width, side,
+            step_nm=options.refinement_step_nm, radius_nm=options.maximum_radius_nm,
+            via_size_nm=size, via_drill_nm=drill, via_layers=span[:2],
+            state_budget=options.maze_state_budget,
+            accept_via=lambda p: not (
+                bounds.min_x - size // 2 <= p.x_nm <= bounds.max_x + size // 2
+                and bounds.min_y - size // 2 <= p.y_nm <= bounds.max_y + size // 2),
+        )
+        if result is not None:
+            path, endpoint = result
+            choices.append((path, Via(net, endpoint, size, drill, *span)))
+    return tuple(dict.fromkeys(choices))
 
 
 def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,

@@ -11,6 +11,61 @@ from .physical import PadReference, PhysicalBoard
 
 if TYPE_CHECKING:
     from .plane_verify import PlaneVerification
+    from .flow import RoutingPipelineResult
+
+
+def routing_complete_with_fill(
+    pipeline: "RoutingPipelineResult", board: PhysicalBoard,
+    drc: PhysicalDrcReport, evidence: "PlaneVerification | None",
+) -> bool:
+    """Routing completion, not manufacturing signoff or a replacement token.
+
+    An intent-only zone necessarily leaves the explicit-copper checker open.
+    Accept only those deferred-zone findings after exact-export-bound native
+    refill proves zero opens and zero violations. Failed signal searches,
+    package preflight, geometric findings and stale evidence still fail closed.
+    The original physical DRC report/token is never changed.
+    """
+    from .critical import CriticalRoutingStatus
+    from .drc import DrcDisposition, DrcSeverity, DrcDecision
+    from .flow import PhysicalFlowStatus
+    from .physical import RouteKind
+    if evidence is not None and not (
+        evidence.passed and evidence.matches(board) and not evidence.findings
+        and evidence.unconnected_count == evidence.island_count == evidence.other_violation_count == 0
+    ):
+        return False
+    if pipeline.status is PhysicalFlowStatus.PASS and drc.decision is DrcDecision.PASS:
+        return True
+    if evidence is None or not board.zones:
+        return False
+    if (not pipeline.placement_and_global.full_route_certified
+            or pipeline.critical.status is CriticalRoutingStatus.FAILED
+            or pipeline.package_access is not None and not pipeline.package_access.ready
+            or pipeline.detailed.metrics.total_conflict_overflow):
+        return False
+    zones = {z.net for z in board.zones}
+    rules = {r.net: r for r in board.net_routing_rules}
+    required = {n.name for n in board.nets if len(n.pads) >= 2 and n.name not in zones
+                and (n.name not in rules or rules[n.name].kind is RouteKind.GENERAL)}
+    results = {n.net: n for n in pipeline.detailed.nets}
+    if any(name not in results or not results[name].connected for name in required):
+        return False
+    if any(not n.connected and (n.net not in zones
+               or "zone net awaits verified fill and pad stitching" not in n.diagnostics)
+           for n in pipeline.detailed.nets):
+        return False
+    for finding in drc.findings:
+        if finding.disposition is DrcDisposition.WAIVED:
+            return False
+        if finding.severity is not DrcSeverity.ERROR:
+            continue
+        if finding.code == "DRC-ROUTE-INCOMPLETE":
+            continue
+        if finding.code == "DRC-OPEN-NET" and finding.nets and set(finding.nets) <= zones:
+            continue
+        return False
+    return True
 
 
 def reconcile_zone_lands(
