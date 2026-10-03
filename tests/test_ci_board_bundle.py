@@ -181,14 +181,20 @@ def test_workflow_is_trusted_sha_pinned_and_routes_instead_of_dry_running():
     workflow = (ROOT / ".github/workflows/board-routing.yml").read_text()
     assert "pull_request_target" not in workflow.replace("# No pull_request_target", "# No")
     assert "runs-on: ubuntu-24.04" in workflow and "self-hosted" not in workflow.split("jobs:")[1]
-    assert "tags: ['*']" in workflow and "timeout-minutes: 360" in workflow
-    assert "--dry-run" not in workflow and "ci_board_bundle.py route" in workflow
+    assert "branches: ['**']" in workflow and "tags: ['v*']" in workflow
+    assert "workflow_dispatch:" not in workflow
+    test_job = workflow.split("  test:\n", 1)[1].split("  route:\n", 1)[0]
+    route_job = workflow.split("  route:\n", 1)[1].split("  publish:\n", 1)[0]
+    assert "run: python -m pytest" in test_job and "ci_board_bundle.py route" not in test_job
+    assert "pygerber==2.4.3" in test_job
+    assert test_job.index("Install KiCad 10") < test_job.index("Run complete test suite")
+    assert "if: ${{ startsWith(github.ref, 'refs/tags/v') }}" in route_job
+    assert "needs: test" in route_job and "timeout-minutes: 360" in route_job
+    assert "group: board-routing-${{ github.ref }}" in route_job
+    assert "run: python scripts/ci_board_bundle.py route --minutes 270" in route_job
+    assert "run: python -m pytest" not in route_job and "--dry-run" not in route_job
     assert "ppa:kicad/kicad-10.0-releases" in workflow
-    assert "run: python -m pytest" in workflow
-    assert "pygerber==2.4.3" in workflow
-    assert workflow.index("Install KiCad 10") < workflow.index("Run complete test suite")
     assert "pytest tests/test_ci_board_bundle.py" not in workflow
-    assert "INCLUDE_NRF: ${{ inputs.include_nrf || false }}" in workflow
     assert "contents: write" in workflow.split("  publish:")[1]
     assert "contents: write" not in workflow.split("  publish:")[0]
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in re.findall(r"uses: \S+@([^\s]+)", workflow))
