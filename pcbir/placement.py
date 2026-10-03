@@ -1180,8 +1180,18 @@ def _legal(
     polygon = _placement_polygon(board, candidate)
     edge_clearance = (rule.edge_clearance_nm if rule and rule.edge_clearance_nm is not None
                       else options.edge_clearance_nm)
-    if not _polygon_inside(polygon, board.outline.vertices, edge_clearance):
+    from .mechanical import shape_in_board
+    from .geometry import RoundedConvexShape, shapes_clear
+    inside = (shape_in_board(board, RoundedConvexShape(polygon), edge_clearance)
+              if board.outline.cutouts or board.mechanical_holes
+              else _polygon_inside(polygon, board.outline.vertices, edge_clearance))
+    if not inside:
         return False
+    for hole in board.mechanical_holes:
+        if hole.head_clearance_radius_nm and not shapes_clear(
+                RoundedConvexShape(polygon),
+                RoundedConvexShape((hole.position,), hole.head_clearance_radius_nm), 1):
+            return False
     if rule is not None and rule.region is not None:
         region = next(item for item in board.regions if item.name == rule.region)
         if region.side is not None and candidate.side is not region.side:

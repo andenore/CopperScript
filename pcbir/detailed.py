@@ -17,6 +17,7 @@ from typing import Iterable, Mapping
 from .geometry import (RoundedConvexShape, point_on_segment, point_in_polygon,
                        segment_in_polygon, shape_distance_squared)
 from .route_style import chamfer_ordinary_corners
+from .mechanical import point_in_material, shape_in_board
 from .physical import (
     BoardSide,
     CopperLayer,
@@ -1406,7 +1407,7 @@ def _physical_grid_line_clear(
     if start.layer_index != end.layer_index:
         return False
     first, second = grid.point(start), grid.point(end)
-    if not segment_in_polygon(first, second, grid.board.outline.vertices):
+    if not shape_in_board(grid.board, RoundedConvexShape((first, second))):
         return False
     key = id(grid.board)
     cached = grid.obstacle_cache.get(key)
@@ -1483,7 +1484,7 @@ def _build_grid(
         for x_index, x in enumerate(xs):
             for y_index, y in enumerate(ys):
                 point = Point(x, y)
-                if not _point_in_polygon(point, board.outline.vertices):
+                if not point_in_material(board, point):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
                 elif any(
                     layer in layers and point_in_polygon(point, polygon)

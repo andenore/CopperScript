@@ -33,6 +33,8 @@ from ..physical import (
     PolygonWithHoles,
     ZoneConnection,
     ViaKind,
+    Size,
+    nm_from_mm,
 )
 from .base import Artifact, ArtifactManifest
 from ..clusters import footprint_geometry_digest, resolved_cluster_keepouts
@@ -52,6 +54,8 @@ class KiCadPcbBackend:
     target_version = KICAD_PCB_TARGET_VERSION
 
     def generate(self, board: PhysicalBoard) -> ArtifactManifest:
+        has_head_clearance = any(h.head_clearance_radius_nm for h in board.mechanical_holes)
+        board = _mechanical_export_board(board)
         if board.stackup.copper_layers[0] is not CopperLayer.FRONT or board.stackup.copper_layers[-1] is not CopperLayer.BACK:
             raise ValueError("KiCad stackups must start at F.Cu and end at B.Cu")
         # Remap only the export, never the authoritative physical IR or its
@@ -65,6 +69,11 @@ class KiCadPcbBackend:
             raise ValueError("generated footprint names collide")
         content = _render(board, names)
         warnings: list[str] = []
+        if has_head_clearance:
+            warnings.append(
+                "Screw-head clearance is enforced by CopperScript placement, not exported "
+                "as a native KiCad placement constraint; recheck after manual placement changes."
+            )
         if board.hard_macros:
             if set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
                 raise ValueError("cannot export a hard macro without its immutable copper")
@@ -167,6 +176,9 @@ def _render_project(board: PhysicalBoard) -> str:
             "design_settings": {
                 "rules": {
                     "min_clearance": clearance,
+                    # Match the IR's explicit edge predicate, not KiCad's
+                    # implicit 0.5 mm project default.
+                    "min_copper_edge_clearance": clearance,
                     "min_hole_clearance": hole_clearance,
                     "min_track_width": minimum_track_width,
                     **({
@@ -296,22 +308,49 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
         for layer in sorted(keepout.layers, key=lambda item: item.value):
             lines.extend(_copper_keepout_lines(board, keepout, layer))
 
-    vertices = board.outline.vertices
-    for index, start in enumerate(vertices):
-        end = vertices[(index + 1) % len(vertices)]
-        lines.extend(
-            [
-                "  (gr_line",
-                f"    (start {_point(start)})",
-                f"    (end {_point(end)})",
-                "    (stroke (width 0.05) (type default))",
-                '    (layer "Edge.Cuts")',
-                f'    (uuid "{_stable_uuid(board.name, "outline", str(index))}")',
-                "  )",
-            ]
-        )
+    for loop_id, vertices in (("outer", board.outline.vertices),
+                              *((f"cutout:{c.id}", c.vertices) for c in board.outline.cutouts)):
+        for index, start in enumerate(vertices):
+            end = vertices[(index + 1) % len(vertices)]
+            lines.extend(
+                [
+                    "  (gr_line",
+                    f"    (start {_point(start)})",
+                    f"    (end {_point(end)})",
+                    "    (stroke (width 0.05) (type default))",
+                    '    (layer "Edge.Cuts")',
+                    f'    (uuid "{_stable_uuid(board.name, "outline", loop_id, str(index))}")',
+                    "  )",
+                ]
+            )
     lines.append(")")
     return "\n".join(lines) + "\n"
+
+
+def _mechanical_export_board(board: PhysicalBoard) -> PhysicalBoard:
+    """Lower board-owned NPTHs to canonical assets only in the export copy."""
+    if not board.mechanical_holes:
+        return board
+    footprints = dict(board.footprints)
+    placements = list(board.placements)
+    for hole in sorted(board.mechanical_holes, key=lambda h: h.id):
+        identity = sha256(hole.id.encode()).hexdigest()[:16]
+        reference = f"CS_MH_{identity}"
+        name = f"__mechanical_hole_{hole.diameter_nm}"
+        if any(p.reference == reference for p in placements):
+            raise ValueError("generated mechanical hole reference conflicts with a component")
+        size = Size(hole.diameter_nm, hole.diameter_nm)
+        footprint = PhysicalFootprint(name, (
+            FootprintPad("", Point(0, 0), size, kind=PadKind.NON_PLATED_THROUGH_HOLE,
+                         shape=PadShape.CIRCLE, drill=size, has_solder_paste=False),), size,
+            graphics=(FootprintCircle(Point(0, 0), Point((hole.diameter_nm + 1) // 2, 0),
+                                     nm_from_mm("0.05"), FootprintLayer.FABRICATION),),
+            exclude_from_bom=True, exclude_from_pos_files=True)
+        if name in footprints and footprints[name] != footprint:
+            raise ValueError("generated mechanical hole asset conflicts with a footprint")
+        footprints[name] = footprint
+        placements.append(Placement(reference, name, hole.position, source_path=f"mechanical:{hole.id}"))
+    return replace(board, footprints=footprints, placements=tuple(placements), mechanical_holes=())
 
 
 def _copper_layer_lines(board: PhysicalBoard) -> list[str]:

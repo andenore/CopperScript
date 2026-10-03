@@ -919,3 +919,31 @@ constraint. Battery contact via count follows electrical/mechanical requirements
 not an automatic large-pad-area heuristic; the nRF52 prototype retains its
 explicit filled/capped BT1.NEG ground-contact exception. Source references remain
 optional; generation guidance requires evidence before asserting a connection.
+
+## CS-142 — Real substrate geometry (Accepted; initial implementation)
+
+Board geometry belongs in a separate mechanical/physical description, never
+schematic coordinates or a second electrical connectivity definition. One
+canonical physical outline, named cutouts and board-owned NPTH holes describe
+actual material. Shared exact material predicates gate placement, routing and
+DRC; endpoints or bounding boxes alone cannot prove legal copper. Optional
+screw-head radius restricts placement on both sides without inventing copper
+keepouts. Plated holes remain component pads on ordinary nets.
+
+Validate simple closed topology and reject outside, touching, nested or
+intersecting voids. Include geometry in routing/signoff identity. KiCad exports
+outer/cutout loops and deterministic BOM-excluded NPTH assets; round Excellon
+hits reconcile against the original IR. Export edge clearance explicitly to
+match the IR rather than silently inherit a different KiCad default. Board
+NPTH process limits are separately provenance-bound, not borrowed from vias.
+Initial edge predicates use `DesignRules.minimum_clearance_nm`; independent
+profile-specific edge/web/tool limits remain further work.
+Manufacturing release rejects the new void features until independent
+outline/tooling qualification exists; inspection PCB export remains available.
+
+New-mechanical-geometry filled-zone containment is not yet qualified and fails
+closed in physical DRC. Screw-head placement intent is checked in CopperScript
+but not yet a native KiCad placement rule. Dedicated mechanical language/datums,
+curved boundaries, slots and full manufacturing outline qualification follow
+the [mechanical specification and implementation checklist](mechanical-geometry.md).
+No schema migration/version bump or fabrication-ready claim is implied.

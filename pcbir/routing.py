@@ -16,7 +16,8 @@ from math import ceil
 from typing import Iterable, Mapping
 
 from .drc import placed_pad_shape
-from .geometry import point_in_polygon, point_segment_distance_squared
+from .geometry import RoundedConvexShape, point_in_polygon, point_segment_distance_squared
+from .mechanical import point_in_material, shape_in_board
 from .pin_access import local_access_path
 from .physical import (
     BoardSide,
@@ -757,7 +758,7 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
         for x_index, x in enumerate(xs):
             for y_index, y in enumerate(ys):
                 point = Point(x, y)
-                if not _point_in_polygon(point, board.outline.vertices):
+                if not point_in_material(board, point):
                     continue
                 if any(
                     layer in layers and _point_in_box(point, box)
@@ -773,6 +774,10 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
         for dx, dy in ((1, 0), (0, 1)):
             neighbor = GridNode(node.layer_index, node.x_index + dx, node.y_index + dy)
             if neighbor in legal:
+                if not shape_in_board(board, RoundedConvexShape((
+                        Point(xs[node.x_index], ys[node.y_index]),
+                        Point(xs[neighbor.x_index], ys[neighbor.y_index])))):
+                    continue
                 layer = board.stackup.copper_layers[node.layer_index]
                 capacity = _planar_capacity(
                     Point(xs[node.x_index], ys[node.y_index]),
@@ -1216,6 +1221,8 @@ def _placement_fingerprint(board: PhysicalBoard) -> str:
         "via_in_pad_rules": [repr(item) for item in sorted(board.via_in_pad_rules,key=lambda item: item.pad)],
         # Materialization does not change placement or topology identity.
         "outline": [(point.x_nm, point.y_nm) for point in board.outline.vertices],
+        "cutouts": [repr(c) for c in board.outline.cutouts],
+        "mechanical_holes": [repr(h) for h in sorted(board.mechanical_holes, key=lambda h: h.id)],
         "placements": [
             (
                 item.reference,

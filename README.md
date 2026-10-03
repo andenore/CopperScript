@@ -9,6 +9,18 @@ claim fabrication readiness from routing guidance. Its prototype physical
 workflow can place components and attempt geometry-checked detailed routing,
 but a routed board still requires independent physical and KiCad DRC signoff.
 
+The [mechanical-geometry specification and checklist](docs/mechanical-geometry.md)
+adds polygonal outlines, cutouts and round mounting holes to the physical IR.
+Try the routed L-shaped inspection probe (including performance profiling):
+
+```console
+uv run python -m pcbir.mechanical_example
+```
+
+Output: ignored `build/mechanical-example/`. Dedicated `.copper` mechanical
+syntax, curved outlines, slots and complete manufacturing qualification are
+follow-up work; this probe does not claim production readiness.
+
 ## GitHub inspection builds
 
 The [board-routing workflow](.github/workflows/board-routing.yml) attempts the

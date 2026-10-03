@@ -237,6 +237,11 @@ def surface_path_to_via(
 
 
 def via_inside_board(board: PhysicalBoard, position: Point, size_nm: int) -> bool:
+    if board.outline.cutouts or board.mechanical_holes:
+        from .mechanical import shape_in_board
+        from .geometry import RoundedConvexShape
+        return shape_in_board(board, RoundedConvexShape((position,), (size_nm + 1) // 2),
+                              board.rules.minimum_clearance_nm, board.rules.minimum_hole_clearance_nm)
     outline = board.outline.vertices
     rectangle = _rectangle_bounds(outline)
     if rectangle is not None:
@@ -255,6 +260,11 @@ def via_inside_board(board: PhysicalBoard, position: Point, size_nm: int) -> boo
 def _track_inside_board(
     board: PhysicalBoard, start: Point, end: Point, width_nm: int,
 ) -> bool:
+    if board.outline.cutouts or board.mechanical_holes:
+        from .mechanical import shape_in_board
+        from .geometry import RoundedConvexShape
+        return shape_in_board(board, RoundedConvexShape((start, end), (width_nm + 1) // 2),
+                              board.rules.minimum_clearance_nm, board.rules.minimum_hole_clearance_nm)
     outline = board.outline.vertices
     rectangle = _rectangle_bounds(outline)
     if rectangle is not None:

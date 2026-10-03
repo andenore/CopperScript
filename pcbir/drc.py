@@ -223,6 +223,15 @@ def run_physical_drc(
         _check_zone_fill_spacing(board, findings)
         coverage.append(DrcCoverage("copper_zones", DrcCoverageStatus.EXECUTED, False,
                                     "checked content-bound normalized fill polygons"))
+        if board.outline.cutouts or board.mechanical_holes:
+            findings.append(_finding(
+                "DRC-MECHANICAL-FILL-UNSUPPORTED", DrcSeverity.ERROR,
+                "filled-zone material coverage for cutouts/mechanical holes is not yet qualified",
+            ))
+            coverage.append(DrcCoverage(
+                "mechanical_zone_material", DrcCoverageStatus.UNSUPPORTED, True,
+                "requires hole-aware filled-region containment; boundary-only checks are insufficient",
+            ))
     else:
         coverage.append(
             DrcCoverage(
@@ -315,6 +324,8 @@ def physical_board_digest(board: PhysicalBoard) -> str:
         {
             "name": board.name,
             "outline": [(p.x_nm, p.y_nm) for p in board.outline.vertices],
+            "cutouts": [(c.id, [(p.x_nm, p.y_nm) for p in c.vertices]) for c in board.outline.cutouts],
+            "mechanical_holes": [repr(h) for h in sorted(board.mechanical_holes, key=lambda h: h.id)],
             "stackup": {
                 "layers": [layer.value for layer in board.stackup.copper_layers],
                 "thickness_nm": board.stackup.thickness_nm,
@@ -509,18 +520,20 @@ def _check_differential_rules(board: PhysicalBoard, findings: list[DrcFinding]) 
 
 def _check_board_edge(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
     clearance = board.rules.minimum_clearance_nm
-    edges = tuple(zip(board.outline.vertices, (*board.outline.vertices[1:], board.outline.vertices[0])))
+    from .mechanical import ring_edges, shape_in_outline
+    edges = (*ring_edges(board.outline.vertices),
+             *(edge for cutout in board.outline.cutouts for edge in ring_edges(cutout.vertices)))
     for index, track in enumerate(board.tracks):
         margin = min(
             _fraction_sqrt_floor(segment_distance_squared(track.start, track.end, first, second))
             for first, second in edges
         ) - track.width_nm / 2
-        inside = all(_point_in_polygon_or_edge(point, board.outline.vertices) for point in (track.start, track.end))
+        inside = shape_in_outline(RoundedConvexShape((track.start, track.end), (track.width_nm + 1) // 2), board.outline, clearance)
         if not inside or margin < clearance:
             findings.append(_finding("DRC-BOARD-EDGE", DrcSeverity.ERROR, f"track {index} violates copper-to-board-edge clearance", objects=(f"track:{index}",), nets=(track.net,), layers=(track.layer.value,), required_nm=clearance, measured_nm=max(0, round(margin))))
     for index, via in enumerate(board.vias):
         margin = min(_point_segment_distance(via.position, first, second) for first, second in edges) - via.size_nm / 2
-        if not _point_in_polygon_or_edge(via.position, board.outline.vertices) or margin < clearance:
+        if not shape_in_outline(RoundedConvexShape((via.position,), (via.size_nm + 1) // 2), board.outline, clearance) or margin < clearance:
             findings.append(_finding("DRC-BOARD-EDGE", DrcSeverity.ERROR, f"via {index} violates copper-to-board-edge clearance", objects=(f"via:{index}",), nets=(via.net,), required_nm=clearance, measured_nm=max(0, round(margin))))
     for pad in _copper_pads(board):
         spine_edges = ((pad.shape.spine[0], pad.shape.spine[0]),) if len(pad.shape.spine) == 1 else (
@@ -531,8 +544,7 @@ def _check_board_edge(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
             _fraction_sqrt_floor(segment_distance_squared(start, end, first, second))
             for start, end in spine_edges for first, second in edges
         ) - pad.shape.radius_nm
-        if not all(_point_in_polygon_or_edge(point, board.outline.vertices)
-                   for point in pad.shape.spine) or margin < clearance:
+        if not shape_in_outline(pad.shape, board.outline, clearance) or margin < clearance:
             findings.append(_finding("DRC-BOARD-EDGE", DrcSeverity.ERROR, f"{pad.identity} violates copper-to-board-edge clearance", objects=(pad.identity,), nets=(pad.net,), layers=tuple(layer.value for layer in pad.layers), required_nm=clearance, measured_nm=max(0, round(margin))))
 
 
@@ -731,6 +743,8 @@ def non_plated_holes(board: PhysicalBoard) -> tuple[tuple[str, RoundedConvexShap
     """Return placed drill envelopes, including unnumbered mechanical holes."""
 
     holes: list[tuple[str, RoundedConvexShape]] = []
+    from .mechanical import hole_shape
+    holes.extend((f"mechanical-hole:{hole.id}", hole_shape(hole)) for hole in board.mechanical_holes)
     for placement in sorted(board.placements, key=lambda item: item.reference):
         footprint = board.footprints[placement.footprint]
         for index, pad in enumerate(footprint.pads):
@@ -754,6 +768,11 @@ def _check_non_plated_hole_clearance(
 ) -> None:
     clearance = board.rules.minimum_hole_clearance_nm
     for identity, hole in non_plated_holes(board):
+        for pad in _copper_pads(board):
+            if not shapes_clear(pad.shape, hole, clearance):
+                findings.append(_finding("DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
+                    f"{pad.identity} violates {identity} drill clearance",
+                    objects=(pad.identity, identity), nets=(pad.net,)))
         for index, track in enumerate(board.tracks):
             copper = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
             if not shapes_clear(copper, hole, clearance):
@@ -827,6 +846,22 @@ def _check_drill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> No
     """Check via-to-via and via-to-plated-pad drills, independent of net."""
 
     clearance = board.rules.minimum_hole_clearance_nm
+    npth = non_plated_holes(board)
+    other_drills = [(f"via:{i}", RoundedConvexShape((v.position,), (v.drill_nm + 1) // 2))
+                    for i, v in enumerate(board.vias)]
+    for placement in board.placements:
+        for i, pad in enumerate(board.footprints[placement.footprint].pads):
+            if pad.kind is PadKind.THROUGH_HOLE and pad.drill is not None:
+                drill = replace(pad, size=pad.drill, kind=PadKind.SMD, drill=None,
+                                shape=PadShape.CIRCLE if pad.drill.width_nm == pad.drill.height_nm else PadShape.OVAL)
+                other_drills.append((f"drill:{placement.reference}:{i}",
+                    placed_pad_shape(transformed_local_point(placement, pad.position), drill, placement)))
+    for i, (identity, hole) in enumerate(npth):
+        for other_id, other in (*npth[:i], *other_drills):
+            if not shapes_clear(hole, other, clearance):
+                findings.append(_finding("DRC-DRILL-SPACING", DrcSeverity.ERROR,
+                    f"{identity} and {other_id} violate hole spacing",
+                    objects=(identity, other_id), required_nm=clearance))
     for first_index, first in enumerate(board.vias):
         first_hole = RoundedConvexShape((first.position,), first.drill_nm // 2)
         for second_index in range(first_index + 1, len(board.vias)):

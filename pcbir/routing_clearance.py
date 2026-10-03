@@ -227,6 +227,11 @@ class RoutingClearanceIndex:
     def _keepout_clear(
         self, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...], *, for_via: bool
     ) -> bool:
+        if self.board.outline.cutouts or self.board.mechanical_holes:
+            from .mechanical import shape_in_board
+            if not shape_in_board(self.board, shape, self.board.rules.minimum_clearance_nm,
+                                  self.board.rules.minimum_hole_clearance_nm):
+                return False  # Always locked, including speculative soft rip-up.
         layer_set = set(layers)
         if any(layer_set.intersection(region_layers) and not shapes_clear(shape, region_shape, 1)
                for region_layers, region_shape in self._macro_regions):

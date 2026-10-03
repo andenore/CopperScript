@@ -160,6 +160,8 @@ from .importers import (
 from .physical import (
     AlignmentAxis,
     BoardOutline,
+    BoardCutout,
+    MechanicalHole,
     BoardSide,
     ComponentPlacementRule,
     CopperKeepout,
@@ -278,6 +280,8 @@ __all__ = [
     "Backend",
     "Board",
     "BoardOutline",
+    "BoardCutout",
+    "MechanicalHole",
     "BoardSide",
     "Bounds",
     "BondDefinition",

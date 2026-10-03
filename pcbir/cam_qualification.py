@@ -15,7 +15,7 @@ from typing import Protocol
 from collections import Counter
 
 from .physical import PadKind, PhysicalBoard
-from .placement import transformed_pad_position
+from .placement import transformed_local_point, transformed_pad_position
 
 
 class CamGateStatus(str, Enum):
@@ -385,6 +385,8 @@ def reconcile_drills(board: PhysicalBoard,
     """Compare the normalized hit multiset to pads and vias in signed physical IR."""
     expected: Counter[tuple[int, int, int, bool | None]] = Counter()
     findings: list[str] = []
+    for hole in board.mechanical_holes:
+        expected[(hole.position.x_nm, hole.position.y_nm, hole.diameter_nm, False)] += 1
     for placement in board.placements:
         footprint = board.footprints[placement.footprint]
         for pad in footprint.pads:
@@ -393,7 +395,8 @@ def reconcile_drills(board: PhysicalBoard,
             if pad.drill.width_nm != pad.drill.height_nm:
                 findings.append(f"slot reconciliation requires routed XNC support: {placement.reference}.{pad.number}")
                 continue
-            point = transformed_pad_position(board, placement, pad.number)
+            # Each physical land owns its drill, including repeated/empty numbers.
+            point = transformed_local_point(placement, pad.position)
             plated = pad.kind is PadKind.THROUGH_HOLE
             expected[(point.x_nm, point.y_nm, pad.drill.width_nm, plated)] += 1
     for via in board.vias:

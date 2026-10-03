@@ -174,17 +174,50 @@ class Size:
 
 
 @dataclass(frozen=True, slots=True)
+class BoardCutout:
+    """Named polygon of removed substrate, not a copper keepout."""
+
+    id: str
+    vertices: tuple[Point, ...]
+
+    def __post_init__(self) -> None:
+        from .mechanical import validated_ring
+        if not isinstance(self.id, str) or not self.id.strip():
+            raise ValueError("board cutout requires an id")
+        object.__setattr__(self, "vertices", validated_ring(self.vertices))
+
+
+@dataclass(frozen=True, slots=True)
+class MechanicalHole:
+    """Board-owned round NPTH; no electrical pin, net or BOM entry."""
+
+    id: str
+    position: Point
+    diameter_nm: Nanometres
+    head_clearance_radius_nm: Nanometres = 0
+
+    def __post_init__(self) -> None:
+        if (not isinstance(self.id, str) or not self.id.strip()
+                or type(self.diameter_nm) is not int or self.diameter_nm <= 0):
+            raise ValueError("mechanical hole requires an id and positive integer diameter")
+        if type(self.head_clearance_radius_nm) is not int or self.head_clearance_radius_nm < 0:
+            raise ValueError("mechanical head clearance radius must be a nonnegative integer")
+        if self.head_clearance_radius_nm and 2 * self.head_clearance_radius_nm < self.diameter_nm:
+            raise ValueError("mechanical head clearance cannot be smaller than the hole")
+
+
+@dataclass(frozen=True, slots=True)
 class BoardOutline:
     """Closed polygon; the closing edge is implicit."""
 
     vertices: tuple[Point, ...]
+    cutouts: tuple[BoardCutout, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "vertices", tuple(self.vertices))
-        if len(self.vertices) < 3:
-            raise ValueError("a board outline requires at least three vertices")
-        if len(set(self.vertices)) < 3:
-            raise ValueError("a board outline requires three distinct vertices")
+        from .mechanical import validated_ring, validate_cutouts
+        object.__setattr__(self, "vertices", validated_ring(self.vertices))
+        object.__setattr__(self, "cutouts", tuple(self.cutouts))
+        validate_cutouts(self)
 
     @classmethod
     def rectangle(
@@ -656,6 +689,8 @@ class PlacementRegion:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("placement region name cannot be empty")
+        if self.outline.cutouts:
+            raise ValueError("placement region outlines do not support cutouts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -668,6 +703,8 @@ class PlacementKeepout:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("placement keepout name cannot be empty")
+        if self.outline.cutouts:
+            raise ValueError("placement keepout outlines do not support cutouts")
         if (
             self.maximum_component_height_nm is not None
             and self.maximum_component_height_nm < 0
@@ -1016,6 +1053,7 @@ class PhysicalBoard:
     hard_macros: tuple[PhysicalHardMacro, ...] = ()
     materialized_macros: tuple[str, ...] = ()
     via_in_pad_rules: tuple[PadViaInPadRule, ...] = ()
+    mechanical_holes: tuple[MechanicalHole, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -1037,6 +1075,9 @@ class PhysicalBoard:
         object.__setattr__(self, "hard_macros", tuple(self.hard_macros))
         object.__setattr__(self, "materialized_macros", tuple(self.materialized_macros))
         object.__setattr__(self, "via_in_pad_rules", tuple(self.via_in_pad_rules))
+        object.__setattr__(self, "mechanical_holes", tuple(self.mechanical_holes))
+        from .mechanical import validate_mechanical_holes
+        validate_mechanical_holes(self)
         self._validate_references()
 
     def _validate_references(self) -> None:

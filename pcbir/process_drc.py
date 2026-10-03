@@ -44,6 +44,7 @@ class FabricationAssemblyProfile:
     maximum_copper_imbalance_ppm: ProcessCapability | None = None
     require_orientation_marks: bool = True
     allow_edge_plating: bool = False
+    minimum_non_plated_drill_nm: ProcessCapability | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +75,21 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
     stencil_failed = False
     assembly_failed = False
     fabrication_incomplete = False
+    for hole in board.mechanical_holes:
+        limit = profile.minimum_non_plated_drill_nm
+        if limit is None:
+            fabrication_incomplete = True
+            findings.append(ProcessFinding(
+                "FAB-NPTH-LIMIT-MISSING", "fabrication",
+                "board-owned NPTH requires a separately qualified non-plated drill limit",
+                (hole.id,),
+            ))
+        elif hole.diameter_nm < limit.value:
+            fabrication_failed = True
+            findings.append(ProcessFinding(
+                "FAB-NPTH-MIN", "fabrication",
+                "board-owned NPTH is below the qualified non-plated process limit", (hole.id,),
+            ))
     placed_pads: list[tuple[str, object, object, object, RoundedConvexShape]] = []
     silk_shapes: list[tuple[str, RoundedConvexShape]] = []
     for placement in board.placements:

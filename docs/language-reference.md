@@ -1,5 +1,15 @@
 # CopperScript v0.1 language reference
 
+## Mechanical geometry status
+
+Polygonal board outlines, named interior cutouts and round NPTH mounting holes
+are currently available through the separate physical IR (`BoardOutline`,
+`BoardCutout`, `PhysicalBoard.mechanical_holes`, `MechanicalHole`). They do not
+add coordinates to the electrical IR. A dedicated `.copper` mechanical block
+and placement datums are planned, **not yet supported syntax**. See the accepted
+[mechanical specification and checklist](mechanical-geometry.md) and run
+`uv run python -m pcbir.mechanical_example` for the routed physical-IR probe.
+
 ## Permanent component-internal pad connections
 
 Parts may declare `internal_pad_groups = "1; 2";`. Semicolons separate
