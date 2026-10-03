@@ -34,8 +34,14 @@ def install(prefix: Path):
         commands = [[str(directory / "configure"), f"--prefix={prefix}", *pin["configure"]],
                     ["make", f"-j{min(os.cpu_count() or 2, 4)}"], ["make", "install"]]
         with (prefix / "build.log").open("w", encoding="utf-8") as log:
-            for command in commands:
-                subprocess.run(command, cwd=directory, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
+            try:
+                for command in commands:
+                    print("Building ngspice: " + " ".join(command), flush=True)
+                    subprocess.run(command, cwd=directory, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                log.flush()
+                print((prefix / "build.log").read_text(encoding="utf-8", errors="replace")[-16000:], file=sys.stderr, flush=True)
+                raise
     version = subprocess.run([str(prefix / "bin/ngspice"), "--version"], capture_output=True, text=True, check=True).stdout
     match = re.search(r"ngspice-(\d+)", version)
     if not match or int(match[1]) != pin["ngspice_version"]:
