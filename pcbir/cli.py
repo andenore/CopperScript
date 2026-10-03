@@ -856,6 +856,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ],
                 }
             zone_nets = {zone.net for zone in output_board.zones}
+            ordinary_results = [item for item in result.detailed.nets if item.net not in zone_nets]
+            connectivity = {
+                "routed_ordinary_net_count": sum(item.connected for item in ordinary_results),
+                "unrouted_ordinary_nets": sorted(item.net for item in ordinary_results if not item.connected),
+                "deferred_zone_nets": sorted(item.net for item in result.detailed.nets
+                                             if not item.connected and item.net in zone_nets),
+                "native_fill_verified": bool(plane_verification and plane_verification.passed
+                                             and plane_verification.matches(output_board)),
+            }
+            report["connectivity"] = connectivity
             signal_lengths = {"straight_nm": 0, "diagonal_45_nm": 0,
                               "other_angle_nm": 0}
             signal_layer_lengths = {
@@ -1004,10 +1014,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2
-            metrics = result.detailed.metrics
             print(
                 f"BOARD ROUTE: {closure_status.value} - "
-                f"routed={metrics.routed_net_count}, unrouted={metrics.unrouted_net_count}, "
+                f"ordinary routed={connectivity['routed_ordinary_net_count']}, "
+                f"unrouted={len(connectivity['unrouted_ordinary_nets'])}; "
+                f"deferred zone nets={len(connectivity['deferred_zone_nets'])}, "
+                f"native fill verified={connectivity['native_fill_verified']}; "
                 f"explicit-copper DRC={output_drc.decision.value}; "
                 f"native filled-board DRC={'pass' if plane_verification and plane_verification.passed else 'not passed'}"
             )

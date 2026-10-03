@@ -593,6 +593,7 @@ def test_fine_grid_soft_candidate_and_evicted_net_commit_atomically(monkeypatch)
     assert repaired.metrics.routed_net_count == 2
     assert ("SIGNAL", True, nm_from_mm(.1)) in observations
     assert ("BLOCKER", False, nm_from_mm(.1)) in observations
+    assert all(pitch == nm_from_mm(.1) for name, soft, pitch in observations if name == "BLOCKER")
     copper = replace(board, tracks=tuple(t for item in repaired.nets for t in item.tracks),
                       vias=tuple(v for item in repaired.nets for v in item.vias))
     assert not {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"} & {

@@ -246,6 +246,9 @@ class _NetAttempt:
     tracks: tuple[TrackSegment, ...]
     vias: tuple[Via, ...]
     resources: frozenset[str]
+    # Search provenance, not physical geometry or a schema field. A fine-grid
+    # candidate can displace neighbours whose launches need that same mesh.
+    pitch_nm: int | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -694,12 +697,15 @@ def _repair_from_passes(
                 for via in candidate.vias:
                     trial_clearance.add_via(via)
                 rerouted = {}
+                eviction_options = replace(options, pitch_nm=max(
+                    options.minimum_repair_pitch_nm,
+                    min(options.pitch_nm, candidate.pitch_nm or options.pitch_nm)))
                 for blocker_name in order:
                     blocker = net_by_name[blocker_name]
                     attempt = _route_repair_net(
-                        board, _build_grid(board, options, blocker.pads, fanout_accesses),
+                        board, _build_grid(board, eviction_options, blocker.pads, fanout_accesses),
                         blocker.name, blocker.pads, rules.get(blocker.name),
-                        guides.get(blocker.name), {}, {}, trial_clearance, options,
+                        guides.get(blocker.name), {}, {}, trial_clearance, eviction_options,
                         fanout_accesses=fanout_accesses,
                     )
                     if not attempt.result.connected:
@@ -794,7 +800,7 @@ def _route_repair_net(
             allow_movable_conflicts=allow_movable_conflicts,
             fanout_accesses=fanout_accesses,
         )
-    return attempt
+    return replace(attempt, pitch_nm=options.pitch_nm)
 
 
 def _ripup_orders(blockers: set[str]) -> tuple[tuple[str, ...], ...]:

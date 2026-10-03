@@ -1044,5 +1044,9 @@ net reroutes legally; otherwise roll back all trial copper.
 Failed-first passes (third and later) also refine proven no-path searches before
 ordinary neighbours are installed. Reserve the difficult legal package channel
 early instead of relying exclusively on post-route rip-up to recover it.
+Carry the successful candidate's mesh resolution as internal search provenance.
+Displaced nets start on that mesh (within the configured resolution floor), not
+on a coarser grid that may hide the narrow channel again. This does not change
+the physical IR, geometry, clearances, ownership, or transactional acceptance.
 Do not repeat a neutral layer-cost fallback when all layer ranks and heading
 preferences are inactive: that is an identical search, not a new strategy.
