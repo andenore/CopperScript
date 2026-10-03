@@ -223,10 +223,10 @@ def run_physical_drc(
         _check_zone_fill_spacing(board, findings)
         coverage.append(DrcCoverage("copper_zones", DrcCoverageStatus.EXECUTED, False,
                                     "checked content-bound normalized fill polygons"))
-        if board.outline.cutouts or board.mechanical_holes:
+        if board.outline.circular_boundary or board.outline.cutouts or board.mechanical_holes:
             findings.append(_finding(
                 "DRC-MECHANICAL-FILL-UNSUPPORTED", DrcSeverity.ERROR,
-                "filled-zone material coverage for cutouts/mechanical holes is not yet qualified",
+                "filled-zone material coverage for curved outlines/cutouts/mechanical holes is not yet qualified",
             ))
             coverage.append(DrcCoverage(
                 "mechanical_zone_material", DrcCoverageStatus.UNSUPPORTED, True,
@@ -324,6 +324,7 @@ def physical_board_digest(board: PhysicalBoard) -> str:
         {
             "name": board.name,
             "outline": [(p.x_nm, p.y_nm) for p in board.outline.vertices],
+            "circular_boundary": repr(board.outline.circular_boundary),
             "cutouts": [(c.id, [(p.x_nm, p.y_nm) for p in c.vertices]) for c in board.outline.cutouts],
             "mechanical_holes": [repr(h) for h in sorted(board.mechanical_holes, key=lambda h: h.id)],
             "stackup": {
@@ -521,6 +522,21 @@ def _check_differential_rules(board: PhysicalBoard, findings: list[DrcFinding]) 
 def _check_board_edge(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
     clearance = board.rules.minimum_clearance_nm
     from .mechanical import ring_edges, shape_in_outline
+    if board.outline.circular_boundary is not None:
+        # Exact disk containment; do not replace it with the inscribed grid ring.
+        objects = [(f"track:{i}", t.net, RoundedConvexShape((t.start, t.end), (t.width_nm + 1) // 2))
+                   for i, t in enumerate(board.tracks)]
+        objects.extend((f"via:{i}", v.net, RoundedConvexShape((v.position,), (v.size_nm + 1) // 2))
+                       for i, v in enumerate(board.vias))
+        objects.extend((p.identity, p.net, p.shape) for p in _copper_pads(board))
+        for identity, net, shape in objects:
+            if not shape_in_outline(shape, board.outline, clearance):
+                findings.append(_finding(
+                    "DRC-BOARD-EDGE", DrcSeverity.ERROR,
+                    f"{identity} violates circular board/cutout clearance",
+                    objects=(identity,), nets=(net,), required_nm=clearance,
+                ))
+        return
     edges = (*ring_edges(board.outline.vertices),
              *(edge for cutout in board.outline.cutouts for edge in ring_edges(cutout.vertices)))
     for index, track in enumerate(board.tracks):

@@ -308,8 +308,18 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
         for layer in sorted(keepout.layers, key=lambda item: item.value):
             lines.extend(_copper_keepout_lines(board, keepout, layer))
 
-    for loop_id, vertices in (("outer", board.outline.vertices),
-                              *((f"cutout:{c.id}", c.vertices) for c in board.outline.cutouts)):
+    circle = board.outline.circular_boundary
+    if circle is not None:
+        lines.extend([
+            "  (gr_circle", f"    (center {_point(circle.center)})",
+            f"    (end {_point(Point(circle.center.x_nm + circle.radius_nm, circle.center.y_nm))})",
+            "    (stroke (width 0.05) (type default))", "    (fill none)",
+            '    (layer "Edge.Cuts")',
+            f'    (uuid "{_stable_uuid(board.name, "outline", "circle")}")', "  )",
+        ])
+    loops = (() if circle is not None else (("outer", board.outline.vertices),))
+    loops += tuple((f"cutout:{c.id}", c.vertices) for c in board.outline.cutouts)
+    for loop_id, vertices in loops:
         for index, start in enumerate(vertices):
             end = vertices[(index + 1) % len(vertices)]
             lines.extend(

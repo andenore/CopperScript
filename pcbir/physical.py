@@ -207,17 +207,49 @@ class MechanicalHole:
 
 
 @dataclass(frozen=True, slots=True)
+class CircularBoardBoundary:
+    """Authoritative circle; an explicit bounded inscribed ring aids grid consumers."""
+
+    center: Point
+    radius_nm: Nanometres
+    maximum_chord_error_nm: Nanometres = nm_from_mm("0.01")
+
+    def __post_init__(self) -> None:
+        if type(self.radius_nm) is not int or self.radius_nm <= 0:
+            raise ValueError("circular board radius must be a positive integer")
+        if (type(self.maximum_chord_error_nm) is not int
+                or not 2 < self.maximum_chord_error_nm < self.radius_nm):
+            raise ValueError("circular board chord error must be >2 nm and smaller than the radius")
+
+
+@dataclass(frozen=True, slots=True)
 class BoardOutline:
-    """Closed polygon; the closing edge is implicit."""
+    """Actual boundary, with a closed conservative query ring (closing edge implicit)."""
 
     vertices: tuple[Point, ...]
     cutouts: tuple[BoardCutout, ...] = ()
+    circular_boundary: CircularBoardBoundary | None = None
 
     def __post_init__(self) -> None:
-        from .mechanical import validated_ring, validate_cutouts
+        from .mechanical import circle_query_ring, validated_ring, validate_cutouts
         object.__setattr__(self, "vertices", validated_ring(self.vertices))
+        if self.circular_boundary is not None and self.vertices != circle_query_ring(self.circular_boundary):
+            raise ValueError("circular board query ring must match its authoritative circle")
         object.__setattr__(self, "cutouts", tuple(self.cutouts))
         validate_cutouts(self)
+
+    @classmethod
+    def circle(cls, diameter_mm: int | float | str, *, center: Point | None = None,
+               maximum_chord_error_mm: int | float | str = "0.01",
+               cutouts: tuple[BoardCutout, ...] = ()) -> "BoardOutline":
+        from .mechanical import circle_query_ring
+        diameter = nm_from_mm(diameter_mm)
+        if diameter <= 0 or diameter % 2:
+            raise ValueError("circular board diameter must be positive and an even number of nanometres")
+        radius = diameter // 2
+        circle = CircularBoardBoundary(center or Point(radius, radius), radius,
+                                       nm_from_mm(maximum_chord_error_mm))
+        return cls(circle_query_ring(circle), cutouts, circle)
 
     @classmethod
     def rectangle(
@@ -691,6 +723,8 @@ class PlacementRegion:
             raise ValueError("placement region name cannot be empty")
         if self.outline.cutouts:
             raise ValueError("placement region outlines do not support cutouts")
+        if self.outline.circular_boundary:
+            raise ValueError("placement region outlines do not support curved boundaries")
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,6 +739,8 @@ class PlacementKeepout:
             raise ValueError("placement keepout name cannot be empty")
         if self.outline.cutouts:
             raise ValueError("placement keepout outlines do not support cutouts")
+        if self.outline.circular_boundary:
+            raise ValueError("placement keepout outlines do not support curved boundaries")
         if (
             self.maximum_component_height_nm is not None
             and self.maximum_component_height_nm < 0

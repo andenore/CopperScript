@@ -9,6 +9,9 @@ add coordinates to the electrical IR. A dedicated `.copper` mechanical block
 and placement datums are planned, **not yet supported syntax**. See the accepted
 [mechanical specification and checklist](mechanical-geometry.md) and run
 `uv run python -m pcbir.mechanical_example` for the routed physical-IR probe.
+`BoardOutline.circle()` is also available through physical IR, with a native
+KiCad circle and explicit bounded grid geometry; it is not yet `.copper` syntax.
+See [the round LED/coin-cell example](round-led-ring.md).
 
 ## Permanent component-internal pad connections
 

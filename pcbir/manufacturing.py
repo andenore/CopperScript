@@ -421,9 +421,9 @@ def verify_cam_directory(
 def _validate_release_gate(board: PhysicalBoard, signoff: SignoffToken,
                            profile: ManufacturingProfile,
                            process_report: ProcessDrcReport | None) -> None:
-    if board.outline.cutouts or board.mechanical_holes:
+    if board.outline.circular_boundary or board.outline.cutouts or board.mechanical_holes:
         raise ValueError(
-            "mechanical cutout/hole manufacturing requires independent outline/tooling "
+            "mechanical circle/cutout/hole manufacturing requires independent outline/tooling "
             "qualification, which is not implemented yet; use inspection export"
         )
     missing_layers = tuple(

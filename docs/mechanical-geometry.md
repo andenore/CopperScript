@@ -143,3 +143,18 @@ substrate-web/tool tolerances, zone clipping or production manufacturing.
 The manufacturing-release entry point rejects these new void features until
 independent outline/tooling qualification is implemented; ordinary inspection
 KiCad export remains available. A passed copper DRC alone cannot bypass that gate.
+
+### Round-outline increment
+
+`BoardOutline.circle()` now retains an authoritative `CircularBoardBoundary`,
+exports a native KiCad circle and uses exact disk containment for shared material
+queries. The separately stored inscribed ring has an explicit radial chord bound
+(default 0.01 mm) and exact edge certification; it never becomes the exported
+outline. Circle/ring mismatches and excessive unsupported precision fail rather
+than silently change source intent. Curved placement regions/keepouts remain
+unsupported. Required filled-zone material coverage and manufacturing release
+also fail closed for circular boundaries until their independent qualification
+is implemented. Item 7 remains open for general arcs/rounded paths/slots/CAM.
+
+The [twelve-LED / MCU / CR2032 example](round-led-ring.md) demonstrates this
+bounded support with fixed radial placement and explicit inspection status.

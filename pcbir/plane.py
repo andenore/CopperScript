@@ -1,4 +1,4 @@
-"""Conservative surface-pad escapes toward declared inner copper zones.
+"""Conservative surface-pad escapes toward declared copper zones.
 
 This stage makes only tracks and vias. It does not invent a zone fill or claim
 that the resulting vias are joined by copper. A pinned refill and connected-
@@ -44,6 +44,9 @@ class PlaneStitchOptions:
     escape_width_nm: int | None = None
     only_pads: frozenset[PadReference] | None = None
     ground_via_in_pad: bool = False
+    # Opt-in opposite-side surface zones, e.g. a two-layer rear ground pour.
+    # Same-side-only zones are refill intent, not a reason to invent a via.
+    include_surface_zones: bool = False
 
     def __post_init__(self) -> None:
         if self.only_pads is not None:
@@ -124,13 +127,18 @@ def stitch_zone_pads(
     owner_graph = explicit_copper_connectivity(board) if owned_pads else None
     owned_pending = set()
     for zone in sorted(board.zones, key=lambda item: item.id):
-        if any(layer not in outer_layers for layer in zone.layers):
+        if (any(layer not in outer_layers for layer in zone.layers)
+                or (options.include_surface_zones and any(layer in outer_layers for layer in zone.layers))):
             zones_by_net.setdefault(zone.net, []).append(zone)
     for net, zones in sorted(zones_by_net.items()):
         for reference in sorted(net_pads[net]):
             if options.only_pads is not None and reference not in options.only_pads:
                 continue
             placement = placements[reference.component]
+            side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+            reference_zones = tuple(z for z in zones if any(layer is not side for layer in z.layers))
+            if not reference_zones:
+                continue  # A same-side pour needs refill, not an invented through-via.
             footprint = board.footprints[placement.footprint]
             lands = tuple(
                 item for item in footprint.pads
@@ -155,12 +163,11 @@ def stitch_zone_pads(
                             and not any(k.block_zones and span.intersection(k.layers)
                                         and _point_in_zone(via.position, k.outline)
                                         for k in keepouts)
-                            for zone in zones):
+                            for zone in reference_zones):
                         contacts.add(owner_graph.roots[f"via:{i}"])
                 if not roots or not roots.issubset(contacts):
                     owned_pending.add(reference)
                 continue
-            side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
             group = next((g for g in footprint.internal_pad_groups if reference.pad in g.numbers), None)
             if group is not None:
                 key = (placement.reference, group.numbers)
@@ -177,7 +184,7 @@ def stitch_zone_pads(
             for pad in lands:
                 position = transformed_local_point(placement, pad.position)
                 choice = _stitch_land(
-                    board, clearance, net, zones, pad, placement, position,
+                    board, clearance, net, reference_zones, pad, placement, position,
                     side, width, via_size, via_drill, outer_layers,
                     replace(options, ground_via_in_pad=True)
                     if PadReference(reference.component, pad.number) in permitted_pads else options,

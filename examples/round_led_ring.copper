@@ -1,0 +1,94 @@
+// 12 independent, low-current red LED channels on a 50 mm circular board.
+// Board outline / ring poses are separate physical intent in pcbir.round_led_example.
+// CR2032 is primary (not rechargeable). SWD VREF is sense only; no power injection.
+board RoundLedRing {
+    use library "tiny";
+    import vertical "github.com/andenore/CopperLib/packages/full_vertical";
+    import demo "github.com/andenore/CopperLib/packages/nrf52_demo";
+
+    component U1: vertical.STM32G0C1RET6;
+    component BT1: demo.KEYSTONE_3034;
+    component J_SWD: vertical.SWD_HEADER;
+    // Generic red 0603 references, not yet orderable LED selections.
+    component LED1: demo.REFERENCE_LED_0603;
+    component LED2: demo.REFERENCE_LED_0603;
+    component LED3: demo.REFERENCE_LED_0603;
+    component LED4: demo.REFERENCE_LED_0603;
+    component LED5: demo.REFERENCE_LED_0603;
+    component LED6: demo.REFERENCE_LED_0603;
+    component LED7: demo.REFERENCE_LED_0603;
+    component LED8: demo.REFERENCE_LED_0603;
+    component LED9: demo.REFERENCE_LED_0603;
+    component LED10: demo.REFERENCE_LED_0603;
+    component LED11: demo.REFERENCE_LED_0603;
+    component LED12: demo.REFERENCE_LED_0603;
+    component R_LED1: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED2: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED3: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED4: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED5: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED6: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED7: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED8: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED9: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED10: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED11: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED12: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component C_VDD: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_REF: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_RESET: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component R_RESET: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+
+    net VBAT {
+        BT1.POS; U1.VDD; U1.VBAT; U1.VREF_PLUS; J_SWD.VREF;
+        C_VDD.1; C_REF.1; C_BULK.1; R_RESET.1;
+        R_LED1.1; R_LED2.1; R_LED3.1; R_LED4.1; R_LED5.1; R_LED6.1;
+        R_LED7.1; R_LED8.1; R_LED9.1; R_LED10.1; R_LED11.1; R_LED12.1;
+    }
+    net GND {
+        BT1.NEG; U1.VSS; J_SWD.GND; J_SWD.GND_5; J_SWD.GND_DETECT;
+        C_VDD.2; C_REF.2; C_BULK.2; C_RESET.2;
+    }
+    net RESET { U1.NRST; J_SWD.RESET; R_RESET.2; C_RESET.1; }
+    net SWDIO { U1.PA13; J_SWD.SWDIO; }
+    net SWDCLK { U1.PA14; J_SWD.SWDCLK; }
+    // Clockwise from 12 o'clock. GPIO sinks current: output LOW turns on.
+    net LED1_K { U1.PD4; LED1.K; }
+    net LED2_K { U1.PD0; LED2.K; }
+    net LED3_K { U1.PA15; LED3.K; }
+    net LED4_K { U1.PA10; LED4.K; }
+    net LED5_K { U1.PA8; LED5.K; }
+    net LED6_K { U1.PB12; LED6.K; }
+    net LED7_K { U1.PB2; LED7.K; }
+    net LED8_K { U1.PA4; LED8.K; }
+    net LED9_K { U1.PA0; LED9.K; }
+    net LED10_K { U1.PC1; LED10.K; }
+    net LED11_K { U1.PC12; LED11.K; }
+    net LED12_K { U1.PC10; LED12.K; }
+    net LED1_A { R_LED1.2; LED1.A; }
+    net LED2_A { R_LED2.2; LED2.A; }
+    net LED3_A { R_LED3.2; LED3.A; }
+    net LED4_A { R_LED4.2; LED4.A; }
+    net LED5_A { R_LED5.2; LED5.A; }
+    net LED6_A { R_LED6.2; LED6.A; }
+    net LED7_A { R_LED7.2; LED7.A; }
+    net LED8_A { R_LED8.2; LED8.A; }
+    net LED9_A { R_LED9.2; LED9.A; }
+    net LED10_A { R_LED10.2; LED10.A; }
+    net LED11_A { R_LED11.2; LED11.A; }
+    net LED12_A { R_LED12.2; LED12.A; }
+
+    supply VBAT { voltage = 3V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+
+    // Use the internal oscillator; no RF, crystal, charger or voltage regulator.
+    constraint fixed_placement(U1) { x = 25mm; y = 25mm; rotation = 0; side = front; }
+    constraint fixed_placement(BT1) { x = 25mm; y = 25mm; rotation = 0; side = back; }
+    constraint fixed_placement(J_SWD) { x = 36mm; y = 22mm; rotation = 0; side = front; }
+    constraint fixed_placement(C_VDD) { x = 16mm; y = 24.75mm; rotation = 180; side = front; }
+    constraint fixed_placement(C_BULK) { x = 12mm; y = 24.75mm; rotation = 180; side = front; }
+    constraint fixed_placement(C_REF) { x = 16mm; y = 22mm; rotation = 180; side = front; }
+    constraint fixed_placement(R_RESET) { x = 16mm; y = 28.5mm; rotation = 0; side = front; }
+    constraint fixed_placement(C_RESET) { x = 16mm; y = 31mm; rotation = 180; side = front; }
+}

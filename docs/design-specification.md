@@ -947,3 +947,25 @@ but not yet a native KiCad placement rule. Dedicated mechanical language/datums,
 curved boundaries, slots and full manufacturing outline qualification follow
 the [mechanical specification and implementation checklist](mechanical-geometry.md).
 No schema migration/version bump or fabrication-ready claim is implied.
+
+## CS-143 — Authoritative round outline and bounded query geometry (Accepted)
+
+`BoardOutline.circle()` stores an authoritative `CircularBoardBoundary` and a
+deterministic inscribed query ring with explicit maximum radial chord error.
+Sampling alone is not proof: all mesh vertices and edges are certified with
+integer/Fraction predicates inside the disk and within the requested bound.
+Reject mismatched source/ring geometry and unsupported/excessive mesh requests.
+Shared material, placement and copper-edge checks use exact disk containment;
+older grid/access broad phases may conservatively use the inscribed ring but
+must not enlarge real material. Export one native KiCad circle, never facets
+that silently replace the intended curved boundary. Geometry and query tolerance
+participate in routing/signoff identity. Native filled-zone containment and
+independent curved CAM/tooling remain unqualified and fail closed at their
+respective gates. This bounded circle support does not imply arbitrary arcs,
+rounded paths, slots or curved placement keepouts. See [the round LED example](round-led-ring.md).
+
+On two-layer boards, plane-pad escape may explicitly opt into opposite-side
+surface zones. Reserve legal ground escapes before ordinary package escapes
+and detailed signals. A same-side pour is not by itself a reason to invent a
+via. Existing via/pad exclusions and exact material/clearance predicates still
+apply; prospective zone contacts never count as verified filled connectivity.

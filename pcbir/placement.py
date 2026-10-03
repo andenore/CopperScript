@@ -1183,7 +1183,7 @@ def _legal(
     from .mechanical import shape_in_board
     from .geometry import RoundedConvexShape, shapes_clear
     inside = (shape_in_board(board, RoundedConvexShape(polygon), edge_clearance)
-              if board.outline.cutouts or board.mechanical_holes
+              if board.outline.circular_boundary or board.outline.cutouts or board.mechanical_holes
               else _polygon_inside(polygon, board.outline.vertices, edge_clearance))
     if not inside:
         return False

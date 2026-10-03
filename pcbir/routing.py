@@ -1221,6 +1221,7 @@ def _placement_fingerprint(board: PhysicalBoard) -> str:
         "via_in_pad_rules": [repr(item) for item in sorted(board.via_in_pad_rules,key=lambda item: item.pad)],
         # Materialization does not change placement or topology identity.
         "outline": [(point.x_nm, point.y_nm) for point in board.outline.vertices],
+        "circular_boundary": repr(board.outline.circular_boundary),
         "cutouts": [repr(c) for c in board.outline.cutouts],
         "mechanical_holes": [repr(h) for h in sorted(board.mechanical_holes, key=lambda h: h.id)],
         "placements": [
