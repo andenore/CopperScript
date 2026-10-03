@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:40999cdb10ccfec6adfae1ce2f1b7606b6d570e86eed260a29aba71c7befbf47",
+      "checksum": "sha256:8c8129a2d356cf244f4235d57bc79a96d7d074cb3431914dc14bf4ef48c0b6dc",
       "files": [
         {
           "path": "copper.mod",
@@ -70,8 +70,8 @@
         },
         {
           "path": "data/full-vertical/nrf-antenna-hard-macro.json",
-          "sha256": "3f0906b1d1088af3f58550ebd3595ff1d5e21ca96bbb420ef83e6c74b2ebb4f4",
-          "size": 12424
+          "sha256": "2af31b661e340aea4a5fadd1f47456a55e1a2e44eb43659d38eec8975f46c5cc",
+          "size": 12422
         },
         {
           "path": "data/full-vertical/nrf52832-qfaa-rf-reference.json",
@@ -276,7 +276,7 @@
       ],
       "module": "github.com/andenore/CopperLib",
       "source": "git:https://github.com/andenore/CopperLib.git",
-      "version": "263445a98f6630537225d83899319e24590b3204"
+      "version": "853d32aff9e868aee04dcb415866f1101565893e"
     },
     {
       "checksum": "sha256:cb30d8a525c1f1fa625976d8e37cb87264c676e7ef696e50edc619cb90847f25",

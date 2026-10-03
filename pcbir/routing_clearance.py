@@ -36,6 +36,7 @@ class _CopperObject:
     clearance_nm: int = 0
     locked: bool = True
     is_pad: bool = False
+    pad_reference: PadReference | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +115,7 @@ class RoutingClearanceIndex:
                     net, tuple(layers), placed_pad_shape(position, pad, placement),
                     footprint.clearance_nm or 0,
                     is_pad=True,
+                    pad_reference=PadReference(placement.reference,pad.number),
                 ))
         for _, hole in non_plated_holes(board):
             self._add(_CopperObject(
@@ -136,11 +138,14 @@ class RoutingClearanceIndex:
         from_layer: CopperLayer, to_layer: CopperLayer,
         drill_nm: int | None = None,
         *, check_hole_copper: bool = False, allow_pad_overlap: bool = False,
+        allowed_pad: PadReference | None = None,
     ) -> bool:
         layers = self._via_layers(from_layer, to_layer)
         shape = RoundedConvexShape((position,), size_nm // 2)
         return (self._keepout_clear(shape, layers, for_via=True)
-                and (allow_pad_overlap or self.pad_copper_clear(shape, layers))
+                and (self.pad_copper_clear(shape,layers,allowed_pad=allowed_pad)
+                     if allowed_pad is not None else
+                     allow_pad_overlap or self.pad_copper_clear(shape, layers))
                 and self._clear(net, shape, layers)
                 and (not check_hole_copper or self._clear(
                     net, RoundedConvexShape(
@@ -194,12 +199,14 @@ class RoutingClearanceIndex:
         return None
 
     def pad_copper_clear(self, shape: RoundedConvexShape,
-                         layers: tuple[CopperLayer, ...]) -> bool:
+                         layers: tuple[CopperLayer, ...], *,
+                         allowed_pad: PadReference | None = None) -> bool:
         """No pad contact, independent of net (including the full annulus)."""
         # Include same-net and unassigned pads, and the complete annulus rather
         # than only the drill/center. A one-nanometre separation rejects contact
         # too; foreign copper still observes the ordinary clearance rule.
-        return all(not other.is_pad or shapes_clear(shape, other.shape, 1)
+        return all(not other.is_pad or (allowed_pad is not None and other.pad_reference == allowed_pad)
+                   or shapes_clear(shape, other.shape, 1)
                    for other in self._overlapping_objects(shape, layers))
 
     def _hole_clear(

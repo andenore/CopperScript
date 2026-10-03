@@ -1213,6 +1213,7 @@ def _placement_fingerprint(board: PhysicalBoard) -> str:
         "board": board.name,
         "rigid_clusters": [repr(item) for item in sorted(board.rigid_clusters, key=lambda item: item.name)],
         "hard_macros": [repr(item) for item in sorted(board.hard_macros, key=lambda item: item.cluster)],
+        "via_in_pad_rules": [repr(item) for item in sorted(board.via_in_pad_rules,key=lambda item: item.pad)],
         # Materialization does not change placement or topology identity.
         "outline": [(point.x_nm, point.y_nm) for point in board.outline.vertices],
         "placements": [

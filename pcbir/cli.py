@@ -281,6 +281,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument("--package-access-trials", type=int, default=8,
         help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
+    board_route_parser.add_argument("--fanout-step-mm", type=_positive_mm, default="0.5",
+        help="coarse package escape candidate step (default: 0.5 mm)")
+    board_route_parser.add_argument("--fanout-refinement-step-mm", type=_positive_mm, default="0.1",
+        help="adaptive step for empty/conflicting escape domains; <= coarse step (default: 0.1 mm)")
     board_route_parser.add_argument("--package-access-movement-mm", type=_positive_mm, default="0.5",
         help="initial package-access placement repair distance (default: 0.5 mm)")
     board_route_parser.add_argument(
@@ -605,7 +609,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     layer_preference_cost=args.layer_preference_cost,
                     direction_preference_cost=args.direction_preference_cost,
                 )
-                fanout_options = FanoutOptions() if args.fanout else None
+                fanout_options = FanoutOptions(
+                    step_nm=nm_from_mm(args.fanout_step_mm),
+                    refinement_step_nm=nm_from_mm(args.fanout_refinement_step_mm),
+                ) if args.fanout else None
                 progress = console_progress() if args.progress else None
                 result = run_routing_pipeline(
                     physical_board,
@@ -792,6 +799,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }]
             if result.fanout is not None:
                 report["fanout"] = {
+                    "step_nm": fanout_options.step_nm,
+                    "refinement_step_nm": fanout_options.refinement_step_nm,
                     "added_track_count": result.fanout.added_track_count,
                     "added_via_count": result.fanout.added_via_count,
                     "escaped_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.accesses],
@@ -802,6 +811,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "selected_candidate_index": item.selected_candidate_index,
                         "diagnostic": item.diagnostic,
                         "two_leg_candidate_count": item.two_leg_candidate_count,
+                        "refined_candidate_count": item.refined_candidate_count,
                     } for item in result.fanout.pin_analysis],
                 }
                 if result.fanout.assignment is not None:

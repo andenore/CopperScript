@@ -48,9 +48,9 @@ def test_battery_presence_is_explicit_not_inferred_from_passive_holder():
 
 
 def installed_roots():
-    roots = (Path("C:/Program Files/KiCad/10.0/share/kicad/footprints"), ROOT.parent / "CopperLib/footprints")
+    roots = (Path("C:/Program Files/KiCad/10.0/share/kicad/footprints"),)
     if not all(p.is_dir() for p in roots):
-        pytest.skip("optional installed KiCad footprints and sibling CopperLib")
+        pytest.skip("optional installed KiCad footprints")
     return roots
 
 
@@ -83,6 +83,24 @@ def test_coin_cell_export_has_locked_macro_no_kicad_geometry_violations(tmp_path
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert not report["violations"]
     assert report["unconnected_items"]  # Non-RF routing is deliberately not claimed.
+
+
+def test_actual_package_access_and_battery_ground_no_longer_block():
+    from pcbir.fanout import route_fanout
+    from pcbir.plane import stitch_zone_pads
+    from pcbir.routing import route_global, GlobalRoutingStatus
+    board = make_example(installed_roots(),offline=True)
+    assert {rule.pad for rule in board.via_in_pad_rules} == {PadReference("BT1","2")}
+    assert route_global(board).status is GlobalRoutingStatus.SUCCESS
+    fanout = route_fanout(board)
+    assert not fanout.pending_pads
+    assert {PadReference("U_NRF","26"),PadReference("U_NRF","33")} <= set(fanout.accesses)
+    stitched = stitch_zone_pads(fanout.board)
+    assert not stitched.pending_pads
+    capped = [v for v in stitched.board.vias if v.finish == "filled-capped"]
+    assert len(capped) == 1 and capped[0].position == Point.mm(15,25)
+    assert not {f.code for f in run_physical_drc(stitched.board).findings} & {
+        "DRC-SHORT","DRC-CLEARANCE","DRC-VIA-PAD-OVERLAP","DRC-HOLE-CLEARANCE"}
 
 
 def test_example_cli_retains_incomplete_signoff_and_performance_profile(tmp_path):

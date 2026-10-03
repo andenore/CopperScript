@@ -68,8 +68,10 @@ def normalize_constraints(constraints: tuple[object, ...]) -> tuple[NormalizedCo
         kind = constraint.kind.value
         routing = kind == "routing"
         zone = kind == "copper_zone"
+        via_in_pad = kind == "via_in_pad"
         default_consumers = (
-            ("physicalizer", "kicad_zone_refill", "physical_drc") if zone
+            ("physicalizer", "plane_stitch", "physical_drc") if via_in_pad
+            else ("physicalizer", "kicad_zone_refill", "physical_drc") if zone
             else ("critical_router", "physical_drc") if routing
             else ("placement", "physical_drc")
         )
@@ -77,13 +79,13 @@ def normalize_constraints(constraints: tuple[object, ...]) -> tuple[NormalizedCo
             NormalizedConstraint(
                 constraint.constraint_id or f"{kind}:{index}",
                 ",".join(constraint.targets),
-                f"copper.{kind}" if zone else f"route.{kind}" if routing else f"placement.{kind}",
+                f"copper.{kind}" if zone or via_in_pad else f"route.{kind}" if routing else f"placement.{kind}",
                 constraint.mode,
-                "physical" if zone else "routing" if routing else "placement",
+                "physical" if zone or via_in_pad else "routing" if routing else "placement",
                 constraint.origins,
                 constraint.consumers or default_consumers,
                 constraint.verifier or (
-                    "KICAD-ZONE-FILL" if zone else "DRC-ROUTING" if routing else "DRC-PLACEMENT"
+                    "DRC-VIA-PAD-OVERLAP" if via_in_pad else "KICAD-ZONE-FILL" if zone else "DRC-ROUTING" if routing else "DRC-PLACEMENT"
                 ),
             )
         )

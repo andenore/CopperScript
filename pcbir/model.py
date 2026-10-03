@@ -145,6 +145,7 @@ class ConstraintKind(str, Enum):
     NOTE = "note"
     ROUTING = "routing"
     COPPER_ZONE = "copper_zone"
+    VIA_IN_PAD = "via_in_pad"
 
 
 @dataclass(frozen=True, slots=True)

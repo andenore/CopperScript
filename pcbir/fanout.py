@@ -36,11 +36,16 @@ class FanoutOptions:
     maximum_two_leg_candidates: int = 256
     joint_escapes: bool = True
     assignment_options: EscapeAssignmentOptions = EscapeAssignmentOptions()
+    refinement_step_nm: int = nm_from_mm("0.1")
+    maximum_refined_two_leg_candidates: int = 1500
 
     def __post_init__(self) -> None:
         if min(self.minimum_component_pads, self.maximum_neighbor_distance_nm,
-               self.step_nm, self.maximum_radius_nm, self.maximum_two_leg_candidates) <= 0:
+               self.step_nm, self.maximum_radius_nm, self.maximum_two_leg_candidates,
+               self.refinement_step_nm, self.maximum_refined_two_leg_candidates) <= 0:
             raise ValueError("fanout options must be positive")
+        if self.refinement_step_nm > self.step_nm:
+            raise ValueError("fanout refinement step must not exceed coarse step")
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +57,7 @@ class FanoutPinAnalysis:
     selected_candidate_index: int | None
     diagnostic: str = ""
     two_leg_candidate_count: int = 0
+    refined_candidate_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +125,25 @@ def route_fanout(
     # easy neighbor's escape. Domains are physically legal alternatives, not
     # guaranteed mutually compatible routes or proof of onward connectivity.
     domains: dict[PadReference, tuple[EscapeCandidate, ...]] = {}
+    refined_counts: dict[PadReference, int] = {}
     pin_by_ref = {item[1]: item for item in pads}
+    refinement_cache = {}
+    def refine(reference):
+        if reference in refinement_cache:
+            return refinement_cache[reference]
+        if options.refinement_step_nm == options.step_nm:
+            return ()
+        _, _, position, placement, pad = pin_by_ref[reference]
+        fine = replace(options, step_nm=options.refinement_step_nm,
+                       maximum_two_leg_candidates=options.maximum_refined_two_leg_candidates)
+        index = RoutingClearanceIndex(board)
+        radial = _legal_choices(board, index, net_by_pad[reference], position, placement, pad,
+                                _candidates(position, placement.position, fine))
+        elbows = (_legal_choices(board, index, net_by_pad[reference], position, placement, pad,
+                                 _two_leg_candidates(position, placement.position, fine),
+                                 multiple_orders=True) if options.two_leg_escapes else ())
+        refinement_cache[reference] = tuple(dict.fromkeys((*radial, *elbows)))
+        return refinement_cache[reference]
     for _, reference, position, placement, pad in pads:
         net = net_by_pad[reference]
         choices = _legal_choices(board, clearance, net, position, placement, pad,
@@ -127,6 +151,9 @@ def route_fanout(
         if options.two_leg_escapes and not choices:
             choices = _legal_choices(board, clearance, net, position, placement, pad,
                                     _two_leg_candidates(position, placement.position, options))
+        if not choices:
+            choices = refine(reference)
+            refined_counts[reference] = len(choices)
         domains[reference] = choices
 
     ordered = sorted(pads, key=lambda item: (
@@ -147,11 +174,14 @@ def route_fanout(
     if options.joint_escapes:
         def expand(reference):
             if not options.two_leg_escapes:
-                return ()
+                return refine(reference)
             _, _, position, placement, pad = pin_by_ref[reference]
-            return _legal_choices(board, RoutingClearanceIndex(board), net_by_pad[reference],
+            coarse = _legal_choices(board, RoutingClearanceIndex(board), net_by_pad[reference],
                 position, placement, pad, _two_leg_candidates(position, placement.position, options),
                 multiple_orders=True)
+            fine = refine(reference)
+            refined_counts[reference] = len(fine)
+            return tuple(dict.fromkeys((*coarse, *fine)))
         selected, assignment = improve_escape_assignment(
             board, ordered_refs, domains, selected, expand, options.assignment_options)
 
@@ -189,7 +219,8 @@ def route_fanout(
         selected.get(reference) if reference in accesses else None,
         ("no legal candidate against immutable input" if not domains[reference]
          else "all initial candidates blocked by selected escapes") if reference not in accesses else "",
-        sum(len(path) == 2 for path, _ in domains[reference])) for reference in ordered_refs)
+        sum(len(path) == 2 for path, _ in domains[reference]),
+        refined_counts.get(reference, 0)) for reference in ordered_refs)
     if failed_gate(after.findings):
         return FanoutResult(board, MappingProxyType({}),
                             tuple(item[1] for item in pads), 0, 0, pin_analysis=tuple(

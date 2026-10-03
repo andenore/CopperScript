@@ -74,6 +74,10 @@ board Nrf52CoinCell {
     supply VBAT { voltage = 3V; external = true; }
     supply GND { voltage = 0V; external = true; }
 
+    // Only the battery ground contact may use a qualified filled/capped via.
+    // Ordinary signal and ground pads retain the no-via-in-pad default.
+    constraint via_in_pad(BT1.NEG) { process = "filled-capped"; }
+
     // Fill intent only; macro-owned return paths and exclusions stay intact.
     constraint copper_zone(GND) {
         id = "ground-return-plane";

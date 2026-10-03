@@ -133,6 +133,32 @@ def test_real_candidate_generation_with_two_physical_via_windows():
     assert not any(f.code == "DRC-COPPER-KEEPOUT" for f in run_physical_drc(selected.board).findings)
 
 
+def test_adaptive_radial_sampling_finds_narrow_off_grid_via_window():
+    base = board()
+    package = replace(base.footprints["two"], pads=(
+        replace(base.footprints["two"].pads[0], position=Point.mm(-1,-1)),
+        base.footprints["two"].pads[1]))
+    # An 0.8 mm via fits only near (4.9,6), missed by 0.5 mm rays from (4,6).
+    xs,ys = (0,4.49,5.31,14),(0,5.59,6.41,14)
+    keepouts = tuple(CopperKeepout(f"window-{i}-{j}",base.stackup.copper_layers,
+        PolygonWithHoles(PolygonRing((Point.mm(x,y),Point.mm(xx,y),
+                                     Point.mm(xx,yy),Point.mm(x,yy)))),
+        block_tracks=False,block_vias=True,block_zones=False)
+        for i,(x,xx) in enumerate(zip(xs,xs[1:]))
+        for j,(y,yy) in enumerate(zip(ys,ys[1:])) if (i,j)!=(1,1))
+    base = replace(base,footprints={**base.footprints,"two":package},copper_keepouts=keepouts)
+    settings = fanout.FanoutOptions(minimum_component_pads=2,
+        maximum_neighbor_distance_nm=nm_from_mm(5),two_leg_escapes=False,joint_escapes=False)
+    coarse = fanout.route_fanout(base,replace(settings,refinement_step_nm=settings.step_nm))
+    assert PadReference("U","1") in coarse.pending_pads
+    fine = fanout.route_fanout(base,settings)
+    assert fine.accesses[PadReference("U","1")] == Point.mm(4.9,6)
+    assert next(a for a in fine.pin_analysis if a.pad==PadReference("U","1")).refined_candidate_count
+    assert fanout.route_fanout(base,settings).board == fine.board
+    assert not {f.code for f in run_physical_drc(fine.board).findings} & {
+        "DRC-COPPER-KEEPOUT","DRC-VIA-PAD-OVERLAP","DRC-CLEARANCE"}
+
+
 def test_pin_analysis_is_observational_not_geometry(monkeypatch):
     base = board()
     monkeypatch.setattr(fanout, "_candidates", candidates)

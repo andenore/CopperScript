@@ -871,6 +871,18 @@ class NetRoutingRule:
 
 
 @dataclass(frozen=True, slots=True)
+class PadViaInPadRule:
+    """Explicit pad-scoped permission, not a global pad-overlap exemption."""
+
+    pad: PadReference
+    process: str = "filled-capped"
+
+    def __post_init__(self) -> None:
+        if self.process != "filled-capped":
+            raise ValueError("via-in-pad supports only the filled-capped process")
+
+
+@dataclass(frozen=True, slots=True)
 class TrackSegment:
     net: str
     start: Point
@@ -994,6 +1006,7 @@ class PhysicalBoard:
     rigid_clusters: tuple[RigidPlacementCluster, ...] = ()
     hard_macros: tuple[PhysicalHardMacro, ...] = ()
     materialized_macros: tuple[str, ...] = ()
+    via_in_pad_rules: tuple[PadViaInPadRule, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -1014,6 +1027,7 @@ class PhysicalBoard:
         object.__setattr__(self, "rigid_clusters", tuple(self.rigid_clusters))
         object.__setattr__(self, "hard_macros", tuple(self.hard_macros))
         object.__setattr__(self, "materialized_macros", tuple(self.materialized_macros))
+        object.__setattr__(self, "via_in_pad_rules", tuple(self.via_in_pad_rules))
         self._validate_references()
 
     def _validate_references(self) -> None:
@@ -1093,6 +1107,22 @@ class PhysicalBoard:
                 assigned_pads[pad_ref] = net.name
 
         known_nets = set(net_names)
+        permitted_pads = set()
+        for rule in self.via_in_pad_rules:
+            if rule.pad in permitted_pads:
+                raise ValueError("multiple via-in-pad permissions for one pad")
+            permitted_pads.add(rule.pad)
+            if assigned_pads.get(rule.pad) != "GND":
+                raise ValueError("via-in-pad permission requires a connected GND pad")
+            placement = next(p for p in self.placements if p.reference == rule.pad.component)
+            lands = [p for p in self.footprints[placement.footprint].pads if p.number == rule.pad.pad]
+            if any(p.kind is not PadKind.SMD for p in lands):
+                raise ValueError("via-in-pad permission requires SMD lands")
+            if self.metadata.get("fabrication_profile") != "jlcpcb-six-layer" or len(self.stackup.copper_layers) != 6:
+                raise ValueError("filled-capped via-in-pad requires the JLCPCB six-layer profile")
+            if not any(z.net == "GND" and any(l not in (CopperLayer.FRONT, CopperLayer.BACK)
+                                             for l in z.layers) for z in self.zones):
+                raise ValueError("via-in-pad permission requires a declared inner GND zone")
         layers = set(self.stackup.copper_layers)
         for track in self.tracks:
             if track.net not in known_nets:

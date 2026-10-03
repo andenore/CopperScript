@@ -54,12 +54,23 @@ uv run python -m pcbir.nrf52_example --route `
 The run preserves immutable RF copper, uses the actual off-pad ground via
 as a macro boundary terminal and retains an In1.Cu ground-fill intent. Reports
 and profiles are saved on partial completion; exit 1 means failed gates.
-The initial routed attempt is **not complete**: U_NRF.26 (SWDIO) and U_NRF.33
+The initial routed attempt was **not complete**: U_NRF.26 (SWDIO) and U_NRF.33
 (DEC3) have no compatible package exits, and BT1.2 lacks a plane escape.
 Ordinary area routing is correctly blocked rather than bypassing the protected
 macro. Independent KiCad reports the resulting opens/dangling reservations.
-Adapting the RF reservation/adjacent support placement and the wide battery-pad
-escape remains required. No manufacturing signoff or Gerbers are claimed.
+The access repair now adds finer bounded sampling, a narrower top RF ownership
+envelope (not relaxed RF keepouts), and the explicit
+`constraint via_in_pad(BT1.NEG) { process = "filled-capped"; }` permission.
+Global planning and signal/ground package access pass on the actual board.
+Only BT1.2 receives a 0.30/0.20 mm filled/capped via; no broad via-in-pad flag
+is enabled. The fabrication order must specify that process. Complete area
+routing and independent native signoff are separate gates; no manufacturing
+signoff or Gerbers are claimed by these access checks.
+The fresh profiled rerun in ignored `build/nrf52-access-fixed/` advances through
+area routing. KiCad 10.0.6 refill/DRC reports zero geometry violations and two
+remaining unconnected items on BUTTON1 and VBAT, not DEC3, SWDIO or battery
+ground. The saved layer audit confirms that the sole via/pad overlap is BT1.2.
+This is still an incomplete board, not a production artifact.
 See [the hard-macro contract](physical-hard-macros.md).
 
 ## Circuit and firmware assumptions

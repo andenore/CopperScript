@@ -34,6 +34,7 @@ from .physical import (
     DesignRules,
     FootprintPad,
     PadReference,
+    PadViaInPadRule,
     PhysicalBoard,
     PhysicalFootprint,
     PhysicalNet,
@@ -327,6 +328,7 @@ def _physicalize(
         placement_groups,
         net_routing_rules,
         zones,
+        via_in_pad_rules,
     ) = _lower_physical_constraints(flat, component_index, metadata, outline)
     return PhysicalBoard(
         name=board.name,
@@ -356,6 +358,7 @@ def _physicalize(
         placement_groups=placement_groups,
         net_routing_rules=net_routing_rules,
         zones=zones,
+        via_in_pad_rules=via_in_pad_rules,
     )
 
 
@@ -372,6 +375,7 @@ def _lower_physical_constraints(
     tuple[PlacementGroup, ...],
     tuple[NetRoutingRule, ...],
     tuple[CopperZone, ...],
+    tuple[PadViaInPadRule, ...],
 ]:
     regions: list[PlacementRegion] = []
     keepouts: list[PlacementKeepout] = []
@@ -380,6 +384,7 @@ def _lower_physical_constraints(
     groups: list[PlacementGroup] = []
     routing_rules: list[NetRoutingRule] = []
     zones: list[CopperZone] = []
+    via_in_pad_rules: list[PadViaInPadRule] = []
     skipped: list[str] = []
 
     def targets(values: tuple[str, ...]) -> tuple[PlacementTarget, ...] | None:
@@ -405,6 +410,19 @@ def _lower_physical_constraints(
 
     net_names = {item.name for item in flat.nets}
     for index, constraint in enumerate(flat.constraints):
+        if constraint.kind is ConstraintKind.VIA_IN_PAD:
+            if len(constraint.targets) != 1:
+                raise ValueError("via_in_pad requires exactly one component.pin target")
+            lowered = targets(constraint.targets)
+            if lowered is None or lowered[0].pad is None:
+                raise ValueError("via_in_pad target must resolve to a physical pad")
+            if set(constraint.parameters) - {"process"}:
+                raise ValueError("unknown via_in_pad parameter")
+            via_in_pad_rules.append(PadViaInPadRule(
+                PadReference(lowered[0].reference, lowered[0].pad),
+                str(constraint.parameters.get("process", "filled-capped")),
+            ))
+            continue
         if constraint.kind is ConstraintKind.COPPER_ZONE:
             if len(constraint.targets) != 1:
                 raise ValueError("copper_zone requires exactly one net target")
@@ -632,6 +650,7 @@ def _lower_physical_constraints(
         _unique_groups(groups),
         tuple(routing_rules),
         tuple(zones),
+        tuple(via_in_pad_rules),
     )
 
 

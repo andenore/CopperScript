@@ -451,7 +451,7 @@ constraint routing(USB_DP) {
 
 Known constraint kinds are `max_distance`, `min_distance`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
-`placement_group`, `keepout`, `routing`, `copper_zone`, and `note`. Coordinates and rectangle dimensions
+`placement_group`, `keepout`, `routing`, `copper_zone`, `via_in_pad`, and `note`. Coordinates and rectangle dimensions
 are lengths in the physical board coordinate system; orientation values are
 unitless degrees. The legalizer accepts any explicitly permitted angle,
 including 45-degree increments; unconstrained components still default to
@@ -498,6 +498,36 @@ physical zone inside the rectangular board outline. `layers` is required;
 selected layers must exist in the chosen physical stackup. A zone declaration
 does not establish electrical connectivity or fabrication readiness: its
 actual fill and connected copper require later verification.
+
+A pad-scoped fabrication permission is separate from connectivity:
+
+```copper
+constraint via_in_pad(BT1.NEG) { process = "filled-capped"; }
+```
+
+The target is one semantic component pin, resolved through the part/device pin
+mapping to `PadViaInPadRule` in physical IR. This initial implementation supports
+only connected SMD GND lands, an inner GND zone, and the six-layer JLCPCB profile.
+The only process is `filled-capped` (also the default); unsupported processes,
+unknown targets/parameters, duplicate permissions and incompatible profiles
+fail closed. The plane-contact stage may use a checked centred 0.30/0.20 mm
+through-via as a fallback when off-pad escape fails. The annulus must fit the
+land and may not contact other lands, including same-net lands. Existing copper,
+all-layer keepouts, board edges, foreign-copper and drill spacing remain checked.
+This permits via-in-pad; it does not require insertion if an ordinary contact
+already exists. Pad size never enables it implicitly. Signal fanout and all
+unselected pads retain the no-pad-overlap default. The route report records
+the filled/capped fabrication requirement; geometry alone does not order that
+manufacturing process or prove filled-plane continuity.
+
+Package escape sampling is configurable on `route-board`: `--fanout-step-mm`
+defaults to 0.5 mm and `--fanout-refinement-step-mm` defaults to 0.1 mm. Empty
+coarse domains and conflicting selected escapes receive bounded finer radial
+and, when enabled, two-leg alternatives against the same immutable input.
+Easy pins keep their coarse choices. Refinement must be no coarser than the
+initial step; equal steps disable the finer pass. Candidate counts and both
+steps are reported. This remains a bounded search, not proof that an empty
+domain is physically unroutable.
 
 ### Critical routing and qualification
 

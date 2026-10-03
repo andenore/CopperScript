@@ -107,6 +107,7 @@ def stitch_zone_pads(
     added_tracks: list[TrackSegment] = []
     added_vias: list[Via] = []
     targets: list[PadReference] = []
+    permitted_pads = {rule.pad for rule in board.via_in_pad_rules}
     pending_lands: list[_PendingContact] = []
     anchors_by_net: dict[str, list[tuple[Point, CopperLayer]]] = {}
     via_size = board.rules.default_via_size_nm
@@ -168,7 +169,8 @@ def stitch_zone_pads(
                 position = transformed_local_point(placement, pad.position)
                 choice = _stitch_land(
                     board, clearance, net, zones, pad, placement, position,
-                    side, width, via_size, via_drill, outer_layers, options,
+                    side, width, via_size, via_drill, outer_layers,
+                    replace(options, ground_via_in_pad=True) if reference in permitted_pads else options,
                     (*board.tracks, *added_tracks), (*board.vias, *added_vias),
                 )
                 if choice is None:
@@ -357,13 +359,15 @@ def _stitch_land(
         # default; every copper layer and keepout is still checked exactly.
         size = nm_from_mm("0.30")
         drill = nm_from_mm("0.20")
-        if (any(_point_in_zone(position, zone.outline) for zone in zones)
+        if (min(pad.size.width_nm, pad.size.height_nm) >= size
+                and any(_point_in_zone(position, zone.outline) for zone in zones)
                 and via_inside_board(board, position, size)
                 and not any(via.position == position for via in committed_vias)
                 and clearance.can_via(
                     net, position, size, outer_layers[0], outer_layers[1], drill,
                     check_hole_copper=True,
                     allow_pad_overlap=True,
+                    allowed_pad=PadReference(placement.reference,pad.number),
                 )):
             return (), Via(
                 net, position, size, drill, outer_layers[0], outer_layers[1],
