@@ -59,6 +59,7 @@ fix and clean exported-board electrical connectivity, **not production readiness
 RF, mechanical, battery and manufacturing qualifications remain outstanding.
 
 The verification fixture's local library replacement is ignored build data.
-Published examples retain URL imports; coordinated compiler/library publication
-and a new immutable library pin are required to reproduce these new declarations
-from a clean GitHub checkout.
+Published examples retain URL imports. CopperLib revision
+`b336e61bd881287e7bed26c3929f213ec413f52b` is published and pinned in
+`copper.mod`/`copper.lock`, so a clean checkout downloads these declarations
+without requiring a manual CopperLib checkout.

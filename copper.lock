@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:8c8129a2d356cf244f4235d57bc79a96d7d074cb3431914dc14bf4ef48c0b6dc",
+      "checksum": "sha256:ca7d27ec7dddec623679d359fc1d1ea54ec6e4ccade59b74a9656b99f6632fbc",
       "files": [
         {
           "path": "copper.mod",
@@ -125,8 +125,8 @@
         },
         {
           "path": "packages/full_vertical/button.copper",
-          "sha256": "ed062a27314c559f44c56ab9e43ae32fc2bedc2576579d316120d4739443fc9f",
-          "size": 316
+          "sha256": "484252cfbfcefa0521ade7cf295f6c72ca7c5fcc0eb2a9acbe97b09b2f8474a4",
+          "size": 923
         },
         {
           "path": "packages/full_vertical/can_connector.copper",
@@ -245,8 +245,8 @@
         },
         {
           "path": "packages/nrf52_demo/cr2032_holder.copper",
-          "sha256": "f2d51509e98aa1b45ae738a41edf08ca8bec0090421ce1bd15c05eb712a5e221",
-          "size": 641
+          "sha256": "66b3a114fca6a92874175bd94cd6a337a38492aead7a8c9defb384a4051f4c3c",
+          "size": 1012
         },
         {
           "path": "packages/nrf52_demo/crystal.copper",
@@ -276,7 +276,7 @@
       ],
       "module": "github.com/andenore/CopperLib",
       "source": "git:https://github.com/andenore/CopperLib.git",
-      "version": "853d32aff9e868aee04dcb415866f1101565893e"
+      "version": "b336e61bd881287e7bed26c3929f213ec413f52b"
     },
     {
       "checksum": "sha256:cb30d8a525c1f1fa625976d8e37cb87264c676e7ef696e50edc619cb90847f25",
