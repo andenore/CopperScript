@@ -2,5 +2,5 @@
   "ngspice_version": 47,
   "source_url": "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47.tar.gz",
   "source_sha256": "894e649651f1838a14095e5a5439e7d3aa63e87ede14d283173fda4fcdef675f",
-  "configure": ["--without-x", "--with-readline=no", "--disable-debug", "--disable-xspice", "--disable-cider"]
+  "configure": ["--without-x", "--with-readline=no", "--disable-debug", "--enable-xspice", "--disable-cider"]
 }
