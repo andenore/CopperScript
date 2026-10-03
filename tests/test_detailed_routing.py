@@ -567,7 +567,13 @@ def test_detailed_router_preserves_critical_copper() -> None:
 
 
 def test_soft_layer_costs_fall_back_when_they_strand_a_signal(monkeypatch) -> None:
-    board = _board()
+    board = replace(_board(),
+        stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+                        CopperLayer.INTERNAL_2, CopperLayer.BACK)),
+        nets=(*_board().nets, PhysicalNet("GND", ())),
+        zones=(CopperZone("plane", "GND", (CopperLayer.INTERNAL_1,),
+            PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in (
+                (.5, .5), (19.5, .5), (19.5, 11.5), (.5, 11.5)))))),))
     guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
     original_route_net = detailed_module._route_net
 
@@ -586,6 +592,77 @@ def test_soft_layer_costs_fall_back_when_they_strand_a_signal(monkeypatch) -> No
     )
     assert routed.status is DetailedRoutingStatus.SUCCESS
     assert routed.metrics.unrouted_net_count == 0
+
+
+def test_no_neutral_reroute_when_requested_preferences_have_no_effect(monkeypatch) -> None:
+    board = _board()
+    guide = replace(route_global(board), routes=())
+    original_route_net = detailed_module._route_net
+    calls = []
+
+    def count(*args, **kwargs):
+        calls.append(args[9])
+        return original_route_net(*args, **kwargs)
+
+    monkeypatch.setattr(detailed_module, "_route_net", count)
+    result = route_detailed(board, guide, DetailedRouterOptions(maximum_passes=1))
+    assert len(calls) == 1
+    assert not result.nets[0].connected
+    assert not result.nets[0].search_policy.neutral_fallback_attempted
+
+
+def test_failed_net_refines_below_quarter_mm_without_relaxing_clearance() -> None:
+    terminal = PhysicalFootprint("terminal", (
+        FootprintPad("1", Point(0, 0), Size.mm(.6, .6)),), Size.mm(1, 1))
+    upper = PhysicalFootprint("upper", (
+        FootprintPad("1", Point(0, 0), Size.mm(4, 1.97)),), Size.mm(4, 1.97))
+    lower = PhysicalFootprint("lower", (
+        FootprintPad("1", Point(0, 0), Size.mm(4, 2.13)),), Size.mm(4, 2.13))
+    board = PhysicalBoard("NarrowChannel", BoardOutline.rectangle(10, 5),
+        {f.name: f for f in (terminal, upper, lower)},
+        (Placement("J1", terminal.name, Point.mm(1, 1)),
+         Placement("J2", terminal.name, Point.mm(9, 4)),
+         Placement("W1", upper.name, Point.mm(5, 1.185)),
+         Placement("W2", lower.name, Point.mm(5, 3.735))),
+        (PhysicalNet("SIGNAL", (PadReference("J1", "1"), PadReference("J2", "1"))),),
+        rules=DesignRules(minimum_track_width_nm=nm_from_mm(.15),
+                         default_track_width_nm=nm_from_mm(.15), minimum_clearance_nm=nm_from_mm(.15)),
+        net_routing_rules=(NetRoutingRule("SIGNAL", allowed_layers=(CopperLayer.FRONT,)),))
+    # Isolate detailed-grid behavior from the coarse capacity estimator;
+    # the detailed search and DRC still see both immutable copper obstacles.
+    guide = route_global(replace(board, placements=board.placements[:2]),
+                         GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    options = DetailedRouterOptions(maximum_passes=2, heuristic_weight_percent=200)
+    coarse = route_detailed(board, guide, replace(options, minimum_repair_pitch_nm=nm_from_mm(.25)))
+    assert not coarse.nets[0].connected
+    refined = route_detailed(board, guide, options)
+    assert refined.nets[0].connected, refined.nets[0].diagnostics
+    assert refined.board.rules == board.rules
+    assert all(track.width_nm >= board.rules.minimum_track_width_nm for track in refined.board.tracks)
+    assert not {"DRC-OPEN-NET", "DRC-CLEARANCE", "DRC-SHORT"} & {
+        finding.code for finding in run_physical_drc(refined.board).findings}
+
+
+def test_refinement_is_bounded_and_never_triggered_by_budget_exhaustion(monkeypatch) -> None:
+    board = _board()
+    guide = route_global(board)
+    pitches = []
+    diagnostic = ["search budget exhausted"]
+
+    def fail(*args, **kwargs):
+        pitches.append(args[9].pitch_nm)
+        return detailed_module._failed(args[2], diagnostic[0])
+
+    monkeypatch.setattr(detailed_module, "_route_net", fail)
+    options = DetailedRouterOptions(pitch_nm=nm_from_mm(8), maximum_passes=2)
+    exhausted = route_detailed(board, guide, options)
+    assert not exhausted.nets[0].connected
+    assert pitches == [nm_from_mm(8)] * 3
+    pitches.clear()
+    diagnostic[0] = "detailed search cannot reach target"
+    disconnected = route_detailed(board, guide, options)
+    assert not disconnected.nets[0].connected
+    assert pitches == [nm_from_mm(pitch) for pitch in (8, 8, 8, 4, 2, 1, .5)]
 
 
 def test_detailed_router_repair_subset_preserves_other_copper() -> None:

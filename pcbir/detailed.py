@@ -186,11 +186,13 @@ class DetailedRouterOptions:
     repair_budget_multiplier: int = 1
     defer_zone_nets: bool = True
     maximum_ripup_blockers: int = 4
+    minimum_repair_pitch_nm: int = nm_from_mm("0.1")
 
     def __post_init__(self) -> None:
         if min(
             self.pitch_nm, self.maximum_passes, self.pin_access_candidates,
             self.maximum_search_states,
+            self.minimum_repair_pitch_nm,
         ) <= 0:
             raise ValueError("detailed router pitch and passes must be positive")
         if min(
@@ -399,7 +401,12 @@ def route_detailed(
     # neutral-cost reroute only when an ordinary net was left open; zone nets
     # deliberately deferred to fill are not a search failure.
     neutral_metrics = None
-    if ((options.layer_preference_cost or options.direction_preference_cost)
+    layer_ranks, preferred_headings = signal_layer_preferences(board)
+    effective_preferences = (
+        options.layer_preference_cost and any(layer_ranks.values())
+        or options.direction_preference_cost and bool(preferred_headings)
+    )
+    if (effective_preferences
             and any(not item.result.connected and item.result.net not in zone_nets
                     for item in best.nets)):
         neutral = route_detailed(
@@ -726,17 +733,17 @@ def _repair_from_passes(
         # pitch pads even when exact copper clearance permits a route. Refine
         # only a proven no-path search; a budget-exhausted search needs more
         # states, not a larger graph.
-        if (not attempt.result.connected
-                and any("cannot reach" in message for message in attempt.result.diagnostics)
-                and repair_options.pitch_nm > nm_from_mm("0.25")):
-            refined_options = replace(
-                repair_options,
-                pitch_nm=max(nm_from_mm("0.25"), repair_options.pitch_nm // 2),
-            )
+        for _ in range(4):
+            if (attempt.result.connected
+                    or not any("cannot reach" in message for message in attempt.result.diagnostics)
+                    or repair_options.pitch_nm <= options.minimum_repair_pitch_nm):
+                break
+            repair_options = replace(repair_options,
+                pitch_nm=max(options.minimum_repair_pitch_nm, repair_options.pitch_nm // 2))
             attempt = _route_net(
-                board, _build_grid(board, refined_options, net.pads, fanout_accesses),
+                board, _build_grid(board, repair_options, net.pads, fanout_accesses),
                 net.name, net.pads, rules.get(net.name), guides.get(net.name),
-                usage, {}, clearance, refined_options,
+                usage, {}, clearance, repair_options,
                 fanout_accesses=fanout_accesses,
             )
         if not attempt.result.connected:

@@ -1031,3 +1031,11 @@ deferred zone nets after all signal searches, package access and geometric check
 pass. Failed signal searches, stale evidence, waivers and hard findings remain
 failures. Do not alter the physical DRC token or mark the board fabrication-ready;
 independent CAM, assembly and mechanical production qualification remain separate.
+
+No-path repair may refine only the failed net's mesh in up to four halving
+rounds, with a configurable resolution floor (`--minimum-repair-pitch-mm`,
+default 0.1 mm). A fixed 0.25 mm floor cannot represent all legal narrow launch
+channels. Each trial preserves immutable copper, exact clearance checks and
+search-state bounds; exhausted budgets alone do not trigger a larger graph.
+Do not repeat a neutral layer-cost fallback when all layer ranks and heading
+preferences are inactive: that is an identical search, not a new strategy.

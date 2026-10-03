@@ -287,6 +287,8 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--pitch-mm", default="1")
     board_route_parser.add_argument("--passes", type=int, default=1)
     board_route_parser.add_argument("--search-budget", type=int, default=50_000)
+    board_route_parser.add_argument("--minimum-repair-pitch-mm", type=_positive_mm, default="0.1",
+        help="resolution floor for up to four failed-net-only no-path refinement rounds (default: 0.1 mm)")
     board_route_parser.add_argument("--progress", action="store_true",
         help="stream elapsed phase/group/trial events; telemetry is not completion or signoff evidence")
     board_route_parser.add_argument(
@@ -693,6 +695,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 detailed_options = DetailedRouterOptions(
                     pitch_nm=nm_from_mm(args.pitch_mm), maximum_passes=args.passes,
                     maximum_search_states=args.search_budget,
+                    minimum_repair_pitch_nm=nm_from_mm(args.minimum_repair_pitch_mm),
                     heuristic_weight_percent=args.heuristic_weight,
                     enable_soft_ripup=args.soft_ripup,
                     constrained_pins_first=args.constrained_pins_first,
