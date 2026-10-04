@@ -79,6 +79,11 @@ function render() {
       node("text",{x:mm(e.start[0]+e.end[0])/2,y:mm(e.start[1]+e.end[1])/2},e.id));svg.append(g);
   }
   for(const a of s.attachments||[]) svg.append(node("circle",{cx:mm(a.position[0]),cy:mm(a.position[1]),r:.4,class:"attachment-anchor","pointer-events":"none"}));
+  for(const [key,label] of [["body_overhangs","BODY ONLY"],["assembly_envelopes","HEIGHT LIMIT"],["assembly_access","TOOL ACCESS"]]) for(const region of s[key]||[]) {
+    if(region.side && $("side").value!=="both" && region.side!==$("side").value)continue;
+    const n=node("polygon",{points:points(region.vertices),class:key});
+    n.append(node("title",{},`${label}: ${region.id}; ${region.reason||region.purpose||mm(region.maximum_height_nm)+" mm"}`));svg.append(n);
+  }
   for (const cutout of s.outline.cutouts) {
     const n=node("polygon",{points:points(cutout.vertices),class:"cutout"});
     n.append(node("title",{},`${cutout.id}. ${featureLabel("cutout",cutout.id)}`));svg.append(n);
@@ -212,7 +217,7 @@ function updateControls() {
     (component.source_position_locked && component.source_rotation_locked && component.source_side_locked);
   $("lock").disabled = !component || blocked || !!preview;
   if (component) {
-    if(component.source_attachment) $("notice").textContent=`Pose owned by attachment ${component.source_attachment}; edit the attachment or its datum in Mechanical features.`;
+    if(component.source_attachment && !sourceReview && !preview && !busy && !accepted?.source_stale) $("notice").textContent=`Pose owned by attachment ${component.source_attachment}; edit the attachment or its datum in Mechanical features.`;
     $("x").disabled=$("y").disabled=!!component.source_position_locked && !$("edit-locks").checked;
     $("rotation").disabled=!!component.source_rotation_locked && !$("edit-locks").checked;
     $("pose-side").disabled=!!component.source_side_locked && !$("edit-locks").checked;
@@ -220,6 +225,7 @@ function updateControls() {
     $("rotation").value = component.rotation; $("pose-side").value = component.side;
     $("lock").textContent = component.session_locked ? "Unlock temporary pose" : "Lock temporary pose";
     $("details").textContent = `${component.footprint}; ${component.value}. ${component.source_position_locked||component.source_rotation_locked ? "SOURCE LOCK. Enable explicit source-lock editing to change it. " : ""}${component.profile_role ? "Imported profile role: "+component.profile_role+" (read-only). " : ""}${component.macro ? "Rigid unit: "+component.macro+". " : ""}Allowed angles: ${component.allowed_orientations.join(", ")}.`;
+    $("details").textContent+=` Height: ${component.height_nm==null ? "unknown" : mm(component.height_nm)+" mm"}.`;
   }
 }
 function populate() {
@@ -388,7 +394,13 @@ const featureDefaults={
   "rules:":{minimum_clearance:"0.2mm",minimum_track_width:"0.2mm"},
   "datum:":{position:"(5mm,5mm)"},
   "edge:":{start:"(0mm,0mm)",end:"(40mm,0mm)"},
-  "attach:":{component:"J1",target:"DATUM",offset:"(0mm,0mm)",anchor:"origin",rotation:"0",side:"front"}
+  "attach:":{component:"J1",target:"DATUM",offset:"(0mm,0mm)",anchor:"origin",rotation:"0",side:"front"},
+  "overhang:":{component:"J1",edge:"TOP",start:"10mm",end:"20mm",distance:"2mm",reason:'"Audited connector body protrusion; copper remains on board"'},
+  "component_height:":{component:"J1",height:"3mm"},
+  "enclosure:rectangle":{origin:"(0mm,0mm)",width:"40mm",height:"30mm",side:"front",maximum_height:"4mm"},
+  "enclosure:polygon":{vertices:"[(0mm,0mm),(40mm,0mm),(40mm,30mm),(0mm,30mm)]",side:"front",maximum_height:"4mm"},
+  "assembly_access:rectangle":{component:"J1",origin:"(-3mm,-5mm)",width:"6mm",height:"3mm",side:"component",purpose:'"Connector insertion clearance"'},
+  "assembly_access:polygon":{component:"J1",vertices:"[(-3mm,-5mm),(3mm,-5mm),(3mm,-2mm),(-3mm,-2mm)]",side:"component",purpose:'"Connector insertion clearance"'}
 };
 function featureInputs(parameters) {
   parameters={...parameters};
@@ -403,9 +415,10 @@ function featureInputs(parameters) {
 }
 function featureMode() {
   const kind=$("feature-kind").value;
-  if (["hole","rules","datum","edge","attach"].includes(kind)) $("feature-shape").value="";
+  if (["hole","rules","datum","edge","attach","overhang","component_height"].includes(kind)) $("feature-shape").value="";
   else if (kind==="cutout") $("feature-shape").value="polygon";
   else if (kind.includes("keepout") && $("feature-shape").value==="circle") $("feature-shape").value="rectangle";
+  else if (["enclosure","assembly_access"].includes(kind) && !["rectangle","polygon"].includes($("feature-shape").value)) $("feature-shape").value="rectangle";
   $("feature-name").disabled=["outline","rules"].includes(kind);
   if ($("feature-name").disabled) $("feature-name").value="";
   featureInputs(featureDefaults[kind+":"+$("feature-shape").value]||{});vertexPoints=[];render();

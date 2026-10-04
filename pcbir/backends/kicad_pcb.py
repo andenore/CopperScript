@@ -516,6 +516,11 @@ def _footprint_lines(
             hidden=True,
         )
     )
+    from ..mechanical_assembly import component_height
+    height=component_height(board,placement)
+    if height is not None:
+        lines.extend(_property_lines(board.name,placement.reference,"CopperScriptHeightMM",_mm(height),
+                    0,0,"F.Fab" if placement.side is BoardSide.FRONT else "B.Fab",hidden=True))
     if placement.source_path:
         lines.extend(
             _property_lines(

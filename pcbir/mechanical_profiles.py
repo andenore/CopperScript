@@ -53,7 +53,7 @@ def expand_mechanical_items(items, profiles: Mapping[str, MechanicalProfileDefin
                 if set(item.bindings) != child or any(not isinstance(v, str) or not v for v in item.bindings.values()):
                     error("nested profile bindings must map every child role to an outer role", item.location)
                 required.extend(item.bindings.values())
-            elif item.kind in {"connector", "attach"}:
+            elif item.kind in {"connector", "attach", "overhang", "component_height", "assembly_access"}:
                 required.append(item.name)
         if len(required) != len(set(required)):
             error("profile contains duplicate connector roles", d.location)
@@ -62,12 +62,12 @@ def expand_mechanical_items(items, profiles: Mapping[str, MechanicalProfileDefin
     def append(item, profile=None, path=None, binding=None):
         name = f"{path}/{item.name}" if path and item.name else item.name
         parameters = dict(item.parameters)
-        if item.kind in {"connector", "attach"} and profile is not None:
+        if item.kind in {"connector", "attach", "overhang", "component_height", "assembly_access"} and profile is not None:
             if "component" in parameters:
                 error("profile connector components must be supplied through explicit bindings", item.location)
             parameters["component"] = binding
         if path:
-            for key in ("relative_to", "target"):
+            for key in ("relative_to", "target", "edge"):
                 if key in parameters:
                     if not isinstance(parameters[key], str):
                         error("profile mechanical targets must be named references", item.location)

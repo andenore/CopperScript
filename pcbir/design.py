@@ -16,6 +16,7 @@ from .quantities import Length
 from .syntax import CopperScriptError, Document, MechanicalDecl, RawQuantity, SourceLocation
 from .mechanical_anchors import MechanicalAttachment, resolve_datums, resolve_edges, resolve_attachments
 from .physical import BoardDatum, BoardEdge
+from .physical import BodyOverhang, ComponentHeight, AssemblyEnvelope, AssemblyAccess
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,10 +44,14 @@ class MechanicalDesign:
     datums: tuple[BoardDatum, ...] = ()
     boundary_edges: tuple[BoardEdge, ...] = ()
     attachments: tuple[MechanicalAttachment, ...] = ()
+    body_overhangs: tuple[BodyOverhang, ...] = ()
+    component_heights: tuple[ComponentHeight, ...] = ()
+    assembly_envelopes: tuple[AssemblyEnvelope, ...] = ()
+    assembly_access: tuple[AssemblyAccess, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holes", tuple(self.holes))
-        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources", "datums", "boundary_edges", "attachments"):
+        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources", "datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(self, "rule_overrides", MappingProxyType(dict(self.rule_overrides)))
         DesignRules(**self.rule_overrides)
@@ -80,6 +85,7 @@ def lower_mechanical(document: Document,
     ids = set()
     connectors, keepouts, copper_keepouts = [], [], []
     datum_items, edge_items, attachment_items = [], [], []
+    assembly_items = []
     items, sources, instances = expand_mechanical_items(block.items, profiles or {})
 
     def length(value):
@@ -112,6 +118,9 @@ def lower_mechanical(document: Document,
                 ids.add(item.name)
             if item.kind in {"datum", "edge", "attach"}:
                 {"datum": datum_items, "edge": edge_items, "attach": attachment_items}[item.kind].append(item)
+                continue
+            if item.kind in {'overhang','component_height','enclosure','assembly_access'}:
+                assembly_items.append(item)
                 continue
             if item.kind == "rules":
                 allowed = {name.removesuffix("_nm") for name in DesignRules.__dataclass_fields__}
@@ -210,8 +219,10 @@ def lower_mechanical(document: Document,
         datums = resolve_datums(datum_items, point)
         edges = resolve_edges(edge_items, outline, point)
         attachments = resolve_attachments(attachment_items, datums, edges, outline, point)
+        from .mechanical_assembly import lower_assembly
+        assembly = lower_assembly(assembly_items, replace(outline,cutouts=tuple(cutouts)), edges, point, length)
         return MechanicalDesign(replace(outline, cutouts=tuple(cutouts)), tuple(holes), rules,
             tuple(connectors), tuple(keepouts), tuple(copper_keepouts), instances, sources,
-            datums, edges, attachments)
+            datums, edges, attachments, *assembly)
     except (ValueError, TypeError) as exc:
         raise CopperScriptError("MEC003", str(exc), block.location) from exc

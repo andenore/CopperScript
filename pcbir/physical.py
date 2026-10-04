@@ -232,6 +232,63 @@ class PhysicalAttachment:
 
 
 @dataclass(frozen=True, slots=True)
+class BodyOverhang:
+    id: str
+    reference: str
+    edge: str
+    start_nm: Nanometres
+    end_nm: Nanometres
+    distance_nm: Nanometres
+    reason: str
+
+    def __post_init__(self):
+        if not all(isinstance(v,str) and v.strip() for v in (self.id,self.reference,self.edge,self.reason)):
+            raise ValueError("body overhang requires identities and an explicit audit reason")
+        if not all(type(v) is int for v in (self.start_nm,self.end_nm,self.distance_nm)) or not 0 <= self.start_nm < self.end_nm or self.distance_nm <= 0:
+            raise ValueError("body overhang requires a positive depth and ordered nonnegative edge interval")
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentHeight:
+    id: str
+    reference: str
+    height_nm: Nanometres
+
+    def __post_init__(self):
+        if not self.id or not self.reference or type(self.height_nm) is not int or self.height_nm <= 0:
+            raise ValueError("component height requires identities and a positive typed length")
+
+
+@dataclass(frozen=True, slots=True)
+class AssemblyEnvelope:
+    id: str
+    outline: BoardOutline
+    side: BoardSide
+    maximum_height_nm: Nanometres
+
+    def __post_init__(self):
+        if not self.id or not isinstance(self.side,BoardSide) or type(self.maximum_height_nm) is not int or self.maximum_height_nm < 0:
+            raise ValueError("enclosure requires an id, side and nonnegative typed height")
+        if self.outline.cutouts or self.outline.circular_boundary:
+            raise ValueError("enclosure requires a simple polygonal region")
+
+
+@dataclass(frozen=True, slots=True)
+class AssemblyAccess:
+    id: str
+    reference: str
+    outline: BoardOutline
+    side: str
+    purpose: str
+
+    def __post_init__(self):
+        if not self.id or not self.reference or self.side not in {'component','opposite'} or not isinstance(self.purpose,str) or not self.purpose.strip():
+            raise ValueError("assembly access requires an owner, relative side and explicit purpose")
+        if self.outline.cutouts or self.outline.circular_boundary:
+            raise ValueError("assembly access requires a simple polygonal local region")
+
+
+@dataclass(frozen=True, slots=True)
 class MechanicalHole:
     """Board-owned round NPTH; no electrical pin, net or BOM entry."""
 
@@ -1137,6 +1194,10 @@ class PhysicalBoard:
     datums: tuple[BoardDatum, ...] = ()
     boundary_edges: tuple[BoardEdge, ...] = ()
     attachments: tuple[PhysicalAttachment, ...] = ()
+    body_overhangs: tuple[BodyOverhang, ...] = ()
+    component_heights: tuple[ComponentHeight, ...] = ()
+    assembly_envelopes: tuple[AssemblyEnvelope, ...] = ()
+    assembly_access: tuple[AssemblyAccess, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -1159,7 +1220,7 @@ class PhysicalBoard:
         object.__setattr__(self, "materialized_macros", tuple(self.materialized_macros))
         object.__setattr__(self, "via_in_pad_rules", tuple(self.via_in_pad_rules))
         object.__setattr__(self, "mechanical_holes", tuple(self.mechanical_holes))
-        for field in ("datums", "boundary_edges", "attachments"):
+        for field in ("datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access"):
             object.__setattr__(self, field, tuple(getattr(self, field)))
             identities = [item.id for item in getattr(self, field)]
             if len(set(identities)) != len(identities):
@@ -1200,6 +1261,15 @@ class PhysicalBoard:
             attached.add(attachment.reference)
             if attachment.target is not None and attachment.target not in set(datum_by_id) | {e.id for e in self.boundary_edges}:
                 raise ValueError("attachment references unknown mechanical target")
+        for field in ("body_overhangs","component_heights","assembly_access"):
+            owned=set()
+            for feature in getattr(self,field):
+                if feature.reference not in placement_refs or feature.reference in owned:
+                    raise ValueError(f"{field} requires unique known component owners")
+                owned.add(feature.reference)
+        from .mechanical_assembly import expanded_body_outline
+        for allowance in self.body_overhangs:
+            expanded_body_outline(self.outline,self.boundary_edges,allowance)
         net_names = [net.name for net in self.nets]
         if len(net_names) != len(set(net_names)):
             raise ValueError("physical net names must be unique")

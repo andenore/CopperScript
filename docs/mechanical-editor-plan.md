@@ -87,7 +87,7 @@ connectivity and locked pose. Comments survive; stale/concurrent edits never win
 
 25. [x] Named datums and stable edge IDs in source/IR; numeric and edge-relative
     component/pad/mating-face attachment with dependency/conflict checks.
-26. [ ] Explicit body-overhang allowances independent of copper-edge requirements;
+26. [x] Explicit body-overhang allowances independent of copper-edge requirements;
     component/enclosure-height and assembly-access metadata where available.
 27. [ ] Exact line/arc/rounded outlines and routed slots through shared queries,
     source editing, physical IR, KiCad and manufacturing export before UI exposure.
@@ -270,3 +270,24 @@ board/source revision, browser actions and explicit remaining limitations.
 - Generic example: `make EXAMPLE=mechanical-anchors edit`.
   Named curved-edge anchors await exact curve support; imported owners remain
   read-only. Items 26–28 remain open.
+
+### Component envelopes and assembly access — 2026-10-04
+
+- Bounded, audited body-only overhang intervals on named axis-aligned edges;
+  other edges, cutouts, holes/screw heads, neighbours and copper stay constrained.
+  No expanded material is exported or credited to routing/fills. Diagonal/curved
+  allowances fail explicitly pending exact exterior-union support.
+- Instance height overrides, same-side enclosure limits (unknown heights fail),
+  and local moving/rotating/mirrored component/opposite-side tool-access areas.
+  Access blocks bodies, not copper. Profile owners remain read-only with explicit
+  role binding. Source editing preserves electrical identity and exact undo.
+- Physical/source/profile/editor regressions: **217 passed**. Additional editor/
+  job/cache/packaging/build checks: **168 passed, 6 skipped**. BOM module restored
+  unchanged and mechanical helpers isolated in `mechanical_assembly.py`; combined
+  assembly/CLI/compiler/profile/packaging verification: **145 passed**.
+- Native KiCad verifies the original (not expanded) outline and retained height
+  field; this is not native 3D enclosure collision checking. Chrome anchor smoke
+  also passes enclosure/access rendering, save and byte-exact undo, zero page
+  errors. `examples/mechanical_anchors.copper` includes these policies.
+- Items 27–28 remain open. Publication and CopperLedRing's public compiler-pin
+  update remain pending the outstanding approval, separate from local verification.

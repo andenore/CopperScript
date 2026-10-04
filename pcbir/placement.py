@@ -401,7 +401,8 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
             errors.append(f"{ref}: rotation {pose.rotation_degrees} is not allowed")
         shape = RoundedConvexShape(_placement_polygon(board, pose))
         clearance = rule.edge_clearance_nm if rule and rule.edge_clearance_nm is not None else options.edge_clearance_nm
-        if not shape_in_outline(shape, board.outline, clearance):
+        from .mechanical_assembly import body_in_material
+        if not body_in_material(board, pose, shape, clearance):
             errors.append(f"{ref}: courtyard violates board material/cutout clearance ({clearance} nm)")
         for hole in board.mechanical_holes:
             if not shapes_clear(shape, hole_shape(hole), 1):
@@ -409,6 +410,14 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
             if hole.head_clearance_radius_nm and not shapes_clear(shape,
                     RoundedConvexShape((hole.position,), hole.head_clearance_radius_nm), 1):
                 errors.append(f"{ref}: courtyard intersects screw-head clearance {hole.id}")
+        from .mechanical_assembly import component_height,assembly_pose_legal
+        if not assembly_pose_legal(board,pose,shape.spine,{k:v for k,v in placements.items() if k!=ref}):
+            height=component_height(board,pose)
+            limits=[f"{e.id} ≤ {e.maximum_height_nm} nm" for e in board.assembly_envelopes
+                    if e.side is pose.side and _polygons_too_close(shape.spine,e.outline.vertices,0)
+                    and (height is None or height>e.maximum_height_nm)]
+            if limits:errors.append(f"{ref}: component height {'unknown' if height is None else str(height)+' nm'} violates enclosure {', '.join(limits)}")
+            else:errors.append(f"{ref}: assembly-access or original-board pad clearance conflict (body overhang never waives copper)")
         if not _legal(pose, {}, board, options):
             if not any(e.startswith(ref + ":") for e in errors):
                 names = [k.name for k in board.keepouts if (k.side is None or k.side is pose.side)
@@ -1259,10 +1268,14 @@ def _legal(
                       else options.edge_clearance_nm)
     from .mechanical import shape_in_board
     from .geometry import RoundedConvexShape, shapes_clear
-    inside = (shape_in_board(board, RoundedConvexShape(polygon), edge_clearance)
+    from .mechanical_assembly import body_in_material,assembly_pose_legal,component_height
+    inside = (body_in_material(board,candidate,RoundedConvexShape(polygon),edge_clearance)
+              if board.body_overhangs else (shape_in_board(board, RoundedConvexShape(polygon), edge_clearance)
               if board.outline.circular_boundary or board.outline.cutouts or board.mechanical_holes
-              else _polygon_inside(polygon, board.outline.vertices, edge_clearance))
+              else _polygon_inside(polygon, board.outline.vertices, edge_clearance)))
     if not inside:
+        return False
+    if (board.body_overhangs or board.assembly_envelopes or board.assembly_access) and not assembly_pose_legal(board,candidate,polygon,placed):
         return False
     for hole in board.mechanical_holes:
         if hole.head_clearance_radius_nm and not shapes_clear(
@@ -1296,7 +1309,8 @@ def _legal(
         if keepout.side is not None and candidate.side is not keepout.side:
             continue
         if keepout.maximum_component_height_nm is not None:
-            if footprint.height_nm is not None and footprint.height_nm <= keepout.maximum_component_height_nm:
+            height=component_height(board,candidate)
+            if height is not None and height <= keepout.maximum_component_height_nm:
                 continue
         if _polygons_too_close(polygon, keepout.outline.vertices, 0):
             return False

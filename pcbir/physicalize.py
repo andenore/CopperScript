@@ -425,6 +425,10 @@ def _physicalize(
         datums=mechanical.datums if mechanical else (),
         boundary_edges=mechanical.boundary_edges if mechanical else (),
         attachments=attachments,
+        body_overhangs=mechanical.body_overhangs if mechanical else (),
+        component_heights=mechanical.component_heights if mechanical else (),
+        assembly_envelopes=mechanical.assembly_envelopes if mechanical else (),
+        assembly_access=mechanical.assembly_access if mechanical else (),
     )
 
 

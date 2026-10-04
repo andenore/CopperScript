@@ -345,6 +345,10 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "datums": [repr(d) for d in sorted(board.datums, key=lambda d:d.id)],
             "boundary_edges": [repr(e) for e in sorted(board.boundary_edges, key=lambda e:e.id)],
             "attachments": [repr(a) for a in sorted(board.attachments, key=lambda a:a.id)],
+            "body_overhangs": [repr(a) for a in sorted(board.body_overhangs,key=lambda a:a.id)],
+            "component_heights": [repr(a) for a in sorted(board.component_heights,key=lambda a:a.id)],
+            "assembly_envelopes": [repr(a) for a in sorted(board.assembly_envelopes,key=lambda a:a.id)],
+            "assembly_access": [repr(a) for a in sorted(board.assembly_access,key=lambda a:a.id)],
             "stackup": {
                 "layers": [layer.value for layer in board.stackup.copper_layers],
                 "thickness_nm": board.stackup.thickness_nm,

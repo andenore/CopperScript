@@ -10,6 +10,15 @@ board MechanicalAnchors {
         datum CENTER { position=(20mm,15mm); }
         datum DEBUG { relative_to=CENTER; offset=(-10mm,-5mm); }
         edge TOP { start=(0mm,0mm); end=(40mm,0mm); }
+        component_height R1_HEIGHT { component=R1; height=0.6mm; }
+        component_height R2_HEIGHT { component=R2; height=0.6mm; }
+        enclosure FRONT_CASE rectangle {
+            width=40mm; height=30mm; side=front; maximum_height=2mm;
+        }
+        assembly_access R2_PROBE rectangle {
+            component=R2; origin=(3mm,-2mm); width=3mm; height=4mm;
+            side=component; purpose="Side access for a test probe";
+        }
         attach DEBUG_PAD {
             component=R1; target=DEBUG; anchor=pad; anchor_pad="1";
             rotation=45; side=back;

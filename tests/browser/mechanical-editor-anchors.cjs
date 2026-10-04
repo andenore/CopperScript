@@ -19,6 +19,8 @@ const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||'playwright');
     assert.match(await page.locator('#source-diff').innerText(),/22mm/);assert.deepEqual(fs.readFileSync(source),original);
     await page.locator('#save-source').click();await page.waitForFunction(()=>document.querySelector('#source-review').hidden && !document.querySelector('#auto').disabled);
     assert.match(fs.readFileSync(source,'utf8'),/position=\(22mm,15mm\)/);
+    assert.equal(await page.locator('.assembly_envelopes').count(),1);
+    assert.equal(await page.locator('.assembly_access').count(),1);
     if(screenshot)await page.screenshot({path:screenshot,fullPage:true});
     await page.locator('#undo-source').click();await page.waitForFunction(()=>document.querySelector('#undo-source').disabled && !document.querySelector('#auto').disabled);
     assert.deepEqual(fs.readFileSync(source),original);assert.deepEqual(errors,[]);

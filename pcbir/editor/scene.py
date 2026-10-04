@@ -118,6 +118,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
     components = []
     for pose in sorted(board.placements, key=lambda item: item.reference):
         footprint = board.footprints[pose.footprint]
+        from ..mechanical_assembly import component_height
         rule = rules.get(pose.reference)
         pads = []
         for index, pad in enumerate(footprint.pads):
@@ -135,6 +136,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
                      ((-w, -h), (w, -h), (w, h), (-w, h)))
         components.append({"reference": pose.reference, "hierarchy": pose.reference.split("/")[:-1],
             "source_attachment": next((a.id for a in board.attachments if a.reference==pose.reference),None),
+            "height_nm": component_height(board,pose),
             "profile_role": profile_roles.get(pose.reference),
             "footprint": pose.footprint, "position": _point(pose.position),
             "rotation": str(pose.rotation_degrees), "side": pose.side.value,
@@ -162,6 +164,10 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         "datums": [{"id": d.id, "position": _point(d.position), "relative_to": d.relative_to} for d in board.datums],
         "boundary_edges": [{"id": e.id, "start": _point(e.start), "end": _point(e.end)} for e in board.boundary_edges],
         "attachments": [{"id": a.id, "reference": a.reference, "target": a.target, "position": _point(a.position), "anchor": a.anchor} for a in board.attachments],
+        "body_overhangs": [{"id":a.id,"reference":a.reference,"edge":a.edge,"reason":a.reason,"vertices":[_point(p) for p in _overhang_band(board,a)]} for a in board.body_overhangs],
+        "assembly_envelopes": [{"id":a.id,"side":a.side.value,"maximum_height_nm":a.maximum_height_nm,"vertices":[_point(p) for p in a.outline.vertices]} for a in board.assembly_envelopes],
+        "assembly_access": [{"id":a.id,"reference":a.reference,"purpose":a.purpose,"side":_access_side(a,next(p for p in board.placements if p.reference==a.reference)),
+                             "vertices":[_point(transformed_local_point(next(p for p in board.placements if p.reference==a.reference),v)) for v in a.outline.vertices]} for a in board.assembly_access],
         "keepouts": [{"name": k.name, "side": k.side.value if k.side else "both",
                       "vertices": [_point(p) for p in k.outline.vertices]} for k in board.keepouts],
         "copper_keepouts": [{"name": k.id, "layers": [layer.value for layer in k.layers],
@@ -185,6 +191,23 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         scene["warnings"]["macro_copper_not_materialized"] = macro_error
     scene["net_costs"] = net_costs(scene["ratsnest"])
     return scene
+
+
+def _access_side(access,pose):
+    return pose.side.value if access.side=='component' else ('back' if pose.side.value=='front' else 'front')
+
+
+def _overhang_band(board,policy):
+    from ..mechanical_assembly import expanded_body_outline
+    expanded=expanded_body_outline(board.outline,board.boundary_edges,policy)
+    edge=next(e for e in board.boundary_edges if e.id==policy.edge)
+    length=abs(edge.end.x_nm-edge.start.x_nm)+abs(edge.end.y_nm-edge.start.y_nm)
+    dx,dy=(edge.end.x_nm-edge.start.x_nm)//length,(edge.end.y_nm-edge.start.y_nm)//length
+    a=Point(edge.start.x_nm+dx*policy.start_nm,edge.start.y_nm+dy*policy.start_nm)
+    b=Point(edge.start.x_nm+dx*policy.end_nm,edge.start.y_nm+dy*policy.end_nm)
+    # Exact axis-aligned rectangle: only the two exterior points are new.
+    outside=[p for p in expanded.vertices if p not in board.outline.vertices and p not in (a,b)]
+    return (a,b,*sorted(outside,key=lambda p:abs(p.x_nm-b.x_nm)+abs(p.y_nm-b.y_nm)))
 
 
 def net_costs(edges):
