@@ -23,6 +23,21 @@ outlines, cutouts, NPTH holes and physical rules. General curved paths, slots an
 complete manufacturing qualification remain follow-up work. Board-specific
 builders live under `examples/`, never in the generic `pcbir` package.
 
+A local [mechanical/floorplan editor preview](docs/mechanical-editor.md) displays
+real footprint pads/courtyards, outlines, holes and cutouts. It supports rough
+auto-placement preview/apply, ratsnest filters, legal manual pose previews,
+temporary locks and undo/redo. **Source saving and mechanical authoring are not
+implemented yet**; session changes are explicitly unsaved. The
+[detailed implementation checklist](docs/mechanical-editor-plan.md) tracks them.
+
+```powershell
+uv run copper edit-mechanical examples/mechanical_editor_demo.copper --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
+```
+
+The tool opens a loopback-only browser UI; Ctrl+C stops the service.
+Use `--no-browser` to open its printed URL yourself. Footprints must resolve from
+explicit roots or pinned library assets; proxy inspection is opt-in only.
+
 A [50 mm circular LED-ring example](docs/round-led-ring.md) uses an offset nRF52832
 as a non-radio controller, twelve GPIO-controlled LEDs and a rear CR2032 holder.
 It exports a true KiCad circle and fixed radial placement, with profiling and an

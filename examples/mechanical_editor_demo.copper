@@ -1,0 +1,17 @@
+// Editor/geometry demonstration only, not a production circuit.
+board MechanicalEditorDemo {
+    use library "standard";
+    component R_ANCHOR: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R1: RESISTOR { value = 1kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R2: RESISTOR { value = 2kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component C1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    net SIGNAL { R_ANCHOR.1; R1.1; R2.1; C1.1; }
+    net GND { R_ANCHOR.2; R1.2; R2.2; C1.2; }
+    mechanical {
+        outline rectangle { width = 40mm; height = 30mm; }
+        cutout window polygon { vertices = [(27mm,18mm), (33mm,18mm), (33mm,23mm), (27mm,23mm)]; }
+        hole H1 { position = (3mm,3mm); diameter = 2.2mm; head_clearance_radius = 2mm; }
+    }
+    constraint fixed_placement(R_ANCHOR) { x = 7mm; y = 8mm; rotation = 0; side = front; }
+    constraint allowed_orientations(R1) { values = "0,45,90,135,180,225,270,315"; }
+}

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CopperScript mechanical editor</title><link rel="stylesheet" href="/editor.css"></head>
+<body>
+<header><h1>CopperScript <span>mechanical / floorplan preview</span></h1>
+<p id="notice">Source is read-only. Temporary changes are not saved.</p></header>
+<nav aria-label="Placement commands">
+<button id="auto">Preview rough auto-placement</button><button id="apply" disabled>Apply preview</button>
+<button id="discard" disabled>Discard preview</button><button id="undo">Undo</button><button id="redo">Redo</button>
+<button id="fit">Fit board</button><button id="zoom-in">Zoom +</button><button id="zoom-out">Zoom −</button>
+</nav>
+<main><aside>
+<h2>View</h2>
+<label><input id="airwires" type="checkbox" checked> Ratsnest</label>
+<label><input id="selected-only" type="checkbox"> Selected component nets only</label>
+<label><input id="zone-nets" type="checkbox"> Include zone nets (e.g. GND)</label>
+<label>Net <select id="net"><option value="">All nets</option></select></label>
+<label>Side <select id="side"><option value="both">Both, shared top-view coordinates</option><option value="front">Front</option><option value="back">Rear, unmirrored</option></select></label>
+<h2>Component</h2>
+<label>Reference <select id="reference"><option value="">Select a component</option></select></label>
+<p id="details">Click a footprint to inspect it.</p>
+<label>X (mm) <input id="x" type="number" step="0.1"></label>
+<label>Y (mm) <input id="y" type="number" step="0.1"></label>
+<label>Rotation (degrees) <input id="rotation" type="number" step="45"></label>
+<label>Placement side <select id="pose-side"><option value="front">Front</option><option value="back">Rear</option></select></label>
+<button id="move" disabled>Preview pose</button><button id="lock" disabled>Lock temporary pose</button>
+<label>Drag snap (mm) <input id="snap" type="number" min="0.001" value="0.1" step="0.1"></label>
+<p>Drag a movable footprint for a checked preview. Apply explicitly. Source locks remain read-only.</p>
+<h2>Scope</h2><p>Outline, cutouts and holes are visible. Mechanical authoring and source saving are not implemented yet. Ratsnest is a guide, not routing.</p>
+<details><summary>Footprint / source warnings</summary><pre id="warnings"></pre></details>
+</aside>
+<section id="viewport" aria-label="Board view"><svg id="board" role="img" aria-label="Mechanical board and placement preview"></svg></section>
+</main>
+<footer><output id="status" aria-live="polite">Loading scene…</output></footer>
+<script src="/editor.js"></script></body></html>

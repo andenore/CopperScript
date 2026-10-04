@@ -70,6 +70,18 @@ def _nonnegative_mm(value: str) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    editor = subparsers.add_parser("edit-mechanical", help="open a local mechanical/floorplan session preview (source read-only)")
+    editor.add_argument("board", type=Path)
+    _add_resolution_options(editor)
+    editor.add_argument("--footprint-root", action="append", default=[], type=Path)
+    editor.add_argument("--layers", type=int, choices=(2, 4, 6), default=2)
+    editor.add_argument("--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic")
+    editor.add_argument("--placement-templates", type=Path)
+    editor.add_argument("--hard-macro", action="append", default=[], type=Path)
+    editor.add_argument("--allow-proxy-footprints", action="store_true", help="explicit inspection-only proxy geometry")
+    editor.add_argument("--no-browser", action="store_true")
+    editor.add_argument("--port", type=int, default=0, help="loopback port; zero chooses an available port")
+    editor.add_argument("--scene-output", type=Path, help="write a derived scene and exit without serving")
     manufacturing = subparsers.add_parser("export-manufacturing", help="export native-DRC-clean KiCad manufacturing files without independent CAM qualification")
     manufacturing.add_argument("pcb", type=Path, help="final routed .kicad_pcb, with matching .kicad_pro")
     manufacturing.add_argument("--kicad-cli", type=Path, default=Path("kicad-cli"))
@@ -457,6 +469,44 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "edit-mechanical":
+        from .editor.session import EditorSession
+        from .editor.server import serve
+        from .hard_macros import apply_hard_macro_scene
+        try:
+            design = load_design(args.board, locked=args.locked, offline=args.offline)
+            diagnostics = check(design.electrical)
+            if has_errors(diagnostics):
+                for diagnostic in diagnostics:
+                    print(diagnostic)
+                return 1
+            options = PrototypePhysicalOptions(copper_layers=args.layers, fabrication_profile=args.fab_profile)
+            if args.allow_proxy_footprints:
+                physical = prototype_physicalize(design, options)
+            else:
+                resolver = FootprintResolver(base_directory=args.board.resolve().parent,
+                    search_roots=tuple(root.resolve() for root in args.footprint_root),
+                    locked=args.locked, offline=args.offline)
+                physical = resolved_physicalize(design, resolver, options)
+            if args.placement_templates:
+                physical = apply_placement_templates(physical, args.placement_templates,
+                    locked=args.locked, offline=args.offline)
+            for macro in args.hard_macro:
+                physical = apply_hard_macro_scene(physical, macro, locked=args.locked, offline=args.offline)
+            session = EditorSession(physical, args.board)
+            if args.scene_output:
+                if args.scene_output.resolve() == args.board.resolve():
+                    raise ValueError("scene output cannot overwrite the source board")
+                args.scene_output.parent.mkdir(parents=True, exist_ok=True)
+                with args.scene_output.open("x", encoding="utf-8") as stream:
+                    stream.write(json.dumps(session.scene(), indent=2, sort_keys=True) + "\n")
+                print(f"Derived editor scene -> {args.scene_output}; source unchanged")
+            else:
+                serve(session, port=args.port, open_browser=not args.no_browser)
+            return 0
+        except (BoardLoadError, ValueError, OSError) as exc:
+            print(f"MECHANICAL EDITOR ERROR: {exc}")
+            return 2
     if args.command == "export-manufacturing":
         from .manufacturing_files import export_manufacturing_files
         try:

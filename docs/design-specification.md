@@ -1082,3 +1082,16 @@ and rotation conventions without guessing supplier corrections. Firmware is
 not a manufacturing gate for assembled unprogrammed hardware. All generic
 export code belongs in CopperScript; reusable exact parts belong in libraries,
 and board-specific choices/build recipes remain in the board project.
+
+## CS-148 — Source-authoritative mechanical and floorplan editor (Accepted)
+
+CopperScript owns a reusable physical-intent editor; board projects own their
+`.copper` mechanics and constraints. Derived scenes and generated KiCad files
+are not new sources of truth. Rough automatic placement previews must preserve
+source/manual locks and rigid macros; applying a result must not freeze all
+components. Ratsnest uses explicit physical connectivity islands and remains a
+guide, not routing or filled-zone proof. Local UI operations use revision-bound,
+validated transactions. Source saves require comment-preserving targeted edits
+and conflict detection; until implemented, preview edits are explicitly unsaved.
+Electrical connectivity and schematic IR remain unchanged. See the
+[editor specification](mechanical-editor.md) and [delivery plan](mechanical-editor-plan.md).

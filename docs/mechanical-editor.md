@@ -1,0 +1,203 @@
+# Mechanical and floorplan editor specification
+
+Status: accepted contract; incremental implementation in CopperScript. See the
+[implementation checklist](mechanical-editor-plan.md) for actual delivery status.
+This is a physical-intent editor, not a schematic editor or another PCB router.
+
+## Ownership and user workflow
+
+The tool, reusable UI assets, CLI, scene protocol and tests belong in the
+CopperScript repository. Generic algorithms belong in `pcbir`; no example part,
+reference, path or board geometry may be encoded there. Libraries own reusable
+footprints and hard macros; board projects own their source and constraints.
+
+1. Open a board and resolve its pinned packages and actual footprints.
+2. Define its outline, cutouts, holes and mechanical clearances.
+3. Preview rough automatic placement and apply a chosen result.
+4. Enable ratsnest, adjust selected connectors/test points/components and lock
+   their intended poses. Use numeric dimensions as well as dragging.
+5. Place the remaining movable components while preserving fixed intent.
+6. Save reviewed source edits, rebuild, route, refill and run native DRC.
+
+Neither a useful preview nor a short ratsnest establishes routability, electrical
+function, impedance, assembly suitability or manufacturing qualification.
+Independent CAM qualification is not a prerequisite for editor use.
+
+## Authoritative data and persistence
+
+`.copper` remains authoritative. Geometry lives in `MechanicalDesign`, alongside
+electrical `Board` in `Design`; it never becomes schematic geometry or electrical
+connections. Existing physical-intent constraints lower to physical IR. The UI
+scene is a derived view, not a second netlist or authoritative floorplan.
+
+Saving changes updates the board's mechanical declarations and relevant physical
+constraints. Generated KiCad files, JSON scenes, view state and solver reports
+are outputs only. Do not rewrite imported library definitions. Hierarchical
+targets identify resolved instance paths and lower back to source-level targets.
+Rigid clusters/hard macros move as units; a user cannot detach their members or
+discard private copper by dragging a component.
+
+Source edits require complete syntax spans, document revision checks and a
+comment-preserving patch layer. Update owned existing declarations rather than
+adding competing constraints. Present conflicting/unowned declarations for
+resolution; declaration order must not decide which constraint wins. Validate
+the prospective complete design before an atomic save, preserving file encoding
+and line endings. Source undo/redo must use the same edit transactions.
+
+Automatic placement is a preview, with explicit apply/discard. Applying poses
+does NOT create fixed constraints for every component. Movable poses are session
+seeds. Only deliberate locks are persistent design intent. Reopening a board
+may regenerate movable poses; exact reproducible poses require explicit locks
+or a separately specified future seed mechanism, not a hidden source of truth.
+
+## Mechanical editing
+
+The initial geometry palette uses supported circles, rectangles, simple polygons,
+polygonal cutouts and named round NPTH holes. Holes expose finished diameter and
+optional screw-head placement clearance. Distinguish substrate voids, placement
+keepouts and copper keepouts; creating one must not silently create the others.
+Plated/net-connected holes remain component pads, not unconnected NPTH features.
+
+Later increments add named datums, dimension/edge-relative attachment, rounded
+corners, exact arcs and routed slots. Each requires language/IR, legality, export
+and regression coverage before enabling its editing controls. References to
+arbitrary edges must be stable IDs, not unstable polygon vertex indices.
+Explicit connector-body overhang must be separate from copper-to-edge legality.
+Enclosure/DXF overlays are reference data with explicit units/transforms and
+asset identities; never silently heal a drawing into manufacturing geometry.
+Full enclosure solid modelling, panels and general MCAD constraints are deferred.
+
+## Component editing and placement
+
+Render actual pads, courtyards, conservative body envelopes, mechanical holes,
+regions, keepouts and footprint provenance. Front and rear share authoritative
+board coordinates; a mirrored rear view is presentation only. Include hierarchy,
+reference search, zoom/fit, measurement, grid snapping and exact numeric editing.
+Footprint origins and pad anchors must be labelled rather than confused with
+component body centroids.
+
+Support position-only, rotation-only and full-pose locks, side choice, placement
+regions, alignment and allowed angles, including explicitly allowed 45-degree
+increments. Honour existing source constraints and macro ownership. Explicit
+editing of a source lock requires a reviewed source transaction; an ordinary
+auto-placement or drag must not bypass it. Session locks must be visibly distinct
+from source locks and must not be described as saved before source persistence.
+
+Initial auto-placement reuses the existing connectivity-aware estimator,
+legalizer and refinement engine. 'Place remaining' retains manual/source locks,
+regions, allowed orientations, fixed sides and rigid geometry. Candidate
+selection is deterministic; preview is cancellable and cannot mutate accepted
+state on failure. Interactive hints may be approximate, but apply/save checks
+use the existing authoritative placement/material predicates. Validation reports
+must explain the reference and rule involved, not merely say 'illegal'.
+
+## Ratsnest
+
+Offer global, selected-component and selected-net views; power/GND and side
+filters reduce clutter without changing connectivity. Recompute as components
+move or rotate, including nearest physical lands on repeated terminal numbers.
+
+Build a deterministic Euclidean minimum spanning tree between explicit physical
+connectivity islands. Edge weights use the nearest pad-centre pair between islands,
+not component centres. Use shared copper-contact roots: repeated pad numbers alone
+do not imply an internal conductive connection; declared internal pad groups do.
+Already connected explicit macro/track/via copper joins islands. Zone outlines do
+not. Initial endpoints are pads; arbitrary free-track/via endpoints and verified
+native-filled islands are later extensions. Therefore a pad-anchored tree is a
+guide, not the minimum physical route or a copper continuity certificate.
+
+Distinguish electrical guides from routed copper. A routed-board overlay must
+identify the exact board revision; stale copper is visibly stale and cannot hide
+new airwires. Filter state changes only presentation, never compilation/ERC.
+
+## Architecture and local security
+
+Start with a dependency-free Python local service and bundled HTML/CSS/JavaScript
+SVG UI. Keep transport, scene, session operations and source editing separate.
+The UI can later be hosted by a VS Code webview/custom text editor using the same
+scene/operation contract and the editor's document/undo services.
+
+Bind only `127.0.0.1`, default to an ephemeral port, check Host and Origin, require
+a random per-session capability header for every API request and reject cross-
+origin requests. No CORS, arbitrary filesystem endpoint, shell endpoint or remote
+UI/CDN resources. Send the token in the launch URL fragment, not query strings or
+server access logs. Require bounded JSON bodies, explicit operation fields and
+revision checks; serialize mutations. Asset/package resolution respects explicit
+locked/offline options and search roots. A preview must not fetch new dependencies.
+
+The scene contract carries integer nanometre geometry, decimal-angle strings,
+source revision, session revision, source/session lock status, footprint warnings,
+macro ownership and truthful feature capabilities. Convert to millimetres only
+for presentation. Derived scene fingerprints are not manufacturing signoff.
+
+Undo/redo is bounded. A new successful edit discards redo, whereas previewing or
+rejecting a candidate leaves history intact. Successful mutations invalidate
+older pending previews. Future async jobs are bound to revisions and cancelled
+or discarded when their input changes; stale results cannot apply.
+
+## Verification and first delivery scope
+
+Test front/rear and 45-degree transforms, hole/cutout rendering, deterministic
+ratsnest, physically separate duplicate lands, declared internal connections,
+explicit copper reuse, source/session lock retention, undo/redo, failed/stale
+transaction rollback, HTTP origin/host/token/body validation and wheel assets.
+Browser verification must exercise auto-place preview/apply and ratsnest filters,
+not just load a screenshot. Later test source round-trips, conflicting constraints,
+mechanical legality and routing/fill invalidation end-to-end.
+
+First delivery: read-only source, mechanical/footprint view, ratsnest filters,
+rough auto-place preview/apply, legal in-session whole-unit pose previews,
+temporary full-pose locks and undo/redo. It must explicitly say that edits are
+not saved, provide no misleading save control and leave source bytes unchanged.
+Mechanical authoring, persistent/partial locks, source-selection links, copper
+overlays, measurements, datums, slots and VS Code hosting remain checklist work.
+
+CLI contract: `copper edit-mechanical board.copper --footprint-root <root>`.
+`--locked --offline`, physical layer/profile settings, explicit templates/macros,
+`--no-browser` and a scene JSON export support reproducible/headless inspection.
+
+## First preview delivery: use and limitations
+
+The launch command is now implemented. From the CopperScript checkout:
+
+```powershell
+uv run copper edit-mechanical examples/mechanical_editor_demo.copper --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
+# Compile a real project's locked scene without starting a service:
+uv run copper edit-mechanical ../CopperLedRing/board.copper --locked --offline --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints" --scene-output build/led-ring-scene.json
+```
+
+Linux: use your installed footprint root, commonly `/usr/share/kicad/footprints`.
+The first command launches the local UI. Keep the terminal alive; Ctrl+C stops
+it. `--no-browser` prints a private loopback launch URL for manual opening.
+Scene export refuses existing files and cannot overwrite source. `--layers`,
+`--fab-profile`, `--placement-templates` and repeatable `--hard-macro` mirror the
+existing physical pipeline. `--allow-proxy-footprints` is labelled inspection-only.
+
+Click 'Preview rough auto-placement', inspect, then apply/discard. Select an
+unlocked component, drag or enter numeric X/Y/angle/side, inspect its checked
+preview and apply explicitly. Temporary locking preserves that pose during
+subsequent placement. Source locks cannot be edited/unlocked in this increment.
+The demo's R1 allows 45-degree rotations; other demo parts retain their normal
+angle constraints. Nets/side/selected-component toggles filter ratsnest display.
+
+Live drag shifts pad-anchored airwire geometry; the authoritative island graph
+and nearest-pad MST are recomputed on release, not continuously during a drag.
+Rear view currently uses shared unmirrored coordinates, not a mirrored display.
+Footprint bodies are conservative envelopes; pads/courtyards use imported geometry.
+Unplaced/illegal macros produce an explicit warning and receive no private-copper
+connectivity credit until their pose can materialize legally. Copper overlays,
+copper-keepout rendering, measurements and detailed per-rule rejection diagnostics
+remain future work; the first pose gate uses complete-board legality.
+
+Session state is in memory only. Closing/restarting loses temporary poses/locks;
+no action writes the `.copper` source or saves a derived second floorplan. There
+is no mechanical drawing tool or save button yet. Source file changes disable
+mutations until restart. Dependencies/asset changes during a running preview
+are not monitored yet; restart after changing them. Placement runs are synchronous
+and serialized in this increment, without a cancellation/progress UI.
+
+Regression tests: `uv run --extra test pytest tests/test_mechanical_editor.py`.
+Optional browser smoke: with Node, Playwright and a Chromium browser installed,
+run `node tests/browser/mechanical-editor.cjs <private-local-demo-URL>` against
+the demo session. `COPPER_PLAYWRIGHT_MODULE` and `COPPER_BROWSER_EXECUTABLE` may
+point to explicitly installed test tools. These are not runtime dependencies.

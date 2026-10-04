@@ -26,7 +26,10 @@ tiny = "copperscript.library_data:tiny_library"
 standard = "copperscript.library_data:tiny_library"
 
 [tool.setuptools]
-packages = ["copperscript", "pcbir", "pcbir.backends", "pcbir.importers", "pcbir.simulation"]
+packages = ["copperscript", "pcbir", "pcbir.backends", "pcbir.importers", "pcbir.simulation", "pcbir.editor", "pcbir.editor.assets"]
+
+[tool.setuptools.package-data]
+"pcbir.editor.assets" = ["*.html", "*.css", "*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
