@@ -73,4 +73,9 @@ escape hatch, with their provenance and locked-mode limits visible.
 - Linux CI passed the footprint/symlink checks and found one stale aggregate
   Make test: 14 examples were registered but its assertion expected 13. The
   test now checks every registered positive example, so additions do not
-  invalidate an unrelated hard-coded count. Final Linux confirmation follows.
+  invalidate an unrelated hard-coded count. Its Linux CI rerun was dispatched.
+- Rebased over exact mechanical paths/slots (`4873543`); integration checks:
+  **248 passed, 13 optional skips**, covering footprints, CLI, packages, rigid
+  macros, mechanical curves/anchors/assembly, routing policy and build helpers.
+- Implementation and integration are complete. The guide and example are ready;
+  asynchronous Linux CI confirms the pushed Make registration assertion.
