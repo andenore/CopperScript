@@ -1,7 +1,7 @@
 # Raspberry Pi Compute Module 4 baseboard
 
 A real CM4 connector/mounting-pattern example using importable mechanical
-profiles, not a fictional host. **This is an unrouted carrier prototype, not an
+profiles, not a fictional host. **This is a routed carrier prototype, not an
 order-ready PCB.** The installed CM4 must have eMMC with its OS already flashed
 using a CM4IO or another USB-capable carrier. CM4 Lite and CM5 are not supported
 by this example. No firmware is supplied.
@@ -78,6 +78,38 @@ It intentionally does not call this a release/manufacturing build.
 After the initial dependency download, add `--offline` to CLI commands for
 cached builds; the full KiCad footprint library still needs to be installed.
 
+### Complete routing and ground fill
+
+From the repository root (Windows, KiCad 10 installed):
+
+```powershell
+uv run --no-sync python scripts/route_cm4.py
+```
+
+The script fetches the pinned CopperLib package if needed, runs package escape
+and detailed routing with profiling enabled, then **saves the ground fills**
+and runs native KiCad DRC on that exact output board. No rule relaxation or
+via-in-pad permission is added. Default outputs go in a timestamped directory
+under ignored `build/cm4-baseboard/`; open its `board.kicad_pcb` in KiCad.
+`route-report.json`, `kicad-drc.json`, logs, input/output hashes and performance
+reports are retained together. Success requires zero native violations and
+zero unconnected items; a failed build returns nonzero and retains diagnostics.
+
+For Linux/macOS or another KiCad installation, supply paths explicitly:
+
+```sh
+uv run --no-sync python scripts/route_cm4.py \
+  --kicad-cli /usr/bin/kicad-cli \
+  --kicad-footprints /usr/share/kicad/footprints
+# Or from this example directory:
+make route KICAD_CLI=/usr/bin/kicad-cli KICAD_FOOTPRINTS=/usr/share/kicad/footprints
+```
+
+Add `--offline` after the first dependency download. `--output-dir` selects a
+new/empty directory below the repository's `build/`; `make route` defaults to
+`build/cm4-baseboard/routed`, so choose another `ROUTE_OUT` for repeat runs.
+Function profiling can be disabled with `--profile none` for timing comparisons.
+
 ## Header wiring
 
 | Header | Pins in footprint-number order |
@@ -108,11 +140,19 @@ reserved pins. Sockets expose passive signal contacts; this is **not** a full
 active CM4 peripheral/mux/power-state model. Electrical sequencing, backfeed,
 timing, loading and firmware assignments still need review.
 
-Current placement verification: legal placement; native KiCad reports zero
-physical DRC violations, **76 unconnected items**. No copper has been routed or
-zones filled. Therefore no Gerbers/assembly release or production-ready claim
-is made. Next steps are package escapes, power routing/current review, ground
-connections/fill, signal routing, native KiCad DRC and manufacturing export.
+Routing verified with KiCad 10.0.6: **all 11 ordinary nets routed**, GND connected
+through escapes and filled In1.Cu/B.Cu zones, **zero unconnected items and zero
+native DRC violations**. A separate copper-layer audit found zero via/pad
+overlaps and only horizontal, vertical or 45-degree segments. In2.Cu carries
+most signal length; In1.Cu is the ground reference. Some 90-degree joins remain,
+so this is a connectivity/DRC-verified prototype, not an optimized reference
+layout. The pre-fill IR-only checker still reports GND open because it does not
+model filled zone copper; native filled-board evidence closes that check.
+
+No Gerbers/assembly release or production-ready claim is made. Power traces
+currently use the prototype minimum width: power routing/current sharing,
+thermal performance and protection require review before powering hardware.
+Manufacturing export remains a separate step.
 The pin headers also need exact orderable selections before assembly ordering.
 USB recovery, SD/Lite support, Ethernet, HDMI, camera, display and PCIe are
 deliberately absent rather than partially connected.

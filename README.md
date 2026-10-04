@@ -54,9 +54,15 @@ uv run copper edit-mechanical examples/mechanical_profile_project/board.copper -
 For a real host pattern, see the [CM4 baseboard example](examples/cm4_baseboard/README.md).
 It binds two real Hirose 100-pin sockets to a CopperLib mounting profile with
 four holes, separates project-owned mechanics from connections, and reserves
-module/antenna clearance. It includes a minimal Makefile and editor/placement
-commands. This four-layer eMMC carrier is an **unrouted prototype**, not an
-order-ready board; no manual CopperLib checkout is required.
+module/antenna clearance. It includes a minimal Makefile, editor/placement
+commands and a profiled routing workflow that saves ground fills and verifies
+zero opens/violations with native KiCad. This four-layer eMMC carrier is a
+**routed prototype**, not an order-ready board; no manual CopperLib checkout
+is required.
+
+```powershell
+uv run --no-sync python scripts/route_cm4.py
+```
 
 A [50 mm circular LED-ring example](docs/round-led-ring.md) uses an offset nRF52832
 as a non-radio controller, twelve GPIO-controlled LEDs and a rear CR2032 holder.
