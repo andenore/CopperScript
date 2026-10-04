@@ -1,3 +1,5 @@
 module github.com/andenore/CopperScript/examples/cm4_baseboard
 
-require github.com/andenore/CopperLib 0d667217d2a6755b61f3725d87dc2f26ab857c05
+require github.com/andenore/CopperLib bcc158d
+
+footprint-library KENTO github.com/andenore/CopperLib/packages/parts/kento/kt0603r/footprints

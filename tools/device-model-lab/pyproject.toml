@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "copperscript-device-model-lab"
+version = "0.1.0"
+description = "Evidence-backed device-model compatibility lab for CopperScript"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7.4"]
+upstream = ["copperscript @ git+https://github.com/andenore/CopperScript.git@87062923657a1f1aef4b9ba87146d8119318f8ea"]
+
+[project.scripts]
+copperscript-stm32g0 = "copperscript_stm32g0.cli:main"
+
+[tool.setuptools]
+packages = ["copperscript_stm32g0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

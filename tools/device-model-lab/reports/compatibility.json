@@ -1,0 +1,315 @@
+{
+  "cases": [
+    {
+      "concepts": [
+        {
+          "classification": "represented",
+          "id": "closed_part_kind",
+          "note": "MCU maps to the existing mcu kind."
+        },
+        {
+          "classification": "lossy",
+          "id": "analog_direction_semantics",
+          "note": "ANALOG capability exists, but mixed digital/analog pin semantics are not typed."
+        },
+        {
+          "classification": "represented",
+          "id": "differential_pair_grouping",
+          "note": "No differential pin group is required in this bounded slice."
+        },
+        {
+          "classification": "represented",
+          "id": "repeated_functional_units",
+          "note": "No repeated subunit is selected in this bounded slice."
+        },
+        {
+          "classification": "lossy",
+          "id": "shared_power_pins",
+          "note": "Repeated VDD/decoupling relationships are not modeled as package power topology."
+        },
+        {
+          "classification": "expansion-risk",
+          "id": "wildcard_pin_routing",
+          "note": "PSEL routing is parametric rather than an enumerated mux table; risk metric is 48 GPIO candidates per routable signal.",
+          "risk_metric": "48 GPIO candidates per routable signal"
+        },
+        {
+          "classification": "lossy",
+          "id": "high_speed_interface_semantics",
+          "note": "USB/NFC/RF fixed functions cannot carry their electrical/interface semantics in the current pin model."
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "no_connect_exposed_pad_rules",
+          "note": "Package-specific fixed-function and connection recommendations lack a rule representation."
+        },
+        {
+          "classification": "lossy",
+          "id": "voltage_current_range_metadata",
+          "note": "Voltage fields exist on pads, but supply/current/range metadata is not modeled at this scope."
+        },
+        {
+          "classification": "expansion-risk",
+          "id": "multi_interface_kinds",
+          "note": "The current compiler's high-level interface model is not a general Nordic peripheral interface schema."
+        }
+      ],
+      "fact_count": 9,
+      "fixture": "explicit-non-representable",
+      "id": "nrf52840-qiaa",
+      "orderable_part": "nRF52840-QIAA",
+      "package": "aQFN73",
+      "production_publishable": false,
+      "scope": "aQFN73 balls A8/A12/A18/A22/AD4/AD6 and flexible PSEL routing",
+      "source_count": 3,
+      "sources": [
+        {
+          "document": "nRF52840 Product Specification",
+          "id": "nordic-ps-pin",
+          "locator": "aQFN73 ball assignments, Table 1",
+          "revision": "latest HTML; revision history v1.11",
+          "url": "https://docs.nordicsemi.com/r/bundle/ps_nrf52840/page/pin.html"
+        },
+        {
+          "document": "nRF52840 Product Specification",
+          "id": "nordic-ps-order",
+          "locator": "Package variant codes, Table 2; QIAA aQFN73",
+          "revision": "latest HTML; revision history v1.11",
+          "url": "https://docs.nordicsemi.com/r/bundle/ps_nrf52840/page/ordering_info.html"
+        },
+        {
+          "document": "nRF52840 Product Specification revision history",
+          "id": "nordic-ps-rev",
+          "locator": "revision history",
+          "revision": "v1.11",
+          "url": "https://docs.nordicsemi.com/r/bundle/ps_nrf52840/page/rev_history.html"
+        }
+      ],
+      "validation_errors": [],
+      "vendor": "Nordic Semiconductor"
+    },
+    {
+      "concepts": [
+        {
+          "classification": "lossy",
+          "id": "closed_part_kind",
+          "note": "MCU is the nearest kind, but FX10 is a USB/high-bandwidth controller with distinct semantics."
+        },
+        {
+          "classification": "represented",
+          "id": "analog_direction_semantics",
+          "note": "No analog pin is selected in this bounded slice."
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "differential_pair_grouping",
+          "note": "Positive/negative LVDS identities and pair association are absent from pads and mux rows."
+        },
+        {
+          "classification": "expansion-risk",
+          "id": "repeated_functional_units",
+          "note": "Seven SCBs and repeated port structures require subunit identity; bounded mode variants already multiply rows."
+        },
+        {
+          "classification": "lossy",
+          "id": "shared_power_pins",
+          "note": "VDDIO domain association can be approximated, but mode-dependent supply constraints are not modeled."
+        },
+        {
+          "classification": "expansion-risk",
+          "id": "wildcard_pin_routing",
+          "note": "Shared IO matrix and mode-dependent names cannot be represented without enumerating combinations; two electrical modes occur per selected data signal.",
+          "risk_metric": "2 named modes per selected high-bandwidth signal"
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "high_speed_interface_semantics",
+          "note": "USB HS/USB 3.2/LVDS electrical interface classes exceed the current signal type model."
+        },
+        {
+          "classification": "lossy",
+          "id": "no_connect_exposed_pad_rules",
+          "note": "No bounded DNC/EP fact selected, but package rules are not first-class."
+        },
+        {
+          "classification": "lossy",
+          "id": "voltage_current_range_metadata",
+          "note": "Supply domains exist in source facts, while current and mode-specific electrical ranges do not fit the bundle."
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "multi_interface_kinds",
+          "note": "I2C/UART/SPI/CAN/I2S/USB and GPIF are not represented as typed CopperScript interfaces."
+        }
+      ],
+      "fact_count": 7,
+      "fixture": "explicit-non-representable",
+      "id": "cyusb4014-fcaxi",
+      "orderable_part": "CYUSB4014-FCAXI",
+      "package": "169-ball FBGA",
+      "production_publishable": false,
+      "scope": "P0D7P/P0D7N and P0D6P/P0D6N LVDS pairs with LVCMOS aliases, plus P4.3, USB and VDDIO_P0 concepts",
+      "source_count": 1,
+      "sources": [
+        {
+          "document": "CYUSB401x EZ-USB FX10 USB 10 Gbps peripheral controller datasheet",
+          "id": "infineon-fx10-ds",
+          "locator": "package information p. 2; pin definitions Table 9 p. 31 and Table 11 pp. 35-36; ordering information p. 82",
+          "revision": "002-40837 Rev. *C, 2026-03-10",
+          "url": "https://www.infineon.com/dgdl/Infineon-CYUSB401x_EZ-USB_FX10_USB_10_Gbps_peripheral_controller-DataSheet-v02_00-EN.pdf?fileId=8ac78c8c956a0a4701959618c62d4947"
+        }
+      ],
+      "validation_errors": [],
+      "vendor": "Infineon/Cypress"
+    },
+    {
+      "concepts": [
+        {
+          "classification": "unrepresentable",
+          "id": "closed_part_kind",
+          "note": "No ADC/data-converter PartKind exists; generic would discard the device class."
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "analog_direction_semantics",
+          "note": "AI/AO/DI/O and analog channel semantics do not map to the current typed peripheral/pin model."
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "differential_pair_grouping",
+          "note": "AINx+ and AINx\u2212 polarity and channel grouping have no representation."
+        },
+        {
+          "classification": "expansion-risk",
+          "id": "repeated_functional_units",
+          "note": "Four ADC channels and multiple DOUT outputs need repeated subunits; 4 channels \u00d7 2 polarities is the bounded endpoint count.",
+          "risk_metric": "4 channels \u00d7 2 polarities = 8 analog endpoints"
+        },
+        {
+          "classification": "lossy",
+          "id": "shared_power_pins",
+          "note": "Multiple analog/digital/clock rails can be listed, but internal LDO and ground relationships are not modeled."
+        },
+        {
+          "classification": "expansion-risk",
+          "id": "wildcard_pin_routing",
+          "note": "SPI versus pin-control and serialized versus parallel output modes are configuration-dependent."
+        },
+        {
+          "classification": "lossy",
+          "id": "high_speed_interface_semantics",
+          "note": "48 MHz clock and high-rate data timing are outside the current interface model."
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "no_connect_exposed_pad_rules",
+          "note": "DNC pin and exposed-pad grounding rules are not first-class package constraints."
+        },
+        {
+          "classification": "lossy",
+          "id": "voltage_current_range_metadata",
+          "note": "Multiple exact rail ranges are documented, but bundle metadata has no complete per-device supply/range schema."
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "multi_interface_kinds",
+          "note": "SPI, pin-control, DOUT and clock/control interfaces exceed the current I2C-centered interface model."
+        }
+      ],
+      "fact_count": 8,
+      "fixture": "explicit-non-representable",
+      "id": "ad4134bcpz",
+      "orderable_part": "AD4134BCPZ",
+      "package": "56-lead LFCSP with EP",
+      "production_publishable": false,
+      "scope": "AIN0-3 differential pairs, reference pins, supplies, clocks, SPI/pin-control and DOUT concepts",
+      "source_count": 1,
+      "sources": [
+        {
+          "document": "AD4134 datasheet",
+          "id": "adi-ad4134-ds",
+          "locator": "Table 8, Pin Function Descriptions, pp. 14-16; ordering guide p. 92; SPI/data interface pp. 52, 62-64",
+          "revision": "Rev. 0, 2021",
+          "url": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad4134.pdf"
+        }
+      ],
+      "validation_errors": [],
+      "vendor": "Analog Devices"
+    },
+    {
+      "concepts": [
+        {
+          "classification": "unrepresentable",
+          "id": "closed_part_kind",
+          "note": "No operational-amplifier PartKind exists."
+        },
+        {
+          "classification": "lossy",
+          "id": "analog_direction_semantics",
+          "note": "Current input/output types do not express analog voltage semantics."
+        },
+        {
+          "classification": "expansion-risk",
+          "id": "differential_pair_grouping",
+          "note": "Each amplifier has a +IN/\u2212IN pair, but the pair-to-unit relationship is not modeled."
+        },
+        {
+          "classification": "unrepresentable",
+          "id": "repeated_functional_units",
+          "note": "OPA2197 units A and B require repeated subunits; current parts have one flat pin namespace."
+        },
+        {
+          "classification": "lossy",
+          "id": "shared_power_pins",
+          "note": "Shared V+ and V\u2212 pins cannot be associated with both functional units."
+        },
+        {
+          "classification": "represented",
+          "id": "wildcard_pin_routing",
+          "note": "No configurable pin routing is selected in this fixed-function package."
+        },
+        {
+          "classification": "represented",
+          "id": "high_speed_interface_semantics",
+          "note": "No high-speed digital interface is selected in this bounded slice."
+        },
+        {
+          "classification": "represented",
+          "id": "no_connect_exposed_pad_rules",
+          "note": "No DNC or exposed-pad rule is selected in the OPA2197 SOIC-8 slice."
+        },
+        {
+          "classification": "lossy",
+          "id": "voltage_current_range_metadata",
+          "note": "Supply range is documented, but current model lacks complete device-level range metadata."
+        },
+        {
+          "classification": "represented",
+          "id": "multi_interface_kinds",
+          "note": "No digital interface is selected in this bounded slice."
+        }
+      ],
+      "fact_count": 7,
+      "fixture": "explicit-non-representable",
+      "id": "opa2197id",
+      "orderable_part": "OPA2197ID",
+      "package": "SOIC-8 (D)",
+      "production_publishable": false,
+      "scope": "two amplifier units, shared V+/V\u2212 pins, analog input/output direction and supply range",
+      "source_count": 1,
+      "sources": [
+        {
+          "document": "OPAx197 36-V Precision Rail-to-Rail Input/Output Low Offset Voltage Operational Amplifiers datasheet",
+          "id": "ti-opa2197-ds",
+          "locator": "Pin Configuration and Functions pp. 2-3; Recommended Operating Conditions p. 5; package addendum pp. 34, 38-39",
+          "revision": "SBOS737C, revised March 2018",
+          "url": "https://www.ti.com/lit/ds/symlink/opa2197.pdf"
+        }
+      ],
+      "validation_errors": [],
+      "vendor": "Texas Instruments"
+    }
+  ],
+  "copperscript_revision": "ee63d69",
+  "schema": "copperscript-device-model-compatibility/v0.1"
+}

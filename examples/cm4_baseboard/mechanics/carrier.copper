@@ -1,6 +1,6 @@
 // Project owns its outline and antenna cutout; CopperLib owns the host pattern.
 board_profile CM4Carrier {
-    import cm4 "github.com/andenore/CopperLib/packages/raspberry_pi_cm4";
+    import cm4 "github.com/andenore/CopperLib/packages/profiles/raspberry_pi/cm4";
     use cm4.CM4Mounting as module { gpio = gpio; high_speed = high_speed; }
     outline rectangle { width = 70mm; height = 70mm; }
     rules { minimum_track_width = 0.15mm; minimum_clearance = 0.15mm; }

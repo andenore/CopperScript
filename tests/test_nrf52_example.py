@@ -38,7 +38,7 @@ def test_coin_cell_example_is_electrically_complete_and_uses_real_macro_roles():
     all_endpoints = set().union(*(endpoints(board, net.name) for net in board.nets))
     assert not {("U_NRF", "DCC"), ("U_NRF", "DEC2"), ("U_NRF", "NC_44"),
                 ("ANT_BT", "NC"), ("J_SWD", "NC_8")} & all_endpoints
-    assert {pin.name: pin.number for pin in board.library["demo.REFERENCE_LED_0603"].pins.values()} == {"K": "1", "A": "2"}
+    assert {pin.name: pin.number for pin in board.library["nrf52_support.REFERENCE_LED_0603"].pins.values()} == {"K": "1", "A": "2"}
 
 
 def test_battery_presence_is_explicit_not_inferred_from_passive_holder():

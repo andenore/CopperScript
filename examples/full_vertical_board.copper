@@ -3,33 +3,50 @@
 // remain subject to schematic/layout review before fabrication.
 board FullVerticalTracker {
     use library "tiny";
-    import vertical "github.com/andenore/CopperLib/packages/full_vertical";
+    import gct_usb "github.com/andenore/CopperLib/packages/parts/gct/usb4135";
+    import tusb "github.com/andenore/CopperLib/packages/parts/ti/tusb320lai";
+    import st_mcu "github.com/andenore/CopperLib/packages/parts/st/stm32g0c1";
+    import ti_can "github.com/andenore/CopperLib/packages/parts/ti/tcan334g";
+    import quectel "github.com/andenore/CopperLib/packages/parts/quectel/eg800g-eu";
+    import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
+    import st_accel "github.com/andenore/CopperLib/packages/parts/st/lis2dw12";
+    import ublox "github.com/andenore/CopperLib/packages/parts/u-blox/max-m10s";
+    import coilcraft "github.com/andenore/CopperLib/packages/parts/coilcraft/0603usb";
+    import gct_sim "github.com/andenore/CopperLib/packages/parts/gct/sim8060";
+    import johanson "github.com/andenore/CopperLib/packages/parts/johanson/2450at18a0100001e";
+    import generic_can "github.com/andenore/CopperLib/packages/generic/can-connector";
+    import generic_ufl "github.com/andenore/CopperLib/packages/generic/u-fl-connector";
+    import generic_debug "github.com/andenore/CopperLib/packages/generic/debug-uart-header";
+    import generic_switch "github.com/andenore/CopperLib/packages/generic/switch-button";
+    import generic_led "github.com/andenore/CopperLib/packages/generic/led-0603";
+    import swd "github.com/andenore/CopperLib/packages/interfaces/arm/swd-10pin";
+    import vertical_support "github.com/copperscript/examples/vertical_support";
 
-    component J_POWER: vertical.GCT_USB4135_GF_A;
-    component U_CC: vertical.TUSB320LAI;
-    module PWR: vertical.FullVerticalPowerTree;
+    component J_POWER: gct_usb.GCT_USB4135_GF_A;
+    component U_CC: tusb.TUSB320LAI;
+    module PWR: vertical_support.FullVerticalPowerTree;
 
-    component U_MCU: vertical.STM32G0C1RET6;
-    component U_CAN: vertical.TCAN334G;
-    component U_MODEM: vertical.EG800G_EU;
-    component U_MODEM_LEVEL: vertical.DUAL_UART_LEVEL_SHIFTER;
-    component U_MODEM_KEY: vertical.OPEN_DRAIN_DRIVER;
-    component U_NRF: vertical.NRF52832_QFAA;
-    component U_ACCEL: vertical.LIS2DW12;
-    component U_GNSS: vertical.MAX_M10S_00B;
-    component FL_USB: vertical.COILCRAFT_0603USB_601MLC;
+    component U_MCU: st_mcu.STM32G0C1RET6;
+    component U_CAN: ti_can.TCAN334G;
+    component U_MODEM: quectel.EG800G_EU;
+    component U_MODEM_LEVEL: vertical_support.DUAL_UART_LEVEL_SHIFTER;
+    component U_MODEM_KEY: vertical_support.OPEN_DRAIN_DRIVER;
+    component U_NRF: nordic.NRF52832_QFAA;
+    component U_ACCEL: st_accel.LIS2DW12;
+    component U_GNSS: ublox.MAX_M10S_00B;
+    component FL_USB: coilcraft.COILCRAFT_0603USB_601MLC;
 
-    component J_CAN: vertical.CAN_CONNECTOR;
-    component J_CELL: vertical.RF_CONNECTOR;
-    component J_GNSS: vertical.RF_CONNECTOR;
-    component J_SIM: vertical.SIM8060_6_0_14_00_A;
-    component J_DEBUG: vertical.DEBUG_UART_HEADER;
-    component J_SWD_MCU: vertical.SWD_HEADER;
-    component J_SWD_NRF: vertical.SWD_HEADER;
-    component ANT_BT: vertical.JOHANSON_2450AT18A0100001E;
-    component SW_USER: vertical.BUTTON;
-    component LED_1: vertical.LED;
-    component LED_2: vertical.LED;
+    component J_CAN: generic_can.CAN_CONNECTOR;
+    component J_CELL: generic_ufl.RF_CONNECTOR;
+    component J_GNSS: generic_ufl.RF_CONNECTOR;
+    component J_SIM: gct_sim.SIM8060_6_0_14_00_A;
+    component J_DEBUG: generic_debug.DEBUG_UART_HEADER;
+    component J_SWD_MCU: swd.SWD_HEADER;
+    component J_SWD_NRF: swd.SWD_HEADER;
+    component ANT_BT: johanson.JOHANSON_2450AT18A0100001E;
+    component SW_USER: generic_switch.BUTTON;
+    component LED_1: generic_led.LED;
+    component LED_2: generic_led.LED;
 
     component R_I2C_SDA: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_I2C_SCL: RESISTOR { value = 4.7kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }

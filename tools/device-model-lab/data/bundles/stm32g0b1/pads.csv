@@ -1,0 +1,5 @@
+name,domains,directions,drive_modes,traits,power_domain,unpowered,voltage_min,voltage_max
+PA0,digital,input|output,push_pull,,,,,
+PA1,digital,input|output,push_pull,,,,,
+PC0,digital,input|output,push_pull,,,,,
+PC1,digital,input|output,push_pull,,,,,

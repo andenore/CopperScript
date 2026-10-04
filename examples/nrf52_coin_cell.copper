@@ -2,18 +2,22 @@
 // Not production-qualified. See docs/nrf52-coin-cell.md for hardware/FW limits.
 board Nrf52CoinCell {
     use library "tiny";
-    import vertical "github.com/andenore/CopperLib/packages/full_vertical";
-    import demo "github.com/andenore/CopperLib/packages/nrf52_demo";
+    import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
+    import johanson "github.com/andenore/CopperLib/packages/parts/johanson/2450at18a0100001e";
+    import keystone "github.com/andenore/CopperLib/packages/parts/keystone/3034";
+    import swd "github.com/andenore/CopperLib/packages/interfaces/arm/swd-10pin";
+    import generic_switch "github.com/andenore/CopperLib/packages/generic/switch-button";
+    import nrf52_support "github.com/copperscript/examples/nrf52_support";
 
-    component U_NRF: vertical.NRF52832_QFAA;
-    component ANT_BT: vertical.JOHANSON_2450AT18A0100001E;
-    component BT1: demo.KEYSTONE_3034;
-    component J_SWD: vertical.SWD_HEADER;
-    component LED_1: demo.REFERENCE_LED_0603;
-    component LED_2: demo.REFERENCE_LED_0603;
-    component SW_1: vertical.BUTTON;
-    component SW_2: vertical.BUTTON;
-    component X1: demo.REFERENCE_XTAL_2016 { value = 32MHz; }
+    component U_NRF: nordic.NRF52832_QFAA;
+    component ANT_BT: johanson.JOHANSON_2450AT18A0100001E;
+    component BT1: keystone.KEYSTONE_3034;
+    component J_SWD: swd.SWD_HEADER;
+    component LED_1: nrf52_support.REFERENCE_LED_0603;
+    component LED_2: nrf52_support.REFERENCE_LED_0603;
+    component SW_1: generic_switch.BUTTON;
+    component SW_2: generic_switch.BUTTON;
+    component X1: nrf52_support.REFERENCE_XTAL_2016 { value = 32MHz; }
 
     // RF component values/geometry are the existing experimental hard macro.
     component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }

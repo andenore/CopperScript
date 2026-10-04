@@ -1,0 +1,8 @@
+{
+  "case_id": "nrf52840-qiaa",
+  "sources": [
+    {"id":"nordic-ps-pin","document":"nRF52840 Product Specification","revision":"latest HTML; revision history v1.11","url":"https://docs.nordicsemi.com/r/bundle/ps_nrf52840/page/pin.html","locator":"aQFN73 ball assignments, Table 1"},
+    {"id":"nordic-ps-order","document":"nRF52840 Product Specification","revision":"latest HTML; revision history v1.11","url":"https://docs.nordicsemi.com/r/bundle/ps_nrf52840/page/ordering_info.html","locator":"Package variant codes, Table 2; QIAA aQFN73"},
+    {"id":"nordic-ps-rev","document":"nRF52840 Product Specification revision history","revision":"v1.11","url":"https://docs.nordicsemi.com/r/bundle/ps_nrf52840/page/rev_history.html","locator":"revision history"}
+  ]
+}

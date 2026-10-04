@@ -126,9 +126,11 @@ def test_full_vertical_example_compiles_and_passes_erc() -> None:
     assert check(board) == []
     assert analyze_power_states(board) == []
     assert {instance.ref for instance in board.module_instances} == {"PWR"}
-    assert {
-        dependency.import_path for dependency in board.dependencies
-    } == {"github.com/andenore/CopperLib/packages/full_vertical"}
+    dependencies = {dependency.import_path for dependency in board.dependencies}
+    assert "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832" in dependencies
+    assert "github.com/andenore/CopperLib/packages/parts/johanson/2450at18a0100001e" in dependencies
+    assert "github.com/copperscript/examples/vertical_support" in dependencies
+    assert not any(path.endswith("/packages/full_vertical") for path in dependencies)
 
 
 def test_full_vertical_declares_unfilled_inner_ground_plane() -> None:
@@ -142,7 +144,7 @@ def test_full_vertical_declares_unfilled_inner_ground_plane() -> None:
 
 def test_swd_headers_use_keyed_smd_cortex_pinout() -> None:
     board = compile_file(EXAMPLE)
-    header = board.library["vertical.SWD_HEADER"]
+    header = board.library["swd.SWD_HEADER"]
     assert header.footprints == ("Connector_Debug:FTSH-105-01-L-DV-007-K",)
     assert {pin.number for pin in header.pins.values()} == {
         "1", "2", "3", "4", "5", "6", "8", "9", "10"
@@ -164,12 +166,12 @@ def test_full_vertical_example_exercises_required_subsystems() -> None:
     }
 
     assert {
-        "vertical.STM32G0C1RET6",
-        "vertical.TCAN334G",
-        "vertical.EG800G_EU",
-        "vertical.NRF52832_QFAA",
-        "vertical.LIS2DW12",
-        "vertical.MAX_M10S_00B",
+        "st_mcu.STM32G0C1RET6",
+        "ti_can.TCAN334G",
+        "quectel.EG800G_EU",
+        "nordic.NRF52832_QFAA",
+        "st_accel.LIS2DW12",
+        "ublox.MAX_M10S_00B",
     } <= parts
     assert {
         ("U_MCU", "USART1"),
@@ -186,7 +188,7 @@ def test_full_vertical_example_exercises_required_subsystems() -> None:
 
 def test_nordic_qfaa_package_has_all_footprint_pad_numbers() -> None:
     board = compile_file(EXAMPLE)
-    part = board.library["vertical.NRF52832_QFAA"]
+    part = board.library["nordic.NRF52832_QFAA"]
     assert {pin.number for pin in part.pins.values()} == {
         str(number) for number in range(1, 50)
     }
@@ -196,7 +198,7 @@ def test_nordic_qfaa_package_has_all_footprint_pad_numbers() -> None:
 
 def test_bluetooth_antenna_keeps_nc_anchor_isolated() -> None:
     board = compile_file(EXAMPLE)
-    part = board.library["vertical.JOHANSON_2450AT18A0100001E"]
+    part = board.library["johanson.JOHANSON_2450AT18A0100001E"]
     assert part.manufacturer == "Johanson Technology"
     assert part.pins["NC"].number == "2"
     assert part.pins["NC"].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
@@ -214,7 +216,7 @@ def test_nordic_matching_shunt_is_on_chip_side_of_series_inductor() -> None:
 
 def test_stm32g0c1re_standard_lqfp64_bonds_are_complete() -> None:
     board = compile_file(EXAMPLE)
-    part = board.library["vertical.STM32G0C1RET6"]
+    part = board.library["st_mcu.STM32G0C1RET6"]
     assert {pin.number for pin in part.pins.values()} == {
         str(number) for number in range(1, 65)
     }
@@ -226,7 +228,7 @@ def test_stm32g0c1re_standard_lqfp64_bonds_are_complete() -> None:
 
 def test_gct_nano_sim_socket_uses_c7_for_io_and_connects_shell() -> None:
     board = compile_file(EXAMPLE)
-    part = board.library["vertical.SIM8060_6_0_14_00_A"]
+    part = board.library["gct_sim.SIM8060_6_0_14_00_A"]
     assert part.footprints == ("Connector_Card:nanoSIM_GCT_SIM8060-6-0-14-00",)
     assert part.pins["VPP"].number == "6"
     assert part.pins["IO"].number == "7"
@@ -240,7 +242,7 @@ def test_gct_nano_sim_socket_uses_c7_for_io_and_connects_shell() -> None:
 
 def test_usb_choke_uses_coilcraft_winding_pairs_and_land_pattern() -> None:
     board = compile_file(EXAMPLE)
-    part = board.library["vertical.COILCRAFT_0603USB_601MLC"]
+    part = board.library["coilcraft.COILCRAFT_0603USB_601MLC"]
     assert part.footprints == (
         "Inductor_SMD:L_CommonModeChoke_Coilcraft_0603USB",
     )
@@ -264,7 +266,7 @@ def test_usb_choke_uses_coilcraft_winding_pairs_and_land_pattern() -> None:
 
 def test_usb_c_power_entry_detects_3a_source_and_defaults_modem_off() -> None:
     board = compile_file(EXAMPLE)
-    part = board.library["vertical.GCT_USB4135_GF_A"]
+    part = board.library["gct_usb.GCT_USB4135_GF_A"]
     assert part.footprints == (
         "Connector_USB:USB_C_Receptacle_GCT_USB4135-GF-A_6P_TopMnt_Horizontal",
     )
@@ -280,7 +282,7 @@ def test_usb_c_power_entry_detects_3a_source_and_defaults_modem_off() -> None:
         net.name: {(endpoint.component, endpoint.pin) for endpoint in net.endpoints}
         for net in elaborate(board).nets
     }
-    cc = board.library["vertical.TUSB320LAI"]
+    cc = board.library["tusb.TUSB320LAI"]
     assert cc.footprints == ("Package_DFN_QFN:Texas_X2QFN-12_1.6x1.6mm_P0.4mm",)
     assert {pin.number for pin in cc.pins.values()} == {str(number) for number in range(1, 13)}
     assert cc.pins["ADDR"].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
@@ -309,8 +311,8 @@ def test_modem_rail_uses_real_buck_power_stage() -> None:
         net.name: {(endpoint.component, endpoint.pin) for endpoint in net.endpoints}
         for net in flat.nets
     }
-    buck = board.library["vertical.TPS62130ARGTR"]
-    inductor = board.library["vertical.XAL4020_222MEC"]
+    buck = board.library["vertical_support.ti.TPS62130ARGTR"]
+    inductor = board.library["vertical_support.coilcraft.XAL4020_222MEC"]
     assert buck.footprints == (
         "Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
     )

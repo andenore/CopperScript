@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "copperscript_revision": "ee63d69",
+  "requests": [
+    {
+      "id": "stm32g0b1cbt6-lqfp48-poc",
+      "orderable_part": "STM32G0B1CBT6",
+      "family": "STM32G0B1",
+      "package": "LQFP48",
+      "scope": "proof-of-concept",
+      "complete_coverage": false,
+      "work_packets": ["stm32g0b1cbt6-lqfp48-gpio-core"]
+    }
+  ]
+}

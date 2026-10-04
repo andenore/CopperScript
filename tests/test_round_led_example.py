@@ -97,7 +97,7 @@ def test_round_example_has_twelve_unique_active_low_channels_and_primary_supply(
     board = compile_file(SOURCE, locked=True, offline=True)
     assert check(board) == []
     assert len(board.components) == 34
-    assert next(c for c in board.components if c.ref == "U1").part == "vertical.NRF52832_QFAA"
+    assert next(c for c in board.components if c.ref == "U1").part == "nordic.NRF52832_QFAA"
     assert {s.net for s in board.supplies} == {"VBAT", "GND"}
     assert all(s.externally_driven for s in board.supplies)
     pins = set()

@@ -1,19 +1,22 @@
 // Minimal CM4 eMMC carrier. Not CM4 Lite / CM5 and not yet fabrication-qualified.
 // The Compute Module itself is plugged in, not a soldered carrier BOM item.
 board CM4Baseboard {
-    import cm4 "github.com/andenore/CopperLib/packages/raspberry_pi_cm4";
+    import cm4 "github.com/andenore/CopperLib/packages/profiles/raspberry_pi/cm4";
     import carrier "./mechanics";
-    import basic "github.com/andenore/CopperLib/packages/assembly_basics";
+    import headers "github.com/andenore/CopperLib/packages/generic/headers";
+    import samsung "github.com/andenore/CopperLib/packages/parts/samsung/cl05";
+    import kento "github.com/andenore/CopperLib/packages/parts/kento/kt0603r";
+    import uniroyal "github.com/andenore/CopperLib/packages/parts/uniroyal/0603waf";
 
     component J_CM4_GPIO: cm4.CM4_GPIO_SOCKET { value = "DF40C-100DS-0.4V(51)"; }
     component J_CM4_HS: cm4.CM4_HS_SOCKET { value = "DF40C-100DS-0.4V(51)"; }
-    component J_POWER: cm4.HEADER_1X02 { value = "5V IN / GND"; }
-    component J_UART: cm4.HEADER_1X04 { value = "3V3 sense / TX / RX / GND"; }
-    component J_GPIO: cm4.HEADER_1X06 { value = "3V3 / GPIO2 / GPIO3 / GPIO17 / GPIO27 / GND"; }
-    component J_ENABLE: cm4.HEADER_1X02 { value = "GLOBAL_EN / GND: short to power off"; }
-    component C_VREF: basic.SAMSUNG_CL05B104KO5NNNC { value = 100nF; }
-    component D1: basic.KENTO_KT0603R;
-    component R_LED: basic.UNIROYAL_0603WAF1002T5E { value = 10kohm; }
+    component J_POWER: headers.HEADER_1X02 { value = "5V IN / GND"; }
+    component J_UART: headers.HEADER_1X04 { value = "3V3 sense / TX / RX / GND"; }
+    component J_GPIO: headers.HEADER_1X06 { value = "3V3 / GPIO2 / GPIO3 / GPIO17 / GPIO27 / GND"; }
+    component J_ENABLE: headers.HEADER_1X02 { value = "GLOBAL_EN / GND: short to power off"; }
+    component C_VREF: samsung.SAMSUNG_CL05B104KO5NNNC { value = 100nF; }
+    component D1: kento.KENTO_KT0603R;
+    component R_LED: uniroyal.UNIROYAL_0603WAF1002T5E { value = 10kohm; }
 
     net V5 {
         J_POWER.1;

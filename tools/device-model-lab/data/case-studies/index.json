@@ -1,0 +1,10 @@
+{
+  "schema": "copperscript-device-model-lab/v0.1",
+  "copperscript_revision": "ee63d69",
+  "cases": [
+    "nrf52840-qiaa",
+    "cyusb4014-fcaxi",
+    "ad4134bcpz",
+    "opa2197id"
+  ]
+}

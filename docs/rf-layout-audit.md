@@ -34,7 +34,7 @@ endpoint numbers now follow that reference orientation; the shunt topology is
 unchanged. Historical pass-5/6 copper measurements are not the new template run.
 
 Compact source hashes/locators are retained in CopperLib's
-`data/full-vertical/rf-audit.json`; original documents remain ignored cache
+`packages/parts/johanson/2450at18a0100001e/evidence/rf-audit.json`; original documents remain ignored cache
 assets. The schematic and relevant antenna drawing pages were visually checked,
 not inferred from flattened PDF text. The matching correction does not complete
 the Nordic crystal, DEC/VDD decoupling or manufacturer reference-ground circuit.
@@ -122,7 +122,7 @@ not committed.
 ### Source-backed matching scene and fresh placement probe
 
 The three-member extraction and explicit scene binding are now implemented.
-`CopperLib/scripts/extract_nrf52832_rf_reference.py` verifies both archive and
+`CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/extract_reference.py` verifies both archive and
 placement-entry hashes, reads data only and emits a compact provisional packet.
 The scene binds its bytes, resolved footprints and physical pad/net roles.
 Top-view Y reflection, C3's 270-degree orientation and its ground-side pad 1

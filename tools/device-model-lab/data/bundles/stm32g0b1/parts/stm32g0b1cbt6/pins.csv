@@ -1,0 +1,5 @@
+name,number,bond,domains,directions,drive_modes,traits,connection,required_net_traits,voltage_min,voltage_max
+PA0,25,PA0,digital,bidirectional,,,required,,,
+PA1,26,PA1,digital,bidirectional,,,required,,,
+PC0,21,PC0,digital,bidirectional,,,required,,,
+PC1,22,PC1,digital,bidirectional,,,required,,,

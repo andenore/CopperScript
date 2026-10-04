@@ -27,7 +27,7 @@ and is not replaced. The correction is factual, not a routing optimization.
 ## Implementation and invalidation
 
 CopperLib records the source revision/location/hash on the part and in
-`data/full-vertical/usb-choke-audit.json`. Its regression verifies that each
+`packages/parts/coilcraft/0603usb/evidence/usb-choke-audit.json`. Its regression verifies that each
 signal traverses a distinct winding and that inputs share dot polarity. The
 CopperScript integration regression verifies the lowered physical nets:
 MCU DP/DM on pads 1/4, modem DP/DM on pads 2/3. The local dependency lock is

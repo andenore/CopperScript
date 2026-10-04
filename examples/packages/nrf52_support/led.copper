@@ -1,0 +1,8 @@
+// Illustrative LED, not an orderable part. KiCad Device:LED convention and
+// LED_0603_1608Metric polarity marking: cathode=1, anode=2.
+part REFERENCE_LED_0603 {
+    category = "optoelectronics.led";
+    footprint = "LED_SMD:LED_0603_1608Metric";
+    pin K { number = "1"; domains = "analog"; directions = "passive"; }
+    pin A { number = "2"; domains = "analog"; directions = "passive"; }
+}

@@ -61,7 +61,7 @@ def test_kicad_backend_explicitly_flattens_hierarchy() -> None:
 
 def test_smd_cortex_debug_connectors_are_in_schematic_bom() -> None:
     board = load_board(ROOT / "examples" / "full_vertical_board.copper")
-    target = board.library["vertical.SWD_HEADER"]
+    target = board.library["swd.SWD_HEADER"]
     assert target.assembled
     assert target.footprints == ("Connector_Debug:FTSH-105-01-L-DV-007-K",)
     schematic = KiCadSchematicBackend().generate(board).artifacts[0].content

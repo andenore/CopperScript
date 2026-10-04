@@ -3,25 +3,27 @@
 // CR2032 is primary (not rechargeable). SWD VREF is sense only; no power injection.
 board RoundLedRing {
     use library "tiny";
-    import vertical "github.com/andenore/CopperLib/packages/full_vertical";
-    import demo "github.com/andenore/CopperLib/packages/nrf52_demo";
+    import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
+    import keystone "github.com/andenore/CopperLib/packages/parts/keystone/3034";
+    import swd "github.com/andenore/CopperLib/packages/interfaces/arm/swd-10pin";
+    import generic_led "github.com/andenore/CopperLib/packages/generic/led-0603";
 
-    component U1: vertical.NRF52832_QFAA;
-    component BT1: demo.KEYSTONE_3034;
-    component J_SWD: vertical.SWD_HEADER;
+    component U1: nordic.NRF52832_QFAA;
+    component BT1: keystone.KEYSTONE_3034;
+    component J_SWD: swd.SWD_HEADER;
     // Generic red 0603 references, not yet orderable LED selections.
-    component LED1: demo.REFERENCE_LED_0603;
-    component LED2: demo.REFERENCE_LED_0603;
-    component LED3: demo.REFERENCE_LED_0603;
-    component LED4: demo.REFERENCE_LED_0603;
-    component LED5: demo.REFERENCE_LED_0603;
-    component LED6: demo.REFERENCE_LED_0603;
-    component LED7: demo.REFERENCE_LED_0603;
-    component LED8: demo.REFERENCE_LED_0603;
-    component LED9: demo.REFERENCE_LED_0603;
-    component LED10: demo.REFERENCE_LED_0603;
-    component LED11: demo.REFERENCE_LED_0603;
-    component LED12: demo.REFERENCE_LED_0603;
+    component LED1: generic_led.LED;
+    component LED2: generic_led.LED;
+    component LED3: generic_led.LED;
+    component LED4: generic_led.LED;
+    component LED5: generic_led.LED;
+    component LED6: generic_led.LED;
+    component LED7: generic_led.LED;
+    component LED8: generic_led.LED;
+    component LED9: generic_led.LED;
+    component LED10: generic_led.LED;
+    component LED11: generic_led.LED;
+    component LED12: generic_led.LED;
     component R_LED1: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
     component R_LED2: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
     component R_LED3: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }

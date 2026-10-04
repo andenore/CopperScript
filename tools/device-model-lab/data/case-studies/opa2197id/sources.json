@@ -1,0 +1,6 @@
+{
+  "case_id": "opa2197id",
+  "sources": [
+    {"id":"ti-opa2197-ds","document":"OPAx197 36-V Precision Rail-to-Rail Input/Output Low Offset Voltage Operational Amplifiers datasheet","revision":"SBOS737C, revised March 2018","url":"https://www.ti.com/lit/ds/symlink/opa2197.pdf","locator":"Pin Configuration and Functions pp. 2-3; Recommended Operating Conditions p. 5; package addendum pp. 34, 38-39"}
+  ]
+}

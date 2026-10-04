@@ -1,6 +1,6 @@
 // Split-file mechanics demonstration, not a production board or HAT certification.
 board MechanicalProfileDemo {
-    import connector "github.com/andenore/CopperLib/packages/full_vertical";
+    import connector "github.com/andenore/CopperLib/packages/generic/debug-uart-header";
     import carrier "./mechanics";
 
     component J_DEBUG: connector.DEBUG_UART_HEADER;

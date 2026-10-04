@@ -1,0 +1,13 @@
+// Illustrative symbol/footprint contract, NOT an orderable crystal. Select a
+// 32 MHz, CL=8 pF part meeting Nordic's oscillator limits and verify its pinout.
+// KiCad Crystal_GND24 convention: oscillator terminals 1/3, ground case 2/4.
+part REFERENCE_XTAL_2016 {
+    category = "passive.crystal";
+    footprint = "Crystal:Crystal_SMD_2016-4Pin_2.0x1.6mm";
+    source_document = "Nordic nRF52832 reference circuitry Table 1; KiCad Crystal_GND24 convention";
+    source_url = "https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/ref_circuitry.html";
+    pin X1 { number = "1"; domains = "analog"; directions = "passive"; }
+    pin X2 { number = "3"; domains = "analog"; directions = "passive"; }
+    pin CASE_2 { number = "2"; domains = "ground"; directions = "passive"; }
+    pin CASE_4 { number = "4"; domains = "ground"; directions = "passive"; }
+}

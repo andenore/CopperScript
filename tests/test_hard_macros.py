@@ -311,10 +311,10 @@ def test_vendor_extraction_is_deterministic_and_identity_pinned(monkeypatch):
     library=Path(__file__).resolve().parents[2]/"CopperLib"
     archive=library/"cache/rf-reference/nrf52832qfaxreflayoutv11.zip"
     if not archive.is_file(): pytest.skip("optional locally cached Nordic archive")
-    monkeypatch.syspath_prepend(str(library/"scripts"))
-    from extract_nrf_antenna_hard_macro import generate,gerber_strokes
+    monkeypatch.syspath_prepend(str(library/"packages/circuits/nordic/nrf52832-johanson-reference"))
+    from generate_trial import generate,gerber_strokes
     raw=(json.dumps(generate(archive),indent=2,sort_keys=True)+"\n").encode()
-    assert raw==(library/"data/full-vertical/nrf-antenna-hard-macro.json").read_bytes()
+    assert raw==(library/"packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json").read_bytes()
     with pytest.raises(ValueError,match="coordinate format"): gerber_strokes("not Gerber")
 
 

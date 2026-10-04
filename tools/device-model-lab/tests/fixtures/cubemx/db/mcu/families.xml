@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Families xmlns="urn:synthetic:cubemx" version="6.12.0" databaseVersion="6.1.0">
+  <Family name="STM32G0" />
+</Families>

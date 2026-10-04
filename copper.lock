@@ -1,285 +1,260 @@
 {
   "modules": [
     {
-      "checksum": "sha256:ca7d27ec7dddec623679d359fc1d1ea54ec6e4ccade59b74a9656b99f6632fbc",
+      "checksum": "sha256:cc0a9769536291f67511bfd3073699e8f46061409a4b54aa5dffa11c7bd76acd",
       "files": [
         {
           "path": "copper.mod",
-          "sha256": "dbff5750456b6baf5531fe2fe5292fca01b3032fdb66354c65358a2f6cfe5e87",
-          "size": 37
+          "sha256": "64ba4fb81cce9a3d396101cc30d3acaf2b8f70f2fda9e4af7cca1c944d91bc0e",
+          "size": 38
         },
         {
-          "path": "data/bundles/stm32g0b1/device.json",
-          "sha256": "e84194b02d72d3c61bad00f58d839fa6f868c5dfe2b5b829f992060c0fe6428d",
-          "size": 680
+          "path": "packages/circuits/nordic/nrf52832-johanson-reference/assets/nordic-qfaa-ldo-reference.json",
+          "sha256": "a33f0545ba2bc7e543a2766ca0e7b9af04a02fcabaa5c3d78bd57e8666423ae5",
+          "size": 2454
         },
         {
-          "path": "data/bundles/stm32g0b1/mux.csv",
-          "sha256": "a6546060f87e8e5f69f4625c1e2b1eb34bc9ade82d7774e87406a24ec97c5e3f",
-          "size": 48
+          "path": "packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json",
+          "sha256": "847261da97cdac7d6d59ae55d0a0c7280a9975862fe83dfb701dda8ed49bd541",
+          "size": 13134
         },
         {
-          "path": "data/bundles/stm32g0b1/pads.csv",
-          "sha256": "20bc01b499e0f5356cb1a971c890e5cb06a5c56a14b7496e3692d44a4831da76",
-          "size": 250
+          "path": "packages/circuits/nordic/nrf52832-johanson-reference/circuit.copper",
+          "sha256": "dc74de0b4a2a6d0add54fb04be21615efac383477809d80614098de056277b53",
+          "size": 2085
         },
         {
-          "path": "data/bundles/stm32g0b1/parts/stm32g0b1cbt6/part.json",
-          "sha256": "163230b8f209027c41a6bbfc921502a74665a075a682fad6b6d4572935ed98f4",
-          "size": 464
+          "path": "packages/generic/can-connector/part.copper",
+          "sha256": "bb4fa840ce2f26c09195a6af9f9933b1416e042c9313c6d2d014696abd308d16",
+          "size": 508
         },
         {
-          "path": "data/bundles/stm32g0b1/parts/stm32g0b1cbt6/pins.csv",
-          "sha256": "e3ebcc3f27085e770166d25f4aec378e0afde297fc0ea4372cc7b19e56a53c23",
-          "size": 298
+          "path": "packages/generic/debug-uart-header/part.copper",
+          "sha256": "fd56a9149ef67c6d20880274cda3d04d70d317a87f4db64d3c85e1b89ce050ea",
+          "size": 526
         },
         {
-          "path": "data/bundles/stm32g0b1/peripherals.csv",
-          "sha256": "746a85b7e190365b1c8beb28b5566b1eca8f73545210a6c59042caa079f5f0b7",
-          "size": 37
+          "path": "packages/generic/headers/header_1x02.copper",
+          "sha256": "eb4a66b21d4afc4aa5e720201aff4754377e7a8ae3f9fe14fefcefed62fc20c5",
+          "size": 368
         },
         {
-          "path": "data/case-studies/ad4134bcpz/sources.json",
-          "sha256": "47fe83002e2117665acda0ef21104c29445c040819e17d3b8216ad7b315d3248",
-          "size": 334
+          "path": "packages/generic/headers/header_1x04.copper",
+          "sha256": "c3b3ef863fbd404b1c6013b30a1f5363308571dab782395a8d8c0d1ee04b1093",
+          "size": 516
         },
         {
-          "path": "data/case-studies/cases.json",
-          "sha256": "aeda88a2d0c00601b5c1bab7156b3ac84ed0b069dd2e019334887cf6313bcd48",
-          "size": 8257
+          "path": "packages/generic/headers/header_1x06.copper",
+          "sha256": "40616a565d9dcf434b14ed9c33d1cdea846cdf0e907389a9b5554cedfcb826a8",
+          "size": 664
         },
         {
-          "path": "data/case-studies/cyusb4014-fcaxi/sources.json",
-          "sha256": "964c82f475a41a7f6403dc36f3b8bc303a705f7648c3bae16f1a189e49a59fca",
-          "size": 493
+          "path": "packages/generic/led-0603/part.copper",
+          "sha256": "c7eca205c8030543f59483733361300533a9c0c820dfcd2f80bb08b57ed35678",
+          "size": 323
         },
         {
-          "path": "data/case-studies/index.json",
-          "sha256": "40510e783de00732dac14583e667b5519ef2123b13d8bfbc694e913bacd5771c",
-          "size": 187
+          "path": "packages/generic/passives/capacitor.copper",
+          "sha256": "5d3a3873536dbb83bad05aeaf26511790561325fc62a7ad1cd9ae5229fb2e131",
+          "size": 275
         },
         {
-          "path": "data/case-studies/nrf52840-qiaa/sources.json",
-          "sha256": "717869acad56824085948d94a1d652842702977794a5c76cacf6fcae7745c056",
-          "size": 765
+          "path": "packages/generic/passives/inductor.copper",
+          "sha256": "7019679bf8c221d320863499fc098b0b81d385433ef3dbb0ff056a22f4e4e0ff",
+          "size": 272
         },
         {
-          "path": "data/case-studies/opa2197id/sources.json",
-          "sha256": "833b1a864369bed4ee0d99e60d4943ab37b3839f0599cc1a72da0b649ba74c57",
-          "size": 409
+          "path": "packages/generic/switch-button/part.copper",
+          "sha256": "5e80295296bf2bb1d55b2888b9fe7b8fa8a19f76d9ff343076746ade72df948e",
+          "size": 939
         },
         {
-          "path": "data/full-vertical/nrf-antenna-hard-macro.json",
-          "sha256": "2af31b661e340aea4a5fadd1f47456a55e1a2e44eb43659d38eec8975f46c5cc",
-          "size": 12422
+          "path": "packages/generic/u-fl-connector/part.copper",
+          "sha256": "84d8a29952b2ff5cea71c54b8dd9dd1d41c2f3ff84441125d308ee46354e9b68",
+          "size": 362
         },
         {
-          "path": "data/full-vertical/nrf52832-qfaa-rf-reference.json",
-          "sha256": "207ff21dda6881717e252cbb9e7f4dadfb0a51827068f7c001d770b700557cac",
-          "size": 2354
+          "path": "packages/interfaces/arm/swd-10pin/part.copper",
+          "sha256": "61d9facae04669109b32fb242407c14e5a83b1cf65c7374e3c2f228f203ffa97",
+          "size": 1201
         },
         {
-          "path": "data/full-vertical/rf-audit.json",
-          "sha256": "081714cca5aea8614c0a1a3870198938323e625c5b6fdaf30819be7d3f877bfe",
-          "size": 2060
+          "path": "packages/parts/coilcraft/0603usb/evidence/usb-choke-audit.json",
+          "sha256": "e43c5917d334e4b853d2ed3baa808c84b218273d60332d91c4f38f370a386096",
+          "size": 1117
         },
         {
-          "path": "data/full-vertical/usb-choke-audit.json",
-          "sha256": "3fc689ac3a6b5bf6aec4a7ede31fe29ed68321cc83423bd9f9ff7ca77f01afb7",
-          "size": 1097
+          "path": "packages/parts/coilcraft/0603usb/part.copper",
+          "sha256": "2a74c5319ce6e2ce2b6ed2b6a091897172f92bd4b90505534eba3afeee134699",
+          "size": 1272
         },
         {
-          "path": "data/requests.json",
-          "sha256": "1aeba0a701b7e1937198ea08f5d9445cf8addeec0395a71bd0dfbb4b322085e3",
-          "size": 352
+          "path": "packages/parts/coilcraft/xal4020/part.copper",
+          "sha256": "3051f03f93337df8bc3df9c0531234be83eb05ee201a0b402f8bb28966f8d228",
+          "size": 638
         },
         {
-          "path": "data/sources.json",
-          "sha256": "7bb20db33168638211872360e0442e23cbf24e1721970aa95afbbcd80c0af9b3",
-          "size": 533
+          "path": "packages/parts/fenghua/0402cg/part.copper",
+          "sha256": "68fbd0e6696bdf8cf29268ba7a734ac7f5a53cf097f2a3d3946caf5e5e0df88d",
+          "size": 794
         },
         {
-          "path": "footprints/Connector_Debug.pretty/FTSH-105-01-L-DV-007-K.kicad_mod",
-          "sha256": "4c66f92ed67d117b419c23e2c38d2d79a76a899d9680fa25068cba6cb3a44a5c",
-          "size": 1833
+          "path": "packages/parts/gct/sim8060/part.copper",
+          "sha256": "14496f9026f2e4862151815073362eff7a77c7bad766c57780177f957f6573f7",
+          "size": 934
         },
         {
-          "path": "footprints/RF_Module.pretty/Quectel_EG800G.kicad_mod",
-          "sha256": "04c7d4959775476212750edb1ed2fc78bc98a30c086a8c183304b86d838b8747",
-          "size": 12400
-        },
-        {
-          "path": "footprints/RF_Module.pretty/u-blox_MAX-M10S.kicad_mod",
-          "sha256": "724ada78323cfac5ad22bdbf96c675f4a8a880340c96e5d194ad09aee330871e",
-          "size": 4385
-        },
-        {
-          "path": "generated/stm32g0b1_device.copper",
-          "sha256": "793e08fc8af337e1fe3e0a892a0fa9aa567c8cc8370f6b2cdf1460f566d33ce0",
-          "size": 1102
-        },
-        {
-          "path": "generated/stm32g0b1cbt6.copper",
-          "sha256": "861271cd0e5eb020a733933657af0f8a04634d05abe05c02273c10743ddb1e72",
-          "size": 1230
-        },
-        {
-          "path": "packages/full_vertical/button.copper",
-          "sha256": "484252cfbfcefa0521ade7cf295f6c72ca7c5fcc0eb2a9acbe97b09b2f8474a4",
-          "size": 923
-        },
-        {
-          "path": "packages/full_vertical/can_connector.copper",
-          "sha256": "a4ca9837e91d5fd0c9d03f60487a210b00633b15ce741d5b63ab9f7c6a08b9ab",
-          "size": 500
-        },
-        {
-          "path": "packages/full_vertical/debug_header.copper",
-          "sha256": "d82d92a56f5259e4ef998142e737e213a9c2edadea5a936dd8e8af1704ead499",
-          "size": 517
-        },
-        {
-          "path": "packages/full_vertical/eg800g_eu.copper",
-          "sha256": "e4fb4dfdfca1d7d5b397e53485cf4059fe8ae69a22a767ba96abdd9ca3baa6e2",
-          "size": 8851
-        },
-        {
-          "path": "packages/full_vertical/led.copper",
-          "sha256": "f5fbb85e550ad965cbda8a07ae59b573e4a9ba752f9ddb94ea5164aa3b280801",
-          "size": 316
-        },
-        {
-          "path": "packages/full_vertical/lis2dw12.copper",
-          "sha256": "23919e3c337ca139f5d6e78df61aa0ed5cd13784189dab967384b21a7a0b42bc",
-          "size": 1678
-        },
-        {
-          "path": "packages/full_vertical/max_m10s.copper",
-          "sha256": "d5c3ef286e9b47f9d31a54b83e79d230c31c0e847066a4ecf315da89f8c7f62b",
-          "size": 2331
-        },
-        {
-          "path": "packages/full_vertical/nrf52832_device.copper",
-          "sha256": "58d5f119cee2a7705a0a07c5ca62e923f68bf07f55fd220b33733ee715fdc7b4",
-          "size": 5285
-        },
-        {
-          "path": "packages/full_vertical/nrf52832_qfaa.copper",
-          "sha256": "5c3973905b9f553dcd860b0a04beb8826458c1cd4e9f548c5b2ee52069f6abfc",
-          "size": 2865
-        },
-        {
-          "path": "packages/full_vertical/open_drain_driver.copper",
-          "sha256": "81e7bc7da7e71ce94068d1c0bd1534333377ff420b45df4822df68316fc78f58",
-          "size": 499
-        },
-        {
-          "path": "packages/full_vertical/power_tree.copper",
-          "sha256": "b31a602444fb90d25a34efe1d60e7eb5aa587f42b9186cca5c1a01deb48142d2",
-          "size": 2789
-        },
-        {
-          "path": "packages/full_vertical/rf_antenna.copper",
-          "sha256": "cdd68044c733355c0bb7f540836b54ac8639e1bf79d44ece4fff9f7263c7ad17",
+          "path": "packages/parts/gct/usb4135/part.copper",
+          "sha256": "74316559c4c76115f9560bf288547b5fc386b0c02584d1b89ad0a8f03fc65056",
           "size": 933
         },
         {
-          "path": "packages/full_vertical/rf_connector.copper",
-          "sha256": "0560b6d38fc0aa454a50cfce2f1a0c7d0652650859801e82895b35efea32573d",
-          "size": 355
+          "path": "packages/parts/johanson/2450at18a0100001e/evidence/rf-audit.json",
+          "sha256": "ab00f2bc4b1ffb42727ed128db1d49fef9c8f3275d78dce641741c9beb9e8a62",
+          "size": 2090
         },
         {
-          "path": "packages/full_vertical/sim_socket.copper",
-          "sha256": "894656bb3c78261ce383ddd22dd9599c6527c5af4718e15ae86b1a7de15756f3",
-          "size": 919
+          "path": "packages/parts/johanson/2450at18a0100001e/part.copper",
+          "sha256": "0d8b45912a6fe506fc027dca3a93ba9e4b2bd560282d0f4caf0bac554719fab2",
+          "size": 948
         },
         {
-          "path": "packages/full_vertical/stm32g0c1_device.copper",
-          "sha256": "68e3e11039c33044600b6b596ffd2cbaa1f3adc4eee028bc2235c71c323e853d",
-          "size": 9586
+          "path": "packages/parts/kento/kt0603r/footprints/KENTO_KT0603R.kicad_mod",
+          "sha256": "160e06bb017959cb64c54234bce1270f912444d95b31e2c85cc7391e43b8aeb1",
+          "size": 1611
         },
         {
-          "path": "packages/full_vertical/stm32g0c1ret6.copper",
-          "sha256": "c489dc4acd114cff184a20428fbcb7e19e08e2e9d77ab855739aa93b0ca1d927",
-          "size": 3328
+          "path": "packages/parts/kento/kt0603r/part.copper",
+          "sha256": "dcd88648c219ec229129f4be56e06320ad96dd5bb2894265be2f6afeaa7772d7",
+          "size": 865
         },
         {
-          "path": "packages/full_vertical/swd_header.copper",
-          "sha256": "56c338f7961b15c9dc69b008214a869e31c0ec72fb4dc7c240d6277d8c01573c",
-          "size": 1183
+          "path": "packages/parts/keystone/3034/part.copper",
+          "sha256": "07f9a4fbbad61ca8d37e7b06bf9a4ac8a0b7e067f72cd3e5b3531374f3fe5d98",
+          "size": 1028
         },
         {
-          "path": "packages/full_vertical/tcan334g.copper",
-          "sha256": "97c366dcac21debc335320d9f5ca389545f0470477b9e3150a0c1a1f10725333",
-          "size": 1174
+          "path": "packages/parts/nordic/nrf52832/device.copper",
+          "sha256": "81408bcf219347aba1a898ea044762bcdf0f1728ddb7f001ae263df51db42228",
+          "size": 5344
         },
         {
-          "path": "packages/full_vertical/tps62130a.copper",
-          "sha256": "8b418fbb5bdb77d0bba933ede7699734c06c1594d7b2c15f66c2e85327f233e4",
-          "size": 2012
+          "path": "packages/parts/nordic/nrf52832/part.copper",
+          "sha256": "8ab96c4e788e76bbaf1751bbc59e54fac22cc719dc76efaf3fecf3b0a365db8b",
+          "size": 2925
         },
         {
-          "path": "packages/full_vertical/tusb320lai.copper",
-          "sha256": "23e2de03e0184ec1e254492371093357e3bdeece8f8935fa2da7484a43af9f46",
-          "size": 1807
+          "path": "packages/parts/quectel/eg800g-eu/footprints/Quectel_EG800G.kicad_mod",
+          "sha256": "1a45d714a7697d0476566333e1aac52e774c8e151df434075cc86caf30e8fb7e",
+          "size": 12525
         },
         {
-          "path": "packages/full_vertical/uart_level_shifter.copper",
-          "sha256": "1b618e6e5d46b2cf531a8f0eff9c2cfc54287ad0710429956d03e86bda878705",
-          "size": 1035
+          "path": "packages/parts/quectel/eg800g-eu/part.copper",
+          "sha256": "c1b5a4c84b951903b54e3044d6ac065aa1c81b7d23a9f4d16f074d0c6f039baf",
+          "size": 8972
         },
         {
-          "path": "packages/full_vertical/usb_c_power_receptacle.copper",
-          "sha256": "1b26ec9de320e690d47bb6259d0b75f1a1c42b224b49f87cee187f156d6c8af9",
-          "size": 918
+          "path": "packages/parts/samsung/cl05/part.copper",
+          "sha256": "b8aa17af9e82f5d92ccf6024ad039b43c6e0b3599df351881b4a0db0c932475f",
+          "size": 633
         },
         {
-          "path": "packages/full_vertical/usb_common_mode_choke.copper",
-          "sha256": "ef8d06c779045d4f727f550930f1eba1472592463cd4b8b6582035b3a0d66775",
-          "size": 1253
+          "path": "packages/parts/samsung/cl10/part-1uf.copper",
+          "sha256": "1b62fcc23426595ec7bd2ebeadd23b5dd2e107f46e1e9f20786d8ae892cfe084",
+          "size": 639
         },
         {
-          "path": "packages/full_vertical/xal4020_222mec.copper",
-          "sha256": "004d96510d7d3f362a7fd625799e59b73810b48e5ae235f21c406f6bad44005c",
-          "size": 627
+          "path": "packages/parts/samsung/cl10/part-4u7.copper",
+          "sha256": "c24b172b1bd990a925dd7278f2d370e5c155d91876a084cddd1acf9097801e9f",
+          "size": 641
         },
         {
-          "path": "packages/nrf52_demo/cr2032_holder.copper",
-          "sha256": "66b3a114fca6a92874175bd94cd6a337a38492aead7a8c9defb384a4051f4c3c",
-          "size": 1012
+          "path": "packages/parts/samtec/ftsh-105-01-l-dv-007-k/footprints/FTSH-105-01-L-DV-007-K.kicad_mod",
+          "sha256": "d17ae8d6024430837dc5d6d34a428e0a5d120942106f3fd627b51b13997d1831",
+          "size": 1857
         },
         {
-          "path": "packages/nrf52_demo/crystal.copper",
-          "sha256": "20ba56a7d295e8f069075dedb6076b6b5bc1f1c7a41564dff758d682bb45035d",
-          "size": 854
+          "path": "packages/parts/st/lis2dw12/part.copper",
+          "sha256": "a48e5e2eb8eefbd758e0ea916ff178b739d4442d5425fbec300fc3e140ddb938",
+          "size": 1699
         },
         {
-          "path": "packages/nrf52_demo/led.copper",
-          "sha256": "7a020a2413004b687ccaaef66f96d75f2d7523cedf2cee99f02e0afa4218bacc",
-          "size": 394
+          "path": "packages/parts/st/stm32g0c1/device.copper",
+          "sha256": "8d952339254abb2323f1ebf7b2b2cbec138c7af6c1c602bbebe2b07146ce558f",
+          "size": 9686
         },
         {
-          "path": "reports/compatibility.json",
-          "sha256": "6f0677d43cd8608d31fe0099fc6df53b50543c312628010a8eb4dc60f68e181e",
-          "size": 13026
+          "path": "packages/parts/st/stm32g0c1/part.copper",
+          "sha256": "bcd611ba112d99a7091b496e18e5fb2a27d311e042f781a8ac6603776c13276a",
+          "size": 3404
+        },
+        {
+          "path": "packages/parts/ti/tcan334g/part.copper",
+          "sha256": "4365744075533ecaf9a514f248e9db8ce98c0fbf248e4c9bba179b9261134b1f",
+          "size": 1191
+        },
+        {
+          "path": "packages/parts/ti/tps62130a/part.copper",
+          "sha256": "4cd931281414700255af02578b89cd13637b929ab20ca0fb0770d1d9f53a66b7",
+          "size": 2040
+        },
+        {
+          "path": "packages/parts/ti/tusb320lai/part.copper",
+          "sha256": "807f2b0dbe6e199692d9c7380cf1f174f151f6793436a751fb7bb11b34d50c4a",
+          "size": 1831
+        },
+        {
+          "path": "packages/parts/u-blox/max-m10s/footprints/u-blox_MAX-M10S.kicad_mod",
+          "sha256": "6a87118c12a8b2a09eb5fab7b729489db47b0989d293fc24d129a673854101c5",
+          "size": 4453
+        },
+        {
+          "path": "packages/parts/u-blox/max-m10s/part.copper",
+          "sha256": "b4b0f68ee7da11b45dab18e1bc58ca87de2cb3e90c6d29953412e237b297adfc",
+          "size": 2357
+        },
+        {
+          "path": "packages/parts/uniroyal/0603waf/part.copper",
+          "sha256": "0c2ecac2d7de4090ce2d4024a9c577cd2a723d3ee90b1b41010080958ee66d64",
+          "size": 758
+        },
+        {
+          "path": "packages/profiles/raspberry_pi/cm4/evidence/mechanics.json",
+          "sha256": "09bc4f2d636666db1128f7e0d777127dda56a2fc4f7cc8829b8c64e381e67d12",
+          "size": 1590
+        },
+        {
+          "path": "packages/profiles/raspberry_pi/cm4/evidence/pinout.json",
+          "sha256": "fa8aff08a840c2789c2360bfa2d2d6bf786a07b57c9383b2e38e4960c9b74044",
+          "size": 13247
+        },
+        {
+          "path": "packages/profiles/raspberry_pi/cm4/gpio_socket.copper",
+          "sha256": "e1ff7c327a1a4209ccc0e95b3544137707390cc18c20856c19058a2ec6eb5371",
+          "size": 11619
+        },
+        {
+          "path": "packages/profiles/raspberry_pi/cm4/high_speed_socket.copper",
+          "sha256": "cf3065c6df512812cd91d7a5bc42c89fc2e5f421e8becc983cc526b4c37109ee",
+          "size": 11497
+        },
+        {
+          "path": "packages/profiles/raspberry_pi/cm4/mounting.copper",
+          "sha256": "2c72c8b47d4bf9f2b4f74aea58eeb6b6b84832486d81552e322cac7ccf2839d6",
+          "size": 1808
         },
         {
           "path": "tests/fixtures/compiler_smoke.copper",
-          "sha256": "06ca9511940f4d2aa3abbc7ac27c92559f1d2a6603bc7e9c1149ec10e56e71a8",
-          "size": 42
-        },
-        {
-          "path": "work-packets/stm32g0b1cbt6-lqfp48-gpio-core.json",
-          "sha256": "97022738c66b7321c284bcf24eb43542f3fa255b3ce2d75943dab563cb702c2b",
-          "size": 208
+          "sha256": "119c8d3a8b514d11f1472da3db1a5e3aaa74f52ec5245a93b257e616d78b9478",
+          "size": 44
         }
       ],
       "module": "github.com/andenore/CopperLib",
       "source": "git:https://github.com/andenore/CopperLib.git",
-      "version": "b336e61bd881287e7bed26c3929f213ec413f52b"
+      "version": "bcc158d"
     },
     {
-      "checksum": "sha256:cb30d8a525c1f1fa625976d8e37cb87264c676e7ef696e50edc619cb90847f25",
+      "checksum": "sha256:1ceff53a878c032632fcd305090fff45680dfabc8e3f2778bf1afbea9f374dca",
       "files": [
         {
           "path": "compatibility/ad4134_device.copper",
@@ -342,6 +317,16 @@
           "size": 499
         },
         {
+          "path": "nrf52_support/crystal.copper",
+          "sha256": "20ba56a7d295e8f069075dedb6076b6b5bc1f1c7a41564dff758d682bb45035d",
+          "size": 854
+        },
+        {
+          "path": "nrf52_support/led.copper",
+          "sha256": "7a020a2413004b687ccaaef66f96d75f2d7523cedf2cee99f02e0afa4218bacc",
+          "size": 394
+        },
+        {
           "path": "power/buck_5v_to_3v3.copper",
           "sha256": "c0f9771888748bebb220dc71b9942858ec4c1ec99fa97c663e88f84cee48bc9a",
           "size": 1424
@@ -360,6 +345,21 @@
           "path": "stm32/stm32g0b1cbt6.copper",
           "sha256": "eb8913333fc9b41fe1172d44168034fa3275acf320142b0bdf161b8f62a1fe24",
           "size": 754
+        },
+        {
+          "path": "vertical_support/open_drain_driver.copper",
+          "sha256": "81e7bc7da7e71ce94068d1c0bd1534333377ff420b45df4822df68316fc78f58",
+          "size": 499
+        },
+        {
+          "path": "vertical_support/power_tree.copper",
+          "sha256": "be3506387d2785d9bd5b73d2f59f50e46afe0da517d7b4d7ca8e069f36b6a89b",
+          "size": 2964
+        },
+        {
+          "path": "vertical_support/uart_level_shifter.copper",
+          "sha256": "1b618e6e5d46b2cf531a8f0eff9c2cfc54287ad0710429956d03e86bda878705",
+          "size": 1035
         }
       ],
       "module": "github.com/copperscript/examples",

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<IP xmlns="urn:synthetic:cubemx" name="GPIO" version="gpiog0_v1_0_Cube">
+  <Mode ConfigFile="GPIO-gpiog0_v1_0_Cube_Parameters.xml" />
+</IP>

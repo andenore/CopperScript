@@ -162,5 +162,6 @@ deliberately absent rather than partially connected.
 Sources: [CM4 datasheet](https://datasheets.raspberrypi.com/cm4/cm4-datasheet.pdf)
 (Fig. 4 and Table 6), [official CM4IO design files](https://pip.raspberrypi.com/categories/1210-design-files),
 and [Hirose connector](https://www.hirose.com/en/product/p/CL0684-4033-4-51).
-The downloaded sources and hashes are recorded in CopperLib's `data/cm4`;
+The downloaded sources and hashes are recorded in CopperLib's
+`packages/profiles/raspberry_pi/cm4/evidence`;
 raw vendor files are not redistributed with this example.

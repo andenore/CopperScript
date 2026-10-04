@@ -1,0 +1,10 @@
+{
+  "name": "STM32G0B1CBT6",
+  "output": "stm32g0b1cbt6.copper",
+  "header": ["Bounded proof of concept: four verified LQFP48 package bonds."],
+  "category": "semiconductor.mcu",
+  "manufacturer": "STMicroelectronics",
+  "footprint": "LQFP-48",
+  "device": "STM32G0B1",
+  "source": {"document": "STM32G0B1xB/xC/xE datasheet", "revision": "DS13560 Rev 6 (February 2026)", "location": "Table 12", "url": "https://www.st.com/resource/en/datasheet/stm32g0b1cc.pdf"}
+}

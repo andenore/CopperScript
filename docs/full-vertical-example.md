@@ -7,11 +7,10 @@ it combines hierarchy, multiple programmable devices, several serial buses,
 three RF paths, high-current modem power, debug connectors, and explicit power
 states.
 
-Reusable device, part, connector, and power-module definitions live in the
-separate CopperLib package
-`github.com/andenore/CopperLib/packages/full_vertical`. The local development
-replacement in `copper.mod` points at the sibling `CopperLib` checkout; the
-compiler repository does not keep duplicate library definitions.
+Reusable device and part definitions live in canonical CopperLib vendor and
+generic packages. The project-only power tree and placeholder level-shifter
+modules live under `examples/packages/vertical_support`; the compiler
+repository does not duplicate the reusable part definitions.
 
 The example is an engineering fixture, not yet a fabrication-ready reference
 design. A clean ERC result means the currently modelled electrical rules are

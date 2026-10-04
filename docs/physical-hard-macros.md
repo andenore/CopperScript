@@ -78,7 +78,8 @@ This does not automatically replace the full-vertical board's electrical circuit
 
 ## Nordic/Johanson trial
 
-CopperLib owns `data/full-vertical/nrf-antenna-hard-macro.json` and its generator.
+CopperLib owns `packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json`
+and its package-local generator.
 The electrical probe/bindings are `examples/nrf_antenna_macro.copper` and
 `examples/nrf_antenna_hard_macro.json`.
 
@@ -116,7 +117,7 @@ Library-author maintenance only (not required for using the examples): from
 the CopperLib repository, regenerate using the locally cached official source:
 
 ```powershell
-python scripts/extract_nrf_antenna_hard_macro.py `
+python packages/circuits/nordic/nrf52832-johanson-reference/generate_trial.py `
   cache/rf-reference/nrf52832qfaxreflayoutv11.zip
 ```
 

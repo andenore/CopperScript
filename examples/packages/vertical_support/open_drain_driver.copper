@@ -1,0 +1,8 @@
+// Prototype functional placeholder; select an orderable transistor/driver before production.
+part OPEN_DRAIN_DRIVER {
+    category = "transistor.driver.open_drain";
+    footprint = "Package_TO_SOT_SMD:SOT-23";
+    pin IN { number = "1"; domains = "digital"; directions = "input"; voltage_max = 3.6V; }
+    pin GND { number = "2"; domains = "ground"; directions = "input"; }
+    pin OUT { number = "3"; domains = "digital"; directions = "output"; drive_modes = "open_drain"; voltage_max = 1.9V; }
+}

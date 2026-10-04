@@ -1,0 +1,16 @@
+{
+  "schema": "copperscript-device-bundle/v0.1",
+  "device": {
+    "name": "STM32G0B1",
+    "output": "stm32g0b1_device.copper",
+    "header": [
+      "Bounded proof of concept: four verified LQFP48 GPIO pads.",
+      "This bundle is incomplete and is not production publishable."
+    ],
+    "metadata": {"vendor": "STMicroelectronics", "family": "STM32G0", "coverage": "PA0, PA1, PC0, PC1 only"},
+    "source": {"document": "STM32G0B1xB/xC/xE datasheet", "revision": "DS13560 Rev 6 (February 2026)", "location": "Table 12", "url": "https://www.st.com/resource/en/datasheet/stm32g0b1cc.pdf"},
+    "resources": [],
+    "power_domains": []
+  },
+  "parts": ["parts/stm32g0b1cbt6"]
+}

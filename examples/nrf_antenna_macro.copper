@@ -3,9 +3,10 @@
 // Its values reproduce Johanson's evaluation example, NOT board-specific tuning.
 board NrfAntennaMacroProbe {
     use library "tiny";
-    import vertical "github.com/andenore/CopperLib/packages/full_vertical";
-    component U_NRF: vertical.NRF52832_QFAA;
-    component ANT_BT: vertical.JOHANSON_2450AT18A0100001E;
+    import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
+    import johanson "github.com/andenore/CopperLib/packages/parts/johanson/2450at18a0100001e";
+    component U_NRF: nordic.NRF52832_QFAA;
+    component ANT_BT: johanson.JOHANSON_2450AT18A0100001E;
     component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
     component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
     component C_ANT_SERIES: CAPACITOR { value = 1pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }

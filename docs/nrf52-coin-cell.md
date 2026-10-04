@@ -3,7 +3,9 @@
 `examples/nrf52_coin_cell.copper` is a small powered electrical example:
 nRF52832 QFAA, the existing Nordic/Johanson RF hard macro, a 10-pin Samtec
 Cortex-M SWD connector, two LEDs, two active-low buttons and a Keystone 3034
-CR2032 holder. New support parts live in CopperLib's `packages/nrf52_demo`,
+CR2032 holder. The orderable holder and reusable nRF parts live in CopperLib's
+canonical vendor packages; illustrative crystal/LED support remains under
+`examples/packages/nrf52_support`,
 not in the compiler repository.
 
 ## Reproduce
