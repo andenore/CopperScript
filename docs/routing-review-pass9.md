@@ -67,9 +67,9 @@ Recorded identities:
 For a fresh run (no cached control), from the installed CopperScript checkout:
 
 ```powershell
-uv run --no-sync python -m pcbir.critical_preflight examples/full_vertical_board.copper `
+uv run --no-sync python -m pcbir.critical_preflight examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --placement-templates examples/full_vertical_placement_templates.json `
+  --placement-templates examples/full_vertical/placement_templates.json `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --footprint-root "..\CopperLib\footprints" `
   --candidates 1 --placement-candidate candidate-01 --feedback-iterations 1 `

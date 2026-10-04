@@ -78,7 +78,7 @@ fanout enabled, `--critical-feedback-trials` adds budget to this unified
 controller rather than running a second critical-first placement controller.
 
 ```powershell
-uv run --no-sync python -m copperscript route-board examples/full_vertical_board.copper `
+uv run --no-sync python -m copperscript route-board examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
   --fanout --package-access-trials 8 --package-access-movement-mm 0.5 `
   --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints" `

@@ -26,7 +26,7 @@ another module invocation, preserving failure exit codes:
 ```powershell
 New-Item -ItemType Directory -Force build/profile | Out-Null
 uv run --no-sync python -m pcbir.profiling --output build/profile/routing.prof `
-  --module copperscript -- route-board examples/valid_board.copper `
+  --module copperscript -- route-board examples/valid_board/board.copper `
   --allow-proxy-footprints --report build/profile/route-report.json `
   -o build/profile/board.kicad_pcb
 ```

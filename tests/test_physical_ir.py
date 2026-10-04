@@ -29,7 +29,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_prototype_physicalizer_keeps_electrical_ir_separate() -> None:
-    electrical = compile_file(ROOT / "examples" / "valid_board.copper")
+    electrical = compile_file(ROOT / "examples/valid_board/board.copper")
     physical = prototype_physicalize(electrical)
 
     assert physical.name == electrical.name
@@ -50,7 +50,7 @@ def test_prototype_physicalizer_keeps_electrical_ir_separate() -> None:
 
 
 def test_four_layer_fabrication_profile_is_explicit() -> None:
-    electrical = compile_file(ROOT / "examples" / "valid_board.copper")
+    electrical = compile_file(ROOT / "examples/valid_board/board.copper")
     options = PrototypePhysicalOptions(
         copper_layers=4, fabrication_profile="jlcpcb-four-layer"
     )
@@ -65,7 +65,7 @@ def test_four_layer_fabrication_profile_is_explicit() -> None:
 
 
 def test_six_layer_fabrication_profile_is_explicit() -> None:
-    electrical = compile_file(ROOT / "examples" / "valid_board.copper")
+    electrical = compile_file(ROOT / "examples/valid_board/board.copper")
     options = PrototypePhysicalOptions(
         copper_layers=6, fabrication_profile="jlcpcb-six-layer"
     )

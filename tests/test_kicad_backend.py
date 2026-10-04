@@ -10,7 +10,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_kicad_backend_generates_self_contained_deterministic_schematic() -> None:
-    board = compile_file(ROOT / "examples" / "valid_board.copper")
+    board = compile_file(ROOT / "examples/valid_board/board.copper")
     backend = KiCadSchematicBackend()
 
     first = backend.generate(board)
@@ -40,7 +40,7 @@ def test_kicad_backend_generates_self_contained_deterministic_schematic() -> Non
 
 
 def test_kicad_backend_maps_effective_device_pad_capabilities() -> None:
-    board = compile_file(ROOT / "examples" / "valid_board.copper")
+    board = compile_file(ROOT / "examples/valid_board/board.copper")
     schematic = KiCadSchematicBackend().generate(board).artifacts[0].content
 
     assert '(pin power_in line\n          (at -10.16' in schematic
@@ -48,7 +48,7 @@ def test_kicad_backend_maps_effective_device_pad_capabilities() -> None:
 
 
 def test_kicad_backend_explicitly_flattens_hierarchy() -> None:
-    board = compile_file(ROOT / "examples" / "hierarchical_board.copper")
+    board = compile_file(ROOT / "examples/hierarchical_board/board.copper")
     manifest = KiCadSchematicBackend().generate(board)
     schematic = manifest.artifacts[0].content
 
@@ -60,7 +60,7 @@ def test_kicad_backend_explicitly_flattens_hierarchy() -> None:
 
 
 def test_smd_cortex_debug_connectors_are_in_schematic_bom() -> None:
-    board = load_board(ROOT / "examples" / "full_vertical_board.copper")
+    board = load_board(ROOT / "examples/full_vertical/board.copper")
     target = board.library["swd.SWD_HEADER"]
     assert target.assembled
     assert target.footprints == ("Connector_Debug:FTSH-105-01-L-DV-007-K",)

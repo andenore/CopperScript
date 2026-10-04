@@ -1,6 +1,6 @@
 # nRF52 coin-cell hard-macro example
 
-`examples/nrf52_coin_cell.copper` is a small powered electrical example:
+`examples/nrf52_coin_cell/board.copper` is a small powered electrical example:
 nRF52832 QFAA, the existing Nordic/Johanson RF hard macro, a 10-pin Samtec
 Cortex-M SWD connector, two LEDs, two active-low buttons and a Keystone 3034
 CR2032 holder. The orderable holder and reusable nRF parts live in CopperLib's
@@ -22,8 +22,8 @@ from CopperScript's root (PowerShell):
 
 ```powershell
 uv sync --extra test
-uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked
-uv run python -m examples.nrf52_example `
+uv run python -m copperscript check examples/nrf52_coin_cell/board.copper --locked
+uv run python -m examples.nrf52_coin_cell.nrf52_example `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
@@ -52,7 +52,7 @@ Without `--route` this remains a placed draft. To attempt the full standard
 placement/global/package-access/critical/plane/detailed pipeline:
 
 ```powershell
-uv run python -m examples.nrf52_example --route `
+uv run python -m examples.nrf52_coin_cell.nrf52_example --route `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
   --output-dir build/nrf52-routed

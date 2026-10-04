@@ -11,7 +11,7 @@ def test_preflight_exports_partial_artifact_and_never_claims_full_signoff(tmp_pa
     report = tmp_path / "preflight.json"
     output = tmp_path / "preflight.kicad_pcb"
     code = main([
-        str(ROOT / "examples" / "valid_board.copper"), "--allow-proxy-footprints",
+        str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
         "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
         "--report", str(report), "-o", str(output),
     ])
@@ -34,7 +34,7 @@ def test_preflight_retains_global_checkpoint_on_critical_interruption(tmp_path, 
     monkeypatch.setattr(preflight, "route_critical_nets", interrupt)
     report = tmp_path / "checkpoint.json"
     assert main([
-        str(ROOT / "examples" / "valid_board.copper"), "--allow-proxy-footprints",
+        str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
         "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
         "--report", str(report),
     ]) == 2
@@ -54,7 +54,7 @@ def test_preflight_keeps_running_group_checkpoint_on_interruption(tmp_path, monk
     monkeypatch.setattr(preflight, "route_critical_nets", interrupt)
     report = tmp_path / "checkpoint.json"
     assert main([
-        str(ROOT / "examples" / "valid_board.copper"), "--allow-proxy-footprints",
+        str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
         "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
         "--report", str(report),
     ]) == 2
@@ -79,7 +79,7 @@ def test_completed_group_checkpoint_retains_metrics_but_not_full_signoff(tmp_pat
     monkeypatch.setattr(preflight, "route_critical_nets", interrupt)
     report = tmp_path / "checkpoint.json"
     assert main([
-        str(ROOT / "examples" / "valid_board.copper"), "--allow-proxy-footprints",
+        str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
         "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
         "--report", str(report),
     ]) == 2
@@ -103,7 +103,7 @@ def test_preflight_forwards_opt_in_feedback_and_exports_selected_result(tmp_path
 
     monkeypatch.setattr(preflight, "improve_critical_placement", observe)
     report = tmp_path / "feedback.json"
-    main([str(ROOT / "examples" / "valid_board.copper"), "--allow-proxy-footprints",
+    main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
           "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
           "--critical-feedback-trials", "1", "--report", str(report)])
     data = json.loads(report.read_text())
@@ -120,7 +120,7 @@ def test_feedback_interruption_retains_baseline_and_proposed_pose(tmp_path, monk
 
     monkeypatch.setattr(preflight, "improve_critical_placement", interrupt)
     report = tmp_path / "feedback.json"
-    assert main([str(ROOT / "examples" / "valid_board.copper"), "--allow-proxy-footprints",
+    assert main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
           "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
           "--critical-feedback-trials", "1", "--report", str(report)]) == 2
     data = json.loads(report.read_text())

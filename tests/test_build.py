@@ -183,7 +183,7 @@ def test_run_paths_and_gates_cannot_be_overridden(tmp_path, option):
 
 def test_compile_creates_output_directory(tmp_path):
     path = tmp_path / "nested/build/board.json"
-    assert copper_main(["compile", str(ROOT / "examples/valid_board.copper"), "-o", str(path)]) == 0
+    assert copper_main(["compile", str(ROOT / "examples/valid_board/board.copper"), "-o", str(path)]) == 0
     assert path.is_file()
 
 
@@ -209,10 +209,10 @@ def test_shared_make_routes_use_generic_runner_and_exact_settings(make, example,
     if example == "cm4":
         assert args.fanout_maze and args.fab_profile == "jlcpcb-four-layer"
     if example == "full-vertical":
-        assert args.placement_templates == ROOT / "examples/full_vertical_placement_templates.json"
+        assert args.placement_templates == ROOT / "examples/full_vertical/placement_templates.json"
         assert args.zone_dependency_expansions == 2 and args.critical_feedback_trials == 0
     if example == "nrf52":
-        assert args.hard_macro == [ROOT / "examples/nrf_antenna_hard_macro.json"]
+        assert args.hard_macro == [ROOT / "examples/nrf_antenna_macro/hard_macro.json"]
 
 
 def test_example_makefile_shares_root_recipes(make):

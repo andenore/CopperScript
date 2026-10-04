@@ -36,7 +36,7 @@ from pcbir.physicalize import PrototypePhysicalOptions
 
 
 def _prototype_board():
-    return prototype_physicalize(load_board("examples/valid_board.copper"))
+    return prototype_physicalize(load_board("examples/valid_board/board.copper"))
 
 
 def test_planner_is_deterministic_and_marks_scope() -> None:
@@ -159,7 +159,7 @@ def test_layout_report_is_machine_readable() -> None:
 
 def test_planner_reports_when_board_cannot_be_legalized() -> None:
     physical = prototype_physicalize(
-        load_board("examples/valid_board.copper"),
+        load_board("examples/valid_board/board.copper"),
         PrototypePhysicalOptions(board_width_mm=10, board_height_mm=10, margin_mm=1),
     )
 
@@ -225,7 +225,7 @@ def test_explicit_45_degree_orientation_is_legal_and_selected() -> None:
 
 
 def test_hierarchy_and_interfaces_create_semantic_placement_groups() -> None:
-    physical = prototype_physicalize(load_board("examples/hierarchical_board.copper"))
+    physical = prototype_physicalize(load_board("examples/hierarchical_board/board.copper"))
 
     module_group = next(
         group for group in physical.placement_groups if group.name == "module:PWR"

@@ -7,7 +7,7 @@ attachments are supported; see [advanced mechanical intent](advanced-mechanical-
 That specification also defines component-owned body overhang, declared height,
 side-specific enclosure limits and moving/rotating tool-access regions. None of
 these mechanical policies relax copper DRC or alter the manufacturing outline.
-`examples/mechanical_anchors.copper` demonstrates a rear 45-degree pad anchor
+`examples/mechanical_anchors/board.copper` demonstrates a rear 45-degree pad anchor
 and an edge-relative mating-face point. Open it with
 `make EXAMPLE=mechanical-anchors edit`. Attachments own the resolved pose:
 edit the attachment or its datum rather than adding a competing placement lock.

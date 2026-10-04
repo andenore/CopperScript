@@ -86,7 +86,7 @@ KiCad output, and reports.
 Run it with:
 
 ```console
-python -m copperscript plan-layout examples/valid_board.copper \
+python -m copperscript plan-layout examples/valid_board/board.copper \
   --allow-proxy-footprints \
   --candidates 3 \
   -o planned.kicad_pcb \

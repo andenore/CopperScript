@@ -1,7 +1,7 @@
 # Hard-macro routing validation and remaining work
 
 The pipeline consumes explicit digest-bound macro scenes via `--hard-macro`.
-The `examples.nrf52_example --route` command uses that same implementation, not an
+The `examples.nrf52_coin_cell.nrf52_example --route` command uses that same implementation, not an
 alternate example router. See [the example commands](nrf52-coin-cell.md).
 
 Completed implementation:

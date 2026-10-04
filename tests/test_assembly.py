@@ -174,7 +174,7 @@ def test_loader_rejects_unknown_fields_duplicate_json_and_wrong_types(tmp_path):
 
 
 def test_hierarchy_uses_qualified_references_without_mutating_ir():
-    board = compile_file(ROOT / "examples/hierarchical_board.copper")
+    board = compile_file(ROOT / "examples/hierarchical_board/board.copper")
     before = tuple(board.components)
     lock = snapshot(board)
     assert "PWR/U1" in {e.reference for e in lock.selections}
@@ -183,7 +183,7 @@ def test_hierarchy_uses_qualified_references_without_mutating_ir():
 
 
 def test_cli_snapshot_never_overwrites_and_partial_check_fails(tmp_path, capsys):
-    board = ROOT / "examples/valid_board.copper"
+    board = ROOT / "examples/valid_board/board.copper"
     path = tmp_path / "assembly.lock"
     assert main(["assembly", "snapshot", str(board), "-o", str(path)]) == 0
     original = path.read_bytes()
@@ -199,7 +199,7 @@ def test_cli_snapshot_never_overwrites_and_partial_check_fails(tmp_path, capsys)
 
 def test_cli_erc_error_prevents_snapshot(tmp_path):
     path = tmp_path / "assembly.lock"
-    assert main(["assembly", "snapshot", str(ROOT / "examples/invalid_board.copper"), "-o", str(path)]) == 1
+    assert main(["assembly", "snapshot", str(ROOT / "examples/invalid_board/board.copper"), "-o", str(path)]) == 1
     assert not path.exists()
 
 

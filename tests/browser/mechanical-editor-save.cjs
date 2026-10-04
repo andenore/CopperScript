@@ -1,4 +1,4 @@
-/* Mutating smoke for a disposable copy of mechanical_editor_demo.copper. */
+/* Mutating smoke for a disposable copy of examples/mechanical_editor_demo/board.copper. */
 const assert=require("node:assert/strict");
 const fs=require("node:fs");
 const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||"playwright");

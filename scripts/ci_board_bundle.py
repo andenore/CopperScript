@@ -60,7 +60,7 @@ def library_module(*, offline: bool):
     """Resolve the public module through the same locked package API as imports."""
     from pcbir.packages import PackageResolver
     from pcbir.syntax import SourceLocation
-    source = ROOT / "examples/full_vertical_board.copper"
+    source = ROOT / "examples/full_vertical/board.copper"
     location = SourceLocation(str(source), 0, 1, 1)
     resolver = PackageResolver.for_source(source, location, locked=True, offline=offline)
     if LIBRARY_MODULE in resolver.manifest.replacements:
@@ -83,8 +83,8 @@ def prepare(output: Path) -> None:
     # The resolver fetches only the pinned revision and verifies every lock byte.
     # Nothing here canonicalizes, refreshes or modifies the authoritative lock.
     library = library_module(offline=False)
-    compile_file(ROOT / "examples/full_vertical_board.copper", locked=True, offline=True)
-    compile_file(ROOT / "examples/nrf52_coin_cell.copper", locked=True, offline=True)
+    compile_file(ROOT / "examples/full_vertical/board.copper", locked=True, offline=True)
+    compile_file(ROOT / "examples/nrf52_coin_cell/board.copper", locked=True, offline=True)
     if lock_path.read_bytes() != original:
         raise ValueError("locked preparation unexpectedly changed copper.lock")
     save(output / "provenance.json", {
@@ -96,8 +96,8 @@ def prepare(output: Path) -> None:
         "github": {key: os.environ.get(key) for key in (
             "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")},
         "inputs": {name: sha(ROOT / name) for name in (
-            "examples/full_vertical_board.copper", "examples/full_vertical_placement_templates.json",
-            "examples/nrf52_coin_cell.copper", "examples/nrf_antenna_hard_macro.json")}})
+            "examples/full_vertical/board.copper", "examples/full_vertical/placement_templates.json",
+            "examples/nrf52_coin_cell/board.copper", "examples/nrf_antenna_macro/hard_macro.json")}})
 
 
 def run_logged(command: list[str], output: Path, seconds: float,

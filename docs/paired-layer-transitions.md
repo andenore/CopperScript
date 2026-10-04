@@ -59,7 +59,7 @@ surface-only shared-spine refinement does not own these multilayer transitions.
 
 ## Example profile
 
-All four USB member profiles in `examples/full_vertical_board.copper` now
+All four USB member profiles in `examples/full_vertical/board.copper` now
 allow `F.Cu,In2.Cu`, with `max_vias = 2`, required `GND` return vias and a
 2 mm maximum distance to both signal vias. This is an explicit provisional
 geometric bound, not a vendor-qualified SI limit. The initial 1.5 mm bound

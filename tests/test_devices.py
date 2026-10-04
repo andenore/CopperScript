@@ -8,7 +8,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_explicit_mcu_mux_selection_is_typed_and_serialized() -> None:
-    board = compile_file(ROOT / "examples" / "valid_board.copper")
+    board = compile_file(ROOT / "examples/valid_board/board.copper")
 
     assert check(board) == []
     part = board.library["stm32.STM32G0B1CBT6"]

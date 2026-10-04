@@ -203,7 +203,7 @@ def test_parser_resource_limits_and_native_example_checksum():
     with pytest.raises(ValueError):parse_dxf(b' '* (MAX_BYTES+1),'mm')
     from pcbir.compiler import compile_design_file
     root=Path(__file__).resolve().parents[1]
-    design=compile_design_file(root/'examples/mechanical_reference.copper')
+    design=compile_design_file(root/'examples/mechanical_reference/board.copper')
     verify_reference_assets(design.mechanical.references)
     assert '*.dxf -text' in (root/'.gitattributes').read_text()
 

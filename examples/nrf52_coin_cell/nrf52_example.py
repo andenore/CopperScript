@@ -18,11 +18,11 @@ from pcbir.clusters import cluster_placements
 from pcbir.drc import run_physical_drc
 from pcbir.erc import check
 from pcbir.hard_macros import apply_hard_macro_scene, materialize_hard_macros
-from .hard_macro_trial import document
+from examples.nrf_antenna_macro.hard_macro_trial import document
 from pcbir.placement import placement_solution_is_legal
 
-ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "examples/nrf52_coin_cell.copper"
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = ROOT / "examples/nrf52_coin_cell/board.copper"
 
 
 def make_example(footprint_roots, *, offline=False):
@@ -34,7 +34,7 @@ def make_example(footprint_roots, *, offline=False):
         FootprintResolver(SOURCE.parent, tuple(footprint_roots), locked=True, offline=offline),
         PrototypePhysicalOptions(board_width_mm=50, board_height_mm=40,
             copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
-    scene_path = ROOT / "examples/nrf_antenna_hard_macro.json"
+    scene_path = ROOT / "examples/nrf_antenna_macro/hard_macro.json"
     board = apply_hard_macro_scene(board, scene_path, offline=offline)
     poses = {p.reference: p for p in board.placements}
     for rule in board.placement_rules:
@@ -65,7 +65,7 @@ def main(argv=None):
         args.output_dir.mkdir(parents=True,exist_ok=True)
         command = ["route-board",str(SOURCE),"--locked","--width-mm","50","--height-mm","40",
             "--layers","6","--fab-profile","jlcpcb-six-layer","--hard-macro",
-            str(ROOT / "examples/nrf_antenna_hard_macro.json"),
+            str(ROOT / "examples/nrf_antenna_macro/hard_macro.json"),
             "--pitch-mm","0.5","--passes","2","--search-budget","20000","--soft-ripup",
             "--fanout","--package-access-trials","0","--zone-escape-trials","0",
             "--zone-local-ripup-trials","0","--constrained-pins-first","--progressive-guides",

@@ -95,7 +95,7 @@ def test_cli_physical_paths_apply_templates_once(command, tmp_path, monkeypatch,
         raise ValueError("template integration probe")
     monkeypatch.setattr("pcbir.cli.apply_placement_templates", probe)
     path = tmp_path / "scene.json"
-    assert main([command, "examples/valid_board.copper", "--allow-proxy-footprints",
+    assert main([command, "examples/valid_board/board.copper", "--allow-proxy-footprints",
                  "--placement-templates", str(path)]) == 2
     assert calls == [path]
     assert "template integration probe" in capsys.readouterr().out
@@ -115,7 +115,7 @@ def test_source_bound_nordic_matching_routes_on_installed_footprints(rotation):
     library = root.parent / "CopperLib"
     if not footprints.is_dir() or not library.is_dir():
         pytest.skip("optional real-reference regression requires installed KiCad and sibling CopperLib")
-    original = resolved_physicalize(compile_file(root / "examples/full_vertical_board.copper"),
+    original = resolved_physicalize(compile_file(root / "examples/full_vertical/board.copper"),
         FootprintResolver(root / "examples", (footprints, library / "footprints")),
         PrototypePhysicalOptions(copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     refs = {"U_NRF", "C_BT_MATCH", "L_BT_MATCH"}
@@ -127,7 +127,7 @@ def test_source_bound_nordic_matching_routes_on_installed_footprints(rotation):
               for net in original.nets if net.name in {"NRF_RF_RAW", "NRF_RF_ANT", "GND"}),
         stackup=original.stackup, rules=original.rules,
         net_routing_rules=tuple(rule for rule in original.net_routing_rules if rule.net == "NRF_RF_RAW"))
-    board = apply_placement_templates(board, root / "examples/full_vertical_placement_templates.json")
+    board = apply_placement_templates(board, root / "examples/full_vertical/placement_templates.json")
     current = {pose.reference: pose for pose in board.placements}
     current.update(cluster_placements(board, board.rigid_clusters[0], replace(
         current["U_NRF"], position=Point.mm(20, 20), rotation_degrees=rotation)))

@@ -285,7 +285,7 @@ def test_http_success_and_stale_revision(http_editor):
 
 
 def test_cli_scene_export_is_deterministic_and_does_not_overwrite_source(tmp_path):
-    source = Path("examples/mechanical_outline.copper")
+    source = Path("examples/mechanical_outline/board.copper")
     original = source.read_bytes()
     output = tmp_path / "scene.json"
     args = ["edit-mechanical", str(source), "--allow-proxy-footprints", "--scene-output", str(output)]

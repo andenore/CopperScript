@@ -11,7 +11,7 @@ from pcbir.physical import BoardSide, CopperLayer, Point, RouteKind, nm_from_mm
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE = ROOT / "examples" / "full_vertical_board.copper"
+EXAMPLE = ROOT / "examples/full_vertical/board.copper"
 
 FIXED_FLOORPLAN = {
     "J_POWER": ("12", "74", 0),
@@ -54,7 +54,7 @@ def test_fixed_floorplan_is_legal_on_installed_footprints_and_preserves_rf_macro
     physical = resolved_physicalize(compile_file(EXAMPLE),
         FootprintResolver(EXAMPLE.parent, (footprints, library / "footprints")),
         PrototypePhysicalOptions(copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
-    physical = apply_placement_templates(physical, EXAMPLE.parent / "full_vertical_placement_templates.json")
+    physical = apply_placement_templates(physical, EXAMPLE.parent / "placement_templates.json")
     refs = set(FIXED_FLOORPLAN) | {"C_BT_MATCH", "L_BT_MATCH"}
     poses = {pose.reference: pose for pose in physical.placements if pose.reference in refs}
     for rule in physical.placement_rules:

@@ -1,6 +1,6 @@
 # Round MCU / CR2032 LED-ring example
 
-`examples/round_led_ring.copper` defines a small inspection design: twelve
+`examples/round_led_ring/board.copper` defines a small inspection design: twelve
 independent active-low LED channels, nRF52832 QFAA, Keystone 3034 CR2032 holder,
 10-pin Cortex-M SWD header, LDO support/bypass/bulk capacitors and reset pull-up. All device
 parts reuse the pinned GitHub CopperLib dependency; no sibling checkout or new
@@ -34,7 +34,7 @@ From the repository root, with installed KiCad footprints (PowerShell):
 Use the generic compiler directly (no example builder required):
 
 ```powershell
-uv run copper export-kicad-pcb examples/round_led_ring.copper --locked `
+uv run copper export-kicad-pcb examples/round_led_ring/board.copper --locked `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   -o build/round-led-ring/round_led_ring.kicad_pcb
 ```
@@ -42,8 +42,8 @@ uv run copper export-kicad-pcb examples/round_led_ring.copper --locked `
 The optional repository-only wrapper adds previews, profiling and native checks:
 
 ```powershell
-uv run python -m copperscript check examples/round_led_ring.copper --locked
-uv run python -m examples.round_led_example `
+uv run python -m copperscript check examples/round_led_ring/board.copper --locked
+uv run python -m examples.round_led_ring.round_led_example `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe"
 ```
@@ -57,7 +57,7 @@ destination. Performance profiling is always enabled.
 To attempt package escapes and detailed signal routing with native ground refill:
 
 ```powershell
-uv run python -m examples.round_led_example --route `
+uv run python -m examples.round_led_ring.round_led_example --route `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
   --output-dir build/round-led-ring-routed

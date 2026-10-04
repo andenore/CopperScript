@@ -126,7 +126,7 @@ def test_cli_reports_colliding_output_paths_without_partial_project(tmp_path, ca
     from pcbir.cli import main
 
     root = Path(__file__).resolve().parents[1]
-    assert main(["export-kicad-pcb", str(root / "examples/resolved_footprint_board.copper"),
+    assert main(["export-kicad-pcb", str(root / "examples/resolved_footprint_board/board.copper"),
                  "-o", str(tmp_path / "wrong.kicad_pro")]) == 2
     assert "OUTPUT ERROR: generated artifact destinations collide" in capsys.readouterr().out
     assert not list(tmp_path.iterdir())

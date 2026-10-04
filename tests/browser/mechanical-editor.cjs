@@ -1,5 +1,5 @@
 /* Optional headless browser smoke. Run against a freshly started
- * mechanical_editor_demo.copper session; this test changes temporary poses/locks.
+ * examples/mechanical_editor_demo/board.copper session; this test changes temporary poses/locks.
  * npm/Playwright are test-only dependencies, not CopperScript runtime deps.
  * COPPER_PLAYWRIGHT_MODULE / COPPER_BROWSER_EXECUTABLE allow explicit installed tools.
  */

@@ -1,7 +1,7 @@
 """Build a 50 mm, twelve-LED coin-cell board with a true circular outline.
 
 Connectivity, mechanical geometry, fixed placements and pour intent are entirely
-in examples/round_led_ring.copper. This optional wrapper renders the example.
+in examples/round_led_ring/board.copper. This optional wrapper renders the example.
 No firmware or manufacturing
 qualification is implied. Profiling is enabled for every run.
 """
@@ -27,8 +27,8 @@ from pcbir.backends.kicad_pcb import KiCadPcbBackend
 from pcbir.backends.kicad_project import write_kicad_project
 from pcbir.drc import run_physical_drc
 
-ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "examples/round_led_ring.copper"
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = ROOT / "examples/round_led_ring/board.copper"
 
 
 def make_example(footprint_roots, *, offline=False):

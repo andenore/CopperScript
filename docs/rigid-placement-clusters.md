@@ -84,7 +84,7 @@ do not create tracks, return vias or ground connectivity.
 
 ## Source-backed CLI scene
 
-`examples/full_vertical_placement_templates.json` binds CopperLib's extracted
+`examples/full_vertical/placement_templates.json` binds CopperLib's extracted
 Nordic QFAA LDO U1/C3/L1 midpoint/rotation data to U_NRF/C_BT_MATCH/L_BT_MATCH.
 The scene pins both reference bytes and complete resolved footprint digests,
 then checks the declared physical pad/net roles. Changed source/footprints,
@@ -97,9 +97,9 @@ members' component rules permit them.
 Example, from the CopperScript root with the sibling CopperLib checkout:
 
 ```powershell
-uv run python -m pcbir.critical_preflight examples/full_vertical_board.copper `
+uv run python -m pcbir.critical_preflight examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --placement-templates examples/full_vertical_placement_templates.json `
+  --placement-templates examples/full_vertical/placement_templates.json `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --footprint-root "..\CopperLib\footprints" `
   --report build/rf-preflight.json -o build/rf-critical.kicad_pcb

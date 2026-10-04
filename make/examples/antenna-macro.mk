@@ -1,1 +1,1 @@
-SOURCE ?= $(COPPER_ROOT)/examples/nrf_antenna_macro.copper
+SOURCE ?= $(COPPER_ROOT)/examples/nrf_antenna_macro/board.copper

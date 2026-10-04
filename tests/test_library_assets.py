@@ -95,7 +95,7 @@ def test_cli_physical_paths_bind_explicit_macros_once(command,tmp_path,monkeypat
     monkeypatch.setattr("pcbir.hard_macros.apply_hard_macro_scene",probe)
     from pcbir.cli import main
     scene = tmp_path / "scene.json"
-    assert main([command,"examples/valid_board.copper","--allow-proxy-footprints",
+    assert main([command,"examples/valid_board/board.copper","--allow-proxy-footprints",
         "--hard-macro",str(scene),"--locked","--offline"]) == 2
     assert calls == [(scene,{"locked":True,"offline":True})]
     assert "macro integration probe" in capsys.readouterr().out

@@ -1,1 +1,1 @@
-SOURCE ?= $(COPPER_ROOT)/examples/mechanical_anchors.copper
+SOURCE ?= $(COPPER_ROOT)/examples/mechanical_anchors/board.copper

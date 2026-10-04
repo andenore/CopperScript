@@ -288,7 +288,7 @@ board/source revision, browser actions and explicit remaining limitations.
 - Native KiCad verifies the original (not expanded) outline and retained height
   field; this is not native 3D enclosure collision checking. Chrome anchor smoke
   also passes enclosure/access rendering, save and byte-exact undo, zero page
-  errors. `examples/mechanical_anchors.copper` includes these policies.
+  errors. `examples/mechanical_anchors/board.copper` includes these policies.
 - Items 27–28 remain open. Publication and CopperLedRing's public compiler-pin
   update remain pending the outstanding approval, separate from local verification.
 

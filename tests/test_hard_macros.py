@@ -285,7 +285,7 @@ def test_existing_fixed_orientation_is_not_broadened_by_macro(tmp_path):
 def test_actual_nordic_antenna_trial_has_no_opens_or_hard_findings(rotation,tmp_path):
     roots=(Path("C:/Program Files/KiCad/10.0/share/kicad/footprints"),Path(__file__).resolve().parents[2]/"CopperLib/footprints")
     if not all(p.is_dir() for p in roots): pytest.skip("optional installed-footprint/source-backed trial")
-    from examples.hard_macro_trial import make_trial,document
+    from examples.nrf_antenna_macro.hard_macro_trial import make_trial,document
     from pcbir.drc import run_physical_drc,PhysicalDrcPolicy
     from pcbir.backends.kicad_pcb import KiCadPcbBackend
     from pcbir.backends.kicad_project import write_kicad_project
@@ -324,7 +324,7 @@ def test_kicad_ground_refill_respects_matching_and_antenna_exclusions(tmp_path):
     roots=(native.parents[1]/"share/kicad/footprints",Path(__file__).resolve().parents[2]/"CopperLib/footprints")
     if not native.is_file() or not cli.is_file() or not all(p.is_dir() for p in roots):
         pytest.skip("optional independent native KiCad refill check")
-    from examples.hard_macro_trial import make_trial
+    from examples.nrf_antenna_macro.hard_macro_trial import make_trial
     from pcbir.physical import CopperZone,PolygonRing,PolygonWithHoles,ZoneConnection
     from pcbir.backends.kicad_pcb import KiCadPcbBackend
     from pcbir.backends.kicad_project import write_kicad_project

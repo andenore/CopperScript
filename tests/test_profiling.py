@@ -14,7 +14,7 @@ from pcbir import profiling
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("board,code", [("valid_board.copper", 0), ("invalid_board.copper", 1)])
+@pytest.mark.parametrize("board,code", [("valid_board/board.copper", 0), ("invalid_board/board.copper", 1)])
 def test_real_module_exit_and_diagnostics_identical_when_profiled(tmp_path, board, code):
     command = [sys.executable, "-u", "-m", "copperscript", "check", str(ROOT / "examples" / board)]
     plain = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
@@ -83,7 +83,7 @@ def test_summary_bounds_rows_but_raw_preserves_all_functions(tmp_path):
 
 def test_real_routing_geometry_reports_and_project_bytes_identical(tmp_path):
     base = [sys.executable, "-u", "-m", "copperscript", "route-board",
-            str(ROOT / "examples/valid_board.copper"), "--allow-proxy-footprints",
+            str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
             "--candidates", "1", "--zone-escape-trials", "0", "--zone-local-ripup-trials", "0"]
     commands = []
     for name in ("plain", "observed"):

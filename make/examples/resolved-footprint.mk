@@ -1,1 +1,1 @@
-SOURCE ?= $(COPPER_ROOT)/examples/resolved_footprint_board.copper
+SOURCE ?= $(COPPER_ROOT)/examples/resolved_footprint_board/board.copper

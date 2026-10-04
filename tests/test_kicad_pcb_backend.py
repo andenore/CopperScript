@@ -84,7 +84,7 @@ def test_filled_capped_via_exports_qualified_kicad_minima() -> None:
 
 
 def test_kicad_pcb_backend_marks_proxy_board_as_non_fabrication_ready() -> None:
-    electrical = compile_file(ROOT / "examples" / "valid_board.copper")
+    electrical = compile_file(ROOT / "examples/valid_board/board.copper")
     physical = prototype_physicalize(electrical)
 
     manifest = KiCadPcbBackend().generate(physical)

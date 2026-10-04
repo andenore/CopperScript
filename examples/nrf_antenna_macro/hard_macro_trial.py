@@ -19,17 +19,17 @@ from pcbir.erc import check
 from pcbir.hard_macros import apply_hard_macro_scene, materialize_hard_macros
 from pcbir.physical import Point
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def make_trial(footprint_roots, rotation=0):
-    source = ROOT / "examples/nrf_antenna_macro.copper"
+    source = ROOT / "examples/nrf_antenna_macro/board.copper"
     electrical = compile_file(source,locked=True)
     diagnostics = check(electrical)
     board = resolved_physicalize(electrical, FootprintResolver(source.parent, tuple(footprint_roots), locked=True),
         PrototypePhysicalOptions(board_width_mm=50, board_height_mm=40,
                                  copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
-    scene_path = ROOT / "examples/nrf_antenna_hard_macro.json"
+    scene_path = ROOT / "examples/nrf_antenna_macro/hard_macro.json"
     board = apply_hard_macro_scene(board, scene_path)
     current = {p.reference: p for p in board.placements}
     # Default assembly mounts at the upper-right corner of a 50x40 mm probe.

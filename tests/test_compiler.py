@@ -10,7 +10,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_valid_source_compiles_to_typed_ir() -> None:
-    board = compile_file(ROOT / "examples" / "valid_board.copper")
+    board = compile_file(ROOT / "examples/valid_board/board.copper")
     assert board.name == "ValidSensorBoard"
     assert board.components[4].value == kiloohms(4.7)
     assert board.supplies[1].voltage == volts(3.3)

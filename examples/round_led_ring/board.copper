@@ -1,5 +1,5 @@
 // 12 independent, low-current red LED channels on a 50 mm circular board.
-// Board outline / ring poses are separate physical intent in examples.round_led_example.
+// Board outline / ring poses are separate physical intent in examples.round_led_ring.round_led_example.
 // CR2032 is primary (not rechargeable). SWD VREF is sense only; no power injection.
 board RoundLedRing {
     use library "tiny";

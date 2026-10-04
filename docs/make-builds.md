@@ -36,8 +36,8 @@ Targets:
 | `route` | Profiled package escape/routing, saved copper fill and native DRC |
 | `compile-examples` (root only) | Compile all 13 registered complete examples |
 
-`compile-examples` excludes `invalid_board.copper` and the intentionally
-incomplete `nrf_antenna_macro.copper` probe. It does not waive ERC. A selectable
+`compile-examples` excludes `examples/invalid_board/board.copper` and the intentionally
+incomplete `examples/nrf_antenna_macro/board.copper` probe. It does not waive ERC. A selectable
 example is not a promise of successful routing or production readiness: only
 an actual passed route/fill/DRC run establishes that board's connectivity.
 The CM4 four-layer routing preset has been verified with KiCad 10.0.6.
@@ -85,7 +85,7 @@ Profiles are preferences, never hardcoded geometry or weakened DRC rules.
 Any `.copper` board can use the root recipes, not just registered examples:
 
 ```sh
-make SOURCE=examples/hierarchical_board.copper compile
+make SOURCE=examples/hierarchical_board/board.copper compile
 make SOURCE=path/to/my_board.copper route LAYERS=4 FAB_PROFILE=jlcpcb-four-layer
 ```
 

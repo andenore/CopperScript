@@ -9,7 +9,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_hierarchical_board_elaborates_and_passes_erc() -> None:
-    board = compile_file(ROOT / "examples" / "hierarchical_board.copper")
+    board = compile_file(ROOT / "examples/hierarchical_board/board.copper")
 
     assert check(board) == []
     assert [(instance.ref, instance.module) for instance in board.module_instances] == [
@@ -34,7 +34,7 @@ def test_hierarchical_board_elaborates_and_passes_erc() -> None:
 
 
 def test_module_constraints_are_qualified() -> None:
-    board = compile_file(ROOT / "examples" / "hierarchical_board.copper")
+    board = compile_file(ROOT / "examples/hierarchical_board/board.copper")
     definition = board.module_definitions["power.Buck5VTo3V3"]
     local_targets = {
         target for constraint in definition.constraints for target in constraint.targets

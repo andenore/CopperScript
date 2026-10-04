@@ -1,6 +1,6 @@
 # Full-vertical acceptance design
 
-`examples/full_vertical_board.copper` is the integration design used to grow
+`examples/full_vertical/board.copper` is the integration design used to grow
 CopperScript from an electrical description into production Gerber and drill
 files. It is intentionally more demanding than the small language examples:
 it combines hierarchy, multiple programmable devices, several serial buses,
@@ -67,7 +67,7 @@ reviewing these coordinates.
 
 `J_GNSS` remains automatic but must be within 5 mm of the GNSS RF input.
 Other components remain automatic and retain their existing proximity rules.
-Use `examples/full_vertical_placement_templates.json` when planning or routing:
+Use `examples/full_vertical/placement_templates.json` when planning or routing:
 it preserves the source-backed Nordic matching components as a rigid unit
 with the fixed U_NRF anchor. Placement/routing feedback cannot move a hard
 lock; incompatible constraints must fail rather than silently relax it.
@@ -77,9 +77,9 @@ the README setup:
 
 ```powershell
 New-Item -ItemType Directory -Force build/constrained-placement | Out-Null
-uv run --no-sync python -m copperscript plan-layout examples/full_vertical_board.copper `
+uv run --no-sync python -m copperscript plan-layout examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --placement-templates examples/full_vertical_placement_templates.json `
+  --placement-templates examples/full_vertical/placement_templates.json `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --footprint-root "..\CopperLib\footprints" --candidates 1 `
   --report build/constrained-placement/layout-report.json `
@@ -209,7 +209,7 @@ Before spending time on ordinary detailed routing, run the same initial
 placement/global/critical stages in isolation (after the README setup):
 
 ```powershell
-uv run --no-sync python -m pcbir.critical_preflight examples/full_vertical_board.copper `
+uv run --no-sync python -m pcbir.critical_preflight examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --footprint-root "..\CopperLib\footprints" `
@@ -345,7 +345,7 @@ this does not qualify impedance or production readiness.
 - Selecting the distinct legal placement `candidate-01` reaches 49 of 58 nets
   after eight passes. Nine nets remain open, all at the 10,000-state search
   limit. The placement is promising but still not fabrication-ready.
-- `examples/full_vertical_provisional_4layer.kicad_pcb` is a placed,
+- `examples/full_vertical/provisional_4layer.kicad_pcb` is a placed,
   **unrouted** KiCad 10 preview for mechanical and component-location review.
   It is deliberately not a fabrication deliverable; its adjacent layout JSON
   records the placement gate result.
@@ -383,14 +383,14 @@ layer-specific 90-ohm impedance or filled-plane continuity. RF profiles remain
 unchanged. See [paired layer transitions](paired-layer-transitions.md).
 
 ```text
-python -m copperscript check examples/full_vertical_board.copper
-python -m copperscript power-check examples/full_vertical_board.copper
-python -m copperscript compile examples/full_vertical_board.copper -o board.json
-python -m copperscript export-kicad examples/full_vertical_board.copper -o full_vertical_board.kicad_sch
-python -m copperscript plan-layout examples/full_vertical_board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
-python -m copperscript route-global examples/full_vertical_board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 -o full_vertical.global-route.json
-python -m copperscript route-board examples/full_vertical_board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 --pitch-mm 1 --passes 1 --report full_vertical.route-report.json -o full_vertical.routed-draft.kicad_pcb
-python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --json
+python -m copperscript check examples/full_vertical/board.copper
+python -m copperscript power-check examples/full_vertical/board.copper
+python -m copperscript compile examples/full_vertical/board.copper -o board.json
+python -m copperscript export-kicad examples/full_vertical/board.copper -o full_vertical_board.kicad_sch
+python -m copperscript plan-layout examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
+python -m copperscript route-global examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 -o full_vertical.global-route.json
+python -m copperscript route-board examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 --pitch-mm 1 --passes 1 --report full_vertical.route-report.json -o full_vertical.routed-draft.kicad_pcb
+python -m copperscript audit-footprints examples/full_vertical/board.copper --locked --offline --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --json
 ```
 
 The last command emits a deterministic JSON coverage list (`passed`,

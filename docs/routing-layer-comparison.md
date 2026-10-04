@@ -1,6 +1,6 @@
 # Full-vertical prototype: four versus six routing layers
 
-This is a bounded routing experiment on `examples/full_vertical_board.copper`,
+This is a bounded routing experiment on `examples/full_vertical/board.copper`,
 not a fabrication release. Both runs used the same 100 x 80 mm provisional
 outline, resolved KiCad/CopperLib footprints, nominal 0.09 mm clearance,
 0.20 mm default track width, one placement candidate, one global feedback
@@ -40,7 +40,7 @@ exhaustion remain important even if more layers are available.
 The routing command for each stronger run was:
 
 ```console
-python -m copperscript route-board examples/full_vertical_board.copper \
+python -m copperscript route-board examples/full_vertical/board.copper \
   --locked --offline --layers L --fab-profile PROFILE \
   --footprint-root PATH_TO_KICAD_FOOTPRINTS \
   --footprint-root PATH_TO_COPPERLIB_FOOTPRINTS \

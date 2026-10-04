@@ -35,9 +35,11 @@ def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
     (tmp_path / ".github/board-toolchain.json").write_text('{}')
     original = b'{"modules": []}\n'
     (tmp_path / "copper.lock").write_bytes(original)
-    for name in ("full_vertical_board.copper", "full_vertical_placement_templates.json",
-                 "nrf52_coin_cell.copper", "nrf_antenna_hard_macro.json"):
-        (tmp_path / "examples" / name).write_text("fixture\n")
+    for name in ("full_vertical/board.copper", "full_vertical/placement_templates.json",
+                 "nrf52_coin_cell/board.copper", "nrf_antenna_macro/hard_macro.json"):
+        path = tmp_path / "examples" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture\n")
     calls = []
     def resolve(**kwargs):
         assert kwargs == {"offline": False}

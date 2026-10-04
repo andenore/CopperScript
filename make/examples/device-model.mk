@@ -1,1 +1,1 @@
-SOURCE ?= $(COPPER_ROOT)/examples/device_model_showcase.copper
+SOURCE ?= $(COPPER_ROOT)/examples/device_model_showcase/board.copper

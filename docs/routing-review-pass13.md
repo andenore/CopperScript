@@ -176,7 +176,7 @@ Recorded identities:
 - Independent DRC: `9a7f3c93b93b512083affb40c0f31b47549e5c9c66b1fa13d92eae2fe6d3d021`.
 
 Reproduce with the README's complete `route-board` command, also passing
-`--placement-templates examples/full_vertical_placement_templates.json` and
+`--placement-templates examples/full_vertical/placement_templates.json` and
 `--critical-feedback-trials 0`. Keep the corrected library and locked bytes.
 Future runs include policy telemetry, but its addition does not change geometry.
 

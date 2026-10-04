@@ -18,13 +18,13 @@ def run_cli(example: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_cli_accepts_valid_copper_board() -> None:
-    result = run_cli("valid_board.copper")
+    result = run_cli("valid_board/board.copper")
     assert result.returncode == 0
     assert "passed ERC" in result.stdout
 
 
 def test_cli_rejects_invalid_copper_board() -> None:
-    result = run_cli("invalid_board.copper")
+    result = run_cli("invalid_board/board.copper")
     assert result.returncode == 1
     assert "OUTPUT_CONFLICT" in result.stdout
     assert "I2C_MISSING_PULLUP" in result.stdout
@@ -32,7 +32,7 @@ def test_cli_rejects_invalid_copper_board() -> None:
 
 def test_cli_footprint_audit_json_is_machine_readable() -> None:
     command = [sys.executable, "-m", "copperscript", "audit-footprints",
-               "examples/valid_board.copper", "--json"]
+               "examples/valid_board/board.copper", "--json"]
     first = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
     second = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
     assert first.stdout == second.stdout
@@ -44,7 +44,7 @@ def test_cli_footprint_audit_json_is_machine_readable() -> None:
 
 def test_cli_compiles_to_json() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "copperscript", "compile", "examples/valid_board.copper"],
+        [sys.executable, "-m", "copperscript", "compile", "examples/valid_board/board.copper"],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -58,7 +58,7 @@ def test_cli_compiles_to_json() -> None:
 
 def test_cli_json_preserves_hierarchy() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "copperscript", "compile", "examples/hierarchical_board.copper"],
+        [sys.executable, "-m", "copperscript", "compile", "examples/hierarchical_board/board.copper"],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -79,7 +79,7 @@ def test_cli_rejects_python_board_sources() -> None:
 
 def test_cli_runs_power_state_analysis() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "copperscript", "power-check", "examples/valid_board.copper"],
+        [sys.executable, "-m", "copperscript", "power-check", "examples/valid_board/board.copper"],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -97,7 +97,7 @@ def test_cli_exports_kicad_schematic(tmp_path: Path) -> None:
             "-m",
             "copperscript",
             "export-kicad",
-            "examples/valid_board.copper",
+            "examples/valid_board/board.copper",
             "-o",
             str(output),
         ],
@@ -120,7 +120,7 @@ def test_cli_refuses_kicad_export_when_erc_fails(tmp_path: Path) -> None:
             "-m",
             "copperscript",
             "export-kicad",
-            "examples/invalid_board.copper",
+            "examples/invalid_board/board.copper",
             "-o",
             str(output),
         ],
@@ -143,7 +143,7 @@ def test_cli_exports_prototype_kicad_pcb(tmp_path: Path) -> None:
             "-m",
             "copperscript",
             "export-kicad-pcb",
-            "examples/valid_board.copper",
+            "examples/valid_board/board.copper",
             "-o",
             str(output),
             "--allow-proxy-footprints",
@@ -169,7 +169,7 @@ def test_cli_exports_pcb_with_resolved_kicad_mod(tmp_path: Path) -> None:
             "-m",
             "copperscript",
             "export-kicad-pcb",
-            "examples/resolved_footprint_board.copper",
+            "examples/resolved_footprint_board/board.copper",
             "-o",
             str(output),
         ],
@@ -193,7 +193,7 @@ def test_cli_exports_provisional_four_layer_board(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable, "-m", "copperscript", "export-kicad-pcb",
-            "examples/resolved_footprint_board.copper", "--layers", "4",
+            "examples/resolved_footprint_board/board.copper", "--layers", "4",
             "-o", str(output),
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -210,7 +210,7 @@ def test_cli_accepts_explicit_four_layer_fabrication_profile(tmp_path: Path) -> 
     result = subprocess.run(
         [
             sys.executable, "-m", "copperscript", "export-kicad-pcb",
-            "examples/resolved_footprint_board.copper", "--layers", "4",
+            "examples/resolved_footprint_board/board.copper", "--layers", "4",
             "--fab-profile", "jlcpcb-four-layer", "-o", str(output),
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -228,7 +228,7 @@ def test_cli_exports_provisional_six_layer_board(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable, "-m", "copperscript", "export-kicad-pcb",
-            "examples/resolved_footprint_board.copper", "--layers", "6",
+            "examples/resolved_footprint_board/board.copper", "--layers", "6",
             "--fab-profile", "jlcpcb-six-layer", "-o", str(output),
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -253,7 +253,7 @@ def test_cli_does_not_silently_fall_back_to_proxy_footprints(
             "-m",
             "copperscript",
             "export-kicad-pcb",
-            "examples/valid_board.copper",
+            "examples/valid_board/board.copper",
             "-o",
             str(output),
         ],
@@ -277,7 +277,7 @@ def test_cli_plans_layout_and_writes_readiness_report(tmp_path: Path) -> None:
             "-m",
             "copperscript",
             "plan-layout",
-            "examples/valid_board.copper",
+            "examples/valid_board/board.copper",
             "-o",
             str(output),
             "--report",
@@ -313,7 +313,7 @@ def test_cli_writes_global_routing_guides(tmp_path: Path) -> None:
             "-m",
             "copperscript",
             "route-global",
-            "examples/valid_board.copper",
+            "examples/valid_board/board.copper",
             "-o",
             str(output),
             "--allow-proxy-footprints",
@@ -340,7 +340,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     result = subprocess.run(
         [
             sys.executable, "-m", "copperscript", "route-board",
-            "examples/valid_board.copper", "--allow-proxy-footprints",
+            "examples/valid_board/board.copper", "--allow-proxy-footprints",
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
             "--fanout",
             "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
@@ -397,7 +397,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
 def test_cli_requires_plane_stitch_and_six_layers_for_ground_via_in_pad() -> None:
     command = [
         sys.executable, "-m", "copperscript", "route-board",
-        "examples/valid_board.copper", "--allow-proxy-footprints",
+        "examples/valid_board/board.copper", "--allow-proxy-footprints",
         "--ground-via-in-pad",
     ]
     without_stitch = subprocess.run(
@@ -418,7 +418,7 @@ def test_cli_rejects_unknown_selective_plane_pad() -> None:
     result = subprocess.run(
         [
             sys.executable, "-m", "copperscript", "route-board",
-            "examples/valid_board.copper", "--allow-proxy-footprints",
+            "examples/valid_board/board.copper", "--allow-proxy-footprints",
             "--stitch-zone-pads", "--early-plane-pad", "UNKNOWN.1",
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -432,7 +432,7 @@ def test_cli_rejects_nonpositive_plane_search_step() -> None:
     result = subprocess.run(
         [
             sys.executable, "-m", "copperscript", "route-board",
-            "examples/valid_board.copper", "--plane-stitch-step-mm", "0",
+            "examples/valid_board/board.copper", "--plane-stitch-step-mm", "0",
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
     )

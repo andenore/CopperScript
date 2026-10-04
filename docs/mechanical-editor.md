@@ -162,7 +162,7 @@ CLI contract: `copper edit-mechanical board.copper --footprint-root <root>`.
 The launch command is now implemented. From the CopperScript checkout:
 
 ```powershell
-uv run copper edit-mechanical examples/mechanical_editor_demo.copper --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
+uv run copper edit-mechanical examples/mechanical_editor_demo/board.copper --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
 # Compile a real project's locked scene without starting a service:
 uv run copper edit-mechanical ../CopperLedRing/board.copper --locked --offline --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints" --scene-output build/led-ring-scene.json
 ```

@@ -6,7 +6,7 @@ from pcbir.serializer import board_to_dict
 
 
 ROOT = Path(__file__).parents[1]
-SHOWCASE = ROOT / "examples" / "device_model_showcase.copper"
+SHOWCASE = ROOT / "examples/device_model_showcase/board.copper"
 
 
 def test_cross_vendor_showcase_compiles_and_serializes_rich_semantics() -> None:

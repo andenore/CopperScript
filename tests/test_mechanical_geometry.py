@@ -19,7 +19,7 @@ from pcbir import (
 from pcbir.drc import DrcCompleteness, PhysicalDrcPolicy, physical_board_digest
 from pcbir.geometry import RoundedConvexShape
 from pcbir.mechanical import hole_shape, point_in_material, shape_in_board
-from examples.mechanical_example import build_mechanical_example
+from examples.mechanical_probe.mechanical_example import build_mechanical_example
 from pcbir.physical import PolygonRing, PolygonWithHoles, ZoneFillResult
 from pcbir.placement import placement_solution_is_legal
 from pcbir.process_drc import (

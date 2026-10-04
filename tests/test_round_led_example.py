@@ -15,9 +15,9 @@ from pcbir import (
 from pcbir.drc import PhysicalDrcPolicy, physical_board_digest, placed_pad_shape, run_physical_drc
 from pcbir.geometry import RoundedConvexShape, segment_distance_squared, shapes_clear
 from pcbir.mechanical import point_in_material, ring_edges, shape_in_board
-from examples.mechanical_example import build_mechanical_example
+from examples.mechanical_probe.mechanical_example import build_mechanical_example
 from pcbir.placement import placement_solution_is_legal, transformed_local_point
-from examples.round_led_example import SOURCE, main, make_example, placement_svg, stitch_ground_pours
+from examples.round_led_ring.round_led_example import SOURCE, main, make_example, placement_svg, stitch_ground_pours
 from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.surface_path import _track_inside_board, via_inside_board
 
@@ -216,7 +216,7 @@ def test_outer_plane_escape_is_opt_in_and_reserves_legal_ground_before_signals(p
 
 
 def test_interrupted_rerun_does_not_reuse_an_old_success(tmp_path, monkeypatch):
-    import examples.round_led_example as example
+    import examples.round_led_ring.round_led_example as example
     (tmp_path / "summary.json").write_text(json.dumps({"native_routing_complete": True}))
     def fail(*args, **kwargs):
         raise ValueError("test interrupted generation")

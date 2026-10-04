@@ -80,8 +80,8 @@ This does not automatically replace the full-vertical board's electrical circuit
 
 CopperLib owns `packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json`
 and its package-local generator.
-The electrical probe/bindings are `examples/nrf_antenna_macro.copper` and
-`examples/nrf_antenna_hard_macro.json`.
+The electrical probe/bindings are `examples/nrf_antenna_macro/board.copper` and
+`examples/nrf_antenna_macro/hard_macro.json`.
 
 Seven members: nRF52832 QFAA, Nordic 0.8 pF/3.9 nH chip matching, a **separate**
 Johanson evaluation-style tee (1 pF series, 2.7 nH shunt, 3.9 nH series), and
@@ -103,7 +103,7 @@ From CopperScript with installed KiCad footprints (CopperLib is URL-resolved):
 
 ```powershell
 uv sync --extra test
-uv run python -m examples.hard_macro_trial `
+uv run python -m examples.nrf_antenna_macro.hard_macro_trial `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 

@@ -14,7 +14,7 @@ adds polygonal outlines, cutouts and round mounting holes to the physical IR.
 Try the routed L-shaped inspection probe (including performance profiling):
 
 ```console
-uv run python -m examples.mechanical_example
+uv run python -m examples.mechanical_probe.mechanical_example
 ```
 
 Output: ignored `build/mechanical-example/`. The frontend supports a separate
@@ -22,7 +22,9 @@ Output: ignored `build/mechanical-example/`. The frontend supports a separate
 rounded and closed line/arc outlines, cutouts, NPTH holes/slots and physical rules.
 Curved-query limits are explicit; complete manufacturing qualification remains
 separate from routing and inspection export. Board-specific
-builders live under `examples/`, never in the generic `pcbir` package.
+builders live under `examples/`, never in the generic `pcbir` package. The
+[examples index](examples/README.md) keeps each standalone example and its
+assets in one directory.
 
 A local [mechanical/floorplan editor](docs/mechanical-editor.md) displays real
 footprint pads/courtyards, mechanical geometry and locked DXF/enclosure guides.
@@ -36,7 +38,7 @@ source changes always require diff review and Save. The
 and limitations, including convex curved paths and reference-only DXF overlays.
 
 ```powershell
-uv run copper edit-mechanical examples/mechanical_editor_demo.copper --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
+uv run copper edit-mechanical examples/mechanical_editor_demo/board.copper --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
 ```
 
 The tool opens a loopback-only browser UI; Ctrl+C stops the service.
@@ -84,10 +86,10 @@ It exports a true KiCad circle and fixed radial placement, with profiling and an
 optional routing run:
 
 Its circle, rear ground pour and all fixed placements are declared directly in
-`examples/round_led_ring.copper`. No Python builder is needed to export it:
+`examples/round_led_ring/board.copper`. No Python builder is needed to export it:
 
 ```powershell
-uv run copper export-kicad-pcb examples/round_led_ring.copper --locked `
+uv run copper export-kicad-pcb examples/round_led_ring/board.copper --locked `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   -o build/round-led-ring/round_led_ring.kicad_pcb
 ```
@@ -95,7 +97,7 @@ uv run copper export-kicad-pcb examples/round_led_ring.copper --locked `
 The optional example wrapper adds placement previews, profiling and native checks:
 
 ```powershell
-uv run python -m examples.round_led_example `
+uv run python -m examples.round_led_ring.round_led_example `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
@@ -121,7 +123,7 @@ corner fill exclusions and whole-assembly rotations. CopperLib downloads through
 the pinned URL dependency automatically:
 
 ```powershell
-uv run python -m examples.hard_macro_trial `
+uv run python -m examples.nrf_antenna_macro.hard_macro_trial `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
@@ -132,8 +134,8 @@ A [small powered nRF52/CR2032 example](docs/nrf52-coin-cell.md) adds a 10-pin
 SWD connector, two LEDs, two buttons and the radio support circuit:
 
 ```powershell
-uv run python -m copperscript check examples/nrf52_coin_cell.copper --locked
-uv run python -m examples.nrf52_example `
+uv run python -m copperscript check examples/nrf52_coin_cell/board.copper --locked
+uv run python -m examples.nrf52_coin_cell.nrf52_example `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 ```
 
@@ -145,36 +147,36 @@ linked report/remaining-work guide). This is not production signoff.
 Python 3.11 or newer is required. From the repository root:
 
 ```console
-python -m copperscript check examples/valid_board.copper
-python -m copperscript check examples/invalid_board.copper
-python -m copperscript power-check examples/valid_board.copper
+python -m copperscript check examples/valid_board/board.copper
+python -m copperscript check examples/invalid_board/board.copper
+python -m copperscript power-check examples/valid_board/board.copper
 ```
 
 The examples already have a committed lock. Populate the URL dependency cache,
 then reproduce without network access:
 
 ```console
-python -m copperscript check examples/full_vertical_board.copper --locked
-python -m copperscript check examples/full_vertical_board.copper --locked --offline
-python -m copperscript audit-footprints examples/full_vertical_board.copper --locked --offline --footprint-root path/to/kicad-footprints
+python -m copperscript check examples/full_vertical/board.copper --locked
+python -m copperscript check examples/full_vertical/board.copper --locked --offline
+python -m copperscript audit-footprints examples/full_vertical/board.copper --locked --offline --footprint-root path/to/kicad-footprints
 ```
 
 Compile a valid design to normalized JSON IR:
 
 ```console
-python -m copperscript compile examples/valid_board.copper -o board.json
+python -m copperscript compile examples/valid_board/board.copper -o board.json
 ```
 
 Generate a self-contained KiCad 8 schematic:
 
 ```console
-python -m copperscript export-kicad examples/valid_board.copper -o valid_board.kicad_sch
+python -m copperscript export-kicad examples/valid_board/board.copper -o valid_board.kicad_sch
 ```
 
 Generate a KiCad 8 PCB draft with resolved footprint geometry:
 
 ```console
-python -m copperscript export-kicad-pcb examples/resolved_footprint_board.copper -o build/resolved/board.kicad_pcb
+python -m copperscript export-kicad-pcb examples/resolved_footprint_board/board.copper -o build/resolved/board.kicad_pcb
 ```
 
 All PCB export commands automatically write a same-stem `.kicad_pro`, a
@@ -205,14 +207,14 @@ so the output is not yet fabrication-ready. Generated proxy pads remain
 available for backend development through explicit opt-in:
 
 ```console
-python -m copperscript export-kicad-pcb examples/valid_board.copper --allow-proxy-footprints
+python -m copperscript export-kicad-pcb examples/valid_board/board.copper --allow-proxy-footprints
 ```
 
 Produce a deterministic legal placement candidate and a four-gate readiness
 report:
 
 ```console
-python -m copperscript plan-layout examples/valid_board.copper --allow-proxy-footprints --candidates 3 -o planned.kicad_pcb --report layout-report.json
+python -m copperscript plan-layout examples/valid_board/board.copper --allow-proxy-footprints --candidates 3 -o planned.kicad_pcb --report layout-report.json
 ```
 
 The planner estimates global routing congestion but does not generate copper.
@@ -226,7 +228,7 @@ Produce deterministic multilayer global-routing guides after transactional
 placement feedback:
 
 ```console
-python -m copperscript route-global examples/valid_board.copper --allow-proxy-footprints -o global-route.json
+python -m copperscript route-global examples/valid_board/board.copper --allow-proxy-footprints -o global-route.json
 ```
 
 Global guides reserve corridors, layers, and proposed transitions for ordinary
@@ -237,7 +239,7 @@ Attempt detailed routing and write a native DRC report plus an inspection-only
 KiCad PCB draft:
 
 ```console
-python -m copperscript route-board examples/valid_board.copper --allow-proxy-footprints --report route-report.json -o routed-draft.kicad_pcb
+python -m copperscript route-board examples/valid_board/board.copper --allow-proxy-footprints --report route-report.json -o routed-draft.kicad_pcb
 ```
 
 Detailed signal tracks prefer long straight runs and 45-degree bends. Nets with
@@ -353,7 +355,7 @@ Set-Location CopperScript
 
 uv sync --python 3.12
 # Fetch the exact locked URL dependency (subsequent runs can use --offline).
-uv run --no-sync python -m copperscript check examples/full_vertical_board.copper --locked
+uv run --no-sync python -m copperscript check examples/full_vertical/board.copper --locked
 ```
 
 `copper.mod` pins CopperLib's GitHub commit; `copper.lock` verifies its exact
@@ -429,9 +431,9 @@ $kicadFootprints = "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 $kicadCli = "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe"
 New-Item -ItemType Directory -Force "build/full-vertical" | Out-Null
 
-uv run --no-sync python -m copperscript route-board examples/full_vertical_board.copper `
+uv run --no-sync python -m copperscript route-board examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --placement-templates examples/full_vertical_placement_templates.json `
+  --placement-templates examples/full_vertical/placement_templates.json `
   --footprint-root $kicadFootprints `
   --candidates 1 --placement-candidate candidate-01 `
   --feedback-iterations 1 --router-iterations 5 --critical-feedback-trials 0 `
@@ -502,7 +504,7 @@ For a development installation with the `copper` command:
 
 ```console
 python -m pip install -e ".[test]"
-copper check examples/valid_board.copper
+copper check examples/valid_board/board.copper
 python -m pytest
 ```
 
@@ -538,7 +540,7 @@ board SensorBoard {
 
 See the [design specification](docs/design-specification.md), the
 [language reference](docs/language-reference.md), and the complete [valid
-example](examples/valid_board.copper).
+example](examples/valid_board/board.copper).
 
 Device-library authors should use the compact, table-driven
 [device generation workflow](docs/device-generation.md) rather than writing
@@ -549,7 +551,7 @@ how CopperScript can represent flexible Nordic pin routing, mode-dependent FX10
 pins, differential ADC channels, multi-unit op-amps, and package connection
 rules and the cross-vendor acceptance fixtures used to validate them.
 
-The [hierarchical example](examples/hierarchical_board.copper) instantiates a
+The [hierarchical example](examples/hierarchical_board/board.copper) instantiates a
 reusable [5 V to 3.3 V buck supply](examples/packages/power/buck_5v_to_3v3.copper)
 and imports the sensor part from a separate package.
 
@@ -700,7 +702,7 @@ keepouts during whole-cluster placement/refinement and routing feedback,
 including explicitly permitted 45-degree rotations. Vendor RF templates and
 their qualification are separate work; the example does not yet use a qualified
 Nordic/Johanson cluster. An opt-in
-`--placement-templates examples/full_vertical_placement_templates.json` scene
+`--placement-templates examples/full_vertical/placement_templates.json` scene
 now binds the source-extracted Nordic matching macro to pinned KiCad footprints.
 It is a provisional adaptation, not the complete vendor support/ground layout;
 use the [template preflight command](docs/rigid-placement-clusters.md#source-backed-cli-scene)

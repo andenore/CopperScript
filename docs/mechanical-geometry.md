@@ -132,7 +132,7 @@ the exporter warns when present, so manual movement requires renewed legality.
 Run the physical-IR probe from the repository root:
 
 ```console
-uv run python -m examples.mechanical_example
+uv run python -m examples.mechanical_probe.mechanical_example
 ```
 
 Ignored `build/mechanical-example/` contains a routed L-shaped KiCad project,

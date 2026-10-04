@@ -91,7 +91,7 @@ board Nrf52CoinCell {
     }
 
     // Provisional 50 x 40 mm placement. Antenna/RF member poses come from
-    // nrf_antenna_hard_macro.json, as one rigid unit anchored at U_NRF.
+    // nrf_antenna_macro/hard_macro.json, as one rigid unit anchored at U_NRF.
     constraint fixed_placement(U_NRF) { x = 34mm; y = 12mm; rotation = 0; side = front; }
     constraint fixed_placement(BT1) { x = 15mm; y = 25mm; rotation = 0; side = front; }
     constraint fixed_placement(J_SWD) { x = 12mm; y = 7mm; rotation = 0; side = front; }

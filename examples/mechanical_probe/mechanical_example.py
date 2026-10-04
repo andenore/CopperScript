@@ -1,6 +1,6 @@
 """Routed physical-IR mechanical probe, pending dedicated .copper syntax.
 
-Run ``python -m examples.mechanical_example`` from the project root. All outputs
+Run ``python -m examples.mechanical_probe.mechanical_example`` from the project root. All outputs
 and routing profiles go into ignored build/mechanical-example by default.
 This is inspection geometry, not a component library or manufacturing release.
 """
