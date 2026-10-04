@@ -75,9 +75,9 @@ connectivity and locked pose. Comments survive; stale/concurrent edits never win
 
 20. [x] Asynchronous/cancellable auto-placement with revision-bound progress and
     resource budgets. Incremental incident-net ratsnest refresh and profiling.
-21. [ ] Selected-net/component and side/power filters, labels, optional net costs;
+21. [x] Selected-net/component and side/power filters, labels, optional net costs;
     arbitrary copper-island terminals and validated filled-zone overlay extension.
-22. [ ] Routed-copper overlay with source/physical digest, stale display and explicit
+22. [x] Routed-copper overlay with source/physical digest, stale display and explicit
     remaining-connectivity evidence; never infer fill from an outline.
 23. [ ] Shared browser core hosted by VS Code, document selection/source links,
     native undo/save, workspace trust and pinned compiler configuration.
@@ -187,3 +187,27 @@ board/source revision, browser actions and explicit remaining limitations.
   browser inspection passed its circle, 33 front/1 rear parts and navigation with
   zero page errors and no source mutations. Its public compiler pin update is
   pending publication approval; development verification used `EDITOR_PYTHON`.
+
+### Routed reference overlays and net filters — 2026-10-04
+
+- Compiler emits `board.editor-intent.json`; generic Make build binds its digest
+  to `run.json`. Explicit native Python probe reads tracks, vias and **actual**
+  filled-zone outer/interior rings, never rule areas or unfilled zone boundaries.
+- `editor-overlay` checks routed poses (including native hierarchy reference
+  mapping), exact copper, saved PCB and native DRC hashes. The capsule is bound
+  back to its run manifest. No executable or filesystem paths come from JSON.
+- Editor reconstructs router poses as movable seeds only when source, electrical
+  dependency identity and physical projection match. Changed source/imports,
+  footprints, rules or poses visibly stale the overlay and revoke connectivity
+  credit. Source editing never retains copper in authoritative physical intent.
+- Remaining native opens remain visible; missing native evidence gives explicit
+  track/via-island ratsnest only. Matching zero-open native evidence can close
+  presentation airwires, without claiming manufacturing signoff.
+- Signal/supply, selected component/net, side and copper-layer filters, airwire
+  labels and optional straight-line MST cost estimates are implemented.
+- Affected suites: **116 passed, 6 skipped**. Includes 20 overlay regressions and
+  a real KiCad filled-plane/NPTH exclusion test. Browser smoke passes layer
+  visibility, stale-preview airwires, filters, labels/costs and discard recovery;
+  zero page errors. Inspected screenshot: `build/editor-overlay-20261004/editor.png`.
+- Fresh generic Make demo route: **zero native violations and zero opens**;
+  bound reference generated with installed KiCad 10.0.6. Items 23–28 remain open.

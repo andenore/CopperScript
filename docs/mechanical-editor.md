@@ -259,5 +259,34 @@ during computation. Manual edits cancel older work, and a changed source/session
 revision discards the result. Only incident ratsnest nets are recomputed for pose
 changes; exact graph semantics remain unchanged.
 
-Routed overlays, VS Code hosting and advanced mechanical intent
-remain tracked separately in checklist sections D and E.
+## Routed reference and connectivity evidence
+
+The compiler writes a route-intent sidecar and the shared Make runner records its
+digest. After a fresh `make route`, export an editor reference with native KiCad
+Python (on Linux typically `/usr/bin/python3`; on Windows KiCad's `bin/python.exe`):
+
+```sh
+make EXAMPLE=mechanical-editor editor-overlay RUN_DIR=build/my-run KICAD_PYTHON="C:/Program Files/KiCad/10.0/bin/python.exe"
+make EXAMPLE=mechanical-editor edit EDITOR_ARGS="--overlay build/my-run/editor-overlay.json"
+```
+
+Direct CLI equivalent: `copper editor-overlay build/my-run/run.json
+--kicad-python <interpreter> -o build/my-run/editor-overlay.json`. The output must
+be a new JSON file beside the run manifest; evidence files are never overwritten.
+Old builds without the intent sidecar must be rerun. A failure draft may be
+inspected, but missing saved-fill/native-DRC evidence grants no plane connectivity.
+
+Actual filled rings (including holes/fractured boundaries) are extracted read-only
+from the native board. **Zone intent outlines never count as filled copper.** The
+reference has source, electrical/dependency, physical, PCB, DRC and content digests.
+The native report applies only to those exact saved PCB bytes. A zero-open matching
+report closes presentation airwires; partial reports retain native-open markers and
+explicit-copper island airwires. This is connectivity evidence, not release signoff.
+
+Router poses seed the session without freezing components. Moving a part or
+changing source, dependencies, footprints or rules fades/labels the reference
+STALE and restores unrouted source airwires. Undo/discard can restore the exact
+matching state. Persistent edits always rebuild unrouted intent, not old copper.
+Layer/side/net/component/signal-supply filters and optional airwire labels/costs
+help inspect the result. Costs are straight-line MST estimates, not detailed route
+predictions. VS Code hosting and advanced mechanical intent remain in the checklist.

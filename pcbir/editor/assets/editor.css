@@ -200,3 +200,11 @@ textarea {width:100%;min-height:65px;background:#253440;color:#edf5fa;}
 input[type=text] {max-width:100%;width:100%;}
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,svg:focus-visible {outline:2px solid #ffd17d;}
 @media (max-width:760px) {main {min-height:350px;} aside {width:230px;} h1 span {display:block;} nav {padding:8px;}}
+.routed-track {stroke-linecap:round;stroke-linejoin:round;}
+.zone-fill {fill-opacity:.24;}
+.routed-via {fill:#c8bd96;}
+.routed-overlay.stale {opacity:.25;}
+.native-open {fill:none;stroke:#ff8a8a;stroke-width:.16;stroke-dasharray:.25 .15;}
+.net-label {font-size:.7px;fill:#e5df8d;pointer-events:none;}
+#net-cost-summary {white-space:pre-line;font-size:12px;}
+#overlay-status.error {color:#ff9e9e;}

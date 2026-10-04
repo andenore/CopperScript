@@ -22,6 +22,8 @@ ROUTE_ARGS ?= --candidates 1 --placement-candidate candidate-00 --feedback-itera
  --repair-budget-multiplier 10 --plane-contact-radius-mm 5
 EXTRA_ROUTE_ARGS ?=
 BUILD_ARGS ?=
+EDITOR_ARGS ?=
+KICAD_PYTHON ?= /usr/bin/python3
 
 _paths = $(if $(strip $(KICAD_CLI)),--kicad-cli "$(KICAD_CLI)") $(if $(strip $(KICAD_FOOTPRINTS)),--kicad-footprints "$(KICAD_FOOTPRINTS)")
 _physical = --layers $(LAYERS) --fab-profile $(FAB_PROFILE) \
@@ -29,7 +31,7 @@ _physical = --layers $(LAYERS) --fab-profile $(FAB_PROFILE) \
  $(if $(strip $(PLACEMENT_TEMPLATES)),--placement-templates "$(PLACEMENT_TEMPLATES)") \
  $(if $(strip $(HARD_MACRO)),--hard-macro "$(HARD_MACRO)") $(PHYSICAL_ARGS)
 
-.PHONY: all check compile layout edit route
+.PHONY: all check compile layout edit route editor-overlay
 all: check compile
 check:
 	$(COPPER) check "$(SOURCE)" $(RESOLVE_ARGS)
@@ -38,7 +40,10 @@ compile:
 layout:
 	$(COPPER) plan-layout "$(SOURCE)" $(RESOLVE_ARGS) $(_physical) -o "$(OUT)/placed.kicad_pcb" --report "$(OUT)/placement.json"
 edit:
-	$(COPPER) edit-mechanical "$(SOURCE)" $(RESOLVE_ARGS) $(_physical)
+	$(COPPER) edit-mechanical "$(SOURCE)" $(RESOLVE_ARGS) $(_physical) $(EDITOR_ARGS)
+editor-overlay:
+	$(if $(strip $(RUN_DIR)),,$(error Set RUN_DIR to an existing completed routing run))
+	$(COPPER) editor-overlay "$(RUN_DIR)/run.json" --kicad-python "$(KICAD_PYTHON)" -o "$(RUN_DIR)/editor-overlay.json"
 # Atomic route + saved fill + native DRC. Every default run has a fresh directory.
 # RUN_DIR selects a new/empty path; intentionally no recursive clean target.
 route:

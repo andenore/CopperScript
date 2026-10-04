@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+from math import isqrt
 
 from ..drc import explicit_copper_connectivity, placed_pad_shape
 from ..geometry import bounds
@@ -190,6 +191,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
                      "vertices": [_point(p) for p in r.outline.vertices]} for r in board.regions],
         "components": components, "nets": [n.name for n in sorted(board.nets, key=lambda n: n.name)],
         "zone_nets": sorted({z.net for z in board.zones}),
+        "power_nets": [],
         "ratsnest": ratsnest_cache.get(board) if ratsnest_cache else ratsnest(board),
         "warnings": {k: board.metadata[k] for k in ("footprint_import_warnings", "omitted_components",
             "omitted_constraint_targets", "prototype_footprints") if k in board.metadata},
@@ -200,4 +202,15 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
     _, macro_error = _preview_copper(board)
     if macro_error:
         scene["warnings"]["macro_copper_not_materialized"] = macro_error
+    scene["net_costs"] = net_costs(scene["ratsnest"])
     return scene
+
+
+def net_costs(edges):
+    """Remaining straight-line MST length, not a predicted detailed route cost."""
+    costs = {}
+    for edge in edges:
+        cost = costs.setdefault(edge["net"], {"airwires": 0, "length_nm": 0})
+        cost["airwires"] += 1
+        cost["length_nm"] += isqrt(int(edge["distance_squared_nm"]))
+    return costs

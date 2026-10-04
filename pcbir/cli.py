@@ -70,7 +70,11 @@ def _nonnegative_mm(value: str) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    editor = subparsers.add_parser("edit-mechanical", help="open a local mechanical/floorplan session preview (source read-only)")
+    overlay = subparsers.add_parser("editor-overlay", help="extract source-bound routed copper and actual native fills from a build run")
+    overlay.add_argument("run", type=Path, help="generic build run.json")
+    overlay.add_argument("--kicad-python", type=Path, required=True, help="explicit Python interpreter with pcbnew")
+    overlay.add_argument("-o", "--output", type=Path, required=True, help="new overlay JSON; never overwritten")
+    editor = subparsers.add_parser("edit-mechanical", help="open a reviewed mechanical/floorplan editor")
     editor.add_argument("board", type=Path)
     _add_resolution_options(editor)
     editor.add_argument("--footprint-root", action="append", default=[], type=Path)
@@ -82,6 +86,7 @@ def _parser() -> argparse.ArgumentParser:
     editor.add_argument("--no-browser", action="store_true")
     editor.add_argument("--port", type=int, default=0, help="loopback port; zero chooses an available port")
     editor.add_argument("--scene-output", type=Path, help="write a derived scene and exit without serving")
+    editor.add_argument("--overlay", type=Path, help="optional content-bound routed reference JSON")
     manufacturing = subparsers.add_parser("export-manufacturing", help="export native-DRC-clean KiCad manufacturing files without independent CAM qualification")
     manufacturing.add_argument("pcb", type=Path, help="final routed .kicad_pcb, with matching .kicad_pro")
     manufacturing.add_argument("--kicad-cli", type=Path, default=Path("kicad-cli"))
@@ -469,6 +474,14 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "editor-overlay":
+        from .editor.overlay import export_overlay
+        try:
+            print(f"Routed editor reference -> {export_overlay(args.run, args.kicad_python, args.output)}")
+            return 0
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"EDITOR OVERLAY ERROR: {exc}")
+            return 2
     if args.command == "edit-mechanical":
         from .editor.session import EditorSession
         from .editor.server import serve
@@ -517,7 +530,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             inputs += [Path(fp.metadata["source_path"]) for fp in physical.footprints.values()
                        if fp.metadata.get("source_path")]
             workspace = SourceWorkspace(args.board, design, rebuild, input_paths=tuple(inputs))
-            session = EditorSession(physical, args.board, workspace=workspace)
+            from .editor.overlay import RoutedOverlay
+            session = EditorSession(physical, args.board, workspace=workspace,
+                                    overlay=RoutedOverlay.load(args.overlay) if args.overlay else None)
             if args.scene_output:
                 if args.scene_output.resolve() == args.board.resolve():
                     raise ValueError("scene output cannot overwrite the source board")
@@ -696,6 +711,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1 if has_errors(diagnostics) else 0
 
         if args.command == "route-board":
+            from hashlib import sha256
+            editor_source_revision = sha256(args.board.read_bytes()).hexdigest()
             if has_errors(diagnostics) and not args.no_check:
                 for diagnostic in diagnostics:
                     print(diagnostic)
@@ -723,6 +740,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for scene in args.hard_macro:
                     physical_board = apply_hard_macro_scene(physical_board, scene,
                         locked=args.locked, offline=args.offline)
+                editor_source_board = physical_board
                 stitch_enabled = args.stitch_zone_pads or bool(physical_board.zones)
                 early_pads: set[PadReference] = set()
                 if args.early_plane_pad and not stitch_enabled:
@@ -1103,6 +1121,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.output:
                     pcb_manifest = KiCadPcbBackend().generate(output_board)
                     write_kicad_project(pcb_manifest, args.output)
+                    from .editor.overlay import write_intent
+                    write_intent(args.board, editor_source_board, output_board,
+                                 args.output.with_suffix(".editor-intent.json"), electrical=design.electrical,
+                                 source_revision=editor_source_revision)
                 emit(progress, "export", "finished", report=str(report_path), status=closure_status.value)
             except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")

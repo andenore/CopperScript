@@ -858,6 +858,11 @@ def _safe_name(value: str) -> str:
 
 
 def _kicad_reference(value: str) -> str:
+    return kicad_reference(value)
+
+
+def kicad_reference(value: str) -> str:
+    """Deterministic backend reference; source hierarchy keeps its own identity."""
     safe = re.sub(r"[^A-Za-z0-9_]", "_", value)
     return safe if safe and safe[0].isalpha() else f"U_{safe}"
 

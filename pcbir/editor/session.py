@@ -38,14 +38,18 @@ def _integer(value, name):
 
 class EditorSession:
     def __init__(self, board: PhysicalBoard, source: Path,
-                 options: PlacementPlannerOptions | None = None, *, workspace: SourceWorkspace | None = None):
+                 options: PlacementPlannerOptions | None = None, *, workspace: SourceWorkspace | None = None,
+                 overlay=None):
         if board.tracks or board.vias or board.zone_fills or board.materialized_macros:
             raise EditorError("editor placement requires an unrouted physical source")
         self.source = source.resolve()
         self.source_raw = self.source.read_bytes()
         self.source_revision = sha256(self.source_raw).hexdigest()
         self.options = options or PlacementPlannerOptions(candidate_count=1)
-        self.state = State(board)
+        self.overlay = overlay
+        from .overlay import electrical_digest
+        identity = electrical_digest(workspace.identity) if workspace else None
+        self.state = State(overlay.seed(board, self.source_revision, identity) if overlay else board)
         self.revision = 0
         self.pending: State | None = None
         self.undo_stack: list[State] = []
@@ -73,6 +77,30 @@ class EditorSession:
     def _document(self, state):
         scene = board_scene(state.board, source_revision=self.source_revision,
             revision=self.revision, session_locks=state.locks, options=self.options, ratsnest_cache=self.ratsnest_cache)
+        if self.overlay:
+            from .overlay import electrical_digest
+            identity = electrical_digest(self.workspace.identity) if self.workspace else None
+            overlay_revision = sha256(self.source.read_bytes()).hexdigest()
+            if self.source_pending and state.board is self.source_pending.board:
+                overlay_revision = self.source_pending.after.revision
+            if self.workspace:
+                try:
+                    self.workspace.check_inputs()
+                except ValueError:
+                    identity = "inputs_changed"
+            scene["routed_overlay"] = self.overlay.scene(state.board, overlay_revision, identity)
+            if not scene["routed_overlay"]["stale"]:
+                from .scene import ratsnest
+                evidence = self.overlay.data["evidence"]
+                scene["ratsnest"] = ([] if evidence["verified"] and not evidence["remaining"] else
+                                     ratsnest(self.overlay.copper_board(state.board)))
+                scene["connectivity_basis"] = ("native saved-board DRC" if evidence["verified"] and not evidence["remaining"]
+                                               else "explicit routed copper; planes do not grant credit")
+                from .scene import net_costs
+                scene["net_costs"] = net_costs(scene["ratsnest"])
+        if self.workspace:
+            from ..elaborate import elaborate
+            scene["power_nets"] = sorted({s.net for s in elaborate(self.workspace.identity).supplies})
         scene["scene_profile"] = {"ratsnest_recomputed_nets": self.ratsnest_cache.recomputed_nets}
         scene["source_writable"] = self.workspace is not None
         scene["capabilities"].update(source_save=self.workspace is not None,

@@ -70,14 +70,55 @@ function render() {
   }
   const visible = new Set(s.components.filter(c => $("side").value === "both" || c.side === $("side").value).map(c => c.reference));
   const relevant = new Set(s.components.find(c=>c.reference===selected)?.pads.map(p=>p.net).filter(Boolean)||[]);
+  const netVisible = net => (!$("net").value || net === $("net").value) &&
+    (!$("selected-only").checked || relevant.has(net)) &&
+    ($("power-filter").value==="all" || (s.power_nets||[]).includes(net) === ($("power-filter").value==="power"));
+  const overlay=s.routed_overlay;
+  $("overlay-controls").hidden=!overlay;
+  if (overlay) {
+    $("overlay-status").textContent=`${overlay.notice}. ${overlay.connectivity_credit ? "Matching native connectivity evidence." : "No plane connectivity credit."}`;
+    $("overlay-status").classList.toggle("error",overlay.stale);
+    const layerVisible = layer => (!$("copper-layer").value || layer===$("copper-layer").value) &&
+      ($("side").value==="both" || layer!==($("side").value==="front"?"B.Cu":"F.Cu"));
+    const group=node("g",{class:`routed-overlay${overlay.stale?" stale":""}`,"pointer-events":"none"});
+    const colors={"F.Cu":"#ef7777","B.Cu":"#699eed","In1.Cu":"#d4bd69","In2.Cu":"#bb80dc","In3.Cu":"#72bda0","In4.Cu":"#df8db2"};
+    if ($("filled-zones").checked) for (const f of overlay.native.fills) {
+      if (!netVisible(f.net) || !layerVisible(f.layer)) continue;
+      const ring=r=>`M ${points(r).replaceAll(" "," L ")} Z`;
+      const n=node("path",{d:[ring(f.outer),...f.holes.map(ring)].join(" "),"fill-rule":"evenodd",fill:colors[f.layer]||"#a5b9c7",class:"zone-fill"});
+      n.append(node("title",{},`${f.net} actual filled copper on ${f.layer}`));group.append(n);
+    }
+    if ($("routed-tracks").checked) {
+      for (const t of overlay.native.tracks) {
+        if (!netVisible(t.net) || !layerVisible(t.layer)) continue;
+        const n=node("line",{x1:mm(t.start[0]),y1:mm(t.start[1]),x2:mm(t.end[0]),y2:mm(t.end[1]),stroke:colors[t.layer]||"#a5b9c7","stroke-width":mm(t.width_nm),class:"routed-track"});
+        n.append(node("title",{},`${t.net} on ${t.layer}`));group.append(n);
+      }
+      for (const v of overlay.native.vias) {
+        const layers=overlay.native.layers, a=layers.indexOf(v.from_layer),b=layers.indexOf(v.to_layer);
+        if (!netVisible(v.net) || !layers.slice(Math.min(a,b),Math.max(a,b)+1).some(layerVisible)) continue;
+        group.append(node("circle",{cx:mm(v.position[0]),cy:mm(v.position[1]),r:mm(v.size_nm)/2,class:"routed-via"}),
+                     node("circle",{cx:mm(v.position[0]),cy:mm(v.position[1]),r:mm(v.drill_nm)/2,class:"drill"}));
+      }
+    }
+    if ($("native-opens").checked) for (const item of overlay.evidence.remaining) {
+      const positions=(item.items||[]).map(i=>i.pos).filter(p=>p && Number.isFinite(p.x) && Number.isFinite(p.y));
+      for (const p of positions) group.append(node("circle",{cx:p.x,cy:p.y,r:.6,class:"native-open"}));
+      if (positions.length===2) group.append(node("line",{x1:positions[0].x,y1:positions[0].y,x2:positions[1].x,y2:positions[1].y,class:"native-open"}));
+    }
+    svg.append(group);
+  }
   if ($("airwires").checked) for (const [edgeIndex,edge] of s.ratsnest.entries()) {
-    if ($("net").value && edge.net !== $("net").value) continue;
+    if (!netVisible(edge.net)) continue;
     if (!$("zone-nets").checked && s.zone_nets.includes(edge.net)) continue;
     if ($("selected-only").checked && !relevant.has(edge.net)) continue;
     if ((edge.from.reference && !visible.has(edge.from.reference)) || (edge.to.reference && !visible.has(edge.to.reference))) continue;
     const n = node("line",{x1:mm(edge.from.position[0]),y1:mm(edge.from.position[1]),x2:mm(edge.to.position[0]),y2:mm(edge.to.position[1]),class:"airwire","data-edge":edgeIndex});
     n.append(node("title",{},edge.net)); svg.append(n);
+    if ($("net-labels").checked) svg.append(node("text",{x:mm(edge.from.position[0]+edge.to.position[0])/2,y:mm(edge.from.position[1]+edge.to.position[1])/2,class:"net-label"},`${edge.net} ${(Math.sqrt(Number(edge.distance_squared_nm))/1e6).toFixed(2)} mm`));
   }
+  $("net-cost-summary").hidden=!$("net-costs").checked;
+  $("net-cost-summary").textContent=Object.entries(s.net_costs||{}).filter(([net])=>netVisible(net)).map(([net,cost])=>`${net}: ${cost.airwires} airwires, ${mm(cost.length_nm).toFixed(2)} mm MST estimate`).join("\n")||"No remaining airwires in this filter.";
   for (const component of s.components) {
     if (!visible.has(component.reference)) continue;
     const locked = component.source_position_locked || component.source_rotation_locked || component.session_locked;
@@ -147,6 +188,8 @@ function populate() {
   const features=$("feature"),old=features.value;features.replaceChildren(new Option("New feature",""));
   for (const [index,f] of (accepted.mechanical_features||[]).entries()) features.add(new Option(`${f.kind} ${f.name||f.shape} (line ${f.line})`,String(index)));
   features.value=old;
+  const layer=$("copper-layer"),previous=layer.value;layer.replaceChildren(new Option("All copper layers",""));
+  for (const name of accepted.routed_overlay?.native.layers||[]) layer.add(new Option(name,name));layer.value=previous;
 }
 async function operation(action, fields={}, applyImmediately=false) {
   if (busy || !accepted) return; busy=true; updateControls(); status(`${action}: working…`);
@@ -245,7 +288,7 @@ $("board").addEventListener("lostpointercapture",()=>{if(drag||pan) cancelGestur
 $("reference").addEventListener("change",()=>{selected=$("reference").value;render();});
 $("reference").addEventListener("change",syncLockChecks);
 $("edit-locks").onchange=()=>{syncLockChecks();updateControls();};
-for (const id of ["side","net","airwires","selected-only","zone-nets"]) $(id).addEventListener("change",render);
+for (const id of ["side","net","airwires","selected-only","zone-nets","power-filter","net-labels","net-costs","copper-layer","routed-tracks","filled-zones","native-opens"]) $(id).addEventListener("change",render);
 for (const [id,action] of [["apply","apply"],["discard","discard"],["undo","undo"],["redo","redo"]]) $(id).onclick=()=>operation(action);
 $("auto").onclick=()=>operation("start_auto_place",{budget_seconds:Number($("placement-budget").value)});
 $("cancel-auto").onclick=()=>operation("cancel_auto_place");

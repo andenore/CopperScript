@@ -125,7 +125,7 @@ def provenance(project: Path, source: Path, options: list[str]) -> dict:
     # External package inventories are authenticated by the committed lock.
     for directory, subdirs, files in os.walk(project):
         subdirs[:] = [name for name in subdirs if name not in {
-            "build", "dist", ".git", ".venv", "venv", ".copper-cache", "__pycache__"}]
+            "build", "dist", ".git", ".venv", "venv", ".copper-cache", "__pycache__", ".pytest_cache"}]
         paths.update(Path(directory) / name for name in files
                      if name.endswith((".copper", ".mk")) or name in {"copper.mod", "copper.lock", "Makefile"})
     for index, value in enumerate(options):
@@ -212,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
             owned = True
             stream.write(json.dumps(manifest, indent=2) + "\n")
         code = run_logged(command, Path.cwd(), output / "routing.log")
+        intent = output / "board.editor-intent.json"
+        draft = output / "board.kicad_pcb"
+        if intent.is_file() and draft.is_file():
+            manifest["editor_intent_sha256"] = hashlib.sha256(intent.read_bytes()).hexdigest()
+            manifest["draft_board_sha256"] = hashlib.sha256(draft.read_bytes()).hexdigest()
         if code == 0:
             code = run_logged(fill, Path.cwd(), output / "fill.log")
             if code == 0 and not completed(output):

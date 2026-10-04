@@ -23,8 +23,18 @@
 <label><input id="airwires" type="checkbox" checked> Ratsnest</label>
 <label><input id="selected-only" type="checkbox"> Selected component nets only</label>
 <label><input id="zone-nets" type="checkbox"> Include zone nets (e.g. GND)</label>
+<label>Power nets <select id="power-filter"><option value="all">Signals and supplies</option><option value="signal">Signals only</option><option value="power">Supplies only</option></select></label>
+<label><input id="net-labels" type="checkbox"> Airwire net labels / lengths</label>
+<label><input id="net-costs" type="checkbox"> Show remaining net costs</label><output id="net-cost-summary" hidden></output>
 <label>Net <select id="net"><option value="">All nets</option></select></label>
 <label>Side <select id="side"><option value="both">Both, shared top-view coordinates</option><option value="front">Front</option><option value="back">Rear, unmirrored</option></select></label>
+<fieldset id="overlay-controls" hidden><legend>Routed reference (read-only)</legend>
+<p id="overlay-status" role="status"></p>
+<label>Layer <select id="copper-layer"><option value="">All copper layers</option></select></label>
+<label><input id="routed-tracks" type="checkbox" checked> Tracks / vias</label>
+<label><input id="filled-zones" type="checkbox" checked> Actual native filled copper</label>
+<label><input id="native-opens" type="checkbox" checked> Native remaining-connection markers</label>
+</fieldset>
 <h2>Component</h2>
 <label>Reference <select id="reference"><option value="">Select a component</option></select></label>
 <p id="details">Click a footprint to inspect it.</p>
