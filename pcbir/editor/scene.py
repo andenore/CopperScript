@@ -157,10 +157,12 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
                          "source_save": False, "mechanical_edit": False},
         "bounds": [extent.min_x, extent.min_y, extent.max_x, extent.max_y],
         "outline": {"vertices": [_point(p) for p in board.outline.vertices],
+            "path": _outline_path(board.outline.boundary_path),
             "circle": {"center": _point(circle.center), "radius_nm": circle.radius_nm} if circle else None,
             "cutouts": [{"id": c.id, "vertices": [_point(p) for p in c.vertices]} for c in board.outline.cutouts]},
         "holes": [{"id": h.id, "position": _point(h.position), "diameter_nm": h.diameter_nm,
                    "head_clearance_radius_nm": h.head_clearance_radius_nm} for h in board.mechanical_holes],
+        "slots": [{"id":s.id,"start":_point(s.start),"end":_point(s.end),"width_nm":s.width_nm} for s in board.mechanical_slots],
         "datums": [{"id": d.id, "position": _point(d.position), "relative_to": d.relative_to} for d in board.datums],
         "boundary_edges": [{"id": e.id, "start": _point(e.start), "end": _point(e.end)} for e in board.boundary_edges],
         "attachments": [{"id": a.id, "reference": a.reference, "target": a.target, "position": _point(a.position), "anchor": a.anchor} for a in board.attachments],
@@ -195,6 +197,20 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
 
 def _access_side(access,pose):
     return pose.side.value if access.side=='component' else ('back' if pose.side.value=='front' else 'front')
+
+
+def _outline_path(path):
+    if path is None:return None
+    from ..physical import BoundaryArc
+    from ..mechanical_curves import arc_angles
+    result=[]
+    for segment in path.segments:
+        item={'id':segment.id,'kind':'line','start':_point(segment.start),'end':_point(segment.end)}
+        if isinstance(segment,BoundaryArc):
+            cx,cy,r2,angle,sweep=arc_angles(segment)
+            item.update(kind='arc',mid=_point(segment.mid),radius_nm=float(r2)**.5,sweep=sweep>0)
+        result.append(item)
+    return result
 
 
 def _overhang_band(board,policy):

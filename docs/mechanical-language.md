@@ -57,7 +57,7 @@ clearances must fit material and satisfy the existing hole topology checks.
 Optional rules override physicalizer defaults, not electrical ERC. Allowed
 length properties are `minimum_clearance`, `minimum_hole_clearance`,
 `minimum_track_width`, `default_track_width`, `default_via_size`,
-`default_via_drill`. Omitted values keep the selected fabrication profile's
+`default_via_drill`, `minimum_slot_width`. Omitted values keep the selected fabrication profile's
 defaults. This is design intent, not manufacturing qualification.
 
 A source outline is authoritative. CLI `--width-mm` / `--height-mm` are a
@@ -82,7 +82,38 @@ compiler, placement, routing and backend modules must not import examples or
 encode example references/paths. The round LED source owns its circle, fixed
 ring placements, clearance rules and rear ground-pour intent.
 
-Deferred: curved polygon edges/slots, plated board-owned holes, multiple boards,
+Exact curved outlines and slots:
+
+```copper
+outline rounded_rectangle {
+    width=40mm; height=30mm; corner_radius=3mm;
+    maximum_chord_error=0.01mm;
+}
+slot S { start=(17mm,10mm); end=(23mm,10mm); width=1.5mm; }
+```
+
+Alternatively `outline path { maximum_chord_error=0.01mm; }` owns ordered
+`boundary NAME line { start=(...); end=(...); }` and
+`boundary NAME arc { start=(...); mid=(...); end=(...); }` declarations.
+Endpoints must join exactly and close; no healing is performed. Line primitive
+IDs are stable attachment edges; arc approximation chords are not edges.
+Manufacturing retains three-point arcs. Shared placement/routing queries use a
+bounded inscribed approximation. Initially curved paths must be convex with
+arcs no greater than 180 degrees; all-line paths may be concave. Rounded corners
+require a positive radius strictly below half the smaller dimension. Paths have
+2–256 primitives and at most 4,096 query vertices; unsupported queries fail.
+
+Slots are board-owned NPTH capsules; start/end name distinct cutter centres,
+not the outside tips. They exclude bodies and copper from board material, obey
+hole/slot proximity checks, and export native oval drills / Excellon G85. The
+default generic minimum width is 1mm, configurable through mechanical rules;
+this is not a supplier capability guarantee. A fabrication profile must specify
+its milling capability separately. Gerber/drill inspection export is supported.
+Complete closed paths can be reviewed in one atomic editor transaction, then
+saved or undone byte-exactly. Imported profile geometry remains read-only.
+See `make EXAMPLE=mechanical-curves route` for a real-footprint routing example.
+
+Deferred: concave curved paths, curved cutouts, plated board-owned holes, multiple boards,
 panelization, a general polygon-offset engine, and independent CAM qualification
 of nonrectangular releases. Existing manufacturing gates remain closed for
 unqualified mechanical geometry; exporting/routing is not production signoff.

@@ -429,6 +429,7 @@ def _physicalize(
         component_heights=mechanical.component_heights if mechanical else (),
         assembly_envelopes=mechanical.assembly_envelopes if mechanical else (),
         assembly_access=mechanical.assembly_access if mechanical else (),
+        mechanical_slots=mechanical.slots if mechanical else (),
     )
 
 

@@ -14,7 +14,7 @@ from .geometry import (
     segment_in_polygon, segments_intersect, segment_distance_squared,
     shapes_clear,
 )
-from .physical import BoardOutline, CircularBoardBoundary, MechanicalHole, PhysicalBoard, Point
+from .physical import BoardOutline, CircularBoardBoundary, MechanicalHole, PhysicalBoard, Point, BoundaryLine
 
 
 @lru_cache(maxsize=128)
@@ -46,6 +46,12 @@ def ring_edges(vertices: tuple[Point, ...]) -> tuple[tuple[Point, Point], ...]:
     return tuple(zip(vertices, (*vertices[1:], vertices[0])))
 
 
+def boundary_line_pairs(outline):
+    if outline.circular_boundary:return ()
+    if outline.boundary_path:return tuple((s.start,s.end) for s in outline.boundary_path.segments if isinstance(s,BoundaryLine))
+    return ring_edges(outline.vertices)
+
+
 def validated_ring(vertices: Iterable[Point]) -> tuple[Point, ...]:
     vertices = tuple(vertices)
     if len(vertices) > 1 and vertices[0] == vertices[-1]:
@@ -75,7 +81,7 @@ def validate_cutouts(outline: BoardOutline) -> None:
         raise ValueError("board cutout ids must be unique")
     for i, cutout in enumerate(outline.cutouts):
         shape = RoundedConvexShape(cutout.vertices)
-        bare = BoardOutline(outline.vertices, circular_boundary=outline.circular_boundary)
+        bare = BoardOutline(outline.vertices, circular_boundary=outline.circular_boundary,boundary_path=outline.boundary_path)
         if not shape_in_outline(shape, bare, 1):
             raise ValueError(f"cutout {cutout.id!r} must lie strictly inside the board")
         for other in outline.cutouts[:i]:
@@ -115,15 +121,21 @@ def hole_shape(hole: MechanicalHole) -> RoundedConvexShape:
     return RoundedConvexShape((hole.position,), (hole.diameter_nm + 1) // 2)
 
 
+def slot_shape(slot):
+    # Outward 2 nm guard also bounds native oval centre/angle quantization.
+    return RoundedConvexShape((slot.start,slot.end),(slot.width_nm+1)//2+2)
+
+
 def shape_in_board(board: PhysicalBoard, shape: RoundedConvexShape,
                    edge_clearance_nm: int = 0, hole_clearance_nm: int = 0) -> bool:
     return (shape_in_outline(shape, board.outline, edge_clearance_nm)
             and all(shapes_clear(shape, hole_shape(hole), max(1, hole_clearance_nm))
-                    for hole in board.mechanical_holes))
+                    for hole in board.mechanical_holes)
+            and all(shapes_clear(shape,slot_shape(slot),max(1,hole_clearance_nm)) for slot in board.mechanical_slots))
 
 
 def point_in_material(board: PhysicalBoard, point: Point) -> bool:
-    if not board.outline.circular_boundary and not board.outline.cutouts and not board.mechanical_holes:
+    if not board.outline.circular_boundary and not board.outline.boundary_path and not board.outline.cutouts and not board.mechanical_holes and not board.mechanical_slots:
         return point_in_polygon(point, board.outline.vertices)
     return shape_in_board(board, RoundedConvexShape((point,)))
 
@@ -137,3 +149,11 @@ def validate_mechanical_holes(board: PhysicalBoard) -> None:
             raise ValueError(f"mechanical hole {hole.id!r} must lie strictly inside board material")
         if any(not shapes_clear(hole_shape(hole), hole_shape(other), 1) for other in holes[:i]):
             raise ValueError("mechanical holes cannot touch or overlap")
+    occupied=[hole_shape(h) for h in holes]
+    if {h.id for h in holes}&{s.id for s in board.mechanical_slots}:raise ValueError('hole and slot IDs must not collide')
+    for slot in board.mechanical_slots:
+        shape=slot_shape(slot)
+        if slot.width_nm<board.rules.minimum_slot_width_nm:raise ValueError('routed slot width is below the board minimum slot/tool diameter')
+        if not shape_in_outline(shape,board.outline,1):raise ValueError(f'slot {slot.id!r} must lie strictly inside board material')
+        if any(not shapes_clear(shape,other,max(1,board.rules.minimum_hole_clearance_nm)) for other in occupied):raise ValueError('slots cannot touch/overlap holes or other slots or violate hole clearance')
+        occupied.append(shape)

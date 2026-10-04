@@ -15,7 +15,7 @@ from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source, compile_design_file, compile_design_source
 from .design import Design, MechanicalDesign, MechanicalConnectorBinding
 from .mechanical_profiles import MechanicalProfileDefinition, MechanicalProfileInstance, MechanicalFeatureSource
-from .cam_qualification import CamCorpusCase, CamGateStatus, CamMatrixCell, CamQualificationEvidence, CamQualificationMatrix, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, TestVia, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net, run_cam_qualification_matrix
+from .cam_qualification import CamCorpusCase, CamGateStatus, CamMatrixCell, CamQualificationEvidence, CamQualificationMatrix, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, DrillSlot, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, TestVia, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net, run_cam_qualification_matrix
 from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage, normalize_constraints
 from .critical import (
     CriticalNetResult,
@@ -160,6 +160,9 @@ from .importers import (
     parse_kicad_mod,
 )
 from .physical import (
+    BoundaryLine, BoundaryArc, BoardBoundaryPath, MechanicalSlot,
+    BoardDatum, BoardEdge, PhysicalAttachment,
+    BodyOverhang, ComponentHeight, AssemblyEnvelope, AssemblyAccess,
     AlignmentAxis,
     BoardOutline,
     BoardCutout,
@@ -285,6 +288,9 @@ __all__ = [
     "Backend",
     "Board",
     "BoardOutline",
+    "BoundaryLine", "BoundaryArc", "BoardBoundaryPath", "MechanicalSlot",
+    "BoardDatum", "BoardEdge", "PhysicalAttachment",
+    "BodyOverhang", "ComponentHeight", "AssemblyEnvelope", "AssemblyAccess",
     "BoardCutout",
     "CircularBoardBoundary",
     "MechanicalHole",
@@ -302,6 +308,7 @@ __all__ = [
     "CamReconciliation",
     "CamToolAdapter",
     "DrillHit",
+    "DrillSlot",
     "GerbvSubprocessAdapter",
     "CamVerificationReport",
     "ComponentInstance",

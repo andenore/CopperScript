@@ -1,0 +1,15 @@
+// Real-footprint geometry/routing demonstration; not a production circuit.
+board MechanicalCurves {
+    use library "standard";
+    component R1: RESISTOR { value=1kohm; footprint="Resistor_SMD:R_0603_1608Metric"; }
+    component R2: RESISTOR { value=2kohm; footprint="Resistor_SMD:R_0603_1608Metric"; }
+    net SIGNAL { R1.1; R2.1; }
+    net GND { R1.2; R2.2; }
+    mechanical {
+        outline rounded_rectangle { width=40mm; height=30mm; corner_radius=3mm; }
+        slot MOUNT { start=(17mm,10mm); end=(23mm,10mm); width=1.5mm; }
+        hole H1 { position=(5mm,25mm); diameter=2mm; }
+    }
+    constraint fixed_placement(R1) { x=8mm; y=10mm; rotation=0; side=front; }
+    constraint fixed_placement(R2) { x=32mm; y=10mm; rotation=0; side=front; }
+}

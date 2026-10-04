@@ -66,7 +66,14 @@ function render() {
   const focused=document.activeElement?.closest?.(".component")?.dataset.reference;
   const svg=node("g"); // Build off-document; one DOM replacement avoids layout churn.
   const c = s.outline.circle;
-  const outline=c ? node("circle",{cx:mm(c.center[0]),cy:mm(c.center[1]),r:mm(c.radius_nm),class:"outline"}) :
+  let pathData="";
+  if(s.outline.path) {
+    pathData=`M ${s.outline.path[0].start.map(mm).join(" ")}`;
+    for(const segment of s.outline.path) pathData+=segment.kind==="line" ? ` L ${segment.end.map(mm).join(" ")}` :
+      ` A ${mm(segment.radius_nm)} ${mm(segment.radius_nm)} 0 0 ${segment.sweep?1:0} ${segment.end.map(mm).join(" ")}`;
+    pathData+=" Z";
+  }
+  const outline=s.outline.path ? node("path",{d:pathData,class:"outline"}) : c ? node("circle",{cx:mm(c.center[0]),cy:mm(c.center[1]),r:mm(c.radius_nm),class:"outline"}) :
     node("polygon",{points:points(s.outline.vertices),class:"outline"});
   outline.append(node("title",{},featureLabel("outline")));svg.append(outline);
   for(const d of s.datums||[]) {
@@ -92,6 +99,10 @@ function render() {
     if (h.head_clearance_radius_nm) svg.append(node("circle",{cx:mm(h.position[0]),cy:mm(h.position[1]),r:mm(h.head_clearance_radius_nm),class:"head-clearance"}));
     const n = node("circle",{cx:mm(h.position[0]),cy:mm(h.position[1]),r:mm(h.diameter_nm)/2,class:"hole"});
     n.append(node("title",{},`${h.id}: ${mm(h.diameter_nm)} mm NPTH. ${featureLabel("hole",h.id)}`)); svg.append(n);
+  }
+  for(const slot of s.slots||[]) {
+    const n=shape({spine:[slot.start,slot.end],radius_nm:slot.width_nm/2},"mechanical-slot");
+    n.append(node("title",{},`NPTH slot ${slot.id}; tool width ${mm(slot.width_nm)} mm`));svg.append(n);
   }
   for (const [items,cls] of [[s.regions,"region"],[s.keepouts,"keepout"]]) for (const k of items) {
     const n=node("polygon",{points:points(k.vertices),class:cls});
@@ -236,6 +247,12 @@ function populate() {
   const features=$("feature"),old=features.value;features.replaceChildren(new Option("New feature",""));
   for (const [index,f] of (accepted.mechanical_features||[]).entries()) features.add(new Option(`${f.kind} ${f.name||f.shape} (line ${f.line})`,String(index)));
   features.value=old;
+  const existing=(accepted.mechanical_features||[]).filter(f=>f.kind==="boundary");
+  $("path-segments").value=JSON.stringify(existing.length ? existing.map(f=>({id:f.name,kind:f.shape,...f.parameters})) :
+    [{id:"TOP",kind:"line",start:"(0mm,0mm)",end:"(40mm,0mm)"},
+     {id:"RIGHT",kind:"line",start:"(40mm,0mm)",end:"(40mm,30mm)"},
+     {id:"BOTTOM",kind:"line",start:"(40mm,30mm)",end:"(0mm,30mm)"},
+     {id:"LEFT",kind:"line",start:"(0mm,30mm)",end:"(0mm,0mm)"}],null,2);
   const layer=$("copper-layer"),previous=layer.value;layer.replaceChildren(new Option("All copper layers",""));
   for (const name of accepted.routed_overlay?.native.layers||[]) layer.add(new Option(name,name));layer.value=previous;
 }
@@ -383,9 +400,14 @@ $("reload-source").onclick=()=>{if (confirm("Discard temporary placement, previe
 $("source-link").onclick=()=>api("/api/source-link",{reference:selected}).catch(e=>status(e.message,true));
 const featureDefaults={
   "outline:rectangle":{width:"40mm",height:"30mm",origin:"(0mm,0mm)"},
+  "outline:rounded_rectangle":{width:"40mm",height:"30mm",origin:"(0mm,0mm)",corner_radius:"3mm",maximum_chord_error:"0.01mm"},
+  "outline:path":{maximum_chord_error:"0.01mm"},
   "outline:circle":{diameter:"50mm",center:"(25mm,25mm)"},
   "outline:polygon":{vertices:"[(0mm,0mm), (40mm,0mm), (40mm,30mm), (0mm,30mm)]"},
   "hole:":{position:"(3mm,3mm)",diameter:"2.2mm",head_clearance_radius:"0mm"},
+  "slot:":{start:"(17mm,10mm)",end:"(23mm,10mm)",width:"1.5mm"},
+  "boundary:line":{start:"(0mm,0mm)",end:"(40mm,0mm)"},
+  "boundary:arc":{start:"(0mm,20mm)",mid:"(10mm,10mm)",end:"(20mm,20mm)"},
   "cutout:polygon":{vertices:"[(27mm,18mm), (33mm,18mm), (33mm,23mm), (27mm,23mm)]"},
   "keepout:rectangle":{width:"4mm",height:"4mm",origin:"(10mm,10mm)",side:"front"},
   "keepout:polygon":{vertices:"[(10mm,10mm), (14mm,10mm), (14mm,14mm), (10mm,14mm)]",side:"front"},
@@ -415,7 +437,8 @@ function featureInputs(parameters) {
 }
 function featureMode() {
   const kind=$("feature-kind").value;
-  if (["hole","rules","datum","edge","attach","overhang","component_height"].includes(kind)) $("feature-shape").value="";
+  if (["hole","slot","rules","datum","edge","attach","overhang","component_height"].includes(kind)) $("feature-shape").value="";
+  else if(kind==="boundary" && !["line","arc"].includes($("feature-shape").value)) $("feature-shape").value="line";
   else if (kind==="cutout") $("feature-shape").value="polygon";
   else if (kind.includes("keepout") && $("feature-shape").value==="circle") $("feature-shape").value="rectangle";
   else if (["enclosure","assembly_access"].includes(kind) && !["rectangle","polygon"].includes($("feature-shape").value)) $("feature-shape").value="rectangle";
@@ -433,9 +456,32 @@ $("feature").onchange=()=>{
 };
 function featureRequest(remove=false) {
   const parameters=Object.fromEntries([...$("feature-parameters").querySelectorAll("[data-property]")].filter(n=>n.value.trim()).map(n=>[n.dataset.property,n.value.trim()]));
+  if(!remove && $("feature-kind").value==="outline" && $("feature-shape").value==="path") {reviewPath(parameters.maximum_chord_error);return;}
+  if(!remove && $("feature-kind").value==="outline" && accepted.mechanical_features?.some(f=>f.kind==="boundary")) {
+    operation("prepare_mechanical_batch",{features:[{kind:"outline",name:"",shape:$("feature-shape").value,parameters,remove:false},
+      ...accepted.mechanical_features.filter(f=>f.kind==="boundary").map(f=>({kind:"boundary",name:f.name,shape:f.shape,parameters:{},remove:true}))]});return;
+  }
   operation("prepare_mechanical",{kind:$("feature-kind").value,name:$("feature-name").value,shape:$("feature-shape").value,parameters:remove?{}:parameters,remove});
 }
 $("prepare-feature").onclick=()=>featureRequest();$("remove-feature").onclick=()=>featureRequest(true);
+function reviewPath(error="0.01mm") {
+  try {
+    const segments=JSON.parse($("path-segments").value);
+    if(!Array.isArray(segments) || segments.length<2 || segments.length>256)throw new Error("Path requires 2–256 primitives");
+    const previous=scene().mechanical_features.find(f=>f.kind==="outline" && f.shape==="path");
+    const features=[{kind:"outline",name:"",shape:"path",parameters:{maximum_chord_error:error||previous?.parameters.maximum_chord_error||"0.01mm"},remove:false}];
+    for(const segment of segments) {
+      const {id,kind,...parameters}=segment;
+      if(!["line","arc"].includes(kind) || typeof id!=="string")throw new Error("Each primitive requires an id and line/arc kind");
+      features.push({kind:"boundary",name:id,shape:kind,parameters,remove:false});
+    }
+    const names=new Set(segments.map(s=>s.id));
+    for(const old of accepted.mechanical_features||[]) if(old.kind==="boundary" && !names.has(old.name))
+      features.push({kind:"boundary",name:old.name,shape:old.shape,parameters:{},remove:true});
+    operation("prepare_mechanical_batch",{features});
+  } catch(e){status(e.message,true);}
+}
+$("prepare-path").onclick=()=>reviewPath();
 function snappedPoint(event) {
   const step=Number($("snap").value),p=svgPoint(event);
   if (!Number.isFinite(step)||step<=0) throw new Error("Snap must be positive");

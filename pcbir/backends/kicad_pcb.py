@@ -317,7 +317,16 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
             '    (layer "Edge.Cuts")',
             f'    (uuid "{_stable_uuid(board.name, "outline", "circle")}")', "  )",
         ])
-    loops = (() if circle is not None else (("outer", board.outline.vertices),))
+    if board.outline.boundary_path:
+        from ..physical import BoundaryArc
+        for segment in board.outline.boundary_path.segments:
+            lines.extend(['  (gr_arc' if isinstance(segment,BoundaryArc) else '  (gr_line',
+                f'    (start {_point(segment.start)})',
+                *([f'    (mid {_point(segment.mid)})'] if isinstance(segment,BoundaryArc) else []),
+                f'    (end {_point(segment.end)})',
+                '    (stroke (width 0.05) (type default))','    (layer "Edge.Cuts")',
+                f'    (uuid "{_stable_uuid(board.name,"outline",segment.id)}")','  )'])
+    loops = (() if circle is not None or board.outline.boundary_path else (("outer", board.outline.vertices),))
     loops += tuple((f"cutout:{c.id}", c.vertices) for c in board.outline.cutouts)
     for loop_id, vertices in loops:
         for index, start in enumerate(vertices):
@@ -339,7 +348,7 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
 
 def _mechanical_export_board(board: PhysicalBoard) -> PhysicalBoard:
     """Lower board-owned NPTHs to canonical assets only in the export copy."""
-    if not board.mechanical_holes:
+    if not board.mechanical_holes and not board.mechanical_slots:
         return board
     footprints = dict(board.footprints)
     placements = list(board.placements)
@@ -360,7 +369,22 @@ def _mechanical_export_board(board: PhysicalBoard) -> PhysicalBoard:
             raise ValueError("generated mechanical hole asset conflicts with a footprint")
         footprints[name] = footprint
         placements.append(Placement(reference, name, hole.position, source_path=f"mechanical:{hole.id}"))
-    return replace(board, footprints=footprints, placements=tuple(placements), mechanical_holes=())
+    from math import atan2,degrees,hypot
+    for slot in sorted(board.mechanical_slots,key=lambda s:s.id):
+        identity=sha256(slot.id.encode()).hexdigest()[:16];reference='CS_MS_'+identity
+        if any(p.reference==reference for p in placements):raise ValueError('generated slot reference conflicts with a component')
+        dx,dy=slot.end.x_nm-slot.start.x_nm,slot.end.y_nm-slot.start.y_nm
+        length=round(hypot(dx,dy));size=Size(length+slot.width_nm,slot.width_nm)
+        name=f'__mechanical_slot_{size.width_nm}_{size.height_nm}'
+        footprint=PhysicalFootprint(name,(FootprintPad('',Point(0,0),size,kind=PadKind.NON_PLATED_THROUGH_HOLE,
+            shape=PadShape.OVAL,drill=size,has_solder_paste=False),),size,
+            graphics=(FootprintRectangle(Point(-size.width_nm//2,-size.height_nm//2),Point(size.width_nm//2,size.height_nm//2),50000,FootprintLayer.FABRICATION),),
+            exclude_from_bom=True,exclude_from_pos_files=True)
+        if name in footprints and footprints[name]!=footprint:raise ValueError('generated slot asset conflicts with a footprint')
+        footprints[name]=footprint
+        origin=Point(round((slot.start.x_nm+slot.end.x_nm)/2),round((slot.start.y_nm+slot.end.y_nm)/2))
+        placements.append(Placement(reference,name,origin,rotation_degrees=-degrees(atan2(dy,dx)),source_path='mechanical:'+slot.id))
+    return replace(board, footprints=footprints, placements=tuple(placements), mechanical_holes=(),mechanical_slots=())
 
 
 def _copper_layer_lines(board: PhysicalBoard) -> list[str]:

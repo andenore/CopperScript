@@ -237,7 +237,7 @@ def surface_path_to_via(
 
 
 def via_inside_board(board: PhysicalBoard, position: Point, size_nm: int) -> bool:
-    if board.outline.circular_boundary or board.outline.cutouts or board.mechanical_holes:
+    if board.outline.circular_boundary or board.outline.boundary_path or board.outline.cutouts or board.mechanical_holes or board.mechanical_slots:
         from .mechanical import shape_in_board
         from .geometry import RoundedConvexShape
         return shape_in_board(board, RoundedConvexShape((position,), (size_nm + 1) // 2),
@@ -260,7 +260,7 @@ def via_inside_board(board: PhysicalBoard, position: Point, size_nm: int) -> boo
 def _track_inside_board(
     board: PhysicalBoard, start: Point, end: Point, width_nm: int,
 ) -> bool:
-    if board.outline.circular_boundary or board.outline.cutouts or board.mechanical_holes:
+    if board.outline.circular_boundary or board.outline.boundary_path or board.outline.cutouts or board.mechanical_holes or board.mechanical_slots:
         from .mechanical import shape_in_board
         from .geometry import RoundedConvexShape
         return shape_in_board(board, RoundedConvexShape((start, end), (width_nm + 1) // 2),

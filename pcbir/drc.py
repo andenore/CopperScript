@@ -238,7 +238,7 @@ def run_physical_drc(
         _check_zone_fill_spacing(board, findings)
         coverage.append(DrcCoverage("copper_zones", DrcCoverageStatus.EXECUTED, False,
                                     "checked content-bound normalized fill polygons"))
-        if board.outline.circular_boundary or board.outline.cutouts or board.mechanical_holes:
+        if board.outline.circular_boundary or board.outline.boundary_path or board.outline.cutouts or board.mechanical_holes or board.mechanical_slots:
             findings.append(_finding(
                 "DRC-MECHANICAL-FILL-UNSUPPORTED", DrcSeverity.ERROR,
                 "filled-zone material coverage for curved outlines/cutouts/mechanical holes is not yet qualified",
@@ -340,8 +340,10 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "name": board.name,
             "outline": [(p.x_nm, p.y_nm) for p in board.outline.vertices],
             "circular_boundary": repr(board.outline.circular_boundary),
+            "boundary_path": repr(board.outline.boundary_path),
             "cutouts": [(c.id, [(p.x_nm, p.y_nm) for p in c.vertices]) for c in board.outline.cutouts],
             "mechanical_holes": [repr(h) for h in sorted(board.mechanical_holes, key=lambda h: h.id)],
+            "mechanical_slots": [repr(s) for s in sorted(board.mechanical_slots,key=lambda s:s.id)],
             "datums": [repr(d) for d in sorted(board.datums, key=lambda d:d.id)],
             "boundary_edges": [repr(e) for e in sorted(board.boundary_edges, key=lambda e:e.id)],
             "attachments": [repr(a) for a in sorted(board.attachments, key=lambda a:a.id)],
@@ -356,6 +358,7 @@ def physical_board_digest(board: PhysicalBoard) -> str:
                 "via_technologies": [repr(item) for item in board.stackup.via_technologies],
             },
             "rules": {
+                "minimum_slot_width": board.rules.minimum_slot_width_nm,
                 "clearance": board.rules.minimum_clearance_nm,
                 "hole_clearance": board.rules.minimum_hole_clearance_nm,
                 "minimum_track_width": board.rules.minimum_track_width_nm,
@@ -544,7 +547,7 @@ def _check_differential_rules(board: PhysicalBoard, findings: list[DrcFinding]) 
 def _check_board_edge(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
     clearance = board.rules.minimum_clearance_nm
     from .mechanical import ring_edges, shape_in_outline
-    if board.outline.circular_boundary is not None:
+    if board.outline.circular_boundary is not None or board.outline.boundary_path:
         # Exact disk containment; do not replace it with the inscribed grid ring.
         objects = [(f"track:{i}", t.net, RoundedConvexShape((t.start, t.end), (t.width_nm + 1) // 2))
                    for i, t in enumerate(board.tracks)]
@@ -781,8 +784,9 @@ def non_plated_holes(board: PhysicalBoard) -> tuple[tuple[str, RoundedConvexShap
     """Return placed drill envelopes, including unnumbered mechanical holes."""
 
     holes: list[tuple[str, RoundedConvexShape]] = []
-    from .mechanical import hole_shape
+    from .mechanical import hole_shape,slot_shape
     holes.extend((f"mechanical-hole:{hole.id}", hole_shape(hole)) for hole in board.mechanical_holes)
+    holes.extend((f"mechanical-slot:{slot.id}",slot_shape(slot)) for slot in board.mechanical_slots)
     for placement in sorted(board.placements, key=lambda item: item.reference):
         footprint = board.footprints[placement.footprint]
         for index, pad in enumerate(footprint.pads):

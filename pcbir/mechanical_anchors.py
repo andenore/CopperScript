@@ -53,7 +53,8 @@ def resolve_datums(items, point):
 def resolve_edges(items, outline, point):
     if items and outline.circular_boundary:
         raise ValueError("straight named edges require a polygon outline; circular arc edges are not sampled")
-    pairs = tuple(zip(outline.vertices, (*outline.vertices[1:], outline.vertices[0])))
+    from .mechanical import boundary_line_pairs
+    pairs = boundary_line_pairs(outline)
     result = []
     for item in items:
         if set(item.parameters) != {"start", "end"}:
@@ -67,8 +68,9 @@ def resolve_edges(items, outline, point):
 
 def resolve_attachments(items, datums, edges, outline, point):
     datums, edges = {d.id:d for d in datums}, {e.id:e for e in edges}
-    pairs = tuple(zip(outline.vertices, (*outline.vertices[1:], outline.vertices[0])))
-    winding = 1 if sum(a.x_nm*b.y_nm-b.x_nm*a.y_nm for a,b in pairs) > 0 else -1
+    from .mechanical import boundary_line_pairs,ring_edges
+    pairs = boundary_line_pairs(outline)
+    winding = 1 if sum(a.x_nm*b.y_nm-b.x_nm*a.y_nm for a,b in ring_edges(outline.vertices)) > 0 else -1
     result, references = [], set()
     for item in items:
         p = item.parameters

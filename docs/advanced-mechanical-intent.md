@@ -94,6 +94,13 @@ minimum slot dimensions, hole/slot proximity, copper clearance, native DRC and
 Gerber/drill round trips before adding their UI controls. Unsupported curved
 queries must fail closed, not silently substitute a bounding rectangle.
 
+Implemented forms and initial limits are in [mechanical language](mechanical-language.md).
+Curved paths are convex, with three-point arcs of at most 180 degrees; all-line
+paths may be concave. Rounded rectangles retain four native arcs. Slots retain
+NPTH cutter-centre endpoints and width, with native oval/G85 export. Conservative
+queries never turn voids into material. Atomic complete-path reviews allow joined
+endpoints to change together, without accepting invalid intermediate geometry.
+
 ## Locked external reference overlays (checklist 28)
 
 DXF/enclosure reference assets are locked by content checksum and imported through

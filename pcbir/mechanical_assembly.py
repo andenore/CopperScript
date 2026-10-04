@@ -92,7 +92,7 @@ def component_height(board,pose):
 
 
 def body_in_material(board,pose,shape,clearance):
-    from .mechanical import shape_in_board,shape_in_outline,hole_shape
+    from .mechanical import shape_in_board,shape_in_outline,hole_shape,slot_shape
     from .geometry import RoundedConvexShape,shapes_clear
     policy=next((a for a in board.body_overhangs if a.reference==pose.reference),None)
     if policy is None:return shape_in_board(board,shape,clearance)
@@ -110,7 +110,7 @@ def body_in_material(board,pose,shape,clearance):
     if b!=edge.end:unaffected.append((b,edge.end))
     if any(not shapes_clear(shape,RoundedConvexShape((s,e)),clearance) for s,e in unaffected):return False
     if any(not shapes_clear(shape,RoundedConvexShape(c.vertices),max(1,clearance)) for c in board.outline.cutouts):return False
-    return all(shapes_clear(shape,hole_shape(h),1) for h in board.mechanical_holes)
+    return all(shapes_clear(shape,hole_shape(h),1) for h in board.mechanical_holes) and all(shapes_clear(shape,slot_shape(s),1) for s in board.mechanical_slots)
 
 
 def assembly_pose_legal(board,pose,polygon,placed):

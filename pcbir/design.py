@@ -17,6 +17,7 @@ from .syntax import CopperScriptError, Document, MechanicalDecl, RawQuantity, So
 from .mechanical_anchors import MechanicalAttachment, resolve_datums, resolve_edges, resolve_attachments
 from .physical import BoardDatum, BoardEdge
 from .physical import BodyOverhang, ComponentHeight, AssemblyEnvelope, AssemblyAccess
+from .physical import MechanicalSlot,BoundaryLine,BoundaryArc,BoardBoundaryPath
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,14 +49,16 @@ class MechanicalDesign:
     component_heights: tuple[ComponentHeight, ...] = ()
     assembly_envelopes: tuple[AssemblyEnvelope, ...] = ()
     assembly_access: tuple[AssemblyAccess, ...] = ()
+    slots: tuple[MechanicalSlot,...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holes", tuple(self.holes))
-        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources", "datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access"):
+        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources", "datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access", "slots"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(self, "rule_overrides", MappingProxyType(dict(self.rule_overrides)))
         DesignRules(**self.rule_overrides)
-        PhysicalBoard("mechanical-validation", self.outline, {}, (), (), mechanical_holes=self.holes)
+        PhysicalBoard("mechanical-validation", self.outline, {}, (), (), mechanical_holes=self.holes,mechanical_slots=self.slots,
+                      rules=DesignRules(**self.rule_overrides))
         from .geometry import RoundedConvexShape
         from .mechanical import shape_in_outline
         for hole in self.holes:
@@ -86,6 +89,8 @@ def lower_mechanical(document: Document,
     connectors, keepouts, copper_keepouts = [], [], []
     datum_items, edge_items, attachment_items = [], [], []
     assembly_items = []
+    boundary_items,slots=[],[]
+    path_options=None
     items, sources, instances = expand_mechanical_items(block.items, profiles or {})
 
     def length(value):
@@ -122,6 +127,14 @@ def lower_mechanical(document: Document,
             if item.kind in {'overhang','component_height','enclosure','assembly_access'}:
                 assembly_items.append(item)
                 continue
+            if item.kind=='boundary':
+                boundary_items.append(item)
+                continue
+            if item.kind=='outline' and item.shape=='path':
+                if outline is not None or path_options is not None:raise ValueError('exactly one board outline is allowed')
+                if set(p)-{'maximum_chord_error'}:raise ValueError('path outline only accepts maximum_chord_error')
+                path_options=p
+                continue
             if item.kind == "rules":
                 allowed = {name.removesuffix("_nm") for name in DesignRules.__dataclass_fields__}
                 required = set()
@@ -144,12 +157,17 @@ def lower_mechanical(document: Document,
             elif item.kind == "hole":
                 allowed = {"position", "diameter", "head_clearance_radius"}
                 required = {"position", "diameter"}
+            elif item.kind=='slot':
+                allowed=required={'start','end','width'}
             elif item.shape == "circle" and item.kind == "outline":
                 allowed = {"center", "diameter", "maximum_chord_error"}
                 required = {"diameter"}
             elif item.shape == "rectangle" and item.kind == "outline":
                 allowed = {"origin", "width", "height"}
                 required = {"width", "height"}
+            elif item.shape=='rounded_rectangle' and item.kind=='outline':
+                allowed={'origin','width','height','corner_radius','maximum_chord_error'}
+                required={'width','height','corner_radius'}
             elif item.shape == "polygon":
                 allowed = required = {"vertices"}
             else:
@@ -197,10 +215,12 @@ def lower_mechanical(document: Document,
             elif item.kind == "hole":
                 holes.append(MechanicalHole(item.name, point(p["position"]), length(p["diameter"]),
                     length(p["head_clearance_radius"]) if "head_clearance_radius" in p else 0))
+            elif item.kind=='slot':
+                slots.append(MechanicalSlot(item.name,point(p['start']),point(p['end']),length(p['width'])))
             elif item.kind == "cutout":
                 cutouts.append(BoardCutout(item.name, vertices(p["vertices"])))
             else:
-                if outline is not None:
+                if outline is not None or path_options is not None:
                     raise ValueError("exactly one board outline is allowed")
                 if item.shape == "circle":
                     outline = BoardOutline.circle(mm(p["diameter"]),
@@ -209,20 +229,37 @@ def lower_mechanical(document: Document,
                 elif item.shape == "rectangle":
                     outline = BoardOutline.rectangle(mm(p["width"]), mm(p["height"]),
                         origin=point(p["origin"]) if "origin" in p else None)
+                elif item.shape=='rounded_rectangle':
+                    outline=BoardOutline.rounded_rectangle(mm(p['width']),mm(p['height']),mm(p['corner_radius']),
+                        origin=point(p['origin']) if 'origin' in p else None,
+                        maximum_chord_error_mm=mm(p['maximum_chord_error']) if 'maximum_chord_error' in p else '0.01')
                 else:
                     outline = BoardOutline(vertices(p["vertices"]))
         except (ValueError, TypeError) as exc:
             raise CopperScriptError("MEC002", str(exc), item.location) from exc
     try:
+        if path_options is not None:
+            primitives=[]
+            for item in boundary_items:
+                p=item.parameters
+                required={'start','end'} if item.shape=='line' else {'start','mid','end'} if item.shape=='arc' else None
+                if required is None or set(p)!=required:raise ValueError('boundary primitives require line start/end or arc start/mid/end')
+                primitives.append(BoundaryLine(item.name,point(p['start']),point(p['end'])) if item.shape=='line' else
+                    BoundaryArc(item.name,point(p['start']),point(p['mid']),point(p['end'])))
+            outline=BoardOutline.from_path(BoardBoundaryPath(tuple(primitives),length(path_options['maximum_chord_error']) if 'maximum_chord_error' in path_options else 10000))
+        elif boundary_items:raise ValueError('boundary declarations require an outline path')
         if outline is None:
             raise ValueError("mechanical block requires exactly one outline")
         datums = resolve_datums(datum_items, point)
         edges = resolve_edges(edge_items, outline, point)
+        if outline.boundary_path:
+            edges=(*edges,*(BoardEdge(s.id,s.start,s.end) for s in outline.boundary_path.segments if isinstance(s,BoundaryLine)))
+            if len({e.id for e in edges})!=len(edges):raise ValueError('duplicate boundary edge IDs')
         attachments = resolve_attachments(attachment_items, datums, edges, outline, point)
         from .mechanical_assembly import lower_assembly
         assembly = lower_assembly(assembly_items, replace(outline,cutouts=tuple(cutouts)), edges, point, length)
         return MechanicalDesign(replace(outline, cutouts=tuple(cutouts)), tuple(holes), rules,
             tuple(connectors), tuple(keepouts), tuple(copper_keepouts), instances, sources,
-            datums, edges, attachments, *assembly)
+            datums, edges, attachments, *assembly, tuple(slots))
     except (ValueError, TypeError) as exc:
         raise CopperScriptError("MEC003", str(exc), block.location) from exc

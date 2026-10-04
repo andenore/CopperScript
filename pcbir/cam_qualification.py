@@ -110,10 +110,19 @@ class DrillHit:
 
 
 @dataclass(frozen=True, slots=True)
+class DrillSlot:
+    tool: str
+    diameter_nm: int
+    start: tuple[int,int]
+    end: tuple[int,int]
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizedDrillProgram:
     hits: tuple[DrillHit, ...]
     units: str
     plated: bool | None = None
+    slots: tuple[DrillSlot,...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +344,7 @@ def parse_xnc(path: Path, *, plated: bool | None = None) -> NormalizedDrillProgr
     tools: dict[str, int] = {}
     current: str | None = None
     hits: list[DrillHit] = []
+    slots: list[DrillSlot] = []
     in_header = True
     metric = False
     for line in lines[1:-1]:
@@ -365,6 +375,12 @@ def parse_xnc(path: Path, *, plated: bool | None = None) -> NormalizedDrillProgr
             if current not in tools:
                 raise ValueError(f"XNC selects undefined tool T{current}")
             continue
+        slot=re.fullmatch(r'X(-?\d+(?:\.\d+)?)Y(-?\d+(?:\.\d+)?)G85X(-?\d+(?:\.\d+)?)Y(-?\d+(?:\.\d+)?)',line)
+        if slot:
+            if current is None:raise ValueError('XNC slot occurs before tool selection')
+            coordinates=tuple(round(float(v)*1000000) for v in slot.groups())
+            if coordinates[:2]==coordinates[2:]:raise ValueError('XNC routed slot endpoints must be distinct')
+            slots.append(DrillSlot(current,tools[current],coordinates[:2],coordinates[2:]));continue
         coordinate = re.fullmatch(r"X(-?[0-9.]+)Y(-?[0-9.]+)", line)
         if coordinate:
             if current is None:
@@ -377,14 +393,19 @@ def parse_xnc(path: Path, *, plated: bool | None = None) -> NormalizedDrillProgr
     if in_header or not metric:
         raise ValueError("XNC requires a closed header and explicit METRIC units")
     return NormalizedDrillProgram(tuple(sorted(hits, key=lambda item: (item.x_nm, item.y_nm,
-                                                                        item.diameter_nm, item.tool))), "mm", plated)
+                                                                        item.diameter_nm, item.tool))), "mm", plated,
+            tuple(sorted(slots,key=lambda s:(s.start,s.end,s.diameter_nm,s.tool))))
 
 
 def reconcile_drills(board: PhysicalBoard,
-                     programs: tuple[NormalizedDrillProgram, ...]) -> CamReconciliation:
+                     programs: tuple[NormalizedDrillProgram, ...], *, slot_tolerance_nm: int = 0) -> CamReconciliation:
     """Compare the normalized hit multiset to pads and vias in signed physical IR."""
     expected: Counter[tuple[int, int, int, bool | None]] = Counter()
     findings: list[str] = []
+    if type(slot_tolerance_nm) is not int or not 0<=slot_tolerance_nm<=1000:raise ValueError('explicit slot coordinate tolerance must be 0–1000 nm')
+    def slot_record(start,end,width,plated):
+        a,b=sorted((start,end));return (*a,*b,width,plated)
+    expected_slots=[slot_record((s.start.x_nm,s.start.y_nm),(s.end.x_nm,s.end.y_nm),s.width_nm,False) for s in board.mechanical_slots]
     for hole in board.mechanical_holes:
         expected[(hole.position.x_nm, hole.position.y_nm, hole.diameter_nm, False)] += 1
     for placement in board.placements:
@@ -393,7 +414,14 @@ def reconcile_drills(board: PhysicalBoard,
             if pad.drill is None:
                 continue
             if pad.drill.width_nm != pad.drill.height_nm:
-                findings.append(f"slot reconciliation requires routed XNC support: {placement.reference}.{pad.number}")
+                # Use the same transformed capsule as DRC; no unique pad-number lookup.
+                from .drc import placed_pad_shape
+                from .physical import PadShape
+                from dataclasses import replace
+                shape=placed_pad_shape(transformed_local_point(placement,pad.position),
+                    replace(pad,size=pad.drill,shape=PadShape.OVAL),placement)
+                expected_slots.append(slot_record((shape.spine[0].x_nm,shape.spine[0].y_nm),
+                    (shape.spine[1].x_nm,shape.spine[1].y_nm),min(pad.drill.width_nm,pad.drill.height_nm),pad.kind is PadKind.THROUGH_HOLE))
                 continue
             # Each physical land owns its drill, including repeated/empty numbers.
             point = transformed_local_point(placement, pad.position)
@@ -402,10 +430,18 @@ def reconcile_drills(board: PhysicalBoard,
     for via in board.vias:
         expected[(via.position.x_nm, via.position.y_nm, via.drill_nm, True)] += 1
     actual: Counter[tuple[int, int, int, bool | None]] = Counter()
+    actual_slots=[]
     for program in programs:
         for hit in program.hits:
             # KiCad Excellon uses Cartesian-up Y; board IR uses PCB Y-down.
             actual[(hit.x_nm, -hit.y_nm, hit.diameter_nm, program.plated)] += 1
+        actual_slots.extend(slot_record((s.start[0],-s.start[1]),(s.end[0],-s.end[1]),s.diameter_nm,program.plated) for s in program.slots)
+    for expected_slot in sorted(expected_slots):
+        matches=[(sum(abs(a-b) for a,b in zip(expected_slot[:5],item[:5])),i) for i,item in enumerate(actual_slots)
+            if item[5] is expected_slot[5] and all(abs(a-b)<=slot_tolerance_nm for a,b in zip(expected_slot[:5],item[:5]))]
+        if matches:actual_slots.pop(min(matches)[1])
+        else:findings.append(f'missing routed slot {expected_slot}')
+    findings.extend(f'unexpected routed slot {s}' for s in sorted(actual_slots))
     if expected != actual:
         for item, count in sorted((expected - actual).items()):
             findings.append(f"missing drill hit {item} x{count}")

@@ -90,6 +90,15 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
                 "FAB-NPTH-MIN", "fabrication",
                 "board-owned NPTH is below the qualified non-plated process limit", (hole.id,),
             ))
+    for slot in board.mechanical_slots:
+        limit=profile.minimum_slot_width_nm
+        if limit is None:
+            fabrication_incomplete=True
+            findings.append(ProcessFinding('FAB-SLOT-QUALIFICATION-MISSING','fabrication',
+                'routed slot requires a separately specified milling/tool capability',(slot.id,)))
+        elif slot.width_nm<limit.value:
+            fabrication_failed=True
+            findings.append(ProcessFinding('FAB-SLOT-MIN','fabrication','routed slot is below the specified tool width',(slot.id,)))
     placed_pads: list[tuple[str, object, object, object, RoundedConvexShape]] = []
     silk_shapes: list[tuple[str, RoundedConvexShape]] = []
     for placement in board.placements:
@@ -99,8 +108,10 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
             findings.append(ProcessFinding("ASM-COURTYARD-MISSING", "assembly",
                                            f"{placement.reference} has no audited courtyard",
                                            (placement.reference,)))
-        if (profile.maximum_component_height_nm is not None and footprint.height_nm is not None
-                and footprint.height_nm > profile.maximum_component_height_nm.value):
+        from .mechanical_assembly import component_height
+        height=component_height(board,placement)
+        if (profile.maximum_component_height_nm is not None and height is not None
+                and height > profile.maximum_component_height_nm.value):
             assembly_failed = True
             findings.append(ProcessFinding("ASM-HEIGHT", "assembly",
                                            f"{placement.reference} exceeds the assembly height limit",

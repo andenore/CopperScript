@@ -89,7 +89,7 @@ connectivity and locked pose. Comments survive; stale/concurrent edits never win
     component/pad/mating-face attachment with dependency/conflict checks.
 26. [x] Explicit body-overhang allowances independent of copper-edge requirements;
     component/enclosure-height and assembly-access metadata where available.
-27. [ ] Exact line/arc/rounded outlines and routed slots through shared queries,
+27. [x] Exact line/arc/rounded outlines and routed slots through shared queries,
     source editing, physical IR, KiCad and manufacturing export before UI exposure.
 28. [ ] Locked DXF/enclosure reference overlays with explicit units/transforms,
     whitelisted entities and no silent healing; optional 3D inspection later.
@@ -291,3 +291,26 @@ board/source revision, browser actions and explicit remaining limitations.
   errors. `examples/mechanical_anchors.copper` includes these policies.
 - Items 27–28 remain open. Publication and CopperLedRing's public compiler-pin
   update remain pending the outstanding approval, separate from local verification.
+
+### Exact outline primitives and routed slots — 2026-10-04
+
+- Retained closed line/three-point arc paths, rounded rectangles and NPTH slots;
+  shared conservative material/placement/routing queries, source/profiles, typed
+  physical IR, cache identities and exact native manufacturing export.
+- Atomic reviewed path editing compiles the complete transaction once, preserves
+  electrical identity and source bytes until save, and supports exact undo.
+  Invalid joins, duplicate edits and resource overflows fail without state changes.
+- Curves/geometry/source/editor/document/packaging/build/CAM checks: **167 passed,
+  6 skipped**; wider affected suite **252 passed**. Native tests include four
+  nonorthogonal slot angles and strict exported drill reconciliation.
+- Generic Make real-footprint `mechanical-curves` route at
+  `build/editor-curves-native-20261004`: zero unrouted nets, **zero native KiCad
+  violations and zero opens**, profiling retained. Native Gerber/drill inspection
+  export retains four arcs and the 1.5mm G85 slot.
+- Chrome smoke passes rounded arc/slot rendering, reviewed radius save and
+  byte-exact undo, then atomic four-line path save/undo, zero page errors.
+  Screenshot inspected: `build/editor-curves-smoke/editor.png`.
+- Initial limits: convex curved paths, arcs <=180 degrees, bounded inscribed
+  query approximation; all-line concave paths remain supported. Generic slot
+  minimum 1mm is configurable, not a milling qualification. No production-signoff
+  claim. Item 28 and publication/pin update remain open.

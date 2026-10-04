@@ -308,6 +308,60 @@ class MechanicalHole:
 
 
 @dataclass(frozen=True, slots=True)
+class MechanicalSlot:
+    """Board-owned non-plated capsule: endpoints are tool-centre positions."""
+    id: str
+    start: Point
+    end: Point
+    width_nm: Nanometres
+
+    def __post_init__(self):
+        if not isinstance(self.id,str) or not self.id.strip() or not all(isinstance(p,Point) for p in (self.start,self.end)) or self.start==self.end:
+            raise ValueError('routed slot requires an id and distinct typed endpoints')
+        if type(self.width_nm) is not int or self.width_nm<=0:
+            raise ValueError('routed slot width must be a positive integer length')
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryLine:
+    id: str
+    start: Point
+    end: Point
+
+    def __post_init__(self):
+        if not isinstance(self.id,str) or not self.id.strip() or not all(isinstance(p,Point) for p in (self.start,self.end)) or self.start==self.end:
+            raise ValueError('boundary line requires an id and distinct typed endpoints')
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryArc:
+    id: str
+    start: Point
+    mid: Point
+    end: Point
+
+    def __post_init__(self):
+        if not isinstance(self.id,str) or not self.id.strip() or not all(isinstance(p,Point) for p in (self.start,self.mid,self.end)) or len({self.start,self.mid,self.end})!=3:
+            raise ValueError('boundary arc requires an id and three distinct typed points')
+
+
+@dataclass(frozen=True, slots=True)
+class BoardBoundaryPath:
+    segments: tuple[BoundaryLine | BoundaryArc,...]
+    maximum_chord_error_nm: Nanometres = nm_from_mm('0.01')
+
+    def __post_init__(self):
+        object.__setattr__(self,'segments',tuple(self.segments))
+        if not 2 <= len(self.segments) <= 256 or not all(isinstance(s,(BoundaryLine,BoundaryArc)) for s in self.segments):
+            raise ValueError('boundary path requires 2–256 line/arc primitives')
+        if len({s.id for s in self.segments})!=len(self.segments):raise ValueError('boundary primitive IDs must be unique')
+        if type(self.maximum_chord_error_nm) is not int or self.maximum_chord_error_nm <= 2:
+            raise ValueError('boundary path chord error must exceed 2 nm')
+        if any(a.end!=b.start for a,b in zip(self.segments,(*self.segments[1:],self.segments[0]))):
+            raise ValueError('boundary path must be exactly connected and closed; no healing')
+
+
+@dataclass(frozen=True, slots=True)
 class CircularBoardBoundary:
     """Authoritative circle; an explicit bounded inscribed ring aids grid consumers."""
 
@@ -330,14 +384,30 @@ class BoardOutline:
     vertices: tuple[Point, ...]
     cutouts: tuple[BoardCutout, ...] = ()
     circular_boundary: CircularBoardBoundary | None = None
+    boundary_path: BoardBoundaryPath | None = None
 
     def __post_init__(self) -> None:
         from .mechanical import circle_query_ring, validated_ring, validate_cutouts
         object.__setattr__(self, "vertices", validated_ring(self.vertices))
         if self.circular_boundary is not None and self.vertices != circle_query_ring(self.circular_boundary):
             raise ValueError("circular board query ring must match its authoritative circle")
+        if self.boundary_path is not None:
+            from .mechanical_curves import path_query_ring
+            if self.circular_boundary or self.vertices!=path_query_ring(self.boundary_path):
+                raise ValueError('board query ring must match its authoritative line/arc path')
         object.__setattr__(self, "cutouts", tuple(self.cutouts))
         validate_cutouts(self)
+
+    @classmethod
+    def from_path(cls,path,*,cutouts=()):
+        from .mechanical_curves import path_query_ring
+        return cls(path_query_ring(path),cutouts,boundary_path=path)
+
+    @classmethod
+    def rounded_rectangle(cls,width_mm,height_mm,corner_radius_mm,*,origin=None,maximum_chord_error_mm='0.01'):
+        from .mechanical_curves import rounded_rectangle_path
+        return cls.from_path(rounded_rectangle_path(origin or Point(0,0),nm_from_mm(width_mm),nm_from_mm(height_mm),
+            nm_from_mm(corner_radius_mm),nm_from_mm(maximum_chord_error_mm)))
 
     @classmethod
     def circle(cls, diameter_mm: int | float | str, *, center: Point | None = None,
@@ -577,6 +647,7 @@ class DesignRules:
     default_track_width_nm: Nanometres = nm_from_mm("0.25")
     default_via_size_nm: Nanometres = nm_from_mm("0.8")
     default_via_drill_nm: Nanometres = nm_from_mm("0.4")
+    minimum_slot_width_nm: Nanometres = nm_from_mm('1')
 
     def __post_init__(self) -> None:
         values = (
@@ -586,6 +657,7 @@ class DesignRules:
             self.default_track_width_nm,
             self.default_via_size_nm,
             self.default_via_drill_nm,
+            self.minimum_slot_width_nm,
         )
         if any(value <= 0 for value in values):
             raise ValueError("physical design rules must be positive")
@@ -1198,6 +1270,7 @@ class PhysicalBoard:
     component_heights: tuple[ComponentHeight, ...] = ()
     assembly_envelopes: tuple[AssemblyEnvelope, ...] = ()
     assembly_access: tuple[AssemblyAccess, ...] = ()
+    mechanical_slots: tuple[MechanicalSlot,...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -1220,7 +1293,7 @@ class PhysicalBoard:
         object.__setattr__(self, "materialized_macros", tuple(self.materialized_macros))
         object.__setattr__(self, "via_in_pad_rules", tuple(self.via_in_pad_rules))
         object.__setattr__(self, "mechanical_holes", tuple(self.mechanical_holes))
-        for field in ("datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access"):
+        for field in ("datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access", "mechanical_slots"):
             object.__setattr__(self, field, tuple(getattr(self, field)))
             identities = [item.id for item in getattr(self, field)]
             if len(set(identities)) != len(identities):
@@ -1248,7 +1321,8 @@ class PhysicalBoard:
                 if current.position != Point(parent.position.x_nm+current.offset.x_nm,parent.position.y_nm+current.offset.y_nm):
                     raise ValueError("physical datum position does not match its dependency")
                 current = parent
-        pairs = tuple(zip(self.outline.vertices,(*self.outline.vertices[1:],self.outline.vertices[0])))
+        from .mechanical import boundary_line_pairs
+        pairs = boundary_line_pairs(self.outline)
         if self.boundary_edges and self.outline.circular_boundary:
             raise ValueError("circular outlines do not expose sampled straight edge IDs")
         for edge in self.boundary_edges:

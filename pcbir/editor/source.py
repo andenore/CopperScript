@@ -253,7 +253,7 @@ def mechanical_patch(snapshot: SourceSnapshot, *, kind: str, name: str = "", sha
     one intended feature and property inventory before patching token spans.
     """
     parameters = parameters or {}
-    if kind not in {"outline", "hole", "cutout", "keepout", "copper_keepout", "rules", "datum", "edge", "attach", "overhang", "component_height", "enclosure", "assembly_access"}:
+    if kind not in {"outline", "hole", "cutout", "keepout", "copper_keepout", "rules", "datum", "edge", "attach", "overhang", "component_height", "enclosure", "assembly_access", "slot", "boundary"}:
         raise SourceEditError("unsupported mechanical feature kind")
     if type(remove) is not bool:
         raise SourceEditError("remove must be boolean")

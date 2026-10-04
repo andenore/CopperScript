@@ -1271,7 +1271,7 @@ def _legal(
     from .mechanical_assembly import body_in_material,assembly_pose_legal,component_height
     inside = (body_in_material(board,candidate,RoundedConvexShape(polygon),edge_clearance)
               if board.body_overhangs else (shape_in_board(board, RoundedConvexShape(polygon), edge_clearance)
-              if board.outline.circular_boundary or board.outline.cutouts or board.mechanical_holes
+              if board.outline.circular_boundary or board.outline.boundary_path or board.outline.cutouts or board.mechanical_holes or board.mechanical_slots
               else _polygon_inside(polygon, board.outline.vertices, edge_clearance)))
     if not inside:
         return False

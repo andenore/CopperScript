@@ -56,13 +56,18 @@
 <p id="board-help">Scroll to zoom; right-drag to pan. Focus the board: arrows move by one snap (Shift: ten); R rotates to the next allowed angle; +/− zoom; F fits. Escape cancels a gesture. Tab/Enter selects a footprint. Temporary placement and source history are separate.</p>
 <fieldset id="mechanical-controls" disabled><legend>Mechanical features</legend>
 <label>Project-owned feature <select id="feature"><option value="">New feature</option></select></label>
-<label>Kind <select id="feature-kind"><option>outline</option><option>hole</option><option>cutout</option><option>keepout</option><option>copper_keepout</option><option>rules</option><option>datum</option><option>edge</option><option>attach</option><option>overhang</option><option>component_height</option><option>enclosure</option><option>assembly_access</option></select></label>
+<label>Kind <select id="feature-kind"><option>outline</option><option>hole</option><option>slot</option><option>boundary</option><option>cutout</option><option>keepout</option><option>copper_keepout</option><option>rules</option><option>datum</option><option>edge</option><option>attach</option><option>overhang</option><option>component_height</option><option>enclosure</option><option>assembly_access</option></select></label>
 <label>Stable ID <input id="feature-name" type="text" placeholder="H2"></label>
-<label>Shape <select id="feature-shape"><option>rectangle</option><option>circle</option><option>polygon</option><option value="">Not applicable</option></select></label>
+<label>Shape <select id="feature-shape"><option>rectangle</option><option>rounded_rectangle</option><option>circle</option><option>polygon</option><option>path</option><option>line</option><option>arc</option><option value="">Not applicable</option></select></label>
 <div id="feature-parameters"></div>
 <label><input id="draw-vertices" type="checkbox"> Click snapped polygon vertices</label>
 <button id="prepare-feature">Review feature</button><button id="remove-feature">Review feature removal</button>
 <p>Dimensions use exact CopperScript units (e.g. 2.2mm). Position is (xmm, ymm); vertices are [(xmm, ymm), ...]. Holes are NPTH; plated holes must be electrical components. Imported profiles remain read-only.</p>
+<details><summary>Closed line/arc path</summary>
+<p>Edit all joined endpoints together. JSON entries use id, kind (line/arc), start/end, and mid for arcs; coordinates are CopperScript length-pair literals. Unsupported concave curved paths fail rather than heal.</p>
+<label>Primitives <textarea id="path-segments" rows="12" spellcheck="false"></textarea></label>
+<button id="prepare-path">Review complete closed path</button>
+</details>
 </fieldset>
 <h2>Measure</h2><label><input id="measure" type="checkbox"> Click two snapped points</label><output id="measurement">No measurement</output>
 <h2>Scope</h2><p>Source edits rebuild unrouted physical intent. Existing routing, copper fills and manufacturing outputs become stale; rebuild before ordering. Ratsnest is a guide, not routing.</p>

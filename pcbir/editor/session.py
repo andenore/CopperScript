@@ -198,6 +198,7 @@ class EditorSession:
                   "lock": ("reference", "locked"), "apply": (), "discard": (), "undo": (), "redo": (),
                   "prepare_lock": ("reference", "x_nm", "y_nm", "rotation", "side", "locks"),
                   "prepare_mechanical": ("kind", "name", "shape", "parameters", "remove"),
+                  "prepare_mechanical_batch": ("features",),
                   "save_source": ("review_id",), "discard_source": (),
                   "undo_source": (), "redo_source": (), "reload_source": (),
                   "start_auto_place": ("budget_seconds",), "cancel_auto_place": ()}
@@ -241,7 +242,7 @@ class EditorSession:
             self.job.cancel("stale", "session edited; old placement cancelled")
         if self.source_pending and action not in {"save_source", "discard_source"}:
             raise EditorError("save or discard the source review before another operation")
-        if action in {"prepare_lock", "prepare_mechanical", "save_source", "discard_source", "undo_source", "redo_source"}:
+        if action in {"prepare_lock", "prepare_mechanical", "prepare_mechanical_batch", "save_source", "discard_source", "undo_source", "redo_source"}:
             return self._source_operation(action, request)
         if action == "start_auto_place":
             budget = request["budget_seconds"]
@@ -369,20 +370,26 @@ class EditorSession:
                                           resolved_references=refs)
             self.source_pending = self.workspace.review(snapshot, patch.apply(snapshot),
                                                        self.state.board, self.options)
-        elif action == "prepare_mechanical":
-            if (not isinstance(request["parameters"], dict) or len(request["parameters"]) > 32
-                    or not all(isinstance(k, str) and isinstance(v, str) for k, v in request["parameters"].items())
-                    or not all(isinstance(request[k], str) for k in ("kind", "name", "shape"))):
-                raise EditorError("mechanical feature requires a bounded literal property map")
+        elif action in {"prepare_mechanical","prepare_mechanical_batch"}:
+            features=request['features'] if action=='prepare_mechanical_batch' else [{k:request[k] for k in ('kind','name','shape','parameters','remove')}]
+            if not isinstance(features,list) or not 1<=len(features)<=513:raise EditorError('mechanical batch requires 1–513 feature edits')
             # Existing imported features cannot be shadowed by a local declaration.
             import json
             provenance = json.loads(self.state.board.metadata.get("mechanical_provenance", "{}"))
-            if any(f["kind"] == request["kind"] and f["name"] == request["name"] and f.get("profile")
-                   for f in provenance.get("features", ())):
-                raise EditorError("mechanical feature is owned by an imported profile")
-            patch = mechanical_patch(snapshot, **{k: request[k] for k in
-                ("kind", "name", "shape", "parameters", "remove")})
-            self.source_pending = self.workspace.review(snapshot, patch.apply(snapshot),
+            current=snapshot;seen=set()
+            for feature in features:
+                if (not isinstance(feature,dict) or set(feature)!={'kind','name','shape','parameters','remove'}
+                    or not isinstance(feature['parameters'],dict) or len(feature['parameters'])>32
+                    or not all(isinstance(k,str) and isinstance(v,str) for k,v in feature['parameters'].items())
+                    or not all(isinstance(feature[k],str) for k in ('kind','name','shape')) or type(feature['remove']) is not bool):
+                    raise EditorError('mechanical feature requires a bounded literal property map')
+                identity=(feature['kind'],feature['name'])
+                if identity in seen:raise EditorError('mechanical batch cannot edit a feature twice')
+                seen.add(identity)
+                if any(f['kind']==feature['kind'] and f['name']==feature['name'] and f.get('profile') for f in provenance.get('features',())):
+                    raise EditorError('mechanical feature is owned by an imported profile')
+                current=SourceSnapshot(mechanical_patch(current,**feature).apply(current),snapshot.filename)
+            self.source_pending = self.workspace.review(snapshot, current.raw,
                                                        self.state.board, self.options)
         elif action == "save_source":
             review = self.source_pending
