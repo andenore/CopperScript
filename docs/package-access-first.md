@@ -87,7 +87,7 @@ uv run --no-sync python -m copperscript route-board examples/full_vertical_board
 ```
 
 Create `build/` first. For the complete pinned workflow use
-`uv run --no-sync python scripts/route_full_vertical.py`; its `--fanout` now
+`make EXAMPLE=full-vertical route`; its `--fanout` now
 selects this stage ordering. `--package-access-trials 0` disables moves, **not**
 the gate. Standalone fanout remains usable for partial diagnostics, and a flow
 without `--fanout` retains its existing behavior. Report `package_access`

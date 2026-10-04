@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -154,32 +153,26 @@ def run_logged(command: list[str], output: Path, seconds: float,
 
 def route(output: Path, cli: Path, footprints: Path, minutes: int,
           include_nrf: bool) -> None:
-    spec = importlib.util.spec_from_file_location("full_vertical_runner", ROOT / "scripts/route_full_vertical.py")
-    runner = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(runner)
-    from pcbir.profiling import profiled_command
-    board_dir = output / "full-vertical"
-    if board_dir.exists():
-        raise ValueError("route output already exists; do not mix CI runs")
-    library = library_module(offline=True).directory
-    arguments = runner.routing_command(ROOT, board_dir, cli, footprints, library / "footprints",
-        include_placement_templates=False)
-    wrapped = profiled_command(arguments, board_dir / "routing.prof")
-    command = [wrapped[0], "-u", "-c", WORKER, "pcbir.profiling", *wrapped[4:]]
-    result = run_logged(command, board_dir, minutes * 60)
-    shutil.copy2(board_dir / "ci-process.log", board_dir / "routing.log")
-    result["profiling"] = runner._save_performance(board_dir, "cprofile",
-        130 if result["timed_out"] else result["exit_code"])
-    result["provenance"] = runner._provenance(ROOT)
-    result["routing_command"] = arguments
-    result["status"] = ("timeout" if result["timed_out"] else
-                        {0: "passed", 1: "unmet_gates"}.get(result["exit_code"], "error"))
-    save(board_dir / "run.json", result)
+    # The same checked-in example settings and recipes as local Make builds.
+    # CI owns only timeout/logging/artifact publication, not routing algorithms.
+    configurations = [("full-vertical", "full-vertical", minutes * 60)]
     if include_nrf:
-        run_logged([sys.executable, "-u", "-c", WORKER, "examples.nrf52_example", "--route", "--offline",
-            "--kicad-cli", str(cli),
-            "--footprint-root", str(footprints),
-            "--output-dir", str(output / "nrf52-coin-cell")], output / "nrf52-coin-cell", 20 * 60)
+        configurations.append(("nrf52", "nrf52-coin-cell", 20 * 60))
+    for example, name, seconds in configurations:
+        board_dir = output / name
+        if board_dir.exists():
+            raise ValueError("route output already exists; do not mix CI runs")
+        command = [os.environ.get("MAKE", "make"), "-f", str(ROOT / "Makefile"),
+            f"EXAMPLE={example}", "route", f'PYTHON="{sys.executable}"',
+            f"KICAD_CLI={cli}", f"KICAD_FOOTPRINTS={footprints}",
+            f"RUN_DIR={board_dir}", "RESOLVE_ARGS=--locked --offline"]
+        if example == "full-vertical":
+            command.append("PLACEMENT_TEMPLATES=")  # retain CI's source-only placement policy
+        process_dir = output / ".process" / name
+        result = run_logged(command, process_dir, seconds)
+        board_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(process_dir / "ci-process.log", board_dir / "ci-process.log")
+        save(board_dir / "ci-process.json", result)
 
 
 def inspect(output: Path, cli: Path) -> list[dict]:

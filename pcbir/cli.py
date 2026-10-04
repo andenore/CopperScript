@@ -1261,6 +1261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         if args.output:
             try:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
                 write_json(design, args.output)
             except OSError as exc:
                 print(f"OUTPUT ERROR: {exc}")

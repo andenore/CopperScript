@@ -87,7 +87,7 @@ uv run --no-sync python -m copperscript plan-layout examples/full_vertical_board
   -o build/constrained-placement/placed.kicad_pcb
 ```
 
-The README's complete `scripts/route_full_vertical.py` workflow consumes these
+The README's complete `make EXAMPLE=full-vertical route` workflow consumes these
 source constraints too. Previous routed boards and any run started before
 these constraints were added are historical results, not routing validation
 of this floorplan. A fresh full routing/signoff run is required.

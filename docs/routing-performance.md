@@ -6,10 +6,10 @@ The complete workflow now enables standard-library `cProfile` function profiling
 and streamed phase events by default; no additional dependency is required:
 
 ```powershell
-uv run --no-sync python scripts/route_full_vertical.py
+make EXAMPLE=full-vertical route
 ```
 
-Each fresh ignored `build/full-vertical/<UTC-run-id>/` contains:
+Each fresh ignored `build/full-vertical/runs/<UTC-run-id>/` contains:
 
 - `routing.prof`: complete Python call statistics, including callers/callees.
 - `profile-summary.txt` and `profile-summary.json`: top 50 functions by self time
@@ -54,13 +54,13 @@ For uninstrumented wall-time comparisons, keep progress events but disable
 function instrumentation:
 
 ```powershell
-uv run --no-sync python scripts/route_full_vertical.py --profile none
+make EXAMPLE=full-vertical route PROFILE=none
 ```
 
 Inspect a run (including an unfinished run) without modifying its artifacts:
 
 ```powershell
-uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/<run-id>"
+uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/runs/<run-id>"
 ```
 
 For the O1b comparison, first complete the function-profile run, then run these
@@ -68,9 +68,9 @@ uninstrumented variants sequentially on the same otherwise idle machine. Repeat
 in alternating order before drawing a wall-time conclusion:
 
 ```powershell
-uv run --no-sync python scripts/route_full_vertical.py --profile none --no-incremental-placement-repair
-uv run --no-sync python scripts/route_full_vertical.py --profile none
-uv run --no-sync python -m pcbir.routing_benchmark compare "build/full-vertical/<baseline-id>" "build/full-vertical/<candidate-id>"
+make EXAMPLE=full-vertical route PROFILE=none EXTRA_ROUTE_ARGS=--no-incremental-placement-repair
+make EXAMPLE=full-vertical route PROFILE=none
+uv run --no-sync python -m pcbir.routing_benchmark compare "build/full-vertical/runs/<baseline-id>" "build/full-vertical/runs/<candidate-id>"
 ```
 
 `routing_benchmark` checks named failed signal/critical nets, pending ground,
@@ -102,7 +102,7 @@ pending escapes, wire length and via counts as well as time. Report wall time an
 peak memory; distinguish cold and warm runs. Do not infer speedups by comparing
 instrumented and uninstrumented times. An out-of-process sampler such as
 [py-spy](https://github.com/benfred/py-spy) is a useful lower-overhead cross-check,
-but is not a required dependency or enabled by this script.
+but is not a required dependency or enabled by the shared build workflow.
 
 ## Evidence available on 2026-10-02
 
@@ -251,8 +251,8 @@ blocker limit. `--zone-dependency-expansions 0` disables just the new expansion,
 not the original local repair. The complete workflow exposes the same option:
 
 ```powershell
-uv run --no-sync python scripts/route_full_vertical.py --profile none --zone-dependency-expansions 0
-uv run --no-sync python scripts/route_full_vertical.py --profile none --zone-dependency-expansions 2
+make EXAMPLE=full-vertical route PROFILE=none EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"
+make EXAMPLE=full-vertical route PROFILE=none EXTRA_ROUTE_ARGS="--zone-dependency-expansions 2"
 ```
 
 Compare on the same inputs and machine load, recording both accepted geometry and
@@ -290,8 +290,8 @@ To compare against full placement trials while retaining local same-placement
 repair, run:
 
 ```powershell
-uv run --no-sync python scripts/route_full_vertical.py --profile none --no-incremental-placement-repair
-uv run --no-sync python scripts/route_full_vertical.py --profile none
+make EXAMPLE=full-vertical route PROFILE=none EXTRA_ROUTE_ARGS=--no-incremental-placement-repair
+make EXAMPLE=full-vertical route PROFILE=none
 ```
 
 Progress records `zone_incremental_trial`, `zone_moved_global` and fallback reasons

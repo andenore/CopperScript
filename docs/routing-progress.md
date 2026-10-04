@@ -1,7 +1,7 @@
 # Routing progress and long runs
 
 `route-board --progress` streams flushed `PROGRESS {json}` lines. The complete
-`scripts/route_full_vertical.py` workflow enables it automatically and persists
+`make EXAMPLE=full-vertical route` workflow enables it automatically and persists
 these lines in its ignored run directory's `routing.log`. Direct CLI commands
 remain quiet unless explicitly enabled.
 

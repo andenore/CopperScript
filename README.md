@@ -61,8 +61,13 @@ zero opens/violations with native KiCad. This four-layer eMMC carrier is a
 is required.
 
 ```powershell
-uv run --no-sync python scripts/route_cm4.py
+make EXAMPLE=cm4 route
 ```
+
+All examples use the [same Make targets and generic build runner](docs/make-builds.md),
+not per-board routing scripts. `make compile-examples` compiles the 13 complete
+registered examples; `make EXAMPLE=cm4 compile` builds just one. GNU Make is
+required in addition to Python/uv (use `mingw32-make` on Windows if that is its name).
 
 A [50 mm circular LED-ring example](docs/round-led-ring.md) uses an offset nRF52832
 as a non-radio controller, twelve GPIO-controlled LEDs and a rear CR2032 holder.
@@ -243,7 +248,7 @@ parts retain 0/90/180/270-degree candidates.
 The command exits nonzero when routing or DRC is incomplete. Even a successful
 native check does not qualify proxy footprints or replace KiCad and CAM review.
 Use `--progress` for flushed phase/group/trial events during long runs; the
-complete routing script enables this automatically and saves them in
+shared Make routing workflow enables this automatically and saves them in
 `routing.log`. Full ground-feedback trials can each rebuild the routing.
 Progress is not completion or signoff evidence; see [routing progress](docs/routing-progress.md).
 `--pitch-mm`, `--passes`, and `--search-budget` bound detailed-routing work;
@@ -349,53 +354,55 @@ See uv's
 After the setup above, run the complete workflow with:
 
 ```powershell
-uv run --no-sync python scripts/route_full_vertical.py
+make EXAMPLE=full-vertical route
 ```
 
-The script recomputes placement and routing from source with the six-layer
+The shared Make workflow recomputes placement and routing from source with the six-layer
 settings below, including the pinned placement scene, critical routing, fanout,
 ordinary routing, ground feedback, native DRC and independent KiCad plane
-verification. Each run writes a fresh `build/full-vertical/<UTC-run-id>/` with
+verification and saves native filled copper. Each run writes a fresh `build/full-vertical/runs/<UTC-run-id>/` with
 `board.kicad_pcb`, `board.kicad_pro`, `route-report.json`, `routing.log` and
 `run.json` (command, timestamps, elapsed time and exit code). `build/` is ignored
 by Git. Errors/interruption may leave only logs/partial artifacts; file existence
 does not imply routing success. No Gerbers are generated.
 
-The script uses the current Python/uv environment and downloads the locked
-CopperLib dependency if uncached; it never updates `copper.lock`. Add `--offline`
+The generic runner uses the current Python/uv environment and downloads the locked
+dependencies if uncached; it never updates `copper.lock`. Set `RESOLVE_ARGS="--locked --offline"`
 to prohibit fetching. It discovers
 `kicad-cli` on PATH or the standard Windows KiCad 10 installation. Footprints
 use `KICAD10_FOOTPRINT_DIR`, the KiCad installation, or `/usr/share/kicad/footprints`.
-Override paths when needed, preview without routing using `--dry-run`, or
+Override paths when needed, preview without routing using `BUILD_ARGS=--dry-run`, or
 select a new/empty directory inside `build/`:
 
 ```powershell
-uv run --no-sync python scripts/route_full_vertical.py --dry-run
-uv run --no-sync python scripts/route_full_vertical.py `
-  --kicad-cli "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe" `
-  --kicad-footprints "C:/Program Files/KiCad/10.0/share/kicad/footprints" `
-  --output-dir "build/my-routing-run"
+make EXAMPLE=full-vertical route BUILD_ARGS=--dry-run
+make EXAMPLE=full-vertical route `
+  KICAD_CLI="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe" `
+  KICAD_FOOTPRINTS="C:/Program Files/KiCad/10.0/share/kicad/footprints" `
+  RUN_DIR="build/my-routing-run"
 ```
 
-The script preserves the router's exit code: **1** means unmet routing/DRC
+The runner preserves the router's exit code: **1** means unmet routing/DRC
 gates, **2** means setup/execution error, and **130** means interruption.
+GNU Make itself returns nonzero (usually 2) when its recipe fails.
 An existing nonempty output directory is rejected so old results cannot be
 mistaken for a new run. Exit 0 still does not constitute manufacturing signoff.
-Allow tens of minutes; adding this script does not rerun the full board.
+Allow tens of minutes for a full-vertical run; the shared workflow is not a claim
+that every example has passed complete routing.
 
 Function profiling is enabled by default. Each run also saves `routing.prof`,
 readable/JSON hotspot summaries and `phase-timings.json` under the same ignored
-directory. Instrumentation adds overhead; use `--profile none` for uninstrumented
+directory. Instrumentation adds overhead; use `PROFILE=none` for uninstrumented
 speed comparisons (phase events are still saved). See
 [profiling and optimization assessment](docs/routing-performance.md) for details,
 current evidence and the prioritized optimization work list.
 The detailed [optimization todos](docs/routing-optimization-todo.md) track implementation.
 Local repair now supports bounded blocker-cone expansion; use
-`--zone-dependency-expansions 0` on the full-run script to compare without that extension.
+`EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"` to compare without that extension.
 Small noncritical placement moves also try bounded incremental repair. Use
-`--no-incremental-placement-repair` to compare against full placement reroutes;
+`EXTRA_ROUTE_ARGS=--no-incremental-placement-repair` to compare against full placement reroutes;
 unsupported moves always retain that fallback.
-Inspect a run without changing it using `uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/<run-id>"`.
+Inspect a run without changing it using `uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/runs/<run-id>"`.
 The [performance guide](docs/routing-performance.md) explains guarded before/after comparisons.
 
 For the equivalent explicit CLI invocation, adjust the KiCad paths if your
@@ -442,7 +449,7 @@ exits **1**, with three ordinary open nets (`MCU_NRF_TX`, `MODEM_EN`, `V3V3`),
 Neither run is production signoff. An output file or zero airwires is not
 manufacturing acceptance; USB/RF/return-path qualification remains outstanding.
 Vias avoid all pads by default, including same-net pads and annulus-edge contact.
-The complete-routing script does not enable via-in-pad. Explicit
+The shared routing workflow does not enable blanket via-in-pad. Explicit
 `--ground-via-in-pad` permits filled-and-capped GND vias for this six-layer
 profile; that process must be explicitly qualified with the fabricator before
 ordering a board.

@@ -96,7 +96,6 @@ def test_actual_profile_worker_preserves_stats_on_timeout(tmp_path, monkeypatch)
 
 def test_routing_commands_use_offline_managed_assets_and_native_fill(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(CI, "library_module", lambda **kw: SimpleNamespace(directory=tmp_path / "managed"))
     def run(command, output, seconds, **kwargs):
         calls.append((command, seconds))
         output.mkdir(parents=True)
@@ -105,11 +104,11 @@ def test_routing_commands_use_offline_managed_assets_and_native_fill(tmp_path, m
     monkeypatch.setattr(CI, "run_logged", run)
     CI.route(tmp_path / "output", tmp_path / "kicad-cli", tmp_path / "footprints", 1, True)
     full, nrf = (item[0] for item in calls)
-    assert "--locked" in full and "--offline" in full and "--verify-plane-fill" in full
-    assert "--placement-templates" not in full
-    assert str(tmp_path / "managed/footprints") in full
-    assert "--route" in nrf and "--offline" in nrf and "--kicad-cli" in nrf
-    assert str(tmp_path / "managed/footprints") not in nrf  # resolved inside the example module
+    assert "EXAMPLE=full-vertical" in full and "route" in full
+    assert "RESOLVE_ARGS=--locked --offline" in full and "PLACEMENT_TEMPLATES=" in full
+    assert f"KICAD_FOOTPRINTS={tmp_path / 'footprints'}" in full
+    assert "EXAMPLE=nrf52" in nrf and "route" in nrf
+    assert f"KICAD_CLI={tmp_path / 'kicad-cli'}" in nrf
     assert [item[1] for item in calls] == [60, 1200]
 
 

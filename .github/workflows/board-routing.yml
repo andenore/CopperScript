@@ -44,7 +44,7 @@ jobs:
         run: |
           sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
           sudo apt-get update
-          sudo apt-get install --yes kicad
+          sudo apt-get install --yes kicad make
           expected=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_version"])')
           actual=$(kicad-cli version)
           test "$actual" = "$expected"
@@ -109,7 +109,7 @@ jobs:
         run: |
           sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
           sudo apt-get update
-          sudo apt-get install --yes kicad
+          sudo apt-get install --yes kicad make
           expected=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_version"])')
           actual=$(kicad-cli version)
           test "$actual" = "$expected"

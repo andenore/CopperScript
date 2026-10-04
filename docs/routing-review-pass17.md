@@ -110,7 +110,7 @@ the remaining conflicts, with multi-leg anchor verification/ownership, or legal
 whole-unit placement/critical-reservation feedback if no legal pattern exists.
 Compare a compatible complete group; do not insert a lone escape and assume
 its displaced neighbor can reconnect. Once the MCU exits survive allocation,
-use `scripts/route_full_vertical.py` for the complete rerun, independent filled
+use `make EXAMPLE=full-vertical route` for the complete rerun, independent filled
 zones and all-layer geometry/congestion review. That rerun is not performed by
 this pass. Area-route escape replacement, onward-route cost, R5/R6b/R7/R9 and
 RF/stackup/library/CAM qualification remain open.

@@ -83,14 +83,14 @@ cached builds; the full KiCad footprint library still needs to be installed.
 From the repository root (Windows, KiCad 10 installed):
 
 ```powershell
-uv run --no-sync python scripts/route_cm4.py
+make EXAMPLE=cm4 route
 ```
 
-The script fetches the pinned CopperLib package if needed, runs package escape
+The shared [Make workflow](../../docs/make-builds.md) fetches pinned imports if needed, runs package escape
 and detailed routing with profiling enabled, then **saves the ground fills**
 and runs native KiCad DRC on that exact output board. No rule relaxation or
 via-in-pad permission is added. Default outputs go in a timestamped directory
-under ignored `build/cm4-baseboard/`; open its `board.kicad_pcb` in KiCad.
+under ignored `build/cm4-baseboard/runs/`; open its `board.kicad_pcb` in KiCad.
 `route-report.json`, `kicad-drc.json`, logs, input/output hashes and performance
 reports are retained together. Success requires zero native violations and
 zero unconnected items; a failed build returns nonzero and retains diagnostics.
@@ -98,17 +98,19 @@ zero unconnected items; a failed build returns nonzero and retains diagnostics.
 For Linux/macOS or another KiCad installation, supply paths explicitly:
 
 ```sh
-uv run --no-sync python scripts/route_cm4.py \
-  --kicad-cli /usr/bin/kicad-cli \
-  --kicad-footprints /usr/share/kicad/footprints
+make EXAMPLE=cm4 route \
+  KICAD_CLI=/usr/bin/kicad-cli \
+  KICAD_FOOTPRINTS=/usr/share/kicad/footprints
 # Or from this example directory:
 make route KICAD_CLI=/usr/bin/kicad-cli KICAD_FOOTPRINTS=/usr/share/kicad/footprints
 ```
 
-Add `--offline` after the first dependency download. `--output-dir` selects a
-new/empty directory below the repository's `build/`; `make route` defaults to
-`build/cm4-baseboard/routed`, so choose another `ROUTE_OUT` for repeat runs.
-Function profiling can be disabled with `--profile none` for timing comparisons.
+Set `RESOLVE_ARGS="--locked --offline"` after the first dependency download.
+`RUN_DIR` selects a new/empty directory below the repository's `build/`; repeat
+runs default to fresh timestamped directories. Use `PROFILE=none` for timing
+comparisons. GNU Make is required (`mingw32-make` is also supported on Windows).
+The example Makefile contains settings only; the same `make/board.mk` recipes
+compile and route other boards without custom per-example Python scripts.
 
 ## Header wiring
 

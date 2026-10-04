@@ -1131,3 +1131,17 @@ firmware, power sequencing, RF performance or CM5 compatibility. A legal
 placement/zero clearance violations is not a routed or production-ready board.
 Module body keepouts and antenna copper clearance are separate requirements;
 the current socket-corridor representation still needs assembled 3D inspection.
+
+### Generic build workflow
+
+Board projects and repository examples share Make targets and the generic
+route/fill/verification runner. Per-example configuration is data (source,
+layer/fabrication profile and explicit scenes/options), not Python orchestration
+or compiler conditionals. The runner must not assume a particular library URL,
+part, board geometry or sibling checkout. CI uses the same configurations as
+local builds. Profiling and input/output provenance accompany each routing run;
+failure remains nonzero and stale artifacts cannot masquerade as a new run.
+Saved filled copper and native DRC on the exact output board are required for
+connectivity acceptance, not merely a successful route search or disposable
+plane-check copy. This acceptance is not fabrication/assembly qualification.
+See [shared Make builds](make-builds.md).
