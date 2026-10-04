@@ -1155,3 +1155,41 @@ coordinates to electrical IR. Conflicting owners/cycles fail, copper-edge rules
 are never waived by a body allowance, and unsupported curves cannot invent legal
 material. See [advanced mechanical intent](advanced-mechanical-intent.md) and the
 editor checklist for the staged implementation/verification contract.
+
+## CS-150 — Footprints as resolvable package dependencies (Accepted)
+
+Part defaults and component overrides may name an exact `.kicad_mod` asset by
+GitHub/GitLab module path or `https://` module URL. Versions belong in the consuming
+project's `copper.mod`; downloads and complete asset SHA-256 inventories use the
+existing managed package cache and `copper.lock`. Layout, routing, audit, export
+and editor physicalization must resolve the same inputs without requiring a
+download directory supplied on each command.
+
+`footprint-library NAME MODULE/DIRECTORY` in `copper.mod` binds a KiCad namespace
+to one directory inside a required module. `NAME:Footprint` selects exactly
+`MODULE/DIRECTORY/Footprint.kicad_mod`. Each namespace has one binding; malformed,
+duplicate or unprovided bindings fail. The project declares the provider's
+version explicitly. Missing assets or lock drift never select a different source.
+
+Relative `.kicad_mod` references authored inside imported parts or modules are
+relative to that declaring package and confined to its module. Lower them to
+portable module identities (or entry-source-relative paths for workspace imports),
+preserving package ownership across aliases, nested modules and serialization.
+Package assets cannot accidentally bind to an identically named board-local file.
+
+Exact URLs always use managed resolution. Explicit local roots may override a
+namespace only in unlocked development, with local provenance; a locked managed
+namespace verifies its pinned source. Existing unbound local references and legacy
+managed `footprints/` lookup remain supported. Ambiguity, declared-name mismatch,
+pad mismatch, symlinks and module path escapes fail; imported geometry remains
+subject to the existing physical validation rules.
+
+`copper lock BOARD` prepares selected managed footprint dependencies as well as
+source imports. `--locked` rejects missing/changed dependency inventory and never
+updates it; downloads remain allowed when matching content is missing from cache.
+`--offline` prevents remote fetching and requires local/cached sources. Offline
+alone may create/update a lock. Explicit local files outside required modules
+are not covered by the package inventory. Provenance identifies which route was
+used, the selected file digest and managed module/revision/inventory when present.
+See [footprint dependency syntax](footprint-dependencies.md) and
+[implementation plan](footprint-dependencies-plan.md).

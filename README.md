@@ -177,8 +177,15 @@ assets and does not modify your global KiCad configuration. Input resolution
 may fetch pinned URL dependencies before generation. See [generated KiCad
 projects](docs/kicad-project-export.md) for portability and safety details.
 
-Direct `.kicad_mod` references are resolved relative to the board file. KiCad
-`Library:Footprint` identifiers can be resolved through explicit roots:
+[Managed footprint dependencies](docs/footprint-dependencies.md) resolve exact
+GitHub/GitLab `.kicad_mod` asset URLs or KiCad `Library:Footprint` identifiers
+bound through `footprint-library` in `copper.mod`. They share the pinned package
+cache and `copper.lock`, so no manual footprint download or installation path
+is needed. Try the [standalone example](examples/managed_footprints/README.md).
+
+Local `.kicad_mod` paths in imported parts/modules resolve from the declaring
+source; board-local paths resolve from the board. Unbound KiCad identifiers can
+still use explicit roots:
 
 ```console
 python -m copperscript export-kicad-pcb board.copper --footprint-root path/to/kicad-footprints
@@ -754,9 +761,11 @@ Presentation-only omissions such as 3D models and user text produce explicit
 warnings; `--strict` promotes those warnings to errors. Source format, version,
 generator, path, and SHA-256 checksum are retained as footprint metadata.
 
-Footprint references ending in `.kicad_mod` are paths relative to the board
-source. `Library:Footprint` searches `<root>/Library.pretty/Footprint.kicad_mod`
-and `<root>/Library/Footprint.kicad_mod` for each `--footprint-root`. Resolution
+Managed footprint URLs and manifest-bound `Library:Footprint` identifiers use
+the declared provider revision and inventory. Local `.kicad_mod` paths are
+relative to the declaring source. Unbound `Library:Footprint` identifiers search
+`<root>/Library.pretty/Footprint.kicad_mod` and
+`<root>/Library/Footprint.kicad_mod` for each `--footprint-root`. Resolution
 fails on zero or multiple matches, and the selected name must agree with the
 footprint name declared inside the file. CopperScript never searches an
 installed KiCad library implicitly.

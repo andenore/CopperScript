@@ -1,18 +1,18 @@
 """Resolve external footprint references into normalized physical IR.
 
-Resolution is intentionally explicit and deterministic.  CopperScript does
-not inspect a user's KiCad installation or silently select the first matching
-system footprint.  Direct ``.kicad_mod`` paths are relative to the board
-source directory; KiCad ``Library:Footprint`` identifiers are searched only in
-the roots supplied by the caller.
+Managed URLs and manifest library bindings use the existing package cache and
+inventory lock. Explicit local files/roots remain available for development;
+no system installation or floating remote revision is selected implicitly.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .importers import FootprintImportResult, KiCadModImportError, load_kicad_mod
+from .packages import PackageResolver, ResolvedAsset, ResolvedPackage, find_manifest, read_manifest
+from .syntax import CopperScriptError, SourceLocation
 
 
 class FootprintResolutionError(ValueError):
@@ -21,13 +21,15 @@ class FootprintResolutionError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class FootprintResolver:
-    """Resolve CopperScript footprint references from explicit local roots."""
+    """Resolve managed dependencies and explicit local footprint sources."""
 
     base_directory: Path
     search_roots: tuple[Path, ...] = ()
     strict: bool = False
     locked: bool = False
     offline: bool = False
+    _packages: PackageResolver | None = field(default=None, init=False, repr=False, compare=False)
+    _verified_modules: dict[str, ResolvedPackage] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_directory", self.base_directory.resolve())
@@ -42,23 +44,40 @@ class FootprintResolver:
 
         if not reference or "\x00" in reference:
             raise FootprintResolutionError("footprint reference cannot be empty")
-        candidates = self._candidate_paths(reference)
-        matches = tuple(path for path in candidates if path.is_file())
-        if not matches:
-            # Imported library footprints are data in the same managed cache.
-            # Explicit/system roots retain precedence; no sibling discovery.
-            from .packages import find_manifest, read_manifest, resolve_module_root
-            from .syntax import CopperScriptError
-            manifest_path = find_manifest(self.base_directory)
-            if manifest_path:
-                for module in read_manifest(manifest_path).requirements:
-                    try:
-                        root = resolve_module_root(self.base_directory, module,
-                            locked=self.locked, offline=self.offline) / "footprints"
-                    except CopperScriptError as exc:
-                        raise FootprintResolutionError(str(exc)) from exc
-                    managed = replace(self, search_roots=(root,))._candidate_paths(reference)
-                    matches += tuple(p for p in managed if p.is_file() and p not in matches)
+        try:
+            target = self.managed_reference(reference)
+            asset = None
+            resolution = "local"
+            if target:
+                candidates = (() if reference.startswith(("github.com/", "gitlab.com/", "https://")) or self.locked else
+                              self._candidate_paths(reference, roots=self.search_roots))
+                matches = tuple(p for p in candidates if p.is_file())
+                if matches:
+                    resolution = "local_override"
+                else:
+                    asset = self._asset(target)
+                    candidates = matches = (asset.path,)
+                    resolution = "managed"
+            else:
+                candidates = self._candidate_paths(reference)
+                matches = tuple(path for path in candidates if path.is_file())
+                if not matches:
+                    manifest_path = find_manifest(self.base_directory)
+                    if manifest_path:
+                        packages = self._package_resolver()
+                        for module in packages.manifest.requirements:
+                            package = self._module(module)
+                            root = package.directory / "footprints"
+                            managed = self._candidate_paths(reference, roots=(root,))
+                            matches += tuple(p for p in managed if p.is_file() and p not in matches)
+                        if len(matches) == 1:
+                            path = matches[0]
+                            owner = next((p for p in self._verified_modules.values() if path.is_relative_to(p.directory)), None)
+                            if owner:
+                                asset = self._asset(owner.module_path + "/" + path.relative_to(owner.directory).as_posix())
+                                resolution = "managed"
+        except (CopperScriptError, OSError) as exc:
+            raise FootprintResolutionError(str(exc)) from exc
         if not matches:
             searched = ", ".join(str(path) for path in candidates[:6])
             suffix = f"; searched {searched}" if searched else ""
@@ -76,6 +95,8 @@ class FootprintResolver:
             imported = load_kicad_mod(path, strict=self.strict)
         except KiCadModImportError as exc:
             raise FootprintResolutionError(str(exc)) from exc
+        if asset and imported.footprint.metadata.get("source_sha256") != asset.sha256:
+            raise FootprintResolutionError(f"footprint changed after module verification: {reference!r}")
 
         expected_name = _reference_name(reference)
         if imported.footprint.name != expected_name:
@@ -89,8 +110,14 @@ class FootprintResolver:
             {
                 "resolved_reference": reference,
                 "source_footprint_name": imported.footprint.name,
+                "resolution": resolution,
             }
         )
+        if target:
+            metadata["managed_reference"] = target
+        if asset:
+            metadata.update({"source_asset": asset.identity, "module_path": asset.module_path,
+                             "module_version": asset.version, "module_checksum": asset.checksum})
         footprint = replace(
             imported.footprint,
             name=reference,
@@ -103,8 +130,42 @@ class FootprintResolver:
             source_version=imported.source_version,
         )
 
-    def _candidate_paths(self, reference: str) -> tuple[Path, ...]:
-        roots = (self.base_directory, *self.search_roots)
+    def managed_reference(self, reference: str) -> str | None:
+        """Return a managed asset identity without fetching any dependency."""
+        if "://" in reference and not reference.startswith("https://"):
+            raise FootprintResolutionError("managed footprint URLs must use HTTPS")
+        if reference.startswith(("github.com/", "gitlab.com/", "https://")):
+            if not reference.lower().endswith(".kicad_mod"):
+                raise FootprintResolutionError("managed footprint references must name a .kicad_mod file")
+            return reference.removeprefix("https://")
+        if ":" in reference and not Path(reference).is_absolute() and "/" not in reference and "\\" not in reference:
+            library, name = reference.split(":", 1)
+            if not library or not name or ":" in name or name in {".", ".."}:
+                raise FootprintResolutionError(f"invalid KiCad footprint identifier {reference!r}")
+            manifest_path = find_manifest(self.base_directory)
+            if manifest_path:
+                binding = read_manifest(manifest_path).footprint_libraries.get(library)
+                if binding:
+                    return f"{binding}/{name}.kicad_mod"
+        return None
+
+    def _package_resolver(self) -> PackageResolver:
+        if self._packages is None:
+            resolver = PackageResolver.for_source(self.base_directory, SourceLocation(str(self.base_directory), 0, 1, 1),
+                                                  locked=self.locked, offline=self.offline)
+            object.__setattr__(self, "_packages", resolver)
+        return self._packages
+
+    def _module(self, module: str) -> ResolvedPackage:
+        if module not in self._verified_modules:
+            self._verified_modules[module] = self._package_resolver().resolve(module, SourceLocation(str(self.base_directory), 0, 1, 1))
+        return self._verified_modules[module]
+
+    def _asset(self, reference: str) -> ResolvedAsset:
+        return self._package_resolver().resolve_asset(reference, SourceLocation(str(self.base_directory), 0, 1, 1), self._verified_modules)
+
+    def _candidate_paths(self, reference: str, *, roots: tuple[Path, ...] | None = None) -> tuple[Path, ...]:
+        roots = (self.base_directory, *self.search_roots) if roots is None else roots
         reference_path = Path(reference)
         candidates: list[Path] = []
 
@@ -151,7 +212,23 @@ class FootprintResolver:
 
 
 def _reference_name(reference: str) -> str:
+    if reference.startswith(("github.com/", "gitlab.com/", "https://")):
+        return reference.rsplit("/", 1)[-1][:-len(".kicad_mod")]
     if ":" in reference and not Path(reference).is_absolute():
         return reference.split(":", 1)[1]
     path = Path(reference)
     return path.stem if path.suffix.casefold() == ".kicad_mod" else reference
+
+
+def prepare_footprint_dependencies(board, resolver: FootprintResolver) -> tuple[str, ...]:
+    """Prepare selected managed geometry without requiring unrelated local files."""
+    from .elaborate import elaborate
+    flat = elaborate(board)
+    references = sorted({c.footprint or flat.library[c.part].footprints[0]
+                         for c in flat.components if c.footprint or flat.library[c.part].footprints})
+    managed = []
+    for reference in references:
+        if resolver.managed_reference(reference):
+            resolver.resolve(reference)
+            managed.append(reference)
+    return tuple(managed)

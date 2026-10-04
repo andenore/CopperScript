@@ -306,6 +306,10 @@ def _load_package(
         )
         for name, document in part_documents.items()
     }
+    for name, document in part_documents.items():
+        key = f"{namespace}.{name}"
+        parts[key] = replace(parts[key], footprints=tuple(
+            resolver.qualify_footprint(ref, document.location) for ref in parts[key].footprints))
     modules: dict[str, ModuleDefinition] = {}
     profiles: dict[str, MechanicalProfileDefinition] = {}
     dependencies: list[Dependency] = []
@@ -376,6 +380,9 @@ def _load_package(
             resolve_module,
             devices,
         )
+        definition = replace(definition, components=tuple(
+            replace(component, footprint=resolver.qualify_footprint(component.footprint, document.location))
+            if component.footprint else component for component in definition.components))
         _register_module(modules, definition, document.location)
         compiling.pop()
         return definition

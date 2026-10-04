@@ -35,6 +35,28 @@ def _keys(row, expected):
         raise ValueError("unsupported hard-macro fields")
 
 
+def _macro_footprint_digest(footprint, reference, asset):
+    """Verify legacy module-root asset IDs without weakening geometry checks."""
+    if footprint.name == reference:
+        return footprint_geometry_digest(footprint)
+    metadata = footprint.metadata
+    module = metadata.get("module_path")
+    identity = metadata.get("source_asset")
+    if (not module or not identity or metadata.get("resolution") != "managed" or
+            not reference.endswith(".kicad_mod") or "\\" in reference or
+            any(p in {"", ".", ".."} for p in reference.split("/")) or
+            identity != module + "/" + reference):
+        return None
+    # A module-relative ID is meaningful only within the macro's own module.
+    source = Path(metadata["source_path"]).resolve()
+    root = source.parents[len(reference.split("/")) - 1]
+    if not Path(asset).resolve().is_relative_to(root):
+        return None
+    legacy = replace(footprint, name=reference, source_library_id=reference,
+                     metadata={**metadata, "resolved_reference": reference})
+    return footprint_geometry_digest(legacy)
+
+
 def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
                     name: str, bindings: dict[str, str], net_bindings: dict[str, str]) -> PhysicalBoard:
     """Bind pinned data only. Never execute, fetch, rewire or move components."""
@@ -70,10 +92,11 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
         for row in data["members"]:
             _keys(row, "reference footprint footprint_digest center_nm rotation_degrees edge_clearance_nm")
             pose = poses[bindings[row["reference"]]]
-            if pose.footprint != row["footprint"] or footprint_geometry_digest(board.footprints[pose.footprint]) != row["footprint_digest"]:
+            footprint = board.footprints[pose.footprint]
+            if _macro_footprint_digest(footprint, row["footprint"], asset) != row["footprint_digest"]:
                 raise ValueError(f"hard-macro footprint identity mismatch: {pose.reference}")
             position = _point(row["center_nm"])
-            members.append(RigidPlacementMember(pose.reference, pose.footprint, row["footprint_digest"], position, row["rotation_degrees"]))
+            members.append(RigidPlacementMember(pose.reference, pose.footprint, footprint_geometry_digest(footprint), position, row["rotation_degrees"]))
             local_poses[row["reference"]] = replace(pose, position=position, rotation_degrees=row["rotation_degrees"], side=BoardSide.FRONT)
             if type(row["edge_clearance_nm"]) is not int or row["edge_clearance_nm"] <= 0:
                 raise ValueError("macro member edge clearance requires positive integer nm")
@@ -391,7 +414,7 @@ def apply_hard_macro_scene(board, scene_path, *, locked=True, offline=False):
         scene = json.loads(scene_path.read_text(encoding="utf-8"))
         _keys(scene, "asset asset_sha256 name bindings net_bindings")
         asset = scene["asset"]
-        if asset.startswith(("github.com/", "https://github.com/")):
+        if asset.startswith(("github.com/", "gitlab.com/", "https://github.com/", "https://gitlab.com/")):
             from .packages import resolve_module_asset
             asset_path = resolve_module_asset(scene_path, asset, locked=locked, offline=offline)
         else:

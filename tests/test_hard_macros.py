@@ -354,3 +354,33 @@ print('verified actual fill exclusions and immutable copper')
 """
     result=subprocess.run([str(native),"-c",code,str(path)],check=True,capture_output=True,text=True)
     assert "verified actual fill exclusions" in result.stdout
+
+
+@pytest.mark.parametrize("invalid", [None, "geometry", "module"])
+def test_pinned_legacy_module_asset_ids_bind_canonical_footprints(tmp_path, invalid):
+    board, asset, bind = fixture(tmp_path)
+    reference = "footprints/test.kicad_mod"
+    old = replace(board.footprints["test"], name=reference, source_library_id=reference,
+                  metadata={"resolved_reference": reference, "source_sha256": "pinned"})
+    for row in asset["members"]:
+        row["footprint"] = reference
+        row["footprint_digest"] = footprint_geometry_digest(old)
+    module = "github.com/vendor/library"
+    identity = module + "/" + reference
+    source_root = tmp_path / "other-module" if invalid == "module" else tmp_path
+    current = replace(old, name=identity, source_library_id=identity,
+                      metadata={**old.metadata, "resolved_reference": identity,
+                                "resolution": "managed", "module_path": module,
+                                "source_asset": identity,
+                                "source_path": str(source_root / reference)})
+    if invalid == "geometry":
+        current = replace(current, body_size=Size.mm(1, 1))
+    canonical = replace(board, footprints={identity: current},
+                        placements=tuple(replace(p, footprint=identity) for p in board.placements))
+    if invalid:
+        with pytest.raises(ValueError, match="footprint identity mismatch"):
+            bind(input_board=canonical)
+    else:
+        result = bind(input_board=canonical)
+        assert all(m.footprint == identity for m in result.rigid_clusters[0].members)
+        assert materialize_hard_macros(result).tracks
