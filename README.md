@@ -18,17 +18,22 @@ uv run python -m examples.mechanical_example
 ```
 
 Output: ignored `build/mechanical-example/`. The frontend supports a separate
-[`mechanical` section](docs/mechanical-language.md) for circle/rectangle/polygon
-outlines, cutouts, NPTH holes and physical rules. General curved paths, slots and
-complete manufacturing qualification remain follow-up work. Board-specific
+[`mechanical` section](docs/mechanical-language.md) for circle/rectangle/polygon,
+rounded and closed line/arc outlines, cutouts, NPTH holes/slots and physical rules.
+Curved-query limits are explicit; complete manufacturing qualification remains
+separate from routing and inspection export. Board-specific
 builders live under `examples/`, never in the generic `pcbir` package.
 
-A local [mechanical/floorplan editor preview](docs/mechanical-editor.md) displays
-real footprint pads/courtyards, outlines, holes and cutouts. It supports rough
-auto-placement preview/apply, ratsnest filters, legality-checked component dragging,
-temporary locks and undo/redo. **Source saving and mechanical authoring are not
-implemented yet**; session changes are explicitly unsaved. The
-[detailed implementation checklist](docs/mechanical-editor-plan.md) tracks them.
+A local [mechanical/floorplan editor](docs/mechanical-editor.md) displays real
+footprint pads/courtyards, mechanical geometry and locked DXF/enclosure guides.
+It supports rough auto-placement, ratsnest/copper filters, checked dragging,
+temporary poses and reviewed persistent source locks/geometry edits with undo.
+Named datums/edges, attachments, body-only overhangs, height/access policies,
+atomic closed-path editing and an optional VS Code host share generic compiler
+code. Temporary placement remains unsaved unless explicitly locked into source;
+source changes always require diff review and Save. The
+[verified implementation checklist](docs/mechanical-editor-plan.md) records tests
+and limitations, including convex curved paths and reference-only DXF overlays.
 
 ```powershell
 uv run copper edit-mechanical examples/mechanical_editor_demo.copper --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
@@ -40,6 +45,10 @@ explicit roots or pinned library assets; proxy inspection is opt-in only.
 Scroll the wheel to zoom under the pointer; hold the right mouse button to pan.
 Ordinary left-drags apply after checking (with Undo). Numeric poses and rough
 auto-placement remain explicit previews; apply or discard them before more edits.
+
+Try `make EXAMPLE=mechanical-curves route` for rounded geometry/slot routing or
+`make EXAMPLE=mechanical-reference edit` for a checksum-pinned enclosure guide.
+Source edits stale previous routed/fill outputs; rebuild before using them.
 
 [Importable mechanical profiles](docs/mechanical-profiles.md) split reusable
 outlines, holes, keepouts and anchored connector placement into separate `.copper`

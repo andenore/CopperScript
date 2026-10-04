@@ -334,6 +334,7 @@ def run_incremental_physical_drc(
 
 def physical_board_digest(board: PhysicalBoard) -> str:
     """Digest all geometry and rules that can affect manufacturing signoff."""
+    from .mechanical_references import reference_scene
 
     return _digest(
         {
@@ -344,6 +345,8 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "cutouts": [(c.id, [(p.x_nm, p.y_nm) for p in c.vertices]) for c in board.outline.cutouts],
             "mechanical_holes": [repr(h) for h in sorted(board.mechanical_holes, key=lambda h: h.id)],
             "mechanical_slots": [repr(s) for s in sorted(board.mechanical_slots,key=lambda s:s.id)],
+            "mechanical_references": [reference_scene(r)
+                                      for r in sorted(board.mechanical_references,key=lambda r:r.id)],
             "datums": [repr(d) for d in sorted(board.datums, key=lambda d:d.id)],
             "boundary_edges": [repr(e) for e in sorted(board.boundary_edges, key=lambda e:e.id)],
             "attachments": [repr(a) for a in sorted(board.attachments, key=lambda a:a.id)],

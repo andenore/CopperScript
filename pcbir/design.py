@@ -18,6 +18,7 @@ from .mechanical_anchors import MechanicalAttachment, resolve_datums, resolve_ed
 from .physical import BoardDatum, BoardEdge
 from .physical import BodyOverhang, ComponentHeight, AssemblyEnvelope, AssemblyAccess
 from .physical import MechanicalSlot,BoundaryLine,BoundaryArc,BoardBoundaryPath
+from .mechanical_references import MechanicalReference, lower_reference
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,13 +51,16 @@ class MechanicalDesign:
     assembly_envelopes: tuple[AssemblyEnvelope, ...] = ()
     assembly_access: tuple[AssemblyAccess, ...] = ()
     slots: tuple[MechanicalSlot,...] = ()
+    references: tuple[MechanicalReference,...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holes", tuple(self.holes))
-        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources", "datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access", "slots"):
+        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources", "datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access", "slots", "references"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(self, "rule_overrides", MappingProxyType(dict(self.rule_overrides)))
         DesignRules(**self.rule_overrides)
+        from .mechanical_references import validate_reference_inventory
+        validate_reference_inventory(self.references)
         PhysicalBoard("mechanical-validation", self.outline, {}, (), (), mechanical_holes=self.holes,mechanical_slots=self.slots,
                       rules=DesignRules(**self.rule_overrides))
         from .geometry import RoundedConvexShape
@@ -90,6 +94,7 @@ def lower_mechanical(document: Document,
     datum_items, edge_items, attachment_items = [], [], []
     assembly_items = []
     boundary_items,slots=[],[]
+    references=[]
     path_options=None
     items, sources, instances = expand_mechanical_items(block.items, profiles or {})
 
@@ -126,6 +131,10 @@ def lower_mechanical(document: Document,
                 continue
             if item.kind in {'overhang','component_height','enclosure','assembly_access'}:
                 assembly_items.append(item)
+                continue
+            if item.kind=='reference':
+                if len(references)>=32:raise ValueError('reference inventory exceeds 32 assets')
+                references.append(lower_reference(item,point))
                 continue
             if item.kind=='boundary':
                 boundary_items.append(item)
@@ -235,7 +244,7 @@ def lower_mechanical(document: Document,
                         maximum_chord_error_mm=mm(p['maximum_chord_error']) if 'maximum_chord_error' in p else '0.01')
                 else:
                     outline = BoardOutline(vertices(p["vertices"]))
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OSError) as exc:
             raise CopperScriptError("MEC002", str(exc), item.location) from exc
     try:
         if path_options is not None:
@@ -260,6 +269,6 @@ def lower_mechanical(document: Document,
         assembly = lower_assembly(assembly_items, replace(outline,cutouts=tuple(cutouts)), edges, point, length)
         return MechanicalDesign(replace(outline, cutouts=tuple(cutouts)), tuple(holes), rules,
             tuple(connectors), tuple(keepouts), tuple(copper_keepouts), instances, sources,
-            datums, edges, attachments, *assembly, tuple(slots))
+            datums, edges, attachments, *assembly, tuple(slots), tuple(references))
     except (ValueError, TypeError) as exc:
         raise CopperScriptError("MEC003", str(exc), block.location) from exc

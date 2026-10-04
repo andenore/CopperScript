@@ -34,6 +34,7 @@ def board_to_dict(board: Board | Design) -> dict[str, object]:
             m = board.mechanical
             point = lambda p: {"x_nm": p.x_nm, "y_nm": p.y_nm}
             circle = m.outline.circular_boundary
+            from .mechanical_references import reference_scene
             result["mechanical"] = {
                 "outline": {
                     "vertices": [point(p) for p in m.outline.vertices],
@@ -52,6 +53,7 @@ def board_to_dict(board: Board | Design) -> dict[str, object]:
                                  "rotation": str(a.rotation), "side": a.side.value} for a in m.attachments],
                 "rule_overrides": dict(m.rule_overrides),
                 "slots": [{"id":s.id,"start":point(s.start),"end":point(s.end),"width_nm":s.width_nm} for s in m.slots],
+                "references": [reference_scene(r) for r in m.references],
                 "boundary_path": {"maximum_chord_error_nm":m.outline.boundary_path.maximum_chord_error_nm,
                     "segments":[{"id":s.id,"kind":"arc" if hasattr(s,'mid') else "line","start":point(s.start),"end":point(s.end),
                         **({"mid":point(s.mid)} if hasattr(s,'mid') else {})} for s in m.outline.boundary_path.segments]} if m.outline.boundary_path else None,

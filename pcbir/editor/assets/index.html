@@ -20,6 +20,7 @@
 <details id="source-review" hidden open><summary>Exact proposed source diff — inspect before saving</summary><pre id="source-diff"></pre></details>
 <main><aside>
 <h2>View</h2>
+<label><input id="reference-guides" type="checkbox" checked> Locked DXF / enclosure guides (read-only)</label>
 <label><input id="airwires" type="checkbox" checked> Ratsnest</label>
 <label><input id="selected-only" type="checkbox"> Selected component nets only</label>
 <label><input id="zone-nets" type="checkbox"> Include zone nets (e.g. GND)</label>
@@ -56,9 +57,9 @@
 <p id="board-help">Scroll to zoom; right-drag to pan. Focus the board: arrows move by one snap (Shift: ten); R rotates to the next allowed angle; +/− zoom; F fits. Escape cancels a gesture. Tab/Enter selects a footprint. Temporary placement and source history are separate.</p>
 <fieldset id="mechanical-controls" disabled><legend>Mechanical features</legend>
 <label>Project-owned feature <select id="feature"><option value="">New feature</option></select></label>
-<label>Kind <select id="feature-kind"><option>outline</option><option>hole</option><option>slot</option><option>boundary</option><option>cutout</option><option>keepout</option><option>copper_keepout</option><option>rules</option><option>datum</option><option>edge</option><option>attach</option><option>overhang</option><option>component_height</option><option>enclosure</option><option>assembly_access</option></select></label>
+<label>Kind <select id="feature-kind"><option>outline</option><option>hole</option><option>slot</option><option>boundary</option><option>reference</option><option>cutout</option><option>keepout</option><option>copper_keepout</option><option>rules</option><option>datum</option><option>edge</option><option>attach</option><option>overhang</option><option>component_height</option><option>enclosure</option><option>assembly_access</option></select></label>
 <label>Stable ID <input id="feature-name" type="text" placeholder="H2"></label>
-<label>Shape <select id="feature-shape"><option>rectangle</option><option>rounded_rectangle</option><option>circle</option><option>polygon</option><option>path</option><option>line</option><option>arc</option><option value="">Not applicable</option></select></label>
+<label>Shape <select id="feature-shape"><option>rectangle</option><option>rounded_rectangle</option><option>circle</option><option>polygon</option><option>path</option><option>line</option><option>arc</option><option>dxf</option><option value="">Not applicable</option></select></label>
 <div id="feature-parameters"></div>
 <label><input id="draw-vertices" type="checkbox"> Click snapped polygon vertices</label>
 <button id="prepare-feature">Review feature</button><button id="remove-feature">Review feature removal</button>

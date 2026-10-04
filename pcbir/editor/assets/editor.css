@@ -217,3 +217,5 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .assembly_envelopes {fill:#bd8ef51a;stroke:#bd8ef5;stroke-width:.1;stroke-dasharray:.7 .3;pointer-events:none}
 .assembly_access {fill:#57cbd322;stroke:#57cbd3;stroke-width:.1;stroke-dasharray:.2 .2;pointer-events:none}
 .mechanical-slot {stroke:#131a20;pointer-events:none}
+.reference-guide {fill:none;stroke:#cf93ef;stroke-width:.12;stroke-dasharray:.8 .3;pointer-events:none}
+.reference-guide.stale {opacity:.3;stroke:#e88787}

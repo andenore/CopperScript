@@ -111,6 +111,57 @@ remote code execution, arbitrary browser file reads or runtime network fetches.
 External geometry cannot replace source-owned manufacturing outlines implicitly.
 Optional 3D inspection is later work, not a first-delivery completion requirement.
 
+Implementation contract:
+
+```copper
+reference CASE dxf {
+    file="assets/case.dxf"; sha256="<64 lowercase hexadecimal digits>";
+    units=mm; frame=cartesian;
+    position=(0mm,30mm); rotation=0; mirror_x=false; side=both;
+    purpose="Enclosure reference only";
+}
+```
+
+The path is relative to the declaring file, including imported profiles, and
+must stay beneath that file's directory. Absolute paths, URLs, parent traversal,
+symbolic links/junctions and alternate streams are forbidden. A bounded regular
+ASCII DXF is read locally and its exact bytes must match the mandatory SHA-256.
+No network or browser upload/read endpoint is introduced. Units are explicitly
+`mm` or `inch`; a declared non-unitless `$INSUNITS` must agree. `cartesian` means
+DXF Y-up converted to board Y-down; `board` means the asset already uses Y-down.
+Apply frame conversion, optional local X mirror, then counter-clockwise rotation
+in board coordinates and translation. Source transforms retain typed intent;
+query coordinates quantize once to nanometres. Scale is determined only by units.
+
+First whitelist: planar LINE, CIRCLE, ARC and zero-width/zero-bulge LWPOLYLINE.
+Nondefault extrusion, elevation, thickness, unsupported entities/blocks and
+malformed/degenerate geometry fail. Closed polylines must be simple; open guides
+are allowed and never implicitly stitched into an outline. Enclosure projection
+is a reference purpose, not a collision constraint or a 3D model. Reference
+geometry is read-only; root declarations' transforms/hash can be reviewed as
+ordinary source edits, imported declarations cannot. Visibility/side filtering
+does not affect routing or manufacturing. Guide assets participate in input
+staleness/save checks, but never electrical identity or board material.
+
+Limits: 1MiB/2,048 entities/8,192 vertices per asset; closed polylines at most
+512 vertices (bounded exact topology checks). Designs accept at most 32 assets,
+8,192 entities and 16,384 vertices. Sub-nanometre asset lengths fail rather than
+rounding source geometry; transformed coordinates round once for display only.
+See the [Autodesk entity reference](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-DXF/files/GUID-7D07C886-FD1D-4A0C-A7AB-B4D21F18E484.htm)
+and [LWPOLYLINE definition](https://help.autodesk.com/cloudhelp/2018/ENU/AutoCAD-DXF/files/GUID-748FC305-F3F2-4F74-825A-61F04D757A50.htm).
+Use `*.dxf -text` in Git attributes to retain checksum-pinned bytes across hosts.
+
+Detailed implementation sequence for item 28:
+
+1. Typed retained guide primitives and transforms; bounded strict DXF parser,
+   path authority/checksum/header-unit validation and source lowering.
+2. Physicalization/serialization/provenance, asset-change guards for both editor
+   hosts, source transform review/undo; no manufacturing or ratsnest credit.
+3. Shared read-only SVG layer, visibility/side controls and local example assets.
+4. Parser/security/topology/unit/transform/profile/history/native exclusion tests,
+   headless browser inspection, package build and CopperLedRing integration check.
+5. Record evidence, mark the checklist only after verification, commit locally.
+
 Implementation order: typed source/IR and validation → shared physicalization/
 queries → native backend/export regression → reviewed source patches → shared UI
 → real example verification → checklist record and commit.

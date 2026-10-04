@@ -17,6 +17,7 @@ const NS = "http://www.w3.org/2000/svg";
 let accepted, preview = null, sourcePreview = null, selected = "", viewbox = null, drag = null, pan = null, busy = false;
 let measurePoints=[], vertexPoints=[];
 let jobPoll=null;
+let mechanicalFormRevision="";
 const mm = n => n / 1000000;
 const scene = () => sourcePreview || preview || accepted;
 function featureLabel(kind,name="") {
@@ -76,6 +77,20 @@ function render() {
   const outline=s.outline.path ? node("path",{d:pathData,class:"outline"}) : c ? node("circle",{cx:mm(c.center[0]),cy:mm(c.center[1]),r:mm(c.radius_nm),class:"outline"}) :
     node("polygon",{points:points(s.outline.vertices),class:"outline"});
   outline.append(node("title",{},featureLabel("outline")));svg.append(outline);
+  if($("reference-guides").checked) for(const guide of s.references||[]) {
+    if(guide.side!=="both" && $("side").value!=="both" && guide.side!==$("side").value)continue;
+    const g=node("g",{class:"reference-guide"+(s.references_stale?" stale":""),"pointer-events":"none"});
+    g.append(node("title",{},`${guide.id}: ${guide.purpose}; locked ${guide.sha256}. ${featureLabel("reference",guide.id)}`));
+    for(const e of guide.entities) {
+      const p=e.points.map(p=>p.map(mm));let n;
+      if(e.kind==="line")n=node("line",{x1:p[0][0],y1:p[0][1],x2:p[1][0],y2:p[1][1]});
+      else if(e.kind==="circle")n=node("circle",{cx:p[0][0],cy:p[0][1],r:mm(e.radius_nm)});
+      else if(e.kind==="arc")n=node("path",{d:`M ${e.start.map(mm).join(" ")} A ${mm(e.radius_nm)} ${mm(e.radius_nm)} 0 ${e.large?1:0} ${e.sweep?1:0} ${e.end.map(mm).join(" ")}`});
+      else n=node(e.closed?"polygon":"polyline",{points:points(e.points)});
+      g.append(n);
+    }
+    svg.append(g);
+  }
   for(const d of s.datums||[]) {
     const [x,y]=d.position.map(mm),g=node("g",{class:"datum","pointer-events":"none"});
     g.append(node("line",{x1:x-.4,y1:y,x2:x+.4,y2:y}),node("line",{x1:x,y1:y-.4,x2:x,y2:y+.4}),node("text",{x:x+.5,y:y-.3},d.id),node("title",{},featureLabel("datum",d.id)));svg.append(g);
@@ -247,6 +262,9 @@ function populate() {
   const features=$("feature"),old=features.value;features.replaceChildren(new Option("New feature",""));
   for (const [index,f] of (accepted.mechanical_features||[]).entries()) features.add(new Option(`${f.kind} ${f.name||f.shape} (line ${f.line})`,String(index)));
   features.value=old;
+  // Save/Undo/Reload must not leave stale literals in a selected feature form.
+  if(old!=="" && mechanicalFormRevision!==accepted.source_revision)features.onchange?.();
+  mechanicalFormRevision=accepted.source_revision;
   const existing=(accepted.mechanical_features||[]).filter(f=>f.kind==="boundary");
   $("path-segments").value=JSON.stringify(existing.length ? existing.map(f=>({id:f.name,kind:f.shape,...f.parameters})) :
     [{id:"TOP",kind:"line",start:"(0mm,0mm)",end:"(40mm,0mm)"},
@@ -353,7 +371,7 @@ $("board").addEventListener("lostpointercapture",()=>{if(drag||pan) cancelGestur
 $("reference").addEventListener("change",()=>{selected=$("reference").value;render();});
 $("reference").addEventListener("change",syncLockChecks);
 $("edit-locks").onchange=()=>{syncLockChecks();updateControls();};
-for (const id of ["side","net","airwires","selected-only","zone-nets","power-filter","net-labels","net-costs","copper-layer","routed-tracks","filled-zones","native-opens"]) $(id).addEventListener("change",render);
+for (const id of ["side","net","airwires","selected-only","zone-nets","power-filter","net-labels","net-costs","copper-layer","routed-tracks","filled-zones","native-opens","reference-guides"]) $(id).addEventListener("change",render);
 for (const [id,action] of [["apply","apply"],["discard","discard"],["undo","undo"],["redo","redo"]]) $(id).onclick=()=>operation(action);
 $("auto").onclick=()=>operation("start_auto_place",{budget_seconds:Number($("placement-budget").value)});
 $("cancel-auto").onclick=()=>operation("cancel_auto_place");
@@ -408,6 +426,7 @@ const featureDefaults={
   "slot:":{start:"(17mm,10mm)",end:"(23mm,10mm)",width:"1.5mm"},
   "boundary:line":{start:"(0mm,0mm)",end:"(40mm,0mm)"},
   "boundary:arc":{start:"(0mm,20mm)",mid:"(10mm,10mm)",end:"(20mm,20mm)"},
+  "reference:dxf":{file:'"assets/case.dxf"',sha256:'"REPLACE_WITH_FILE_SHA256"',units:"mm",frame:"cartesian",position:"(0mm,30mm)",rotation:"0",mirror_x:"false",side:"both",purpose:'"Enclosure reference only"'},
   "cutout:polygon":{vertices:"[(27mm,18mm), (33mm,18mm), (33mm,23mm), (27mm,23mm)]"},
   "keepout:rectangle":{width:"4mm",height:"4mm",origin:"(10mm,10mm)",side:"front"},
   "keepout:polygon":{vertices:"[(10mm,10mm), (14mm,10mm), (14mm,14mm), (10mm,14mm)]",side:"front"},
@@ -438,6 +457,7 @@ function featureInputs(parameters) {
 function featureMode() {
   const kind=$("feature-kind").value;
   if (["hole","slot","rules","datum","edge","attach","overhang","component_height"].includes(kind)) $("feature-shape").value="";
+  else if(kind==="reference")$("feature-shape").value="dxf";
   else if(kind==="boundary" && !["line","arc"].includes($("feature-shape").value)) $("feature-shape").value="line";
   else if (kind==="cutout") $("feature-shape").value="polygon";
   else if (kind.includes("keepout") && $("feature-shape").value==="circle") $("feature-shape").value="rectangle";

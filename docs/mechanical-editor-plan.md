@@ -91,7 +91,7 @@ connectivity and locked pose. Comments survive; stale/concurrent edits never win
     component/enclosure-height and assembly-access metadata where available.
 27. [x] Exact line/arc/rounded outlines and routed slots through shared queries,
     source editing, physical IR, KiCad and manufacturing export before UI exposure.
-28. [ ] Locked DXF/enclosure reference overlays with explicit units/transforms,
+28. [x] Locked DXF/enclosure reference overlays with explicit units/transforms,
     whitelisted entities and no silent healing; optional 3D inspection later.
 
 ## Verification record
@@ -314,3 +314,38 @@ board/source revision, browser actions and explicit remaining limitations.
   query approximation; all-line concave paths remain supported. Generic slot
   minimum 1mm is configurable, not a milling qualification. No production-signoff
   claim. Item 28 and publication/pin update remain open.
+
+### Locked reference drawings and final local verification — 2026-10-04
+
+- Typed retained DXF guides with mandatory SHA-256, explicit mm/inch units,
+  cartesian/board frames, mirror/rotation/translation and side/purpose. Assets
+  stay beneath the declaring source directory (including imported profiles),
+  with no URLs/traversal/symlinks/junctions/browser reads. Git retains exact bytes.
+- Bounded strict whitelist: planar LINE/CIRCLE/ARC and zero-width/zero-bulge
+  LWPOLYLINE. Invalid closed loops, blocks/unsupported entities, nonplanar data,
+  malformed groups, conflicting header units and altered checksums fail.
+  Guides grant no material/copper/clearance/connectivity/manufacturing credit.
+- Source transform review/save/byte-exact undo, imported-owner isolation and
+  asset-change guards in standalone and native document hosts. Stale guides are
+  visibly marked; save revalidates assets. Selected forms refresh after Undo.
+- Broad affected mechanics/editor/source/profile/DRC/compiler/build regressions:
+  **491 passed, 7 skipped**. Additional final document/packaging/reference checks:
+  **84 passed, 1 skipped**. Reference/security-specific checks subsequently pass
+  **44 tests**, with one Windows symlink-creation skip. Traversal/special-path/
+  checksum rejection and explicit reparse-point rejection are exercised normally.
+- Chrome smoke renders all four entities, filters visibility/side, reviews a
+  transform without disk changes, saves and undoes byte-exactly, zero page errors.
+  Screenshot inspected: `build/editor-reference-smoke/editor.png`.
+- Shared Make `EXAMPLE=mechanical-reference route` passes full routing/refill:
+  **zero native violations and zero opens**, profiling retained in
+  `build/editor-reference-native-20261004`. Native output omits guides entirely.
+- Wheel and offline VSIX build; installed VS Code accepts the VSIX in an isolated
+  profile. No added runtime dependencies, no changes to user editor settings.
+- CopperLedRing `make edit` exports its 34-component real-footprint scene with the
+  local `EDITOR_PYTHON` override; exact board SHA remains
+  `c2820b7bb9bbd576815a3ab3f9bbe948c3cd2f861266afea02920870946c487d`.
+  Fresh-checkout publication/compiler-pin integration awaits the outstanding
+  publication approval; this is separate from the locally completed checklist.
+- Items 1–28 are locally implemented and verified within documented initial
+  limits. Optional 3D, concave curved paths/curved cutouts and supplier production
+  qualification remain explicitly outside this first tool delivery.

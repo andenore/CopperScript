@@ -150,6 +150,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
                 if any(m.reference == pose.reference for m in c.members)), None)})
     extent = bounds(board.outline.vertices)
     circle = board.outline.circular_boundary
+    from ..mechanical_references import reference_scene
     scene = {"schema": SCHEMA, "board": board.name, "source_revision": source_revision,
         "revision": revision, "units": "nm", "source_writable": False,
         "mechanical_provenance": json.loads(board.metadata.get("mechanical_provenance", "{}")),
@@ -163,6 +164,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         "holes": [{"id": h.id, "position": _point(h.position), "diameter_nm": h.diameter_nm,
                    "head_clearance_radius_nm": h.head_clearance_radius_nm} for h in board.mechanical_holes],
         "slots": [{"id":s.id,"start":_point(s.start),"end":_point(s.end),"width_nm":s.width_nm} for s in board.mechanical_slots],
+        "references": [reference_scene(r) for r in board.mechanical_references],
         "datums": [{"id": d.id, "position": _point(d.position), "relative_to": d.relative_to} for d in board.datums],
         "boundary_edges": [{"id": e.id, "start": _point(e.start), "end": _point(e.end)} for e in board.boundary_edges],
         "attachments": [{"id": a.id, "reference": a.reference, "target": a.target, "position": _point(a.position), "anchor": a.anchor} for a in board.attachments],

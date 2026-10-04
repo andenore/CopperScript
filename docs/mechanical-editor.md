@@ -149,8 +149,9 @@ First delivery: read-only source, mechanical/footprint view, ratsnest filters,
 rough auto-place preview/apply, legal in-session whole-unit pose previews,
 temporary full-pose locks and undo/redo. It must explicitly say that edits are
 not saved, provide no misleading save control and leave source bytes unchanged.
-Mechanical authoring, persistent/partial locks, source-selection links, copper
-overlays, measurements, datums, slots and VS Code hosting remain checklist work.
+This describes the historical first preview, not the current delivery. Mechanical
+authoring, persistent/partial locks, source links, copper overlays, measurements,
+datums, slots and VS Code hosting are now implemented as recorded in the checklist.
 
 CLI contract: `copper edit-mechanical board.copper --footprint-root <root>`.
 `--locked --offline`, physical layer/profile settings, explicit templates/macros,
@@ -305,7 +306,9 @@ command and its exact content fingerprint, along with the physical build setting
 The editor performs no downloads, executes no source-provided code, and opens no
 server port in this host. Component source links navigate to the root declaration
 or hierarchical instance. Follow the extension README to stage and open it.
-Advanced mechanical intent remains in checklist section E.
+Advanced mechanical intent is specified in
+[advanced mechanical intent](advanced-mechanical-intent.md) and its supported
+source forms in [mechanical language](mechanical-language.md).
 
 ## Responsiveness and keyboard access
 
@@ -323,3 +326,23 @@ source lock restricts only its own dimensions. Source edits require review as
 before. SVG is assembled off-document before one DOM replacement. Standalone
 and VS Code share these behaviors. Offline VSIX packaging and CI artifact details
 are in the extension README.
+
+## Advanced mechanical authoring
+
+Named datums/edges attach component origins, pads or audited mating-face points.
+Dependency/conflicting-owner checks prevent silent retargeting. Body-only overhang
+allowances never relax copper containment. Enclosure height limits reject unknown
+heights; moving tool-access regions are distinct from copper keepouts.
+
+Rounded outlines and closed ordered line/arc paths retain exact manufacturing
+primitives. Edit all joined endpoints in the Closed line/arc path panel and
+review/save one transaction; invalid intermediate joins never enter accepted
+state. Initial curved queries require convex paths/arcs <=180 degrees; unsupported
+geometry fails. Board-owned NPTH slots exclude material and export oval/G85 drills.
+
+Locked DXF guides use explicit units/frame/transform and SHA-256, never material
+or copper credit. The view toggle and side filter affect display only. Guide
+geometry cannot be dragged; project-owned declaration transforms can be reviewed
+like other source edits. Imported owners stay read-only. Changed asset bytes stale
+the guide and block edits until reload, with no silent checksum update. Native
+manufacturing excludes guides entirely. 3D enclosure inspection is deferred.

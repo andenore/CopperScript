@@ -435,6 +435,7 @@ def _physicalize(
         assembly_envelopes=mechanical.assembly_envelopes if mechanical else (),
         assembly_access=mechanical.assembly_access if mechanical else (),
         mechanical_slots=mechanical.slots if mechanical else (),
+        mechanical_references=mechanical.references if mechanical else (),
     )
 
 

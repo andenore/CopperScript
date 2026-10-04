@@ -1271,6 +1271,7 @@ class PhysicalBoard:
     assembly_envelopes: tuple[AssemblyEnvelope, ...] = ()
     assembly_access: tuple[AssemblyAccess, ...] = ()
     mechanical_slots: tuple[MechanicalSlot,...] = ()
+    mechanical_references: tuple["MechanicalReference",...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -1293,12 +1294,16 @@ class PhysicalBoard:
         object.__setattr__(self, "materialized_macros", tuple(self.materialized_macros))
         object.__setattr__(self, "via_in_pad_rules", tuple(self.via_in_pad_rules))
         object.__setattr__(self, "mechanical_holes", tuple(self.mechanical_holes))
-        for field in ("datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access", "mechanical_slots"):
+        for field in ("datums", "boundary_edges", "attachments", "body_overhangs", "component_heights", "assembly_envelopes", "assembly_access", "mechanical_slots", "mechanical_references"):
             object.__setattr__(self, field, tuple(getattr(self, field)))
             identities = [item.id for item in getattr(self, field)]
             if len(set(identities)) != len(identities):
                 raise ValueError(f"duplicate {field} identity")
         from .mechanical import validate_mechanical_holes
+        from .mechanical_references import MechanicalReference, validate_reference_inventory
+        if any(not isinstance(r,MechanicalReference) for r in self.mechanical_references):
+            raise ValueError("physical references require typed mechanical guides")
+        validate_reference_inventory(self.mechanical_references)
         validate_mechanical_holes(self)
         self._validate_references()
 

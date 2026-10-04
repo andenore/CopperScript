@@ -159,6 +159,7 @@ from .importers import (
     load_kicad_mod,
     parse_kicad_mod,
 )
+from .mechanical_references import MechanicalReference, ReferenceEntity
 from .physical import (
     BoundaryLine, BoundaryArc, BoardBoundaryPath, MechanicalSlot,
     BoardDatum, BoardEdge, PhysicalAttachment,
@@ -288,7 +289,7 @@ __all__ = [
     "Backend",
     "Board",
     "BoardOutline",
-    "BoundaryLine", "BoundaryArc", "BoardBoundaryPath", "MechanicalSlot",
+    "BoundaryLine", "BoundaryArc", "BoardBoundaryPath", "MechanicalSlot", "MechanicalReference", "ReferenceEntity",
     "BoardDatum", "BoardEdge", "PhysicalAttachment",
     "BodyOverhang", "ComponentHeight", "AssemblyEnvelope", "AssemblyAccess",
     "BoardCutout",

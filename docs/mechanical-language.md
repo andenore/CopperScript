@@ -113,6 +113,38 @@ Complete closed paths can be reviewed in one atomic editor transaction, then
 saved or undone byte-exactly. Imported profile geometry remains read-only.
 See `make EXAMPLE=mechanical-curves route` for a real-footprint routing example.
 
+Locked DXF/enclosure guides are separate from manufacturing boundaries:
+
+```copper
+reference CASE dxf {
+    file="assets/case.dxf"; sha256="<64 lowercase hex digits>";
+    units=mm; frame=cartesian; position=(0mm,30mm);
+    rotation=0; mirror_x=false; side=front; purpose="Enclosure reference only";
+}
+```
+
+The mandatory checksum pins exact bytes (keep DXF assets `-text` in Git
+attributes). Paths stay beneath the declaring source file, including imported
+profiles; URLs, parent traversal, symbolic links and junctions are rejected.
+No browser file-read or upload API is provided. Units are `mm` or `inch`;
+non-unitless DXF header units must agree. `cartesian` converts DXF Y-up to board
+Y-down; `board` retains Y-down. Apply frame conversion, optional local X mirror,
+counter-clockwise rotation, then board-frame translation. Defaults: zero pose,
+no mirror, both sides, reference-only purpose. No independent scale is allowed.
+
+Whitelist: planar LINE/CIRCLE/ARC and zero-width, zero-bulge LWPOLYLINE. Closed
+polylines must be simple; open guide lines remain open. Unsupported geometry,
+blocks, extrusion/elevation/thickness, malformed input or changed checksums fail
+without healing. Per asset: 1MiB, 2,048 entities, 8,192 vertices; closed polylines
+have at most 512 vertices for bounded topology checks.
+Per design: 32 assets, 8,192 entities, 16,384 vertices. Guides are read-only
+and side/visibility-filtered; only source-owned declarations' transforms are
+editable through review/save/undo. Assets are checked again before save; changed
+drawings visibly stale the guide and require source reload. They never become
+board material, placement clearance, copper, drills or manufacturing output.
+Use `enclosure`/keepouts for actual constraints; 3D inspection is deferred.
+Example: `make EXAMPLE=mechanical-reference edit`.
+
 Deferred: concave curved paths, curved cutouts, plated board-owned holes, multiple boards,
 panelization, a general polygon-offset engine, and independent CAM qualification
 of nonrectangular releases. Existing manufacturing gates remain closed for

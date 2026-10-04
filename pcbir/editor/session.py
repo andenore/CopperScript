@@ -74,6 +74,8 @@ class EditorSession:
             raise StaleRevision("source changed externally; reload the source before applying previews")
         if self.workspace:
             self.workspace.check_inputs()
+        from ..mechanical_references import verify_reference_assets
+        verify_reference_assets(self.state.board.mechanical_references)
 
     def _options(self):
         return replace(self.options, fixed_references=self.state.locks)
@@ -157,6 +159,13 @@ class EditorSession:
         scene.update({"can_undo": bool(self.undo_stack), "can_redo": bool(self.redo_stack),
                       "source_stale": sha256(self.read_source()).hexdigest() != self.source_revision})
         scene["placement_job"] = self.job.poll() if self.job else None
+        from ..mechanical_references import verify_reference_assets
+        try:
+            verify_reference_assets(self.state.board.mechanical_references)
+            scene["references_stale"]=False
+        except (ValueError,OSError):
+            scene["references_stale"]=True
+            scene["warnings"]["reference_assets_changed"]="Locked reference assets changed; reload source before editing. Guides are stale."
         scene["pending_preview"] = self._document(self.pending) if self.pending else None
         return scene
 
@@ -429,6 +438,7 @@ class EditorSession:
         self.source_revision = sha256(raw).hexdigest()
         self.state = State(replace(board, metadata={**board.metadata,
             "fabrication_ready": "false", "editor_outputs_stale": "true"}))
+        self.workspace.references=board.mechanical_references
         self.pending = self.source_pending = None
         self.undo_stack.clear(); self.redo_stack.clear()
         self.outputs_stale = True

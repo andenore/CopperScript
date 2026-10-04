@@ -1,3 +1,5 @@
 # Package inventory bytes must not depend on the checkout platform.
 *.copper text eol=lf
 copper.mod text eol=lf
+# Checksum-pinned reference assets must retain exact bytes on every platform.
+*.dxf -text

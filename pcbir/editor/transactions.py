@@ -81,6 +81,7 @@ class SourceWorkspace:
         self.source_reader = source_reader
         self.build = build
         self.input_paths = tuple(p.resolve() for p in input_paths)
+        self.references = design.mechanical.references if design.mechanical else ()
         self.inputs = self._inputs()
 
     def _inputs(self):
@@ -88,6 +89,8 @@ class SourceWorkspace:
                      for p in self.input_paths)
 
     def check_inputs(self):
+        from ..mechanical_references import verify_reference_assets
+        verify_reference_assets(self.references)
         if self._inputs() != self.inputs:
             raise SourceEditError("compiler/footprint inputs changed externally; reload the source workspace")
 
@@ -113,6 +116,8 @@ class SourceWorkspace:
         if findings:
             raise SourceEditError("prospective copper/drill geometry: " + "; ".join(f.message for f in findings))
         self.check_inputs()
+        from ..mechanical_references import verify_reference_assets
+        verify_reference_assets(board.mechanical_references)
         return design, board
 
     def review(self, snapshot: SourceSnapshot, raw: bytes, seeds: PhysicalBoard,
@@ -130,6 +135,8 @@ class SourceWorkspace:
         if self.source_reader is not None:
             raise SourceEditError("document host must commit through native document edits, not filesystem saves")
         self.check_inputs()
+        from ..mechanical_references import verify_reference_assets
+        verify_reference_assets(review.board.mechanical_references)
         if self.source.is_symlink():
             raise SourceEditError("source was replaced with a symbolic link")
         lock = self.source.with_name(self.source.name + ".editor-lock")
@@ -149,6 +156,7 @@ class SourceWorkspace:
                     os.fsync(stream.fileno())
                 os.chmod(temporary, mode)
                 self.check_inputs()
+                verify_reference_assets(review.board.mechanical_references)
                 if self.source.read_bytes() != review.before.raw:
                     raise SourceEditError("source changed during save; no edit committed")
                 os.replace(temporary, self.source)

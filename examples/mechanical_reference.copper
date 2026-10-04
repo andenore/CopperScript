@@ -1,0 +1,20 @@
+// Local, checksum-pinned enclosure projection. A guide, not board material.
+board MechanicalReferenceDemo {
+    use library "standard";
+    component R1: RESISTOR { value=1kohm; footprint="Resistor_SMD:R_0603_1608Metric"; }
+    component R2: RESISTOR { value=1kohm; footprint="Resistor_SMD:R_0603_1608Metric"; }
+    net SIGNAL { R1.1; R2.1; }
+    net GND { R1.2; R2.2; }
+    mechanical {
+        outline rectangle { width=40mm; height=30mm; }
+        reference CASE dxf {
+            file="mechanical-assets/enclosure-guide.dxf";
+            sha256="0e04d50fe71d932f400ff7cdf05d84befe8703defc39540b9e258bb1a2f45509";
+            units=mm; frame=cartesian; position=(0mm,30mm);
+            rotation=0; mirror_x=false; side=front;
+            purpose="Illustrative enclosure projection; not a clearance constraint";
+        }
+    }
+    constraint fixed_placement(R1) { x=8mm; y=10mm; rotation=0; side=front; }
+    constraint fixed_placement(R2) { x=32mm; y=10mm; rotation=0; side=front; }
+}
