@@ -70,6 +70,14 @@ def _nonnegative_mm(value: str) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    manufacturing = subparsers.add_parser("export-manufacturing", help="export native-DRC-clean KiCad manufacturing files without independent CAM qualification")
+    manufacturing.add_argument("pcb", type=Path, help="final routed .kicad_pcb, with matching .kicad_pro")
+    manufacturing.add_argument("--kicad-cli", type=Path, default=Path("kicad-cli"))
+    manufacturing.add_argument("--skip-independent-cam", action="store_true", required=True,
+                               help="explicitly acknowledge these files are not an independently qualified release")
+    manufacturing.add_argument("--bom", type=Path, help="reviewed JLCPCB BOM; also generates a matching CPL")
+    manufacturing.add_argument("--replace", action="store_true", help="replace generated output after success, retaining a sibling backup")
+    manufacturing.add_argument("-o", "--output", type=Path, required=True, help="new manufacturing directory (never overwritten)")
     assembly_parser = subparsers.add_parser("assembly", help="pin and check explicit assembly selections offline")
     assembly_commands = assembly_parser.add_subparsers(dest="assembly_command", required=True)
     for action in ("snapshot", "check", "bom"):
@@ -449,6 +457,17 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "export-manufacturing":
+        from .manufacturing_files import export_manufacturing_files
+        try:
+            output = export_manufacturing_files(args.pcb, args.output, kicad_cli=args.kicad_cli,
+                                               skip_independent_cam=args.skip_independent_cam, bom=args.bom,
+                                               replace_existing=args.replace)
+            print(f"Manufacturing files -> {output}; native DRC passed; independent CAM skipped; supplier preview review required")
+            return 0
+        except (ValueError, RuntimeError, OSError) as exc:
+            print(f"MANUFACTURING EXPORT ERROR: {exc}")
+            return 2
     if args.command == "assembly":
         from .assembly import AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_jlcpcb_bom
         try:

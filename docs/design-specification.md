@@ -1063,3 +1063,22 @@ a declared, non-keepout same-side pour is a prospective contact instead of
 forcing redundant via-in-pad. Never use this prospective contact as a surface
 chain anchor or filled connectivity proof. Zero opens, islands and other native
 violations on the exact completed board remain mandatory for routing closure.
+
+## CS-147 — Native manufacturing files without independent qualification (Accepted)
+
+Support an explicit `--skip-independent-cam` manufacturing-file export path.
+Consume the final native PCB and matching project, retain all geometry and
+design rules, refill zones, and require zero native DRC violations and opens.
+Export Gerbers, plated/nonplated drills, manufacturing netlist and native
+positions atomically with checksums and truthful verification status. Circular
+outlines and slots are exported by KiCad; independent outline qualification is
+not a prerequisite for this explicitly acknowledged path.
+
+Do not weaken or silently bypass the separate qualified-release API. File
+generation is not independent CAM qualification, supplier availability or
+factory approval. Optional JLC assembly output must use explicit exact BOM
+selections and matching placement references, preserving native coordinate
+and rotation conventions without guessing supplier corrections. Firmware is
+not a manufacturing gate for assembled unprogrammed hardware. All generic
+export code belongs in CopperScript; reusable exact parts belong in libraries,
+and board-specific choices/build recipes remain in the board project.

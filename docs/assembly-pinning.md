@@ -20,8 +20,10 @@ new snapshot rather than silently accepting new parts. Missing fields, unknown
 or duplicate references, mismatched parts/footprints, and unreviewed selections
 fail the check. BOM export requires both ERC and assembly checks to pass.
 The CSV contains JLCPCB's component-selection columns plus manufacturer/MPN.
-No stock lookup, order submission, CPL generation or manufacturing signoff is
-implied. The footprint reference is pinned, but its geometry checksum still
+No stock lookup, order submission or manufacturing signoff is implied.
+The separate [native manufacturing exporter](manufacturing-files.md) can consume
+this BOM and the final routed KiCad board to generate a matching JLCPCB CPL.
+The footprint reference is pinned, but its geometry checksum still
 requires the independent footprint/manufacturing audit.
 
 ## JLCPCB access experiment
