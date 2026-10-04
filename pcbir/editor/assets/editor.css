@@ -208,3 +208,5 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .net-label {font-size:.7px;fill:#e5df8d;pointer-events:none;}
 #net-cost-summary {white-space:pre-line;font-size:12px;}
 #overlay-status.error {color:#ff9e9e;}
+.component:focus-visible .courtyard {stroke:#ffd17d;stroke-width:.22;stroke-dasharray:none;}
+@media (prefers-reduced-motion:reduce) {* {scroll-behavior:auto;}}

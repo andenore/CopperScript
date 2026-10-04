@@ -62,7 +62,9 @@ function resetFit() {
   $("board").setAttribute("viewBox",viewbox.join(" "));
 }
 function render() {
-  const s = scene(), svg = $("board"); if (!s) return; svg.replaceChildren();
+  const s=scene(),liveSvg=$("board");if(!s)return;
+  const focused=document.activeElement?.closest?.(".component")?.dataset.reference;
+  const svg=node("g"); // Build off-document; one DOM replacement avoids layout churn.
   const c = s.outline.circle;
   const outline=c ? node("circle",{cx:mm(c.center[0]),cy:mm(c.center[1]),r:mm(c.radius_nm),class:"outline"}) :
     node("polygon",{points:points(s.outline.vertices),class:"outline"});
@@ -139,7 +141,10 @@ function render() {
   for (const component of s.components) {
     if (!visible.has(component.reference)) continue;
     const locked = component.source_position_locked || component.source_rotation_locked || component.session_locked;
-    const g = node("g",{class:`component ${component.side}${selected === component.reference ? " selected" : ""}${locked ? " locked" : ""}`,"data-reference":component.reference});
+    const g = node("g",{class:`component ${component.side}${selected === component.reference ? " selected" : ""}${locked ? " locked" : ""}`,"data-reference":component.reference,
+      role:"button",tabindex:selected===component.reference || (!selected && component.reference===s.components[0]?.reference)?"0":"-1",
+      "aria-pressed":selected===component.reference?"true":"false",
+      "aria-label":`${component.reference}, ${component.value||component.footprint}, ${component.side}, X ${mm(component.position[0])} mm, Y ${mm(component.position[1])} mm${locked?", pose constraints present":""}`});
     g.append(node("polygon",{points:points(component.courtyard),class:"courtyard"}),node("polygon",{points:points(component.body),class:"body"}));
     for (const pad of component.pads) {
       if (pad.kind !== "non_plated_through_hole") {
@@ -149,6 +154,7 @@ function render() {
     }
     g.append(node("text",{x:mm(component.position[0]),y:mm(component.position[1])-1.4,class:"ref"},component.reference));
     g.addEventListener("pointerdown",event=>startDrag(event,component,g)); svg.append(g);
+    g.addEventListener("keydown",event=>{if(["Enter"," "].includes(event.key)){event.preventDefault();selected=component.reference;render();syncLockChecks();}});
   }
   if (vertexPoints.length) svg.append(node("polyline",{points:vertexPoints.map(p=>p.join(",")).join(" "),class:"vertex-preview"}));
   if (measurePoints.length===2) {
@@ -156,8 +162,10 @@ function render() {
     svg.append(node("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1],class:"measure-line"}),
       node("text",{x:(a[0]+b[0])/2,y:(a[1]+b[1])/2,class:"measure-text"},`${distance.toFixed(3)} mm`));
     $("measurement").textContent=`${distance.toFixed(6)} mm; ΔX ${(b[0]-a[0]).toFixed(6)}, ΔY ${(b[1]-a[1]).toFixed(6)} mm`;
-  }
-  if (!viewbox) resetFit(); else svg.setAttribute("viewBox",viewbox.join(" "));
+  } else $("measurement").textContent=measurePoints.length ? "Select the second measurement point" : "No measurement";
+  liveSvg.replaceChildren(svg);
+  if (!viewbox) resetFit(); else liveSvg.setAttribute("viewBox",viewbox.join(" "));
+  if(focused) liveSvg.querySelector(`.component[data-reference="${CSS.escape(focused)}"]`)?.focus();
   $("warnings").textContent = Object.entries(s.warnings).map(([key,value])=>`${key}: ${value}`).join("\n\n") || "No recorded footprint/omission warnings.";
   updateControls();
 }
@@ -190,9 +198,13 @@ function updateControls() {
   $("mechanical-controls").disabled=blocked || !!preview || !accepted?.capabilities.mechanical_edit;
   $("undo").disabled = blocked || !accepted?.can_undo; $("redo").disabled = blocked || !accepted?.can_redo;
   $("pending").hidden = !preview;
-  $("move").disabled = !component || blocked || !!preview || component.session_locked || component.source_position_locked || component.source_rotation_locked;
+  $("move").disabled = !component || blocked || !!preview || component.session_locked ||
+    (component.source_position_locked && component.source_rotation_locked && component.source_side_locked);
   $("lock").disabled = !component || blocked || !!preview;
   if (component) {
+    $("x").disabled=$("y").disabled=!!component.source_position_locked && !$("edit-locks").checked;
+    $("rotation").disabled=!!component.source_rotation_locked && !$("edit-locks").checked;
+    $("pose-side").disabled=!!component.source_side_locked && !$("edit-locks").checked;
     $("x").value = mm(component.position[0]); $("y").value = mm(component.position[1]);
     $("rotation").value = component.rotation; $("pose-side").value = component.side;
     $("lock").textContent = component.session_locked ? "Unlock temporary pose" : "Lock temporary pose";
@@ -252,7 +264,7 @@ function startDrag(event,component,g) {
   selected=component.reference; $("reference").value=selected; syncLockChecks(); updateControls();
   if (preview) {status("Apply or discard the pending preview before moving another component.");return;}
   const start=svgPoint(event);
-  if (component.session_locked || component.source_position_locked || component.source_rotation_locked) {render();return;}
+  if (component.session_locked || component.source_position_locked) {render();return;}
   const members=scene().components.filter(c=>c.reference===component.reference || (component.macro && c.macro===component.macro));
   drag={component,g,start,last:start,pointerId:event.pointerId,members:new Set(members.map(c=>c.reference))}; g.classList.add("dragging"); $("board").setPointerCapture(event.pointerId);
 }
@@ -416,9 +428,18 @@ $("board").addEventListener("click",event=>{
 });
 $("board").addEventListener("keydown",event=>{
   if (event.key==="Escape") {cancelGesture();measurePoints=[];vertexPoints=[];render();return;}
+  if(event.key==="+" || event.key==="="){event.preventDefault();zoom(.8);return;}
+  if(event.key==="-"){event.preventDefault();zoom(1.25);return;}
+  if(event.key.toLowerCase()==="f"){event.preventDefault();resetFit();render();return;}
+  const c=scene()?.components.find(c=>c.reference===selected);
+  if(event.key.toLowerCase()==="r" && c && !busy && !preview && !accepted?.source_review && !c.session_locked && !c.source_rotation_locked) {
+    event.preventDefault();const angles=c.allowed_orientations.map(Number),current=((Number(c.rotation)%360)+360)%360;
+    const next=angles.find(a=>a>current)??angles[0];
+    if(next!==undefined)operation("move",{reference:selected,x_nm:c.position[0],y_nm:c.position[1],rotation:next,side:c.side},true);
+    return;
+  }
   const delta={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[event.key];
   if (!delta || busy || preview || accepted?.source_review) return;
-  const c=scene()?.components.find(c=>c.reference===selected);
   if (!c || c.session_locked || c.source_position_locked) return;
   event.preventDefault();const step=Math.round(Number($("snap").value)*1e6)*(event.shiftKey?10:1);
   operation("move",{reference:selected,x_nm:c.position[0]+delta[0]*step,y_nm:c.position[1]+delta[1]*step,rotation:c.rotation,side:c.side},true);

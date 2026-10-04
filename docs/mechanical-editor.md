@@ -306,3 +306,20 @@ The editor performs no downloads, executes no source-provided code, and opens no
 server port in this host. Component source links navigate to the root declaration
 or hierarchical instance. Follow the extension README to stage and open it.
 Advanced mechanical intent remains in checklist section E.
+
+## Responsiveness and keyboard access
+
+Ratsnest island MST uses an exact spatial Boruvka search. Bounding boxes and
+uniform-component labels eliminate unnecessary distance checks while preserving
+the exhaustive Kruskal tree and its deterministic tie ordering. Memory remains
+linear; pathological coincident/interleaved islands may still need quadratic work.
+Incident-net caching remains in place. Immutable geometry and full placement
+legality are also reused for unchanged job-status polls.
+
+Footprints expose accessible button names/selection and a roving keyboard focus.
+Use arrows (Shift: ten snaps), R for the next explicitly allowed rotation, +/− for
+zoom, F for fit, and Escape to cancel/reset gestures/measurement. Each partial
+source lock restricts only its own dimensions. Source edits require review as
+before. SVG is assembled off-document before one DOM replacement. Standalone
+and VS Code share these behaviors. Offline VSIX packaging and CI artifact details
+are in the extension README.

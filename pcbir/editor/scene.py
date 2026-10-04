@@ -11,6 +11,7 @@ from ..hard_macros import materialize_hard_macros
 from ..physical import PadKind, PadReference, PadShape, PhysicalBoard, Point
 from ..placement import (PlacementPlannerOptions, placement_solution_is_legal,
                          transformed_footprint_polygon, transformed_local_point)
+from .islands import nearest_island_tree
 
 SCHEMA = "copperscript-editor-scene/v0.1"
 
@@ -67,31 +68,7 @@ def ratsnest(board: PhysicalBoard, *, only_nets: frozenset[str] | None = None) -
         by_net.setdefault(via.net, []).append((graph.roots[identity], identity, "", "", via.position))
     result = []
     for net, lands in sorted(by_net.items()):
-        roots = sorted({land[0] for land in lands})
-        parent = {root: root for root in roots}
-
-        def find(root):
-            while root != parent[root]:
-                parent[root] = parent[parent[root]]
-                root = parent[root]
-            return root
-
-        nearest = {}
-        for i, left in enumerate(lands):
-            for right in lands[i + 1:]:
-                if left[0] == right[0]:
-                    continue
-                a, b = sorted((left, right), key=lambda land: (land[0], land[1]))
-                distance = (a[4].x_nm - b[4].x_nm) ** 2 + (a[4].y_nm - b[4].y_nm) ** 2
-                edge = (distance, a[0], b[0], a[1], b[1], a, b)
-                key = a[0], b[0]
-                if key not in nearest or edge[:5] < nearest[key][:5]:
-                    nearest[key] = edge
-        for distance, ar, br, _, _, a, b in sorted(nearest.values(), key=lambda edge: edge[:5]):
-            left, right = find(ar), find(br)
-            if left == right:
-                continue
-            parent[max(left, right)] = min(left, right)
+        for distance, _, _, _, _, a, b in nearest_island_tree(lands):
             result.append({"net": net, "distance_squared_nm": str(distance),
                 "from": {"land": a[1], "reference": a[2], "pad": a[3], "position": _point(a[4])},
                 "to": {"land": b[1], "reference": b[2], "pad": b[3], "position": _point(b[4])}})

@@ -37,3 +37,15 @@ This host deliberately uses VS Code's [custom text editor API](https://code.visu
 and [workspace trust](https://code.visualstudio.com/api/extension-guides/workspace-trust).
 Routed-reference import is currently available in the standalone host; advanced
 mechanical formats remain governed by the main editor checklist.
+
+Offline installable artifact (no npm/marketplace build dependencies):
+
+```sh
+node integrations/vscode/build.cjs
+python integrations/vscode/package.py -o build/copperscript-mechanical.vsix
+code --install-extension build/copperscript-mechanical.vsix
+```
+
+Packaging uses fixed archive timestamps and whitelisted runtime assets. Existing
+VSIX files are never overwritten. CI publishes the staged extension as an artifact
+and includes it in tagged inspection releases. This does not publish to Marketplace.

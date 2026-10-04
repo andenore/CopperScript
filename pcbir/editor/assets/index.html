@@ -53,7 +53,7 @@
 </fieldset>
 <label>Drag snap (mm) <input id="snap" type="number" min="0.001" value="0.1" step="0.1"></label>
 <label><input id="preview-drags" type="checkbox"> Preview drags before applying</label>
-<p>Scroll to zoom; right-drag to pan. Arrow keys move the selected movable part by one snap; Shift uses ten snaps. Escape cancels a gesture. Temporary placement and source history are separate.</p>
+<p id="board-help">Scroll to zoom; right-drag to pan. Focus the board: arrows move by one snap (Shift: ten); R rotates to the next allowed angle; +/− zoom; F fits. Escape cancels a gesture. Tab/Enter selects a footprint. Temporary placement and source history are separate.</p>
 <fieldset id="mechanical-controls" disabled><legend>Mechanical features</legend>
 <label>Project-owned feature <select id="feature"><option value="">New feature</option></select></label>
 <label>Kind <select id="feature-kind"><option>outline</option><option>hole</option><option>cutout</option><option>keepout</option><option>copper_keepout</option><option>rules</option></select></label>
@@ -68,7 +68,7 @@
 <h2>Scope</h2><p>Source edits rebuild unrouted physical intent. Existing routing, copper fills and manufacturing outputs become stale; rebuild before ordering. Ratsnest is a guide, not routing.</p>
 <details><summary>Footprint / source warnings</summary><pre id="warnings"></pre></details>
 </aside>
-<section id="viewport" aria-label="Board view"><svg id="board" tabindex="0" role="img" aria-label="Mechanical board and placement editor"></svg></section>
+<section id="viewport" aria-label="Board view"><svg id="board" tabindex="0" role="group" aria-label="Mechanical board and placement editor" aria-describedby="board-help"></svg></section>
 </main>
 <footer><output id="status" aria-live="polite">Loading scene…</output></footer>
 <script src="/editor.js"></script></body></html>

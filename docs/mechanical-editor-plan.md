@@ -81,7 +81,7 @@ connectivity and locked pose. Comments survive; stale/concurrent edits never win
     remaining-connectivity evidence; never infer fill from an outline.
 23. [x] Shared browser core hosted by VS Code, document selection/source links,
     native undo/save, workspace trust and pinned compiler configuration.
-24. [ ] Accessibility/keyboard editing, large-board performance and release assets.
+24. [x] Accessibility/keyboard editing, large-board performance and release assets.
 
 ## E. Advanced mechanical intent
 
@@ -230,3 +230,25 @@ board/source revision, browser actions and explicit remaining limitations.
   native source Undo, invalid unsaved text recovery and declaration navigation.
   Test uses disposable `build/vscode-smoke-workspace`; no user workspace settings
   or sources are changed. Items 24–28 remain open.
+
+### Keyboard access, exact spatial ratsnest and release assets — 2026-10-04
+
+- Accessible footprint buttons with roving focus, selection and coordinate labels;
+  keyboard arrows/Shift snaps, next allowed rotation, zoom/fit and Escape. Partial
+  source locks restrict only their owned pose dimensions, not unrelated movement.
+  Chrome keyboard smoke passes a legal 45-degree rotation with unchanged source.
+- Exact spatial Boruvka MST uses bounding boxes and uniform-component pruning;
+  no approximate-neighbour connectivity. Twenty randomized/tie-order cases match
+  exhaustive Kruskal exactly, including shuffled input and coincident terminals.
+  A 2,500-terminal grid uses **69,124** distance tests (two rounds, ~0.83 s on the
+  verification host), versus **3,123,750** all-pairs tests. Worst-case work can
+  still be quadratic; memory is linear. Unchanged status polls cache physical
+  scene transforms/full legality rather than recomputing them.
+- Deterministic, offline, whitelisted VSIX packaging passes reproducibility and
+  exact shared-asset tests. Installed VS Code accepts the generated artifact in
+  an isolated profile. Existing tag CI now includes it and the compiler fingerprint
+  in inspection release assets; ordinary pushes preserve editor artifacts too.
+  This is packaging configuration, not a claim that CI has run remotely.
+- Broad source/editor/placement/profile/DRC/compiler/build regressions:
+  **305 passed, 6 skipped**. Wheel builds with shared modules/assets and no new
+  runtime dependencies. Items 25–28 remain open.

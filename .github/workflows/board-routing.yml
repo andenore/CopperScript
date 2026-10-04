@@ -58,6 +58,17 @@ jobs:
           echo 'COPPER_SIM_REQUIRED=1' >> "$GITHUB_ENV"
       - name: Run complete test suite
         run: python -m pytest
+      - name: Package shared mechanical editor (offline VSIX)
+        run: |
+          node integrations/vscode/build.cjs
+          python integrations/vscode/package.py -o build/editor-dist/copperscript-mechanical.vsix
+          python -m pcbir.editor.document --fingerprint > build/editor-dist/compiler-fingerprint.txt
+      - name: Preserve editor release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mechanical-editor-${{ github.sha }}
+          path: CopperScript/build/editor-dist
+          if-no-files-found: error
       - name: Generate bounded simulation examples
         if: always()
         run: python scripts/ci_simulation.py examples
@@ -122,6 +133,9 @@ jobs:
         run: |
           mkdir -p build/ci-dist
           python -m build --no-isolation --outdir build/ci-dist
+          node integrations/vscode/build.cjs
+          python integrations/vscode/package.py -o build/ci-dist/copperscript-mechanical.vsix
+          python -m pcbir.editor.document --fingerprint > build/ci-dist/compiler-fingerprint.txt
           git archive --format=zip --output=build/ci-dist/copperscript-sources.zip HEAD
           python scripts/ci_board_bundle.py sources
       - name: Refill, inspect layers and package all available results

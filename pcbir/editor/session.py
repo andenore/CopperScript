@@ -63,6 +63,9 @@ class EditorSession:
         self.job = None
         self.job_consumed = False
         self.ratsnest_cache = RatsnestCache()
+        self.scene_board = None
+        self.scene_locks = None
+        self.scene_template = None
 
     def _check(self, revision):
         if type(revision) is not int or revision != self.revision:
@@ -76,8 +79,16 @@ class EditorSession:
         return replace(self.options, fixed_references=self.state.locks)
 
     def _document(self, state):
-        scene = board_scene(state.board, source_revision=self.source_revision,
-            revision=self.revision, session_locks=state.locks, options=self.options, ratsnest_cache=self.ratsnest_cache)
+        if self.scene_board is not state.board or self.scene_locks != state.locks:
+            self.scene_template = board_scene(state.board, source_revision=self.source_revision,
+                revision=self.revision, session_locks=state.locks, options=self.options, ratsnest_cache=self.ratsnest_cache)
+            self.scene_board, self.scene_locks = state.board, state.locks
+        # Job polling does not retransform every pad or rerun full legality.
+        # Dynamic fields and component annotations remain per-response records.
+        scene = {**self.scene_template, "revision": self.revision, "source_revision": self.source_revision,
+                 "components": [dict(c) for c in self.scene_template["components"]],
+                 "capabilities": dict(self.scene_template["capabilities"]),
+                 "warnings": dict(self.scene_template["warnings"])}
         if self.overlay:
             from .overlay import electrical_digest
             identity = electrical_digest(self.workspace.identity) if self.workspace else None
