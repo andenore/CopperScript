@@ -85,7 +85,7 @@ connectivity and locked pose. Comments survive; stale/concurrent edits never win
 
 ## E. Advanced mechanical intent
 
-25. [ ] Named datums and stable edge IDs in source/IR; numeric and edge-relative
+25. [x] Named datums and stable edge IDs in source/IR; numeric and edge-relative
     component/pad/mating-face attachment with dependency/conflict checks.
 26. [ ] Explicit body-overhang allowances independent of copper-edge requirements;
     component/enclosure-height and assembly-access metadata where available.
@@ -252,3 +252,21 @@ board/source revision, browser actions and explicit remaining limitations.
 - Broad source/editor/placement/profile/DRC/compiler/build regressions:
   **305 passed, 6 skipped**. Wheel builds with shared modules/assets and no new
   runtime dependencies. Items 25–28 remain open.
+
+### Named anchors and retained placement intent — 2026-10-04
+
+- Absolute/relative datums, stable straight boundary edges and numeric/datum/
+  edge-relative origin, pad and explicit mating-face anchors retain typed intent.
+  Dependency cycles, removed edges, unknown/ambiguous pads, competing pose owners
+  and incompatible explicit angles fail. Profile targets are namespaced and roles
+  explicitly bound; electrical IR remains geometry-free.
+- Affected source/editor/document/profile/placement/compiler/DRC regressions:
+  **277 passed**. Ten native KiCad cases verify exported pad coordinates at five
+  front/rear rotations, including 45 degrees. Rear overlay checking now handles
+  KiCad's mirror-Y/180-degree convention without changing source poses.
+- Chrome smoke passes rendered datums/edge/anchors, competing-lock rejection,
+  reviewed datum edit moving its dependent pose, save and byte-exact undo; zero
+  page errors. Inspected screenshot: `build/editor-anchor-smoke/editor.png`.
+- Generic example: `make EXAMPLE=mechanical-anchors edit`.
+  Named curved-edge anchors await exact curve support; imported owners remain
+  read-only. Items 26–28 remain open.

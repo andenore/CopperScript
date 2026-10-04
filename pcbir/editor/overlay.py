@@ -131,9 +131,12 @@ def export_overlay(run_path, kicad_python, output, *, runner=subprocess.run):
     poses = {p["reference"]: p for p in native["poses"]}
     for p in intent["poses"]:
         actual = poses.get(intent["native_references"][p["reference"]])
+        # The backend exports mirrorX IR poses as mirrorY KiCad footprints.
+        # Rear orientation therefore differs by 180 degrees, not by geometry.
+        expected_rotation = Decimal(p["rotation"]) + (180 if p["side"] == "back" else 0)
         if (actual is None or actual["position"] != p["position"] or actual["side"] != p["side"]
-                or min(abs(Decimal(actual["rotation"]) - Decimal(p["rotation"])) % 360,
-                       360 - abs(Decimal(actual["rotation"]) - Decimal(p["rotation"])) % 360) > Decimal("0.000001")):
+                or min(abs(Decimal(actual["rotation"]) - expected_rotation) % 360,
+                       360 - abs(Decimal(actual["rotation"]) - expected_rotation) % 360) > Decimal("0.000001")):
             raise ValueError("native PCB placement does not match the routed intent")
     for kind in ("tracks", "vias"):
         if sorted(map(_copper_key, native[kind])) != sorted(map(_copper_key, intent[kind])):

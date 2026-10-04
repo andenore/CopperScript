@@ -12,15 +12,17 @@ from pcbir.editor.overlay import (RoutedOverlay, _digest, electrical_digest, exp
                                   pose_records, projection_digest, write_intent)
 from pcbir.editor.session import EditorSession
 from pcbir.editor.scene import net_costs, ratsnest
-from pcbir.physical import (CopperLayer, CopperZone, MechanicalHole, Point, PolygonRing,
+from pcbir.physical import (BoardSide, CopperLayer, CopperZone, MechanicalHole, Point, PolygonRing,
                             PolygonWithHoles, TrackSegment)
 from test_mechanical_editor import board_fixture, request
 
 
-def fixture(tmp_path, *, verified=True, opens=None):
+def fixture(tmp_path, *, verified=True, opens=None, rear=False):
     source = tmp_path / "source.copper"
     source.write_text("// Physical overlay fixture; never executed.\n")
     original = board_fixture()
+    if rear:
+        original = replace(original, placements=tuple(replace(p, side=BoardSide.BACK) for p in original.placements))
     routed = replace(original, tracks=(TrackSegment("SIGNAL", original.placements[0].position,
                                original.placements[1].position, 200000, CopperLayer.FRONT),))
     intent_path = tmp_path / "board.editor-intent.json"
@@ -34,6 +36,8 @@ def fixture(tmp_path, *, verified=True, opens=None):
                          "holes": [[[20, 20], [30, 20], [20, 30]]]}]}
     for pose in native["poses"]:
         pose["reference"] = intent["native_references"][pose["reference"]]
+        if pose['side'] == 'back':
+            pose['rotation'] = str((float(pose['rotation']) + 180) % 360)
     report = tmp_path / "kicad-drc.json"
     report.write_text(json.dumps({"coordinate_units": "mm", "violations": [], "unconnected_items": opens or []}))
     run = {"editor_intent_sha256": sha256(intent_path.read_bytes()).hexdigest(),
@@ -50,6 +54,14 @@ def fixture(tmp_path, *, verified=True, opens=None):
         return SimpleNamespace(returncode=0, stdout=json.dumps(native), stderr="")
     export_overlay(run_path, "explicit-kicad-python", output, runner=runner)
     return original, routed, source, output, native, calls
+
+
+def test_rear_native_orientation_is_normalized_without_changing_ir_pose(tmp_path):
+    original, _, source, output, native, _ = fixture(tmp_path, rear=True)
+    overlay = RoutedOverlay.load(output)
+    assert overlay.fresh(original, sha256(source.read_bytes()).hexdigest())
+    assert overlay.seed(original, sha256(source.read_bytes()).hexdigest()) == original
+    assert native['poses'][0]['rotation'] == '180.0'
 
 
 def test_export_is_content_bound_and_never_runs_manifest_commands(tmp_path):

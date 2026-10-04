@@ -1,0 +1,23 @@
+// Placement-intent demonstration, not a production circuit.
+board MechanicalAnchors {
+    use library "standard";
+    component R1: RESISTOR { value=1kohm; footprint="Resistor_SMD:R_0603_1608Metric"; }
+    component R2: RESISTOR { value=2kohm; footprint="Resistor_SMD:R_0603_1608Metric"; }
+    net SIGNAL { R1.1; R2.1; }
+    net GND { R1.2; R2.2; }
+    mechanical {
+        outline rectangle { width=40mm; height=30mm; }
+        datum CENTER { position=(20mm,15mm); }
+        datum DEBUG { relative_to=CENTER; offset=(-10mm,-5mm); }
+        edge TOP { start=(0mm,0mm); end=(40mm,0mm); }
+        attach DEBUG_PAD {
+            component=R1; target=DEBUG; anchor=pad; anchor_pad="1";
+            rotation=45; side=back;
+        }
+        attach EDGE_BODY {
+            component=R2; target=TOP; offset=(28mm,5mm);
+            anchor=mating_face; anchor_point=(0mm,-0.8mm);
+            rotation=0; side=front;
+        }
+    }
+}

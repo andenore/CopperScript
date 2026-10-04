@@ -14,6 +14,8 @@ from .mechanical_profiles import (MechanicalProfileDefinition, MechanicalProfile
     MechanicalFeatureSource, expand_mechanical_items)
 from .quantities import Length
 from .syntax import CopperScriptError, Document, MechanicalDecl, RawQuantity, SourceLocation
+from .mechanical_anchors import MechanicalAttachment, resolve_datums, resolve_edges, resolve_attachments
+from .physical import BoardDatum, BoardEdge
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,10 +40,13 @@ class MechanicalDesign:
     copper_keepouts: tuple[CopperKeepout, ...] = ()
     profiles: tuple[MechanicalProfileInstance, ...] = ()
     sources: tuple[MechanicalFeatureSource, ...] = ()
+    datums: tuple[BoardDatum, ...] = ()
+    boundary_edges: tuple[BoardEdge, ...] = ()
+    attachments: tuple[MechanicalAttachment, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holes", tuple(self.holes))
-        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources"):
+        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources", "datums", "boundary_edges", "attachments"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(self, "rule_overrides", MappingProxyType(dict(self.rule_overrides)))
         DesignRules(**self.rule_overrides)
@@ -74,6 +79,7 @@ def lower_mechanical(document: Document,
     rules = {}
     ids = set()
     connectors, keepouts, copper_keepouts = [], [], []
+    datum_items, edge_items, attachment_items = [], [], []
     items, sources, instances = expand_mechanical_items(block.items, profiles or {})
 
     def length(value):
@@ -104,6 +110,9 @@ def lower_mechanical(document: Document,
                 if item.name in ids:
                     raise ValueError(f"duplicate mechanical feature id {item.name!r}")
                 ids.add(item.name)
+            if item.kind in {"datum", "edge", "attach"}:
+                {"datum": datum_items, "edge": edge_items, "attach": attachment_items}[item.kind].append(item)
+                continue
             if item.kind == "rules":
                 allowed = {name.removesuffix("_nm") for name in DesignRules.__dataclass_fields__}
                 required = set()
@@ -198,7 +207,11 @@ def lower_mechanical(document: Document,
     try:
         if outline is None:
             raise ValueError("mechanical block requires exactly one outline")
+        datums = resolve_datums(datum_items, point)
+        edges = resolve_edges(edge_items, outline, point)
+        attachments = resolve_attachments(attachment_items, datums, edges, outline, point)
         return MechanicalDesign(replace(outline, cutouts=tuple(cutouts)), tuple(holes), rules,
-            tuple(connectors), tuple(keepouts), tuple(copper_keepouts), instances, sources)
-    except ValueError as exc:
+            tuple(connectors), tuple(keepouts), tuple(copper_keepouts), instances, sources,
+            datums, edges, attachments)
+    except (ValueError, TypeError) as exc:
         raise CopperScriptError("MEC003", str(exc), block.location) from exc

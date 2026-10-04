@@ -179,12 +179,12 @@ class Parser:
                 self._advance()
                 instance = self._name("profile instance")
             return MechanicalProfileUseDecl(location, name, instance, self._assignment_block())
-        allowed = {"outline", "cutout", "hole", "rules", "keepout", "copper_keepout"}
+        allowed = {"outline", "cutout", "hole", "rules", "keepout", "copper_keepout", "datum", "edge", "attach"}
         if profile:
             allowed.add("connector")
         if kind not in allowed:
             self._error("PAR013", f"unknown mechanical declaration {kind!r}")
-        name = self._name("mechanical feature id") if kind in {"hole", "cutout", "keepout", "copper_keepout", "connector"} else ""
+        name = self._name("mechanical feature id") if kind in {"hole", "cutout", "keepout", "copper_keepout", "connector", "datum", "edge", "attach"} else ""
         shape = self._name("mechanical shape") if kind in {"outline", "cutout", "keepout", "copper_keepout"} else ""
         self._expect_symbol("{")
         parameters = {}

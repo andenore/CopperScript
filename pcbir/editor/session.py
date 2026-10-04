@@ -332,6 +332,10 @@ class EditorSession:
             refs = frozenset(p.reference for p in self.state.board.placements)
             if reference not in refs:
                 raise EditorError("unknown component reference")
+            import json
+            owner = json.loads(self.state.board.metadata.get("mechanical_attachment_owners","{}")).get(reference)
+            if owner:
+                raise EditorError(f"pose is owned by mechanical attachment {owner!r}; edit that attachment instead")
             from ..elaborate import elaborate
             from ..model import ConstraintKind
             # A flattened import may own a pose even when no root declaration

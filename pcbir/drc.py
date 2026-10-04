@@ -342,6 +342,9 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "circular_boundary": repr(board.outline.circular_boundary),
             "cutouts": [(c.id, [(p.x_nm, p.y_nm) for p in c.vertices]) for c in board.outline.cutouts],
             "mechanical_holes": [repr(h) for h in sorted(board.mechanical_holes, key=lambda h: h.id)],
+            "datums": [repr(d) for d in sorted(board.datums, key=lambda d:d.id)],
+            "boundary_edges": [repr(e) for e in sorted(board.boundary_edges, key=lambda e:e.id)],
+            "attachments": [repr(a) for a in sorted(board.attachments, key=lambda a:a.id)],
             "stackup": {
                 "layers": [layer.value for layer in board.stackup.copper_layers],
                 "thickness_nm": board.stackup.thickness_nm,

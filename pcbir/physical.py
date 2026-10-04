@@ -188,6 +188,50 @@ class BoardCutout:
 
 
 @dataclass(frozen=True, slots=True)
+class BoardDatum:
+    id: str
+    position: Point
+    relative_to: str | None = None
+    offset: Point = Point(0, 0)
+
+    def __post_init__(self):
+        if not self.id or not isinstance(self.position, Point):
+            raise ValueError("datum requires an id and a typed point")
+
+
+@dataclass(frozen=True, slots=True)
+class BoardEdge:
+    id: str
+    start: Point
+    end: Point
+
+    def __post_init__(self):
+        if not self.id or self.start == self.end:
+            raise ValueError("named edge requires an id and distinct endpoints")
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalAttachment:
+    id: str
+    reference: str
+    target: str | None
+    position: Point
+    offset: Point
+    anchor: str
+    anchor_point: Point
+    rotation: Decimal
+    side: BoardSide
+
+    def __post_init__(self):
+        if not self.id or not self.reference or self.anchor not in {"origin", "pad", "mating_face"}:
+            raise ValueError("attachment requires stable identities and a supported anchor")
+        if not all(isinstance(p,Point) for p in (self.position,self.offset,self.anchor_point)):
+            raise ValueError("attachment coordinates require typed points")
+        if not isinstance(self.rotation,Decimal) or not self.rotation.is_finite() or not isinstance(self.side,BoardSide):
+            raise ValueError("attachment pose requires finite Decimal rotation and BoardSide")
+
+
+@dataclass(frozen=True, slots=True)
 class MechanicalHole:
     """Board-owned round NPTH; no electrical pin, net or BOM entry."""
 
@@ -1090,6 +1134,9 @@ class PhysicalBoard:
     materialized_macros: tuple[str, ...] = ()
     via_in_pad_rules: tuple[PadViaInPadRule, ...] = ()
     mechanical_holes: tuple[MechanicalHole, ...] = ()
+    datums: tuple[BoardDatum, ...] = ()
+    boundary_edges: tuple[BoardEdge, ...] = ()
+    attachments: tuple[PhysicalAttachment, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -1112,6 +1159,11 @@ class PhysicalBoard:
         object.__setattr__(self, "materialized_macros", tuple(self.materialized_macros))
         object.__setattr__(self, "via_in_pad_rules", tuple(self.via_in_pad_rules))
         object.__setattr__(self, "mechanical_holes", tuple(self.mechanical_holes))
+        for field in ("datums", "boundary_edges", "attachments"):
+            object.__setattr__(self, field, tuple(getattr(self, field)))
+            identities = [item.id for item in getattr(self, field)]
+            if len(set(identities)) != len(identities):
+                raise ValueError(f"duplicate {field} identity")
         from .mechanical import validate_mechanical_holes
         validate_mechanical_holes(self)
         self._validate_references()
@@ -1120,6 +1172,34 @@ class PhysicalBoard:
         placement_refs = [placement.reference for placement in self.placements]
         if len(placement_refs) != len(set(placement_refs)):
             raise ValueError("physical placement references must be unique")
+        datum_by_id = {d.id:d for d in self.datums}
+        if set(datum_by_id) & {e.id for e in self.boundary_edges}:
+            raise ValueError("datum and edge names must not collide")
+        for datum in self.datums:
+            current, seen = datum, set()
+            while current.relative_to is not None:
+                if current.id in seen:
+                    raise ValueError("cyclic physical datum dependency")
+                seen.add(current.id)
+                if current.relative_to not in datum_by_id:
+                    raise ValueError("physical datum references unknown parent")
+                parent = datum_by_id[current.relative_to]
+                if current.position != Point(parent.position.x_nm+current.offset.x_nm,parent.position.y_nm+current.offset.y_nm):
+                    raise ValueError("physical datum position does not match its dependency")
+                current = parent
+        pairs = tuple(zip(self.outline.vertices,(*self.outline.vertices[1:],self.outline.vertices[0])))
+        if self.boundary_edges and self.outline.circular_boundary:
+            raise ValueError("circular outlines do not expose sampled straight edge IDs")
+        for edge in self.boundary_edges:
+            if (edge.start,edge.end) not in pairs and (edge.end,edge.start) not in pairs:
+                raise ValueError("named edge is not an actual board boundary segment")
+        attached = set()
+        for attachment in self.attachments:
+            if attachment.reference not in placement_refs or attachment.reference in attached:
+                raise ValueError("attachment requires a unique known component")
+            attached.add(attachment.reference)
+            if attachment.target is not None and attachment.target not in set(datum_by_id) | {e.id for e in self.boundary_edges}:
+                raise ValueError("attachment references unknown mechanical target")
         net_names = [net.name for net in self.nets]
         if len(net_names) != len(set(net_names)):
             raise ValueError("physical net names must be unique")

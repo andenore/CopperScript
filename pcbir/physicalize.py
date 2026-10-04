@@ -371,11 +371,17 @@ def _physicalize(
         zones,
         via_in_pad_rules,
     ) = _lower_physical_constraints(flat, component_index, metadata, outline)
+    attachments = ()
     if mechanical:
         keepouts = (*keepouts, *mechanical.keepouts)
         if len({k.name for k in keepouts}) != len(keepouts):
             raise ValueError("conflicting placement keepout names")
         placement_rules = _bind_profile_connectors(mechanical, flat, footprints, placements, placement_rules)
+        from .mechanical_anchors import bind_attachments
+        explicit_angles = frozenset(target for c in flat.constraints if c.kind is ConstraintKind.ALLOWED_ORIENTATIONS for target in c.targets)
+        placement_rules, attachments = bind_attachments(mechanical.attachments, footprints, placements, placement_rules,
+                                                       _merge_rule, explicit_angles=explicit_angles)
+        metadata["mechanical_attachment_owners"] = json.dumps({a.reference:a.id for a in attachments},sort_keys=True)
         if mechanical.profiles:
             metadata["mechanical_provenance"] = json.dumps(mechanical_provenance(mechanical), sort_keys=True)
             metadata["mechanical_connector_roles"] = json.dumps({c.reference: c.role for c in mechanical.connectors}, sort_keys=True)
@@ -416,6 +422,9 @@ def _physicalize(
         via_in_pad_rules=via_in_pad_rules,
         mechanical_holes=mechanical.holes if mechanical else (),
         copper_keepouts=mechanical.copper_keepouts if mechanical else (),
+        datums=mechanical.datums if mechanical else (),
+        boundary_edges=mechanical.boundary_edges if mechanical else (),
+        attachments=attachments,
     )
 
 

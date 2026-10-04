@@ -1145,3 +1145,13 @@ Saved filled copper and native DRC on the exact output board are required for
 connectivity acceptance, not merely a successful route search or disposable
 plane-check copy. This acceptance is not fabrication/assembly qualification.
 See [shared Make builds](make-builds.md).
+
+### Advanced mechanical intent
+
+Named datums/edges, component/pad/mating-face attachments, audited body overhang,
+height/access envelopes, exact manufacturing curves/slots and locked enclosure
+references belong to separate mechanical/physical intent. They never add schematic
+coordinates to electrical IR. Conflicting owners/cycles fail, copper-edge rules
+are never waived by a body allowance, and unsupported curves cannot invent legal
+material. See [advanced mechanical intent](advanced-mechanical-intent.md) and the
+editor checklist for the staged implementation/verification contract.

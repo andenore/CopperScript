@@ -2,6 +2,13 @@
 
 Status: accepted and implemented (unreleased v0.1).
 
+Named datums, stable straight boundary edges and component/pad/mating-face
+attachments are supported; see [advanced mechanical intent](advanced-mechanical-intent.md).
+`examples/mechanical_anchors.copper` demonstrates a rear 45-degree pad anchor
+and an edge-relative mating-face point. Open it with
+`make EXAMPLE=mechanical-anchors edit`. Attachments own the resolved pose:
+edit the attachment or its datum rather than adding a competing placement lock.
+
 Electrical `Board` and reusable electrical modules contain no outline geometry.
 A compiled `Design` combines an electrical `Board` with an optional, separate
 `MechanicalDesign`. Physicalization consumes that aggregate. Electrical-only

@@ -210,3 +210,6 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 #overlay-status.error {color:#ff9e9e;}
 .component:focus-visible .courtyard {stroke:#ffd17d;stroke-width:.22;stroke-dasharray:none;}
 @media (prefers-reduced-motion:reduce) {* {scroll-behavior:auto;}}
+.datum line,.named-edge line {stroke:#84d5e3;stroke-width:.15;}
+.datum text,.named-edge text {fill:#84d5e3;font-size:.8px;stroke:none;}
+.attachment-anchor {fill:none;stroke:#84d5e3;stroke-width:.12;}

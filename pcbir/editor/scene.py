@@ -134,6 +134,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         body = tuple(transformed_local_point(pose, Point(x, y)) for x, y in
                      ((-w, -h), (w, -h), (w, h), (-w, h)))
         components.append({"reference": pose.reference, "hierarchy": pose.reference.split("/")[:-1],
+            "source_attachment": next((a.id for a in board.attachments if a.reference==pose.reference),None),
             "profile_role": profile_roles.get(pose.reference),
             "footprint": pose.footprint, "position": _point(pose.position),
             "rotation": str(pose.rotation_degrees), "side": pose.side.value,
@@ -158,6 +159,9 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
             "cutouts": [{"id": c.id, "vertices": [_point(p) for p in c.vertices]} for c in board.outline.cutouts]},
         "holes": [{"id": h.id, "position": _point(h.position), "diameter_nm": h.diameter_nm,
                    "head_clearance_radius_nm": h.head_clearance_radius_nm} for h in board.mechanical_holes],
+        "datums": [{"id": d.id, "position": _point(d.position), "relative_to": d.relative_to} for d in board.datums],
+        "boundary_edges": [{"id": e.id, "start": _point(e.start), "end": _point(e.end)} for e in board.boundary_edges],
+        "attachments": [{"id": a.id, "reference": a.reference, "target": a.target, "position": _point(a.position), "anchor": a.anchor} for a in board.attachments],
         "keepouts": [{"name": k.name, "side": k.side.value if k.side else "both",
                       "vertices": [_point(p) for p in k.outline.vertices]} for k in board.keepouts],
         "copper_keepouts": [{"name": k.id, "layers": [layer.value for layer in k.layers],

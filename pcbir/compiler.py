@@ -151,10 +151,10 @@ def compile_design_source(source: str, filename: str = "<memory>", *,
     mechanical = lower_mechanical(document, imported.profiles)
     electrical = _compile_board(document, imported.modules, imported.parts,
                                 imported.devices, imported.dependencies)
-    if mechanical and mechanical.connectors:
+    if mechanical and (mechanical.connectors or mechanical.attachments):
         from .elaborate import elaborate
         references = {c.ref for c in elaborate(electrical).components}
-        for connector in mechanical.connectors:
+        for connector in (*mechanical.connectors, *mechanical.attachments):
             if connector.reference not in references:
                 _error("MEC005", f"profile binding references unknown component {connector.reference!r}", connector.location)
     return Design(electrical, mechanical)

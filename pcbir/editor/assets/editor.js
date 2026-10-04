@@ -69,6 +69,16 @@ function render() {
   const outline=c ? node("circle",{cx:mm(c.center[0]),cy:mm(c.center[1]),r:mm(c.radius_nm),class:"outline"}) :
     node("polygon",{points:points(s.outline.vertices),class:"outline"});
   outline.append(node("title",{},featureLabel("outline")));svg.append(outline);
+  for(const d of s.datums||[]) {
+    const [x,y]=d.position.map(mm),g=node("g",{class:"datum","pointer-events":"none"});
+    g.append(node("line",{x1:x-.4,y1:y,x2:x+.4,y2:y}),node("line",{x1:x,y1:y-.4,x2:x,y2:y+.4}),node("text",{x:x+.5,y:y-.3},d.id),node("title",{},featureLabel("datum",d.id)));svg.append(g);
+  }
+  for(const e of s.boundary_edges||[]) {
+    const g=node("g",{class:"named-edge","pointer-events":"none"});
+    g.append(node("line",{x1:mm(e.start[0]),y1:mm(e.start[1]),x2:mm(e.end[0]),y2:mm(e.end[1])}),
+      node("text",{x:mm(e.start[0]+e.end[0])/2,y:mm(e.start[1]+e.end[1])/2},e.id));svg.append(g);
+  }
+  for(const a of s.attachments||[]) svg.append(node("circle",{cx:mm(a.position[0]),cy:mm(a.position[1]),r:.4,class:"attachment-anchor","pointer-events":"none"}));
   for (const cutout of s.outline.cutouts) {
     const n=node("polygon",{points:points(cutout.vertices),class:"cutout"});
     n.append(node("title",{},`${cutout.id}. ${featureLabel("cutout",cutout.id)}`));svg.append(n);
@@ -194,7 +204,7 @@ function updateControls() {
   $("source-review").hidden=!sourceReview;
   $("source-diff").textContent=accepted?.source_review?.diff || "";
   $("persistent-controls").disabled=blocked || !!preview || !accepted?.source_writable;
-  $("prepare-lock").disabled=blocked || !!preview || !component || !$("edit-locks").checked || !!component.profile_role;
+  $("prepare-lock").disabled=blocked || !!preview || !component || !$("edit-locks").checked || !!component.profile_role || !!component.source_attachment;
   $("mechanical-controls").disabled=blocked || !!preview || !accepted?.capabilities.mechanical_edit;
   $("undo").disabled = blocked || !accepted?.can_undo; $("redo").disabled = blocked || !accepted?.can_redo;
   $("pending").hidden = !preview;
@@ -202,6 +212,7 @@ function updateControls() {
     (component.source_position_locked && component.source_rotation_locked && component.source_side_locked);
   $("lock").disabled = !component || blocked || !!preview;
   if (component) {
+    if(component.source_attachment) $("notice").textContent=`Pose owned by attachment ${component.source_attachment}; edit the attachment or its datum in Mechanical features.`;
     $("x").disabled=$("y").disabled=!!component.source_position_locked && !$("edit-locks").checked;
     $("rotation").disabled=!!component.source_rotation_locked && !$("edit-locks").checked;
     $("pose-side").disabled=!!component.source_side_locked && !$("edit-locks").checked;
@@ -374,11 +385,16 @@ const featureDefaults={
   "keepout:polygon":{vertices:"[(10mm,10mm), (14mm,10mm), (14mm,14mm), (10mm,14mm)]",side:"front"},
   "copper_keepout:rectangle":{width:"4mm",height:"4mm",origin:"(10mm,10mm)",layers:'"F.Cu"',block_tracks:"true",block_vias:"true",block_pads:"true",block_zones:"true",block_footprints:"false"},
   "copper_keepout:polygon":{vertices:"[(10mm,10mm), (14mm,10mm), (14mm,14mm), (10mm,14mm)]",layers:'"F.Cu"'},
-  "rules:":{minimum_clearance:"0.2mm",minimum_track_width:"0.2mm"}
+  "rules:":{minimum_clearance:"0.2mm",minimum_track_width:"0.2mm"},
+  "datum:":{position:"(5mm,5mm)"},
+  "edge:":{start:"(0mm,0mm)",end:"(40mm,0mm)"},
+  "attach:":{component:"J1",target:"DATUM",offset:"(0mm,0mm)",anchor:"origin",rotation:"0",side:"front"}
 };
 function featureInputs(parameters) {
   parameters={...parameters};
   if ($("feature-kind").value==="keepout" && !("maximum_height" in parameters)) parameters.maximum_height="";
+  if ($("feature-kind").value==="datum") for(const key of ["position","relative_to","offset"]) if(!(key in parameters))parameters[key]="";
+  if ($("feature-kind").value==="attach") for(const key of ["target","position","offset","anchor_pad","anchor_point"]) if(!(key in parameters))parameters[key]="";
   const container=$("feature-parameters");container.replaceChildren();
   for (const [key,value] of Object.entries(parameters)) {
     const label=document.createElement("label");label.textContent=key;
@@ -387,7 +403,7 @@ function featureInputs(parameters) {
 }
 function featureMode() {
   const kind=$("feature-kind").value;
-  if (["hole","rules"].includes(kind)) $("feature-shape").value="";
+  if (["hole","rules","datum","edge","attach"].includes(kind)) $("feature-shape").value="";
   else if (kind==="cutout") $("feature-shape").value="polygon";
   else if (kind.includes("keepout") && $("feature-shape").value==="circle") $("feature-shape").value="rectangle";
   $("feature-name").disabled=["outline","rules"].includes(kind);
