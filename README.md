@@ -25,7 +25,7 @@ builders live under `examples/`, never in the generic `pcbir` package.
 
 A local [mechanical/floorplan editor preview](docs/mechanical-editor.md) displays
 real footprint pads/courtyards, outlines, holes and cutouts. It supports rough
-auto-placement preview/apply, ratsnest filters, legal manual pose previews,
+auto-placement preview/apply, ratsnest filters, legality-checked component dragging,
 temporary locks and undo/redo. **Source saving and mechanical authoring are not
 implemented yet**; session changes are explicitly unsaved. The
 [detailed implementation checklist](docs/mechanical-editor-plan.md) tracks them.
@@ -37,6 +37,9 @@ uv run copper edit-mechanical examples/mechanical_editor_demo.copper --footprint
 The tool opens a loopback-only browser UI; Ctrl+C stops the service.
 Use `--no-browser` to open its printed URL yourself. Footprints must resolve from
 explicit roots or pinned library assets; proxy inspection is opt-in only.
+Scroll the wheel to zoom under the pointer; hold the right mouse button to pan.
+Ordinary left-drags apply after checking (with Undo). Numeric poses and rough
+auto-placement remain explicit previews; apply or discard them before more edits.
 
 A [50 mm circular LED-ring example](docs/round-led-ring.md) uses an offset nRF52832
 as a non-radio controller, twelve GPIO-controlled LEDs and a rear CR2032 holder.

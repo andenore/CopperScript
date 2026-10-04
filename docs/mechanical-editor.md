@@ -174,8 +174,14 @@ Scene export refuses existing files and cannot overwrite source. `--layers`,
 existing physical pipeline. `--allow-proxy-footprints` is labelled inspection-only.
 
 Click 'Preview rough auto-placement', inspect, then apply/discard. Select an
-unlocked component, drag or enter numeric X/Y/angle/side, inspect its checked
-preview and apply explicitly. Temporary locking preserves that pose during
+unlocked component and left-drag it: the pose applies after legality checking and
+can be undone. Enable 'Preview drags before applying' for explicit drag previews.
+Numeric X/Y/angle/side edits still require Apply or Discard; a visible pending
+banner explains why another move cannot start. Wheel zoom is cursor-anchored;
+right-button drag pans, including when a preview is pending. Both navigate only,
+without changing placements. A rejected/conflicting operation reloads the accepted
+scene revision; 'Reload session scene' also refreshes it explicitly (not source).
+Temporary locking preserves that pose during
 subsequent placement. Source locks cannot be edited/unlocked in this increment.
 The demo's R1 allows 45-degree rotations; other demo parts retain their normal
 angle constraints. Nets/side/selected-component toggles filter ratsnest display.
@@ -199,5 +205,18 @@ and serialized in this increment, without a cancellation/progress UI.
 Regression tests: `uv run --extra test pytest tests/test_mechanical_editor.py`.
 Optional browser smoke: with Node, Playwright and a Chromium browser installed,
 run `node tests/browser/mechanical-editor.cjs <private-local-demo-URL>` against
-the demo session. `COPPER_PLAYWRIGHT_MODULE` and `COPPER_BROWSER_EXECUTABLE` may
+the freshly started demo session (the smoke changes temporary poses/locks).
+`COPPER_PLAYWRIGHT_MODULE` and `COPPER_BROWSER_EXECUTABLE` may
 point to explicitly installed test tools. These are not runtime dependencies.
+
+### Source-patch foundation (not yet a save workflow)
+
+`pcbir.editor.source` provides immutable UTF-8 snapshots, exact token-end offsets,
+revision-bound non-overlapping text edits, and targeted board-owned
+`fixed_placement` candidates. Existing comments (even inside a scalar), UTF-8 BOM,
+newlines and unrelated source bytes survive. New constraints are inserted
+deterministically. Shared/duplicate constraints and hierarchical/unowned targets
+are rejected; imports are neither fetched nor edited by this pure patch layer.
+Candidates are syntax-checked only. Full prospective compile/physical validation,
+hierarchical target mapping, explicit lock editing, diff review, atomic saving and
+source undo are still required before enabling a Save button.

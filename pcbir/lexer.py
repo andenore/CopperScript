@@ -21,6 +21,9 @@ class Token:
     kind: TokenKind
     text: str
     location: SourceLocation
+    # Exclusive character offset in the original source, including quotes/escapes.
+    # Optional only for callers constructing synthetic tokens.
+    end_offset: int | None = None
 
 
 class Lexer:
@@ -47,12 +50,12 @@ class Lexer:
                 tokens.append(self._string())
             elif character in "{}[]():;=,.+-":
                 location = self._location()
-                tokens.append(Token(TokenKind.SYMBOL, self._advance(), location))
+                tokens.append(Token(TokenKind.SYMBOL, self._advance(), location, self.offset))
             else:
                 raise CopperScriptError(
                     "LEX001", f"unexpected character {character!r}", self._location()
                 )
-        tokens.append(Token(TokenKind.EOF, "", self._location()))
+        tokens.append(Token(TokenKind.EOF, "", self._location(), self.offset))
         return tuple(tokens)
 
     def _identifier(self) -> Token:
@@ -60,7 +63,7 @@ class Lexer:
         start = self.offset
         while self._peek().isalnum() or self._peek() in "_-":
             self._advance()
-        return Token(TokenKind.IDENTIFIER, self.source[start : self.offset], location)
+        return Token(TokenKind.IDENTIFIER, self.source[start : self.offset], location, self.offset)
 
     def _number(self) -> Token:
         location = self._location()
@@ -71,7 +74,7 @@ class Lexer:
             self._advance()
             while self._peek().isdigit():
                 self._advance()
-        return Token(TokenKind.NUMBER, self.source[start : self.offset], location)
+        return Token(TokenKind.NUMBER, self.source[start : self.offset], location, self.offset)
 
     def _string(self) -> Token:
         location = self._location()
@@ -93,7 +96,7 @@ class Lexer:
         if self.offset >= len(self.source):
             raise CopperScriptError("LEX003", "unterminated string", location)
         self._advance()
-        return Token(TokenKind.STRING, "".join(characters), location)
+        return Token(TokenKind.STRING, "".join(characters), location, self.offset)
 
     def _skip_comment(self) -> None:
         while self.offset < len(self.source) and self._peek() not in "\r\n":

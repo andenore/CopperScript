@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get("token");
 const NS = "http://www.w3.org/2000/svg";
-let accepted, preview = null, selected = "", viewbox = null, drag = null, busy = false;
+let accepted, preview = null, selected = "", viewbox = null, drag = null, pan = null, busy = false;
 const mm = n => n / 1000000;
 const scene = () => preview || accepted;
 function status(message, error = false) { $("status").textContent = message; $("status").classList.toggle("error", error); }
@@ -11,7 +11,11 @@ async function api(path, body) {
     "X-Copper-Token": token || "", ...(body ? {"Content-Type": "application/json"} : {})},
     ...(body ? {body: JSON.stringify(body)} : {})});
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "Editor request failed");
+  if (!response.ok) {
+    const error = new Error(result.error || "Editor request failed");
+    error.status = response.status;
+    throw error;
+  }
   return result;
 }
 function node(tag, attrs = {}, text) {
@@ -29,12 +33,13 @@ function shape(data, cls) {
   return node("polygon",attrs);
 }
 function resetFit() {
+  if (!scene()) return;
   const b = scene().bounds.map(mm), margin = 4;
   viewbox = [b[0]-margin,b[1]-margin,b[2]-b[0]+2*margin,b[3]-b[1]+2*margin];
   $("board").setAttribute("viewBox",viewbox.join(" "));
 }
 function render() {
-  const s = scene(), svg = $("board"); svg.replaceChildren();
+  const s = scene(), svg = $("board"); if (!s) return; svg.replaceChildren();
   const c = s.outline.circle;
   svg.append(c ? node("circle",{cx:mm(c.center[0]),cy:mm(c.center[1]),r:mm(c.radius_nm),class:"outline"}) :
     node("polygon",{points:points(s.outline.vertices),class:"outline"}));
@@ -75,12 +80,16 @@ function render() {
   updateControls();
 }
 function updateControls() {
-  const s = scene(), component = s.components.find(c => c.reference===selected);
+  const s = scene(), component = s?.components.find(c => c.reference===selected);
+  const blocked = busy || !s || !!accepted?.source_stale;
   $("reference").value = selected;
-  $("apply").disabled = !preview || busy; $("discard").disabled = !preview || busy;
-  $("auto").disabled = busy; $("undo").disabled = busy || !accepted.can_undo; $("redo").disabled = busy || !accepted.can_redo;
-  $("move").disabled = !component || busy || !!preview || component.session_locked || component.source_position_locked || component.source_rotation_locked;
-  $("lock").disabled = !component || busy || !!preview;
+  $("apply").disabled = !preview || blocked; $("discard").disabled = !preview || blocked;
+  $("auto").disabled = blocked || !!preview;
+  $("reload").disabled = busy;
+  $("undo").disabled = blocked || !accepted?.can_undo; $("redo").disabled = blocked || !accepted?.can_redo;
+  $("pending").hidden = !preview;
+  $("move").disabled = !component || blocked || !!preview || component.session_locked || component.source_position_locked || component.source_rotation_locked;
+  $("lock").disabled = !component || blocked || !!preview;
   if (component) {
     $("x").value = mm(component.position[0]); $("y").value = mm(component.position[1]);
     $("rotation").value = component.rotation; $("pose-side").value = component.side;
@@ -94,13 +103,25 @@ function populate() {
     for (const value of values) element.add(new Option(value,value)); element.value=old;
   }
 }
-async function operation(action, fields={}) {
-  if (busy) return; busy=true; updateControls(); status(`${action}: working…`);
+async function operation(action, fields={}, applyImmediately=false) {
+  if (busy || !accepted) return; busy=true; updateControls(); status(`${action}: working…`);
   try {
-    const result = await api("/api/operation",{action,revision:accepted.revision,...fields});
+    let result = await api("/api/operation",{action,revision:accepted.revision,...fields});
+    if (result.preview && applyImmediately) {
+      // The existing two-phase API validates both operations. Never apply using
+      // an old revision: another editor may have changed the pending pose.
+      accepted.revision=result.preview.revision;
+      result=await api("/api/operation",{action:"apply",revision:result.preview.revision});
+    }
     if (result.preview) {preview=result.preview; accepted.revision=preview.revision; status("Preview — inspect, then apply or discard. Source remains unchanged.");}
     else {accepted=result.scene;preview=null;status("Temporary session updated. Source remains unchanged.");}
-  } catch (error) {preview=null;status(error.message,true);}
+  } catch (error) {
+    preview=null;
+    // Recover the authoritative revision after conflicts and rejected poses.
+    // Otherwise every subsequent edit can fail until the page is reloaded.
+    try {accepted=await api("/api/scene");populate();} catch (_) { /* Keep the original failure visible. */ }
+    status(`${error.message}${error.status===409 && !accepted?.source_stale ? " Scene reloaded; retry your edit." : ""}`,true);
+  }
   finally {busy=false;render();}
 }
 function svgPoint(event) {
@@ -108,14 +129,31 @@ function svgPoint(event) {
   return [p.x,p.y];
 }
 function startDrag(event,component,g) {
-  if (busy || preview) return;
+  if (event.button!==0 || busy || drag || pan || accepted?.source_stale) return;
   selected=component.reference; $("reference").value=selected; updateControls();
+  if (preview) {status("Apply or discard the pending preview before moving another component.");return;}
   const start=svgPoint(event);
   if (component.session_locked || component.source_position_locked || component.source_rotation_locked) {render();return;}
   const members=scene().components.filter(c=>c.reference===component.reference || (component.macro && c.macro===component.macro));
-  drag={component,g,start,last:start,members:new Set(members.map(c=>c.reference))}; g.classList.add("dragging"); $("board").setPointerCapture(event.pointerId);
+  drag={component,g,start,last:start,pointerId:event.pointerId,members:new Set(members.map(c=>c.reference))}; g.classList.add("dragging"); $("board").setPointerCapture(event.pointerId);
 }
+$("board").addEventListener("contextmenu",event=>event.preventDefault());
+$("board").addEventListener("pointerdown",event=>{
+  if (event.button!==2 || !viewbox || drag || pan) return;
+  event.preventDefault();
+  const inverse=$("board").getScreenCTM().inverse();
+  const start=new DOMPoint(event.clientX,event.clientY).matrixTransform(inverse);
+  pan={start,inverse,viewbox:[...viewbox],pointerId:event.pointerId};
+  $("board").classList.add("panning");
+  $("board").setPointerCapture(event.pointerId);
+});
 $("board").addEventListener("pointermove",event=>{
+  if (pan && event.pointerId===pan.pointerId) {
+    const p=new DOMPoint(event.clientX,event.clientY).matrixTransform(pan.inverse);
+    viewbox=[pan.viewbox[0]+pan.start.x-p.x,pan.viewbox[1]+pan.start.y-p.y,...pan.viewbox.slice(2)];
+    $("board").setAttribute("viewBox",viewbox.join(" "));return;
+  }
+  if (drag && event.pointerId!==drag.pointerId) return;
   if (!drag) return; drag.last=svgPoint(event);
   const dx=drag.last[0]-drag.start[0],dy=drag.last[1]-drag.start[1];
   for (const g of $("board").querySelectorAll(".component")) if (drag.members.has(g.dataset.reference)) g.setAttribute("transform",`translate(${dx} ${dy})`);
@@ -131,22 +169,52 @@ $("board").addEventListener("pointermove",event=>{
   }
 });
 $("board").addEventListener("pointerup",event=>{
-  if (!drag) return; const d=drag;drag=null;
+  if (pan && event.pointerId===pan.pointerId) {endPan();return;}
+  if (!drag || event.pointerId!==drag.pointerId) return; const d=drag;drag=null;
+  if ($("board").hasPointerCapture(event.pointerId)) $("board").releasePointerCapture(event.pointerId);
   if (Math.hypot(d.last[0]-d.start[0],d.last[1]-d.start[1])<.01) {render();return;}
   const snap=Number($("snap").value); if (!Number.isFinite(snap)||snap<=0) {render();status("Snap must be positive",true);return;}
   const x=Math.round((mm(d.component.position[0])+d.last[0]-d.start[0])/snap)*snap;
   const y=Math.round((mm(d.component.position[1])+d.last[1]-d.start[1])/snap)*snap;
-  operation("move",{reference:d.component.reference,x_nm:Math.round(x*1e6),y_nm:Math.round(y*1e6),rotation:d.component.rotation,side:d.component.side});
+  operation("move",{reference:d.component.reference,x_nm:Math.round(x*1e6),y_nm:Math.round(y*1e6),rotation:d.component.rotation,side:d.component.side},!$("preview-drags").checked);
 });
-$("board").addEventListener("pointercancel",()=>{drag=null;render();});
+function endPan() {
+  const id=pan?.pointerId;pan=null;$("board").classList.remove("panning");
+  if (id!==undefined && $("board").hasPointerCapture(id)) $("board").releasePointerCapture(id);
+}
+function cancelGesture() {endPan();drag=null;render();}
+$("board").addEventListener("pointercancel",cancelGesture);
+$("board").addEventListener("lostpointercapture",()=>{if(drag||pan) cancelGesture();});
 $("reference").addEventListener("change",()=>{selected=$("reference").value;render();});
 for (const id of ["side","net","airwires","selected-only","zone-nets"]) $(id).addEventListener("change",render);
 for (const [id,action] of [["auto","auto_place"],["apply","apply"],["discard","discard"],["undo","undo"],["redo","redo"]]) $(id).onclick=()=>operation(action);
 $("lock").onclick=()=>operation("lock",{reference:selected,locked:!scene().components.find(c=>c.reference===selected).session_locked});
 $("move").onclick=()=>operation("move",{reference:selected,x_nm:Math.round(Number($("x").value)*1e6),y_nm:Math.round(Number($("y").value)*1e6),rotation:$("rotation").value,side:$("pose-side").value});
 $("fit").onclick=()=>{resetFit();render();};
-function zoom(factor) {const [x,y,w,h]=viewbox;viewbox=[x+w*(1-factor)/2,y+h*(1-factor)/2,w*factor,h*factor];render();}
+function zoom(factor,anchor) {
+  if (!viewbox || drag || pan) return;
+  const [x,y,w,h]=viewbox;
+  // Keep the cursor's world coordinate fixed and bound the zoom scale.
+  factor=Math.max(0.1/w,Math.min(100000/w,factor));
+  const [ax,ay]=anchor||[x+w/2,y+h/2];
+  viewbox=[ax+(x-ax)*factor,ay+(y-ay)*factor,w*factor,h*factor];
+  $("board").setAttribute("viewBox",viewbox.join(" "));
+}
+$("board").addEventListener("wheel",event=>{
+  event.preventDefault();
+  const unit=event.deltaMode===1 ? 16 : event.deltaMode===2 ? $("board").clientHeight : 1;
+  zoom(Math.exp(Math.max(-1,Math.min(1,event.deltaY*unit*.0015))),viewbox ? svgPoint(event) : undefined);
+},{passive:false});
 $("zoom-in").onclick=()=>zoom(.8); $("zoom-out").onclick=()=>zoom(1.25);
-api("/api/scene").then(s=>{
-  accepted=s;populate();render();status(`${s.board}: ${s.components.length} components; ${s.ratsnest.length} airwires. ${s.placement_legal ? "Placement legal." : "Initial inspection placement needs legalization."} ${Object.keys(s.warnings).length ? "Footprint/omission warnings are present in scene data." : ""}`);
-}).catch(error=>status(error.message,true));
+async function reloadScene() {
+  if (busy) return;busy=true;updateControls();
+  try {
+    const s=await api("/api/scene");preview=null;
+    accepted=s;populate();render();
+    status(s.source_stale ? "Source changed externally; restart the editor before editing." :
+      `${s.board}: ${s.components.length} components; ${s.ratsnest.length} airwires. ${s.placement_legal ? "Placement legal." : "Initial inspection placement needs legalization."} ${Object.keys(s.warnings).length ? "Footprint/omission warnings are present in scene data." : ""}`,s.source_stale);
+  } catch(error) {status(error.message,true);}
+  finally {busy=false;updateControls();}
+}
+$("reload").onclick=reloadScene;
+updateControls();reloadScene();

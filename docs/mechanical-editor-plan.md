@@ -24,10 +24,13 @@ No board-specific data or algorithms belong in `pcbir`.
    zoom/fit, mechanical features, numeric pose/drag preview, ratsnest/net/selected-
    component filters, source/session lock distinction, apply/discard/undo/redo.
    Clearly label read-only source and unsupported mechanical editing.
+   Follow-up: checked drags now apply immediately by default (optional previews),
+   wheel zoom anchors under the pointer, right drag pans, and conflict errors
+   refresh the accepted revision rather than leaving subsequent edits blocked.
 7. [x] Add CLI launch and deterministic scene export, locked/offline/root/profile
    settings and explicit template/macro loading. Default to real footprints;
    proxy inspection requires explicit opt-in and visible warnings.
-8. [ ] Unit/HTTP/CLI/packaging tests, browser smoke and real-footprint LED-ring
+8. [x] Unit/HTTP/CLI/packaging tests, browser smoke and real-footprint LED-ring
    inspection. Record commands/results and first-delivery limitations.
 
 Acceptance: open a real board, see its true outline and footprints, preview and
@@ -41,6 +44,11 @@ bytes were modified. Macro-only connected nets produce no artificial airwires.
    encoding and newline preservation. Tests for nested/imported/hierarchical files.
 10. [ ] Build targeted patch operations for existing constraint properties and
     deterministic new declarations. Detect ambiguous/multiple/unowned rules.
+    Initial slice implemented: immutable UTF-8/BOM snapshots, token-end spans,
+    revision-bound candidate patches for direct board-owned fixed placements,
+    comment/newline preservation and shared/duplicate ownership rejection.
+    General declaration indexing and hierarchical target mapping remain open;
+    these pure syntax-checked candidates are not exposed as a Save operation.
 11. [ ] Add position-only, rotation-only, side and full-pose lock editing with
     explicit conflict resolution; move source-locked parts only in edit-lock mode.
 12. [ ] Map resolved instance targets to valid source references. Do not edit
@@ -121,3 +129,31 @@ board/source revision, browser actions and explicit remaining limitations.
   the exact graph/tree on release. Macro materialization failures are explicit
   warnings with no private-copper credit. Async/cancel/progress, copper overlays
   and copper-keepout rendering remain later work.
+
+### Continuous editing/navigation and source-patch foundation — 2026-10-04
+
+- Default drags now validate then apply in one UI operation using the existing
+  revision-bound preview/apply protocol. Undo remains available. Explicit drag
+  previews are opt-in; numeric/auto-placement previews retain Apply/Discard and
+  show a blocking-state banner. Revision conflicts reload accepted state.
+- Headless installed Chrome smoke passed consecutive drags, live airwires,
+  explicit preview/discard, cursor-anchored wheel zoom, right-button panning
+  starting on a footprint without changing its pose, and second-client conflict
+  recovery. Existing auto-placement, 45-degree rotation and history checks pass;
+  zero page errors. Screenshot: ignored `build/editor-interaction.png`.
+- Real LED-ring browser inspection passed: true circle, 33 front/1 rear
+  components, filters and wheel/fit; zero page errors, no mutations. Screenshot
+  inspected at ignored `build/editor-led-ring.png`; source SHA remains the value
+  recorded above. This closes item 8's visual inspection gap.
+- Source patching has 35 tests: byte-exact UTF-8/BOM/newline/comment preservation,
+  scalar token offsets/escapes, deterministic insertion, compile/electrical
+  equality probe, stale/overlapping edit rejection, ambiguous/shared constraints,
+  imported-content isolation and invalid pose values. No save endpoint or source
+  mutation was added; items 9–15 remain incomplete as detailed above.
+- Updated wheel builds with bundled UI assets and the new source module. No
+  runtime dependencies added.
+- Final regression command: `pytest tests/test_editor_source.py
+  tests/test_mechanical_editor.py tests/test_compiler.py tests/test_cli.py
+  tests/test_layout.py tests/test_mechanical_language.py
+  tests/test_internal_pad_connections.py tests/test_rigid_clusters.py
+  -q -o addopts=''` — 181 passed.

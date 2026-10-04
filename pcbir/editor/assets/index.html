@@ -6,10 +6,12 @@
 <header><h1>CopperScript <span>mechanical / floorplan preview</span></h1>
 <p id="notice">Source is read-only. Temporary changes are not saved.</p></header>
 <nav aria-label="Placement commands">
-<button id="auto">Preview rough auto-placement</button><button id="apply" disabled>Apply preview</button>
-<button id="discard" disabled>Discard preview</button><button id="undo">Undo</button><button id="redo">Redo</button>
+<button id="auto" disabled>Preview rough auto-placement</button><button id="apply" disabled>Apply preview</button>
+<button id="discard" disabled>Discard preview</button><button id="undo" disabled>Undo</button><button id="redo" disabled>Redo</button>
+<button id="reload">Reload session scene</button>
 <button id="fit">Fit board</button><button id="zoom-in">Zoom +</button><button id="zoom-out">Zoom −</button>
 </nav>
+<p id="pending" role="status" hidden>Preview pending: apply or discard it to resume placement editing. Zoom and pan remain available.</p>
 <main><aside>
 <h2>View</h2>
 <label><input id="airwires" type="checkbox" checked> Ratsnest</label>
@@ -26,7 +28,8 @@
 <label>Placement side <select id="pose-side"><option value="front">Front</option><option value="back">Rear</option></select></label>
 <button id="move" disabled>Preview pose</button><button id="lock" disabled>Lock temporary pose</button>
 <label>Drag snap (mm) <input id="snap" type="number" min="0.001" value="0.1" step="0.1"></label>
-<p>Drag a movable footprint for a checked preview. Apply explicitly. Source locks remain read-only.</p>
+<label><input id="preview-drags" type="checkbox"> Preview drags before applying</label>
+<p>Left-drag moves a movable footprint after legality checking; Undo reverses it. Scroll to zoom under the pointer; right-drag to pan. Numeric poses and auto-placement require Apply or Discard. Source locks remain read-only.</p>
 <h2>Scope</h2><p>Outline, cutouts and holes are visible. Mechanical authoring and source saving are not implemented yet. Ratsnest is a guide, not routing.</p>
 <details><summary>Footprint / source warnings</summary><pre id="warnings"></pre></details>
 </aside>
