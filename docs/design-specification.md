@@ -1114,3 +1114,20 @@ CopperLib; compiler code contains no board-standard geometry. Mechanical fit
 alone is not host electrical compatibility, RF or manufacturing qualification.
 See [profile specification](mechanical-profiles.md) and
 [implementation plan](mechanical-profiles-plan.md).
+
+### Real host-pattern acceptance example: CM4
+
+The [CM4 carrier](../examples/cm4_baseboard/README.md) exercises two explicit
+connector bindings and four mounting holes from CopperLib, composed with a
+project-owned outline and antenna keepout. The soldered receptacles are separate
+BOM components; the removable module is not an invented additional footprint.
+Socket numbering is local (1..100 for each socket), with CM4 pin 101 mapping to
+the second socket's pad 1. All fitted grounds and required parallel power
+contacts retain individual external connections; no internal-connectivity waiver.
+
+Passive carrier sockets do not stand in for a complete active SoM device model.
+Their accepted contact/mechanical facts must not imply validated peripheral mux,
+firmware, power sequencing, RF performance or CM5 compatibility. A legal
+placement/zero clearance violations is not a routed or production-ready board.
+Module body keepouts and antenna copper clearance are separate requirements;
+the current socket-corridor representation still needs assembled 3D inspection.

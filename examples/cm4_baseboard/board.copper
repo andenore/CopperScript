@@ -1,0 +1,78 @@
+// Minimal CM4 eMMC carrier. Not CM4 Lite / CM5 and not yet fabrication-qualified.
+// The Compute Module itself is plugged in, not a soldered carrier BOM item.
+board CM4Baseboard {
+    import cm4 "github.com/andenore/CopperLib/packages/raspberry_pi_cm4";
+    import carrier "./mechanics";
+    import basic "github.com/andenore/CopperLib/packages/assembly_basics";
+
+    component J_CM4_GPIO: cm4.CM4_GPIO_SOCKET { value = "DF40C-100DS-0.4V(51)"; }
+    component J_CM4_HS: cm4.CM4_HS_SOCKET { value = "DF40C-100DS-0.4V(51)"; }
+    component J_POWER: cm4.HEADER_1X02 { value = "5V IN / GND"; }
+    component J_UART: cm4.HEADER_1X04 { value = "3V3 sense / TX / RX / GND"; }
+    component J_GPIO: cm4.HEADER_1X06 { value = "3V3 / GPIO2 / GPIO3 / GPIO17 / GPIO27 / GND"; }
+    component J_ENABLE: cm4.HEADER_1X02 { value = "GLOBAL_EN / GND: short to power off"; }
+    component C_VREF: basic.SAMSUNG_CL05B104KO5NNNC { value = 100nF; }
+    component D1: basic.KENTO_KT0603R;
+    component R_LED: basic.UNIROYAL_0603WAF1002T5E { value = 10kohm; }
+
+    net V5 {
+        J_POWER.1;
+        J_CM4_GPIO.V5_77; J_CM4_GPIO.V5_79; J_CM4_GPIO.V5_81;
+        J_CM4_GPIO.V5_83; J_CM4_GPIO.V5_85; J_CM4_GPIO.V5_87;
+    }
+    // Tie both CM4 3V3 output contacts together on the carrier and to GPIO_VREF.
+    // No independent 3V3 injection. The external source here is the mated CM4.
+    net V3V3 {
+        J_CM4_GPIO.V3V3_84; J_CM4_GPIO.V3V3_86; J_CM4_GPIO.GPIO_VREF;
+        J_UART.1; J_GPIO.1; C_VREF.1; R_LED.1;
+    }
+    net GND {
+        J_POWER.2; J_UART.4; J_GPIO.6; J_ENABLE.2; C_VREF.2;
+        J_CM4_GPIO.GND_1; J_CM4_GPIO.GND_2; J_CM4_GPIO.GND_7;
+        J_CM4_GPIO.GND_8; J_CM4_GPIO.GND_13; J_CM4_GPIO.GND_14;
+        J_CM4_GPIO.GND_22; J_CM4_GPIO.GND_23; J_CM4_GPIO.GND_32;
+        J_CM4_GPIO.GND_33; J_CM4_GPIO.GND_42; J_CM4_GPIO.GND_43;
+        J_CM4_GPIO.GND_52; J_CM4_GPIO.GND_53; J_CM4_GPIO.GND_59;
+        J_CM4_GPIO.GND_60; J_CM4_GPIO.GND_65; J_CM4_GPIO.GND_66;
+        J_CM4_GPIO.GND_71; J_CM4_GPIO.GND_74; J_CM4_GPIO.GND_98;
+        J_CM4_HS.GND_107; J_CM4_HS.GND_108; J_CM4_HS.GND_113;
+        J_CM4_HS.GND_114; J_CM4_HS.GND_119; J_CM4_HS.GND_120;
+        J_CM4_HS.GND_125; J_CM4_HS.GND_126; J_CM4_HS.GND_131;
+        J_CM4_HS.GND_132; J_CM4_HS.GND_137; J_CM4_HS.GND_138;
+        J_CM4_HS.GND_144; J_CM4_HS.GND_150; J_CM4_HS.GND_155;
+        J_CM4_HS.GND_156; J_CM4_HS.GND_161; J_CM4_HS.GND_162;
+        J_CM4_HS.GND_167; J_CM4_HS.GND_168; J_CM4_HS.GND_173;
+        J_CM4_HS.GND_174; J_CM4_HS.GND_179; J_CM4_HS.GND_180;
+        J_CM4_HS.GND_185; J_CM4_HS.GND_186; J_CM4_HS.GND_191;
+        J_CM4_HS.GND_192; J_CM4_HS.GND_197; J_CM4_HS.GND_198;
+    }
+    // TX/RX names below describe the CM4 side. Connect host RX to CM4_TX.
+    net CM4_TX { J_CM4_GPIO.GPIO14; J_UART.2; }
+    net CM4_RX { J_CM4_GPIO.GPIO15; J_UART.3; }
+    net GPIO2 { J_CM4_GPIO.GPIO2; J_GPIO.2; }
+    net GPIO3 { J_CM4_GPIO.GPIO3; J_GPIO.3; }
+    net GPIO17 { J_CM4_GPIO.GPIO17; J_GPIO.4; }
+    net GPIO27 { J_CM4_GPIO.GPIO27; J_GPIO.5; }
+    net GLOBAL_EN { J_CM4_GPIO.GLOBAL_EN; J_ENABLE.1; }
+    net ACT_LED_A { R_LED.2; D1.A; }
+    net ACT_LED_K { D1.K; J_CM4_GPIO.Pi_nLED_Activity; }
+
+    supply V5 { voltage = 5V; external = true; }
+    supply V3V3 { voltage = 3.3V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+
+    mechanical {
+        use carrier.CM4Carrier as base {
+            gpio = J_CM4_GPIO;
+            high_speed = J_CM4_HS;
+        }
+    }
+    constraint fixed_placement(J_POWER) { x = 60mm; y = 61mm; rotation = 90; side = front; }
+    constraint fixed_placement(J_UART) { x = 60mm; y = 17mm; rotation = 0; side = front; }
+    constraint fixed_placement(J_GPIO) { x = 60mm; y = 34mm; rotation = 0; side = front; }
+    constraint fixed_placement(J_ENABLE) { x = 57mm; y = 52mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_VREF) { x = 6mm; y = 46mm; rotation = 90; side = front; }
+    constraint fixed_placement(R_LED) { x = 6mm; y = 38mm; rotation = 90; side = front; }
+    constraint fixed_placement(D1) { x = 6mm; y = 34mm; rotation = 90; side = front; }
+    constraint copper_zone(GND) { layers = "In1.Cu,B.Cu"; inset = 0.5mm; pad_connection = solid; }
+}

@@ -22,8 +22,11 @@ Checked items require passing evidence; no example geometry belongs in `pcbir`.
 
 Follow-ups (not prerequisites for the above initial vertical):
 
-9. [ ] Publish reviewed, revision-specific standard-board profiles in CopperLib,
-   including Raspberry Pi variants once exact required boundary geometry exists.
+9. [x] Create a source-backed CM4 mounting fragment in CopperLib and a real
+   `examples/cm4_baseboard` carrier. Verify both socket orientations, all 200
+   pad centres, four mounting holes and component/antenna reservations. Other
+   Raspberry Pi variants/HAT profiles remain future work; no compatibility
+   claim follows from sharing a connector family.
 10. [ ] Add exact rounded/arc outlines, mating axes/faces, height/host-interference
     contracts end-to-end; never claim unsupported standard compliance.
 11. [ ] Extend editor persistence with imported-owner guards, exact diff review
@@ -63,3 +66,20 @@ Follow-ups (not prerequisites for the above initial vertical):
   integration. Updated wheel contents match current IR/resolver/profile/UI files.
 - Initial scope is complete. Follow-ups 9–12 are separate contracts: no standard
   HAT asset, use-site transforms/parameters, source saving, or mating/3D certification.
+
+### CM4 acceptance example
+
+- CopperLib `0d667217d2a6755b61f3725d87dc2f26ab857c05` publishes the source-backed
+  sockets, compact pin/mechanical evidence, generator, four-hole mounting
+  fragment and tests. Its compiler dependency is published `8706292`.
+- `examples/cm4_baseboard/copper.mod` pins that exact GitHub revision, without
+  a local replacement; its lock authenticates 69 library assets.
+- A project copy in a new ignored build directory fetched its dependencies
+  from GitHub with an empty cache, passed locked ERC, then passed locked/offline
+  ERC and real-footprint four-layer placement. No sibling CopperLib was used.
+- Affected compiler/example tests: **150 passed**. CopperLib suite: **46 passed**.
+  All 200 placed contacts match the official CM4IO carrier datum; auto-placement
+  retains both connector poses. Browser inspection passes nine components,
+  four holes, body/antenna keepouts, pose locks and ratsnest toggle.
+- Native KiCad placement-draft DRC: **0 violations, 76 unconnected items**.
+  This example remains unrouted; it is not a manufacturing release.

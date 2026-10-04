@@ -1,0 +1,358 @@
+{
+  "modules": [
+    {
+      "checksum": "sha256:7a43d9a3739236584b05e6bf21edbf45be78f207e1db2615aadc003bb0c588a3",
+      "files": [
+        {
+          "path": "copper.mod",
+          "sha256": "dbff5750456b6baf5531fe2fe5292fca01b3032fdb66354c65358a2f6cfe5e87",
+          "size": 37
+        },
+        {
+          "path": "data/bundles/stm32g0b1/device.json",
+          "sha256": "e84194b02d72d3c61bad00f58d839fa6f868c5dfe2b5b829f992060c0fe6428d",
+          "size": 680
+        },
+        {
+          "path": "data/bundles/stm32g0b1/mux.csv",
+          "sha256": "a6546060f87e8e5f69f4625c1e2b1eb34bc9ade82d7774e87406a24ec97c5e3f",
+          "size": 48
+        },
+        {
+          "path": "data/bundles/stm32g0b1/pads.csv",
+          "sha256": "20bc01b499e0f5356cb1a971c890e5cb06a5c56a14b7496e3692d44a4831da76",
+          "size": 250
+        },
+        {
+          "path": "data/bundles/stm32g0b1/parts/stm32g0b1cbt6/part.json",
+          "sha256": "163230b8f209027c41a6bbfc921502a74665a075a682fad6b6d4572935ed98f4",
+          "size": 464
+        },
+        {
+          "path": "data/bundles/stm32g0b1/parts/stm32g0b1cbt6/pins.csv",
+          "sha256": "e3ebcc3f27085e770166d25f4aec378e0afde297fc0ea4372cc7b19e56a53c23",
+          "size": 298
+        },
+        {
+          "path": "data/bundles/stm32g0b1/peripherals.csv",
+          "sha256": "746a85b7e190365b1c8beb28b5566b1eca8f73545210a6c59042caa079f5f0b7",
+          "size": 37
+        },
+        {
+          "path": "data/case-studies/ad4134bcpz/sources.json",
+          "sha256": "47fe83002e2117665acda0ef21104c29445c040819e17d3b8216ad7b315d3248",
+          "size": 334
+        },
+        {
+          "path": "data/case-studies/cases.json",
+          "sha256": "aeda88a2d0c00601b5c1bab7156b3ac84ed0b069dd2e019334887cf6313bcd48",
+          "size": 8257
+        },
+        {
+          "path": "data/case-studies/cyusb4014-fcaxi/sources.json",
+          "sha256": "964c82f475a41a7f6403dc36f3b8bc303a705f7648c3bae16f1a189e49a59fca",
+          "size": 493
+        },
+        {
+          "path": "data/case-studies/index.json",
+          "sha256": "40510e783de00732dac14583e667b5519ef2123b13d8bfbc694e913bacd5771c",
+          "size": 187
+        },
+        {
+          "path": "data/case-studies/nrf52840-qiaa/sources.json",
+          "sha256": "717869acad56824085948d94a1d652842702977794a5c76cacf6fcae7745c056",
+          "size": 765
+        },
+        {
+          "path": "data/case-studies/opa2197id/sources.json",
+          "sha256": "833b1a864369bed4ee0d99e60d4943ab37b3839f0599cc1a72da0b649ba74c57",
+          "size": 409
+        },
+        {
+          "path": "data/cm4/mechanics.json",
+          "sha256": "832c0cdf55306bf1d517109e4a263bcab0aa5de14899f4c896458cc7d49d6474",
+          "size": 1559
+        },
+        {
+          "path": "data/cm4/pinout.json",
+          "sha256": "7332e0b9ea499142360510e463c9b673936af8e3e66d3caa70cb8a46e4f6f178",
+          "size": 12437
+        },
+        {
+          "path": "data/full-vertical/nrf-antenna-hard-macro.json",
+          "sha256": "2af31b661e340aea4a5fadd1f47456a55e1a2e44eb43659d38eec8975f46c5cc",
+          "size": 12422
+        },
+        {
+          "path": "data/full-vertical/nrf52832-qfaa-rf-reference.json",
+          "sha256": "207ff21dda6881717e252cbb9e7f4dadfb0a51827068f7c001d770b700557cac",
+          "size": 2354
+        },
+        {
+          "path": "data/full-vertical/rf-audit.json",
+          "sha256": "081714cca5aea8614c0a1a3870198938323e625c5b6fdaf30819be7d3f877bfe",
+          "size": 2060
+        },
+        {
+          "path": "data/full-vertical/usb-choke-audit.json",
+          "sha256": "3fc689ac3a6b5bf6aec4a7ede31fe29ed68321cc83423bd9f9ff7ca77f01afb7",
+          "size": 1097
+        },
+        {
+          "path": "data/requests.json",
+          "sha256": "1aeba0a701b7e1937198ea08f5d9445cf8addeec0395a71bd0dfbb4b322085e3",
+          "size": 352
+        },
+        {
+          "path": "data/sources.json",
+          "sha256": "7bb20db33168638211872360e0442e23cbf24e1721970aa95afbbcd80c0af9b3",
+          "size": 533
+        },
+        {
+          "path": "footprints/Connector_Debug.pretty/FTSH-105-01-L-DV-007-K.kicad_mod",
+          "sha256": "4c66f92ed67d117b419c23e2c38d2d79a76a899d9680fa25068cba6cb3a44a5c",
+          "size": 1833
+        },
+        {
+          "path": "footprints/LED_SMD.pretty/KENTO_KT0603R.kicad_mod",
+          "sha256": "6af1e7d3d576b9e5ad75a000c6cc2581b7521b57b1bb95978e899c409579240f",
+          "size": 1591
+        },
+        {
+          "path": "footprints/RF_Module.pretty/Quectel_EG800G.kicad_mod",
+          "sha256": "04c7d4959775476212750edb1ed2fc78bc98a30c086a8c183304b86d838b8747",
+          "size": 12400
+        },
+        {
+          "path": "footprints/RF_Module.pretty/u-blox_MAX-M10S.kicad_mod",
+          "sha256": "724ada78323cfac5ad22bdbf96c675f4a8a880340c96e5d194ad09aee330871e",
+          "size": 4385
+        },
+        {
+          "path": "generated/stm32g0b1_device.copper",
+          "sha256": "793e08fc8af337e1fe3e0a892a0fa9aa567c8cc8370f6b2cdf1460f566d33ce0",
+          "size": 1102
+        },
+        {
+          "path": "generated/stm32g0b1cbt6.copper",
+          "sha256": "861271cd0e5eb020a733933657af0f8a04634d05abe05c02273c10743ddb1e72",
+          "size": 1230
+        },
+        {
+          "path": "packages/assembly_basics/capacitor_100nf.copper",
+          "sha256": "d40d56381b45a47e4822ac811cec11a51e26299898d8e1838edaffca5336ade8",
+          "size": 621
+        },
+        {
+          "path": "packages/assembly_basics/capacitor_100pf.copper",
+          "sha256": "7bdcfdd0d33ae36a38b452c6ef12387e6dd246eeaa02f91951edc75d80d0b9a2",
+          "size": 781
+        },
+        {
+          "path": "packages/assembly_basics/capacitor_1uf.copper",
+          "sha256": "07369a95414423738912ade9b5c39d3686b1d290b8e88ff8d2bf14ce0442661b",
+          "size": 627
+        },
+        {
+          "path": "packages/assembly_basics/capacitor_4u7.copper",
+          "sha256": "dd94dc1bc731e350e4ea8b80c496c223fcfe3596193dd960aaed2cd50bc299e1",
+          "size": 629
+        },
+        {
+          "path": "packages/assembly_basics/kento_kt0603r.copper",
+          "sha256": "321582ff510f9677f9e31811a0066f34486bb6d1d8ff6a0d690fcd21276546e4",
+          "size": 852
+        },
+        {
+          "path": "packages/assembly_basics/resistor_10k.copper",
+          "sha256": "74ff74de563229c7aad414129f0ab33310b8f616cd5ef879769541eb60ca04ba",
+          "size": 744
+        },
+        {
+          "path": "packages/full_vertical/button.copper",
+          "sha256": "484252cfbfcefa0521ade7cf295f6c72ca7c5fcc0eb2a9acbe97b09b2f8474a4",
+          "size": 923
+        },
+        {
+          "path": "packages/full_vertical/can_connector.copper",
+          "sha256": "a4ca9837e91d5fd0c9d03f60487a210b00633b15ce741d5b63ab9f7c6a08b9ab",
+          "size": 500
+        },
+        {
+          "path": "packages/full_vertical/debug_header.copper",
+          "sha256": "d82d92a56f5259e4ef998142e737e213a9c2edadea5a936dd8e8af1704ead499",
+          "size": 517
+        },
+        {
+          "path": "packages/full_vertical/eg800g_eu.copper",
+          "sha256": "e4fb4dfdfca1d7d5b397e53485cf4059fe8ae69a22a767ba96abdd9ca3baa6e2",
+          "size": 8851
+        },
+        {
+          "path": "packages/full_vertical/led.copper",
+          "sha256": "f5fbb85e550ad965cbda8a07ae59b573e4a9ba752f9ddb94ea5164aa3b280801",
+          "size": 316
+        },
+        {
+          "path": "packages/full_vertical/lis2dw12.copper",
+          "sha256": "23919e3c337ca139f5d6e78df61aa0ed5cd13784189dab967384b21a7a0b42bc",
+          "size": 1678
+        },
+        {
+          "path": "packages/full_vertical/max_m10s.copper",
+          "sha256": "d5c3ef286e9b47f9d31a54b83e79d230c31c0e847066a4ecf315da89f8c7f62b",
+          "size": 2331
+        },
+        {
+          "path": "packages/full_vertical/nrf52832_device.copper",
+          "sha256": "58d5f119cee2a7705a0a07c5ca62e923f68bf07f55fd220b33733ee715fdc7b4",
+          "size": 5285
+        },
+        {
+          "path": "packages/full_vertical/nrf52832_qfaa.copper",
+          "sha256": "5c3973905b9f553dcd860b0a04beb8826458c1cd4e9f548c5b2ee52069f6abfc",
+          "size": 2865
+        },
+        {
+          "path": "packages/full_vertical/open_drain_driver.copper",
+          "sha256": "81e7bc7da7e71ce94068d1c0bd1534333377ff420b45df4822df68316fc78f58",
+          "size": 499
+        },
+        {
+          "path": "packages/full_vertical/power_tree.copper",
+          "sha256": "b31a602444fb90d25a34efe1d60e7eb5aa587f42b9186cca5c1a01deb48142d2",
+          "size": 2789
+        },
+        {
+          "path": "packages/full_vertical/rf_antenna.copper",
+          "sha256": "cdd68044c733355c0bb7f540836b54ac8639e1bf79d44ece4fff9f7263c7ad17",
+          "size": 933
+        },
+        {
+          "path": "packages/full_vertical/rf_connector.copper",
+          "sha256": "0560b6d38fc0aa454a50cfce2f1a0c7d0652650859801e82895b35efea32573d",
+          "size": 355
+        },
+        {
+          "path": "packages/full_vertical/sim_socket.copper",
+          "sha256": "894656bb3c78261ce383ddd22dd9599c6527c5af4718e15ae86b1a7de15756f3",
+          "size": 919
+        },
+        {
+          "path": "packages/full_vertical/stm32g0c1_device.copper",
+          "sha256": "68e3e11039c33044600b6b596ffd2cbaa1f3adc4eee028bc2235c71c323e853d",
+          "size": 9586
+        },
+        {
+          "path": "packages/full_vertical/stm32g0c1ret6.copper",
+          "sha256": "c489dc4acd114cff184a20428fbcb7e19e08e2e9d77ab855739aa93b0ca1d927",
+          "size": 3328
+        },
+        {
+          "path": "packages/full_vertical/swd_header.copper",
+          "sha256": "56c338f7961b15c9dc69b008214a869e31c0ec72fb4dc7c240d6277d8c01573c",
+          "size": 1183
+        },
+        {
+          "path": "packages/full_vertical/tcan334g.copper",
+          "sha256": "97c366dcac21debc335320d9f5ca389545f0470477b9e3150a0c1a1f10725333",
+          "size": 1174
+        },
+        {
+          "path": "packages/full_vertical/tps62130a.copper",
+          "sha256": "8b418fbb5bdb77d0bba933ede7699734c06c1594d7b2c15f66c2e85327f233e4",
+          "size": 2012
+        },
+        {
+          "path": "packages/full_vertical/tusb320lai.copper",
+          "sha256": "23e2de03e0184ec1e254492371093357e3bdeece8f8935fa2da7484a43af9f46",
+          "size": 1807
+        },
+        {
+          "path": "packages/full_vertical/uart_level_shifter.copper",
+          "sha256": "1b618e6e5d46b2cf531a8f0eff9c2cfc54287ad0710429956d03e86bda878705",
+          "size": 1035
+        },
+        {
+          "path": "packages/full_vertical/usb_c_power_receptacle.copper",
+          "sha256": "1b26ec9de320e690d47bb6259d0b75f1a1c42b224b49f87cee187f156d6c8af9",
+          "size": 918
+        },
+        {
+          "path": "packages/full_vertical/usb_common_mode_choke.copper",
+          "sha256": "ef8d06c779045d4f727f550930f1eba1472592463cd4b8b6582035b3a0d66775",
+          "size": 1253
+        },
+        {
+          "path": "packages/full_vertical/xal4020_222mec.copper",
+          "sha256": "004d96510d7d3f362a7fd625799e59b73810b48e5ae235f21c406f6bad44005c",
+          "size": 627
+        },
+        {
+          "path": "packages/nrf52_demo/cr2032_holder.copper",
+          "sha256": "66b3a114fca6a92874175bd94cd6a337a38492aead7a8c9defb384a4051f4c3c",
+          "size": 1012
+        },
+        {
+          "path": "packages/nrf52_demo/crystal.copper",
+          "sha256": "20ba56a7d295e8f069075dedb6076b6b5bc1f1c7a41564dff758d682bb45035d",
+          "size": 854
+        },
+        {
+          "path": "packages/nrf52_demo/led.copper",
+          "sha256": "7a020a2413004b687ccaaef66f96d75f2d7523cedf2cee99f02e0afa4218bacc",
+          "size": 394
+        },
+        {
+          "path": "packages/raspberry_pi_cm4/gpio_socket.copper",
+          "sha256": "4ac822e45f85b88574a5be20a9a4a51318e8b1d5549cf5afc682e6a474478777",
+          "size": 11519
+        },
+        {
+          "path": "packages/raspberry_pi_cm4/header_2.copper",
+          "sha256": "a714a93b7d311225293904f27ae9123816c71c323ff299718d9ff47d055194d3",
+          "size": 361
+        },
+        {
+          "path": "packages/raspberry_pi_cm4/header_4.copper",
+          "sha256": "0435e8b5e7b644a6193c988533e1227a35fc9172468ac1f9a474b84b2f354ae2",
+          "size": 507
+        },
+        {
+          "path": "packages/raspberry_pi_cm4/header_6.copper",
+          "sha256": "07cdc5b1a33d04c4b7173207061282155ef8fec39e47151245e37e60092ee30e",
+          "size": 653
+        },
+        {
+          "path": "packages/raspberry_pi_cm4/high_speed_socket.copper",
+          "sha256": "665cc05d8b20deecf3580087baf2b00b2095c428ff30d779c33ec7de4c8dc97c",
+          "size": 11397
+        },
+        {
+          "path": "packages/raspberry_pi_cm4/mounting.copper",
+          "sha256": "933afcc2bfb9e22b379905a7a4452a1e27be6b21c4387d9a72c573a962b9c08c",
+          "size": 1783
+        },
+        {
+          "path": "reports/compatibility.json",
+          "sha256": "6f0677d43cd8608d31fe0099fc6df53b50543c312628010a8eb4dc60f68e181e",
+          "size": 13026
+        },
+        {
+          "path": "tests/fixtures/compiler_smoke.copper",
+          "sha256": "06ca9511940f4d2aa3abbc7ac27c92559f1d2a6603bc7e9c1149ec10e56e71a8",
+          "size": 42
+        },
+        {
+          "path": "work-packets/stm32g0b1cbt6-lqfp48-gpio-core.json",
+          "sha256": "97022738c66b7321c284bcf24eb43542f3fa255b3ce2d75943dab563cb702c2b",
+          "size": 208
+        }
+      ],
+      "module": "github.com/andenore/CopperLib",
+      "source": "git:https://github.com/andenore/CopperLib.git",
+      "version": "0d667217d2a6755b61f3725d87dc2f26ab857c05"
+    }
+  ],
+  "schema": "copperscript.package-lock/v1"
+}
