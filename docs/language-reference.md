@@ -532,9 +532,12 @@ constraint copper_zone(GND) {
 ```
 
 `copper_zone` targets exactly one existing net and lowers to an unfilled
-physical zone inside the rectangular board outline. `layers` is required;
+physical zone inside the declared board outline. `layers` is required;
 `inset`, `clearance`, `minimum_width`, and `pad_connection` are optional. The
-selected layers must exist in the chosen physical stackup. A zone declaration
+`island_policy` optionally selects `remove_all`, `keep_all`, or
+`remove_below_area` (the existing default, with a 10 mm² threshold). Use
+`remove_all` to discard disconnected fill rather than waive native warnings.
+The selected layers must exist in the chosen physical stackup. A zone declaration
 does not establish electrical connectivity or fabrication readiness: its
 actual fill and connected copper require later verification.
 

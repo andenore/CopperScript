@@ -373,6 +373,27 @@ def test_blocked_stitches_remain_explicitly_pending() -> None:
     assert not result.board.vias
 
 
+@pytest.mark.parametrize("same_side,block_fill", [(True, False), (False, False), (True, True)])
+def test_large_land_uses_same_side_pour_without_inventing_via_or_fill(same_side, block_fill) -> None:
+    base = _plane_board()
+    footprint = PhysicalFootprint("test/large-land", (
+        FootprintPad("1", Point(0, 0), Size.mm(12, 8)),), Size.mm(12, 8))
+    zone = replace(base.zones[0], layers=(CopperLayer.BACK,))
+    board = replace(base, footprints={footprint.name: footprint},
+        placements=(Placement("J1", footprint.name, Point.mm(10, 6)),),
+        nets=(PhysicalNet("GND", (PadReference("J1", "1"),)),),
+        stackup=Stackup((CopperLayer.FRONT, CopperLayer.BACK)),
+        zones=(zone, replace(zone, id="front-pour", layers=(CopperLayer.FRONT,))) if same_side else (zone,),
+        copper_keepouts=(CopperKeepout("no-front-fill", (CopperLayer.FRONT,), zone.outline),)
+            if block_fill else (),
+    )
+    result = stitch_zone_pads(board, PlaneStitchOptions(include_surface_zones=True))
+    assert result.complete is (same_side and not block_fill)
+    assert not result.board.tracks and not result.board.vias
+    assert not result.board.zone_fills
+    assert result.board.metadata["fabrication_ready"] == "false"
+
+
 def test_filled_capped_ground_via_in_pad_rescues_only_qualified_board() -> None:
     base = _plane_board()
     small_zone = replace(base.zones[0], outline=PolygonWithHoles(PolygonRing((

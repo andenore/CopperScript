@@ -1054,3 +1054,12 @@ off-pad access stubs only when actually used. Duplicate numbers alone, device
 functionality and undeclared internal paths never create such connectivity.
 Do not repeat a neutral layer-cost fallback when all layer ranks and heading
 preferences are inactive: that is an identical search, not a new strategy.
+
+Expose the physical IR's island-removal policy through `copper_zone` constraints.
+Two-sided surface pours may bridge regions separated on one layer; disconnected
+fill can be removed with `island_policy = "remove_all"`. This is not a DRC waiver.
+Retain useful legal through-via contacts, but when a large land cannot escape,
+a declared, non-keepout same-side pour is a prospective contact instead of
+forcing redundant via-in-pad. Never use this prospective contact as a surface
+chain anchor or filled connectivity proof. Zero opens, islands and other native
+violations on the exact completed board remain mandatory for routing closure.

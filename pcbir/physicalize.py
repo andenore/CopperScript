@@ -34,6 +34,7 @@ from .physical import (
     CopperZone,
     DesignRules,
     FootprintPad,
+    IslandPolicy,
     PadReference,
     PadViaInPadRule,
     PhysicalBoard,
@@ -473,7 +474,7 @@ def _lower_physical_constraints(
             if net not in net_names:
                 raise ValueError(f"copper_zone references unknown net {net!r}")
             parameters = constraint.parameters
-            unknown = set(parameters) - {"layers", "inset", "pad_connection", "clearance", "minimum_width"}
+            unknown = set(parameters) - {"layers", "inset", "pad_connection", "clearance", "minimum_width", "island_policy"}
             if unknown:
                 raise ValueError(f"unknown copper_zone parameter {sorted(unknown)[0]!r}")
             layers = _constraint_layers(parameters.get("layers"))
@@ -508,6 +509,7 @@ def _lower_physical_constraints(
             # Without a general polygon-boolean engine, reject an inset which
             # intersects a void instead of exporting an invalid hole contour.
             BoardOutline(zone_vertices, cutouts=outline.cutouts)
+            island_policy = IslandPolicy(str(parameters.get("island_policy", "remove_below_area")))
             zone = CopperZone(
                 id=constraint.constraint_id or f"zone:{net}:{index}",
                 net=net,
@@ -517,6 +519,9 @@ def _lower_physical_constraints(
                 clearance_nm=_optional_constraint_length(parameters, "clearance"),
                 minimum_width_nm=_optional_constraint_length(parameters, "minimum_width") or nm_from_mm("0.25"),
                 pad_connection=ZoneConnection(str(parameters.get("pad_connection", "thermal"))),
+                island_policy=island_policy,
+                minimum_island_area_nm2=(10_000_000_000_000
+                    if island_policy is IslandPolicy.REMOVE_BELOW_AREA else None),
             )
             zones.append(zone)
             continue

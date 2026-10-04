@@ -19,7 +19,7 @@ from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.drc import run_physical_drc
 from pcbir.physical import (
     BoardOutline, CopperLayer, CopperZone, FootprintPad, NetRoutingRule, PadKind, PadReference,
-    PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, Size,
+    PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, Size, BoardSide, IslandPolicy,
     PolygonRing, PolygonWithHoles, Via, ZoneConnection, nm_from_mm,
 )
 
@@ -308,3 +308,38 @@ def test_installed_kicad_accepts_pruned_fanout_route() -> None:
     )
     evidence = verify_filled_planes(detailed.board, kicad_cli=Path(executable))
     assert evidence.passed, evidence.findings
+
+
+def test_native_two_sided_pour_large_land_needs_real_layer_bridge() -> None:
+    from pcbir.plane import PlaneStitchOptions, stitch_zone_pads
+    executable = shutil.which("kicad-cli")
+    if executable is None:
+        installed = Path("C:/Program Files/KiCad/10.0/bin/kicad-cli.exe")
+        if not installed.is_file():
+            pytest.skip("KiCad CLI not installed")
+        executable = str(installed)
+    small = PhysicalFootprint("small", (
+        FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),), Size.mm(2, 2))
+    large = PhysicalFootprint("large", (
+        FootprintPad("1", Point(0, 0), Size.mm(12, 8)),), Size.mm(14, 10))
+    outline = PolygonWithHoles(PolygonRing((Point.mm(1, 1), Point.mm(29, 1),
+        Point.mm(29, 19), Point.mm(1, 19))))
+    board = PhysicalBoard("TwoSidedGround", BoardOutline.rectangle(30, 20),
+        {small.name: small, large.name: large},
+        (Placement("J1", small.name, Point.mm(5, 10)),
+         Placement("J2", large.name, Point.mm(20, 10), side=BoardSide.BACK)),
+        (PhysicalNet("GND", (PadReference("J1", "1"), PadReference("J2", "1"))),),
+        zones=(CopperZone("ground", "GND", (CopperLayer.FRONT, CopperLayer.BACK),
+            outline, pad_connection=ZoneConnection.SOLID,
+            island_policy=IslandPolicy.REMOVE_ALL, minimum_island_area_nm2=None),))
+    stitched = stitch_zone_pads(board, PlaneStitchOptions(include_surface_zones=True))
+    assert stitched.complete
+    assert stitched.added_via_count == 1
+    assert not stitched.board.zone_fills
+    evidence = verify_filled_planes(stitched.board, kicad_cli=Path(executable))
+    assert evidence.passed, evidence.findings
+    assert evidence.unconnected_count == evidence.island_count == evidence.other_violation_count == 0
+    # Labelled pours on two layers are not connected without physical copper.
+    unbridged = verify_filled_planes(replace(board, vias=(), tracks=()), kicad_cli=Path(executable))
+    assert not unbridged.passed
+    assert unbridged.unconnected_count > 0

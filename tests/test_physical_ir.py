@@ -5,6 +5,7 @@ import pytest
 from pcbir import (
     AlignmentAxis,
     BoardOutline,
+    CopperLayer,
     FootprintPad,
     PadReference,
     PhysicalBoard,
@@ -227,6 +228,38 @@ def test_source_ground_plane_rejects_unknown_net_and_invalid_layer() -> None:
     )
     with pytest.raises(ValueError, match="outside the stackup"):
         prototype_physicalize(valid, PrototypePhysicalOptions(copper_layers=2))
+
+
+@pytest.mark.parametrize("policy", ["remove_all", "keep_all", "remove_below_area"])
+def test_source_zone_island_policy_lowers_to_existing_ir_enum(policy) -> None:
+    electrical = compile_source(f'''
+        board Ground {{
+            use library "tiny";
+            component R1: RESISTOR {{ footprint = "0402"; }}
+            net GND {{ R1.1; }}
+            constraint copper_zone(GND) {{
+                layers = "F.Cu,B.Cu"; island_policy = "{policy}";
+            }}
+        }}
+    ''')
+    zone = prototype_physicalize(electrical).zones[0]
+    assert zone.island_policy.value == policy
+    assert zone.layers == (CopperLayer.FRONT, CopperLayer.BACK)
+    assert zone.minimum_island_area_nm2 == (
+        10_000_000_000_000 if policy == "remove_below_area" else None)
+
+
+def test_source_zone_rejects_unknown_island_policy() -> None:
+    electrical = compile_source('''
+        board Ground {
+            use library "tiny";
+            component R1: RESISTOR { footprint = "0402"; }
+            net GND { R1.1; }
+            constraint copper_zone(GND) { layers = "B.Cu"; island_policy = "waive"; }
+        }
+    ''')
+    with pytest.raises(ValueError, match="IslandPolicy"):
+        prototype_physicalize(electrical)
 
 
 def test_routing_constraint_lowers_complete_source_profile_and_ownership() -> None:

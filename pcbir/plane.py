@@ -191,6 +191,17 @@ def stitch_zone_pads(
                     (*board.tracks, *added_tracks), (*board.vias, *added_vias),
                 )
                 if choice is None:
+                    # A declared same-side pour is another *prospective*
+                    # contact. Do not force a redundant through-via in a large
+                    # land merely because an opposite-side pour also exists.
+                    # This is not connectivity evidence: native refill must
+                    # still prove all pads and both layers actually join.
+                    if any(side in zone.layers and _point_in_zone(position, zone.outline)
+                           for zone in zones) and not any(
+                            k.block_zones and side in k.layers
+                            and _point_in_zone(position, k.outline) for k in keepouts):
+                        internal_contact = True
+                        continue
                     if group is None:
                         pending_lands.append(_PendingContact(net, reference, position, side, width))
                     continue
