@@ -217,8 +217,47 @@ point to explicitly installed test tools. These are not runtime dependencies.
 revision-bound non-overlapping text edits, and targeted board-owned
 `fixed_placement` candidates. Existing comments (even inside a scalar), UTF-8 BOM,
 newlines and unrelated source bytes survive. New constraints are inserted
-deterministically. Shared/duplicate constraints and hierarchical/unowned targets
-are rejected; imports are neither fetched nor edited by this pure patch layer.
-Candidates are syntax-checked only. Full prospective compile/physical validation,
-hierarchical target mapping, explicit lock editing, diff review, atomic saving and
-source undo are still required before enabling a Save button.
+deterministically. Shared/duplicate constraints and unowned imported poses are
+rejected; imports are neither fetched nor edited by this pure patch layer.
+
+## Persistent editing and initial mechanical authoring
+
+The local editor now supports reviewed source saves. Select a component, enable
+**Edit source locks explicitly**, choose position/rotation/side independently,
+enter the intended pose, and choose **Review persistent pose / locks**. Review
+the complete source diff and geometry before **Save reviewed source**. Clearing
+a lock removes only its owned properties. Imported module/profile poses require
+editing their public binding or original owner; the editor reports this conflict.
+
+Board-owned constraints may address resolved descendants as `MODULE/COMPONENT`.
+Electrical connections still cross module ports. Movable automatic placements
+remain session seeds and are never silently converted into fixed constraints.
+
+Mechanical features have stable IDs and exact CopperScript literal properties.
+The palette supports circle/rectangle/polygon outlines, NPTH holes with screw-head
+clearance, polygon cutouts, side-specific placement keepouts and layer-specific
+copper keepouts. Select a feature to update its properties or review its removal.
+Polygon vertices can be entered numerically or clicked on the snap grid. The
+measurement tool reports distance and coordinate deltas between snapped points.
+
+Every source candidate is compiled and physicalized in memory using offline,
+locked dependencies. Electrical identity, placement rules, substrate topology,
+pad/drill clearances and copper keepouts are checked. Saving checks the revision
+again and uses a same-directory fsynced temporary file and atomic replacement,
+with an exclusive lock between cooperating editor sessions. Source history is
+bounded and uses the same checks. **Reload source** explicitly discards session
+previews/history after an external edit. No background source merge occurs.
+
+Placement and source history are separate. Successful source changes rebuild
+unrouted physical intent and flag routing/fill/manufacturing outputs stale.
+Reopening reconstructs source locks; movable seeds can change. Re-run the build
+before using existing manufacturing output. These checks are not routing signoff.
+
+Automatic placement now runs in a cancellable process with a wall-time budget,
+phase progress and a cumulative performance profile. The service remains usable
+during computation. Manual edits cancel older work, and a changed source/session
+revision discards the result. Only incident ratsnest nets are recomputed for pose
+changes; exact graph semantics remain unchanged.
+
+Routed overlays, VS Code hosting and advanced mechanical intent
+remain tracked separately in checklist sections D and E.

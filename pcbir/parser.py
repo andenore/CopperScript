@@ -445,6 +445,10 @@ class Parser:
 
     def _reference(self) -> str:
         value = self._name("target")
+        # Board-owned physical intent may address a resolved module descendant.
+        # Electrical endpoints still use module ports, not flattened pin names.
+        while self._accept_symbol("/"):
+            value = f"{value}/{self._name('instance target')}"
         if self._accept_symbol("."):
             value = f"{value}.{self._name('pin name')}"
         return value

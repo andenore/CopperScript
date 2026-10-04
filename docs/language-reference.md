@@ -337,6 +337,18 @@ boundary connections. Consumers that require a global view may explicitly run
 hierarchy elaboration, which derives `/`-qualified names such as `PWR/U1`. This
 flat view is not authoritative and is not the default serialized IR.
 
+Board-owned physical constraints can explicitly address a resolved descendant:
+
+```copper
+constraint fixed_placement(PWR/U1) { x = 12mm; y = 8mm; }
+constraint fixed_placement(J1) { rotation = 90; side = front; }
+```
+
+Position (`x` and `y` together), rotation and side are independent locks.
+Omitted properties remain free; explicit allowed-orientation rules still apply.
+Conflicting imported and board-owned poses are errors. `/` is an instance path
+separator for constraint targets; electrical nets continue to use module ports.
+
 Module ports do not provide a second connectivity mechanism. `port.VIN` and
 `PWR.VIN` are ordinary net endpoints that identify opposite sides of the same
 boundary during elaboration.

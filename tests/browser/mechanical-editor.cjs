@@ -22,7 +22,7 @@ const {chromium} = require(process.env.COPPER_PLAYWRIGHT_MODULE || "playwright")
       return (await (await fetch("/api/scene",{headers:{"X-Copper-Token":token}})).json()).revision;
     });
     assert.equal(initialRevision,0,"Run the mutating smoke against a freshly started demo session");
-    assert.match(await page.locator("#notice").innerText(),/read-only/);
+    assert.match(await page.locator("#notice").innerText(),/Source edits require/);
     assert(await page.locator(".airwire").count()>0);
     await page.locator("#airwires").uncheck();
     assert.equal(await page.locator(".airwire").count(),0);

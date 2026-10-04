@@ -191,3 +191,12 @@ button:focus-visible,input:focus-visible,select:focus-visible {
 #board.panning,#board.panning * {cursor:grabbing;}
 #pending {margin:0;padding:.6rem 1rem;background:#fff1bd;color:#503e0a;}
 .copper-keepout {fill:#df983018;stroke:#dfaa5b;stroke-width:.12;stroke-dasharray:.25 .25;}
+fieldset {border:1px solid #566774;margin:12px 0;padding:8px;min-width:0;}
+legend {font-size:13px;}
+textarea {width:100%;min-height:65px;background:#253440;color:#edf5fa;}
+#source-review {margin:0 20px;max-height:210px;overflow:auto;border:1px solid #c3a975;padding:8px;}
+.measure-line,.vertex-preview {fill:none;stroke:#76d4f0;stroke-width:.18;pointer-events:none;}
+.measure-text {font-size:1.2px;fill:#76d4f0;pointer-events:none;}
+input[type=text] {max-width:100%;width:100%;}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,svg:focus-visible {outline:2px solid #ffd17d;}
+@media (max-width:760px) {main {min-height:350px;} aside {width:230px;} h1 span {display:block;} nav {padding:8px;}}

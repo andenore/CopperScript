@@ -165,6 +165,21 @@ class _PadCopper:
     clearance_nm: int = 0
 
 
+def placement_copper_findings(board: PhysicalBoard) -> tuple[DrcFinding, ...]:
+    """Geometric copper/drill checks for editing an unrouted placement.
+
+    Connectivity and completed-route gates belong to routing signoff, not an
+    editor save. Keepout coverage failures are still reported, never waived.
+    """
+    findings: list[DrcFinding] = []
+    _check_board_edge(board, findings)
+    _check_copper_spacing(board, findings)
+    _check_non_plated_hole_clearance(board, findings)
+    _check_drill_spacing(board, findings)
+    _check_copper_keepouts(board, findings)
+    return tuple(findings)
+
+
 def run_physical_drc(
     board: PhysicalBoard,
     waivers: Iterable[DrcWaiver] = (),

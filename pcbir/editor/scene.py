@@ -33,7 +33,7 @@ def _preview_copper(board):
         return board, str(exc)
 
 
-def ratsnest(board: PhysicalBoard) -> list[dict]:
+def ratsnest(board: PhysicalBoard, *, only_nets: frozenset[str] | None = None) -> list[dict]:
     """Deterministic Euclidean MST between explicit pad connectivity islands.
 
     Nearest physical pad centres define inter-island distance. Duplicate numbers
@@ -41,8 +41,8 @@ def ratsnest(board: PhysicalBoard) -> list[dict]:
     Unfilled zones do not join anything. This is not a route or DRC certificate.
     """
     board, _ = _preview_copper(board)
-    graph = explicit_copper_connectivity(board)
-    assigned = {p: n.name for n in board.nets for p in n.pads}
+    graph = explicit_copper_connectivity(board, only_nets=only_nets)
+    assigned = {p: n.name for n in board.nets if only_nets is None or n.name in only_nets for p in n.pads}
     by_net: dict[str, list[tuple[str, str, str, str, Point]]] = {}
     for pose in sorted(board.placements, key=lambda p: p.reference):
         for index, pad in enumerate(board.footprints[pose.footprint].pads):
@@ -52,6 +52,18 @@ def ratsnest(board: PhysicalBoard) -> list[dict]:
             identity = f"pad:{pose.reference}.{pad.number}:{index}"
             by_net.setdefault(net, []).append((graph.roots[identity], identity,
                 pose.reference, pad.number, transformed_local_point(pose, pad.position)))
+    for index, track in enumerate(board.tracks):
+        if only_nets is not None and track.net not in only_nets:
+            continue
+        identity = f"track:{index}"
+        for end, point in enumerate((track.start, track.end)):
+            by_net.setdefault(track.net, []).append((graph.roots[identity], f"{identity}:{end}",
+                                                    "", "", point))
+    for index, via in enumerate(board.vias):
+        if only_nets is not None and via.net not in only_nets:
+            continue
+        identity = f"via:{index}"
+        by_net.setdefault(via.net, []).append((graph.roots[identity], identity, "", "", via.position))
     result = []
     for net, lands in sorted(by_net.items()):
         roots = sorted({land[0] for land in lands})
@@ -85,9 +97,43 @@ def ratsnest(board: PhysicalBoard) -> list[dict]:
     return result
 
 
+class RatsnestCache:
+    """Recompute only nets incident to changed immutable placements.
+
+    Copper/macro/inventory changes invalidate all roots. Cache reuse never
+    substitutes approximate contact or stale connectivity for the exact graph.
+    """
+    def __init__(self):
+        self.board = None
+        self.edges = {}
+        self.recomputed_nets = ()
+
+    def get(self, board):
+        old = self.board
+        nets = {n.name for n in board.nets} | {t.net for t in board.tracks} | {v.net for v in board.vias}
+        if (old is None or old.nets != board.nets or old.footprints != board.footprints
+                or old.tracks != board.tracks or old.vias != board.vias
+                or old.hard_macros != board.hard_macros or board.hard_macros
+                or old.rigid_clusters != board.rigid_clusters):
+            affected = nets
+            self.edges.clear()
+        else:
+            previous = {p.reference: p for p in old.placements}
+            changed = {p.reference for p in board.placements if previous.get(p.reference) != p}
+            changed |= previous.keys() - {p.reference for p in board.placements}
+            affected = {n.name for n in board.nets if any(p.component in changed for p in n.pads)}
+        self.recomputed_nets = tuple(sorted(affected))
+        if affected:
+            fresh = ratsnest(board, only_nets=frozenset(affected))
+            for net in affected:
+                self.edges[net] = [edge for edge in fresh if edge["net"] == net]
+        self.board = board
+        return [edge for net in sorted(self.edges) for edge in self.edges[net]]
+
+
 def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0,
                 session_locks: frozenset[str] = frozenset(),
-                options: PlacementPlannerOptions | None = None) -> dict:
+                options: PlacementPlannerOptions | None = None, ratsnest_cache: RatsnestCache | None = None) -> dict:
     rules = {rule.reference: rule for rule in board.placement_rules}
     profile_roles = json.loads(board.metadata.get("mechanical_connector_roles", "{}"))
     assigned = {pad: net.name for net in board.nets for pad in net.pads}
@@ -143,7 +189,8 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         "regions": [{"name": r.name, "side": r.side.value if r.side else "both",
                      "vertices": [_point(p) for p in r.outline.vertices]} for r in board.regions],
         "components": components, "nets": [n.name for n in sorted(board.nets, key=lambda n: n.name)],
-        "zone_nets": sorted({z.net for z in board.zones}), "ratsnest": ratsnest(board),
+        "zone_nets": sorted({z.net for z in board.zones}),
+        "ratsnest": ratsnest_cache.get(board) if ratsnest_cache else ratsnest(board),
         "warnings": {k: board.metadata[k] for k in ("footprint_import_warnings", "omitted_components",
             "omitted_constraint_targets", "prototype_footprints") if k in board.metadata},
         "placement_legal": placement_solution_is_legal(board,

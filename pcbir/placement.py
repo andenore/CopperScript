@@ -142,6 +142,7 @@ class PlacementAlgorithmError(ValueError):
 def generate_placement_candidates(
     board: PhysicalBoard,
     options: PlacementPlannerOptions | None = None,
+    *, progress=None,
 ) -> tuple[PlacementCandidate, ...]:
     """Return a deterministic Pareto frontier of legal placement candidates."""
 
@@ -159,8 +160,12 @@ def generate_placement_candidates(
     attempts: list[PlacementCandidate] = []
     seeds = max(2, options.candidate_count)
     for seed in range(seeds):
+        if progress:
+            progress("analytical", seed, seeds)
         continuous = _initial_seed(board, placements, options, seed)
         continuous = _analytical_place(board, continuous, options)
+        if progress:
+            progress("legalization", seed, seeds)
         continuous, seeded_original, phase_options = _place_rigid_clusters(
             board, continuous, placements, options
         )
@@ -170,6 +175,8 @@ def generate_placement_candidates(
         legalized, relative_before = _repair_relative_constraints(
             board, legalized, phase_options
         )
+        if progress:
+            progress("refinement", seed, seeds)
         refined, moves, swaps, feedback_passes = _detailed_refine(
             board, legalized, phase_options, seed
         )
@@ -212,6 +219,8 @@ def generate_placement_candidates(
         )
     ]
     frontier.sort(key=lambda item: (*item.metrics.quality_vector, item.seed))
+    if progress:
+        progress("finished", seeds, seeds)
     return tuple(frontier[: options.candidate_count])
 
 
@@ -343,9 +352,14 @@ def placement_solution_is_legal(
         return False
     if not cluster_placement_matches(board, placements):
         return False
-    fixed = _fixed_placements(board, original, options)
-    if any(placements[reference] != expected for reference, expected in fixed.items()):
+    if any(placements[reference] != original[reference] for reference in options.fixed_references):
         return False
+    for rule in board.placement_rules:
+        pose = placements[rule.reference]
+        if rule.fixed_position is not None and pose.position != rule.fixed_position:
+            return False
+        if rule.fixed_rotation_degrees is not None and pose.rotation_degrees != rule.fixed_rotation_degrees:
+            return False
     accepted: dict[str, Placement] = {}
     keepouts = resolved_cluster_keepouts(board, placements)
     for reference in sorted(placements):
@@ -354,6 +368,67 @@ def placement_solution_is_legal(
             return False
         accepted[reference] = candidate
     return _relative_penalty(board, placements) == 0
+
+
+def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, Placement],
+                                options: PlacementPlannerOptions | None = None) -> tuple[str, ...]:
+    """Explain a rejected pose using the same hard-rule predicates as the planner.
+
+    This runs only on failure; the ordinary boolean hot path remains unchanged.
+    Pair diagnostics deliberately use the real footprint/cluster clearances.
+    """
+    options = options or PlacementPlannerOptions()
+    if placement_solution_is_legal(board, placements, options):
+        return ()
+    original = {p.reference: p for p in board.placements}
+    if set(placements) != set(original):
+        return ("component inventory differs from physical source",)
+    from .geometry import RoundedConvexShape, shapes_clear
+    from .mechanical import shape_in_outline, hole_shape
+    errors = []
+    for ref, pose in sorted(placements.items()):
+        rule = _rules(board).get(ref)
+        if ref in options.fixed_references and pose != original[ref]:
+            errors.append(f"{ref}: temporary session lock fixes the complete pose")
+        if rule:
+            if rule.fixed_position is not None and pose.position != rule.fixed_position:
+                errors.append(f"{ref}: source constraint fixes its position")
+            if rule.fixed_rotation_degrees is not None and pose.rotation_degrees != rule.fixed_rotation_degrees:
+                errors.append(f"{ref}: source constraint fixes its rotation")
+            if rule.side is not None and pose.side is not rule.side:
+                errors.append(f"{ref}: source constraint fixes side {rule.side.value}")
+        if pose.rotation_degrees not in _allowed_orientations(board, ref):
+            errors.append(f"{ref}: rotation {pose.rotation_degrees} is not allowed")
+        shape = RoundedConvexShape(_placement_polygon(board, pose))
+        clearance = rule.edge_clearance_nm if rule and rule.edge_clearance_nm is not None else options.edge_clearance_nm
+        if not shape_in_outline(shape, board.outline, clearance):
+            errors.append(f"{ref}: courtyard violates board material/cutout clearance ({clearance} nm)")
+        for hole in board.mechanical_holes:
+            if not shapes_clear(shape, hole_shape(hole), 1):
+                errors.append(f"{ref}: courtyard intersects hole {hole.id}")
+            if hole.head_clearance_radius_nm and not shapes_clear(shape,
+                    RoundedConvexShape((hole.position,), hole.head_clearance_radius_nm), 1):
+                errors.append(f"{ref}: courtyard intersects screw-head clearance {hole.id}")
+        if not _legal(pose, {}, board, options):
+            if not any(e.startswith(ref + ":") for e in errors):
+                names = [k.name for k in board.keepouts if (k.side is None or k.side is pose.side)
+                         and _polygons_too_close(shape.spine, k.outline.vertices, 0)]
+                if rule and rule.region:
+                    names.append(rule.region)
+                names += [k.id for k in board.copper_keepouts
+                          if k.block_footprints and _polygons_too_close(shape.spine, k.outline.outer.vertices, 0)]
+                errors.append(f"{ref}: pose violates region/keepout {', '.join(names) or 'macro boundary'}")
+        else:
+            for other_ref, other in sorted(placements.items()):
+                if other_ref >= ref or other.side is not pose.side:
+                    continue
+                if not _legal(pose, {other_ref: other}, board, options):
+                    errors.append(f"{ref} / {other_ref}: courtyard or footprint keepout clearance conflict")
+    if not cluster_placement_matches(board, placements):
+        errors.append("rigid cluster/hard-macro member poses must move together")
+    if _relative_penalty(board, placements):
+        errors.append("relative placement constraint (alignment/distance) is not satisfied")
+    return tuple(dict.fromkeys(errors)) or ("pose violates a represented physical constraint",)
 
 
 def _dominates(left: PlacementMetrics, right: PlacementMetrics) -> bool:
@@ -398,6 +473,8 @@ def _fixed_placements(
 
 def _allowed_orientations(board: PhysicalBoard, reference: str) -> tuple[Decimal, ...]:
     rule = _rules(board).get(reference)
+    if rule is not None and rule.fixed_rotation_degrees is not None:
+        return (rule.fixed_rotation_degrees,)
     return (
         tuple(rule.allowed_orientations)
         if rule is not None

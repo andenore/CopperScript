@@ -10,6 +10,7 @@ from threading import RLock
 from urllib.parse import urlsplit
 
 from .session import EditorError, EditorSession, StaleRevision
+from ..syntax import CopperScriptError
 
 
 def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
@@ -36,8 +37,12 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.end_headers()
+                self.wfile.write(body)
+            except ConnectionError:
+                # A closed tab does not roll back an already committed operation.
+                self.close_connection = True
 
         def allowed(self, api=False):
             expected = f"127.0.0.1:{self.server.server_port}"
@@ -61,7 +66,7 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
                 try:
                     with lock:
                         self.respond(200, session.scene())
-                except (OSError, ValueError) as exc:
+                except (OSError, ValueError, CopperScriptError) as exc:
                     self.respond(400, {"error": str(exc)})
                 return
             assets = {"/": ("index.html", "text/html; charset=utf-8"),
@@ -81,7 +86,7 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if (not 0 < length <= 4096 or self.headers.get("Content-Type") != "application/json"
+                if (not 0 < length <= 65536 or self.headers.get("Content-Type") != "application/json"
                         or self.headers.get("Transfer-Encoding") is not None
                         or len(self.headers.get_all("Content-Length", ())) != 1):
                     raise EditorError("bounded application/json body required")
@@ -102,21 +107,27 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
                     self.respond(200, session.operation(request))
             except StaleRevision as exc:
                 self.respond(409, {"error": str(exc)})
-            except (ValueError, OSError, TypeError) as exc:
+            except (ValueError, OSError, TypeError, CopperScriptError) as exc:
                 self.respond(400, {"error": str(exc)})
 
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.daemon_threads = True
     server.editor_url = f"http://127.0.0.1:{server.server_port}/#token={token}"
     server.editor_token = token
+    original_close = server.server_close
+    def close():
+        session.close()
+        original_close()
+    server.server_close = close
     return server
 
 
 def serve(session: EditorSession, *, port: int = 0, open_browser: bool = True):
     import webbrowser
     with create_server(session, port) as server:
-        print(f"Mechanical editor (source read-only): {server.editor_url}", flush=True)
-        print("Preview changes are temporary. Ctrl+C stops the local service.", flush=True)
+        mode = "reviewed source editing" if session.workspace else "source read-only"
+        print(f"Mechanical editor ({mode}): {server.editor_url}", flush=True)
+        print("Placement previews are temporary; source changes require explicit review/save. Ctrl+C stops the local service.", flush=True)
         if open_browser:
             webbrowser.open(server.editor_url)
         try:

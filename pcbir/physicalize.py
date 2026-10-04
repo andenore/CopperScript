@@ -379,9 +379,10 @@ def _physicalize(
         if mechanical.profiles:
             metadata["mechanical_provenance"] = json.dumps(mechanical_provenance(mechanical), sort_keys=True)
             metadata["mechanical_connector_roles"] = json.dumps({c.reference: c.role for c in mechanical.connectors}, sort_keys=True)
-    fixed_rules = {r.reference: r for r in placement_rules if r.fixed_position is not None}
-    placements = [replace(p, position=fixed_rules[p.reference].fixed_position,
-                         rotation_degrees=fixed_rules[p.reference].fixed_rotation_degrees,
+    fixed_rules = {r.reference: r for r in placement_rules}
+    placements = [replace(p, position=fixed_rules[p.reference].fixed_position or p.position,
+                         rotation_degrees=(fixed_rules[p.reference].fixed_rotation_degrees
+                             if fixed_rules[p.reference].fixed_rotation_degrees is not None else p.rotation_degrees),
                          side=fixed_rules[p.reference].side or p.side)
                   if p.reference in fixed_rules else p for p in placements]
     return PhysicalBoard(
@@ -670,10 +671,18 @@ def _lower_physical_constraints(
             if len(lowered_targets) != 1:
                 raise ValueError("fixed_placement requires exactly one component")
             target = lowered_targets[0]
-            rotation = Decimal(str(parameters.get("rotation", 0)))
+            if ("x" in parameters) != ("y" in parameters):
+                raise ValueError("fixed_placement position requires both x and y")
+            if not set(parameters) & {"x", "rotation", "side"}:
+                raise ValueError("fixed_placement requires position, rotation or side")
+            if target.pad is not None:
+                raise ValueError("fixed_placement requires a component, not a pin")
+            rotation = Decimal(str(parameters["rotation"])) if "rotation" in parameters else None
             # Explicit orientation constraints must not be silently overridden
             # by a fixed pose merely because declarations occur in that order.
-            orientations = (rotation,)
+            existing = rules.get(target.reference)
+            orientations = ((rotation,) if rotation is not None else
+                            existing.allowed_orientations if existing else (0, 90, 180, 270))
             for c in flat.constraints:
                 if c.kind is ConstraintKind.ALLOWED_ORIENTATIONS and any(
                         t.reference == target.reference for t in (targets(c.targets) or ())):
@@ -684,7 +693,7 @@ def _lower_physical_constraints(
                 fixed_position=Point(
                     _constraint_length(parameters, "x"),
                     _constraint_length(parameters, "y"),
-                ),
+                ) if "x" in parameters else None,
                 fixed_rotation_degrees=rotation,
                 allowed_orientations=orientations,
                 edge_clearance_nm=_optional_constraint_length(parameters, "edge_clearance"),

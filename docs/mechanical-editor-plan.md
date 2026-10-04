@@ -40,24 +40,21 @@ bytes were modified. Macro-only connected nets produce no artificial airwires.
 
 ## B. Safe persistent source editing
 
-9. [ ] Add source spans for declarations/properties including comments/trivia,
+9. [x] Add source spans for declarations/properties including comments/trivia,
    encoding and newline preservation. Tests for nested/imported/hierarchical files.
-10. [ ] Build targeted patch operations for existing constraint properties and
+10. [x] Build targeted patch operations for existing constraint properties and
     deterministic new declarations. Detect ambiguous/multiple/unowned rules.
-    Initial slice implemented: immutable UTF-8/BOM snapshots, token-end spans,
-    revision-bound candidate patches for direct board-owned fixed placements,
-    comment/newline preservation and shared/duplicate ownership rejection.
-    General declaration indexing and hierarchical target mapping remain open;
-    these pure syntax-checked candidates are not exposed as a Save operation.
-11. [ ] Add position-only, rotation-only, side and full-pose lock editing with
+    Token patches preserve UTF-8/BOM, comments and newlines; imported/profile
+    owners and shared/duplicate constraints are rejected for explicit resolution.
+11. [x] Add position-only, rotation-only, side and full-pose lock editing with
     explicit conflict resolution; move source-locked parts only in edit-lock mode.
-12. [ ] Map resolved instance targets to valid source references. Do not edit
+12. [x] Map resolved instance targets to valid source references. Do not edit
     imported library content or freeze all generated placements.
-13. [ ] Compile/physicalize prospective edits without overwriting disk; validate
+13. [x] Compile/physicalize prospective edits without overwriting disk; validate
     mechanics, electrical equality and physical constraints. Review exact diff.
-14. [ ] Atomic revision-checked save, source undo/redo and external-change reload
+14. [x] Atomic revision-checked save, source undo/redo and external-change reload
     conflict handling. Persist intended locks only; reset/recompute movable seeds.
-15. [ ] Mark route/fill/manufacturing outputs stale after applicable source changes;
+15. [x] Mark route/fill/manufacturing outputs stale after applicable source changes;
     rebuild from source, no incremental copper retention in the first version.
 
 Acceptance: edit connector lock, save, reopen and route with unchanged electrical
@@ -65,18 +62,18 @@ connectivity and locked pose. Comments survive; stale/concurrent edits never win
 
 ## C. Mechanical authoring
 
-16. [ ] Circle/rectangle dimensions and polygon vertex tools; holes and polygonal
+16. [x] Circle/rectangle dimensions and polygon vertex tools; holes and polygonal
     cutouts with stable feature selection and exact source units.
-17. [ ] Screw-head placement clearances, side-specific placement/copper keepouts
+17. [x] Screw-head placement clearances, side-specific placement/copper keepouts
     with distinct previews. Plated holes remain component/net-owned.
-18. [ ] Measurement and dimension snapping; reasons for illegal geometry/poses.
+18. [x] Measurement and dimension snapping; reasons for illegal geometry/poses.
     Validate topology, material containment, courtyard/hole/copper clearance.
-19. [ ] Undo/redo and safe source persistence for mechanical declarations. Native
+19. [x] Undo/redo and safe source persistence for mechanical declarations. Native
     KiCad outline/drill/export regressions; full routed demo using generic code.
 
 ## D. Responsive jobs and editor integration
 
-20. [ ] Asynchronous/cancellable auto-placement with revision-bound progress and
+20. [x] Asynchronous/cancellable auto-placement with revision-bound progress and
     resource budgets. Incremental incident-net ratsnest refresh and profiling.
 21. [ ] Selected-net/component and side/power filters, labels, optional net costs;
     arbitrary copper-island terminals and validated filled-zone overlay extension.
@@ -157,3 +154,36 @@ board/source revision, browser actions and explicit remaining limitations.
   tests/test_layout.py tests/test_mechanical_language.py
   tests/test_internal_pad_connections.py tests/test_rigid_clusters.py
   -q -o addopts=''` — 181 passed.
+
+### Persistent editing, mechanics and bounded placement — 2026-10-04
+
+- Reviewed source save, independent position/rotation/side locks, resolved `/`
+  targets, imported-owner conflict rejection, exact diff, source history and
+  external reload are implemented. Only intended locks persist; automatic poses
+  remain movable seeds. UTF-8 BOM, CRLF/LF, comments and unrelated bytes survive.
+- Initial mechanical palette supports exact circle/rectangle/polygon dimensions,
+  clicked snapped vertices, stable hole/cutout/keepout IDs, screw-head clearance,
+  side/layer scopes and measurement. Prospective compilation checks electrical
+  equality, full placement legality and pad/drill/keepout geometry before save.
+- Regression suite covering source patches/transactions, editor, placement,
+  profiles, physical DRC, compiler and mechanical language: **212 passed**.
+  The transaction suite includes a native KiCad circle/2.4 mm NPTH round-trip.
+- Installed Chrome/Playwright smoke passed source-lock review/save, hole editing,
+  persistent undo/redo and measurement with zero page errors. Final undo restored
+  every original source byte. Screenshot: `build/editor-save-smoke/editor.png`.
+- Shared Make `EXAMPLE=mechanical-editor route` passes full routing and native
+  KiCad 10.0.6 refill/DRC: two nets, **zero violations and zero opens**.
+  `build/editor-native-20261004` contains the profiled run and Gerber/drill export.
+- Placement uses a cancellable spawned process, 1–300 second wall-time budget,
+  bounded component count, phase/candidate progress and cumulative profiling.
+  Manual edits cancel older work; stale source/results cannot apply. Five process
+  and cache tests pass, including actual cancellation and timeout termination.
+- Incident-net ratsnest cache is exactly equivalent to full recomputation; copper,
+  macro and inventory changes invalidate it. Browser save smoke also passes with
+  asynchronous auto-placement. Sections D (21–24) and E remain open.
+- Final affected regression including real placement processes: **217 passed**.
+  The wheel builds with editor modules/assets and no added runtime dependencies.
+- CopperLedRing's `make edit` is wired to this shared editor. Real-footprint
+  browser inspection passed its circle, 33 front/1 rear parts and navigation with
+  zero page errors and no source mutations. Its public compiler pin update is
+  pending publication approval; development verification used `EDITOR_PYTHON`.

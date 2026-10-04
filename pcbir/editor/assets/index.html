@@ -3,15 +3,21 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CopperScript mechanical editor</title><link rel="stylesheet" href="/editor.css"></head>
 <body>
-<header><h1>CopperScript <span>mechanical / floorplan preview</span></h1>
+<header><h1>CopperScript <span>mechanical / floorplan editor</span></h1>
 <p id="notice">Source is read-only. Temporary changes are not saved.</p></header>
 <nav aria-label="Placement commands">
 <button id="auto" disabled>Preview rough auto-placement</button><button id="apply" disabled>Apply preview</button>
+<button id="cancel-auto" disabled>Cancel auto-placement</button><label>Budget (seconds) <input id="placement-budget" type="number" min="1" max="300" value="120" size="4"></label>
 <button id="discard" disabled>Discard preview</button><button id="undo" disabled>Undo</button><button id="redo" disabled>Redo</button>
 <button id="reload">Reload session scene</button>
+<button id="reload-source" disabled>Reload source (discard session)</button>
+<button id="save-source" disabled>Save reviewed source</button><button id="discard-source" disabled>Discard source review</button>
+<button id="undo-source" disabled>Undo source save</button><button id="redo-source" disabled>Redo source save</button>
 <button id="fit">Fit board</button><button id="zoom-in">Zoom +</button><button id="zoom-out">Zoom −</button>
 </nav>
 <p id="pending" role="status" hidden>Preview pending: apply or discard it to resume placement editing. Zoom and pan remain available.</p>
+<p id="job-status" role="status" hidden></p><details id="job-profile" hidden><summary>Placement profile</summary><pre id="profile-text"></pre></details>
+<details id="source-review" hidden open><summary>Exact proposed source diff — inspect before saving</summary><pre id="source-diff"></pre></details>
 <main><aside>
 <h2>View</h2>
 <label><input id="airwires" type="checkbox" checked> Ratsnest</label>
@@ -27,13 +33,31 @@
 <label>Rotation (degrees) <input id="rotation" type="number" step="45"></label>
 <label>Placement side <select id="pose-side"><option value="front">Front</option><option value="back">Rear</option></select></label>
 <button id="move" disabled>Preview pose</button><button id="lock" disabled>Lock temporary pose</button>
+<fieldset id="persistent-controls" disabled><legend>Persistent source constraints</legend>
+<label><input id="edit-locks" type="checkbox"> Edit source locks explicitly</label>
+<label><input id="position-lock" type="checkbox"> Lock position</label>
+<label><input id="rotation-lock" type="checkbox"> Lock rotation</label>
+<label><input id="side-lock" type="checkbox"> Lock side</label>
+<button id="prepare-lock" disabled>Review persistent pose / locks</button>
+</fieldset>
 <label>Drag snap (mm) <input id="snap" type="number" min="0.001" value="0.1" step="0.1"></label>
 <label><input id="preview-drags" type="checkbox"> Preview drags before applying</label>
-<p>Left-drag moves a movable footprint after legality checking; Undo reverses it. Scroll to zoom under the pointer; right-drag to pan. Numeric poses and auto-placement require Apply or Discard. Source locks remain read-only.</p>
-<h2>Scope</h2><p>Outline, cutouts and holes are visible. Mechanical authoring and source saving are not implemented yet. Ratsnest is a guide, not routing.</p>
+<p>Scroll to zoom; right-drag to pan. Arrow keys move the selected movable part by one snap; Shift uses ten snaps. Escape cancels a gesture. Temporary placement and source history are separate.</p>
+<fieldset id="mechanical-controls" disabled><legend>Mechanical features</legend>
+<label>Project-owned feature <select id="feature"><option value="">New feature</option></select></label>
+<label>Kind <select id="feature-kind"><option>outline</option><option>hole</option><option>cutout</option><option>keepout</option><option>copper_keepout</option><option>rules</option></select></label>
+<label>Stable ID <input id="feature-name" type="text" placeholder="H2"></label>
+<label>Shape <select id="feature-shape"><option>rectangle</option><option>circle</option><option>polygon</option><option value="">Not applicable</option></select></label>
+<div id="feature-parameters"></div>
+<label><input id="draw-vertices" type="checkbox"> Click snapped polygon vertices</label>
+<button id="prepare-feature">Review feature</button><button id="remove-feature">Review feature removal</button>
+<p>Dimensions use exact CopperScript units (e.g. 2.2mm). Position is (xmm, ymm); vertices are [(xmm, ymm), ...]. Holes are NPTH; plated holes must be electrical components. Imported profiles remain read-only.</p>
+</fieldset>
+<h2>Measure</h2><label><input id="measure" type="checkbox"> Click two snapped points</label><output id="measurement">No measurement</output>
+<h2>Scope</h2><p>Source edits rebuild unrouted physical intent. Existing routing, copper fills and manufacturing outputs become stale; rebuild before ordering. Ratsnest is a guide, not routing.</p>
 <details><summary>Footprint / source warnings</summary><pre id="warnings"></pre></details>
 </aside>
-<section id="viewport" aria-label="Board view"><svg id="board" role="img" aria-label="Mechanical board and placement preview"></svg></section>
+<section id="viewport" aria-label="Board view"><svg id="board" tabindex="0" role="img" aria-label="Mechanical board and placement editor"></svg></section>
 </main>
 <footer><output id="status" aria-live="polite">Loading scene…</output></footer>
 <script src="/editor.js"></script></body></html>

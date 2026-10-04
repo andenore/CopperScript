@@ -125,12 +125,13 @@ class PlacementPlanningError(ValueError):
 def plan_placement(
     board: PhysicalBoard,
     options: PlacementPlannerOptions | None = None,
+    *, progress=None,
 ) -> PlacementPlan:
     """Create deterministic Pareto candidates and select one legal placement."""
 
     options = options or PlacementPlannerOptions()
     try:
-        candidates = generate_placement_candidates(board, options)
+        candidates = generate_placement_candidates(board, options, progress=progress)
     except PlacementAlgorithmError as exc:
         raise PlacementPlanningError(str(exc)) from exc
     selected = select_placement_candidate(candidates)

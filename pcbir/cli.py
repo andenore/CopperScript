@@ -493,7 +493,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                     locked=args.locked, offline=args.offline)
             for macro in args.hard_macro:
                 physical = apply_hard_macro_scene(physical, macro, locked=args.locked, offline=args.offline)
-            session = EditorSession(physical, args.board)
+            from .editor.transactions import SourceWorkspace
+
+            def rebuild(candidate):
+                # Never fetch or run downloaded code while reviewing source edits.
+                rebuilt = (prototype_physicalize(candidate, options) if args.allow_proxy_footprints else
+                    resolved_physicalize(candidate, FootprintResolver(
+                        base_directory=args.board.resolve().parent,
+                        search_roots=tuple(root.resolve() for root in args.footprint_root),
+                        locked=True, offline=True), options))
+                if args.placement_templates:
+                    rebuilt = apply_placement_templates(rebuilt, args.placement_templates, locked=True, offline=True)
+                for macro in args.hard_macro:
+                    rebuilt = apply_hard_macro_scene(rebuilt, macro, locked=True, offline=True)
+                return rebuilt
+
+            from .packages import find_manifest
+            manifest = find_manifest(args.board.resolve().parent)
+            root = manifest.parent if manifest else None
+            inputs = [p for p in (args.placement_templates, *args.hard_macro) if p]
+            if root:
+                inputs += [root / "copper.mod", root / "copper.lock"]
+            inputs += [Path(fp.metadata["source_path"]) for fp in physical.footprints.values()
+                       if fp.metadata.get("source_path")]
+            workspace = SourceWorkspace(args.board, design, rebuild, input_paths=tuple(inputs))
+            session = EditorSession(physical, args.board, workspace=workspace)
             if args.scene_output:
                 if args.scene_output.resolve() == args.board.resolve():
                     raise ValueError("scene output cannot overwrite the source board")
