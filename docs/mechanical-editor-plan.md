@@ -79,7 +79,7 @@ connectivity and locked pose. Comments survive; stale/concurrent edits never win
     arbitrary copper-island terminals and validated filled-zone overlay extension.
 22. [x] Routed-copper overlay with source/physical digest, stale display and explicit
     remaining-connectivity evidence; never infer fill from an outline.
-23. [ ] Shared browser core hosted by VS Code, document selection/source links,
+23. [x] Shared browser core hosted by VS Code, document selection/source links,
     native undo/save, workspace trust and pinned compiler configuration.
 24. [ ] Accessibility/keyboard editing, large-board performance and release assets.
 
@@ -211,3 +211,22 @@ board/source revision, browser actions and explicit remaining limitations.
   zero page errors. Inspected screenshot: `build/editor-overlay-20261004/editor.png`.
 - Fresh generic Make demo route: **zero native violations and zero opens**;
   bound reference generated with installed KiCad 10.0.6. Items 23–28 remain open.
+
+### Native VS Code document host — 2026-10-04
+
+- Optional custom text editor under `integrations/vscode`, staged with the same
+  bundled web assets by `node integrations/vscode/build.cjs`. Local trusted
+  workspaces only; compiler command is argv/no shell and an exact content digest
+  is required. Source, imports and footprint resolution remain locked/offline.
+- Bounded JSON-lines backend compiles the current unsaved TextDocument in memory.
+  Prospective edits return reviewed minimal UTF-16 text spans, never filesystem
+  source writes. Native WorkspaceEdit/version guards, Save, Undo/Redo, dirty-save
+  failures, invalid-buffer recovery and source declaration links are supported.
+- **19 document-host tests pass**; regression includes real subprocess protocol,
+  stale review rejection, monotonic versions, Unicode/CRLF span handling and
+  filesystem-write bypass prevention. Existing standalone editor regressions pass.
+- Installed VS Code **1.140.0** Extension Development Host passes the actual
+  custom editor, pinned compiler, rough placement worker, reviewed native save,
+  native source Undo, invalid unsaved text recovery and declaration navigation.
+  Test uses disposable `build/vscode-smoke-workspace`; no user workspace settings
+  or sources are changed. Items 24–28 remain open.

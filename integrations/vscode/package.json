@@ -1,0 +1,24 @@
+{
+  "name": "copperscript-mechanical",
+  "displayName": "CopperScript Mechanical Editor",
+  "description": "Source-authoritative board mechanics and placement, using a pinned local CopperScript compiler",
+  "version": "0.1.0",
+  "publisher": "andenore",
+  "license": "MIT",
+  "engines": {"vscode": "^1.90.0"},
+  "main": "./extension.cjs",
+  "activationEvents": ["onCustomEditor:copperscript.mechanical"],
+  "capabilities": {"untrustedWorkspaces": {"supported": false}, "virtualWorkspaces": {"supported": false}},
+  "contributes": {
+    "customEditors": [{"viewType": "copperscript.mechanical", "displayName": "CopperScript Mechanical / Floorplan", "selector": [{"filenamePattern": "*.copper"}], "priority": "option"}],
+    "configuration": {"title": "CopperScript", "properties": {
+      "copperscript.mechanical.compilerCommand": {"scope": "resource", "type": "array", "items": {"type": "string"}, "default": ["uv", "run", "--locked", "--offline", "python"], "description": "Trusted local interpreter command, argv only; no shell. Pin CopperScript in the project's uv.lock."},
+      "copperscript.mechanical.compilerDigest": {"scope": "resource", "type": "string", "default": "", "description": "Required compiler fingerprint from python -m pcbir.editor.document --fingerprint. Update explicitly when upgrading the pinned compiler."},
+      "copperscript.mechanical.footprintRoots": {"scope": "resource", "type": "array", "items": {"type": "string"}, "default": [], "description": "Local KiCad footprint roots; no downloads from the editor."},
+      "copperscript.mechanical.layers": {"scope": "resource", "type": "number", "enum": [2, 4, 6], "default": 2},
+      "copperscript.mechanical.fabricationProfile": {"scope": "resource", "type": "string", "enum": ["generic", "jlcpcb-four-layer", "jlcpcb-six-layer"], "default": "generic"},
+      "copperscript.mechanical.placementTemplates": {"scope": "resource", "type": "string", "default": ""},
+      "copperscript.mechanical.hardMacros": {"scope": "resource", "type": "array", "items": {"type": "string"}, "default": []}
+    }}
+  }
+}

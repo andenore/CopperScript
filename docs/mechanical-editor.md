@@ -289,4 +289,20 @@ STALE and restores unrouted source airwires. Undo/discard can restore the exact
 matching state. Persistent edits always rebuild unrouted intent, not old copper.
 Layer/side/net/component/signal-supply filters and optional airwire labels/costs
 help inspect the result. Costs are straight-line MST estimates, not detailed route
-predictions. VS Code hosting and advanced mechanical intent remain in the checklist.
+predictions.
+
+## VS Code host
+
+The optional [extension](../integrations/vscode/README.md) stages this same web
+core as a custom text editor. A bounded local stdio compiler reads unsaved source
+buffers in memory; it cannot write source files. Reviews produce minimal UTF-16
+WorkspaceEdit spans. VS Code owns versions, Undo/Redo, encoding, dirty documents
+and Save; a stale review cannot commit over a newer buffer. Invalid unsaved text
+does not silently fall back to the disk file, and recovers on a valid later version.
+
+Only trusted local workspaces are supported. Configure an explicit locked compiler
+command and its exact content fingerprint, along with the physical build settings.
+The editor performs no downloads, executes no source-provided code, and opens no
+server port in this host. Component source links navigate to the root declaration
+or hierarchical instance. Follow the extension README to stage and open it.
+Advanced mechanical intent remains in checklist section E.

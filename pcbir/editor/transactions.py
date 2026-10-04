@@ -73,11 +73,12 @@ class ReviewedSource:
 
 class SourceWorkspace:
     def __init__(self, source: Path, design: Design, build: Callable[[Design], PhysicalBoard],
-                 *, input_paths: tuple[Path, ...] = ()):
+                 *, input_paths: tuple[Path, ...] = (), source_reader=None):
         self.source = source.absolute()
         if self.source.is_symlink():
             raise SourceEditError("source saving does not follow a symbolic link")
         self.identity = electrical_identity(design.electrical)
+        self.source_reader = source_reader
         self.build = build
         self.input_paths = tuple(p.resolve() for p in input_paths)
         self.inputs = self._inputs()
@@ -126,6 +127,8 @@ class SourceWorkspace:
 
     def save(self, review: ReviewedSource):
         """Commit reviewed bytes only, never arbitrary client-supplied source."""
+        if self.source_reader is not None:
+            raise SourceEditError("document host must commit through native document edits, not filesystem saves")
         self.check_inputs()
         if self.source.is_symlink():
             raise SourceEditError("source was replaced with a symbolic link")

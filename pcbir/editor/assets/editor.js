@@ -1,6 +1,18 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get("token");
+const vscodeHost=typeof acquireVsCodeApi==="function" ? acquireVsCodeApi() : null;
+const hostRequests=new Map();let hostRequestId=0;
+if(vscodeHost) window.addEventListener("message",event=>{
+  const message=event.data;
+  if(message?.type==="refresh") {reloadScene();return;}
+  if(message?.type==="selection" && scene()?.components.some(c=>c.reference===message.reference)) {
+    selected=message.reference;render();syncLockChecks();return;
+  }
+  const pending=hostRequests.get(message?.id);if(!pending) return;
+  hostRequests.delete(message.id);clearTimeout(pending.timeout);
+  if(message.error) pending.reject(new Error(message.error));else pending.resolve(message.result);
+});
 const NS = "http://www.w3.org/2000/svg";
 let accepted, preview = null, sourcePreview = null, selected = "", viewbox = null, drag = null, pan = null, busy = false;
 let measurePoints=[], vertexPoints=[];
@@ -13,6 +25,11 @@ function featureLabel(kind,name="") {
 }
 function status(message, error = false) { $("status").textContent = message; $("status").classList.toggle("error", error); }
 async function api(path, body) {
+  if(vscodeHost) return new Promise((resolve,reject)=>{
+    const id=++hostRequestId;
+    const timeout=setTimeout(()=>{hostRequests.delete(id);reject(new Error("Document host timed out"));},60000);
+    hostRequests.set(id,{resolve,reject,timeout});vscodeHost.postMessage({id,path,body});
+  });
   const response = await fetch(path, {method: body ? "POST" : "GET", headers: {
     "X-Copper-Token": token || "", ...(body ? {"Content-Type": "application/json"} : {})},
     ...(body ? {body: JSON.stringify(body)} : {})});
@@ -162,8 +179,10 @@ function updateControls() {
   $("reload-source").disabled=busy || !accepted?.source_writable;
   $("save-source").disabled=busy || !sourceReview || !!accepted?.source_stale;
   $("discard-source").disabled=busy || !sourceReview || !!accepted?.source_stale;
-  $("undo-source").disabled=blocked || !accepted?.can_source_undo;
-  $("redo-source").disabled=blocked || !accepted?.can_source_redo;
+  $("undo-source").disabled=blocked || (!accepted?.can_source_undo && !accepted?.document_host);
+  $("redo-source").disabled=blocked || (!accepted?.can_source_redo && !accepted?.document_host);
+  $("source-link").hidden=!accepted?.document_host;
+  $("source-link").disabled=busy || !component?.source_link;
   $("source-review").hidden=!sourceReview;
   $("source-diff").textContent=accepted?.source_review?.diff || "";
   $("persistent-controls").disabled=blocked || !!preview || !accepted?.source_writable;
@@ -332,6 +351,7 @@ $("prepare-lock").onclick=()=>operation("prepare_lock",{reference:selected,
 $("save-source").onclick=()=>operation("save_source",{review_id:accepted.source_review.id});
 for (const [id,action] of [["discard-source","discard_source"],["undo-source","undo_source"],["redo-source","redo_source"]]) $(id).onclick=()=>operation(action);
 $("reload-source").onclick=()=>{if (confirm("Discard temporary placement, previews and history, and reload the current source?")) operation("reload_source");};
+$("source-link").onclick=()=>api("/api/source-link",{reference:selected}).catch(e=>status(e.message,true));
 const featureDefaults={
   "outline:rectangle":{width:"40mm",height:"30mm",origin:"(0mm,0mm)"},
   "outline:circle":{diameter:"50mm",center:"(25mm,25mm)"},

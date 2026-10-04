@@ -43,7 +43,8 @@ class EditorSession:
         if board.tracks or board.vias or board.zone_fills or board.materialized_macros:
             raise EditorError("editor placement requires an unrouted physical source")
         self.source = source.resolve()
-        self.source_raw = self.source.read_bytes()
+        self.read_source = workspace.source_reader if workspace and workspace.source_reader else self.source.read_bytes
+        self.source_raw = self.read_source()
         self.source_revision = sha256(self.source_raw).hexdigest()
         self.options = options or PlacementPlannerOptions(candidate_count=1)
         self.overlay = overlay
@@ -66,7 +67,7 @@ class EditorSession:
     def _check(self, revision):
         if type(revision) is not int or revision != self.revision:
             raise StaleRevision("session changed; reload the current scene")
-        if sha256(self.source.read_bytes()).hexdigest() != self.source_revision:
+        if sha256(self.read_source()).hexdigest() != self.source_revision:
             raise StaleRevision("source changed externally; reload the source before applying previews")
         if self.workspace:
             self.workspace.check_inputs()
@@ -80,7 +81,7 @@ class EditorSession:
         if self.overlay:
             from .overlay import electrical_digest
             identity = electrical_digest(self.workspace.identity) if self.workspace else None
-            overlay_revision = sha256(self.source.read_bytes()).hexdigest()
+            overlay_revision = sha256(self.read_source()).hexdigest()
             if self.source_pending and state.board is self.source_pending.board:
                 overlay_revision = self.source_pending.after.revision
             if self.workspace:
@@ -143,7 +144,7 @@ class EditorSession:
         self._poll_job()
         scene = self._document(self.state)
         scene.update({"can_undo": bool(self.undo_stack), "can_redo": bool(self.redo_stack),
-                      "source_stale": sha256(self.source.read_bytes()).hexdigest() != self.source_revision})
+                      "source_stale": sha256(self.read_source()).hexdigest() != self.source_revision})
         scene["placement_job"] = self.job.poll() if self.job else None
         scene["pending_preview"] = self._document(self.pending) if self.pending else None
         return scene
@@ -204,7 +205,7 @@ class EditorSession:
             if self.workspace is None:
                 raise EditorError("source workspace is read-only")
             # Explicit reload discards local previews/history; never auto-merges.
-            raw = self.source.read_bytes()
+            raw = self.read_source()
             from ..compiler import compile_design_source
             design = compile_design_source(SourceSnapshot(raw).text, str(self.source), locked=True, offline=True)
             from ..erc import check, has_errors
@@ -314,7 +315,7 @@ class EditorSession:
             raise EditorError("source workspace is read-only")
         if self.pending:
             raise EditorError("apply or discard the placement preview before editing source")
-        snapshot = SourceSnapshot(self.source.read_bytes(), str(self.source))
+        snapshot = SourceSnapshot(self.read_source(), str(self.source))
         if action == "prepare_lock":
             reference = request["reference"]
             refs = frozenset(p.reference for p in self.state.board.placements)
