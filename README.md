@@ -65,7 +65,7 @@ make EXAMPLE=cm4 route
 ```
 
 All examples use the [same Make targets and generic build runner](docs/make-builds.md),
-not per-board routing scripts. `make compile-examples` compiles the 13 complete
+not per-board routing scripts. `make compile-examples` compiles all complete
 registered examples; `make EXAMPLE=cm4 compile` builds just one. GNU Make is
 required in addition to Python/uv (use `mingw32-make` on Windows if that is its name).
 
