@@ -68,4 +68,9 @@ escape hatch, with their provenance and locked-mode limits visible.
 - Pinned v0.1 hard macros retain strict geometry hashes and module ownership
   while accepting their original module-root-relative footprint identity.
   Generated rigid members bind the current canonical asset identity/digest.
-- Final full-suite rerun and integration/push follow these fixes.
+- Final local full-suite rerun: **1,260 passed, 15 optional skips**, including
+  actual ngspice and native KiCad checks, after rebasing on `6af467a`.
+- Linux CI passed the footprint/symlink checks and found one stale aggregate
+  Make test: 14 examples were registered but its assertion expected 13. The
+  test now checks every registered positive example, so additions do not
+  invalidate an unrelated hard-coded count. Final Linux confirmation follows.
