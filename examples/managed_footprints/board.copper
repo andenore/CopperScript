@@ -1,0 +1,8 @@
+board ManagedFootprints {
+    import passives "./parts";
+    component R1: passives.R0402 { value = 1kohm; }
+    component C1: passives.C0402 { value = 100nF; }
+    net VIN { R1.A; }
+    net VOUT { R1.B; C1.A; }
+    net GND { C1.B; }
+}

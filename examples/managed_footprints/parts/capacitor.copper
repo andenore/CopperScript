@@ -1,0 +1,6 @@
+part C0402 {
+    category = "passive.capacitor";
+    footprint = "https://gitlab.com/kicad/libraries/kicad-footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod";
+    pin A { number = "1"; domains = "analog"; directions = "passive"; }
+    pin B { number = "2"; domains = "analog"; directions = "passive"; }
+}

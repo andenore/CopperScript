@@ -8,12 +8,14 @@ into a project-local cache and CopperScript never executes package code.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 
@@ -26,6 +28,7 @@ class ModuleManifest:
     requirements: dict[str, str]
     replacements: dict[str, str]
     filename: Path
+    footprint_libraries: dict[str, str] = field(default_factory=dict)
 
     @property
     def root(self) -> Path:
@@ -39,6 +42,16 @@ class ResolvedPackage:
     version: str
     directory: Path
     checksum: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedAsset:
+    path: Path
+    identity: str
+    module_path: str
+    version: str
+    checksum: str
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,13 +88,15 @@ def read_manifest(path: Path) -> ModuleManifest:
     requirements: dict[str, str] = {}
     replacements: dict[str, str] = {}
     module_path: str | None = None
+    footprint_libraries: dict[str, str] = {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
         _manifest_error(path, 1, f"cannot read manifest: {exc}")
 
     for line_number, raw_line in enumerate(lines, 1):
-        line = raw_line.split("//", 1)[0].split("#", 1)[0].strip()
+        # Preserve https:// in asset bindings while accepting ordinary comments.
+        line = re.split(r"(?:^|\s)(?://|#)", raw_line, maxsplit=1)[0].strip()
         if not line:
             continue
         fields = line.split()
@@ -97,6 +112,16 @@ def read_manifest(path: Path) -> ModuleManifest:
             if fields[1] in replacements:
                 _manifest_error(path, line_number, f"duplicate replacement {fields[1]!r}")
             replacements[fields[1]] = fields[3]
+        elif fields[0] == "footprint-library" and len(fields) == 3:
+            name, target = fields[1:]
+            if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*", name) or name in footprint_libraries:
+                _manifest_error(path, line_number, f"invalid or duplicate footprint library {name!r}")
+            target = target.removeprefix("https://")
+            if (not target.startswith(("github.com/", "gitlab.com/")) or "\\" in target or
+                    any(p in {"", ".", ".."} for p in target.split("/")) or
+                    any(c in target for c in "?#%:")):
+                _manifest_error(path, line_number, f"invalid footprint library target {target!r}")
+            footprint_libraries[name] = target
         else:
             _manifest_error(path, line_number, f"invalid directive: {raw_line.strip()}")
 
@@ -109,7 +134,10 @@ def read_manifest(path: Path) -> ModuleManifest:
             1,
             f"replacement has no matching requirement: {unknown_replacements[0]!r}",
         )
-    return ModuleManifest(module_path, requirements, replacements, path.resolve())
+    for name, target in footprint_libraries.items():
+        if not any(target == module or target.startswith(module + "/") for module in requirements):
+            _manifest_error(path, 1, f"footprint library {name!r} has no matching requirement")
+    return ModuleManifest(module_path, requirements, replacements, path.resolve(), footprint_libraries)
 
 
 class PackageResolver:
@@ -129,6 +157,7 @@ class PackageResolver:
         self.lock_path = manifest.root / "copper.lock"
         self._lock_entries = _read_lock(self.lock_path)
         self._source_roots = {}
+        self.source_directory = manifest.root.resolve()
 
     @classmethod
     def for_source(
@@ -142,7 +171,54 @@ class PackageResolver:
         manifest_path = find_manifest(source)
         manifest = (read_manifest(manifest_path) if manifest_path else
                     ModuleManifest("workspace", {}, {}, source.resolve().parent / "copper.mod"))
-        return cls(manifest, locked=locked, offline=offline)
+        resolver = cls(manifest, locked=locked, offline=offline)
+        resolver.source_directory = source.resolve() if source.is_dir() else source.resolve().parent
+        return resolver
+
+    def qualify_footprint(self, reference: str, location: SourceLocation) -> str:
+        """Keep imported relative assets attached to their declaring module."""
+        if reference.startswith(("github.com/", "gitlab.com/", "https://")) or not reference.lower().endswith(".kicad_mod"):
+            return reference
+        if Path(reference).is_absolute() or "\\" in reference or ":" in reference:
+            raise CopperScriptError("PKG004", "package footprint must be a module-relative .kicad_mod path", location)
+        importer = Path(location.filename).resolve()
+        roots = [root for root in self._source_roots if importer.is_relative_to(root)]
+        root = max(roots, key=lambda p: len(p.parts)) if roots else self.manifest.root.resolve()
+        asset = (importer.parent / reference).resolve()
+        if not asset.is_relative_to(root):
+            raise CopperScriptError("PKG004", "package footprint path must stay inside its source module", location)
+        if root in self._source_roots:
+            module = self._source_roots[root][0]
+            return module + "/" + asset.relative_to(root).as_posix()
+        return Path(os.path.relpath(asset, self.source_directory)).as_posix()
+
+    def resolve_asset(self, import_path: str, location: SourceLocation,
+                      verified_modules: dict[str, ResolvedPackage] | None = None) -> ResolvedAsset:
+        """Resolve checked data; an operation may reuse a verified module snapshot."""
+        identity = import_path.removeprefix("https://")
+        if (not identity.startswith(("github.com/", "gitlab.com/")) or "\\" in identity or
+                any(p in {".", "..", ""} for p in identity.split("/")) or
+                any(c in identity for c in "?#%:")):
+            raise CopperScriptError("PKG004", "invalid module asset path", location)
+        module = self._matching_module(identity)
+        if module is None:
+            raise CopperScriptError("PKG002", f"no requirement in copper.mod provides asset {identity!r}", location)
+        package = verified_modules.get(module) if verified_modules is not None else None
+        if package is None:
+            package = self.resolve(module, location)
+            if verified_modules is not None:
+                verified_modules[module] = package
+        relative = identity[len(module):].lstrip("/")
+        unresolved = package.directory / relative
+        asset = unresolved.resolve()
+        if (not relative or not asset.is_relative_to(package.directory) or not asset.is_file() or
+                any(p.is_symlink() for p in (unresolved, *unresolved.parents) if p.is_relative_to(package.directory))):
+            raise CopperScriptError("PKG004", f"module asset does not exist or escapes its module: {identity}", location)
+        files = self._lock_entries[(module, package.version)].files
+        entry = next((f for f in files if f.path == relative), None)
+        if entry is None or hashlib.sha256(asset.read_bytes()).hexdigest() != entry.sha256:
+            raise CopperScriptError("PKG008", f"lock mismatch: asset differs from verified module inventory: {identity}", location)
+        return ResolvedAsset(asset, identity, module, package.version, package.checksum, entry.sha256)
 
     def resolve(self, import_path: str, location: SourceLocation) -> ResolvedPackage:
         if import_path.startswith(("./", "../")):
@@ -237,14 +313,16 @@ class PackageResolver:
     def _fetch_git_module(
         self, module_path: str, version: str, location: SourceLocation
     ) -> Path:
-        if not module_path.startswith("github.com/"):
+        if not module_path.startswith(("github.com/", "gitlab.com/")):
             raise CopperScriptError(
                 "PKG005",
-                "v0.1 remote fetching supports github.com module paths only; use replace for other sources",
+                "remote fetching supports github.com and gitlab.com module paths; use replace for other sources",
                 location,
             )
-        if not re.fullmatch(r"github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", module_path):
-            raise CopperScriptError("PKG005", "invalid GitHub module path", location)
+        pattern = (r"github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" if module_path.startswith("github.com/") else
+                   r"gitlab\.com/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
+        if not re.fullmatch(pattern, module_path) or any(p in {".", ".."} for p in module_path.split("/")):
+            raise CopperScriptError("PKG005", "invalid Git module path", location)
         if not version or version.startswith("-"):
             raise CopperScriptError("PKG006", "invalid Git revision", location)
         cache_key = hashlib.sha256(f"{module_path}@{version}".encode()).hexdigest()[:20]
@@ -268,7 +346,7 @@ class PackageResolver:
             completed = subprocess.run(
                 [
                     "git",
-                    "-c", "core.autocrlf=false",
+                    "-c", "core.autocrlf=false", "-c", "core.longpaths=true",
                     "clone",
                     "--quiet",
                     "--depth",
@@ -287,14 +365,14 @@ class PackageResolver:
             if re.fullmatch(r"[0-9a-fA-F]{40}", version):
                 for arguments in (("fetch", "--quiet", "--depth", "1", "origin", version),
                                   ("checkout", "--quiet", "--detach", version)):
-                    completed = subprocess.run(["git", "-c", "core.autocrlf=false",
+                    completed = subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.longpaths=true",
                         "-C", str(temporary), *arguments], capture_output=True, text=True)
                     if completed.returncode:
                         raise CopperScriptError("PKG006", completed.stderr.strip(), location)
             temporary.replace(destination)
         finally:
             if temporary.exists():
-                shutil.rmtree(temporary)
+                shutil.rmtree(temporary, onerror=_remove_readonly)
         return destination.resolve()
 
     def _verify_or_record_lock(self, entry: LockedModule, location: SourceLocation) -> None:
@@ -315,25 +393,25 @@ class PackageResolver:
             raise CopperScriptError("PKG007", f"cannot write copper.lock: {exc}", location) from exc
 
 
+def _remove_readonly(function, path, exc_info):
+    """Remove read-only Git files when cleaning a failed Windows download."""
+    if not isinstance(exc_info[1], PermissionError):
+        raise exc_info[1]
+    Path(path).chmod(stat.S_IWRITE | stat.S_IREAD)
+    function(path)
+
+
 def resolve_module_asset(source: Path, import_path: str, *, locked: bool = True,
                          offline: bool = False) -> Path:
     """Resolve data through the same revision/inventory lock as .copper parts.
 
-    Accept Go-style paths or https GitHub paths, never execute downloaded data.
+    Accept Go-style paths or HTTPS GitHub/GitLab paths, never execute downloaded data.
     Paths must stay within the selected module, and symlinks are rejected by
     the normal full inventory validation.
     """
-    import_path = import_path.removeprefix("https://")
-    if "\\" in import_path or any(p in {".", "..", ""} for p in import_path.split("/")):
-        raise CopperScriptError("PKG004", "invalid module asset path", SourceLocation(str(source),0,1,1))
     location = SourceLocation(str(source),0,1,1)
     resolver = PackageResolver.for_source(Path(source), location, locked=locked, offline=offline)
-    parent, _, name = import_path.rpartition("/")
-    package = resolver.resolve(parent, location)
-    asset = (package.directory / name).resolve()
-    if not asset.is_relative_to(package.directory) or not asset.is_file():
-        raise CopperScriptError("PKG004", f"module asset does not exist: {import_path}", location)
-    return asset
+    return resolver.resolve_asset(import_path, location).path
 
 
 def resolve_module_root(source: Path, module_path: str, *, locked: bool = True,

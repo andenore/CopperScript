@@ -77,8 +77,8 @@ writes the canonical `copper.lock` inventory. The lock contains a module digest
 and an individual SHA-256 and size for each consumable `.copper`, `.kicad_mod`,
 3D-model, JSON, and CSV asset. Local replacements are locked exactly like
 downloaded modules. Use `--locked` to reject missing or changed content and
-`--offline` to reject remote cache misses. Remote resolution currently supports
-tagged GitHub repositories and caches them in `.copper-cache`; package code is
+`--offline` to reject remote cache misses. Remote resolution supports
+tagged or commit-pinned GitHub and GitLab repositories and caches them in `.copper-cache`; package code is
 never executed.
 
 A package is a directory. Every `.copper` file directly in it exports one
@@ -375,10 +375,29 @@ component R1: RESISTOR {
 }
 ```
 
-It can also use KiCad's `Library:Footprint` identifier form. The PCB export
-command resolves that form only within explicit `--footprint-root` directories.
-For example, `Resistor_SMD:R_0402_1005Metric` maps to
-`Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod`. Missing and ambiguous
+It can also use KiCad's `Library:Footprint` identifier form. Bind the library
+to a versioned provider in the consuming project's `copper.mod`:
+
+```text
+require gitlab.com/kicad/libraries/kicad-footprints eff413fd489b7ade27fc108781a95c4b28ccf0b7
+footprint-library Resistor_SMD gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty
+```
+
+`Resistor_SMD:R_0402_1005Metric` then resolves its exact footprint through the
+managed cache and lock without `--footprint-root`. A part or component may also
+name an exact `.kicad_mod` module asset URL, with or without `https://`:
+
+```copper
+footprint = "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod";
+```
+
+Relative `.kicad_mod` paths authored in imported parts/modules resolve from the
+declaring package and remain confined to its source module. Entry-board paths
+retain their board-relative behavior. Local roots remain explicit development
+overrides; a locked bound namespace always selects its managed provider.
+`copper lock BOARD` prepares selected managed footprints as well as source
+imports. See [footprint dependencies](footprint-dependencies.md) for complete
+syntax, provenance and independent `--locked`/`--offline` behavior. Missing and ambiguous
 references are errors. Imported numbered pads must exactly match the electrical
 part's physical pin numbers; unnumbered non-plated mounting holes do not
 participate in that comparison.

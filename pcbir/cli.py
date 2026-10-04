@@ -13,7 +13,7 @@ from typing import Sequence
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .backends.kicad_project import write_kicad_project
 from .erc import check, has_errors
-from .footprints import FootprintResolver
+from .footprints import FootprintResolver, FootprintResolutionError, prepare_footprint_dependencies
 from .importers import KiCadModImportError, load_kicad_mod
 from .layout import PlacementPlannerOptions, plan_placement
 from .placement_templates import apply_placement_templates
@@ -652,7 +652,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         board = design.electrical
         if args.command == "lock":
-            print(f"Locked package content for {board.name} -> copper.lock")
+            try:
+                managed = prepare_footprint_dependencies(board, FootprintResolver(
+                    args.board.resolve().parent, locked=getattr(args, "locked", False), offline=getattr(args, "offline", False)))
+            except (FootprintResolutionError, OSError) as exc:
+                print(f"FOOTPRINT ERROR: {exc}")
+                return 2
+            print(f"Locked package content for {board.name} -> copper.lock ({len(managed)} managed footprints)")
             return 0
         if args.command == "audit-footprints":
             resolver = FootprintResolver(
@@ -673,6 +679,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "components": list(entry.components),
                         "source_path": entry.source_path,
                         "source_sha256": entry.source_sha256,
+                        "provenance": dict(entry.provenance),
                         "warnings": list(entry.warnings),
                         "errors": list(entry.errors),
                         "passed": entry.passed,

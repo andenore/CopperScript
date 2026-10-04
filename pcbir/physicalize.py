@@ -100,6 +100,7 @@ class FootprintAuditEntry:
     source_sha256: str | None
     warnings: tuple[str, ...]
     errors: tuple[str, ...]
+    provenance: tuple[tuple[str, str], ...] = ()
 
     @property
     def passed(self) -> bool:
@@ -131,11 +132,14 @@ def audit_resolved_footprints(board: Board, resolver: FootprintResolver) -> Foot
         warnings: tuple[str, ...] = ()
         source_path: str | None = None
         source_sha256: str | None = None
+        provenance = ()
         try:
             result = resolver.resolve(reference)
             warnings = result.warnings
             source_path = result.footprint.metadata.get("source_path")
             source_sha256 = result.footprint.metadata.get("source_sha256")
+            provenance = tuple(sorted((k, v) for k, v in result.footprint.metadata.items()
+                if k in {"resolution", "managed_reference", "source_asset", "module_path", "module_version", "module_checksum"}))
             for component, part in uses:
                 try:
                     _validate_footprint_pins(part, component, result.footprint)
@@ -151,6 +155,7 @@ def audit_resolved_footprints(board: Board, resolver: FootprintResolver) -> Foot
                 source_sha256,
                 warnings,
                 tuple(errors),
+                provenance,
             )
         )
     return FootprintAudit(tuple(entries))
