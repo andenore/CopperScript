@@ -236,6 +236,7 @@ class EditorSession:
             from .transactions import electrical_identity
             self.workspace.identity = electrical_identity(design.electrical)
             self.workspace.inputs = self.workspace._inputs()
+            self.workspace.references = board.mechanical_references
             self.source_revision = sha256(raw).hexdigest()
             self.source_raw = raw
             self.state = State(board)

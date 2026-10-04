@@ -139,6 +139,20 @@ def test_new_reference_asset_change_after_review_cannot_save(tmp_path):
     assert s.source.read_bytes()==original
 
 
+def test_explicit_reload_recovers_only_after_source_checksum_is_updated(tmp_path):
+    p,digest=asset(tmp_path);s=session(tmp_path,source(digest).encode());before=s.state
+    p.write_bytes(dxf(LINE,4));replacement=sha256(p.read_bytes()).hexdigest()
+    with pytest.raises(CopperScriptError,match='checksum'):op(s,'reload_source')
+    assert s.state==before and s.scene()['references_stale']
+    s.source.write_bytes(s.source.read_bytes().replace(digest.encode(),replacement.encode()))
+    op(s,'reload_source');assert not s.scene()['references_stale']
+    assert s.workspace.references==s.state.board.mechanical_references
+    # Subsequent edits must use the reloaded asset guard, not its previous hash.
+    params={'file':'"guide.dxf"','sha256':f'"{replacement}"','units':'mm','frame':'board'}
+    op(s,'prepare_mechanical',kind='reference',name='CASE',shape='dxf',parameters=params,remove=False)
+    assert s.source_pending
+
+
 def test_reference_profile_asset_resolves_from_declaring_file_and_is_readonly(tmp_path):
     from pcbir.design import lower_mechanical
     from pcbir.parser import parse
@@ -214,3 +228,19 @@ def test_imported_reference_owner_cannot_be_shadowed_in_editor(tmp_path):
         'mechanical_provenance':json.dumps({'features':[{'kind':'reference','name':'CASE','profile':'Imported'}]})}))
     with pytest.raises(EditorError,match='imported profile'):
         op(s,'prepare_mechanical',kind='reference',name='CASE',shape='dxf',parameters={},remove=True)
+
+
+def test_guides_survive_placement_worker_without_changing_placement(tmp_path):
+    from test_editor_jobs import board,OPTIONS,wait
+    from pcbir.editor.jobs import PlacementJob
+    from pcbir.layout import plan_placement
+    _,digest=asset(tmp_path)
+    refs=compile_design_source(source(digest),str(tmp_path/'board.copper')).mechanical.references
+    plain=board();guided=replace(plain,mechanical_references=refs)
+    job=PlacementJob(guided,OPTIONS,revision=1,source_revision='guide',timeout_seconds=15)
+    try:
+        info=wait(job)
+        assert info['status']=='completed',info
+        assert job.result.mechanical_references==refs
+        assert job.result.placements==plan_placement(plain,OPTIONS).board.placements
+    finally:job.cancel()

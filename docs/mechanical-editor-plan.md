@@ -349,3 +349,32 @@ board/source revision, browser actions and explicit remaining limitations.
 - Items 1–28 are locally implemented and verified within documented initial
   limits. Optional 3D, concave curved paths/curved cutouts and supplier production
   qualification remain explicitly outside this first tool delivery.
+
+### CopperLedRing published-pin integration — 2026-10-04
+
+- Another session published CopperScript `3bf987487aee2e92e734d2f4db2a54e6125d5bfb`
+  (including editor items 1–27). Its GitHub availability was checked, then the
+  local CopperLedRing compiler pin and uv lock were updated to that exact revision.
+  `make edit` now runs from its own locked installed dependency, no local compiler
+  override or manually checked-out CopperLib. LED-ring editor integration is no
+  longer blocked by compiler availability; publishing the example changes still
+  requires approval. Item 28 remains in the latest local CopperScript commit.
+- Default Make scene export and Chrome inspection pass: circle, 33 front/1 rear
+  real components, side filters/wheel/fit, zero page errors, unchanged source SHA.
+  README includes the usage and actual editor snapshot. Local example commit:
+  `edc1027` (shared editor/published compiler pin).
+- Fresh profiled `make route verify BUILD=build/editor-pin-verification` passes:
+  31 ordinary nets routed, zero native violations and zero opens after fill.
+  Explicit-copper GND remains deferred to native filled-zone connectivity rather
+  than being falsely credited. 34/34 exact reviewed assembly selections validate;
+  stock is not checked. Existing manufacturing outputs were preserved.
+- Additional guide/placement-process tests: **50 passed, 1 skipped**; typed guides
+  survive spawned placement jobs and do not change the resulting placement.
+  Generic Make registry checks: **25 passed, 6 skipped**.
+- Manufacturing export with independent CAM explicitly skipped passes native DRC
+  and produces Gerber/drill ZIP, BOM/CPL and checksums in the separate verification
+  build. All 34 BOM/CPL references agree; all **31 package checksums** verify.
+  This is file-generation evidence, not stock reservation/factory qualification.
+- Follow-up: explicit reload replaces the reference-asset guard only after the
+  source checksum is intentionally updated. A mismatched asset cannot reload or
+  silently repin itself; source/history state survives failed reloads.
