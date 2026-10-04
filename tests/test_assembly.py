@@ -63,6 +63,7 @@ def test_complete_selection_roundtrip_and_grouped_bom(tmp_path):
     assert rows[0]["Designator"] == "R1,R2"
     assert rows[0]["LCSC Part #"] == "C123"
     assert rows[0]["MPN"] == "EXAMPLE-10K-0603-1P"
+    assert rows[0]["Comment"] == "10 kohm"
 
 
 def test_stale_lock_detects_value_library_and_board_changes():

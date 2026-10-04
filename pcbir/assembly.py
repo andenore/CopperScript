@@ -12,6 +12,7 @@ from pathlib import Path
 from .elaborate import elaborate
 from .erc import check, has_errors
 from .model import Board, ComponentInstance, PartDefinition
+from .quantities import Quantity
 from .serializer import board_to_json
 
 SCHEMA = "copperscript-assembly-lock/v0.1"
@@ -198,7 +199,9 @@ def write_jlcpcb_bom(board: Board, lock: AssemblyLock, path: str | Path) -> None
     groups = {}
     for entry in lock.selections:
         component, _ = components[entry.reference]
-        value = str(component.value) if component.value is not None else entry.mpn
+        value = (f"{format(component.value.value.normalize(), 'f')} {component.value.display_unit}"
+                 if isinstance(component.value, Quantity)
+                 else str(component.value) if component.value is not None else entry.mpn)
         key = (value, entry.footprint, entry.supplier_part, entry.manufacturer, entry.mpn)
         groups.setdefault(key, []).append(entry.reference)
     output = Path(path)
