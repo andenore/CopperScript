@@ -6,7 +6,7 @@ import pytest
 from pcbir import (BoardOutline, CopperLayer, CopperZone, DetailedRouterOptions,
                    FootprintPad, GlobalRouterOptions, PadReference, PhysicalBoard,
                    PhysicalFootprint, PhysicalNet, Placement, PlacementPlannerOptions,
-                   Point, PolygonRing, PolygonWithHoles, Size, nm_from_mm,
+                   Point, PolygonRing, PolygonWithHoles, Size, Stackup, nm_from_mm,
                    route_detailed, route_global, run_routing_pipeline)
 import pcbir.detailed as detailed
 from pcbir.escape_feedback import _merge_local_detail
@@ -20,8 +20,16 @@ def board(two_nets=False):
         refs = (name+"1", name+"2")
         placements.extend(Placement(ref, footprint.name, Point.mm(x, y)) for ref, x in zip(refs, (3, 12)))
         nets.append(PhysicalNet(name, tuple(PadReference(ref, "1") for ref in refs)))
-    return PhysicalBoard("Policy", BoardOutline.rectangle(16, 12), {footprint.name: footprint},
-                         tuple(placements), tuple(nets))
+    outline = BoardOutline.rectangle(16, 12)
+    # Fallback needs preferences that actually affect search. A two-layer board
+    # with no reference plane has zero ranks and no preferred headings.
+    return PhysicalBoard("Policy", outline, {footprint.name: footprint},
+        tuple(placements), (*nets, PhysicalNet("GND", ())),
+        stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+                        CopperLayer.INTERNAL_2, CopperLayer.INTERNAL_3,
+                        CopperLayer.INTERNAL_4, CopperLayer.BACK)),
+        zones=(CopperZone("reference", "GND", (CopperLayer.INTERNAL_1,),
+                          PolygonWithHoles(PolygonRing(outline.vertices))),))
 
 
 def options(**kwargs):
