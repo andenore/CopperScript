@@ -6,12 +6,13 @@ from pathlib import Path
 import pytest
 
 from pcbir.assembly import (
-    AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_jlcpcb_bom,
+    AssemblyError, check_assembly, electrical_digest, load_lock, lock_to_json, snapshot, write_jlcpcb_bom,
 )
 from pcbir.cli import main
 from pcbir.compiler import compile_file
-from pcbir.model import Board, ComponentInstance, PartDefinition
+from pcbir.model import Board, ComponentInstance, Constraint, ConstraintKind, ModuleDefinition, PartDefinition
 from pcbir.quantities import Resistance
+from pcbir.serializer import board_to_json
 
 ROOT = Path(__file__).parents[1]
 
@@ -74,6 +75,48 @@ def test_stale_lock_detects_value_library_and_board_changes():
     for changed in (changed_value, changed_library):
         assert "STALE_LOCK" in codes(check_assembly(changed, lock))
     assert "BOARD_MISMATCH" in codes(check_assembly(replace(board, name="Other"), lock))
+
+
+@pytest.mark.parametrize("hierarchical", [False, True])
+def test_digest_ignores_only_constraint_diagnostic_origins(hierarchical):
+    constraint = Constraint(
+        ConstraintKind.FIXED_PLACEMENT, ("R1",), {"x": 10, "y": 20},
+        origins=(r"C:\checkout\board.copper:95:16",),
+    )
+    board = board_fixture()
+    if hierarchical:
+        module = ModuleDefinition("Unit", {}, {}, (), (), (), constraints=(constraint,))
+        board = replace(board, module_definitions={"Unit": module})
+
+        def with_constraint(value):
+            return replace(board, module_definitions={"Unit": replace(module, constraints=(value,))})
+    else:
+        board = replace(board, constraints=(constraint,))
+
+        def with_constraint(value):
+            return replace(board, constraints=(value,))
+
+    relocated = with_constraint(replace(constraint, origins=("/home/runner/project/board.copper:120:3",)))
+    lock = reviewed_lock(board)
+    assert electrical_digest(board) == electrical_digest(relocated)
+    assert "STALE_LOCK" not in codes(check_assembly(relocated, lock))
+    assert board_to_json(board) != board_to_json(relocated)
+    assert constraint.origins == (r"C:\checkout\board.copper:95:16",)
+    for changed in (
+        replace(constraint, parameters={"x": 11, "y": 20}),
+        replace(constraint, targets=("R2",)),
+        replace(constraint, constraint_id="different"),
+    ):
+        assert "STALE_LOCK" in codes(check_assembly(with_constraint(changed), lock))
+
+
+def test_digest_preserves_user_properties_named_origins():
+    board = board_fixture()
+    changed = replace(board, components=(
+        replace(board.components[0], properties={"origins": "user-defined fact"}),
+        *board.components[1:],
+    ))
+    assert electrical_digest(board) != electrical_digest(changed)
 
 
 def test_coverage_unknown_duplicates_and_mismatches():

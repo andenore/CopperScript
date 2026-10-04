@@ -19,6 +19,9 @@ invalidate the electrical digest; review differences and deliberately create a
 new snapshot rather than silently accepting new parts. Missing fields, unknown
 or duplicate references, mismatched parts/footprints, and unreviewed selections
 fail the check. BOM export requires both ERC and assembly checks to pass.
+Constraint diagnostic source locations are excluded from this digest, so the
+same locked design works across checkout paths and operating systems. Actual
+constraints, hierarchy, document evidence and library revisions remain bound.
 The CSV contains JLCPCB's component-selection columns plus manufacturer/MPN.
 No stock lookup, order submission or manufacturing signoff is implied.
 The separate [native manufacturing exporter](manufacturing-files.md) can consume

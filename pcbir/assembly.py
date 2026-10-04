@@ -13,7 +13,7 @@ from .elaborate import elaborate
 from .erc import check, has_errors
 from .model import Board, ComponentInstance, PartDefinition
 from .quantities import Quantity
-from .serializer import board_to_json
+from .serializer import board_to_dict
 
 SCHEMA = "copperscript-assembly-lock/v0.1"
 
@@ -68,8 +68,18 @@ def _text(value: object, name: str) -> None:
 
 
 def electrical_digest(board: Board) -> str:
-    """Bind hierarchy, connectivity, values and resolved library provenance."""
-    return hashlib.sha256(board_to_json(board).encode("utf-8")).hexdigest()
+    """Bind design semantics and library provenance, not diagnostic locations.
+
+    Constraint origins identify source lines for diagnostics, so their absolute
+    checkout paths must not invalidate selections on another machine. Strip
+    only those fields; evidence references and arbitrary properties stay bound.
+    """
+    document = board_to_dict(board)
+    for unit in (document, *document["module_definitions"]):
+        for constraint in unit["constraints"]:
+            constraint.pop("origins", None)
+    canonical = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _components(board: Board) -> dict[str, tuple[ComponentInstance, PartDefinition]]:
