@@ -82,7 +82,19 @@ tagged GitHub repositories and caches them in `.copper-cache`; package code is
 never executed.
 
 A package is a directory. Every `.copper` file directly in it exports one
-`device`, `part`, or `module`; boards cannot be exported from packages.
+`device`, `part`, `module`, or `board_profile`; boards cannot be exported from packages.
+Project-local imports such as `import carrier "./mechanics";` are relative to
+the importing file and confined to its source module. Local source retains
+content-hash provenance but is not an external locked dependency.
+
+Reusable [mechanical profiles](mechanical-profiles.md) supply outlines, holes,
+keepouts and explicit connector roles without changing electrical connectivity:
+
+```copper
+mechanical {
+    use carrier.Carrier as host { debug = J_DEBUG; }
+}
+```
 
 ## Part definitions
 
@@ -677,12 +689,16 @@ display unit.
 ## Grammar sketch
 
 ```ebnf
-document       = ("board" | "module" | "part" | "device"), name, "{", item*, "}" ;
+document       = ("board" | "module" | "part" | "device" | "board_profile"), name, "{", item*, "}" ;
 item           = library | package_import | port | pin | pad | power_domain
                | part_property | peripheral | mux | route | pad_set | resource
                | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
-               | power_state | interface | constraint ;
+               | power_state | interface | constraint | mechanical ;
+mechanical     = "mechanical", "{", mechanical_item*, "}" ;
+profile_use    = "use", qualified_name, ["as", name], properties ;
+(* board_profile bodies permit imports and mechanical items, including
+   profile_use and connector roles, but no electrical declarations. *)
 library        = "use", "library", string, ";" ;
 package_import = "import", name, string, ";" ;
 port           = "port", name, ":", pin_type, ";" ;

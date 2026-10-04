@@ -1,0 +1,21 @@
+// Fictional carrier geometry for compiler/editor testing, not a host standard.
+board_profile Carrier {
+    outline rectangle { width = 50mm; height = 35mm; }
+    hole H1 { position = (4mm, 4mm); diameter = 2.5mm; head_clearance_radius = 3mm; }
+    hole H2 { position = (4mm, 31mm); diameter = 2.5mm; head_clearance_radius = 3mm; }
+    connector debug {
+        anchor_pad = "1";
+        position = (15mm, 10mm);
+        rotation = 90;
+        side = front;
+        footprint = "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical";
+    }
+    keepout host_components polygon {
+        vertices = [(25mm, 20mm), (40mm, 20mm), (40mm, 30mm), (25mm, 30mm)];
+        side = back;
+    }
+    copper_keepout host_antenna rectangle {
+        origin = (40mm, 10mm); width = 5mm; height = 10mm;
+        layers = "F.Cu,B.Cu";
+    }
+}

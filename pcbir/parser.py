@@ -17,6 +17,7 @@ from .syntax import (
     ModuleInstanceDecl,
     MechanicalDecl,
     MechanicalItemDecl,
+    MechanicalProfileUseDecl,
     MuxDecl,
     NetDecl,
     PartPropertyDecl,
@@ -49,11 +50,11 @@ class Parser:
         return self.tokens[self.index]
 
     def parse(self) -> Document:
-        root = self._expect(TokenKind.IDENTIFIER, "'board', 'module', 'part', or 'device'")
-        if root.text not in {"board", "module", "part", "device"}:
+        root = self._expect(TokenKind.IDENTIFIER, "'board', 'module', 'part', 'device', or 'board_profile'")
+        if root.text not in {"board", "module", "part", "device", "board_profile"}:
             self._error(
                 "PAR008",
-                f"expected 'board', 'module', 'part', or 'device', found {root.text!r}",
+                f"expected 'board', 'module', 'part', 'device', or 'board_profile', found {root.text!r}",
                 root,
             )
         start = root.location
@@ -72,6 +73,8 @@ class Parser:
                 import_path = self._expect(TokenKind.STRING, "package import path").text
                 imports.append(ImportDecl(import_location, alias, import_path))
                 self._expect_symbol(";")
+            elif root.text == "board_profile":
+                declarations.append(self._mechanical_item(keyword, self.tokens[self.index - 1].location, profile=True))
             elif keyword == "use":
                 import_kind = self._name("'library'")
                 import_name = self._expect(TokenKind.STRING, f"{import_kind} name").text
@@ -163,34 +166,47 @@ class Parser:
         items = []
         while not self._at_symbol("}"):
             start = self.current.location
-            kind = self._name("outline, cutout, hole, or rules")
-            name = self._name("mechanical feature id") if kind in {"hole", "cutout"} else ""
-            shape = self._name("outline shape") if kind in {"outline", "cutout"} else ""
-            if kind not in {"outline", "cutout", "hole", "rules"}:
-                self._error("PAR013", f"unknown mechanical declaration {kind!r}")
-            self._expect_symbol("{")
-            parameters = {}
-            while not self._at_symbol("}"):
-                token = self.current
-                key = self._name("mechanical property")
-                if key in parameters:
-                    self._error("PAR004", f"duplicate property {key!r}", token)
-                self._expect_symbol("=")
-                if self._accept_symbol("["):
-                    value = [self._mechanical_point()]
-                    while self._accept_symbol(","):
-                        value.append(self._mechanical_point())
-                    self._expect_symbol("]")
-                    parameters[key] = tuple(value)
-                elif self._at_symbol("("):
-                    parameters[key] = self._mechanical_point()
-                else:
-                    parameters[key] = self._scalar()
-                self._expect_symbol(";")
-            self._expect_symbol("}")
-            items.append(MechanicalItemDecl(start, kind, name, shape, parameters))
+            kind = self._name("mechanical declaration")
+            items.append(self._mechanical_item(kind, start))
         self._expect_symbol("}")
         return MechanicalDecl(location, tuple(items))
+
+    def _mechanical_item(self, kind, location, *, profile=False):
+        if kind == "use":
+            name = self._qualified_name("board profile")
+            instance = name.split(".")[-1]
+            if self.current.text == "as":
+                self._advance()
+                instance = self._name("profile instance")
+            return MechanicalProfileUseDecl(location, name, instance, self._assignment_block())
+        allowed = {"outline", "cutout", "hole", "rules", "keepout", "copper_keepout"}
+        if profile:
+            allowed.add("connector")
+        if kind not in allowed:
+            self._error("PAR013", f"unknown mechanical declaration {kind!r}")
+        name = self._name("mechanical feature id") if kind in {"hole", "cutout", "keepout", "copper_keepout", "connector"} else ""
+        shape = self._name("mechanical shape") if kind in {"outline", "cutout", "keepout", "copper_keepout"} else ""
+        self._expect_symbol("{")
+        parameters = {}
+        while not self._at_symbol("}"):
+            token = self.current
+            key = self._name("mechanical property")
+            if key in parameters:
+                self._error("PAR004", f"duplicate property {key!r}", token)
+            self._expect_symbol("=")
+            if self._accept_symbol("["):
+                value = [self._mechanical_point()]
+                while self._accept_symbol(","):
+                    value.append(self._mechanical_point())
+                self._expect_symbol("]")
+                parameters[key] = tuple(value)
+            elif self._at_symbol("("):
+                parameters[key] = self._mechanical_point()
+            else:
+                parameters[key] = self._scalar()
+            self._expect_symbol(";")
+        self._expect_symbol("}")
+        return MechanicalItemDecl(location, kind, name, shape, parameters)
 
     def _mechanical_point(self):
         self._expect_symbol("(")

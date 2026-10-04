@@ -24,6 +24,7 @@ from .model import (
 )
 from .quantities import Quantity
 from .design import Design
+from .mechanical_profiles import mechanical_provenance
 
 
 def board_to_dict(board: Board | Design) -> dict[str, object]:
@@ -44,6 +45,17 @@ def board_to_dict(board: Board | Design) -> dict[str, object]:
                 "holes": [{"id": h.id, "position": point(h.position), "diameter_nm": h.diameter_nm,
                            "head_clearance_radius_nm": h.head_clearance_radius_nm} for h in m.holes],
                 "rule_overrides": dict(m.rule_overrides),
+                "connectors": [{"role": c.role, "reference": c.reference, "anchor_pad": c.anchor_pad,
+                                "position": point(c.position), "rotation": str(c.rotation),
+                                "side": c.side.value, "footprint": c.footprint} for c in m.connectors],
+                "keepouts": [{"name": k.name, "vertices": [point(p) for p in k.outline.vertices],
+                              "side": k.side.value if k.side else None,
+                              "maximum_height_nm": k.maximum_component_height_nm} for k in m.keepouts],
+                "copper_keepouts": [{"id": k.id, "layers": [l.value for l in k.layers],
+                                     "vertices": [point(p) for p in k.outline.outer.vertices],
+                                     **{name: getattr(k, name) for name in ("block_tracks", "block_vias", "block_pads", "block_zones", "block_footprints")}}
+                                    for k in m.copper_keepouts],
+                "provenance": mechanical_provenance(m),
             }
         return result
     result = {

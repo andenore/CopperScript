@@ -7,9 +7,25 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .model import Board
-from .physical import BoardCutout, BoardOutline, DesignRules, MechanicalHole, PhysicalBoard, Point
+from .physical import (BoardCutout, BoardOutline, BoardSide, CopperKeepout, CopperLayer,
+    DesignRules, MechanicalHole, PhysicalBoard, PlacementKeepout, Point,
+    PolygonRing, PolygonWithHoles)
+from .mechanical_profiles import (MechanicalProfileDefinition, MechanicalProfileInstance,
+    MechanicalFeatureSource, expand_mechanical_items)
 from .quantities import Length
-from .syntax import CopperScriptError, Document, MechanicalDecl, RawQuantity
+from .syntax import CopperScriptError, Document, MechanicalDecl, RawQuantity, SourceLocation
+
+
+@dataclass(frozen=True, slots=True)
+class MechanicalConnectorBinding:
+    role: str
+    reference: str
+    anchor_pad: str
+    position: Point
+    rotation: Decimal
+    side: BoardSide
+    location: SourceLocation
+    footprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,9 +33,16 @@ class MechanicalDesign:
     outline: BoardOutline
     holes: tuple[MechanicalHole, ...] = ()
     rule_overrides: Mapping[str, int] = field(default_factory=dict)
+    connectors: tuple[MechanicalConnectorBinding, ...] = ()
+    keepouts: tuple[PlacementKeepout, ...] = ()
+    copper_keepouts: tuple[CopperKeepout, ...] = ()
+    profiles: tuple[MechanicalProfileInstance, ...] = ()
+    sources: tuple[MechanicalFeatureSource, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holes", tuple(self.holes))
+        for name in ("connectors", "keepouts", "copper_keepouts", "profiles", "sources"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(self, "rule_overrides", MappingProxyType(dict(self.rule_overrides)))
         DesignRules(**self.rule_overrides)
         PhysicalBoard("mechanical-validation", self.outline, {}, (), (), mechanical_holes=self.holes)
@@ -37,7 +60,8 @@ class Design:
     mechanical: MechanicalDesign | None = None
 
 
-def lower_mechanical(document: Document) -> MechanicalDesign | None:
+def lower_mechanical(document: Document,
+                     profiles: Mapping[str, MechanicalProfileDefinition] | None = None) -> MechanicalDesign | None:
     blocks = [d for d in document.declarations if isinstance(d, MechanicalDecl)]
     if not blocks:
         return None
@@ -49,7 +73,8 @@ def lower_mechanical(document: Document) -> MechanicalDesign | None:
     holes = []
     rules = {}
     ids = set()
-    seen_rules = False
+    connectors, keepouts, copper_keepouts = [], [], []
+    items, sources, instances = expand_mechanical_items(block.items, profiles or {})
 
     def length(value):
         if not isinstance(value, RawQuantity):
@@ -72,7 +97,7 @@ def lower_mechanical(document: Document) -> MechanicalDesign | None:
     def mm(value):
         return Decimal(length(value)) / Decimal(1_000_000)
 
-    for item in block.items:
+    for item in items:
         try:
             p = item.parameters
             if item.name:
@@ -80,11 +105,24 @@ def lower_mechanical(document: Document) -> MechanicalDesign | None:
                     raise ValueError(f"duplicate mechanical feature id {item.name!r}")
                 ids.add(item.name)
             if item.kind == "rules":
-                if seen_rules:
-                    raise ValueError("only one mechanical rules block is allowed")
-                seen_rules = True
                 allowed = {name.removesuffix("_nm") for name in DesignRules.__dataclass_fields__}
                 required = set()
+            elif item.kind == "connector":
+                allowed = {"component", "anchor_pad", "position", "rotation", "side", "footprint"}
+                required = {"component", "anchor_pad", "position", "rotation", "side"}
+            elif item.kind in {"keepout", "copper_keepout"}:
+                allowed = ({"side", "maximum_height"} if item.kind == "keepout" else
+                           {"layers", "block_tracks", "block_vias", "block_pads", "block_zones", "block_footprints"})
+                if item.shape == "rectangle":
+                    allowed |= {"width", "height", "origin"}
+                    required = {"width", "height"}
+                elif item.shape == "polygon":
+                    allowed |= {"vertices"}
+                    required = {"vertices"}
+                else:
+                    raise ValueError("keepouts require rectangle or polygon geometry")
+                if item.kind == "copper_keepout":
+                    required |= {"layers"}
             elif item.kind == "hole":
                 allowed = {"position", "diameter", "head_clearance_radius"}
                 required = {"position", "diameter"}
@@ -103,7 +141,41 @@ def lower_mechanical(document: Document) -> MechanicalDesign | None:
             if required - set(p):
                 raise ValueError(f"missing mechanical property {sorted(required-set(p))[0]!r}")
             if item.kind == "rules":
-                rules = {name + "_nm": length(value) for name, value in p.items()}
+                additions = {name + "_nm": length(value) for name, value in p.items()}
+                if set(rules) & set(additions):
+                    raise ValueError("conflicting mechanical rule ownership")
+                rules.update(additions)
+            elif item.kind == "connector":
+                if isinstance(p["anchor_pad"], bool) or not isinstance(p["anchor_pad"], (str, int)) or not str(p["anchor_pad"]):
+                    raise ValueError("connector anchor_pad must name a physical pad")
+                if isinstance(p["rotation"], bool) or not isinstance(p["rotation"], (int, float)):
+                    raise ValueError("connector rotation must be numeric degrees")
+                angle = Decimal(str(p["rotation"]))
+                if not angle.is_finite():
+                    raise ValueError("connector rotation must be finite")
+                if "footprint" in p and (not isinstance(p["footprint"], str) or not p["footprint"]):
+                    raise ValueError("connector footprint must be a nonempty library identifier")
+                if any(c.reference == p["component"] for c in connectors):
+                    raise ValueError("multiple profile connector roles bind the same component")
+                connectors.append(MechanicalConnectorBinding(item.name, p["component"], str(p["anchor_pad"]),
+                    point(p["position"]), angle % 360, BoardSide(p["side"]), item.location, p.get("footprint")))
+            elif item.kind in {"keepout", "copper_keepout"}:
+                region = (BoardOutline.rectangle(mm(p["width"]), mm(p["height"]),
+                          origin=point(p["origin"]) if "origin" in p else None)
+                          if item.shape == "rectangle" else BoardOutline(vertices(p["vertices"])))
+                if item.kind == "keepout":
+                    side = BoardSide(p["side"]) if "side" in p else None
+                    keepouts.append(PlacementKeepout(item.name, region, side,
+                        length(p["maximum_height"]) if "maximum_height" in p else None))
+                else:
+                    if not isinstance(p["layers"], str):
+                        raise ValueError("copper keepout layers must be a comma-separated string")
+                    layers = tuple(CopperLayer(v.strip()) for v in p["layers"].split(","))
+                    flags = {key: value for key, value in p.items() if key.startswith("block_")}
+                    if any(type(v) is not bool for v in flags.values()):
+                        raise ValueError("copper keepout block properties must be booleans")
+                    copper_keepouts.append(CopperKeepout(item.name, layers,
+                        PolygonWithHoles(PolygonRing(region.vertices)), **flags))
             elif item.kind == "hole":
                 holes.append(MechanicalHole(item.name, point(p["position"]), length(p["diameter"]),
                     length(p["head_clearance_radius"]) if "head_clearance_radius" in p else 0))
@@ -126,6 +198,7 @@ def lower_mechanical(document: Document) -> MechanicalDesign | None:
     try:
         if outline is None:
             raise ValueError("mechanical block requires exactly one outline")
-        return MechanicalDesign(replace(outline, cutouts=tuple(cutouts)), tuple(holes), rules)
+        return MechanicalDesign(replace(outline, cutouts=tuple(cutouts)), tuple(holes), rules,
+            tuple(connectors), tuple(keepouts), tuple(copper_keepouts), instances, sources)
     except ValueError as exc:
         raise CopperScriptError("MEC003", str(exc), block.location) from exc

@@ -5,6 +5,10 @@ const NS = "http://www.w3.org/2000/svg";
 let accepted, preview = null, selected = "", viewbox = null, drag = null, pan = null, busy = false;
 const mm = n => n / 1000000;
 const scene = () => preview || accepted;
+function featureLabel(kind,name="") {
+  const source=scene()?.mechanical_provenance?.features?.find(f=>f.kind===kind && f.name===name);
+  return source ? `${source.profile ? "Imported (read-only): "+source.profile : "Project-owned"}; ${source.source.filename}:${source.source.line}` : "";
+}
 function status(message, error = false) { $("status").textContent = message; $("status").classList.toggle("error", error); }
 async function api(path, body) {
   const response = await fetch(path, {method: body ? "POST" : "GET", headers: {
@@ -41,16 +45,27 @@ function resetFit() {
 function render() {
   const s = scene(), svg = $("board"); if (!s) return; svg.replaceChildren();
   const c = s.outline.circle;
-  svg.append(c ? node("circle",{cx:mm(c.center[0]),cy:mm(c.center[1]),r:mm(c.radius_nm),class:"outline"}) :
-    node("polygon",{points:points(s.outline.vertices),class:"outline"}));
-  for (const cutout of s.outline.cutouts) svg.append(node("polygon",{points:points(cutout.vertices),class:"cutout"}));
+  const outline=c ? node("circle",{cx:mm(c.center[0]),cy:mm(c.center[1]),r:mm(c.radius_nm),class:"outline"}) :
+    node("polygon",{points:points(s.outline.vertices),class:"outline"});
+  outline.append(node("title",{},featureLabel("outline")));svg.append(outline);
+  for (const cutout of s.outline.cutouts) {
+    const n=node("polygon",{points:points(cutout.vertices),class:"cutout"});
+    n.append(node("title",{},`${cutout.id}. ${featureLabel("cutout",cutout.id)}`));svg.append(n);
+  }
   for (const h of s.holes) {
     if (h.head_clearance_radius_nm) svg.append(node("circle",{cx:mm(h.position[0]),cy:mm(h.position[1]),r:mm(h.head_clearance_radius_nm),class:"head-clearance"}));
     const n = node("circle",{cx:mm(h.position[0]),cy:mm(h.position[1]),r:mm(h.diameter_nm)/2,class:"hole"});
-    n.append(node("title",{},`${h.id}: ${mm(h.diameter_nm)} mm NPTH`)); svg.append(n);
+    n.append(node("title",{},`${h.id}: ${mm(h.diameter_nm)} mm NPTH. ${featureLabel("hole",h.id)}`)); svg.append(n);
   }
-  for (const [items,cls] of [[s.regions,"region"],[s.keepouts,"keepout"]]) for (const k of items)
-    svg.append(node("polygon",{points:points(k.vertices),class:cls}));
+  for (const [items,cls] of [[s.regions,"region"],[s.keepouts,"keepout"]]) for (const k of items) {
+    const n=node("polygon",{points:points(k.vertices),class:cls});
+    n.append(node("title",{},`${k.name}. ${featureLabel(cls,k.name)}`));svg.append(n);
+  }
+  for (const k of s.copper_keepouts||[]) {
+    const ring=vertices=>`M ${points(vertices).replaceAll(" "," L ")} Z`;
+    const n=node("path",{d:[ring(k.vertices),...(k.holes||[]).map(ring)].join(" "),class:"copper-keepout","fill-rule":"evenodd"});
+    n.append(node("title",{},`${k.name}: copper keepout on ${k.layers.join(", ")}. ${featureLabel("copper_keepout",k.name)}`));svg.append(n);
+  }
   const visible = new Set(s.components.filter(c => $("side").value === "both" || c.side === $("side").value).map(c => c.reference));
   const relevant = new Set(s.ratsnest.filter(e => e.from.reference===selected || e.to.reference===selected).map(e=>e.net));
   if ($("airwires").checked) for (const [edgeIndex,edge] of s.ratsnest.entries()) {
@@ -94,7 +109,7 @@ function updateControls() {
     $("x").value = mm(component.position[0]); $("y").value = mm(component.position[1]);
     $("rotation").value = component.rotation; $("pose-side").value = component.side;
     $("lock").textContent = component.session_locked ? "Unlock temporary pose" : "Lock temporary pose";
-    $("details").textContent = `${component.footprint}; ${component.value}. ${component.source_position_locked||component.source_rotation_locked ? "SOURCE LOCK (read-only). " : ""}${component.macro ? "Rigid unit: "+component.macro+". " : ""}Allowed angles: ${component.allowed_orientations.join(", ")}.`;
+    $("details").textContent = `${component.footprint}; ${component.value}. ${component.source_position_locked||component.source_rotation_locked ? "SOURCE LOCK (read-only). " : ""}${component.profile_role ? "Imported profile role: "+component.profile_role+" (read-only). " : ""}${component.macro ? "Rigid unit: "+component.macro+". " : ""}Allowed angles: ${component.allowed_orientations.join(", ")}.`;
   }
 }
 function populate() {

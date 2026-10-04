@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 
 from ..drc import explicit_copper_connectivity, placed_pad_shape
 from ..geometry import bounds
@@ -88,6 +89,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
                 session_locks: frozenset[str] = frozenset(),
                 options: PlacementPlannerOptions | None = None) -> dict:
     rules = {rule.reference: rule for rule in board.placement_rules}
+    profile_roles = json.loads(board.metadata.get("mechanical_connector_roles", "{}"))
     assigned = {pad: net.name for net in board.nets for pad in net.pads}
     components = []
     for pose in sorted(board.placements, key=lambda item: item.reference):
@@ -108,6 +110,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         body = tuple(transformed_local_point(pose, Point(x, y)) for x, y in
                      ((-w, -h), (w, -h), (w, h), (-w, h)))
         components.append({"reference": pose.reference, "hierarchy": pose.reference.split("/")[:-1],
+            "profile_role": profile_roles.get(pose.reference),
             "footprint": pose.footprint, "position": _point(pose.position),
             "rotation": str(pose.rotation_degrees), "side": pose.side.value,
             "value": pose.value, "body": [_point(p) for p in body],
@@ -122,6 +125,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
     circle = board.outline.circular_boundary
     scene = {"schema": SCHEMA, "board": board.name, "source_revision": source_revision,
         "revision": revision, "units": "nm", "source_writable": False,
+        "mechanical_provenance": json.loads(board.metadata.get("mechanical_provenance", "{}")),
         "capabilities": {"auto_place": True, "pose_preview": True, "session_locks": True,
                          "source_save": False, "mechanical_edit": False},
         "bounds": [extent.min_x, extent.min_y, extent.max_x, extent.max_y],
@@ -132,6 +136,10 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
                    "head_clearance_radius_nm": h.head_clearance_radius_nm} for h in board.mechanical_holes],
         "keepouts": [{"name": k.name, "side": k.side.value if k.side else "both",
                       "vertices": [_point(p) for p in k.outline.vertices]} for k in board.keepouts],
+        "copper_keepouts": [{"name": k.id, "layers": [layer.value for layer in k.layers],
+                             "vertices": [_point(p) for p in k.outline.outer.vertices],
+                             "holes": [[_point(p) for p in h.vertices] for h in k.outline.holes]}
+                            for k in board.copper_keepouts],
         "regions": [{"name": r.name, "side": r.side.value if r.side else "both",
                      "vertices": [_point(p) for p in r.outline.vertices]} for r in board.regions],
         "components": components, "nets": [n.name for n in sorted(board.nets, key=lambda n: n.name)],

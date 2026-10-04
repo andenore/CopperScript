@@ -13,7 +13,8 @@ from .backends import (
 )
 from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source, compile_design_file, compile_design_source
-from .design import Design, MechanicalDesign
+from .design import Design, MechanicalDesign, MechanicalConnectorBinding
+from .mechanical_profiles import MechanicalProfileDefinition, MechanicalProfileInstance, MechanicalFeatureSource
 from .cam_qualification import CamCorpusCase, CamGateStatus, CamMatrixCell, CamQualificationEvidence, CamQualificationMatrix, CamQualificationProfile, CamReconciliation, CamToolAdapter, DrillHit, GerbvSubprocessAdapter, NormalizedCamLayer, NormalizedDrillProgram, NormalizedTestNet, PyGerberAdapter, TestPoint, TestVia, ToolIdentity, parse_ipcd356, parse_xnc, qualify_cam_artifacts, reconcile_drills, reconcile_test_net, run_cam_qualification_matrix
 from .constraint_coverage import ConstraintCheckStatus, ConstraintCoverage, ConstraintMode, NormalizedConstraint, constraint_coverage, normalize_constraints
 from .critical import (
@@ -271,7 +272,8 @@ from .routing import (
 from .syntax import CopperScriptError, SourceLocation
 
 __all__ = [
-    "Design", "MechanicalDesign", "compile_design_file", "compile_design_source",
+    "Design", "MechanicalDesign", "MechanicalConnectorBinding", "MechanicalProfileDefinition",
+    "MechanicalProfileInstance", "MechanicalFeatureSource", "compile_design_file", "compile_design_source",
     "InternalPadGroup",
     "CriticalPlacementFeedbackResult",
     "CriticalPlacementTrial",

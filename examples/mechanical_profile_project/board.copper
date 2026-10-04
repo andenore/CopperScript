@@ -1,0 +1,18 @@
+// Split-file mechanics demonstration, not a production board or HAT certification.
+board MechanicalProfileDemo {
+    import connector "github.com/andenore/CopperLib/packages/full_vertical";
+    import carrier "./mechanics";
+
+    component J_DEBUG: connector.DEBUG_UART_HEADER;
+    net VREF { J_DEBUG.VREF; }
+    net TX { J_DEBUG.TX; }
+    net RX { J_DEBUG.RX; }
+    net GND { J_DEBUG.GND; }
+    supply VREF { voltage = 3.3V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+
+    mechanical {
+        use carrier.Carrier as host { debug = J_DEBUG; }
+        hole LOCAL { position = (45mm, 4mm); diameter = 2mm; }
+    }
+}

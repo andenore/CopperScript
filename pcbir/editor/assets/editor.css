@@ -190,3 +190,4 @@ button:focus-visible,input:focus-visible,select:focus-visible {
   outline:2px solid #ffd17d}
 #board.panning,#board.panning * {cursor:grabbing;}
 #pending {margin:0;padding:.6rem 1rem;background:#fff1bd;color:#503e0a;}
+.copper-keepout {fill:#df983018;stroke:#dfaa5b;stroke-width:.12;stroke-dasharray:.25 .25;}

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
+import json
 import re
 from typing import Callable, Mapping
 
@@ -36,6 +37,7 @@ from .physical import (
     FootprintPad,
     IslandPolicy,
     PadReference,
+    PadKind,
     PadViaInPadRule,
     PhysicalBoard,
     PhysicalFootprint,
@@ -59,6 +61,7 @@ from .physical import (
 )
 from .quantities import Length, Quantity
 from .design import Design
+from .mechanical_profiles import mechanical_provenance
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +371,14 @@ def _physicalize(
         zones,
         via_in_pad_rules,
     ) = _lower_physical_constraints(flat, component_index, metadata, outline)
+    if mechanical:
+        keepouts = (*keepouts, *mechanical.keepouts)
+        if len({k.name for k in keepouts}) != len(keepouts):
+            raise ValueError("conflicting placement keepout names")
+        placement_rules = _bind_profile_connectors(mechanical, flat, footprints, placements, placement_rules)
+        if mechanical.profiles:
+            metadata["mechanical_provenance"] = json.dumps(mechanical_provenance(mechanical), sort_keys=True)
+            metadata["mechanical_connector_roles"] = json.dumps({c.reference: c.role for c in mechanical.connectors}, sort_keys=True)
     fixed_rules = {r.reference: r for r in placement_rules if r.fixed_position is not None}
     placements = [replace(p, position=fixed_rules[p.reference].fixed_position,
                          rotation_degrees=fixed_rules[p.reference].fixed_rotation_degrees,
@@ -403,7 +414,43 @@ def _physicalize(
         zones=zones,
         via_in_pad_rules=via_in_pad_rules,
         mechanical_holes=mechanical.holes if mechanical else (),
+        copper_keepouts=mechanical.copper_keepouts if mechanical else (),
     )
+
+
+def _bind_profile_connectors(mechanical, flat, footprints, placements, rules):
+    from .placement import transformed_local_point
+    poses = {p.reference: p for p in placements}
+    by_reference = {r.reference: r for r in rules}
+    components = {c.ref: c for c in flat.components}
+    for binding in mechanical.connectors:
+        prefix = f"{binding.location}: connector role {binding.role!r}: "
+        if binding.reference not in poses:
+            raise ValueError(prefix + "bound component needs a selected footprint; it cannot be omitted")
+        pose = poses[binding.reference]
+        fp = footprints[pose.footprint]
+        selected = _selected_footprint(components[binding.reference], flat.library[components[binding.reference].part])
+        if binding.footprint is not None and binding.footprint != selected:
+            raise ValueError(prefix + f"requires footprint {binding.footprint!r}, got {selected!r}")
+        pads = [p for p in fp.pads if p.number == binding.anchor_pad
+                and p.kind not in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}]
+        if len(pads) != 1:
+            raise ValueError(prefix + "anchor_pad must identify exactly one electrical physical land")
+        zero = replace(pose, position=Point(0, 0), rotation_degrees=binding.rotation, side=binding.side)
+        offset = transformed_local_point(zero, pads[0].position)
+        origin = Point(binding.position.x_nm-offset.x_nm, binding.position.y_nm-offset.y_nm)
+        existing = by_reference.get(binding.reference)
+        for key, value in (("fixed_position", origin), ("fixed_rotation_degrees", binding.rotation), ("side", binding.side)):
+            old = getattr(existing, key) if existing else None
+            if old is not None and old != value:
+                raise ValueError(prefix + f"conflicts with existing {key}")
+        explicit_angles = any(c.kind is ConstraintKind.ALLOWED_ORIENTATIONS and
+                              any(t.partition(".")[0] == binding.reference for t in c.targets) for c in flat.constraints)
+        orientations = existing.allowed_orientations if existing and explicit_angles else (binding.rotation,)
+        by_reference[binding.reference] = _merge_rule(existing, binding.reference,
+            fixed_position=origin, fixed_rotation_degrees=binding.rotation, side=binding.side,
+            allowed_orientations=orientations, priority=max(existing.priority if existing else 0, 1000))
+    return tuple(by_reference[key] for key in sorted(by_reference))
 
 
 def _lower_physical_constraints(
@@ -729,6 +776,13 @@ def _merge_rule(
     reference: str,
     **changes: object,
 ) -> ComponentPlacementRule:
+    if existing is not None:
+        for key in ("fixed_position", "fixed_rotation_degrees", "side"):
+            if key in changes and getattr(existing, key) is not None:
+                if changes[key] is None:
+                    changes.pop(key)  # An unspecified value never erases an owned rule.
+                elif getattr(existing, key) != changes[key]:
+                    raise ValueError(f"conflicting {key} constraints for {reference!r}")
     return ComponentPlacementRule(reference, **changes) if existing is None else replace(existing, **changes)
 
 

@@ -15,7 +15,7 @@ from math import isfinite
 
 from ..lexer import Token, TokenKind, tokenize
 from ..parser import parse
-from ..syntax import ComponentDecl, ConstraintDecl
+from ..syntax import ComponentDecl, ConstraintDecl, MechanicalDecl, MechanicalProfileUseDecl
 
 
 class SourceEditError(ValueError):
@@ -127,6 +127,9 @@ def fixed_placement_patch(snapshot: SourceSnapshot, reference: str, *,
         raise SourceEditError("placement edits require a board source")
     if reference not in {d.ref for d in document.declarations if isinstance(d, ComponentDecl)}:
         raise SourceEditError("target must be a direct component owned by this board source")
+    if any(isinstance(item, MechanicalProfileUseDecl) and reference in item.bindings.values()
+           for d in document.declarations if isinstance(d, MechanicalDecl) for item in d.items):
+        raise SourceEditError("component pose is owned by an imported board profile")
     if (x_nm is None) != (y_nm is None):
         raise SourceEditError("position requires both x_nm and y_nm")
     values = {}

@@ -192,8 +192,10 @@ Rear view currently uses shared unmirrored coordinates, not a mirrored display.
 Footprint bodies are conservative envelopes; pads/courtyards use imported geometry.
 Unplaced/illegal macros produce an explicit warning and receive no private-copper
 connectivity credit until their pose can materialize legally. Copper overlays,
-copper-keepout rendering, measurements and detailed per-rule rejection diagnostics
+footprint-local copper-keepout rendering, measurements and detailed per-rule rejection diagnostics
 remain future work; the first pose gate uses complete-board legality.
+Board-level copper keepouts are now displayed by the profile integration, with
+layer-scope and imported-owner tooltips. They are not a routed-copper overlay.
 
 Session state is in memory only. Closing/restarting loses temporary poses/locks;
 no action writes the `.copper` source or saves a derived second floorplan. There

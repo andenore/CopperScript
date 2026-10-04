@@ -1095,3 +1095,22 @@ validated transactions. Source saves require comment-preserving targeted edits
 and conflict detection; until implemented, preview edits are explicitly unsaved.
 Electrical connectivity and schematic IR remain unchanged. See the
 [editor specification](mechanical-editor.md) and [delivery plan](mechanical-editor-plan.md).
+
+## CS-149 — Importable mechanical board profiles (Accepted)
+
+Reusable physical board standards are declarative `board_profile` package exports,
+separate from electrical parts/modules. Boards explicitly apply profiles and bind
+existing components to connector roles; importing a profile creates no components,
+nets or copper connectivity. Compiled `Design.mechanical` preserves profile
+instance paths, namespaced features and source ownership without adding geometry
+to electrical `Board`. Exactly one final outline and unambiguous rule/role/pose
+ownership are required; conflicts and cycles fail rather than depending on order.
+Connector positions anchor to unique physical lands using shared rotation/side
+transforms; footprint/anchor/angle mismatches never silently omit a role. Local
+source-relative imports remain confined to their source module; external profiles
+use the existing versioned, content-authenticated dependency workflow. Imported
+features stay read-only in the editor. Reusable production profiles belong in
+CopperLib; compiler code contains no board-standard geometry. Mechanical fit
+alone is not host electrical compatibility, RF or manufacturing qualification.
+See [profile specification](mechanical-profiles.md) and
+[implementation plan](mechanical-profiles-plan.md).

@@ -41,6 +41,16 @@ Scroll the wheel to zoom under the pointer; hold the right mouse button to pan.
 Ordinary left-drags apply after checking (with Undo). Numeric poses and rough
 auto-placement remain explicit previews; apply or discard them before more edits.
 
+[Importable mechanical profiles](docs/mechanical-profiles.md) split reusable
+outlines, holes, keepouts and anchored connector placement into separate `.copper`
+files. They create no electrical connections. Try the fictional carrier demo
+(uses the existing pinned CopperLib connector, no manual library checkout):
+
+```powershell
+uv run copper check examples/mechanical_profile_project/board.copper --locked
+uv run copper edit-mechanical examples/mechanical_profile_project/board.copper --locked --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
+```
+
 A [50 mm circular LED-ring example](docs/round-led-ring.md) uses an offset nRF52832
 as a non-radio controller, twelve GPIO-controlled LEDs and a rear CR2032 holder.
 It exports a true KiCad circle and fixed radial placement, with profiling and an

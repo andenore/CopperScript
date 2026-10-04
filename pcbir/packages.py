@@ -128,6 +128,7 @@ class PackageResolver:
         self.offline = offline
         self.lock_path = manifest.root / "copper.lock"
         self._lock_entries = _read_lock(self.lock_path)
+        self._source_roots = {}
 
     @classmethod
     def for_source(
@@ -139,15 +140,15 @@ class PackageResolver:
         offline: bool = False,
     ) -> "PackageResolver":
         manifest_path = find_manifest(source)
-        if manifest_path is None:
-            raise CopperScriptError(
-                "PKG001",
-                "package imports require a copper.mod in this directory or a parent",
-                location,
-            )
-        return cls(read_manifest(manifest_path), locked=locked, offline=offline)
+        manifest = (read_manifest(manifest_path) if manifest_path else
+                    ModuleManifest("workspace", {}, {}, source.resolve().parent / "copper.mod"))
+        return cls(manifest, locked=locked, offline=offline)
 
     def resolve(self, import_path: str, location: SourceLocation) -> ResolvedPackage:
+        if import_path.startswith(("./", "../")):
+            return self._resolve_relative(import_path, location)
+        if not self.manifest.filename.is_file():
+            raise CopperScriptError("PKG001", "URL package imports require a copper.mod in this directory or a parent", location)
         module_path = self._matching_module(import_path)
         if module_path is None:
             raise CopperScriptError(
@@ -198,7 +199,32 @@ class PackageResolver:
         self._verify_or_record_lock(
             LockedModule(module_path, version, source, checksum, files), location
         )
+        self._source_roots[module_root] = (module_path, version, checksum)
         return ResolvedPackage(import_path, module_path, version, package_dir, checksum)
+
+    def _resolve_relative(self, import_path, location):
+        importer = Path(location.filename).resolve()
+        roots = [root for root in self._source_roots if importer.is_relative_to(root)]
+        root = max(roots, key=lambda p: len(p.parts)) if roots else self.manifest.root.resolve()
+        unresolved = importer.parent / import_path
+        directory = unresolved.resolve()
+        if ("\\" in import_path or not importer.is_relative_to(root) or
+                not directory.is_relative_to(root) or not directory.is_dir() or
+                any(p.is_symlink() for p in (unresolved, *unresolved.parents) if p.is_relative_to(root))):
+            raise CopperScriptError("PKG004", "relative package import must stay inside its source module", location)
+        try:
+            checksum = _inventory_checksum(_module_inventory(directory))
+        except (OSError, ValueError) as exc:
+            raise CopperScriptError("PKG012", f"cannot inventory local package: {exc}", location) from exc
+        external = root in self._source_roots
+        module, version, root_checksum = self._source_roots.get(root, (self.manifest.path, "workspace", checksum))
+        if external and _inventory_checksum(_module_inventory(root)) != root_checksum:
+            raise CopperScriptError("PKG008", "source module changed during relative import resolution", location)
+        identity = f"{module}/{directory.relative_to(root).as_posix()}"
+        # Workspace source is mutable like the entry board, not a downloaded
+        # dependency. Remote relative imports retain their pinned module digest.
+        return ResolvedPackage(identity, module, version, directory,
+                               root_checksum if external else checksum)
 
     def _matching_module(self, import_path: str) -> str | None:
         matches = [

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Mapping
 
 from .library import LIBRARIES, library_factory
 from .design import Design, lower_mechanical
+from .mechanical_profiles import MechanicalProfileDefinition
 from .pad_connections import InternalPadGroup
 from .model import (
     BondDefinition,
@@ -78,6 +79,7 @@ from .syntax import (
     DevicePropertyDecl,
     InterfaceDecl,
     ModuleInstanceDecl,
+    MechanicalProfileUseDecl,
     MuxDecl,
     NetDecl,
     PortDecl,
@@ -118,13 +120,13 @@ QUANTITY_TYPES: dict[str, type[Quantity]] = {
 }
 
 
-def _compile_electrical_document(
+def _resolve_board_imports(
     document: Document,
     *,
     locked: bool = False,
     offline: bool = False,
-) -> Board:
-    """Compile source into the authoritative hierarchical :class:`Board` IR."""
+) -> PackageContents:
+    """Resolve a board's packages once for both electrical and mechanical lowering."""
 
     filename = document.location.filename
     if document.kind != "board":
@@ -138,17 +140,24 @@ def _compile_electrical_document(
         imported = _load_imports(document, resolver, ())
     else:
         imported = PackageContents({}, {}, {}, ())
-    return _compile_board(
-        document, imported.modules, imported.parts, imported.devices, imported.dependencies
-    )
+    return imported
 
 
 def compile_design_source(source: str, filename: str = "<memory>", *,
                           locked: bool = False, offline: bool = False) -> Design:
     """Compile a complete design, with mechanics separate from electrical IR."""
     document = parse(source, filename)
-    mechanical = lower_mechanical(document)
-    return Design(_compile_electrical_document(document, locked=locked, offline=offline), mechanical)
+    imported = _resolve_board_imports(document, locked=locked, offline=offline)
+    mechanical = lower_mechanical(document, imported.profiles)
+    electrical = _compile_board(document, imported.modules, imported.parts,
+                                imported.devices, imported.dependencies)
+    if mechanical and mechanical.connectors:
+        from .elaborate import elaborate
+        references = {c.ref for c in elaborate(electrical).components}
+        for connector in mechanical.connectors:
+            if connector.reference not in references:
+                _error("MEC005", f"profile binding references unknown component {connector.reference!r}", connector.location)
+    return Design(electrical, mechanical)
 
 
 def compile_source(source: str, filename: str = "<memory>", *,
@@ -196,6 +205,7 @@ class PackageContents:
     devices: dict[str, DeviceDefinition]
     modules: dict[str, ModuleDefinition]
     dependencies: tuple[Dependency, ...]
+    profiles: dict[str, MechanicalProfileDefinition] = field(default_factory=dict)
 
 
 def _load_imports(
@@ -207,6 +217,7 @@ def _load_imports(
     parts: dict[str, PartDefinition] = {}
     devices: dict[str, DeviceDefinition] = {}
     modules: dict[str, ModuleDefinition] = {}
+    profiles: dict[str, MechanicalProfileDefinition] = {}
     dependencies: list[Dependency] = []
     aliases: set[str] = set()
     for declaration in document.imports:
@@ -229,6 +240,7 @@ def _load_imports(
         _merge_devices(devices, package.devices, declaration.location)
         for definition in package.modules.values():
             _register_module(modules, definition, declaration.location)
+        _merge_profiles(profiles, package.profiles, declaration.location)
         dependencies.extend(package.dependencies)
         dependencies.append(
             Dependency(
@@ -238,7 +250,7 @@ def _load_imports(
                 resolved.checksum,
             )
         )
-    return PackageContents(parts, devices, modules, _unique_dependencies(dependencies))
+    return PackageContents(parts, devices, modules, _unique_dependencies(dependencies), profiles)
 
 
 def _load_package(
@@ -253,10 +265,10 @@ def _load_package(
         _error("CMP022", f"package {resolved.import_path!r} exports no .copper files", location)
     documents = [_read_document(path) for path in source_paths]
     for document in documents:
-        if document.kind not in {"device", "part", "module"}:
+        if document.kind not in {"device", "part", "module", "board_profile"}:
             _error(
                 "CMP022",
-                f"package source declares a {document.kind}, expected device, part, or module",
+                f"package source declares a {document.kind}, expected device, part, module, or board_profile",
                 document.location,
             )
 
@@ -267,6 +279,9 @@ def _load_package(
     module_documents = {
         document.name: document for document in documents if document.kind == "module"
     }
+    profile_documents = {d.name: d for d in documents if d.kind == "board_profile"}
+    if len(profile_documents) != sum(d.kind == "board_profile" for d in documents):
+        _error("MEC004", "package contains duplicate board profile names", documents[0].location)
     if len(part_documents) != sum(document.kind == "part" for document in documents):
         _error("CMP040", "package contains duplicate part names", documents[0].location)
     if len(module_documents) != sum(document.kind == "module" for document in documents):
@@ -292,15 +307,17 @@ def _load_package(
         for name, document in part_documents.items()
     }
     modules: dict[str, ModuleDefinition] = {}
+    profiles: dict[str, MechanicalProfileDefinition] = {}
     dependencies: list[Dependency] = []
     import_contexts: dict[str, PackageContents] = {}
-    for name, document in module_documents.items():
+    for name, document in {**module_documents, **{f"profile:{k}": v for k, v in profile_documents.items()}}.items():
         imported = _load_imports(document, resolver, stack, namespace)
         import_contexts[name] = imported
         _merge_library(parts, imported.parts, document.location)
         _merge_devices(devices, imported.devices, document.location)
         for definition in imported.modules.values():
             _register_module(modules, definition, document.location)
+        _merge_profiles(profiles, imported.profiles, document.location)
         dependencies.extend(imported.dependencies)
 
     compiling: list[str] = []
@@ -365,7 +382,29 @@ def _load_package(
 
     for module_name in module_documents:
         compile_local(module_name)
-    return PackageContents(parts, devices, modules, _unique_dependencies(dependencies))
+    for name, document in profile_documents.items():
+        aliases = {d.alias: f"{namespace}.{d.alias}" for d in document.imports}
+        items = []
+        for item in document.declarations:
+            if isinstance(item, MechanicalProfileUseDecl):
+                raw = item.profile
+                if "." in raw:
+                    head, tail = raw.split(".", 1)
+                    qualified = f"{aliases.get(head, head)}.{tail}"
+                else:
+                    qualified = f"{namespace}.{raw}"
+                item = replace(item, profile=qualified)
+            items.append(item)
+        definition = MechanicalProfileDefinition(f"{namespace}.{name}", document.location, tuple(items))
+        _merge_profiles(profiles, {definition.name: definition}, document.location)
+    return PackageContents(parts, devices, modules, _unique_dependencies(dependencies), profiles)
+
+
+def _merge_profiles(profiles, additions, location):
+    for name, definition in additions.items():
+        if name in profiles and profiles[name] != definition:
+            _error("MEC004", f"conflicting board profile {name!r}", location)
+        profiles[name] = definition
 
 
 def _unique_dependencies(dependencies: list[Dependency]) -> tuple[Dependency, ...]:

@@ -222,9 +222,17 @@ class MechanicalItemDecl:
 
 
 @dataclass(frozen=True, slots=True)
+class MechanicalProfileUseDecl:
+    location: SourceLocation
+    profile: str
+    instance: str
+    bindings: dict[str, Scalar]
+
+
+@dataclass(frozen=True, slots=True)
 class MechanicalDecl:
     location: SourceLocation
-    items: tuple[MechanicalItemDecl, ...]
+    items: tuple[MechanicalItemDecl | MechanicalProfileUseDecl, ...]
 
 
 Declaration = (
@@ -251,6 +259,8 @@ Declaration = (
     | InterfaceDecl
     | ConstraintDecl
     | MechanicalDecl
+    | MechanicalItemDecl
+    | MechanicalProfileUseDecl
 )
 
 

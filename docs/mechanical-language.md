@@ -9,8 +9,9 @@ APIs remain useful for ERC, schematic export and simulation; they validate but
 do not return mechanical data. JSON compilation emits mechanical data as a
 sibling of electrical fields, never as a component or connectivity constraint.
 
-Only a top-level board may contain one `mechanical` block. It requires exactly
-one outline. Coordinates and dimensions are explicit typed lengths, converted
+Only a top-level board may contain one `mechanical` block. It may apply imported
+[`board_profile` definitions](mechanical-profiles.md) and add local features;
+the combined result requires exactly one outline. Coordinates and dimensions are explicit typed lengths, converted
 exactly to integer nanometres; negative coordinates are legal, sub-nanometre
 precision is rejected. Unknown/duplicate properties and invalid topology fail
 with source locations. No implicit healing or geometry inference is allowed.
