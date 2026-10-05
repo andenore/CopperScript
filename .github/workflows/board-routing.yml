@@ -51,64 +51,26 @@ jobs:
           echo 'KICAD_CLI=/usr/bin/kicad-cli' >> "$GITHUB_ENV"
           echo 'KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints' >> "$GITHUB_ENV"
       - name: Exercise Make targets for every example
-        id: make-smoke
-        continue-on-error: true
         env:
           PYTHON: python
           RESOLVE_ARGS: --locked --offline
         run: |
           set -euo pipefail
           mkdir -p build/make-target-smoke
-          exec > >(tee build/make-target-smoke.log) 2>&1
-          set +e
           make --no-print-directory check-examples
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            summary="$(tail -c 3500 build/make-target-smoke.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
-            echo "::error title=Make smoke failure::${summary}"
-            exit "$status"
-          fi
-
-          run_smoke() {
-            label="$1"
-            shift
-            echo "RUN ${label}"
-            set +e
-            "$@"
-            status=$?
-            set -e
-            if [ "$status" -ne 0 ]; then
-              summary="$(tail -c 3500 build/make-target-smoke.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
-              echo "::error title=${label} failed::${summary}"
-              return "$status"
-            fi
-          }
 
           physical_examples="$(make --no-print-directory -s --eval='print-physical-examples:;@echo $(PHYSICAL_EXAMPLES)' print-physical-examples)"
           for example in $physical_examples; do
             echo "::group::${example} layout"
-            run_smoke "${example} layout" make --no-print-directory EXAMPLE="$example" layout
+            make --no-print-directory EXAMPLE="$example" layout
             echo "::endgroup::"
 
             echo "::group::${example} edit"
-            run_smoke "${example} edit" make --no-print-directory EXAMPLE="$example" \
+            make --no-print-directory EXAMPLE="$example" \
               EDITOR_ARGS="--no-browser --scene-output build/make-target-smoke/${example}/scene.json" \
               edit
             echo "::endgroup::"
           done
-      - name: Preserve Make target smoke log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: make-target-smoke-${{ github.sha }}
-          path: |
-            CopperScript/build/make-target-smoke.log
-            CopperScript/build/make-target-smoke
-          if-no-files-found: error
-      - name: Fail when a Make target smoke fails
-        if: steps.make-smoke.outcome == 'failure'
-        run: exit 1
       - name: Install pinned ngspice
         run: |
           sudo apt-get install --yes build-essential bison flex

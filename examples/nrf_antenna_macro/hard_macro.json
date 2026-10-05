@@ -1,6 +1,6 @@
 {
   "asset": "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json",
-  "asset_sha256": "847261da97cdac7d6d59ae55d0a0c7280a9975862fe83dfb701dda8ed49bd541",
+  "asset_sha256": "2af31b661e340aea4a5fadd1f47456a55e1a2e44eb43659d38eec8975f46c5cc",
   "name": "nordic-antenna-trial",
   "bindings": {
     "U1": "U_NRF", "C3": "C_BT_MATCH", "L1": "L_BT_MATCH",

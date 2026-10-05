@@ -4,7 +4,7 @@
     {
       "name": "nordic-rf-matching",
       "reference": "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/assets/nordic-qfaa-ldo-reference.json",
-      "reference_sha256": "a33f0545ba2bc7e543a2766ca0e7b9af04a02fcabaa5c3d78bd57e8666423ae5",
+      "reference_sha256": "207ff21dda6881717e252cbb9e7f4dadfb0a51827068f7c001d770b700557cac",
       "bindings": {"U1": "U_NRF", "C3": "C_BT_MATCH", "L1": "L_BT_MATCH"},
       "net_bindings": {"raw": "NRF_RF_RAW", "ground": "GND", "feed": "NRF_RF_ANT"},
       "footprint_digests": {
