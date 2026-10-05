@@ -334,6 +334,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument("--package-access-trials", type=int, default=8,
         help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
+    board_route_parser.add_argument("--package-pattern-trials", type=int, choices=range(3), default=2,
+        help="alternate ordinary/critical/plane escape patterns before placement repair (default: up to 2; 0 disables negotiation)")
     board_route_parser.add_argument("--fanout-step-mm", type=_positive_mm, default="0.5",
         help="coarse package escape candidate step (default: 0.5 mm)")
     board_route_parser.add_argument("--fanout-maze", action="store_true",
@@ -842,7 +844,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     critical_feedback_trials=args.critical_feedback_trials,
                     package_access_options=PackageAccessOptions(
                         maximum_trials=args.package_access_trials,
-                        movement_nm=nm_from_mm(args.package_access_movement_mm)),
+                        movement_nm=nm_from_mm(args.package_access_movement_mm),
+                        maximum_pattern_trials=args.package_pattern_trials),
                     on_progress=progress,
                 )
                 escape_feedback = (
@@ -855,7 +858,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         fanout_options=fanout_options,
                         package_access_options=PackageAccessOptions(
                             maximum_trials=args.package_access_trials,
-                            movement_nm=nm_from_mm(args.package_access_movement_mm)),
+                            movement_nm=nm_from_mm(args.package_access_movement_mm),
+                            maximum_pattern_trials=args.package_pattern_trials),
                         options=EscapeFeedbackOptions(
                             maximum_trials=args.zone_escape_trials,
                             maximum_local_trials=args.zone_local_ripup_trials,
@@ -941,6 +945,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "failed_critical_nets": sorted(access.failed_critical_nets),
                     "hard_findings": access.hard_findings,
                     "accepted_moves": access.accepted_moves,
+                    "pattern_trial_limit": args.package_pattern_trials,
+                    "pattern_trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
+                                       for trial in access.pattern_trials],
                     "trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
                                for trial in access.trials],
                     "ordinary_area_started": access.ready,
@@ -1044,6 +1051,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     assignment = result.fanout.assignment
                     report["fanout"]["assignment"] = {
                         "pair_checks": assignment.pair_checks,
+                        "pair_queries": assignment.pair_queries,
+                        "broad_phase_accepts": assignment.broad_phase_accepts,
                         "native_accepted": assignment.native_accepted,
                         "expanded_pads": [f"{p.component}.{p.pad}" for p in assignment.expanded_pads],
                         "trials": [{"pad": f"{t.pad.component}.{t.pad.pad}",

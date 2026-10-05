@@ -149,7 +149,7 @@ def repair_placement_trial(
         critical = replace(critical, reserved_track_count=len(fan_tracks), reserved_via_count=len(fan_vias))
     access = (replace(initial.package_access, source=trial, global_route=global_route,
         fanout=access_fanout, critical=critical, plane_stitch=early,
-        hard_findings=0, trials=(), accepted_moves=0) if initial.package_access is not None else None)
+        hard_findings=0, trials=(), accepted_moves=0, pattern_trials=()) if initial.package_access is not None else None)
     boot = replace(initial,
         placement_and_global=replace(initial.placement_and_global, board=trial, global_route=global_route,
             full_route_certified=True, status=FeedbackStatus.PASS, iterations=(),

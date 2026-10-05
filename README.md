@@ -413,6 +413,12 @@ speed comparisons (phase events are still saved). See
 [profiling and optimization assessment](docs/routing-performance.md) for details,
 current evidence and the prioritized optimization work list.
 The detailed [optimization todos](docs/routing-optimization-todo.md) track implementation.
+Package preflight can now negotiate alternate ordinary/critical/selected-ground
+escape patterns before placement repair. The default is at most two proposals;
+use `EXTRA_ROUTE_ARGS="--package-pattern-trials 0"` for a baseline comparison.
+Every accepted pattern preserves prior exits and passes fresh owner/native
+checks; this does not certify onward area routing. See
+[package-access design and remaining work](docs/package-access-first.md).
 Local repair now supports bounded blocker-cone expansion; use
 `EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"` to compare without that extension.
 Small noncritical placement moves also try bounded incremental repair. Use

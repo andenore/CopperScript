@@ -35,16 +35,26 @@ introducing a general ILP dependency. The literature's simplified pin-array
 assumptions and reported completion rates are not guarantees for real pads,
 through-vias, keepouts, coupled pairs or our finite search domains.
 
+The assignment budget distinguishes cheap conservative bounding-box separation
+from actual copper/drill compatibility checks. Defaults are 200,000 exact checks
+and 2,000,000 total requests (including cached and broad-phase requests). Remote
+packages therefore cannot exhaust the local exact-check budget before MRV search
+starts; the separate total-query limit still bounds work. Disjoint pairs do not
+fill the exact-pair cache. Reports expose `pair_checks`, `pair_queries` and
+`broad_phase_accepts`. This changes accounting, not clearance predicates or
+transactional whole-board acceptance.
+
 ## Implemented first increment
 
 With `route-board --fanout`, the order is now:
 
 1. Legal placement and coarse global guides.
 2. Joint ordinary crowded-pin fanout against the unrouted placement.
-3. Profile-driven critical routing around those immutable local reservations.
+3. Profile-driven critical routing around those local reservations.
    Pairs still use the coupled search; generic fanout never creates their stubs.
 4. Explicitly requested early plane contacts, checked against both stages.
-5. Package-access gate and optional bounded placement feedback.
+5. Bounded cross-owner pattern negotiation when critical/selected plane access
+   fails, then the package-access gate and optional bounded placement feedback.
 6. Ordinary area routing, only if the gate passes; normal late plane contacts,
    native DRC, independent KiCad refill/connectivity and signoff follow.
 
@@ -72,6 +82,48 @@ previous ordinary exit, adds no pending contact/critical failure and has no hard
 native finding. Changed eligibility cannot hide a previously required pin.
 Rejected proposals leave the incumbent geometry unchanged.
 
+### Cross-owner pattern negotiation
+
+The first ordinary pattern is no longer permanently frozen. If it blocks a
+critical interface or selected early plane contact, preflight tries alternate
+owner orderings **before** moving components. Incomplete ordinary allocation
+can also use the already-successful critical/selected plane owners to seed a
+different ordinary pattern:
+
+1. Probe the specialized critical owners against the clean, macro-materialized
+   placement without ordinary stubs. Keep their original layer, coupling,
+   length, via and return-path profiles.
+   When they already passed, strip only the verified ordinary reservation prefix
+   and reuse their exact copper as the proposal seed, with a fresh native check.
+   This avoids a redundant pair search; changed proposals still receive full
+   critical/plane revalidation before acceptance.
+2. When selected plane contacts or ordinary allocation failed, propose ordinary escapes against both
+   that critical copper and provisional plane contacts. A second bounded
+   proposal can use critical copper alone. For critical-only failures there is
+   just one useful ordering.
+3. Discard probe copper. Rebase only the proposed fanout-owned tracks/vias onto
+   the original source, then rerun critical routing and selected plane contacts
+   from scratch against those reservations.
+4. Apply the same identity-preserving acceptance gate as placement feedback:
+   retain every ordinary exit and required pin, introduce no new pending pad
+   or failed critical net, strictly shrink a failure set, and pass fresh native
+   geometry checks. Otherwise retain the entire incumbent pattern.
+
+This is a deterministic bounded negotiation heuristic, not simultaneous
+enumeration of every critical/ordinary/GND domain or a proof that no compatible
+pattern exists. It does not split differential pairs into ordinary nets, relax
+manufacturing/SI profiles, change placement, or modify hard-macro copper. Plane
+contacts remain provisional until independently refilled and connectivity
+checked. Unrequested ground pads still belong to the late plane stage.
+
+`--package-pattern-trials` selects a budget of 0, 1 or 2 (default 2). Ready
+preflights do not run probes. Failed clean-source critical probes and duplicate
+ordinary patterns are not repeatedly searched. `package_access.pattern_trials`
+records strategy, pending identities, critical failures, outcome and whether
+the proposal received full owner revalidation; progress events separate probe
+and trial costs for profiling. These records describe the selected placement;
+placement trials themselves remain separately recorded.
+
 Defaults are eight evaluated placement trials and a 0.5 mm initial movement.
 Trial runtime can be substantial because critical routing is rebuilt. With
 fanout enabled, `--critical-feedback-trials` adds budget to this unified
@@ -80,16 +132,19 @@ controller rather than running a second critical-first placement controller.
 ```powershell
 uv run --no-sync python -m copperscript route-board examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --fanout --package-access-trials 8 --package-access-movement-mm 0.5 `
-  --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints" `
-  --footprint-root "../CopperLib/footprints" `
+  --fanout --package-pattern-trials 2 `
+  --package-access-trials 8 --package-access-movement-mm 0.5 `
   --report build/access-route-report.json -o build/access-board.kicad_pcb
 ```
 
 Create `build/` first. For the complete pinned workflow use
 `make EXAMPLE=full-vertical route`; its `--fanout` now
 selects this stage ordering. `--package-access-trials 0` disables moves, **not**
-the gate. Standalone fanout remains usable for partial diagnostics, and a flow
+the gate or pattern negotiation. Locked Git providers supply footprints without
+a sibling CopperLib checkout. Before an offline run, populate both source and
+footprint caches with `copper audit-footprints examples/full_vertical/board.copper
+--locked` (or the equivalent `uv run --no-sync python -m copperscript` command).
+Standalone fanout remains usable for partial diagnostics, and a flow
 without `--fanout` retains its existing behavior. Report `package_access`
 records readiness, pending identities, critical failures, hard findings,
 placement trial outcomes and whether ordinary area routing started.
@@ -100,9 +155,10 @@ placement trial outcomes and whether ordinary area routing started.
 - [x] Add a fail-closed access gate and zero-pass diagnostic output.
 - [x] Rebuild reservations transactionally during legal placement feedback.
 - [x] Preserve original critical profiles, ownership and native geometry checks.
-- [ ] Co-allocate critical paired/single-ended access domains with ordinary and
-  dense power/GND exits; compare compatible package patterns instead of treating
-  the first ordinary selection as immutable forever.
+- [x] Compare alternate ordinary/critical/selected-plane patterns with bounded
+  owner-order negotiation and full transactional revalidation.
+- [ ] Extend to joint critical paired/single-ended access-domain allocation with
+  ordinary and dense power/GND exits, beyond the alternate-order proposals.
 - [ ] Add local access collars/boundary ports and verify enough onward channel
   capacity on permitted signal layers. A through-via consumes physical space on
   every spanned layer; it is not automatically a usable exit beyond the package.
@@ -121,3 +177,18 @@ This increment still creates vias for eligible ordinary crowded SMD pins. It
 does not yet offer a general via-free surface-port representation, include all
 ground contacts by default, or prove access for every package type. An NC needs
 no exit. Native/KiCad connectivity and the manufacturing gates remain required.
+
+### Regression evidence
+
+`tests/test_package_access.py` includes a physical nearest-pattern trap: an
+ordinary dogbone blocks a same-layer, no-via, length-limited critical launch.
+Alternate-order negotiation moves the ordinary via, retains the same required
+pad identities and unchanged placement, and passes fresh native checking. A
+selected-plane-contact regression similarly rebuilds a blocked ground via around
+a different ordinary pattern. Candidate-loss, lost eligibility, added hard DRC,
+exchanged critical failures and non-improving proposals must all roll back.
+These fixtures validate negotiation and ownership, not full-board routability.
+The [2026-10-05 allocation review](package-access-budget-review.md) records the
+matched-placement full-vertical experiment: fixing mixed compatibility-budget
+accounting recovers `PWR/U_MODEM.13` and yields 76/76 ordinary exits. Critical,
+plane and onward/area verification remain separate gates.

@@ -21,10 +21,11 @@ class EscapeAssignmentOptions:
     maximum_cluster_pins: int = 12
     maximum_search_states: int = 20_000
     maximum_pair_checks: int = 200_000
+    maximum_pair_queries: int = 2_000_000
 
     def __post_init__(self):
         if min(self.maximum_trials, self.maximum_cluster_pins,
-               self.maximum_search_states, self.maximum_pair_checks) <= 0:
+               self.maximum_search_states, self.maximum_pair_checks, self.maximum_pair_queries) <= 0:
             raise ValueError("escape assignment budgets must be positive")
 
 
@@ -43,6 +44,8 @@ class EscapeAssignmentReport:
     pair_checks: int = 0
     expanded_pads: tuple[PadReference, ...] = ()
     native_accepted: bool = True
+    pair_queries: int = 0
+    broad_phase_accepts: int = 0
 
 
 class _BudgetExceeded(Exception):
@@ -52,7 +55,7 @@ class _BudgetExceeded(Exception):
 class EscapeConflicts:
     """A lazy exact candidate-conflict graph scoped to one immutable board."""
 
-    def __init__(self, board: PhysicalBoard, maximum_checks: int):
+    def __init__(self, board: PhysicalBoard, maximum_checks: int, maximum_queries: int = 2_000_000):
         # Input pads/keepouts were checked by domain generation. This tiny
         # board checks only additional candidate-candidate copper and drills.
         # Original rule/stackup values are retained, not approximated.
@@ -61,6 +64,9 @@ class EscapeConflicts:
             stackup=board.stackup, rules=board.rules, net_routing_rules=board.net_routing_rules)
         self.maximum_checks = maximum_checks
         self.checks = 0
+        self.maximum_queries = maximum_queries
+        self.queries = 0
+        self.broad_phase_accepts = 0
         self._identities: dict[EscapeCandidate, int] = {}
         self._indices: dict[int, RoutingClearanceIndex] = {}
         self._bounds: dict[int, tuple[int, int, int, int]] = {}
@@ -86,17 +92,24 @@ class EscapeConflicts:
         return self._identities[candidate]
 
     def compatible(self, first: EscapeCandidate, second: EscapeCandidate) -> bool:
+        if self.queries >= self.maximum_queries:
+            raise _BudgetExceeded("candidate compatibility query budget exhausted")
+        self.queries += 1
         a, b = self._identity(first), self._identity(second)
         key = min(a, b), max(a, b)
         if key in self._cache:
             return self._cache[key]
+        aa, bb = self._bounds[a], self._bounds[b]
+        if aa[2] < bb[0] or bb[2] < aa[0] or aa[3] < bb[1] or bb[3] < aa[1]:
+            # Conservative separated bounds prove compatibility without any
+            # exact geometry query. Do not charge its scarce budget or fill
+            # the exact-pair cache with distant packages. Total queries retain
+            # an independent bound, including cached/broad-phase requests.
+            self.broad_phase_accepts += 1
+            return True
         if self.checks >= self.maximum_checks:
             raise _BudgetExceeded("candidate compatibility budget exhausted")
         self.checks += 1
-        aa, bb = self._bounds[a], self._bounds[b]
-        if aa[2] < bb[0] or bb[2] < aa[0] or aa[3] < bb[1] or bb[3] < aa[1]:
-            self._cache[key] = True
-            return True
         if a not in self._indices:
             index = RoutingClearanceIndex(self.board)
             for track in first[0]:
@@ -127,7 +140,7 @@ def improve_escape_assignment(
     incumbent alternatives are tried before appended alternatives when legal.
     """
     selected = dict(incumbent)
-    conflicts = EscapeConflicts(board, options.maximum_pair_checks)
+    conflicts = EscapeConflicts(board, options.maximum_pair_checks, options.maximum_pair_queries)
     expanded: set[PadReference] = set()
     trials = []
     rank = {pad: index for index, pad in enumerate(ordered)}
@@ -208,6 +221,9 @@ def improve_escape_assignment(
                                                 answer is not None, diagnostic))
         except _BudgetExceeded as exc:
             trials.append(EscapeAssignmentTrial(root, tuple(sorted(cluster)), states, False, str(exc)))
-            if conflicts.checks >= options.maximum_pair_checks:
+            if (conflicts.checks >= options.maximum_pair_checks
+                    or conflicts.queries >= options.maximum_pair_queries):
                 break
-    return selected, EscapeAssignmentReport(tuple(trials), conflicts.checks, tuple(sorted(expanded)))
+    return selected, EscapeAssignmentReport(tuple(trials), conflicts.checks, tuple(sorted(expanded)),
+                                           pair_queries=conflicts.queries,
+                                           broad_phase_accepts=conflicts.broad_phase_accepts)

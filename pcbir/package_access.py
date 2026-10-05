@@ -1,8 +1,9 @@
 """Escape-first preflight and bounded placement repair before area routing.
 
-This first implementation allocates ordinary exits jointly, then routes critical
-groups with their existing paired/clock/RF owners around those reservations.
-It is not a joint optimizer over all ordinary and critical access domains.
+Ordinary exits are allocated jointly, then specialized critical owners and
+selected plane contacts are verified. Bounded alternate-order proposals can
+replace an incompatible ordinary pattern before any placement or area search.
+This is transactional pattern negotiation, not an exhaustive joint optimizer.
 """
 from __future__ import annotations
 
@@ -10,7 +11,8 @@ from dataclasses import dataclass, replace
 from typing import Iterator
 
 from .clusters import move_placement_unit
-from .critical import CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets
+from .critical import (CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets,
+                       _fingerprint as _critical_fingerprint)
 from .critical_feedback import _failures
 from .detailed import (DetailedNetResult, DetailedRoutingMetrics, DetailedRoutingResult,
                        DetailedRoutingStatus, _fingerprint)
@@ -27,10 +29,23 @@ from .progress import ProgressCallback, critical_progress, emit
 class PackageAccessOptions:
     maximum_trials: int = 8
     movement_nm: int = nm_from_mm("0.5")
+    maximum_pattern_trials: int = 2
 
     def __post_init__(self):
         if self.maximum_trials < 0 or self.movement_nm <= 0:
             raise ValueError("package-access feedback bounds are invalid")
+        if not 0 <= self.maximum_pattern_trials <= 2:
+            raise ValueError("package-access pattern trial budget must be 0..2")
+
+
+@dataclass(frozen=True, slots=True)
+class PackagePatternTrial:
+    index: int
+    strategy: str
+    pending_pads: tuple[PadReference, ...]
+    failed_critical_nets: tuple[str, ...]
+    outcome: str
+    revalidated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +71,7 @@ class PackageAccessResult:
     hard_findings: int
     trials: tuple[PackageAccessTrial, ...] = ()
     accepted_moves: int = 0
+    pattern_trials: tuple[PackagePatternTrial, ...] = ()
 
     @property
     def board(self) -> PhysicalBoard:
@@ -76,13 +92,15 @@ class PackageAccessResult:
 def preflight_package_access(
     board: PhysicalBoard, global_route: GlobalRoutingResult, fanout_options: FanoutOptions,
     plane_options: PlaneStitchOptions | None = None,
-    *, on_progress: ProgressCallback | None = None,
+    *, options: PackageAccessOptions | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> PackageAccessResult:
     """Reserve compatible ordinary exits before any critical long route.
 
-    Critical pairs keep their specialized access/search/profile checks; early
-    plane contacts are built against both signal exits and critical copper.
-    No ordinary area search is launched by this function.
+    Critical pairs keep their specialized access/search/profile checks. When
+    reservations block critical/plane owners, negotiate alternate ordinary
+    patterns and re-run every owner from the clean source before accepting one.
+    No ordinary area search or placement change is launched here.
     """
     from .hard_macros import macro_source, materialize_hard_macros
     board = macro_source(board)
@@ -92,9 +110,23 @@ def preflight_package_access(
     emit(on_progress, "ordinary_package_exits", "started")
     fanout = route_fanout(owner_board, fanout_options)
     emit(on_progress, "ordinary_package_exits", "finished",
-         escaped=len(fanout.accesses), pending=len(fanout.pending_pads))
+         escaped=len(fanout.accesses), pending=len(fanout.pending_pads),
+         pending_pads=[f"{p.component}.{p.pad}" for p in fanout.pending_pads])
     critical = route_critical_nets(board, global_route, reserved_accesses=fanout,
                                    on_progress=critical_progress(on_progress))
+    result = _access_result(board, global_route, fanout, critical, plane_options)
+    result = _negotiate_patterns(result, owner_board, fanout_options,
+                                 options or PackageAccessOptions(), plane_options, on_progress)
+    emit(on_progress, "package_access", "finished", ready=result.ready,
+         pending_pads=[f"{p.component}.{p.pad}" for p in sorted(result.pending_pads)],
+         failed_critical_nets=sorted(result.failed_critical_nets), hard_findings=result.hard_findings)
+    return result
+
+
+def _access_result(
+    board: PhysicalBoard, guides: GlobalRoutingResult, fanout: FanoutResult,
+    critical: CriticalRoutingResult, plane_options: PlaneStitchOptions | None,
+) -> PackageAccessResult:
     plane = stitch_zone_pads(critical.board, plane_options) if plane_options else None
     failed, hard = _failures(board, critical)
     if plane is not None:
@@ -102,11 +134,113 @@ def preflight_package_access(
         hard = sum(finding.severity.value == "error"
                    and finding.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
                    for finding in run_physical_drc(plane.board).findings)
-    result = PackageAccessResult(board, global_route, fanout, critical, plane, failed, hard)
-    emit(on_progress, "package_access", "finished", ready=result.ready,
-         pending_pads=[f"{p.component}.{p.pad}" for p in sorted(result.pending_pads)],
-         failed_critical_nets=sorted(failed), hard_findings=hard)
-    return result
+    return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard)
+
+
+def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccessResult) -> str:
+    required = {item.pad for item in baseline.fanout.pin_analysis}
+    tested = {item.pad for item in candidate.fanout.pin_analysis}
+    if candidate.hard_findings:
+        return "hard_drc"
+    # Counts alone cannot hide a lost pin or exchange one failed interface for
+    # another. The same identity-preserving gate is used for placement trials.
+    if not (required <= tested
+            and set(baseline.fanout.accesses) <= set(candidate.fanout.accesses)
+            and candidate.failed_critical_nets <= baseline.failed_critical_nets
+            and candidate.pending_pads <= baseline.pending_pads
+            and (candidate.pending_pads < baseline.pending_pads
+                 or candidate.failed_critical_nets < baseline.failed_critical_nets)):
+        return "access_not_improved"
+    return "accepted"
+
+
+def _negotiate_patterns(
+    baseline: PackageAccessResult, owner_board: PhysicalBoard, fanout_options: FanoutOptions,
+    options: PackageAccessOptions, plane_options: PlaneStitchOptions | None,
+    on_progress: ProgressCallback | None,
+) -> PackageAccessResult:
+    """Use alternate owners as obstacles only while proposing ordinary exits.
+
+    Probe copper is never committed. Only fanout-owned stubs are rebased onto
+    the original macro-materialized source; critical profiles and plane contacts
+    are then rebuilt against those stubs. Failed trials retain the full incumbent.
+    """
+    plane_pending = bool(baseline.plane_stitch and baseline.plane_stitch.pending_pads)
+    ordinary_pending = bool(baseline.fanout.pending_pads)
+    other_owners = bool(baseline.critical.nets or plane_options and baseline.source.zones)
+    if (not options.maximum_pattern_trials or baseline.hard_findings
+            or baseline.global_route.status is not GlobalRoutingStatus.SUCCESS
+            or not (baseline.failed_critical_nets or plane_pending or ordinary_pending and other_owners)):
+        return baseline
+    # Already-successful critical copper can seed the proposal without a second
+    # expensive pair search. Strip only the verified fanout prefix; ownership,
+    # source copper and all critical geometry remain explicit. This reuse is a
+    # proposal optimization, never a substitute for final owner revalidation.
+    prefix_tracks = (*owner_board.tracks, *baseline.fanout.created_tracks)
+    prefix_vias = (*owner_board.vias, *baseline.fanout.created_vias)
+    reuse = (not baseline.failed_critical_nets
+             and baseline.critical.status is not CriticalRoutingStatus.FAILED
+             and baseline.critical.board.tracks[:len(prefix_tracks)] == prefix_tracks
+             and baseline.critical.board.vias[:len(prefix_vias)] == prefix_vias)
+    emit(on_progress, "package_pattern_probe", "started", reused_critical=reuse)
+    if reuse:
+        tracks = (*owner_board.tracks, *baseline.critical.board.tracks[len(prefix_tracks):])
+        vias = (*owner_board.vias, *baseline.critical.board.vias[len(prefix_vias):])
+        probe = replace(baseline.critical,
+            board=replace(baseline.critical.board, tracks=tracks, vias=vias),
+            locked_tracks=tracks, locked_vias=vias, reserved_track_count=0, reserved_via_count=0,
+            routing_fingerprint=_critical_fingerprint(baseline.global_route.routing_fingerprint,
+                                                     list(tracks), list(vias), list(baseline.critical.nets)))
+    else:
+        probe = route_critical_nets(baseline.source, baseline.global_route,
+                                   on_progress=critical_progress(on_progress))
+    probe_failed, probe_hard = _failures(baseline.source, probe)
+    emit(on_progress, "package_pattern_probe", "finished",
+         failed_critical_nets=sorted(probe_failed), hard_findings=probe_hard, reused_critical=reuse)
+    # Spend the bounded budget on clean-source probes with a strictly smaller
+    # failure set, or on failed plane access. This is a heuristic, not proof
+    # that the skipped joint search has no solution.
+    if probe_hard or (not (plane_pending or ordinary_pending)
+                      and not probe_failed < baseline.failed_critical_nets):
+        return baseline
+    include_planes = bool(plane_options and baseline.source.zones and (plane_pending or ordinary_pending))
+    strategies = ("critical_and_plane_first", "critical_first") if include_planes else ("critical_first",)
+    accepted, records = baseline, []
+    seen = {(baseline.fanout.created_tracks, baseline.fanout.created_vias)}
+    for strategy in strategies[:options.maximum_pattern_trials]:
+        emit(on_progress, "package_pattern_trial", "started", index=len(records) + 1, strategy=strategy)
+        obstacles = (stitch_zone_pads(probe.board, plane_options).board
+                     if strategy == "critical_and_plane_first" else probe.board)
+        proposed = route_fanout(obstacles, fanout_options)
+        # Do not leak critical metadata/copper into ordinary ownership. Existing
+        # macro copper belongs to the source, not to the proposed fanout pattern.
+        proposed = replace(proposed, board=replace(owner_board,
+            tracks=(*owner_board.tracks, *proposed.created_tracks),
+            vias=(*owner_board.vias, *proposed.created_vias)))
+        signature = proposed.created_tracks, proposed.created_vias
+        candidate = None
+        if signature in seen:
+            outcome = "unchanged_pattern"
+        elif not set(accepted.fanout.accesses) <= set(proposed.accesses):
+            outcome = "lost_ordinary_access"
+        else:
+            seen.add(signature)
+            verified = route_critical_nets(baseline.source, baseline.global_route,
+                reserved_accesses=proposed, on_progress=critical_progress(on_progress))
+            candidate = _access_result(baseline.source, baseline.global_route, proposed, verified, plane_options)
+            outcome = _improvement_outcome(accepted, candidate)
+        evidence = candidate or accepted
+        records.append(PackagePatternTrial(len(records) + 1, strategy,
+            tuple(sorted(candidate.pending_pads if candidate else
+                         accepted.pending_pads | frozenset(proposed.pending_pads))),
+            tuple(sorted(evidence.failed_critical_nets)), outcome, candidate is not None))
+        emit(on_progress, "package_pattern_trial", "finished", index=len(records), strategy=strategy,
+             outcome=outcome)
+        if outcome == "accepted":
+            accepted = candidate
+            if accepted.ready:
+                break
+    return replace(accepted, pattern_trials=tuple(records))
 
 
 def package_placement_trials(
@@ -190,21 +324,8 @@ def improve_package_access(
             outcome = "global_failed"
             if guides.status is GlobalRoutingStatus.SUCCESS:
                 candidate = preflight_package_access(trial, guides, fanout_options, plane_options,
-                                                      on_progress=on_progress)
-                required = {item.pad for item in accepted.fanout.pin_analysis}
-                tested = {item.pad for item in candidate.fanout.pin_analysis}
-                # Eligibility changing with placement must not hide a lost exit.
-                ordinary_kept = set(accepted.fanout.accesses) <= set(candidate.fanout.accesses)
-                critical_kept = candidate.failed_critical_nets <= accepted.failed_critical_nets
-                no_lost_contact = candidate.pending_pads <= accepted.pending_pads
-                strict = (candidate.pending_pads < accepted.pending_pads
-                          or candidate.failed_critical_nets < accepted.failed_critical_nets)
-                if candidate.hard_findings:
-                    outcome = "hard_drc"
-                elif not (required <= tested and ordinary_kept and critical_kept and no_lost_contact and strict):
-                    outcome = "access_not_improved"
-                else:
-                    outcome = "accepted"
+                                                      options=options, on_progress=on_progress)
+                outcome = _improvement_outcome(accepted, candidate)
             pose = next(pose for pose in trial.placements if pose.reference == reference)
             old = {pose.reference: pose for pose in accepted.source.placements}
             records.append(PackageAccessTrial(len(records) + 1, reference,

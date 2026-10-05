@@ -63,7 +63,7 @@ def test_competing_pin_with_legal_radial_choice_gets_off_ray_alternative(monkeyp
     assert joint.accesses[PadReference("U","1")] == Point.mm(3,4)
 
 
-@pytest.mark.parametrize("budget", ["maximum_cluster_pins","maximum_search_states","maximum_pair_checks"])
+@pytest.mark.parametrize("budget", ["maximum_cluster_pins","maximum_search_states","maximum_pair_checks", "maximum_pair_queries"])
 def test_budget_exhaustion_preserves_greedy_geometry(monkeypatch,budget):
     base = board()
     monkeypatch.setattr(fanout,"_candidates",trap_candidates)
@@ -120,6 +120,30 @@ def test_conflicts_respect_layers_through_vias_same_net_and_drill_spacing():
     previous = conflicts.checks
     assert conflicts.compatible(a,b)
     assert conflicts.checks == previous
+
+
+def test_remote_candidates_do_not_starve_exact_compatibility_budget():
+    conflicts = EscapeConflicts(board(), maximum_checks=1, maximum_queries=100)
+    local = candidate("A", (2, 2), (4, 2))
+    for i in range(30):
+        assert conflicts.compatible(local, candidate("B", (8, 8 + i / 100), (9, 8 + i / 100)))
+    assert conflicts.queries == conflicts.broad_phase_accepts == 30
+    assert conflicts.checks == 0 and not conflicts._cache
+    assert not conflicts.compatible(local, candidate("B", (3, 1), (3, 3)))
+    assert conflicts.checks == 1
+    # Cached exact answers also count toward the total CPU/query bound.
+    assert not conflicts.compatible(local, candidate("B", (3, 1), (3, 3)))
+    assert conflicts.checks == 1 and conflicts.queries == 32
+
+
+def test_broad_phase_has_its_own_query_limit():
+    conflicts = EscapeConflicts(board(), maximum_checks=1, maximum_queries=1)
+    first, remote = candidate("A", (2, 2), (4, 2)), candidate("B", (8, 8), (9, 8))
+    assert conflicts.compatible(first, remote)
+    from pcbir.escape_assignment import _BudgetExceeded
+    with pytest.raises(_BudgetExceeded, match="query budget"):
+        conflicts.compatible(first, remote)
+    assert conflicts.checks == 0 and conflicts.queries == 1
 
 
 def test_foreign_clearance_overrides_enter_candidate_conflicts():

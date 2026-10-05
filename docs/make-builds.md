@@ -65,6 +65,10 @@ It never assumes CopperLib or a sibling checkout. It preserves routing errors,
 saves filled copper in the deliverable and accepts success only with ERC pass,
 complete routing, native fill verification, zero violations of any severity
 and zero unconnected items. Profiling does not change exit semantics.
+The shared default chooses among the placement planner's actual legal candidates;
+it does not force `candidate-00`, which may have been rejected. To reproduce an
+explicit candidate, set `EXTRA_ROUTE_ARGS="--placement-candidate candidate-01"`;
+an unavailable requested identity remains an error rather than a silent fallback.
 GNU Make normally returns 2 when a recipe fails; inspect `run.json` for the
 underlying routing exit code. No failure is suppressed with `-` or `|| true`.
 

@@ -83,9 +83,10 @@ def run_routing_pipeline(
          global_status=placement.global_route.status.value)
     access = None
     if fanout_options is not None:
-        access = preflight_package_access(placement.board, placement.global_route,
-                                         fanout_options, plane_stitch_options, on_progress=on_progress)
         access_options = package_access_options or PackageAccessOptions()
+        access = preflight_package_access(placement.board, placement.global_route,
+                                         fanout_options, plane_stitch_options,
+                                         options=access_options, on_progress=on_progress)
         # With fanout enabled, critical failures belong to the same escape-first
         # placement transaction, not a second critical-first controller.
         access_options = replace(access_options,
@@ -168,7 +169,8 @@ def run_routing_pipeline(
                      outcome="global_failed")
                 continue
             trial_access = (preflight_package_access(trial_board, trial_global, fanout_options,
-                                                     plane_stitch_options, on_progress=on_progress) if fanout_options else None)
+                                                     plane_stitch_options, options=package_access_options,
+                                                     on_progress=on_progress) if fanout_options else None)
             if trial_access is not None and not trial_access.ready:
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="package_access_failed")

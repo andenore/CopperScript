@@ -356,7 +356,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["schema"] == "copperscript-route-board/v0.1"
     assert document["erc_pass"]
     assert isinstance(document["fanout"]["pin_access_analysis"], list)
-    assert set(document["fanout"]["assignment"]) == {"pair_checks", "native_accepted", "expanded_pads", "trials"}
+    assert set(document["fanout"]["assignment"]) == {"pair_checks", "pair_queries", "broad_phase_accepts", "native_accepted", "expanded_pads", "trials"}
     assert all(set(item) == {"pad", "legal_candidate_count", "selected_candidate_index", "diagnostic", "two_leg_candidate_count"}
                for item in document["fanout"]["pin_access_analysis"])
     assert document["fabrication_ready"] is False
@@ -365,6 +365,8 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["package_access"]["status"] in {"ready", "blocked"}
     assert document["package_access"]["stage_order"][0] == "ordinary_package_exits"
     assert "trials" in document["package_access"]
+    assert document["package_access"]["pattern_trial_limit"] == 2
+    assert isinstance(document["package_access"]["pattern_trials"], list)
     if document["package_access"]["status"] == "blocked":
         assert document["package_access"]["ordinary_area_started"] is False
         assert document["detailed"]["metrics"]["passes"] == 0

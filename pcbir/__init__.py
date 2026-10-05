@@ -28,7 +28,7 @@ from .critical_feedback import (
     CriticalPlacementTrial,
     improve_critical_placement,
 )
-from .package_access import (PackageAccessOptions, PackageAccessResult, PackageAccessTrial,
+from .package_access import (PackageAccessOptions, PackageAccessResult, PackageAccessTrial, PackagePatternTrial,
                              preflight_package_access, improve_package_access)
 from .detailed import (
     DetailedNetResult,
@@ -555,6 +555,7 @@ __all__ = [
     "PackageAccessOptions",
     "PackageAccessResult",
     "PackageAccessTrial",
+    "PackagePatternTrial",
     "preflight_package_access",
     "improve_package_access",
     "route_any_angle",

@@ -17,6 +17,15 @@ from pcbir.cli import _parser, main as copper_main
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_shared_route_defaults_auto_select_placement_without_make():
+    recipe = (ROOT / "make/board.mk").read_text(encoding="utf-8")
+    defaults = recipe.split("ROUTE_ARGS ?=", 1)[1].split("\nEXTRA_ROUTE_ARGS", 1)[0]
+    options = shlex.split(defaults.replace("\\\n", " "))
+    args = _parser().parse_args(["route-board", "example.copper", *options])
+    assert args.placement_candidate is None
+    assert args.fanout and args.package_pattern_trials == 2
+
+
 def evidence(output):
     (output / "route-report.json").write_text(json.dumps({
         "status": "pass", "erc_pass": True, "routing_complete": True,
@@ -207,6 +216,7 @@ def test_shared_make_routes_use_generic_runner_and_exact_settings(make, example,
     options = command[command.index("--") + 1:]
     args = _parser().parse_args(["route-board", "example.copper", *options])
     assert args.layers == layers and not args.ground_via_in_pad and not args.allow_proxy_footprints
+    assert args.placement_candidate is None  # Choose among actual legal candidates, not a stale fixed ID.
     if example == "cm4":
         assert args.fanout_maze and args.fab_profile == "jlcpcb-four-layer"
     if example == "full-vertical":
@@ -214,6 +224,16 @@ def test_shared_make_routes_use_generic_runner_and_exact_settings(make, example,
         assert args.zone_dependency_expansions == 2 and args.critical_feedback_trials == 0
     if example == "nrf52":
         assert args.hard_macro == [ROOT / "examples/nrf_antenna_macro/hard_macro.json"]
+
+
+def test_shared_make_can_still_request_an_explicit_placement_candidate(make):
+    result = subprocess.run([make, "-n", "EXAMPLE=full-vertical", "route",
+        "EXTRA_ROUTE_ARGS=--placement-candidate candidate-01"], cwd=ROOT,
+        text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    command = shlex.split(result.stdout)
+    args = _parser().parse_args(["route-board", "example.copper", *command[command.index("--") + 1:]])
+    assert args.placement_candidate == "candidate-01"
 
 
 def test_example_makefile_shares_root_recipes(make):

@@ -202,6 +202,191 @@ def test_options_validate_bounds():
         access.PackageAccessOptions(maximum_trials=-1)
     with pytest.raises(ValueError):
         access.PackageAccessOptions(movement_nm=0)
+    for budget in (-1, 3):
+        with pytest.raises(ValueError, match="pattern"):
+            access.PackageAccessOptions(maximum_pattern_trials=budget)
+
+
+def pattern_trap():
+    """An ordinary dogbone blocks a length-constrained critical launch.
+
+    Real radial domains and exact critical routing are used, not a mocked
+    connected flag. There is a legal alternative ordinary via on the other side.
+    """
+    board, _, settings, global_options = fixture(critical=True)
+    package = PhysicalFootprint("two", (
+        FootprintPad("1", Point.mm(0, -1), Size.mm(.3, .3)),
+        FootprintPad("2", Point.mm(0, -.4), Size.mm(.3, .3))), Size.mm(2, 3))
+    board = replace(board, footprints={"two": package, "one": board.footprints["one"]},
+        placements=(board.placements[0], replace(board.placements[1], position=Point.mm(3, 6)),
+                    replace(board.placements[2], position=Point.mm(13, 6.6))),
+        net_routing_rules=(NetRoutingRule("A", RouteKind.CRITICAL, max_vias=0,
+            allowed_layers=(CopperLayer.FRONT,), max_length_nm=nm_from_mm(2)),))
+    return board, route_global(board, global_options), settings
+
+
+def test_pattern_negotiation_replaces_blocking_dogbone_without_moving_components():
+    board, guides, settings = pattern_trap()
+    baseline = access.preflight_package_access(board, guides, settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    assert baseline.failed_critical_nets == {"A"} and not baseline.pending_pads
+    events = []
+    result = access.preflight_package_access(board, guides, settings,
+        on_progress=lambda phase, event, details: events.append((phase, event, details)))
+    assert result.ready and result.source == board
+    assert result.board.placements == board.placements
+    assert result.accepted_moves == 0 and result.trials == ()
+    assert result.pattern_trials[0].strategy == "critical_first"
+    assert result.pattern_trials[0].outcome == "accepted"
+    assert result.pattern_trials[0].revalidated
+    assert result.fanout.accesses.keys() == baseline.fanout.accesses.keys()
+    assert result.fanout.created_vias != baseline.fanout.created_vias
+    assert result.fanout.board.metadata == board.metadata
+    assert all(t.net == "B" for t in result.fanout.created_tracks)
+    assert all(v.net == "B" for v in result.fanout.created_vias)
+    assert result.board.tracks[:len(result.fanout.created_tracks)] == result.fanout.created_tracks
+    assert result.critical.reserved_track_count == len(result.fanout.created_tracks)
+    assert result.critical.reserved_via_count == len(result.fanout.created_vias)
+    assert not result.hard_findings
+    assert result == access.preflight_package_access(board, guides, settings)
+    assert any(phase == "package_pattern_trial" and event == "finished"
+               and details["outcome"] == "accepted" for phase, event, details in events)
+
+
+@pytest.mark.parametrize("defect", ["lost_exit", "lost_eligibility", "hard_drc", "new_failure", "no_improvement"])
+def test_pattern_proposal_is_revalidated_and_rolls_back_atomically(monkeypatch, defect):
+    board, guides, settings = pattern_trap()
+    baseline = access.preflight_package_access(board, guides, settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    real = access._access_result
+    def unsafe(source, route, fan, critical, plane):
+        result = real(source, route, fan, critical, plane)
+        if not result.failed_critical_nets:  # Final revalidation, not the incumbent.
+            if defect == "lost_exit":
+                return replace(result, fanout=replace(result.fanout, accesses={}))
+            if defect == "lost_eligibility":
+                return replace(result, fanout=replace(result.fanout, pin_analysis=()))
+            if defect == "hard_drc":
+                return replace(result, hard_findings=1)
+            if defect == "new_failure":
+                return replace(result, failed_critical_nets=frozenset({"B"}))
+            return replace(result, failed_critical_nets=baseline.failed_critical_nets)
+        return result
+    monkeypatch.setattr(access, "_access_result", unsafe)
+    result = access.preflight_package_access(board, guides, settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=1))
+    assert result.board == baseline.board and result.fanout == baseline.fanout
+    assert result.critical == baseline.critical
+    assert len(result.pattern_trials) == 1 and result.pattern_trials[0].outcome != "accepted"
+
+
+def test_ready_preflight_does_not_pay_for_pattern_probes(monkeypatch):
+    board, guides, settings, _ = fixture(critical=True)
+    real = access.route_critical_nets
+    def critical(source, route, *, reserved_accesses, on_progress=None):
+        return real(source, route, reserved_accesses=reserved_accesses, on_progress=on_progress)
+    monkeypatch.setattr(access, "route_critical_nets", critical)
+    result = access.preflight_package_access(board, guides, settings)
+    assert result.ready and not result.pattern_trials
+
+
+def test_plane_contact_can_negotiate_ordinary_exits_with_exact_final_rebuild(monkeypatch):
+    from pcbir import CopperZone, PolygonWithHoles, PolygonRing
+    from pcbir.plane import PlaneStitchOptions
+    board, _, settings = pattern_trap()
+    zone = CopperZone("plane", "A", (CopperLayer.BACK,),
+        PolygonWithHoles(PolygonRing(board.outline.vertices)))
+    board = replace(board, net_routing_rules=(), zones=(zone,))
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    # Isolate one constrained ground via window. Clearance, annulus/pad
+    # exclusion, surface copper and final plane ownership remain real checks.
+    monkeypatch.setattr("pcbir.plane._candidate_points", lambda *args: (Point.mm(4, 6),))
+    monkeypatch.setattr("pcbir.plane.surface_path_to_via", lambda *args, **kwargs: None)
+    planes = PlaneStitchOptions(include_surface_zones=True,
+        only_pads=frozenset({PadReference("U", "1")}))
+    baseline = access.preflight_package_access(board, guides, settings, planes,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    assert baseline.pending_pads == {PadReference("U", "1")}
+    assert not baseline.fanout.pending_pads and not baseline.hard_findings
+    result = access.preflight_package_access(board, guides, settings, planes)
+    assert result.ready and result.source == board
+    assert result.pattern_trials[0].strategy == "critical_and_plane_first"
+    assert result.pattern_trials[0].outcome == "accepted"
+    assert set(result.fanout.accesses) == set(baseline.fanout.accesses)
+    assert all(item.net == "B" for item in (*result.fanout.created_tracks, *result.fanout.created_vias))
+    assert result.plane_stitch.added_via_count == 1
+    assert result.plane_stitch.board.vias[-1].net == "A"
+    assert not result.hard_findings
+
+
+def test_unavoidable_critical_failure_skips_repeated_pattern_search(monkeypatch):
+    board, guides, settings = pattern_trap()
+    baseline = access.preflight_package_access(board, guides, settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    calls = []
+    def critical(*args, **kwargs):
+        calls.append(kwargs.get("reserved_accesses"))
+        return baseline.critical
+    monkeypatch.setattr(access, "route_critical_nets", critical)
+    result = access.preflight_package_access(board, guides, settings)
+    assert not result.ready and result.board == baseline.board
+    assert len(calls) == 2 and calls[0] is not None and calls[1] is None
+    assert not result.pattern_trials
+
+
+@pytest.mark.parametrize("budget", [0, 1])
+def test_pipeline_obeys_pattern_budget_before_starting_area(monkeypatch, budget):
+    board, guides, settings = pattern_trap()
+    monkeypatch.setattr("pcbir.flow.optimize_placement_for_routing", lambda *_:
+        PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
+    result = run_routing_pipeline(board, fanout_options=settings,
+        package_access_options=access.PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=budget),
+        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm(.5), maximum_passes=1))
+    assert result.package_access.ready == bool(budget)
+    assert result.detailed.metrics.passes == budget
+    assert len(result.package_access.pattern_trials) == budget
+
+
+def test_cli_pattern_budget_is_explicit_and_bounded():
+    from pcbir.cli import _parser
+    parser = _parser()
+    assert parser.parse_args(["route-board", "board.copper"]).package_pattern_trials == 2
+    assert parser.parse_args(["route-board", "board.copper", "--package-pattern-trials", "0"]).package_pattern_trials == 0
+    with pytest.raises(SystemExit):
+        parser.parse_args(["route-board", "board.copper", "--package-pattern-trials", "3"])
+
+
+def test_pending_ordinary_exit_can_negotiate_even_when_critical_owner_already_passes(monkeypatch):
+    from types import MappingProxyType
+    board, guides, settings = pattern_trap()
+    real = access.route_fanout
+    real_critical = access.route_critical_nets
+    calls = []
+    critical_calls = []
+    def critical(source, route, *, reserved_accesses, on_progress=None):
+        # An already-successful specialized route seeds the proposal; only
+        # baseline routing and final full revalidation need a critical search.
+        critical_calls.append(reserved_accesses)
+        return real_critical(source, route, reserved_accesses=reserved_accesses, on_progress=on_progress)
+    def exhausted_first_pattern(source, options):
+        result = real(source, options)
+        calls.append(result)
+        if len(calls) == 1:
+            # Simulate a bounded ordinary allocation exhausting its budget;
+            # critical routing and the final escape proposal remain real.
+            return replace(result, board=source, accesses=MappingProxyType({}),
+                pending_pads=tuple(item.pad for item in result.pin_analysis),
+                created_tracks=(), created_vias=(), added_track_count=0, added_via_count=0,
+                pin_analysis=tuple(replace(item, selected_candidate_index=None) for item in result.pin_analysis))
+        return result
+    monkeypatch.setattr(access, "route_fanout", exhausted_first_pattern)
+    monkeypatch.setattr(access, "route_critical_nets", critical)
+    result = access.preflight_package_access(board, guides, settings)
+    assert result.ready and result.source == board and not result.hard_findings
+    assert len(calls) == 2
+    assert len(critical_calls) == 2
+    assert result.pattern_trials[0].outcome == "accepted"
+    assert result.pattern_trials[0].revalidated
 
 
 def test_critical_only_feedback_cannot_silently_drop_reserved_ordinary_access():

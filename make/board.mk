@@ -18,7 +18,7 @@ KICAD_FOOTPRINTS ?= $(KICAD10_FOOTPRINT_DIR)
 PHYSICAL_ARGS ?=
 PLACEMENT_TEMPLATES ?=
 HARD_MACRO ?=
-ROUTE_ARGS ?= --candidates 1 --placement-candidate candidate-00 --feedback-iterations 1 \
+ROUTE_ARGS ?= --candidates 1 --feedback-iterations 1 \
  --router-iterations 5 --pitch-mm 1 --passes 2 --search-budget 20000 --progress \
  --soft-ripup --fanout --constrained-pins-first --progressive-guides \
  --repair-budget-multiplier 10 --plane-contact-radius-mm 5
