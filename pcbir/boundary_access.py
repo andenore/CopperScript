@@ -10,14 +10,15 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, replace
 from heapq import heappop, heappush
+from types import MappingProxyType
 
-from .drc import placed_pad_shape, run_physical_drc
+from .drc import physical_board_digest, placed_pad_shape, run_physical_drc
 from .escape_assignment import (EscapeAssignmentOptions, EscapeAssignmentReport,
                                 EscapeCandidate, improve_escape_assignment)
 from .fanout import FanoutResult
 from .geometry import Bounds, bounds
 from .physical import CopperLayer, PadReference, PhysicalBoard, Point, RouteKind, TrackSegment, nm_from_mm
-from .pin_escape import checked_access_paths, verified_fanout_path
+from .pin_escape import RoutingAccess, checked_access_paths, verified_fanout_path, verified_routing_access
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
@@ -77,6 +78,7 @@ class BoundaryAccessResult:
     assignment: EscapeAssignmentReport
     native_accepted: bool
     options: BoundaryAccessOptions = BoundaryAccessOptions()
+    source_digest: str = ""
 
     @property
     def ready(self) -> bool:
@@ -336,4 +338,69 @@ def analyze_boundary_access(
          "bounded boundary domain exhausted" if not domains[p]
          else "compatible channel allocation not found within budget")) if p in pending else "",
         maze_states.get(p, 0), maze_counts.get(p, 0)) for p in required)
-    return BoundaryAccessResult(tuple(collars.values()), ports, pending, analysis, assignment, native, options)
+    return BoundaryAccessResult(tuple(collars.values()), ports, pending, analysis, assignment, native, options,
+                                physical_board_digest(board))
+
+
+def reserve_boundary_access(
+    board: PhysicalBoard, fanout: FanoutResult, boundary: BoundaryAccessResult,
+) -> FanoutResult:
+    """Atomically commit complete ordinary witnesses as fanout-owned copper.
+
+    Only newly added occurrences are disposable. Existing same-net input tracks
+    may support several ports but never acquire ordinary cleanup ownership.
+    Native acceptance and exact pad/path/span verification are mandatory again.
+    """
+    if (not boundary.ready or not boundary.source_digest
+            or boundary.source_digest != physical_board_digest(board)):
+        raise ValueError("boundary reservation requires complete, fresh capacity evidence")
+    if fanout.boundary_accesses:
+        raise ValueError("boundary reservations are already materialized")
+    if (len({p.pad for p in boundary.ports}) != len(boundary.ports)
+            or {p.pad for p in boundary.ports} != set(fanout.accesses)):
+        raise ValueError("boundary reservation cannot lose or duplicate ordinary launch identities")
+    if (Counter(fanout.created_tracks) - Counter(board.tracks)
+            or Counter(fanout.created_vias) - Counter(board.vias)):
+        raise ValueError("boundary reservation requires owned launch copper")
+    collars = {c.reference: c for c in boundary.collars}
+    references = {p.component for p in fanout.accesses}
+    if (len(collars) != len(boundary.collars) or set(collars) != references
+            or any(c != package_collar(board, ref, boundary.options.collar_margin_nm)
+                   for ref, c in collars.items())):
+        raise ValueError("boundary reservation requires current package collars")
+    net_by_pad = {p: n.name for n in board.nets for p in n.pads}
+    rules = {r.net: r for r in board.net_routing_rules}
+    for port in boundary.ports:
+        if port.pad not in net_by_pad:
+            raise ValueError("boundary reservation requires connected ordinary identities")
+        rule = rules.get(net_by_pad[port.pad])
+        if rule and rule.kind is not RouteKind.GENERAL:
+            raise ValueError("boundary reservation cannot own specialized critical access")
+        width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+        extension = max(boundary.options.collar_margin_nm, (width + 1) // 2 +
+                        max(board.rules.minimum_clearance_nm, rule.clearance_nm or 0 if rule else 0))
+        area, start, end = collars[port.pad.component].bounds, fanout.accesses[port.pad], port.position
+        outside = {"left": end.x_nm <= min(area.min_x, start.x_nm) - extension,
+                   "right": end.x_nm >= max(area.max_x, start.x_nm) + extension,
+                   "top": end.y_nm <= min(area.min_y, start.y_nm) - extension,
+                   "bottom": end.y_nm >= max(area.max_y, start.y_nm) + extension}
+        if not outside.get(port.edge, False):
+            raise ValueError("boundary reservation port does not clear its package collar")
+    owned, present = [], set(board.tracks)
+    for port in boundary.ports:
+        for track in port.path:
+            if track not in present:
+                owned.append(track)
+                present.add(track)
+    reserved = replace(board, tracks=(*board.tracks, *owned))
+    accesses = {p.pad: RoutingAccess(p.position, p.layer, fanout.accesses[p.pad], p.path) for p in boundary.ports}
+    clearance = RoutingClearanceIndex(reserved)
+    if any(verified_routing_access(reserved, pad, net_by_pad[pad], anchor, clearance) is None
+           for pad, anchor in accesses.items()):
+        raise ValueError("boundary reservation has an unverified terminal/layer/path")
+    if any(f.severity.value == "error" and f.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
+           for f in run_physical_drc(reserved).findings):
+        raise ValueError("boundary reservation rejected by native DRC")
+    return replace(fanout, board=reserved, created_tracks=(*fanout.created_tracks, *owned),
+                   added_track_count=fanout.added_track_count+len(owned),
+                   boundary_accesses=MappingProxyType(accesses))

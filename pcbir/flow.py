@@ -10,6 +10,7 @@ from .critical_feedback import CriticalPlacementFeedbackResult, improve_critical
 from .detailed import DetailedRouterOptions, DetailedRoutingResult, DetailedRoutingStatus, route_detailed
 from .drc import DrcDecision, PhysicalDrcPolicy, PhysicalDrcReport, run_physical_drc
 from .fanout import FanoutOptions, FanoutResult
+from .boundary_access import reserve_boundary_access
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .pad_stitch import DuplicatePadStitchResult
 from .route_closure import close_detailed_lands
@@ -127,11 +128,16 @@ def run_routing_pipeline(
         if plane_stitch_options else None
     )
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
-    fanout = replace(access.fanout, board=pre_fanout) if access else None
+    if access:
+        emit(on_progress, "package_boundary_reservation", "started")
+    fanout = reserve_boundary_access(pre_fanout, access.fanout, access.boundary) if access else None
+    if access:
+        emit(on_progress, "package_boundary_reservation", "finished", anchors=len(fanout.boundary_accesses),
+             added_tracks=len(fanout.created_tracks) - len(access.fanout.created_tracks))
     emit(on_progress, "ordinary_area", "started")
     detailed = route_detailed(
         fanout.board if fanout else pre_fanout, placement.global_route,
-        detailed_options, fanout_accesses=fanout.accesses if fanout else None,
+        detailed_options, fanout_accesses=fanout.routing_accesses if fanout else None,
         fanout_created_vias=frozenset((item.net, item.position)
                                     for item in fanout.created_vias) if fanout else None,
         fanout_created_tracks=fanout.created_tracks if fanout else None,
@@ -187,11 +193,18 @@ def run_routing_pipeline(
             trial_pre_fanout = (
                 trial_plane_stitch.board if trial_plane_stitch else trial_critical.board
             )
-            trial_fanout = replace(trial_access.fanout, board=trial_pre_fanout) if trial_access else None
+            if trial_access:
+                emit(on_progress, "package_boundary_reservation", "started", trial=trials_run)
+            trial_fanout = reserve_boundary_access(trial_pre_fanout, trial_access.fanout,
+                                                  trial_access.boundary) if trial_access else None
+            if trial_access:
+                emit(on_progress, "package_boundary_reservation", "finished", trial=trials_run,
+                     anchors=len(trial_fanout.boundary_accesses),
+                     added_tracks=len(trial_fanout.created_tracks) - len(trial_access.fanout.created_tracks))
             trial_detailed = route_detailed(
                 trial_fanout.board if trial_fanout else trial_pre_fanout,
                 trial_global, detailed_options,
-                fanout_accesses=trial_fanout.accesses if trial_fanout else None,
+                fanout_accesses=trial_fanout.routing_accesses if trial_fanout else None,
                 fanout_created_vias=frozenset((item.net, item.position)
                                             for item in trial_fanout.created_vias)
                 if trial_fanout else None,

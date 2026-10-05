@@ -368,7 +368,11 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["package_access"]["pattern_trial_limit"] == 2
     assert isinstance(document["package_access"]["pattern_trials"], list)
     boundary = document["package_access"]["boundary"]
-    assert "not committed" in boundary["scope"]
+    assert boundary["materialized"] == document["package_access"]["ordinary_area_started"]
+    assert len(boundary["source_digest"]) == 64
+    assert boundary["anchor_count"] == (len(boundary["ports"]) if boundary["materialized"] else 0)
+    assert boundary["added_track_count"] >= 0
+    assert ("reserved before area routing" if boundary["materialized"] else "not committed") in boundary["scope"]
     assert boundary["status"] in {"ready", "blocked"}
     assert isinstance(boundary["ports"], list) and isinstance(boundary["pin_analysis"], list)
     assert "package_boundary_access" in document["package_access"]["stage_order"]

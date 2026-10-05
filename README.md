@@ -341,10 +341,15 @@ follow-up work; an allocated fanout via is not complete-board connectivity.
 The [boundary-capacity increment](docs/package-boundary-access.md) now gates area
 routing on mutually compatible ordinary paths beyond package collars. Its
 matched-placement diagnostic proves 76/76 local witnesses after a multi-bend
-fallback; witness copper is provisional, not a replacement full-board route.
+fallback. A ready preflight now commits owned local paths and exact-layer
+boundary anchors for detailed routing; blocked preflights retain provisional
+witnesses only. Neither local access nor those stubs replace full-board routing.
 [Pass 18](docs/routing-review-pass18.md) allocates all 76 ordinary exits at the
 unchanged saved placement, but the modem-side USB pair then fails. The access
-gate correctly blocks area routing; this is not a new full-board success.
+gate correctly blocks area routing. Subsequent alternate-owner preflight passes
+both USB pairs, four RF groups, selected ground contacts and all 76 ordinary
+boundary paths. A new profiled full-area/fill/DRC run is still required before
+claiming full-board success.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
 KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6

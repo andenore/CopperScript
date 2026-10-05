@@ -118,6 +118,7 @@ def test_pending_boundary_channel_stops_area_despite_complete_dogbones(monkeypat
         package_access_options=access.PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=0))
     assert not result.fanout.pending_pads and result.package_access.boundary.pending_pads
     assert not result.package_access.ready and result.detailed.metrics.passes == 0
+    assert result.fanout.boundary_accesses is None  # Provisional witnesses stay uncommitted.
     assert result.package_access.pending_pads == frozenset(result.package_access.boundary.pending_pads)
     proposals = list(access.package_placement_trials(result.package_access, PlacementPlannerOptions(), nm_from_mm(.5)))
     assert proposals and {ref for ref, _ in proposals} == {"U"}
@@ -128,6 +129,39 @@ def test_missing_boundary_evidence_cannot_make_access_ready():
     result = access.preflight_package_access(board, guides, settings)
     assert result.ready and result.boundary.ready
     assert not replace(result, boundary=None).ready
+
+
+def test_ready_pipeline_materializes_owned_layer_anchors_before_area(monkeypatch):
+    from collections import Counter
+    import pcbir.flow as flow
+    from pcbir.pin_escape import RoutingAccess, verified_routing_access
+    from pcbir.routing_clearance import RoutingClearanceIndex
+    board, guides, settings, _ = fixture()
+    monkeypatch.setattr(flow, "optimize_placement_for_routing", lambda *_:
+        PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
+    real = flow.route_detailed
+    calls, events = [], []
+    def area(source, route, options, **kwargs):
+        anchors = kwargs["fanout_accesses"]
+        assert anchors and all(isinstance(a, RoutingAccess) for a in anchors.values())
+        index = RoutingClearanceIndex(source)
+        names = {p:n.name for n in source.nets for p in n.pads}
+        assert all(verified_routing_access(source, p, names[p], a, index) for p,a in anchors.items())
+        assert Counter(kwargs["fanout_created_tracks"]) <= Counter(source.tracks)
+        calls.append(source)
+        return real(source, route, options, **kwargs)
+    monkeypatch.setattr(flow, "route_detailed", area)
+    result = run_routing_pipeline(board, fanout_options=settings,
+        package_access_options=access.PackageAccessOptions(maximum_trials=0),
+        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm(.5), maximum_passes=1),
+        on_progress=lambda *event: events.append(event))
+    assert len(calls) == 1 and result.package_access.ready
+    baseline = result.package_access.fanout
+    assert baseline.boundary_accesses is None and result.fanout.boundary_accesses
+    assert result.fanout.board == calls[0]
+    assert Counter(result.fanout.created_tracks)-Counter(baseline.created_tracks) == Counter(calls[0].tracks)-Counter(result.package_access.board.tracks)
+    assert any(p == "package_boundary_reservation" and e == "finished" for p,e,_ in events)
+    assert all(n.connected for n in result.detailed.nets)
 
 
 def test_failed_critical_group_also_stops_area_and_preserves_ordinary_exits(monkeypatch):

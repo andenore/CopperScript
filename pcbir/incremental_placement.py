@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from hashlib import sha256
 
-from .boundary_access import analyze_boundary_access
+from .boundary_access import analyze_boundary_access, reserve_boundary_access
 from .critical import CriticalRoutingStatus, _fingerprint as critical_fingerprint
 from .detailed import DetailedRouterOptions
 from .drc import PhysicalDrcPolicy
@@ -78,6 +78,11 @@ def repair_placement_trial(
     if incident & protected:
         return fallback("critical endpoint moved")
     if initial.fanout is not None:
+        if initial.fanout.boundary_accesses:
+            # Moving even an unrelated pad/keepout can invalidate the owned
+            # collar path. Full preflight rebuilds paths and source evidence;
+            # never let the old incremental prefix relabel/prune reservations.
+            return fallback("owned boundary access requires full preflight")
         owned = {pad.component for pad in initial.fanout.accesses}
         owned.update(item.pad.component for item in initial.fanout.pin_analysis)
         owned.update(pad.component for pad in initial.fanout.pending_pads)
@@ -165,6 +170,8 @@ def repair_placement_trial(
         if not boundary.ready:
             return fallback("placement closes package boundary access")
         access = replace(access, boundary=boundary)
+        access_fanout = reserve_boundary_access(early.board, access_fanout, boundary)
+        early = replace(early, board=access_fanout.board)
     boot = replace(initial,
         placement_and_global=replace(initial.placement_and_global, board=trial, global_route=global_route,
             full_route_certified=True, status=FeedbackStatus.PASS, iterations=(),

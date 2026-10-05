@@ -45,7 +45,8 @@ from .routing_vias import physical_via_span
 from .routing_costs import COST_UNIT, length_cost, preference_cost
 from .routing_guides import GuideExposure, guide_transition_cost
 from .surface_path import _track_inside_board
-from .pin_escape import checked_access_path, verified_fanout_path
+from .pin_escape import (RoutingAccess, access_position, launch_position, checked_access_path,
+                         verified_fanout_path, verified_routing_access)
 
 
 class DetailedRoutingStatus(str, Enum):
@@ -267,7 +268,7 @@ def route_detailed(
     global_route: GlobalRoutingResult,
     options: DetailedRouterOptions | None = None,
     *,
-    fanout_accesses: Mapping[PadReference, Point] | None = None,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
     fanout_created_vias: frozenset[tuple[str, Point]] | None = None,
     fanout_created_tracks: tuple[TrackSegment, ...] | None = None,
     only_nets: frozenset[str] | None = None,
@@ -513,7 +514,7 @@ def _prune_fanout_copper(
     board: PhysicalBoard,
     tracks: tuple[TrackSegment, ...],
     vias: tuple[Via, ...],
-    accesses: Mapping[PadReference, Point],
+    accesses: Mapping[PadReference, Point | RoutingAccess],
     successful_nets: frozenset[str],
     created_vias: frozenset[tuple[str, Point]] | None,
     created_tracks: tuple[TrackSegment, ...] | None = None,
@@ -525,7 +526,7 @@ def _prune_fanout_copper(
     anchors: set[tuple[str, Point]] = set()
     for pad, anchor in accesses.items():
         net = net_by_pad[pad]
-        anchors.add((net, anchor))
+        anchors.add((net, launch_position(anchor)))
         if net not in successful_nets:
             abandoned_nets.add(net)
     if created_tracks is None:
@@ -564,7 +565,7 @@ def _repair_from_passes(
     best: _Pass,
     completed: list[_Pass],
     options: DetailedRouterOptions,
-    fanout_accesses: Mapping[PadReference, Point] | None = None,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
 ) -> _Pass:
     """Keep the best legal pass and add compatible routes found in other passes."""
 
@@ -775,7 +776,7 @@ def _route_repair_net(
     usage: Mapping[str, int], history: Mapping[str, int],
     clearance: RoutingClearanceIndex, options: DetailedRouterOptions,
     *, allow_movable_conflicts: bool = False,
-    fanout_accesses: Mapping[PadReference, Point] | None = None,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
 ) -> _NetAttempt:
     """Bounded fine-grid search shared by every transactional repair stage.
 
@@ -837,7 +838,7 @@ def _route_net(
     options: DetailedRouterOptions,
     *,
     allow_movable_conflicts: bool = False,
-    fanout_accesses: Mapping[PadReference, Point] | None = None,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
     forbidden_via_positions: frozenset[Point] = frozenset(),
     via_repair_round: int = 0,
 ) -> _NetAttempt:
@@ -872,7 +873,14 @@ def _route_net(
                 continue
             processed_groups.add(key)
         anchor = (fanout_accesses or {}).get(pad)
-        if anchor is not None:
+        if isinstance(anchor, RoutingAccess):
+            if verified_routing_access(board, pad, name, anchor, clearance) is None:
+                return _failed(name, f"unverified boundary anchor for {pad.component}.{pad.pad}")
+            pad_position = anchor.position
+            node = DetailedNode(grid.layers.index(anchor.layer), grid.xs.index(pad_position.x_nm),
+                                grid.ys.index(pad_position.y_nm))
+            candidates = (node,) if node not in grid.blocked else ()
+        elif anchor is not None:
             via = next((item for item in board.vias
                         if item.net == name and item.position == anchor), None)
             if via is None or verified_fanout_path(board, pad, name, anchor, clearance) is None:
@@ -1520,7 +1528,7 @@ def _physical_grid_line_clear(
 def _build_grid(
     board: PhysicalBoard, options: DetailedRouterOptions,
     pads: tuple[PadReference, ...],
-    fanout_accesses: Mapping[PadReference, Point] | None = None,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
 ) -> _Grid:
     min_x = min(item.x_nm for item in board.outline.vertices)
     max_x = max(item.x_nm for item in board.outline.vertices)
@@ -1535,7 +1543,7 @@ def _build_grid(
     port_points = tuple(port.position for net in board.nets
                         for port in macro_routing_ports(board, net.name).values())
     pin_points = tuple(pin_points) + port_points + tuple(
-        fanout_accesses[pad] for pad in pads
+        access_position(fanout_accesses[pad]) for pad in pads
         if fanout_accesses is not None and pad in fanout_accesses
     )
     xs = tuple(sorted(set(range(min_x, max_x + 1, options.pitch_nm)).union(

@@ -31,7 +31,8 @@ from .critical_feedback import (
 from .package_access import (PackageAccessOptions, PackageAccessResult, PackageAccessTrial, PackagePatternTrial,
                              preflight_package_access, improve_package_access)
 from .boundary_access import (BoundaryAccessOptions, BoundaryAccessResult, BoundaryPort,
-                              PackageCollar, analyze_boundary_access)
+                              PackageCollar, analyze_boundary_access, reserve_boundary_access)
+from .pin_escape import RoutingAccess
 from .detailed import (
     DetailedNetResult,
     DetailedNode,
@@ -560,6 +561,8 @@ __all__ = [
     "BoundaryPort",
     "PackageCollar",
     "analyze_boundary_access",
+    "reserve_boundary_access",
+    "RoutingAccess",
     "PackageAccessResult",
     "PackageAccessTrial",
     "PackagePatternTrial",

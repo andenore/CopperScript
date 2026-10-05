@@ -56,7 +56,8 @@ With `route-board --fanout`, the order is now:
 5. Allocate compatible provisional ordinary paths beyond package collars.
    Bounded cross-owner pattern negotiation and placement feedback repair failed
    access before the fail-closed gate.
-6. Ordinary area routing, only if the gate passes; normal late plane contacts,
+6. Commit owned ordinary boundary paths and exact selected-layer anchors only
+   after the gate passes. Ordinary area routing starts from those ports; normal late plane contacts,
    native DRC, independent KiCad refill/connectivity and signoff follow.
 
 The gate requires successful global planning, no pending requested access,
@@ -163,11 +164,13 @@ placement trial outcomes and whether ordinary area routing started.
 - [x] Add local collars and jointly compatible ordinary boundary-capacity
   witnesses on permitted layers, with a fail-closed gate and bounded multi-bend
   fallback. See [boundary access](package-boundary-access.md) for scope/evidence.
-- [ ] Reserve layer-aware boundary ports as detailed-router anchors and extend
-  them to specialized critical/power/GND domains. Witnesses are provisional;
-  through-via access is not end-to-end connectivity.
-- [ ] Generate constrained multi-bend alternatives with extended exact anchor
-  verification/ownership when simple patterns are insufficient.
+- [x] Reserve owned, layer-aware ordinary boundary ports as detailed-router
+  anchors, preserving paths in subset repair and limiting cleanup to owned copper.
+- [ ] Extend boundary-domain allocation to specialized critical/power/GND access.
+  A through-via or local boundary path is not end-to-end connectivity.
+- [ ] Extend multi-bend alternatives to specialized critical access while
+  preserving pair coupling, exact anchors and copper ownership. Ordinary
+  boundary multi-bend witnesses and ownership are already implemented above.
 - [ ] Derive directional placement margins from connected-pin bank demand,
   trace/clearance rules, via rows and nearby obstacles. Score margins cheaply,
   then gate finalists with exact access; do not inflate every courtyard or
@@ -177,8 +180,9 @@ placement trial outcomes and whether ordinary area routing started.
 - [ ] Repeat the full-board run, independent filled-zone/DRC checks and layer
   review before claiming closure or manufacturing readiness.
 
-This increment still creates vias for eligible ordinary crowded SMD pins. It
-does not yet offer a general via-free surface-port representation, include all
+This increment still allocates vias for eligible ordinary crowded SMD pins;
+cleanup may remove them when a verified surface path needs no transition. It
+does not yet generate via-free surface access directly, include all
 ground contacts by default, or prove access for every package type. An NC needs
 no exit. Native/KiCad connectivity and the manufacturing gates remain required.
 

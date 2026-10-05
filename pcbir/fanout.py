@@ -20,7 +20,7 @@ from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers
 from .routing_vias import physical_via_span
-from .pin_escape import checked_access_path, checked_access_paths
+from .pin_escape import RoutingAccess, checked_access_path, checked_access_paths
 from .escape_assignment import (EscapeAssignmentOptions, EscapeAssignmentReport,
                                 EscapeCandidate, improve_escape_assignment)
 
@@ -74,6 +74,12 @@ class FanoutResult:
     pin_analysis: tuple[FanoutPinAnalysis, ...] = ()
     created_tracks: tuple[TrackSegment, ...] = ()
     assignment: EscapeAssignmentReport | None = None
+    boundary_accesses: Mapping[PadReference, RoutingAccess] | None = None
+
+    @property
+    def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
+        """Detailed-router anchors; ordinary preflight retains via identities."""
+        return MappingProxyType({**self.accesses, **(self.boundary_accesses or {})})
 
 
 def route_fanout(

@@ -122,7 +122,7 @@ def test_allowed_45_degree_rotation_rebuilds_offset_pad_route(placement_case):
 
 @pytest.mark.parametrize("guard", ["critical", "fanout-owner", "crowded", "incomplete",
                                    "source-change", "illegal", "reference", "net-cap",
-                                   "locked-collision", "missing-ownership"])
+                                   "locked-collision", "missing-ownership", "boundary-owner"])
 def test_unsupported_transactions_fallback_without_mutation(placement_case, guard):
     initial, trial, baseline, early, plane, kwargs = placement_case
     before = initial.board
@@ -155,6 +155,11 @@ def test_unsupported_transactions_fallback_without_mutation(placement_case, guar
     elif guard == "missing-ownership":
         baseline = replace(baseline, board=replace(baseline.board,
             tracks=tuple(t for t in baseline.board.tracks if t.net != "KEEP")))
+    elif guard == "boundary-owner":
+        from pcbir.pin_escape import RoutingAccess
+        track = next(t for t in initial.board.tracks if t.net == "SIGNAL")
+        initial = replace(initial, fanout=FanoutResult(initial.critical.board, {}, (), 0, 0,
+            boundary_accesses={PadReference("G1", "2"): RoutingAccess(track.end, track.layer, track.start, (track,))}))
     elif guard == "net-cap":
         # Two completed ordinary nets incident to a three-pad package exceed
         # the one-net cap even though both are otherwise eligible for repair.

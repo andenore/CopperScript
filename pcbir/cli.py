@@ -961,8 +961,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
                 if access.boundary is not None:
                     boundary = access.boundary
+                    materialized = bool(result.fanout is not None and result.fanout.boundary_accesses is not None)
                     report["package_access"]["boundary"] = {
-                        "scope": "provisional ordinary local channel capacity; witness copper is not committed",
+                        "scope": ("ordinary local channel capacity; owned paths reserved before area routing; abandoned paths may be pruned"
+                                  if materialized else "provisional ordinary local channel capacity; witness copper is not committed"),
+                        "materialized": materialized,
+                        "source_digest": boundary.source_digest,
+                        "anchor_count": len(result.fanout.boundary_accesses) if materialized else 0,
+                        "added_track_count": (len(result.fanout.created_tracks) - len(access.fanout.created_tracks)) if materialized else 0,
                         "status": "ready" if boundary.ready else "blocked",
                         "native_accepted": boundary.native_accepted,
                         "limits": asdict(boundary.options),

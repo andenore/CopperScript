@@ -15,11 +15,12 @@ also separates pin-access analysis from subsequent detailed routing. These are
 architectural precedents, not drop-in PCB solvers: actual pads, through-vias,
 mechanical geometry, hard macros and critical profiles need their own checks.
 
-This increment covers **allocated ordinary fanout pins only**, not joint critical
-differential launches or every power/GND contact. Witness copper is not committed,
-exported as routed copper, or used to pretend remote pads are connected. Detailed
-routing retains verified via anchors and must find real end-to-end routes.
-Reserving layer-aware boundary ports as area-router anchors is a follow-up.
+This covers **allocated ordinary fanout pins only**, not joint critical
+differential launches or every power/GND contact. CS-152 analysis produces
+provisional witnesses. CS-153 materializes their owned paths **only after the
+entire package-access preflight passes**, then gives detailed routing an exact
+layer-aware boundary anchor. Neither a port nor its stub proves remote-pad
+connectivity; the area router must still create real end-to-end routes.
 
 ## Algorithm
 
@@ -57,6 +58,33 @@ The 2 mm option bounds cheap-family extra Manhattan distance and maze spatial
 padding, not a hard trace-length limit. A failed finite domain/state budget means
 **access unproven**, not physically impossible. Manufacturing rules never relax.
 
+## Owned hand-off to area routing
+
+`reserve_boundary_access(board, fanout, boundary)` is an immutable transaction.
+It requires a complete unique port set matching the ordinary launch identities,
+a matching physical-board digest, current transformed collars and actual port
+clearance beyond the named collar edge, and the actual owned launch track/via
+occurrences. It appends only witness tracks not already present, rechecks every
+terminal-to-launch-to-port path and native DRC, and returns an extended
+`FanoutResult`. A rejected reservation raises without modifying the input.
+Existing same-net tracks may support a path but never acquire cleanup ownership.
+Critical, hard-macro and selected-plane copper remains owned by its original stage.
+
+`FanoutResult.accesses` retains the dogbone positions for pattern negotiation.
+`boundary_accesses` contains `RoutingAccess(position, layer, launch_position,
+path)` descriptors; `routing_accesses` merges these over ordinary via anchors.
+The detailed router validates existing explicit geometry before using a port and
+offers exactly **one selected-layer node**, not every layer of the launch via.
+It rejects a missing/wrong-net path, disconnected terminal, prohibited layer or
+insufficient actual via span rather than falling back to pad-center access.
+
+Subset repairs retain the immutable reservation prefix and consume the same
+typed anchors. Full-route cleanup removes only explicitly owned occurrences on
+abandoned nets; it cannot delete input, macro, critical or ground copper.
+A same-surface port may lose an unnecessary owned via while retaining its
+terminal/path chain. An off-surface port still requires the actual layer transition.
+These are physical routing descriptors, not electrical or schematic IR geometry.
+
 ## Pipeline, placement and reporting
 
 `--fanout` automatically enables this gate. `--package-boundary-step-mm` controls
@@ -69,14 +97,20 @@ Boundary pending identities join ordinary/selected-plane pending pads, so existi
 whole-unit placement feedback can move the blocked package within fixed poses,
 allowed orientations, rigid units, keepouts and proximity rules. Acceptance
 preserves previous boundary identities, ordinary launches and critical connectivity.
-Incremental sparse-component moves recompute boundary evidence: stale/missing
-evidence or a newly closed channel triggers full-preflight fallback. Old witness
-coordinates are never relabelled as proof for a changed placement.
+Incremental sparse-component moves with no committed boundary paths recompute
+evidence. With nonempty owned boundary reservations, the incremental controller
+conservatively requests **full preflight** rather than reclassifying or relabelling
+their copper after a move. This limits the fast path, not legal placement repair.
+Stale/missing evidence or a newly closed channel also triggers full fallback.
 
-`package_access.boundary` reports provisional scope, readiness/native acceptance,
+`package_access.boundary` reports provisional/reserved scope, `materialized`,
+source digest, anchor count, tracks added at hand-off, readiness/native acceptance,
 collars, pending identities, port layer/edge/position/path, candidate counts,
 diagnostics, maze states/candidates and assignment budgets/trials. Progress phase
-`package_boundary_access` separates this cost from critical and area routing.
+`package_boundary_access` separates analysis from critical and area routing;
+`package_boundary_reservation` times the commit-time ownership/geometry checks.
+Port paths describe the pre-area reservation; abandoned paths may be pruned
+from the final board and must not be mistaken for completed-net evidence.
 The normal profiled Make workflow needs no example-specific engine code.
 A blocked gate still means zero ordinary area-search passes and no fabrication
 readiness; uncommitted witness tracks do not appear in exported diagnostic copper.
@@ -91,6 +125,14 @@ dogbones succeed but boundary access is missing.
 An installed-KiCad test independently checks a temporary witness board: only
 expected unconnected/dangling items remain, not geometry/clearance violations.
 Those findings deliberately prevent a passing full-board connectivity claim.
+
+`tests/test_boundary_routing.py` additionally covers exact-layer source/target
+nodes, fresh atomic materialization, unchanged input ownership, stale/invalid
+path rejection, surface-via cleanup, subset repair and abandoned-net cleanup.
+An installed-KiCad fixture verifies a complete boundary-to-area route with no
+unconnected or geometry findings. Pipeline tests ensure that only a ready
+preflight materializes paths and passes the typed anchors to detailed routing.
+This small fixture is not evidence of full-vertical closure.
 
 Matched full-vertical placement fingerprint:
 `5d1b87bb622bd415def17b3c54bd23db266dee9b4a9a08d8c74632bc9551163e`.
@@ -122,14 +164,24 @@ and 22,270 total MCU fallback states while reducing maze `can_track` calls from
 guaranteed production speedup; the predicate-count/geometry comparison isolates
 the intended cache effect without relaxing any check.
 
-Final affected regression run: **192 passed, 10 skipped**. The skips are GNU Make
+CS-152 affected regression run: **192 passed, 10 skipped**. The skips are GNU Make
 integration tests because Make is absent from PATH; portable build assertions
 and installed-KiCad tests ran. This is the affected routing/CLI/build set, not a
 claim that every repository test or the full-board manufacturing flow ran.
 
+CS-153 final affected integration/build run: **220 passed, 10 skipped**; GNU Make
+is still absent from PATH. All 29 focused boundary-handoff tests passed, including
+the installed-KiCad complete-route check. A broader detailed/critical regression
+run also passed (328 tests, 10 Make skips); the final collar/launch-width guards
+and additional ownership cases were verified by the later 220-test run.
+The profiled shared full-vertical workflow was started in
+`build/full-vertical-boundary-20261005/`. At milestone commit it is still searching
+the modem USB pair, before ordinary area routing. This in-progress run began
+before the final guard/report refinements; it is diagnostic, not final-commit
+manufacturing evidence. Saved fill, native DRC and per-layer review remain pending.
+
 Remaining work:
 
-- Feed explicitly owned, layer-aware boundary ports into detailed routing.
 - Negotiate dogbone choice and onward path together, beyond owner orderings.
 - Jointly allocate specialized critical/power/GND access domains.
 - Derive directional placement margins and escape order from bank/channel demand.

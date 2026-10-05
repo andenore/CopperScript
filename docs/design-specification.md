@@ -1236,6 +1236,33 @@ Incremental placement MUST rebuild evidence or request a full preflight fallback
 Witnesses are diagnostic physical objects, not electrical/schematic IR data and
 not silently committed copper. They MUST be reported as provisional and MUST NOT
 claim end-to-end connectivity or fabrication readiness. Layer-aware boundary
-anchor ownership, joint critical/power/GND domains, directional placement margins
+anchor ownership (implemented by CS-153), joint critical/power/GND domains, directional placement margins
 and independent filled-board signoff remain follow-ups.
 See [ordinary package boundary access](package-boundary-access.md).
+
+## CS-153 — Owned layer-aware ordinary boundary hand-off (Accepted)
+
+After the entire CS-131/CS-152 preflight passes, atomically materialize the
+complete ordinary boundary witness set as fanout-owned copper. Bind the proof
+to its physical source digest and unique launch identities; recheck transformed
+collars and port clearance beyond their edges, and verify existing
+owned launch occurrences, exact terminal/path continuity, actual via span,
+per-net allowed layers/widths and fresh native geometry. Invalid arguments MUST
+fail without changing input geometry. Blocked preflights MUST NOT commit witnesses.
+
+Detailed routing and subset repairs consume explicit selected-layer ports,
+not unrestricted via-center aliases. Every claimed path MUST exist and validate;
+missing or stale access MUST NOT silently revert to pad-center routing.
+Preserve dogbone identities separately for upstream pattern negotiation.
+Only newly appended ordinary track occurrences acquire cleanup ownership;
+critical, macro, plane and existing input copper remain protected. Abandoned-net
+cleanup is occurrence-based. A surface path may retain connectivity without an
+unused owned via; an off-surface port requires its real transition.
+
+Placement transactions MUST rebuild access evidence and ownership. Until exact
+incremental rebasing is implemented, nonempty committed boundary reservations
+request full preflight. Reports distinguish provisional proof from materialized
+reservations and record commit-time cost. Local paths remain physical objects:
+they neither add schematic coordinates nor certify end-to-end routing, filled
+plane continuity or fabrication readiness. Specialized critical/GND domains and
+joint dogbone/onward-path optimization remain separate follow-ups.

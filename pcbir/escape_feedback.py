@@ -475,7 +475,7 @@ def _reroute_local_dependencies(
         emit(on_progress, "zone_subset_search", "started", kind=kind,
              affected_nets=sorted(names), expansion=expansion)
         result = route_detailed(source, initial.placement_and_global.global_route,
-            detailed_options, fanout_accesses=initial.fanout.accesses if initial.fanout else None,
+            detailed_options, fanout_accesses=initial.fanout.routing_accesses if initial.fanout else None,
             # Local transactions do not own/prune the fixed fanout prefix.
             fanout_created_vias=frozenset(), fanout_created_tracks=(), only_nets=names)
         result, _, _ = close_detailed_lands(result)
