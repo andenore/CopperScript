@@ -85,8 +85,8 @@ jobs:
             fi
           }
 
-          examples="$(make --no-print-directory -s --eval='print-examples:;@echo $(EXAMPLES)' print-examples)"
-          for example in $examples; do
+          physical_examples="$(make --no-print-directory -s --eval='print-physical-examples:;@echo $(PHYSICAL_EXAMPLES)' print-physical-examples)"
+          for example in $physical_examples; do
             echo "::group::${example} layout"
             run_smoke "${example} layout" make --no-print-directory EXAMPLE="$example" layout
             echo "::endgroup::"

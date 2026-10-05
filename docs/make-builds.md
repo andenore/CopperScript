@@ -45,8 +45,11 @@ an actual passed route/fill/DRC run establishes that board's connectivity.
 The CM4 four-layer routing preset has been verified with KiCad 10.0.6.
 
 `check-examples` checks the fast targets and expands every route recipe without starting
-routing. CI additionally runs the `layout` and non-interactive `edit` targets for every
-registered example on each commit. Actual routing remains limited to release tags.
+routing. CI additionally runs the `layout` and non-interactive `edit` targets for the
+physical examples (`cm4`, `full-vertical`, `nrf52`, `round-led-ring`, the mechanical
+examples, and `resolved-footprint`) on each commit. Electrical and simulation fixtures
+without complete footprint identities still run their complete fast target set. Actual
+routing remains limited to release tags.
 
 Compilation/placement outputs live under ignored `build/<board-name>/`.
 Each route gets a fresh `build/<board-name>/runs/<UTC-id>/`; open its
