@@ -57,16 +57,29 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/make-target-smoke
+          exec > >(tee build/make-target-smoke.log) 2>&1
           make --no-print-directory check-examples
 
           physical_examples="$(make --no-print-directory -s --eval='print-physical-examples:;@echo $(PHYSICAL_EXAMPLES)' print-physical-examples)"
+          run_physical() {
+            label="$1"
+            shift
+            set +e
+            "$@"
+            status=$?
+            set -e
+            if [ "$status" -ne 0 ]; then
+              echo "::error title=${label} failed::$(tail -c 2000 build/make-target-smoke.log 2>/dev/null | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
+              return "$status"
+            fi
+          }
           for example in $physical_examples; do
             echo "::group::${example} layout"
-            make --no-print-directory EXAMPLE="$example" layout
+            run_physical "${example} layout" make --no-print-directory EXAMPLE="$example" layout
             echo "::endgroup::"
 
             echo "::group::${example} edit"
-            make --no-print-directory EXAMPLE="$example" \
+            run_physical "${example} edit" make --no-print-directory EXAMPLE="$example" \
               EDITOR_ARGS="--no-browser --scene-output build/make-target-smoke/${example}/scene.json" \
               edit
             echo "::endgroup::"
