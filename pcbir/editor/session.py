@@ -9,7 +9,8 @@ from pathlib import Path
 from ..clusters import move_placement_unit
 from ..layout import plan_placement
 from ..physical import BoardSide, PhysicalBoard, Point
-from ..placement import PlacementPlannerOptions, placement_solution_is_legal, placement_rejection_reasons
+from ..placement import (PlacementPlannerOptions, placement_solution_is_hard_legal,
+                         placement_rejection_reasons)
 from .scene import board_scene, RatsnestCache
 from .source import SourceEditError, SourceSnapshot, fixed_placement_patch, mechanical_patch
 from .transactions import SourceWorkspace
@@ -204,6 +205,7 @@ class EditorSession:
     def operation(self, request: dict) -> dict:
         action = request.get("action")
         fields = {"auto_place": (), "move": ("reference", "x_nm", "y_nm", "rotation", "side"),
+                  "move_group": ("references", "dx_nm", "dy_nm"),
                   "lock": ("reference", "locked"), "apply": (), "discard": (), "undo": (), "redo": (),
                   "prepare_lock": ("reference", "x_nm", "y_nm", "rotation", "side", "locks"),
                   "prepare_mechanical": ("kind", "name", "shape", "parameters", "remove"),
@@ -290,8 +292,60 @@ class EditorSession:
             except (ValueError, InvalidOperation) as exc:
                 raise EditorError(str(exc)) from exc
             moved = move_placement_unit(self.state.board, poses, reference, proposed)
-            if not placement_solution_is_legal(self.state.board, moved, self._options()):
+            # Relative distance/alignment rules are deliberately advisory while
+            # dragging.  Keep board bounds, keepouts, source locks and rigid
+            # macro geometry hard, then expose any relative violations in the
+            # preview scene for the user to resolve.
+            if not placement_solution_is_hard_legal(self.state.board, moved, self._options()):
                 raise EditorError("pose violates physical constraints: " + "; ".join(
+                    placement_rejection_reasons(self.state.board, moved, self._options())))
+            trial = replace(self.state.board, placements=tuple(moved[p.reference]
+                for p in self.state.board.placements), metadata={**self.state.board.metadata,
+                    "fabrication_ready": "false", "editor_preview": "true"})
+            self.pending = State(trial, self.state.locks)
+            self.revision += 1
+            return {"preview": self._document(self.pending), "accepted": False}
+        if action == "move_group":
+            self.pending = None
+            references = request["references"]
+            poses = {p.reference: p for p in self.state.board.placements}
+            if (not isinstance(references, list) or not references or
+                    len(references) > len(poses) or
+                    any(not isinstance(reference, str) or not reference for reference in references) or
+                    len(set(references)) != len(references)):
+                raise EditorError("group move requires a non-empty list of unique component references")
+            unknown = set(references) - set(poses)
+            if unknown:
+                raise EditorError("unknown component reference(s): " + ", ".join(sorted(unknown)))
+            dx_nm = _integer(request["dx_nm"], "dx_nm")
+            dy_nm = _integer(request["dy_nm"], "dy_nm")
+
+            # A rigid macro is one placement unit.  Expand the selection here,
+            # rather than trusting the browser, so API clients cannot partially
+            # move a macro or leave it in a stale relative pose.
+            members = set(references)
+            for cluster in self.state.board.rigid_clusters:
+                cluster_references = {member.reference for member in cluster.members}
+                if members & cluster_references:
+                    members.update(cluster_references)
+            locked = members & set(self.state.locks)
+            if locked:
+                raise EditorError("unlock the temporary pose before moving the group: " +
+                                  ", ".join(sorted(locked)))
+            fixed = {rule.reference for rule in self.state.board.placement_rules
+                     if rule.fixed_position is not None}
+            fixed_members = members & fixed
+            if fixed_members:
+                raise EditorError("group contains source-position-locked component(s): " +
+                                  ", ".join(sorted(fixed_members)))
+            moved = dict(poses)
+            for reference in members:
+                pose = poses[reference]
+                moved[reference] = replace(pose, position=Point(
+                    _integer(pose.position.x_nm + dx_nm, "x_nm"),
+                    _integer(pose.position.y_nm + dy_nm, "y_nm")))
+            if not placement_solution_is_hard_legal(self.state.board, moved, self._options()):
+                raise EditorError("group move violates physical constraints: " + "; ".join(
                     placement_rejection_reasons(self.state.board, moved, self._options())))
             trial = replace(self.state.board, placements=tuple(moved[p.reference]
                 for p in self.state.board.placements), metadata={**self.state.board.metadata,
@@ -315,9 +369,9 @@ class EditorSession:
         elif action == "apply":
             if self.pending is None:
                 raise EditorError("no pending preview")
-            if not placement_solution_is_legal(self.state.board,
+            if not placement_solution_is_hard_legal(self.state.board,
                     {p.reference: p for p in self.pending.board.placements}, self._options()):
-                raise EditorError("pending placement no longer satisfies hard rules")
+                raise EditorError("pending placement no longer satisfies hard physical rules")
             self._commit(self.pending)
         elif action == "discard":
             self.pending = None

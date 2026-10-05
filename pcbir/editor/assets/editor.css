@@ -151,6 +151,22 @@ footer {
   stroke:#ffdb71;
   stroke-width:.22}
 
+.component.constraint-warning .courtyard {
+  stroke:#ff986e;
+  stroke-width:.22;
+  stroke-dasharray:.18 .12}
+
+.component.constraint-warning .body {
+  stroke:#ff986e;
+  fill:#b95b3b;
+  fill-opacity:.32}
+
+.constraint-warning-marker {
+  fill:#ff986e;
+  stroke:#2b1610;
+  stroke-width:.08;
+  pointer-events:none}
+
 .component.locked .courtyard {
   stroke:#faac66}
 
@@ -172,6 +188,16 @@ footer {
   font-size:1.1px;
   fill:#eff6fa;
   text-anchor:middle;
+  pointer-events:none}
+
+.pad-label {
+  font-size:.55px;
+  fill:#172027;
+  stroke:#f7e6b0;
+  stroke-width:.07px;
+  paint-order:stroke;
+  text-anchor:middle;
+  dominant-baseline:central;
   pointer-events:none}
 
 .component {
@@ -207,6 +233,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .native-open {fill:none;stroke:#ff8a8a;stroke-width:.16;stroke-dasharray:.25 .15;}
 .net-label {font-size:.7px;fill:#e5df8d;pointer-events:none;}
 #net-cost-summary {white-space:pre-line;font-size:12px;}
+#constraint-warnings {white-space:pre-line;color:#ffbf93;}
 #overlay-status.error {color:#ff9e9e;}
 .component:focus-visible .courtyard {stroke:#ffd17d;stroke-width:.22;stroke-dasharray:none;}
 @media (prefers-reduced-motion:reduce) {* {scroll-behavior:auto;}}

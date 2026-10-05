@@ -54,7 +54,7 @@
 </fieldset>
 <label>Drag snap (mm) <input id="snap" type="number" min="0.001" value="0.1" step="0.1"></label>
 <label><input id="preview-drags" type="checkbox"> Preview drags before applying</label>
-<p id="board-help">Scroll to zoom; right-drag to pan. Focus the board: arrows move by one snap (Shift: ten); R rotates to the next allowed angle; +/− zoom; F fits. Escape cancels a gesture. Tab/Enter selects a footprint. Temporary placement and source history are separate.</p>
+<p id="board-help">Scroll to zoom; right-drag to pan. Click a footprint to select it; Shift-click toggles additional components, then drag any highlighted component to move the group together. Focus the board: arrows move by one snap (Shift: ten); R rotates forward, Shift+R backward; L locks, Shift+L or U unlocks; S flips front/back; Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Y) undo/redo; +/− zoom; F/Home fits. Escape cancels a gesture. Tab/Enter selects a footprint. Pad names appear when zoomed in. Temporary placement and source history are separate.</p>
 <fieldset id="mechanical-controls" disabled><legend>Mechanical features</legend>
 <label>Project-owned feature <select id="feature"><option value="">New feature</option></select></label>
 <label>Kind <select id="feature-kind"><option>outline</option><option>hole</option><option>slot</option><option>boundary</option><option>reference</option><option>cutout</option><option>keepout</option><option>copper_keepout</option><option>rules</option><option>datum</option><option>edge</option><option>attach</option><option>overhang</option><option>component_height</option><option>enclosure</option><option>assembly_access</option></select></label>
@@ -72,6 +72,7 @@
 </fieldset>
 <h2>Measure</h2><label><input id="measure" type="checkbox"> Click two snapped points</label><output id="measurement">No measurement</output>
 <h2>Scope</h2><p>Source edits rebuild unrouted physical intent. Existing routing, copper fills and manufacturing outputs become stale; rebuild before ordering. Ratsnest is a guide, not routing.</p>
+<details id="placement-constraint-warnings" hidden><summary>Placement constraint warnings</summary><pre id="constraint-warnings"></pre></details>
 <details><summary>Footprint / source warnings</summary><pre id="warnings"></pre></details>
 </aside>
 <section id="viewport" aria-label="Board view"><svg id="board" tabindex="0" role="group" aria-label="Mechanical board and placement editor" aria-describedby="board-help"></svg></section>

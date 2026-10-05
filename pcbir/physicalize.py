@@ -284,6 +284,21 @@ def _physicalize(
     component_index = {
         component.ref: component for component, _, _ in selected_components
     }
+    # Keep optional electrical pin names alongside physical pad numbers so
+    # editors can reveal useful identities (e.g. ``PA9`` or ``VDD``) without
+    # making the backend-neutral footprint geometry depend on a symbol format.
+    pad_name_map: dict[str, dict[str, str]] = {}
+    for component, part, _ in selected_components:
+        by_number: dict[str, list[str]] = {}
+        for pin in part.pins.values():
+            by_number.setdefault(pin.number, []).append(pin.name)
+        if by_number:
+            pad_name_map[component.ref] = {
+                number: "/".join(dict.fromkeys(names))
+                for number, names in sorted(by_number.items())
+            }
+    if pad_name_map:
+        metadata["pad_names"] = json.dumps(pad_name_map, sort_keys=True)
     footprints: dict[str, PhysicalFootprint] = {}
     placements: list[Placement] = []
 

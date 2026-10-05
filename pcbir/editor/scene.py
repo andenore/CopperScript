@@ -3,13 +3,16 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
-from math import isqrt
+from math import cos, hypot, isqrt, radians, sin
 
 from ..drc import explicit_copper_connectivity, placed_pad_shape
 from ..geometry import bounds
 from ..hard_macros import materialize_hard_macros
-from ..physical import PadKind, PadReference, PadShape, PhysicalBoard, Point
-from ..placement import (PlacementPlannerOptions, placement_solution_is_legal,
+from ..physical import (FootprintArc, FootprintCircle, FootprintLayer,
+                        FootprintLine, FootprintPolygon, FootprintRectangle,
+                        PadKind, PadReference, PadShape, PhysicalBoard, Point)
+from ..placement import (PlacementPlannerOptions, placement_solution_is_hard_legal,
+                         placement_solution_is_legal, relative_placement_violations,
                          transformed_footprint_polygon, transformed_local_point)
 from .islands import nearest_island_tree
 
@@ -109,11 +112,96 @@ class RatsnestCache:
         return [edge for net in sorted(self.edges) for edge in self.edges[net]]
 
 
+def _body_outline(footprint) -> tuple[Point, ...]:
+    """Return an origin-preserving visual body box for an imported footprint.
+
+    ``PhysicalFootprint.body_size`` is a compact legacy size and does not carry
+    the local origin of an offset connector.  KiCad connector footprints often
+    put their anchor on pad 1, so centering that size at the placement origin
+    draws a misleading body box.  Prefer actual non-courtyard graphics and pad
+    envelopes when available, retaining the centered fallback for proxy and
+    minimal footprints.
+    """
+
+    graphics = [
+        graphic for graphic in footprint.graphics
+        if getattr(graphic, "layer", None) is not FootprintLayer.COURTYARD
+    ]
+    if not graphics:
+        half_width = (footprint.body_size.width_nm + 1) // 2
+        half_height = (footprint.body_size.height_nm + 1) // 2
+        return (Point(-half_width, -half_height), Point(half_width, -half_height),
+                Point(half_width, half_height), Point(-half_width, half_height))
+
+    points: list[Point] = []
+
+    def add(point: Point, radius: int = 0) -> None:
+        points.extend((Point(point.x_nm - radius, point.y_nm - radius),
+                       Point(point.x_nm + radius, point.y_nm + radius)))
+
+    for pad in footprint.pads:
+        angle = radians(float(pad.rotation_degrees))
+        half_x, half_y = pad.size.width_nm / 2, pad.size.height_nm / 2
+        for x, y in ((-half_x, -half_y), (half_x, -half_y),
+                     (half_x, half_y), (-half_x, half_y)):
+            add(Point(round(pad.position.x_nm + x * cos(angle) - y * sin(angle)),
+                      round(pad.position.y_nm + x * sin(angle) + y * cos(angle))))
+
+    for graphic in graphics:
+        width = getattr(graphic, "width_nm", 0) // 2
+        if isinstance(graphic, FootprintLine):
+            add(graphic.start, width)
+            add(graphic.end, width)
+        elif isinstance(graphic, FootprintRectangle):
+            for point in (graphic.start,
+                          Point(graphic.end.x_nm, graphic.start.y_nm),
+                          graphic.end,
+                          Point(graphic.start.x_nm, graphic.end.y_nm)):
+                add(point, width)
+        elif isinstance(graphic, FootprintCircle):
+            radius = round(hypot(graphic.end.x_nm - graphic.center.x_nm,
+                                 graphic.end.y_nm - graphic.center.y_nm)) + width
+            add(graphic.center, radius)
+        elif isinstance(graphic, FootprintArc):
+            for point in (graphic.start, graphic.midpoint, graphic.end):
+                add(point, width)
+        elif isinstance(graphic, FootprintPolygon):
+            for point in graphic.points:
+                add(point, width)
+
+    if not points:
+        half_width = (footprint.body_size.width_nm + 1) // 2
+        half_height = (footprint.body_size.height_nm + 1) // 2
+        return (Point(-half_width, -half_height), Point(half_width, -half_height),
+                Point(half_width, half_height), Point(-half_width, half_height))
+    min_x = min(point.x_nm for point in points)
+    min_y = min(point.y_nm for point in points)
+    max_x = max(point.x_nm for point in points)
+    max_y = max(point.y_nm for point in points)
+    return (Point(min_x, min_y), Point(max_x, min_y),
+            Point(max_x, max_y), Point(min_x, max_y))
+
+
+def _metadata_map(board: PhysicalBoard, key: str) -> dict:
+    try:
+        value = json.loads(board.metadata.get(key, "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0,
                 session_locks: frozenset[str] = frozenset(),
                 options: PlacementPlannerOptions | None = None, ratsnest_cache: RatsnestCache | None = None) -> dict:
     rules = {rule.reference: rule for rule in board.placement_rules}
-    profile_roles = json.loads(board.metadata.get("mechanical_connector_roles", "{}"))
+    profile_roles = _metadata_map(board, "mechanical_connector_roles")
+    pad_names = _metadata_map(board, "pad_names")
+    pose_map = {pose.reference: pose for pose in board.placements}
+    relative_violations = relative_placement_violations(board, pose_map)
+    violating_references = {
+        reference for violation in relative_violations
+        for reference in violation.get("references", ())
+    }
     assigned = {pad: net.name for net in board.nets for pad in net.pads}
     components = []
     for pose in sorted(board.placements, key=lambda item: item.reference):
@@ -128,12 +216,11 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
                 drill = _shape(placed_pad_shape(position, replace(pad,
                     size=pad.drill, kind=PadKind.SMD, drill=None,
                     shape=PadShape.CIRCLE if pad.drill.width_nm == pad.drill.height_nm else PadShape.OVAL), pose))
-            pads.append({"number": pad.number, "land": f"pad:{pose.reference}.{pad.number}:{index}",
+            pads.append({"number": pad.number, "name": pad_names.get(pose.reference, {}).get(pad.number),
+                "land": f"pad:{pose.reference}.{pad.number}:{index}",
                 "kind": pad.kind.value, "net": assigned.get(PadReference(pose.reference, pad.number)),
                 "shape": _shape(placed_pad_shape(position, pad, pose)), "drill": drill})
-        w, h = footprint.body_size.width_nm // 2, footprint.body_size.height_nm // 2
-        body = tuple(transformed_local_point(pose, Point(x, y)) for x, y in
-                     ((-w, -h), (w, -h), (w, h), (-w, h)))
+        body = tuple(transformed_local_point(pose, point) for point in _body_outline(footprint))
         components.append({"reference": pose.reference, "hierarchy": pose.reference.split("/")[:-1],
             "source_attachment": next((a.id for a in board.attachments if a.reference==pose.reference),None),
             "height_nm": component_height(board,pose),
@@ -144,13 +231,24 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
             "courtyard": [_point(p) for p in transformed_footprint_polygon(board, pose)],
             "pads": pads, "source_position_locked": bool(rule and rule.fixed_position is not None),
             "source_rotation_locked": bool(rule and rule.fixed_rotation_degrees is not None),
+            "source_side_locked": bool(rule and rule.side is not None),
             "session_locked": pose.reference in session_locks,
+            "constraint_warning": pose.reference in violating_references,
+            "constraint_warning_count": sum(pose.reference in violation.get("references", ())
+                                              for violation in relative_violations),
             "allowed_orientations": [str(x) for x in rule.allowed_orientations] if rule else ["0", "90", "180", "270"],
             "macro": next((c.name for c in board.rigid_clusters
                 if any(m.reference == pose.reference for m in c.members)), None)})
     extent = bounds(board.outline.vertices)
     circle = board.outline.circular_boundary
     from ..mechanical_references import reference_scene
+    warning_data = {k: board.metadata[k] for k in ("footprint_import_warnings", "omitted_components",
+            "omitted_constraint_targets", "prototype_footprints") if k in board.metadata}
+    if relative_violations:
+        warning_data["relative_placement"] = (
+            f"{len(relative_violations)} relative placement constraint(s) are outside tolerance; "
+            "temporary editor poses remain movable."
+        )
     scene = {"schema": SCHEMA, "board": board.name, "source_revision": source_revision,
         "revision": revision, "units": "nm", "source_writable": False,
         "mechanical_provenance": json.loads(board.metadata.get("mechanical_provenance", "{}")),
@@ -184,9 +282,13 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         "zone_nets": sorted({z.net for z in board.zones}),
         "power_nets": [],
         "ratsnest": ratsnest_cache.get(board) if ratsnest_cache else ratsnest(board),
-        "warnings": {k: board.metadata[k] for k in ("footprint_import_warnings", "omitted_components",
-            "omitted_constraint_targets", "prototype_footprints") if k in board.metadata},
+        "warnings": warning_data,
+        "placement_constraints": {"violations": list(relative_violations),
+            "violating_components": sorted(violating_references)},
         "placement_legal": placement_solution_is_legal(board,
+            {p.reference: p for p in board.placements},
+            replace(options or PlacementPlannerOptions(), fixed_references=session_locks)),
+        "placement_hard_legal": placement_solution_is_hard_legal(board,
             {p.reference: p for p in board.placements},
             replace(options or PlacementPlannerOptions(), fixed_references=session_locks)),
         "notice": "Session preview only: source is read-only; no routing or manufacturing signoff."}

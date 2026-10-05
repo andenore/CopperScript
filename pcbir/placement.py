@@ -341,7 +341,32 @@ def placement_solution_is_legal(
     placements: Mapping[str, Placement],
     options: PlacementPlannerOptions | None = None,
 ) -> bool:
-    """Return whether a complete placement satisfies represented hard rules."""
+    """Return whether a complete placement satisfies hard and relative rules.
+
+    Relative placement rules are still hard for the planner and manufacturing
+    flow.  The interactive editor deliberately uses
+    :func:`placement_solution_is_hard_legal` so a user can inspect a temporary
+    pose that needs a relative-constraint adjustment.
+    """
+
+    return (
+        placement_solution_is_hard_legal(board, placements, options)
+        and _relative_penalty(board, placements) == 0
+    )
+
+
+def placement_solution_is_hard_legal(
+    board: PhysicalBoard,
+    placements: Mapping[str, Placement],
+    options: PlacementPlannerOptions | None = None,
+) -> bool:
+    """Return whether a pose satisfies non-relative physical legality rules.
+
+    This predicate intentionally excludes alignment and distance preferences.
+    It is used only by the placement editor's temporary preview path; planners,
+    source validation, routing and signoff continue to require
+    :func:`placement_solution_is_legal`.
+    """
 
     options = options or PlacementPlannerOptions()
     original = {item.reference: item for item in board.placements}
@@ -367,7 +392,7 @@ def placement_solution_is_legal(
         if not _legal(candidate, accepted, board, options, cluster_keepouts=keepouts):
             return False
         accepted[reference] = candidate
-    return _relative_penalty(board, placements) == 0
+    return True
 
 
 def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, Placement],
@@ -1650,6 +1675,86 @@ def _relative_penalty(board: PhysicalBoard, placements: Mapping[str, Placement])
             ]
             total += max(0, max(values) - min(values) - rule.tolerance_nm) * rule.weight
     return total
+
+
+def relative_placement_violations(
+    board: PhysicalBoard, placements: Mapping[str, Placement]
+) -> tuple[dict[str, object], ...]:
+    """Return deterministic, UI-friendly diagnostics for violated soft rules.
+
+    The planner keeps relative rules hard when selecting a fabrication
+    candidate, but the editor needs to show *which* relation is broken while
+    allowing a temporary drag.  Each record contains the participating
+    references, actual measurement and requested limit/tolerance in nanometres.
+    Missing targets are skipped here because the physical-board validator
+    reports inventory errors separately.
+    """
+
+    violations: list[dict[str, object]] = []
+    for rule_index, rule in enumerate(board.relative_rules):
+        points = [_target_point(board, placements, target) for target in rule.targets]
+        if any(point is None for point in points):
+            continue
+        concrete = [point for point in points if point is not None]
+        targets = [
+            {"reference": target.reference, "pad": target.pad}
+            for target in rule.targets
+        ]
+        if rule.kind in {
+            RelativePlacementKind.MAX_DISTANCE,
+            RelativePlacementKind.MIN_DISTANCE,
+        }:
+            for pair_index, (left, right) in enumerate(zip(concrete, concrete[1:])):
+                actual = round(hypot(left.x_nm - right.x_nm, left.y_nm - right.y_nm))
+                limit = rule.distance_nm or 0
+                amount = (
+                    max(0, actual - limit)
+                    if rule.kind is RelativePlacementKind.MAX_DISTANCE
+                    else max(0, limit - actual)
+                )
+                if not amount:
+                    continue
+                left_target, right_target = rule.targets[pair_index : pair_index + 2]
+                kind_text = "maximum" if rule.kind is RelativePlacementKind.MAX_DISTANCE else "minimum"
+                violations.append({
+                    "rule_index": rule_index,
+                    "kind": rule.kind.value,
+                    "targets": targets,
+                    "references": [left_target.reference, right_target.reference],
+                    "pair_index": pair_index,
+                    "actual_distance_nm": actual,
+                    "limit_nm": limit,
+                    "excess_nm": amount,
+                    "message": (
+                        f"{left_target.reference} to {right_target.reference}: "
+                        f"{kind_text} distance {limit} nm, actual {actual} nm"
+                    ),
+                })
+        elif rule.kind is RelativePlacementKind.ALIGN:
+            values = [
+                point.x_nm if rule.axis is AlignmentAxis.X else point.y_nm
+                for point in concrete
+            ]
+            actual = max(values) - min(values)
+            tolerance = rule.tolerance_nm
+            amount = max(0, actual - tolerance)
+            if amount:
+                violations.append({
+                    "rule_index": rule_index,
+                    "kind": rule.kind.value,
+                    "targets": targets,
+                    "references": [target.reference for target in rule.targets],
+                    "axis": rule.axis.value if rule.axis is not None else None,
+                    "actual_span_nm": actual,
+                    "tolerance_nm": tolerance,
+                    "excess_nm": amount,
+                    "message": (
+                        f"{', '.join(target.reference for target in rule.targets)}: "
+                        f"{rule.axis.value if rule.axis is not None else 'axis'} alignment "
+                        f"tolerance {tolerance} nm, actual span {actual} nm"
+                    ),
+                })
+    return tuple(violations)
 
 
 def _relative_margin(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:

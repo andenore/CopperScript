@@ -13,10 +13,13 @@ from pcbir.editor.scene import board_scene, ratsnest
 from pcbir.editor.server import create_server
 from pcbir.editor.session import EditorError, EditorSession, StaleRevision
 from pcbir.physical import (BoardOutline, BoardSide, ComponentPlacementRule,
-    CopperLayer, CopperZone, FootprintPad, InternalPadGroup, MechanicalHole,
-    PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point,
-    PolygonRing, PolygonWithHoles, Size, TrackSegment)
-from pcbir.placement import PlacementPlannerOptions, transformed_local_point
+    CopperLayer, CopperZone, FootprintLayer, FootprintLine, FootprintPad,
+    InternalPadGroup, MechanicalHole, PadReference, PhysicalBoard,
+    PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing,
+    PolygonWithHoles, PlacementTarget, RelativePlacementKind,
+    RelativePlacementRule, Size, TrackSegment, nm_from_mm)
+from pcbir.placement import (PlacementPlannerOptions, relative_placement_violations,
+                             transformed_local_point)
 
 
 def board_fixture():
@@ -65,6 +68,52 @@ def test_scene_pad_transform_matches_shared_geometry(side, rotation):
     xs, ys = zip(*component["pads"][0]["shape"]["spine"])
     assert abs(sum(xs) // len(xs) - expected.x_nm) <= 1
     assert abs(sum(ys) // len(ys) - expected.y_nm) <= 1
+
+
+def test_scene_exposes_optional_pad_names_for_zoomed_labels():
+    board = board_fixture()
+    board = replace(board, metadata={"pad_names": '{"J1":{"1":"UART_TX"}}'})
+    component = next(c for c in board_scene(board, source_revision="x")["components"]
+                     if c["reference"] == "J1")
+    assert component["pads"][0]["name"] == "UART_TX"
+
+
+def test_scene_body_box_preserves_offset_connector_origin():
+    footprint = PhysicalFootprint(
+        "offset-connector",
+        (FootprintPad("1", Point.mm(5, 0), Size.mm(1, 1)),),
+        Size.mm(10, 4),
+        graphics=(FootprintLine(Point.mm(-1, -1), Point.mm(9, -1), 100000,
+                                FootprintLayer.SILKSCREEN),),
+    )
+    board = PhysicalBoard("Offset", BoardOutline.rectangle(30, 20),
+        {footprint.name: footprint}, (Placement("J1", footprint.name, Point.mm(10, 10)),), ())
+    component = board_scene(board, source_revision="x")["components"][0]
+    xs = [point[0] for point in component["body"]]
+    assert min(xs) == nm_from_mm("8.95")
+    assert max(xs) == nm_from_mm("19.05")
+
+
+def test_relative_constraint_warning_allows_editor_preview_but_not_planner_legality(tmp_path):
+    board = board_fixture()
+    board = replace(board,
+        placements=(board.placements[0], replace(board.placements[1], position=Point.mm(7, 5)), board.placements[2]),
+        relative_rules=(RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+            (PlacementTarget("J1"), PlacementTarget("U/R1")), distance_nm=nm_from_mm(3)),))
+    session = session_fixture(tmp_path, board)
+    assert session.scene()["placement_legal"]
+    result = request(session, "move", reference="U/R1", x_nm=12000000, y_nm=5000000,
+                     rotation="0", side="front")
+    preview = result["preview"]
+    assert preview["placement_hard_legal"]
+    assert not preview["placement_legal"]
+    assert preview["placement_constraints"]["violating_components"] == ["J1", "U/R1"]
+    assert next(c for c in preview["components"] if c["reference"] == "U/R1")["constraint_warning"]
+    assert relative_placement_violations(board, {
+        pose.reference: pose for pose in session.pending.board.placements
+    })
+    request(session, "apply")
+    assert session.state.board.placements[1].position == Point.mm(12, 5)
 
 
 def test_ratsnest_deterministic_short_tree_and_copper_reuse():
@@ -167,6 +216,40 @@ def test_manual_move_preview_apply_discard_history_and_failed_rollback(tmp_path)
     assert session.state == original
     request(session, "lock", reference="TP1", locked=True)
     assert not session.redo_stack
+
+
+def test_group_move_translates_selected_components_atomically(tmp_path):
+    session = session_fixture(tmp_path)
+    result = request(session, "move_group", references=["U/R1", "TP1"],
+                     dx_nm=1000000, dy_nm=-1000000)
+    positions = {item["reference"]: item["position"] for item in result["preview"]["components"]}
+    assert positions["J1"] == [5000000, 5000000]
+    assert positions["U/R1"] == [13000000, 4000000]
+    assert positions["TP1"] == [10000000, 11000000]
+    assert result["preview"]["placement_hard_legal"]
+    request(session, "apply")
+    assert {pose.reference: pose.position for pose in session.state.board.placements}["U/R1"] == Point.mm(13, 4)
+    assert {pose.reference: pose.position for pose in session.state.board.placements}["TP1"] == Point.mm(10, 11)
+
+
+def test_group_move_expands_rigid_units_and_rejects_locked_members(tmp_path):
+    from test_hard_macros import fixture
+    _, _, bind = fixture(tmp_path)
+    session = session_fixture(tmp_path, bind())
+    result = request(session, "move_group", references=["U1"], dx_nm=1000000, dy_nm=500000)
+    positions = {item["reference"]: item["position"] for item in result["preview"]["components"]}
+    assert positions == {"U1": [11000000, 10500000], "R1": [13000000, 10500000]}
+    request(session, "discard")
+    request(session, "lock", reference="R1", locked=True)
+    with pytest.raises(EditorError, match="unlock.*R1"):
+        request(session, "move_group", references=["U1"], dx_nm=1000000, dy_nm=0)
+
+
+def test_group_move_rejects_source_fixed_members_without_mutation(tmp_path):
+    session = session_fixture(tmp_path)
+    with pytest.raises(EditorError, match="source-position-locked.*J1"):
+        request(session, "move_group", references=["J1", "TP1"], dx_nm=1000000, dy_nm=0)
+    assert session.revision == 0 and session.pending is None
 
 
 def test_preview_changes_revision_so_other_clients_cannot_apply_old_candidate(tmp_path):

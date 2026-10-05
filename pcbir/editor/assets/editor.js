@@ -7,19 +7,41 @@ if(vscodeHost) window.addEventListener("message",event=>{
   const message=event.data;
   if(message?.type==="refresh") {reloadScene();return;}
   if(message?.type==="selection" && scene()?.components.some(c=>c.reference===message.reference)) {
-    selected=message.reference;render();syncLockChecks();return;
+    selectReferences([message.reference],message.reference);render();syncLockChecks();return;
   }
   const pending=hostRequests.get(message?.id);if(!pending) return;
   hostRequests.delete(message.id);clearTimeout(pending.timeout);
   if(message.error) pending.reject(new Error(message.error));else pending.resolve(message.result);
 });
 const NS = "http://www.w3.org/2000/svg";
-let accepted, preview = null, sourcePreview = null, selected = "", viewbox = null, drag = null, pan = null, busy = false;
+let accepted, preview = null, sourcePreview = null, selected = "", selectedReferences = new Set(), viewbox = null, drag = null, pan = null, busy = false;
 let measurePoints=[], vertexPoints=[];
 let jobPoll=null;
 let mechanicalFormRevision="";
 const mm = n => n / 1000000;
 const scene = () => sourcePreview || preview || accepted;
+function selectReferences(references, primary="") {
+  const available=new Set((scene()?.components||[]).map(component=>component.reference));
+  selectedReferences=new Set(references.filter(reference=>available.has(reference)));
+  selected=selectedReferences.has(primary) ? primary : [...selectedReferences][0] || "";
+}
+function selectionSet() {
+  return new Set(selectedReferences.size ? selectedReferences : (selected ? [selected] : []));
+}
+function expandedSelection() {
+  const components=scene()?.components||[], selection=selectionSet(), macros=new Set(
+    components.filter(component=>selection.has(component.reference) && component.macro)
+      .map(component=>component.macro));
+  return new Set(components.filter(component=>selection.has(component.reference) ||
+    (component.macro && macros.has(component.macro))).map(component=>component.reference));
+}
+function pruneSelection() {
+  if (!scene()) return;
+  const available=new Set(scene().components.map(component=>component.reference));
+  selectedReferences=new Set([...selectedReferences].filter(reference=>available.has(reference)));
+  if (selected && !available.has(selected)) selected=[...selectedReferences][0] || "";
+  if (!selected && selectedReferences.size) selected=[...selectedReferences][0];
+}
 function featureLabel(kind,name="") {
   const source=scene()?.mechanical_provenance?.features?.find(f=>f.kind===kind && f.name===name);
   return source ? `${source.profile ? "Imported (read-only): "+source.profile : "Project-owned"}; ${source.source.filename}:${source.source.line}` : "";
@@ -64,6 +86,12 @@ function resetFit() {
 }
 function render() {
   const s=scene(),liveSvg=$("board");if(!s)return;
+  pruneSelection();
+  const selectedSet=selectionSet();
+  // Keep labels quiet at board scale and readable when the user inspects a
+  // package.  The threshold is in world millimetres, so it is independent of
+  // browser DPI and viewport size.
+  const padLabelsVisible=!!viewbox && viewbox[2] <= 35;
   const focused=document.activeElement?.closest?.(".component")?.dataset.reference;
   const svg=node("g"); // Build off-document; one DOM replacement avoids layout churn.
   const c = s.outline.circle;
@@ -129,7 +157,8 @@ function render() {
     n.append(node("title",{},`${k.name}: copper keepout on ${k.layers.join(", ")}. ${featureLabel("copper_keepout",k.name)}`));svg.append(n);
   }
   const visible = new Set(s.components.filter(c => $("side").value === "both" || c.side === $("side").value).map(c => c.reference));
-  const relevant = new Set(s.components.find(c=>c.reference===selected)?.pads.map(p=>p.net).filter(Boolean)||[]);
+  const relevant = new Set(s.components.filter(component=>selectedSet.has(component.reference))
+    .flatMap(component=>component.pads.map(pad=>pad.net).filter(Boolean)));
   const netVisible = net => (!$("net").value || net === $("net").value) &&
     (!$("selected-only").checked || relevant.has(net)) &&
     ($("power-filter").value==="all" || (s.power_nets||[]).includes(net) === ($("power-filter").value==="power"));
@@ -182,20 +211,33 @@ function render() {
   for (const component of s.components) {
     if (!visible.has(component.reference)) continue;
     const locked = component.source_position_locked || component.source_rotation_locked || component.session_locked;
-    const g = node("g",{class:`component ${component.side}${selected === component.reference ? " selected" : ""}${locked ? " locked" : ""}`,"data-reference":component.reference,
-      role:"button",tabindex:selected===component.reference || (!selected && component.reference===s.components[0]?.reference)?"0":"-1",
-      "aria-pressed":selected===component.reference?"true":"false",
-      "aria-label":`${component.reference}, ${component.value||component.footprint}, ${component.side}, X ${mm(component.position[0])} mm, Y ${mm(component.position[1])} mm${locked?", pose constraints present":""}`});
+    const warning = !!component.constraint_warning;
+    const isSelected=selectedSet.has(component.reference);
+    const g = node("g",{class:`component ${component.side}${isSelected ? " selected" : ""}${locked ? " locked" : ""}${warning ? " constraint-warning" : ""}`,"data-reference":component.reference,
+      role:"button",tabindex:isSelected || (!selected && component.reference===s.components[0]?.reference)?"0":"-1",
+      "aria-pressed":isSelected?"true":"false",
+      "aria-label":`${component.reference}, ${component.value||component.footprint}, ${component.side}, X ${mm(component.position[0])} mm, Y ${mm(component.position[1])} mm${locked?", pose constraints present":""}${warning?`, ${component.constraint_warning_count} relative placement warning${component.constraint_warning_count===1?"":"s"}`:""}`});
     g.append(node("polygon",{points:points(component.courtyard),class:"courtyard"}),node("polygon",{points:points(component.body),class:"body"}));
+    if (warning) {
+      const marker=node("circle",{cx:mm(component.position[0]),cy:mm(component.position[1]),r:.65,class:"constraint-warning-marker"});
+      marker.append(node("title",{},`${component.reference}: relative placement constraint warning`));g.append(marker);
+    }
     for (const pad of component.pads) {
       if (pad.kind !== "non_plated_through_hole") {
-        const n = shape(pad.shape,"pad");n.append(node("title",{},`${component.reference}.${pad.number}: ${pad.net || "no net"}`));g.append(n);
+        const n = shape(pad.shape,"pad");
+        n.append(node("title",{},`${component.reference}.${pad.number}${pad.name ? ` (${pad.name})` : ""}: ${pad.net || "no net"}`));
+        g.append(n);
+        if (padLabelsVisible && pad.number) {
+          const center=pad.shape.spine.reduce((sum,point)=>[sum[0]+point[0],sum[1]+point[1]],[0,0]);
+          center[0]/=pad.shape.spine.length;center[1]/=pad.shape.spine.length;
+          g.append(node("text",{x:mm(center[0]),y:mm(center[1]),class:"pad-label"},pad.name || pad.number));
+        }
       }
       if (pad.drill) g.append(shape(pad.drill,"drill"));
     }
     g.append(node("text",{x:mm(component.position[0]),y:mm(component.position[1])-1.4,class:"ref"},component.reference));
     g.addEventListener("pointerdown",event=>startDrag(event,component,g)); svg.append(g);
-    g.addEventListener("keydown",event=>{if(["Enter"," "].includes(event.key)){event.preventDefault();selected=component.reference;render();syncLockChecks();}});
+    g.addEventListener("keydown",event=>{if(["Enter"," "].includes(event.key)){event.preventDefault();selectReferences([component.reference],component.reference);render();syncLockChecks();}});
   }
   if (vertexPoints.length) svg.append(node("polyline",{points:vertexPoints.map(p=>p.join(",")).join(" "),class:"vertex-preview"}));
   if (measurePoints.length===2) {
@@ -208,10 +250,14 @@ function render() {
   if (!viewbox) resetFit(); else liveSvg.setAttribute("viewBox",viewbox.join(" "));
   if(focused) liveSvg.querySelector(`.component[data-reference="${CSS.escape(focused)}"]`)?.focus();
   $("warnings").textContent = Object.entries(s.warnings).map(([key,value])=>`${key}: ${value}`).join("\n\n") || "No recorded footprint/omission warnings.";
+  const placementWarnings=s.placement_constraints?.violations||[];
+  $("placement-constraint-warnings").hidden=!placementWarnings.length;
+  $("constraint-warnings").textContent=placementWarnings.map(item=>item.message).join("\n")||"No relative placement warnings.";
   updateControls();
 }
 function updateControls() {
   const s = scene(), component = s?.components.find(c => c.reference===selected);
+  const selectionCount=selectionSet().size, groupCount=expandedSelection().size;
   const sourceReview=!!accepted?.source_review;
   const blocked = busy || !s || !!accepted?.source_stale || sourceReview;
   $("notice").textContent=accepted?.notice || "Loading source workspace…";
@@ -239,7 +285,7 @@ function updateControls() {
   $("mechanical-controls").disabled=blocked || !!preview || !accepted?.capabilities.mechanical_edit;
   $("undo").disabled = blocked || !accepted?.can_undo; $("redo").disabled = blocked || !accepted?.can_redo;
   $("pending").hidden = !preview;
-  $("move").disabled = !component || blocked || !!preview || component.session_locked ||
+  $("move").disabled = !component || blocked || !!preview || selectionCount>1 || component.session_locked ||
     (component.source_position_locked && component.source_rotation_locked && component.source_side_locked);
   $("lock").disabled = !component || blocked || !!preview;
   if (component) {
@@ -252,6 +298,8 @@ function updateControls() {
     $("lock").textContent = component.session_locked ? "Unlock temporary pose" : "Lock temporary pose";
     $("details").textContent = `${component.footprint}; ${component.value}. ${component.source_position_locked||component.source_rotation_locked ? "SOURCE LOCK. Enable explicit source-lock editing to change it. " : ""}${component.profile_role ? "Imported profile role: "+component.profile_role+" (read-only). " : ""}${component.macro ? "Rigid unit: "+component.macro+". " : ""}Allowed angles: ${component.allowed_orientations.join(", ")}.`;
     $("details").textContent+=` Height: ${component.height_nm==null ? "unknown" : mm(component.height_nm)+" mm"}.`;
+    if(selectionCount>1) $("details").textContent+=` ${selectionCount} components selected (${groupCount} including rigid macro members); drag any highlighted component to move them together.`;
+    if(component.constraint_warning) $("details").textContent+=` Relative placement warning (${component.constraint_warning_count}); inspect the highlighted components and warning panel.`;
   }
 }
 function populate() {
@@ -313,12 +361,24 @@ async function pollJob() {
 }
 function startDrag(event,component,g) {
   if (event.button!==0 || busy || drag || pan || accepted?.source_stale || accepted?.source_review || $("measure").checked || $("draw-vertices").checked) return;
-  selected=component.reference; $("reference").value=selected; syncLockChecks(); updateControls();
+  if (event.shiftKey) {
+    event.preventDefault();
+    const next=selectionSet();
+    if (next.has(component.reference)) next.delete(component.reference);
+    else next.add(component.reference);
+    selectReferences([...next],next.has(component.reference) ? component.reference : [...next][0] || "");
+    $("reference").value=selected; syncLockChecks(); updateControls(); render();
+    return;
+  }
+  if (!selectionSet().has(component.reference)) selectReferences([component.reference],component.reference);
+  else selected=component.reference;
+  $("reference").value=selected; syncLockChecks(); updateControls();
   if (preview) {status("Apply or discard the pending preview before moving another component.");return;}
   const start=svgPoint(event);
-  if (component.session_locked || component.source_position_locked) {render();return;}
-  const members=scene().components.filter(c=>c.reference===component.reference || (component.macro && c.macro===component.macro));
-  drag={component,g,start,last:start,pointerId:event.pointerId,members:new Set(members.map(c=>c.reference))}; g.classList.add("dragging"); $("board").setPointerCapture(event.pointerId);
+  const members=expandedSelection();
+  const lockedMember=scene().components.find(c=>members.has(c.reference) && (c.session_locked || c.source_position_locked));
+  if (lockedMember) {status(`${lockedMember.reference} is locked and cannot be moved with this selection.`,true);render();return;}
+  drag={component,g,start,last:start,pointerId:event.pointerId,members}; g.classList.add("dragging"); $("board").setPointerCapture(event.pointerId);
 }
 $("board").addEventListener("contextmenu",event=>event.preventDefault());
 $("board").addEventListener("pointerdown",event=>{
@@ -359,7 +419,9 @@ $("board").addEventListener("pointerup",event=>{
   const snap=Number($("snap").value); if (!Number.isFinite(snap)||snap<=0) {render();status("Snap must be positive",true);return;}
   const x=Math.round((mm(d.component.position[0])+d.last[0]-d.start[0])/snap)*snap;
   const y=Math.round((mm(d.component.position[1])+d.last[1]-d.start[1])/snap)*snap;
-  operation("move",{reference:d.component.reference,x_nm:Math.round(x*1e6),y_nm:Math.round(y*1e6),rotation:d.component.rotation,side:d.component.side},!$("preview-drags").checked);
+  const dx_nm=Math.round(x*1e6)-d.component.position[0],dy_nm=Math.round(y*1e6)-d.component.position[1];
+  if (d.members.size>1) operation("move_group",{references:[...d.members],dx_nm,dy_nm},!$("preview-drags").checked);
+  else operation("move",{reference:d.component.reference,x_nm:Math.round(x*1e6),y_nm:Math.round(y*1e6),rotation:d.component.rotation,side:d.component.side},!$("preview-drags").checked);
 });
 function endPan() {
   const id=pan?.pointerId;pan=null;$("board").classList.remove("panning");
@@ -368,7 +430,7 @@ function endPan() {
 function cancelGesture() {endPan();drag=null;render();}
 $("board").addEventListener("pointercancel",cancelGesture);
 $("board").addEventListener("lostpointercapture",()=>{if(drag||pan) cancelGesture();});
-$("reference").addEventListener("change",()=>{selected=$("reference").value;render();});
+$("reference").addEventListener("change",()=>{selectReferences($("reference").value ? [$("reference").value] : [],$("reference").value);render();});
 $("reference").addEventListener("change",syncLockChecks);
 $("edit-locks").onchange=()=>{syncLockChecks();updateControls();};
 for (const id of ["side","net","airwires","selected-only","zone-nets","power-filter","net-labels","net-costs","copper-layer","routed-tracks","filled-zones","native-opens","reference-guides"]) $(id).addEventListener("change",render);
@@ -399,7 +461,7 @@ async function reloadScene() {
     const s=await api("/api/scene");preview=null;sourcePreview=null;
     accepted=s;populate();render();
     status(s.source_stale ? "Source changed externally; use Reload source (discard session) before editing." :
-      `${s.board}: ${s.components.length} components; ${s.ratsnest.length} airwires. ${s.placement_legal ? "Placement legal." : "Initial inspection placement needs legalization."} ${Object.keys(s.warnings).length ? "Footprint/omission warnings are present in scene data." : ""}`,s.source_stale);
+      `${s.board}: ${s.components.length} components; ${s.ratsnest.length} airwires. ${s.placement_legal ? "Placement legal." : s.placement_hard_legal && s.placement_constraints?.violations?.length ? "Relative placement warnings are present." : "Initial inspection placement needs legalization."} ${Object.keys(s.warnings).length ? "Footprint/omission warnings are present in scene data." : ""}`,s.source_stale);
   } catch(error) {status(error.message,true);}
   finally {busy=false;updateControls();}
 }
@@ -523,20 +585,45 @@ $("board").addEventListener("click",event=>{
 });
 $("board").addEventListener("keydown",event=>{
   if (event.key==="Escape") {cancelGesture();measurePoints=[];vertexPoints=[];render();return;}
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase()==="z") {
+    event.preventDefault();
+    operation(event.shiftKey ? "redo" : "undo");
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase()==="y") {
+    event.preventDefault();operation("redo");return;
+  }
   if(event.key==="+" || event.key==="="){event.preventDefault();zoom(.8);return;}
   if(event.key==="-"){event.preventDefault();zoom(1.25);return;}
-  if(event.key.toLowerCase()==="f"){event.preventDefault();resetFit();render();return;}
+  if(event.key.toLowerCase()==="f" || event.key==="Home"){event.preventDefault();resetFit();render();return;}
   const c=scene()?.components.find(c=>c.reference===selected);
+  if((event.key.toLowerCase()==="l" || event.key.toLowerCase()==="u") && c && !busy && !preview && !accepted?.source_review) {
+    const lock=event.key.toLowerCase()==="l" && !event.shiftKey;
+    const unlock=event.key.toLowerCase()==="u" || (event.key.toLowerCase()==="l" && event.shiftKey);
+    if((lock && c.session_locked) || (unlock && !c.session_locked)) return;
+    event.preventDefault();operation("lock",{reference:selected,locked:lock},true);
+    return;
+  }
   if(event.key.toLowerCase()==="r" && c && !busy && !preview && !accepted?.source_review && !c.session_locked && !c.source_rotation_locked) {
-    event.preventDefault();const angles=c.allowed_orientations.map(Number),current=((Number(c.rotation)%360)+360)%360;
-    const next=angles.find(a=>a>current)??angles[0];
+    event.preventDefault();const angles=c.allowed_orientations.map(Number).sort((a,b)=>a-b),current=((Number(c.rotation)%360)+360)%360;
+    const index=angles.findIndex(a=>a===current);
+    const next=event.shiftKey ? angles[(index>0?index:angles.length)-1] : angles[(index+1)%angles.length];
     if(next!==undefined)operation("move",{reference:selected,x_nm:c.position[0],y_nm:c.position[1],rotation:next,side:c.side},true);
+    return;
+  }
+  if(event.key.toLowerCase()==="s" && c && !busy && !preview && !accepted?.source_review && !c.session_locked && !c.source_side_locked) {
+    event.preventDefault();operation("move",{reference:selected,x_nm:c.position[0],y_nm:c.position[1],rotation:c.rotation,side:c.side==="front"?"back":"front"},true);
     return;
   }
   const delta={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[event.key];
   if (!delta || busy || preview || accepted?.source_review) return;
-  if (!c || c.session_locked || c.source_position_locked) return;
   event.preventDefault();const step=Math.round(Number($("snap").value)*1e6)*(event.shiftKey?10:1);
+  const group=expandedSelection();
+  if (group.size>1) {
+    operation("move_group",{references:[...group],dx_nm:delta[0]*step,dy_nm:delta[1]*step},true);
+    return;
+  }
+  if (!c || c.session_locked || c.source_position_locked) return;
   operation("move",{reference:selected,x_nm:c.position[0]+delta[0]*step,y_nm:c.position[1]+delta[1]*step,rotation:c.rotation,side:c.side},true);
 });
 featureMode();
