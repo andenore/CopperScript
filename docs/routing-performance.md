@@ -351,3 +351,24 @@ incident-net routing, unchanged critical geometry, a 45-degree rotation and acce
 rebasing. The same controlled improving move needs zero full-pipeline evaluations
 with incremental repair and one without it. No full-board wall-time speedup has
 yet been measured; O1d benchmarking remains open.
+
+## Python-first geometry and search allocations
+
+The 2026-10-05 full-board profile is saved at `7d7673f` in ignored
+`build/full-vertical-staged-indexed-20261005/`. It finished with three ordinary
+failures (`GNSS_TX`, `I2C_SDA`, `V3V3`), 34 independent KiCad unconnected items
+and one other violation. It is not fabrication-ready.
+
+The next increment remains pure Python: Fraction-free integer clearance
+decisions, lazy rational measurements only for DRC violations, immutable
+placed-obstacle/grid identity reuse, and elimination of duplicate query rays
+and ignored endpoint allocations. Exact tangency, odd-width half-nanometre
+thresholds, full via spans, deterministic search selection and reporting are
+unchanged. See the [implementation and measurement record](python-routing-optimization-plan.md).
+
+Mixed-shape and passing copper-spacing fixtures show approximately 3.26x and
+9.03x kernel speed ratios, with zero Fraction constructions on their Boolean
+paths. These are alternating unprofiled observations under concurrent test load,
+not full-board speedups. Matched full-board timing and closure comparisons are
+still pending; compiled alternatives remain deferred until Python algorithm,
+data-structure and allocation opportunities have been measured and used.

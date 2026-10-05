@@ -24,6 +24,13 @@ class Bounds:
         return not (self.max_x < other.min_x or other.max_x < self.min_x
                     or self.max_y < other.min_y or other.max_y < self.min_y)
 
+    def intersects_expanded(self, other: "Bounds", distance_nm: int) -> bool:
+        """Equivalent to expanded(distance_nm).intersects(other), without allocation."""
+        return not (self.max_x + distance_nm < other.min_x
+                    or other.max_x < self.min_x - distance_nm
+                    or self.max_y + distance_nm < other.min_y
+                    or other.max_y < self.min_y - distance_nm)
+
 
 @dataclass(frozen=True, slots=True)
 class RoundedConvexShape:
@@ -82,9 +89,9 @@ def orientation(a: Point, b: Point, c: Point) -> int:
 
 
 def point_on_segment(point: Point, start: Point, end: Point) -> bool:
-    return orientation(start, end, point) == 0 and bounds((start, end)).intersects(
-        Bounds(point.x_nm, point.y_nm, point.x_nm, point.y_nm)
-    )
+    return (orientation(start, end, point) == 0
+            and min(start.x_nm, end.x_nm) <= point.x_nm <= max(start.x_nm, end.x_nm)
+            and min(start.y_nm, end.y_nm) <= point.y_nm <= max(start.y_nm, end.y_nm))
 
 
 def segments_intersect(a: Point, b: Point, c: Point, d: Point) -> bool:
@@ -118,12 +125,77 @@ def segment_distance_squared(a: Point, b: Point, c: Point, d: Point) -> Fraction
                point_segment_distance_squared(c, a, b), point_segment_distance_squared(d, a, b))
 
 
+def point_segment_distance_at_least(point: Point, start: Point, end: Point,
+                                    minimum_nm: int, *, denominator: int = 1) -> bool:
+    """Exactly compare distance >= minimum_nm / denominator, without Fraction.
+
+    A denominator of two retains half-nanometre thresholds for odd copper widths.
+    Tangency passes; both threshold arguments are integers, with a non-negative
+    numerator and positive denominator. Distance measurement remains available
+    through point_segment_distance_squared.
+    """
+    if minimum_nm < 0 or denominator <= 0:
+        raise ValueError("distance threshold must be non-negative with a positive denominator")
+    return _point_segment_at_least_squared(
+        point, start, end, minimum_nm * minimum_nm, denominator * denominator
+    )
+
+
+def segment_distance_at_least(a: Point, b: Point, c: Point, d: Point,
+                              minimum_nm: int, *, denominator: int = 1) -> bool:
+    """Exactly compare segment distance >= minimum_nm / denominator."""
+    if minimum_nm < 0 or denominator <= 0:
+        raise ValueError("distance threshold must be non-negative with a positive denominator")
+    margin = (minimum_nm + denominator - 1) // denominator
+    if not _segment_boxes_intersect(a, b, c, d, margin):
+        return True
+    return _segment_at_least_squared(
+        a, b, c, d, minimum_nm * minimum_nm, denominator * denominator
+    )
+
+
+def _point_segment_at_least_squared(point: Point, start: Point, end: Point,
+                                    minimum_squared: int, multiplier: int = 1) -> bool:
+    # Compare numerator/length_squared >= minimum_squared/multiplier using
+    # unbounded integer products. No gcd reduction or rational comparison needed.
+    dx, dy = end.x_nm - start.x_nm, end.y_nm - start.y_nm
+    px, py = point.x_nm - start.x_nm, point.y_nm - start.y_nm
+    length_squared = dx * dx + dy * dy
+    projection = px * dx + py * dy
+    if projection <= 0:  # Also handles a zero-length segment.
+        return multiplier * (px * px + py * py) >= minimum_squared
+    if projection >= length_squared:
+        px, py = point.x_nm - end.x_nm, point.y_nm - end.y_nm
+        return multiplier * (px * px + py * py) >= minimum_squared
+    cross = px * dy - py * dx
+    return multiplier * cross * cross >= minimum_squared * length_squared
+
+
+def _segment_at_least_squared(a: Point, b: Point, c: Point, d: Point,
+                              minimum_squared: int, multiplier: int = 1) -> bool:
+    if minimum_squared == 0:
+        return True  # Preserve the distance API's inclusive zero threshold.
+    if segments_intersect(a, b, c, d):
+        return False
+    return (_point_segment_at_least_squared(a, c, d, minimum_squared, multiplier)
+            and _point_segment_at_least_squared(b, c, d, minimum_squared, multiplier)
+            and _point_segment_at_least_squared(c, a, b, minimum_squared, multiplier)
+            and _point_segment_at_least_squared(d, a, b, minimum_squared, multiplier))
+
+
+def _segment_boxes_intersect(a: Point, b: Point, c: Point, d: Point, margin: int) -> bool:
+    return not (max(a.x_nm, b.x_nm) + margin < min(c.x_nm, d.x_nm)
+                or max(c.x_nm, d.x_nm) < min(a.x_nm, b.x_nm) - margin
+                or max(a.y_nm, b.y_nm) + margin < min(c.y_nm, d.y_nm)
+                or max(c.y_nm, d.y_nm) < min(a.y_nm, b.y_nm) - margin)
+
+
 def capsules_clear(a: Point, b: Point, a_radius_nm: int, c: Point, d: Point,
                    c_radius_nm: int, clearance_nm: int = 0) -> bool:
     required = a_radius_nm + c_radius_nm + clearance_nm
-    if not bounds((a, b)).expanded(required).intersects(bounds((c, d))):
+    if not _segment_boxes_intersect(a, b, c, d, required):
         return True
-    return segment_distance_squared(a, b, c, d) >= required * required
+    return _segment_at_least_squared(a, b, c, d, required * required)
 
 
 def point_in_polygon(point: Point, polygon: tuple[Point, ...]) -> bool:
@@ -200,9 +272,46 @@ def segment_in_polygon(start: Point, end: Point, polygon: tuple[Point, ...]) -> 
 def shapes_clear(first: RoundedConvexShape, second: RoundedConvexShape,
                  clearance_nm: int = 0) -> bool:
     required = first.radius_nm + second.radius_nm + clearance_nm
-    if not first.bounds.expanded(clearance_nm).intersects(second.bounds):
+    if not first.bounds.intersects_expanded(second.bounds, clearance_nm):
         return True
-    return shape_distance_squared(first, second) >= required * required
+    return _spines_at_least_squared(first.spine, second.spine, required * required)
+
+
+def _spines_at_least_squared(first: tuple[Point, ...], second: tuple[Point, ...],
+                             minimum_squared: int) -> bool:
+    if minimum_squared == 0:
+        return True
+    if len(first) == 1:
+        return _point_spine_at_least_squared(first[0], second, minimum_squared)
+    if len(second) == 1:
+        return _point_spine_at_least_squared(second[0], first, minimum_squared)
+    if len(first) == len(second) == 2:
+        return _segment_at_least_squared(*first, *second, minimum_squared)
+    if len(first) >= 3 and point_in_polygon(second[0], first):
+        return False
+    if len(second) >= 3 and point_in_polygon(first[0], second):
+        return False
+    first_edges, second_edges = _spine_edges(first), _spine_edges(second)
+    for a, b in first_edges:
+        for c, d in second_edges:
+            if not _segment_at_least_squared(a, b, c, d, minimum_squared):
+                return False
+    return True
+
+
+def _point_spine_at_least_squared(point: Point, spine: tuple[Point, ...],
+                                 minimum_squared: int) -> bool:
+    if len(spine) == 1:
+        dx, dy = point.x_nm - spine[0].x_nm, point.y_nm - spine[0].y_nm
+        return dx * dx + dy * dy >= minimum_squared
+    if len(spine) == 2:
+        return _point_segment_at_least_squared(point, *spine, minimum_squared)
+    if point_in_polygon(point, spine):
+        return False
+    for start, end in _spine_edges(spine):
+        if not _point_segment_at_least_squared(point, start, end, minimum_squared):
+            return False
+    return True
 
 
 def _spine_distance_squared(first: tuple[Point, ...],

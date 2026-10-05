@@ -228,7 +228,7 @@ class _Grid:
     diagonal_successors: dict[tuple[int, ...], tuple[tuple[int, int], ...]] = field(
         default_factory=dict, compare=False, repr=False,
     )
-    obstacle_cache: dict[int, tuple[PhysicalBoard, tuple[CopperKeepout, ...]]] = field(
+    obstacle_cache: dict[int, tuple[PhysicalBoard, tuple[tuple[CopperKeepout, RoundedConvexShape], ...]]] = field(
         default_factory=dict, compare=False, repr=False,
     )
     line_clear_cache: dict[tuple[object, ...], bool] = field(
@@ -237,6 +237,14 @@ class _Grid:
     query_contexts: dict[tuple[int, int, int], tuple[object, ...]] = field(
         default_factory=dict, compare=False, repr=False,
     )
+    _query_context: tuple[int, int, int] = field(init=False, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        key = (id(self.xs), id(self.ys), id(self.blocked))
+        object.__setattr__(self, "_query_context", key)
+        # Replaced grids share query caches. Retain each immutable input once,
+        # rather than constructing its identity/retention tuples on every edge.
+        self.query_contexts.setdefault(key, (self.xs, self.ys, self.blocked))
 
     def point(self, node: DetailedNode) -> Point:
         return Point(self.xs[node.x_index], self.ys[node.y_index])
@@ -1517,9 +1525,24 @@ def _grid_query_context(grid: _Grid) -> tuple[int, int, int]:
     Replaced grids share caches, so coordinates and blocked nodes are part of
     the identity. Hashing full coordinate tuples on every search edge is not.
     """
-    key = (id(grid.xs), id(grid.ys), id(grid.blocked))
-    grid.query_contexts.setdefault(key, (grid.xs, grid.ys, grid.blocked))
-    return key
+    return grid._query_context
+
+
+def _grid_obstacles(grid: _Grid) -> tuple[tuple[CopperKeepout, RoundedConvexShape], ...]:
+    """Placed track obstacles and their shapes, owned by an immutable board.
+
+    A replaced board gets a new snapshot even if it shares this cache. Retaining
+    the board prevents ID reuse from aliasing snapshots; mutable routed copper
+    is still checked separately by RoutingClearanceIndex on every candidate.
+    """
+    key = id(grid.board)
+    cached = grid.obstacle_cache.get(key)
+    if cached is None:
+        obstacles = tuple((item, RoundedConvexShape(item.outline.outer.vertices))
+                          for item in resolved_copper_keepouts(grid.board) if item.block_tracks)
+        grid.obstacle_cache[key] = (grid.board, obstacles)
+        return obstacles
+    return cached[1]
 
 
 def _grid_line_clear(
@@ -1527,8 +1550,7 @@ def _grid_line_clear(
 ) -> bool:
     board_key = id(grid.board)
     if board_key not in grid.obstacle_cache:
-        grid.obstacle_cache[board_key] = (grid.board, tuple(
-            item for item in resolved_copper_keepouts(grid.board) if item.block_tracks))
+        _grid_obstacles(grid)
     key = (board_key, *_grid_query_context(grid), start, end)
     result = grid.line_clear_cache.get(key)
     if result is None:
@@ -1546,27 +1568,21 @@ def _physical_grid_line_clear(
     if start.layer_index != end.layer_index:
         return False
     first, second = grid.point(start), grid.point(end)
-    if not shape_in_board(grid.board, RoundedConvexShape((first, second))):
-        return False
-    key = id(grid.board)
-    cached = grid.obstacle_cache.get(key)
-    if cached is None:
-        obstacles = tuple(item for item in resolved_copper_keepouts(grid.board) if item.block_tracks)
-        # Hold the immutable board so id reuse cannot alias a replaced grid.
-        grid.obstacle_cache[key] = (grid.board, obstacles)
-    else:
-        obstacles = cached[1]
     ray = RoundedConvexShape((first, second))
-    for obstacle in obstacles:
+    if not shape_in_board(grid.board, ray):
+        return False
+    for obstacle, region in _grid_obstacles(grid):
         if (grid.layers[start.layer_index] in obstacle.layers
-                and ray.bounds.intersects(RoundedConvexShape(obstacle.outline.outer.vertices).bounds)
-                and shape_distance_squared(ray, RoundedConvexShape(obstacle.outline.outer.vertices)) == 0):
+                and ray.bounds.intersects(region.bounds)
+                and shape_distance_squared(ray, region) == 0):
             return False
     # Respect synthetic/on-ray blocked nodes too. Off-ray coordinates are
     # irrelevant. Width/clearance are still checked by RoutingClearanceIndex.
     dx, dy = second.x_nm - first.x_nm, second.y_nm - first.y_nm
     if dx:
-        for ix in range(min(start.x_index, end.x_index), max(start.x_index, end.x_index) + 1):
+        # Endpoints were explicitly ignored below; visit only interior nodes.
+        # Adjacent edges therefore allocate no synthetic nodes or endpoint sets.
+        for ix in range(min(start.x_index, end.x_index) + 1, max(start.x_index, end.x_index)):
             numerator = (grid.xs[ix] - first.x_nm) * dy
             if numerator % dx:
                 continue
@@ -1574,12 +1590,12 @@ def _physical_grid_line_clear(
             iy = bisect_left(grid.ys, y)
             if iy < len(grid.ys) and grid.ys[iy] == y:
                 node = DetailedNode(start.layer_index, ix, iy)
-                if node not in {start, end} and node in grid.blocked:
+                if node in grid.blocked:
                     return False
     else:
-        for iy in range(min(start.y_index, end.y_index), max(start.y_index, end.y_index) + 1):
+        for iy in range(min(start.y_index, end.y_index) + 1, max(start.y_index, end.y_index)):
             node = DetailedNode(start.layer_index, start.x_index, iy)
-            if node not in {start, end} and node in grid.blocked:
+            if node in grid.blocked:
                 return False
     return True
 

@@ -17,7 +17,10 @@ See [the assessment](routing-performance.md) for evidence, limitations and sourc
   soft/evicted/final repair and neutral-fallback work. Count all completed attempts
   separately from selected nets; preserve unfinished events without claiming
   closure. Observer-on/off tests retain identical geometry, results and exports.
-- [ ] Capture a current full-board profile and an uninstrumented comparison run.
+- [x] Capture a current full-board profile. `7d7673f`, saved in ignored
+  `build/full-vertical-staged-indexed-20261005/`; exit 1 with three ordinary opens
+  and failed native signoff. A finished profile is not a finished board.
+- [ ] Capture a matched uninstrumented comparison run.
 - [ ] Record expanded states, affected-net count, local/probe searches, full-pipeline
   evaluations and peak memory; distinguish selected work from rejected trials.
 - [ ] Retain representative dense-package, power-tree and repair fixtures so
@@ -68,6 +71,7 @@ See [the assessment](routing-performance.md) for evidence, limitations and sourc
 ## O2 — Reduce geometry/allocation overhead
 
 Current measured work: [early negotiation and indexed geometry plan](routing-search-speed-plan.md).
+Next sequence: [Python-first exact predicates and lazy DRC distances](python-routing-optimization-plan.md).
 
 - [x] Use full profiles to select significant self-time/call-count hot paths.
 - [x] Cache immutable rounded-shape bounds; spatially index static keepouts/macro
@@ -79,6 +83,13 @@ Current measured work: [early negotiation and indexed geometry plan](routing-sea
   The profiled matched-placement preflight passes with unchanged selected
   copper and 6,397 actual states across all passes versus 728,263 in the earlier
   full-budget log. This is a work-count result, not a full-route timing ratio.
+- [x] Replace Boolean rational-distance calculations with exact integer products;
+  use lazy DRC measurements for violations, preserving half-nanometre thresholds.
+  Rational-oracle tests retain complete finding and selected-route identity.
+- [x] Cache placed track-keepout shapes per immutable board and coordinate/block
+  identities per grid; retain inputs against ID reuse and invalidate replaced
+  snapshots. Reuse query rays and avoid ignored endpoint-node/set allocations.
+  Seeded uncached-oracle and construction-count tests cover these changes.
 - [ ] Extend caching beyond bounds to coordinate/placed-pad/port construction where profiles justify it.
 - [ ] Reuse placed-pad/keepout snapshots across search indexes separately from mutable copper;
   define placement, clearance and copper-revision invalidation keys before reuse.
@@ -106,6 +117,8 @@ Current measured work: [early negotiation and indexed geometry plan](routing-sea
 
 ## O5 — Native kernels, only if still justified
 
+- Deferred by the Python-first decision: finish and measure applicable Python
+  algorithm/data-structure/allocation improvements before evaluating alternatives.
 - [ ] Re-profile after O1–O4; select a narrowly bounded remaining hot kernel.
 - [ ] Retain the Python oracle and prove integer-overflow/exact-predicate behavior.
 - [ ] Verify deterministic tie-breaking and cross-platform deployment before adoption.
