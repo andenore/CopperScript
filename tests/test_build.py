@@ -234,6 +234,13 @@ def test_linux_edit_uses_standard_kicad_footprints_by_default(make):
     assert '--footprint-root "/usr/share/kicad/footprints"' in result.stdout
 
 
+def test_edit_does_not_receive_layout_only_dimensions(make):
+    result = subprocess.run([make, "-n", "EXAMPLE=nrf52", "edit"], cwd=ROOT,
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert "--width-mm" not in result.stdout and "--height-mm" not in result.stdout
+
+
 def test_aggregate_compiles_positive_examples_without_routing(make):
     result = subprocess.run([make, "-n", "compile-examples"], cwd=ROOT, text=True, capture_output=True)
     assert result.returncode == 0

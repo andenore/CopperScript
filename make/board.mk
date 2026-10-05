@@ -34,10 +34,12 @@ EDITOR_ARGS ?=
 KICAD_PYTHON ?= /usr/bin/python3
 
 _paths = $(if $(strip $(KICAD_CLI)),--kicad-cli "$(KICAD_CLI)") $(if $(strip $(KICAD_FOOTPRINTS)),--kicad-footprints "$(KICAD_FOOTPRINTS)")
-_physical = --layers $(LAYERS) --fab-profile $(FAB_PROFILE) \
+_physical_common = --layers $(LAYERS) --fab-profile $(FAB_PROFILE) \
  $(if $(strip $(KICAD_FOOTPRINTS)),--footprint-root "$(KICAD_FOOTPRINTS)") \
  $(if $(strip $(PLACEMENT_TEMPLATES)),--placement-templates "$(PLACEMENT_TEMPLATES)") \
- $(if $(strip $(HARD_MACRO)),--hard-macro "$(HARD_MACRO)") $(PHYSICAL_ARGS)
+ $(if $(strip $(HARD_MACRO)),--hard-macro "$(HARD_MACRO)")
+_physical = $(_physical_common) $(PHYSICAL_ARGS)
+_editor_physical = $(_physical_common)
 
 .PHONY: all check compile layout edit route editor-overlay
 all: check compile
@@ -48,7 +50,7 @@ compile:
 layout:
 	$(COPPER) plan-layout "$(SOURCE)" $(RESOLVE_ARGS) $(_physical) -o "$(OUT)/placed.kicad_pcb" --report "$(OUT)/placement.json"
 edit:
-	$(COPPER) edit-mechanical "$(SOURCE)" $(RESOLVE_ARGS) $(_physical) $(EDITOR_ARGS)
+	$(COPPER) edit-mechanical "$(SOURCE)" $(RESOLVE_ARGS) $(_editor_physical) $(EDITOR_ARGS)
 editor-overlay:
 	$(if $(strip $(RUN_DIR)),,$(error Set RUN_DIR to an existing completed routing run))
 	$(COPPER) editor-overlay "$(RUN_DIR)/run.json" --kicad-python "$(KICAD_PYTHON)" -o "$(RUN_DIR)/editor-overlay.json"
