@@ -2,6 +2,7 @@
 import cProfile
 import json
 import os
+import platform
 from pathlib import Path
 import shlex
 import shutil
@@ -219,6 +220,18 @@ def test_example_makefile_shares_root_recipes(make):
     result = subprocess.run([make, "-C", str(ROOT / "examples/cm4_baseboard"), "-n", "route"],
                             text=True, capture_output=True)
     assert result.returncode == 0 and "pcbir.build" in result.stdout
+
+
+def test_linux_edit_uses_standard_kicad_footprints_by_default(make):
+    if platform.system() != "Linux":
+        pytest.skip("Linux footprint default is platform-specific")
+    environment = os.environ.copy()
+    for name in ("KICAD_FOOTPRINTS", "KICAD10_FOOTPRINT_DIR"):
+        environment.pop(name, None)
+    result = subprocess.run([make, "-n", "EXAMPLE=cm4", "edit"], cwd=ROOT,
+                            text=True, capture_output=True, env=environment)
+    assert result.returncode == 0, result.stderr
+    assert '--footprint-root "/usr/share/kicad/footprints"' in result.stdout
 
 
 def test_aggregate_compiles_positive_examples_without_routing(make):

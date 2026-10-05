@@ -12,7 +12,15 @@ FAB_PROFILE ?= generic
 RESOLVE_ARGS ?= --locked
 PROFILE ?= cprofile
 KICAD_CLI ?=
+# KiCad's standard Linux install path makes physical targets usable without
+# repeating the footprint argument. Keep the environment variable and an
+# explicit KICAD_FOOTPRINTS override authoritative for other installations.
 KICAD_FOOTPRINTS ?= $(KICAD10_FOOTPRINT_DIR)
+ifeq ($(strip $(KICAD_FOOTPRINTS)),)
+  ifeq ($(shell uname -s 2>/dev/null),Linux)
+    KICAD_FOOTPRINTS := /usr/share/kicad/footprints
+  endif
+endif
 PHYSICAL_ARGS ?=
 PLACEMENT_TEMPLATES ?=
 HARD_MACRO ?=

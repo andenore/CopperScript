@@ -62,8 +62,10 @@ underlying routing exit code. No failure is suppressed with `-` or `|| true`.
 ## Overrides
 
 KiCad paths are automatically discovered for `route` from environment/PATH or
-the standard Windows KiCad 10 installation. Supply footprint paths for `layout`
-and `edit`; physical settings and explicit scenes are shared across targets.
+the standard Windows KiCad 10 installation. On Linux, `layout` and `edit` use
+`/usr/share/kicad/footprints` by default. Set `KICAD_FOOTPRINTS` for a custom
+or nonstandard KiCad installation; physical settings and explicit scenes are
+shared across targets.
 
 ```powershell
 make EXAMPLE=cm4 route KICAD_CLI="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe" KICAD_FOOTPRINTS="C:/Program Files/KiCad/10.0/share/kicad/footprints"

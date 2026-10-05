@@ -69,9 +69,13 @@ On Linux/macOS with `make`, from this example directory:
 
 ```sh
 make check
-make layout KICAD_FOOTPRINTS=/usr/share/kicad/footprints
-make edit KICAD_FOOTPRINTS=/usr/share/kicad/footprints
+make layout
+make edit
 ```
+
+On Linux the shared Makefile uses `/usr/share/kicad/footprints` automatically.
+Set `KICAD_FOOTPRINTS` when KiCad is installed somewhere else. macOS and other
+custom installations should also provide that override.
 
 The `Makefile` produces placement drafts under ignored `build/cm4-baseboard`.
 It intentionally does not call this a release/manufacturing build.
