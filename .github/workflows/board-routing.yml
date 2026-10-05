@@ -51,14 +51,17 @@ jobs:
           echo 'KICAD_CLI=/usr/bin/kicad-cli' >> "$GITHUB_ENV"
           echo 'KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints' >> "$GITHUB_ENV"
       - name: Exercise Make targets for every example
+        id: make-smoke
+        continue-on-error: true
         env:
           PYTHON: python
           RESOLVE_ARGS: --locked --offline
         run: |
           set -euo pipefail
+          mkdir -p build/make-target-smoke
+          exec > >(tee build/make-target-smoke.log) 2>&1
           make --no-print-directory check-examples
 
-          mkdir -p build/make-target-smoke
           examples="$(make --no-print-directory -s --eval='print-examples:;@echo $(EXAMPLES)' print-examples)"
           for example in $examples; do
             echo "::group::${example} layout"
@@ -71,6 +74,18 @@ jobs:
               edit
             echo "::endgroup::"
           done
+      - name: Preserve Make target smoke log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: make-target-smoke-${{ github.sha }}
+          path: |
+            CopperScript/build/make-target-smoke.log
+            CopperScript/build/make-target-smoke
+          if-no-files-found: error
+      - name: Fail when a Make target smoke fails
+        if: steps.make-smoke.outcome == 'failure'
+        run: exit 1
       - name: Install pinned ngspice
         run: |
           sudo apt-get install --yes build-essential bison flex
