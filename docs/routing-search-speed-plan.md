@@ -116,3 +116,18 @@ after this profile avoid retaining discarded board snapshots for counters and
 skip empty/unrelated-layer static bins; regression tests cover those separately.
 The older full-area run does not contain these optimizations. Final full-board
 closure and sequential uninstrumented comparison remain unchecked above.
+
+The old `build/full-vertical-boundary-20261005/` diagnostic process was stopped
+before replacing it with the committed optimizations. Its log reached ordinary
+area routing, but the Windows interruption bypassed profile/manifest
+finalization: no complete area report or function profile was recovered. An
+ignored `interruption-note.json` records this; the original log and stale
+manifest are retained unchanged and are not completion evidence. Per-net/pass
+progress now exposes the active detailed search and all tentative repair stages
+before the replacement run, without changing budgets, route selection or gates.
+Progress integration validation covered 248 passing cases and 10 GNU Make
+skips across detailed/repair, package-boundary, native KiCad, profiling,
+comparison, CLI export and shared-build tests. The local dependency event test
+now filters its own phase explicitly before checking transaction order; nested
+per-net events are independently verified. The fresh full-build dry run resolves
+all pinned inputs offline and finds the installed KiCad CLI/footprints.

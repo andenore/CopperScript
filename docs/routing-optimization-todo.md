@@ -13,6 +13,10 @@ See [the assessment](routing-performance.md) for evidence, limitations and sourc
   recorded inputs/tools/settings and two uninstrumented runs for a timing ratio.
   `tests/test_routing_benchmark.py` covers missing/stale data, mixed profiling,
   dropped or exchanged failed nets, swapped finding categories and legacy logs.
+- [x] Expose per-net/pass detailed progress before grid construction, including
+  soft/evicted/final repair and neutral-fallback work. Count all completed attempts
+  separately from selected nets; preserve unfinished events without claiming
+  closure. Observer-on/off tests retain identical geometry, results and exports.
 - [ ] Capture a current full-board profile and an uninstrumented comparison run.
 - [ ] Record expanded states, affected-net count, local/probe searches, full-pipeline
   evaluations and peak memory; distinguish selected work from rejected trials.

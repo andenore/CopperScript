@@ -589,7 +589,16 @@ def test_fine_grid_soft_candidate_and_evicted_net_commit_atomically(monkeypatch)
 
     monkeypatch.setattr(detailed_module, "_route_net", constrained_search)
     options = DetailedRouterOptions(enable_soft_ripup=True)
-    repaired = _repair_from_passes(board, list(board.nets), {}, {}, best, [best], options)
+    events = []
+    repaired = _repair_from_passes(board, list(board.nets), {}, {}, best, [best], options,
+        on_progress=lambda p, e, d: events.append((p, e, d)))
+    assert repaired == _repair_from_passes(board, list(board.nets), {}, {}, best, [best], options)
+    assert {d['stage'] for p, e, d in events if (p, e) == ('detailed_net', 'started')} == {
+        'soft_merge', 'soft_ripup', 'evicted_net'}
+    eviction = next(d for p, e, d in events
+        if (p, e) == ('detailed_net', 'finished') and d['stage'] == 'evicted_net')
+    assert eviction['net'] == 'BLOCKER' and eviction['repair_owner'] == 'SIGNAL'
+    assert eviction['final_pitch_nm'] == nm_from_mm(.1)
     assert repaired.metrics.routed_net_count == 2
     assert ("SIGNAL", True, nm_from_mm(.1)) in observations
     assert ("BLOCKER", False, nm_from_mm(.1)) in observations
@@ -649,6 +658,16 @@ def test_soft_layer_costs_fall_back_when_they_strand_a_signal(monkeypatch) -> No
     )
     assert routed.status is DetailedRoutingStatus.SUCCESS
     assert routed.metrics.unrouted_net_count == 0
+    events = []
+    observed = route_detailed(board, guide,
+        DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=1,
+                              layer_preference_cost=4),
+        on_progress=lambda p, e, d: events.append((p, e, d)))
+    assert observed == routed
+    assert next(d for p, e, d in events
+        if (p, e) == ('detailed_neutral_fallback', 'finished'))['selected']
+    starts = [d for p, e, d in events if (p, e) == ('detailed_net', 'started')]
+    assert [d['layer_preference_cost'] for d in starts] == [4, 0]
 
 
 def test_no_neutral_reroute_when_requested_preferences_have_no_effect(monkeypatch) -> None:

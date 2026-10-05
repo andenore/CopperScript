@@ -39,6 +39,7 @@ from .placement import (
     transformed_pad_position,
 )
 from .routing import GlobalNetRoute, GlobalRoutingResult
+from .progress import ProgressCallback, emit
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
@@ -272,8 +273,13 @@ def route_detailed(
     fanout_created_vias: frozenset[tuple[str, Point]] | None = None,
     fanout_created_tracks: tuple[TrackSegment, ...] | None = None,
     only_nets: frozenset[str] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> DetailedRoutingResult:
-    """Route ordinary nets, optionally a repair subset, preserving locked copper."""
+    """Route ordinary nets, optionally a repair subset, preserving locked copper.
+
+    Optional progress describes tentative searches, including rejected repair
+    work. It is not part of the result, fingerprint or closure evidence.
+    """
 
     options = options or DetailedRouterOptions()
     if board.hard_macros and set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
@@ -311,6 +317,8 @@ def route_detailed(
     completed: list[_Pass] = []
     completed_passes = 0
     for pass_index in range(1, options.maximum_passes + 1):
+        emit(on_progress, "detailed_pass", "started", pass_index=pass_index,
+             ordinary_nets=len(general_nets), deferred_zone_nets=len(deferred))
         completed_passes = pass_index
         pass_options = replace(
             options,
@@ -345,18 +353,15 @@ def route_detailed(
                     item.name not in failed,
                     sha256(f"{pass_index}:{item.name}".encode()).digest(),
                 ))
-        for net in ordered_nets:
-            grid = _build_grid(board, pass_options, net.pads, fanout_accesses)
+        for net_index, net in enumerate(ordered_nets, 1):
             guide = guides.get(net.name)
             # A failed-first pass must reserve legal narrow launches before
             # ordinary neighbours close them. Fine repair after all other
             # copper is committed is too late for some package corridors.
-            search = _route_repair_net if pass_index >= 3 and net.name in failed else _route_net
-            attempt = search(
+            repair = pass_index >= 3 and net.name in failed
+            attempt = _search_detailed_net(
                 board,
-                grid,
-                net.name,
-                net.pads,
+                net,
                 rules.get(net.name),
                 guide,
                 usage,
@@ -364,6 +369,9 @@ def route_detailed(
                 clearance,
                 pass_options,
                 fanout_accesses=fanout_accesses,
+                repair=repair, on_progress=on_progress,
+                stage="failed_first" if repair else "pass",
+                pass_index=pass_index, net_index=net_index, net_count=len(ordered_nets),
             )
             attempts.append(attempt)
             if attempt.result.connected:
@@ -385,6 +393,10 @@ def route_detailed(
             passes=pass_index,
         )
         current = _Pass(tuple(attempts), usage, metrics)
+        emit(on_progress, "detailed_pass", "finished", pass_index=pass_index,
+             failed_ordinary_nets=[item.result.net for item in attempts
+                 if not item.result.connected and item.result.net not in zone_nets],
+             deferred_zone_nets=len(deferred), conflict_overflow=metrics.total_conflict_overflow)
         completed.append(current)
         if best is None or current.metrics.quality_vector < best.metrics.quality_vector:
             best = current
@@ -399,11 +411,16 @@ def route_detailed(
                 history[resource] = history.get(resource, 0) + value - 1
     assert best is not None
     if len(completed) > 1 and best.metrics.unrouted_net_count:
+        emit(on_progress, "detailed_repair", "started")
         repaired = _repair_from_passes(
             board, general_nets, rules, guides, best, completed, options,
-            fanout_accesses,
+            fanout_accesses, on_progress=on_progress,
         )
-        if repaired.metrics.quality_vector < best.metrics.quality_vector:
+        improved = repaired.metrics.quality_vector < best.metrics.quality_vector
+        emit(on_progress, "detailed_repair", "finished", selected=improved,
+             failed_ordinary_nets=[item.result.net for item in repaired.nets
+                 if not item.result.connected and item.result.net not in zone_nets])
+        if improved:
             best = repaired
     # Layer/direction preferences must not strand a signal merely because
     # they changed search ordering within a finite state budget. Compare a
@@ -418,6 +435,7 @@ def route_detailed(
     if (effective_preferences
             and any(not item.result.connected and item.result.net not in zone_nets
                     for item in best.nets)):
+        emit(on_progress, "detailed_neutral_fallback", "started")
         neutral = route_detailed(
             board, global_route,
             replace(options, layer_preference_cost=0,
@@ -426,12 +444,15 @@ def route_detailed(
             fanout_created_vias=fanout_created_vias,
             fanout_created_tracks=fanout_created_tracks,
             only_nets=only_nets,
+            on_progress=on_progress,
         )
         neutral_metrics = neutral.metrics
-        if (neutral.metrics.unrouted_net_count,
+        improved = (neutral.metrics.unrouted_net_count,
                 neutral.metrics.total_conflict_overflow) < (
                 best.metrics.unrouted_net_count,
-                best.metrics.total_conflict_overflow):
+                best.metrics.total_conflict_overflow)
+        emit(on_progress, "detailed_neutral_fallback", "finished", selected=improved)
+        if improved:
             return replace(neutral, nets=_with_search_policy(
                 neutral.nets, zone_nets, options, best.metrics, neutral_metrics, True,
             ))
@@ -482,6 +503,40 @@ def route_detailed(
         global_route.routing_fingerprint,
         fingerprint,
     )
+
+
+def _search_detailed_net(
+    board: PhysicalBoard, net: PhysicalNet, rule: NetRoutingRule | None,
+    guide: GlobalNetRoute | None, usage: Mapping[str, int], history: Mapping[str, int],
+    clearance: RoutingClearanceIndex, options: DetailedRouterOptions, *,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess],
+    repair: bool = True, allow_movable_conflicts: bool = False,
+    on_progress: ProgressCallback | None = None, stage: str,
+    **context: object,
+) -> _NetAttempt:
+    """Observe one tentative net attempt, starting before grid construction.
+
+    No per-state callbacks or changes to search ordering/budgets. A repair may
+    refine the pitch or try several branch searches; this is not a global state
+    cap. Interrupted attempts deliberately retain an unmatched start event.
+    """
+    emit(on_progress, "detailed_net", "started", net=net.name, stage=stage,
+         pad_count=len(net.pads), pitch_nm=options.pitch_nm,
+         maximum_search_states=options.maximum_search_states,
+         layer_preference_cost=options.layer_preference_cost,
+         direction_preference_cost=options.direction_preference_cost,
+         heuristic_weight_percent=options.heuristic_weight_percent,
+         allow_movable_conflicts=allow_movable_conflicts, **context)
+    grid = _build_grid(board, options, net.pads, fanout_accesses)
+    search = _route_repair_net if repair else _route_net
+    attempt = search(board, grid, net.name, net.pads, rule, guide, usage, history,
+        clearance, options, fanout_accesses=fanout_accesses,
+        allow_movable_conflicts=allow_movable_conflicts)
+    emit(on_progress, "detailed_net", "finished", net=net.name, stage=stage,
+         connected=attempt.result.connected, track_count=len(attempt.tracks),
+         via_count=len(attempt.vias), diagnostics=list(attempt.result.diagnostics),
+         final_pitch_nm=attempt.pitch_nm or options.pitch_nm, **context)
+    return attempt
 
 
 def _with_search_policy(
@@ -566,6 +621,7 @@ def _repair_from_passes(
     completed: list[_Pass],
     options: DetailedRouterOptions,
     fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
+    *, on_progress: ProgressCallback | None = None,
 ) -> _Pass:
     """Keep the best legal pass and add compatible routes found in other passes."""
 
@@ -594,10 +650,11 @@ def _repair_from_passes(
             key=lambda item: (item.result.via_count, item.result.length_nm),
         )
         if options.enable_soft_ripup:
-            soft_candidate = _route_repair_net(
-                board, _build_grid(board, options, net.pads, fanout_accesses), net.name, net.pads,
+            soft_candidate = _search_detailed_net(
+                board, net,
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
                 options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
+                on_progress=on_progress, stage="soft_merge",
             )
             if soft_candidate.result.connected:
                 candidates.append(soft_candidate)
@@ -633,10 +690,11 @@ def _repair_from_passes(
             key=lambda item: (item.result.via_count, item.result.length_nm),
         )
         if options.enable_soft_ripup:
-            soft_candidate = _route_repair_net(
-                board, _build_grid(board, options, net.pads, fanout_accesses), net.name, net.pads,
+            soft_candidate = _search_detailed_net(
+                board, net,
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
                 options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
+                on_progress=on_progress, stage="soft_ripup",
             )
             if soft_candidate.result.connected:
                 candidates.append(soft_candidate)
@@ -703,11 +761,11 @@ def _repair_from_passes(
                     min(options.pitch_nm, candidate.pitch_nm or options.pitch_nm)))
                 for blocker_name in order:
                     blocker = net_by_name[blocker_name]
-                    attempt = _route_repair_net(
-                        board, _build_grid(board, eviction_options, blocker.pads, fanout_accesses),
-                        blocker.name, blocker.pads, rules.get(blocker.name),
+                    attempt = _search_detailed_net(
+                        board, blocker, rules.get(blocker.name),
                         guides.get(blocker.name), {}, {}, trial_clearance, eviction_options,
                         fanout_accesses=fanout_accesses,
+                        on_progress=on_progress, stage="evicted_net", repair_owner=net.name,
                     )
                     if not attempt.result.connected:
                         break
@@ -736,10 +794,11 @@ def _repair_from_passes(
                 options.maximum_search_states * options.repair_budget_multiplier
             ),
         )
-        attempt = _route_repair_net(
-            board, _build_grid(board, repair_options, net.pads, fanout_accesses), net.name, net.pads,
+        attempt = _search_detailed_net(
+            board, net,
             rules.get(net.name), guides.get(net.name), usage, {}, clearance,
             repair_options, fanout_accesses=fanout_accesses,
+            on_progress=on_progress, stage="final_retry",
         )
         if not attempt.result.connected:
             selected[net.name] = attempt

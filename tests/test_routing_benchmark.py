@@ -202,6 +202,28 @@ def test_work_counts_discarded_critical_searches_without_adding_tiers_twice(tmp_
     assert work["critical_expanded_states"] == 8067
     assert work["pair_state_budget_exhaustions"] == work["package_search_fallbacks"] == 1
     assert [t["name"] for t in work["package_search_tiers"]] == ["initial", "full"]
+    assert work['detailed_net_attempts'] is work['failed_detailed_attempts'] is None
+
+
+def test_detailed_work_counts_attempts_not_unique_nets_or_final_closure(tmp_path):
+    save_run(tmp_path / 'run')
+    events = []
+    for stage, connected in (('pass', False), ('pass', True), ('soft_ripup', True)):
+        events.extend([
+            {'phase': 'detailed_net', 'event': 'started', 'elapsed_seconds': len(events),
+             'details': {'net': 'A', 'stage': stage}},
+            {'phase': 'detailed_net', 'event': 'finished', 'elapsed_seconds': len(events) + 1,
+             'details': {'net': 'A', 'connected': connected}}])
+    unfinished = {'phase': 'detailed_net', 'event': 'started', 'elapsed_seconds': 7,
+                  'details': {'net': 'B', 'stage': 'evicted_net'}}
+    events.append(unfinished)
+    (tmp_path / 'run/routing.log').write_text(
+        ''.join('PROGRESS ' + json.dumps(e) + '\n' for e in events), encoding='utf-8')
+    work = benchmark.summarize_run(tmp_path / 'run')['work']
+    assert work['detailed_net_attempts'] == 3 and work['failed_detailed_attempts'] == 1
+    assert work['detailed_attempt_stages'] == {'pass': 2, 'soft_ripup': 1}
+    assert work['unfinished'] == [unfinished]
+    assert 'not unique accepted nets' in work['note']
 
 
 def test_cli_running_summary_is_read_only_and_comparison_exit_is_not_success(tmp_path, capsys):

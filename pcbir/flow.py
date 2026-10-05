@@ -141,6 +141,7 @@ def run_routing_pipeline(
         fanout_created_vias=frozenset((item.net, item.position)
                                     for item in fanout.created_vias) if fanout else None,
         fanout_created_tracks=fanout.created_tracks if fanout else None,
+        on_progress=on_progress,
     )
     emit(on_progress, "ordinary_area", "finished", status=detailed.status.value,
          failed_nets=[n.net for n in detailed.nets if not n.connected],
@@ -209,6 +210,7 @@ def run_routing_pipeline(
                                             for item in trial_fanout.created_vias)
                 if trial_fanout else None,
                 fanout_created_tracks=trial_fanout.created_tracks if trial_fanout else None,
+                on_progress=on_progress,
             )
             trial_detailed, trial_drc, trial_duplicate = close_detailed_lands(
                 trial_detailed, drc_policy)

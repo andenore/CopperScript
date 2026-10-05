@@ -101,6 +101,13 @@ def summarize_run(directory: Path) -> dict:
             "package_search_fallbacks": sum(span["phase"] == "package_search_fallback" for span in spans),
             "pair_state_budget_exhaustions": sum(span["phase"] == "critical_group"
                 and span["finished_details"].get("pair_budget_exhausted", False) for span in spans),
+            "detailed_net_attempts": (sum(span["phase"] == "detailed_net" for span in spans)
+                if any(span["phase"] == "detailed_net" for span in spans) else None),
+            "failed_detailed_attempts": (sum(span["phase"] == "detailed_net"
+                and not span["finished_details"].get("connected", False) for span in spans)
+                if any(span["phase"] == "detailed_net" for span in spans) else None),
+            "detailed_attempt_stages": dict(sorted(Counter(span["started_details"].get("stage", "unknown")
+                for span in spans if span["phase"] == "detailed_net").items())),
             "trial_decisions": {phase: dict(sorted(Counter(span["finished_details"].get("decision", "unknown")
                 for span in spans if span["phase"] == phase).items()))
                 for phase in ("zone_full_trial", "zone_incremental_trial")},
@@ -109,6 +116,7 @@ def summarize_run(directory: Path) -> dict:
                 for span in spans if span["phase"] == phase), 3) for phase in sorted({s["phase"] for s in spans})},
             "note": "Only paired completed stages counted; inclusive phase times overlap. "
                     "Critical state counts include discarded probes; do not add tier counts again. "
+                    "Detailed attempt counts include rejected work, not unique accepted nets. "
                     "General area state counts are not yet recorded."}
         if not phases["events"]:
             # Older runs have a plain-text log but no structured telemetry.

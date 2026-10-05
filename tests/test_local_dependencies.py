@@ -67,7 +67,10 @@ def test_real_secondary_blocker_expands_and_preserves_unrelated_copper(corridor)
     assert Counter(t for t in board.tracks if t.net == "C") == Counter(t for t in before.tracks if t.net == "C")
     assert not (Counter(fixed.tracks) - Counter(board.tracks))
     assert not [finding for finding in run_physical_drc(board).findings if finding.severity.value == "error"]
-    assert [d["kind"] for _, event, d in events if event == "started"] == ["transaction", "probe_only", "transaction"]
+    assert [d["kind"] for phase, event, d in events
+            if (phase, event) == ("zone_subset_search", "started")] == [
+                "transaction", "probe_only", "transaction"]
+    assert any(phase == "detailed_net" for phase, _, _ in events)
     assert initial.board == before and fixed.tracks == (fixed.tracks[0],)
     repeated = _reroute_local_dependencies(initial, fixed, before.tracks, before.vias,
         frozenset({"A"}), frozenset({"A", "B", "C"}), settings, EscapeFeedbackOptions())

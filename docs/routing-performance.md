@@ -107,7 +107,42 @@ external-library verification and repeated measurements. This is a review aid,
 not automatic optimization acceptance. Structured progress provides completed
 full/incremental trial and subset/probe counts, including rejected work; a legacy
 plain log uses a clearly labelled final-report lower bound instead of inventing
-zero work. Expanded maze states and peak memory are not yet recorded by this tool.
+zero work. General-area expanded maze states and peak memory are not yet recorded
+by this tool; paired critical searches do report their expanded states.
+
+### Per-net area progress
+
+With `--progress`, detailed routing emits `detailed_pass` and `detailed_net`
+start/finish events. A net starts **before grid construction**, so an unfinished
+event identifies the active net even if grid preparation or a repair is slow.
+Pass events include ordinary-net counts and provisional failed-net names. Net
+events include pass/ordinal (where applicable), pad count, requested pitch and
+search budget, layer/direction preferences, and final tentative connectivity,
+track/via counts and diagnostics. These events do not change the IR, selected
+copper, fingerprints, JSON reports or exports.
+
+Repair stages are `failed_first`, `soft_merge`, `soft_ripup`, `evicted_net`
+(with its repair owner), and `final_retry`; a normal pass uses `pass`.
+`detailed_repair` and `detailed_neutral_fallback` events state whether their
+candidate was selected. The same observer is forwarded through placement trials
+and local zone dependency reroutes. There are no per-expanded-state callbacks.
+The requested budget is not an aggregate net budget: branch searches, guide
+expansions and bounded pitch refinements can perform several searches.
+
+Follow a running build in PowerShell:
+
+```powershell
+Get-Content "build/full-vertical/runs/<run-id>/routing.log" -Tail 20 -Wait
+```
+
+The read-only summary reports `detailed_net_attempts`,
+`failed_detailed_attempts` and `detailed_attempt_stages`, including tentative
+and rejected work. Counts are **not** unique accepted nets or DRC closure.
+Older logs without completed per-net events have unknown (`null`) attempt
+counts. Interrupted attempts remain in `work.unfinished`, without an invented
+duration or success; a forcibly killed Windows process may also leave the
+original manifest unfinalized. Check process liveness as well as its status.
+Inclusive phase durations overlap and are not percentages or an ETA.
 
 Compare repeated runs with identical source/lock, actual footprint files, options,
 KiCad/Python versions and machine load. The recorded hashes do not fingerprint
