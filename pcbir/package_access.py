@@ -32,12 +32,15 @@ class PackageAccessOptions:
     movement_nm: int = nm_from_mm("0.5")
     maximum_pattern_trials: int = 2
     boundary_options: BoundaryAccessOptions = BoundaryAccessOptions()
+    initial_pair_state_limit: int = 6_000
 
     def __post_init__(self):
         if self.maximum_trials < 0 or self.movement_nm <= 0:
             raise ValueError("package-access feedback bounds are invalid")
         if not 0 <= self.maximum_pattern_trials <= 2:
             raise ValueError("package-access pattern trial budget must be 0..2")
+        if self.initial_pair_state_limit < 0:
+            raise ValueError("initial pair state limit must be non-negative (0 disables staging)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +51,32 @@ class PackagePatternTrial:
     failed_critical_nets: tuple[str, ...]
     outcome: str
     revalidated: bool = False
+    search_tier: str = "full"
+
+
+@dataclass(frozen=True, slots=True)
+class PackageSearchTier:
+    """Actual work including rejected probes; not an acceptance certificate."""
+    name: str
+    pair_state_limit: int | None
+    critical_passes: int
+    pair_searches: int
+    expanded_states: int
+    ready: bool
+    selected: bool = False
+
+
+@dataclass(slots=True)
+class _SearchWork:
+    """Counters only: do not retain discarded full-board candidate snapshots."""
+    critical_passes: int = 0
+    pair_searches: int = 0
+    expanded_states: int = 0
+
+    def observe(self, result: CriticalRoutingResult) -> None:
+        self.critical_passes += 1
+        self.pair_searches += sum(net.pair_searches for net in result.nets)
+        self.expanded_states += sum(net.search_states for net in result.nets)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +104,7 @@ class PackageAccessResult:
     accepted_moves: int = 0
     pattern_trials: tuple[PackagePatternTrial, ...] = ()
     boundary: BoundaryAccessResult | None = None
+    search_tiers: tuple[PackageSearchTier, ...] = ()
 
     @property
     def board(self) -> PhysicalBoard:
@@ -118,12 +148,45 @@ def preflight_package_access(
     emit(on_progress, "ordinary_package_exits", "finished",
          escaped=len(fanout.accesses), pending=len(fanout.pending_pads),
          pending_pads=[f"{p.component}.{p.pad}" for p in fanout.pending_pads])
-    critical = route_critical_nets(board, global_route, reserved_accesses=fanout,
-                                   on_progress=critical_progress(on_progress))
-    result = _access_result(board, global_route, fanout, critical, plane_options,
-                           options.boundary_options, on_progress)
-    result = _negotiate_patterns(result, owner_board, fanout_options,
-                                 options, plane_options, on_progress)
+    staged = (options.initial_pair_state_limit > 0 and options.maximum_pattern_trials > 0
+              and any(rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}
+                      for rule in board.net_routing_rules))
+    tiers, patterns = [], []
+
+    def run_tier(name: str, limit: int | None) -> PackageAccessResult:
+        work = _SearchWork()
+        emit(on_progress, "package_search_tier", "started", name=name, pair_state_limit=limit)
+        critical = _critical_search(board, global_route, fanout, on_progress, limit, work)
+        candidate = _access_result(board, global_route, fanout, critical, plane_options,
+                                   options.boundary_options, on_progress)
+        candidate = _negotiate_patterns(candidate, owner_board, fanout_options,
+            options, plane_options, on_progress, pair_state_limit=limit, search_work=work,
+            search_tier=name)
+        tier = PackageSearchTier(name, limit, work.critical_passes,
+                                 work.pair_searches, work.expanded_states, candidate.ready)
+        tiers.append(tier)
+        patterns.extend(candidate.pattern_trials)
+        emit(on_progress, "package_search_tier", "finished", **{
+            "name": name, "pair_state_limit": limit, "critical_passes": tier.critical_passes,
+            "pair_searches": tier.pair_searches, "expanded_states": tier.expanded_states,
+            "ready": candidate.ready})
+        return candidate
+
+    result = run_tier("initial" if staged else "full",
+                      options.initial_pair_state_limit if staged else None)
+    selected = 0
+    if staged and not result.ready:
+        # Restart from the ORIGINAL ordinary pattern with historical search
+        # bounds. Limited failure is never interpreted as proof of no solution.
+        emit(on_progress, "package_search_fallback", "started", reason="initial_access_incomplete")
+        full = run_tier("full", None)
+        if _improvement_outcome(result, full, allow_equal=True) == "accepted":
+            result, selected = full, 1
+        emit(on_progress, "package_search_fallback", "finished", selected=tiers[selected].name,
+             ready=result.ready)
+    result = replace(result,
+        pattern_trials=tuple(replace(trial, index=index) for index, trial in enumerate(patterns, 1)),
+        search_tiers=tuple(replace(tier, selected=index == selected) for index, tier in enumerate(tiers)))
     emit(on_progress, "package_access", "finished", ready=result.ready,
          pending_pads=[f"{p.component}.{p.pad}" for p in sorted(result.pending_pads)],
          failed_critical_nets=sorted(result.failed_critical_nets), hard_findings=result.hard_findings)
@@ -151,7 +214,8 @@ def _access_result(
     return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard, boundary=boundary)
 
 
-def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccessResult) -> str:
+def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccessResult,
+                         *, allow_equal: bool = False) -> str:
     required = {item.pad for item in baseline.fanout.pin_analysis}
     tested = {item.pad for item in candidate.fanout.pin_analysis}
     if candidate.hard_findings:
@@ -169,7 +233,7 @@ def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccess
             and set(baseline.fanout.accesses) <= set(candidate.fanout.accesses)
             and candidate.failed_critical_nets <= baseline.failed_critical_nets
             and candidate.pending_pads <= baseline.pending_pads
-            and (candidate.pending_pads < baseline.pending_pads
+            and (allow_equal or candidate.pending_pads < baseline.pending_pads
                  or candidate.failed_critical_nets < baseline.failed_critical_nets)):
         return "access_not_improved"
     return "accepted"
@@ -179,6 +243,9 @@ def _negotiate_patterns(
     baseline: PackageAccessResult, owner_board: PhysicalBoard, fanout_options: FanoutOptions,
     options: PackageAccessOptions, plane_options: PlaneStitchOptions | None,
     on_progress: ProgressCallback | None,
+    *, pair_state_limit: int | None = None,
+    search_work: _SearchWork | None = None,
+    search_tier: str = "full",
 ) -> PackageAccessResult:
     """Use alternate owners as obstacles only while proposing ordinary exits.
 
@@ -203,7 +270,8 @@ def _negotiate_patterns(
              and baseline.critical.status is not CriticalRoutingStatus.FAILED
              and baseline.critical.board.tracks[:len(prefix_tracks)] == prefix_tracks
              and baseline.critical.board.vias[:len(prefix_vias)] == prefix_vias)
-    emit(on_progress, "package_pattern_probe", "started", reused_critical=reuse)
+    emit(on_progress, "package_pattern_probe", "started", reused_critical=reuse,
+         search_tier=search_tier)
     if reuse:
         tracks = (*owner_board.tracks, *baseline.critical.board.tracks[len(prefix_tracks):])
         vias = (*owner_board.vias, *baseline.critical.board.vias[len(prefix_vias):])
@@ -213,11 +281,12 @@ def _negotiate_patterns(
             routing_fingerprint=_critical_fingerprint(baseline.global_route.routing_fingerprint,
                                                      list(tracks), list(vias), list(baseline.critical.nets)))
     else:
-        probe = route_critical_nets(baseline.source, baseline.global_route,
-                                   on_progress=critical_progress(on_progress))
+        probe = _critical_search(baseline.source, baseline.global_route, None,
+                                 on_progress, pair_state_limit, search_work)
     probe_failed, probe_hard = _failures(baseline.source, probe)
     emit(on_progress, "package_pattern_probe", "finished",
-         failed_critical_nets=sorted(probe_failed), hard_findings=probe_hard, reused_critical=reuse)
+         failed_critical_nets=sorted(probe_failed), hard_findings=probe_hard, reused_critical=reuse,
+         search_tier=search_tier)
     # Spend the bounded budget on clean-source probes with a strictly smaller
     # failure set, or on failed plane access. This is a heuristic, not proof
     # that the skipped joint search has no solution.
@@ -229,7 +298,8 @@ def _negotiate_patterns(
     accepted, records = baseline, []
     seen = {(baseline.fanout.created_tracks, baseline.fanout.created_vias)}
     for strategy in strategies[:options.maximum_pattern_trials]:
-        emit(on_progress, "package_pattern_trial", "started", index=len(records) + 1, strategy=strategy)
+        emit(on_progress, "package_pattern_trial", "started", index=len(records) + 1, strategy=strategy,
+             search_tier=search_tier)
         obstacles = (stitch_zone_pads(probe.board, plane_options).board
                      if strategy == "critical_and_plane_first" else probe.board)
         proposed = route_fanout(obstacles, fanout_options)
@@ -246,8 +316,8 @@ def _negotiate_patterns(
             outcome = "lost_ordinary_access"
         else:
             seen.add(signature)
-            verified = route_critical_nets(baseline.source, baseline.global_route,
-                reserved_accesses=proposed, on_progress=critical_progress(on_progress))
+            verified = _critical_search(baseline.source, baseline.global_route, proposed,
+                                        on_progress, pair_state_limit, search_work)
             candidate = _access_result(baseline.source, baseline.global_route, proposed, verified, plane_options,
                                        options.boundary_options, on_progress)
             outcome = _improvement_outcome(accepted, candidate)
@@ -255,14 +325,29 @@ def _negotiate_patterns(
         records.append(PackagePatternTrial(len(records) + 1, strategy,
             tuple(sorted(candidate.pending_pads if candidate else
                          accepted.pending_pads | frozenset(proposed.pending_pads))),
-            tuple(sorted(evidence.failed_critical_nets)), outcome, candidate is not None))
+            tuple(sorted(evidence.failed_critical_nets)), outcome, candidate is not None, search_tier))
         emit(on_progress, "package_pattern_trial", "finished", index=len(records), strategy=strategy,
-             outcome=outcome)
+             outcome=outcome, search_tier=search_tier)
         if outcome == "accepted":
             accepted = candidate
             if accepted.ready:
                 break
     return replace(accepted, pattern_trials=tuple(records))
+
+
+def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
+                     fanout: FanoutResult | None, on_progress: ProgressCallback | None,
+                     pair_state_limit: int | None,
+                     search_work: _SearchWork | None) -> CriticalRoutingResult:
+    kwargs = {"on_progress": critical_progress(on_progress)}
+    if fanout is not None:
+        kwargs["reserved_accesses"] = fanout
+    if pair_state_limit is not None:
+        kwargs["pair_state_limit"] = pair_state_limit
+    result = route_critical_nets(board, guides, **kwargs)
+    if search_work is not None:
+        search_work.observe(result)
+    return result
 
 
 def package_placement_trials(

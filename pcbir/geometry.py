@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Iterable
 
@@ -30,15 +30,17 @@ class RoundedConvexShape:
     """Convex point/segment/polygon swept by an integer radius."""
     spine: tuple[Point, ...]
     radius_nm: int = 0
+    _bounds: Bounds = field(init=False, compare=False, hash=False, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "spine", tuple(self.spine))
         if not self.spine or self.radius_nm < 0:
             raise ValueError("rounded convex shapes require a spine and non-negative radius")
+        object.__setattr__(self, "_bounds", bounds(self.spine).expanded(self.radius_nm))
 
     @property
     def bounds(self) -> Bounds:
-        return bounds(self.spine).expanded(self.radius_nm)
+        return self._bounds
 
 
 @dataclass(frozen=True, slots=True)

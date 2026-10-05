@@ -196,11 +196,16 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                       first_guide: GlobalNetRoute, second_guide: GlobalNetRoute, *,
                       maximum_searches: int = 8, maximum_states: int = 30_000,
                       pitch_nm: int = nm_from_mm(1),
-                      stats: PairSearchStats | None = None) -> Iterator[PairSearchCandidate]:
+                      stats: PairSearchStats | None = None,
+                      maximum_total_states: int | None = None) -> Iterator[PairSearchCandidate]:
     """Yield deterministic joint candidates; never reserve or modify input copper."""
     if min(maximum_searches, maximum_states, pitch_nm) <= 0:
         raise ValueError("joint pair search bounds must be positive")
+    if maximum_total_states is not None and maximum_total_states <= 0:
+        raise ValueError("joint pair aggregate state bound must be positive")
     stats = stats if stats is not None else PairSearchStats()
+    if maximum_total_states is not None and stats.expanded_states >= maximum_total_states:
+        return
     width = first_rule.width_nm or board.rules.default_track_width_nm
     if (second_rule.width_nm or board.rules.default_track_width_nm) != width:
         return
@@ -240,6 +245,9 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                                             pair[1].center.x_nm, pair[1].center.y_nm))
     stats.port_pairs += len(combinations)
     for search_index, (start, end) in enumerate(combinations[:maximum_searches], 1):
+        budget = _remaining_states(stats, maximum_states, maximum_total_states)
+        if not budget:
+            break
         escaped = (*start.first, *start.second, *end.first, *end.second)
         if not _legal(board, index, (*start.first, *end.first), (*start.second, *end.second), clearance):
             continue
@@ -247,7 +255,7 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
         stats.searches += 1
         candidate = _search(escaped_board, RoutingClearanceIndex(escaped_board), first_rule.net,
                             second_rule.net, start, end, width, offset, clearance, layer,
-                            pitch_nm, maximum_states, stats)
+                            pitch_nm, budget, stats)
         if candidate is not None:
             stats.candidates += 1
             a, b, expanded, spine = candidate
@@ -256,6 +264,13 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                 (*start.second, *b, *tuple(
                 TrackSegment(t.net, t.end, t.start, t.width_nm, t.layer) for t in reversed(end.second))),
                 expanded, search_index, spine, start, end)
+
+
+def _remaining_states(stats: PairSearchStats, maximum_states: int,
+                      maximum_total_states: int | None) -> int:
+    """A shared counter caps work across ports, layers, pitches and families."""
+    return (maximum_states if maximum_total_states is None else
+            max(0, min(maximum_states, maximum_total_states - stats.expanded_states)))
 
 
 def _goal_paths(point: Point, end: Point, heading: int, inward: int,

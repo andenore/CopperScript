@@ -2,6 +2,21 @@
 
 ## Profiling future runs
 
+Package preflight now negotiates ordinary escape patterns after a bounded
+initial pair-search tier (default 6,000 aggregate expanded states per pair/pass),
+before committing to historical full-budget searches. If incomplete, it retries
+the original pattern at full budget. `--package-initial-pair-states 0` provides
+the comparison/disable mode; `--package-pattern-trials 0` also disables staging.
+Pass these through the generic build wrapper after `--`. Reports include
+`package_access.search_tiers` with all actual probe/revalidation work and the
+selected tier. A limited failure is not evidence that no legal route exists.
+The read-only run summary includes `critical_expanded_states` across completed
+groups, including discarded pattern/probe work, plus tier/fallback details. Do
+not add tier totals to the group totals again. The comparison helper allows the
+staging knob as an explicit intervention, while preserving other budget,
+quality, provenance and uninstrumented-timing checks.
+See [the plan and acceptance criteria](routing-search-speed-plan.md).
+
 The complete workflow now enables standard-library `cProfile` function profiling
 and streamed phase events by default; no additional dependency is required:
 

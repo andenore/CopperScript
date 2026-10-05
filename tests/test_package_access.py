@@ -414,6 +414,93 @@ def test_cli_pattern_budget_is_explicit_and_bounded():
     assert parser.parse_args(["route-board", "board.copper", "--package-pattern-trials", "0"]).package_pattern_trials == 0
     with pytest.raises(SystemExit):
         parser.parse_args(["route-board", "board.copper", "--package-pattern-trials", "3"])
+    assert parser.parse_args(["route-board", "board.copper"]).package_initial_pair_states == 6000
+    assert parser.parse_args(["route-board", "board.copper", "--package-initial-pair-states", "0"]).package_initial_pair_states == 0
+    with pytest.raises(SystemExit):
+        parser.parse_args(["route-board", "board.copper", "--package-initial-pair-states", "-1"])
+    with pytest.raises(ValueError, match="initial pair"):
+        access.PackageAccessOptions(initial_pair_state_limit=-1)
+
+
+@pytest.mark.parametrize("case", ("easy", "alternate", "full_only", "unavoidable", "rollback"))
+def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
+    # Isolate scheduling/rollback. Other tests above use actual copper/native
+    # gates; pair_vias tests exercise limited searches and coupled acceptance.
+    board, guides, settings, _ = fixture(critical=True)
+    template = access.preflight_package_access(board, guides, settings)
+    board = replace(board, net_routing_rules=tuple(NetRoutingRule(n, RouteKind.DIFFERENTIAL,
+        differential_partner=p, pair_gap_nm=nm_from_mm(.2)) for n, p in (("A", "B"), ("B", "A"))))
+    guides = route_global(board)
+    original = template.fanout
+    alternative = replace(original, created_tracks=tuple(replace(t, end=Point(t.end.x_nm + 1, t.end.y_nm))
+                                                         for t in original.created_tracks))
+    proposals, searches, events = [], [], []
+    def escape(source, options):
+        proposals.append(source)
+        return original if len(proposals) == 1 else alternative
+    def critical(source, route, *, reserved_accesses=None, pair_state_limit=None, on_progress=None):
+        searches.append((pair_state_limit, reserved_accesses))
+        connected = (case == "easy" or case == "alternate" and reserved_accesses is not original
+                     or case == "full_only" and pair_state_limit is None)
+        # Clean-owner probe can propose a new pattern, including a rejected
+        # transaction. Preserve all work in telemetry regardless of selection.
+        if reserved_accesses is None and case in {"alternate", "rollback"}:
+            connected = True
+        if (case == "rollback" and reserved_accesses is not None
+                and reserved_accesses.created_tracks == alternative.created_tracks):
+            connected = True
+        nets = tuple(replace(n, connected=connected, search_states=3 if pair_state_limit else 30,
+                             pair_searches=1) for n in template.critical.nets)
+        return replace(template.critical, nets=nets,
+            status=access.CriticalRoutingStatus.SUCCESS if connected else access.CriticalRoutingStatus.FAILED)
+    def evaluate(source, route, fan, critical, plane, *args):
+        failed = frozenset() if critical.nets[0].connected else frozenset({"A"})
+        # Reject a "connected" proposal that lost an original required access.
+        if case == "rollback" and fan.created_tracks == alternative.created_tracks:
+            fan = replace(fan, accesses={})
+        return replace(template, source=source, global_route=route, fanout=fan, critical=critical,
+                       failed_critical_nets=failed)
+    monkeypatch.setattr(access, "route_fanout", escape)
+    monkeypatch.setattr(access, "route_critical_nets", critical)
+    monkeypatch.setattr(access, "_access_result", evaluate)
+    monkeypatch.setattr(access, "_failures", lambda source, critical:
+        (frozenset() if critical.nets[0].connected else frozenset({"A"}), 0))
+    options = access.PackageAccessOptions(maximum_pattern_trials=1, initial_pair_state_limit=12)
+    result = access.preflight_package_access(board, guides, settings, options=options,
+        on_progress=lambda *event: events.append(event))
+    assert result.ready == (case in {"easy", "alternate", "full_only"})
+    assert [tier.name for tier in result.search_tiers] == (
+        ["initial"] if case in {"easy", "alternate"} else ["initial", "full"])
+    assert sum(tier.expanded_states for tier in result.search_tiers) == sum(3 if cap else 30 for cap, _ in searches)
+    assert sum(tier.critical_passes for tier in result.search_tiers) == len(searches)
+    assert sum(tier.selected for tier in result.search_tiers) == 1
+    if case == "easy":
+        assert len(searches) == 1 and not result.pattern_trials
+    elif case == "alternate":
+        assert len(searches) == 3 and result.pattern_trials[0].outcome == "accepted"
+        assert result.pattern_trials[0].search_tier == "initial"
+        assert all(details['search_tier'] == 'initial' for phase, _, details in events
+                   if phase in {'package_pattern_trial', 'package_pattern_probe'})
+    else:
+        # Full fallback retries the original ordinary pattern, not a leaked
+        # clean-probe board or an unaccepted candidate's copper.
+        assert next(fan for cap, fan in searches if cap is None) is original
+        assert any(phase == "package_search_fallback" for phase, _, _ in events)
+    if case == "rollback":
+        assert result.fanout.accesses == original.accesses
+        assert all(t.outcome == "access_not_improved" for t in result.pattern_trials)
+    if case == "full_only":
+        assert result.search_tiers[-1].selected
+
+
+@pytest.mark.parametrize("initial,patterns", ((0, 2), (6000, 0)))
+def test_disabling_staging_retains_one_full_budget_tier(initial, patterns):
+    # Pair-free fixtures also use a single full tier, as no pair work is capped.
+    board, guides, settings, _ = fixture(critical=True)
+    result = access.preflight_package_access(board, guides, settings,
+        options=access.PackageAccessOptions(initial_pair_state_limit=initial, maximum_pattern_trials=patterns))
+    assert len(result.search_tiers) == 1 and result.search_tiers[0].name == "full"
+    assert result.search_tiers[0].pair_state_limit is None and result.search_tiers[0].selected
 
 
 def test_pending_ordinary_exit_can_negotiate_even_when_critical_owner_already_passes(monkeypatch):

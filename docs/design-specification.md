@@ -1208,7 +1208,7 @@ differential members independently, displace hard-macro copper, relax geometry
 or SI profiles, or treat an early plane contact as filled connectivity.
 
 Bound the implementation to at most two deterministic owner-order proposals
-per placement; ready preflights do no negotiation. Keep proposal/revalidation
+per search tier (CS-154); ready preflights do no negotiation. Keep proposal/revalidation
 outcomes and timing events explicit. This is a repair heuristic, not an optimal
 simultaneous-escape solver, proof of onward capacity, or manufacturing signoff.
 The unchanged fail-closed CS-131 gate remains mandatory before area routing.
@@ -1266,3 +1266,48 @@ reservations and record commit-time cost. Local paths remain physical objects:
 they neither add schematic coordinates nor certify end-to-end routing, filled
 plane continuity or fabrication readiness. Specialized critical/GND domains and
 joint dogbone/onward-path optimization remain separate follow-ups.
+
+## CS-154 — Early negotiation with conservative full-search fallback (Accepted)
+
+When paired critical nets and pattern negotiation are enabled, package preflight
+first explores a bounded search tier. The default aggregate expansion cap is
+6,000 states per pair per critical pass, shared across surface/via families,
+existing pitches, layers and candidate ports. Bounded slices sample both
+families/pitches; clean-owner probes and final pattern revalidation use the same
+cap. Standalone critical routing keeps its historical bounds by default.
+
+The CS-131/CS-151/CS-152 acceptance gates remain unchanged. Limited failure is
+not proof of impossibility. If the initial tier is not ready, retry the ORIGINAL
+ordinary pattern with historical full budgets and bounded pattern negotiation.
+Select full fallback only if it preserves all incumbent access identities and
+does not introduce new pending contacts, failed critical nets or hard findings.
+Otherwise keep the incumbent and report the unsuccessful fallback. Each tier
+may propose up to two patterns; no unbounded same-budget retry loop is allowed.
+
+`--package-initial-pair-states 0` disables staging. Disabling pattern negotiation
+also retains the historical full-budget path. Reports/progress expose tier,
+aggregate cap, exact expanded-state exhaustion, fallback and selection. Work
+counters include discarded clean probes and rejected proposals, not only the
+selected critical result. Counters are telemetry, never connectivity evidence.
+
+## CS-155 — Immutable bounds and static clearance broad phase (Accepted)
+
+Rounded shapes compute their bounds once per immutable instance. The cache must
+not affect equality, hashing or representation; copies, serialization by pickle
+and replacements must preserve/rebuild valid bounds. Exact integer/Fraction
+distance and clearance predicates remain authoritative.
+
+Routing clearance indexes keepouts and protected macro regions by layer and
+coarse spatial bins. Deduplicate candidate identities in deterministic original
+order. Bound memory/work for huge envelopes with conservative per-layer lists.
+Broad-phase queries must include the macro one-nanometre contact exclusion.
+Preserve full physical via-span checks, object flags, transformed footprint
+geometry, mechanical clearance and globally fail-closed unsupported keepout
+holes. Compare answers against the prior linear predicate implementation.
+
+These caches belong to one shape/board snapshot, not a global XY-only legality
+cache. New placement/rule/mechanical snapshots create fresh indexes. Newly added
+copper continues to update a separate mutable spatial index. No stale legality
+answer may be reused after copper insertion or placement changes.
+
+See the [implementation and validation plan](routing-search-speed-plan.md).

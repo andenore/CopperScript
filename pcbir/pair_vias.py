@@ -12,7 +12,7 @@ from math import hypot
 from typing import Iterator
 
 from .pair_search import (PairSearchCandidate, PairSearchStats, _Port, _HEADS,
-                          _legal, _ports, _search)
+                          _legal, _ports, _search, _remaining_states)
 from .drc import placed_pad_shape
 from .geometry import RoundedConvexShape, shapes_clear
 from .placement import transformed_local_point
@@ -171,11 +171,16 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
                           first_guide: GlobalNetRoute, second_guide: GlobalNetRoute, *,
                           maximum_searches: int = 8, maximum_states: int = 30_000,
                           pitch_nm: int = nm_from_mm(1),
-                          stats: PairSearchStats | None = None) -> Iterator[PairSearchCandidate]:
+                          stats: PairSearchStats | None = None,
+                          maximum_total_states: int | None = None) -> Iterator[PairSearchCandidate]:
     """Propose two matched transitions/member; owner checks DRC and profiles."""
     if min(maximum_searches, maximum_states, pitch_nm) <= 0:
         raise ValueError("paired via search bounds must be positive")
+    if maximum_total_states is not None and maximum_total_states <= 0:
+        raise ValueError("paired via aggregate state bound must be positive")
     stats = stats if stats is not None else PairSearchStats()
+    if maximum_total_states is not None and stats.expanded_states >= maximum_total_states:
+        return
     width = first.width_nm or board.rules.default_track_width_nm
     if ((second.width_nm or board.rules.default_track_width_nm) != width
             or first.pair_gap_nm is None or second.pair_gap_nm != first.pair_gap_nm
@@ -197,6 +202,8 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
     clearance = max(board.rules.minimum_clearance_nm, first.clearance_nm or 0, second.clearance_nm or 0)
     offset = (width+first.pair_gap_nm+1)//2
     for layer in targets:
+        if not _remaining_states(stats, maximum_states, maximum_total_states):
+            break
         groups = tuple(_transitions(board, first, second, a.pad_position,
             partners[a.pad.component].pad_position, a.pad.component, surface, layer)
             for a, surface in zip(accesses, surfaces))
@@ -208,6 +215,9 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
                 pair[1].port.center.x_nm, pair[1].port.center.y_nm))
         stats.port_pairs += len(combinations)
         for ordinal,(a,b) in enumerate(combinations[:maximum_searches],1):
+            budget = _remaining_states(stats, maximum_states, maximum_total_states)
+            if not budget:
+                break
             start,end = a.port,b.port
             first_escapes=(*start.first,*end.first)
             second_escapes=(*start.second,*end.second)
@@ -220,7 +230,7 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             escaped=replace(escaped,vias=(*board.vias,*vias))
             stats.searches += 1
             candidate = _search(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
-                start,end,width,offset,clearance,layer,pitch_nm,maximum_states,stats)
+                start,end,width,offset,clearance,layer,pitch_nm,budget,stats)
             if candidate is None:
                 continue
             p,q,expanded,_ = candidate

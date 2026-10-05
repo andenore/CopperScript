@@ -63,9 +63,20 @@ See [the assessment](routing-performance.md) for evidence, limitations and sourc
 
 ## O2 — Reduce geometry/allocation overhead
 
-- [ ] Use full profiles to select significant self-time/call-count hot paths.
-- [ ] Cache coordinate/shape construction within an immutable search/grid where useful.
-- [ ] Separate reusable placed-pad/keepout geometry from mutable copper reservations;
+Current measured work: [early negotiation and indexed geometry plan](routing-search-speed-plan.md).
+
+- [x] Use full profiles to select significant self-time/call-count hot paths.
+- [x] Cache immutable rounded-shape bounds; spatially index static keepouts/macro
+  regions separately from mutable copper. Fresh board snapshots build fresh
+  indexes; huge envelopes fall back conservatively. Linear-oracle tests retain
+  exact tangency, layer/flag, hole-policy and transformed-geometry semantics.
+- [x] Negotiate package patterns after bounded initial pair-search slices,
+  retaining original-pattern full-budget fallback and strict owner gates.
+  The profiled matched-placement preflight passes with unchanged selected
+  copper and 6,397 actual states across all passes versus 728,263 in the earlier
+  full-budget log. This is a work-count result, not a full-route timing ratio.
+- [ ] Extend caching beyond bounds to coordinate/placed-pad/port construction where profiles justify it.
+- [ ] Reuse placed-pad/keepout snapshots across search indexes separately from mutable copper;
   define placement, clearance and copper-revision invalidation keys before reuse.
 - [ ] Tune spatial-bin sizes on realistic footprints, retaining exact narrow-phase checks.
 - [ ] Benchmark each change and run tangency, rotated-pad, drill and full-span-via tests.

@@ -98,7 +98,7 @@ different ordinary pattern:
    When they already passed, strip only the verified ordinary reservation prefix
    and reuse their exact copper as the proposal seed, with a fresh native check.
    This avoids a redundant pair search; changed proposals still receive full
-   critical/plane revalidation before acceptance.
+   all-owner critical/plane revalidation before acceptance.
 2. When selected plane contacts or ordinary allocation failed, propose ordinary escapes against both
    that critical copper and provisional plane contacts. A second bounded
    proposal can use critical copper alone. For critical-only failures there is
@@ -118,13 +118,23 @@ manufacturing/SI profiles, change placement, or modify hard-macro copper. Plane
 contacts remain provisional until independently refilled and connectivity
 checked. Unrequested ground pads still belong to the late plane stage.
 
-`--package-pattern-trials` selects a budget of 0, 1 or 2 (default 2). Ready
+`--package-pattern-trials` selects a budget of 0, 1 or 2 per search tier (default 2). Ready
 preflights do not run probes. Failed clean-source critical probes and duplicate
 ordinary patterns are not repeatedly searched. `package_access.pattern_trials`
 records strategy, pending identities, critical failures, outcome and whether
-the proposal received full owner revalidation; progress events separate probe
+the proposal received all-owner revalidation; progress events separate probe
 and trial costs for profiling. These records describe the selected placement;
 placement trials themselves remain separately recorded.
+
+With paired nets, the first tier limits maze expansions to 6,000 states per
+pair/pass, shared across surface/via families, pitches and ports. It samples
+bounded candidate slices and negotiates patterns early. If not ready, retry the
+original ordinary pattern with historical full search budgets; accept only an
+identity-preserving, no-worse result. `--package-initial-pair-states 0` disables
+staging, as does a zero pattern-trial budget. Reports include `search_tier` on
+patterns and `package_access.search_tiers` with total work, including rejected
+probes/trials. Limited failure is not evidence of impossibility. Exact/native
+geometry, coupled pair profiles and all readiness gates remain unchanged.
 
 Defaults are eight evaluated placement trials and a 0.5 mm initial movement.
 Trial runtime can be substantial because critical routing is rebuilt. With

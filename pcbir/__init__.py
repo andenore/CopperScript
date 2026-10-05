@@ -29,6 +29,7 @@ from .critical_feedback import (
     improve_critical_placement,
 )
 from .package_access import (PackageAccessOptions, PackageAccessResult, PackageAccessTrial, PackagePatternTrial,
+                             PackageSearchTier,
                              preflight_package_access, improve_package_access)
 from .boundary_access import (BoundaryAccessOptions, BoundaryAccessResult, BoundaryPort,
                               PackageCollar, analyze_boundary_access, reserve_boundary_access)
@@ -566,6 +567,7 @@ __all__ = [
     "PackageAccessResult",
     "PackageAccessTrial",
     "PackagePatternTrial",
+    "PackageSearchTier",
     "preflight_package_access",
     "improve_package_access",
     "route_any_angle",

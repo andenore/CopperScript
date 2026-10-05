@@ -68,6 +68,16 @@ def _nonnegative_mm(value: str) -> str:
     return value
 
 
+def _nonnegative_int(value: str) -> int:
+    try:
+        result = int(value)
+        if result < 0:
+            raise ValueError("must not be negative")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected a nonnegative integer, got {value!r}") from exc
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -337,6 +347,8 @@ def _parser() -> argparse.ArgumentParser:
         help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
     board_route_parser.add_argument("--package-pattern-trials", type=int, choices=range(3), default=2,
         help="alternate ordinary/critical/plane escape patterns before placement repair (default: up to 2; 0 disables negotiation)")
+    board_route_parser.add_argument("--package-initial-pair-states", type=_nonnegative_int, default=6000,
+        help="initial aggregate pair-search state cap with --fanout (default: 6000; 0 disables staged search; full-budget fallback if incomplete)")
     board_route_parser.add_argument("--package-boundary-step-mm", type=_positive_mm, default="0.5",
         help="coarse boundary-port sampling with --fanout (default: 0.5 mm, locally refined to 0.1 mm)")
     board_route_parser.add_argument("--fanout-step-mm", type=_positive_mm, default="0.5",
@@ -849,6 +861,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         maximum_trials=args.package_access_trials,
                         movement_nm=nm_from_mm(args.package_access_movement_mm),
                         maximum_pattern_trials=args.package_pattern_trials,
+                        initial_pair_state_limit=args.package_initial_pair_states,
                         boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
                             refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
                     on_progress=progress,
@@ -865,6 +878,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             maximum_trials=args.package_access_trials,
                             movement_nm=nm_from_mm(args.package_access_movement_mm),
                             maximum_pattern_trials=args.package_pattern_trials,
+                            initial_pair_state_limit=args.package_initial_pair_states,
                             boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
                                 refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
                         options=EscapeFeedbackOptions(
@@ -953,6 +967,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "hard_findings": access.hard_findings,
                     "accepted_moves": access.accepted_moves,
                     "pattern_trial_limit": args.package_pattern_trials,
+                    "initial_pair_state_limit": args.package_initial_pair_states,
+                    "search_tiers": [asdict(tier) for tier in access.search_tiers],
                     "pattern_trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
                                        for trial in access.pattern_trials],
                     "trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}

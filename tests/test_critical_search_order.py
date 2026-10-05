@@ -44,9 +44,12 @@ def test_ordering_is_in_report_and_progress_telemetry():
     from pcbir.progress import critical_progress
     board, _ = setup()
     net = CriticalNetResult(("P", "N"), True, 0, 0, (), 0,
-                            pair_search_order="via_first_internal_lands")
+                            pair_search_order="via_first_internal_lands",
+                            pair_state_limit=6000, pair_budget_exhausted=False)
     result = CriticalRoutingResult(CriticalRoutingStatus.SUCCESS, board, (net,), (), (), "g", "r")
     assert json.loads(result.to_json())["nets"][0]["pair_search_order"] == "via_first_internal_lands"
     seen = []
     critical_progress(lambda phase, event, details: seen.append(details))("finished", net.nets, net)
     assert seen[0]["pair_search_order"] == "via_first_internal_lands"
+    assert seen[0]["pair_state_limit"] == 6000 and not seen[0]["pair_budget_exhausted"]
+    assert json.loads(result.to_json())["nets"][0]["pair_state_limit"] == 6000

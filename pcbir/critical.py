@@ -70,6 +70,8 @@ class CriticalNetResult:
     pair_refinement_attempts: int = 0
     pair_refinement_candidates: int = 0
     pair_search_order: str | None = None
+    pair_state_limit: int | None = None
+    pair_budget_exhausted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +115,8 @@ class CriticalRoutingResult:
                     "search_states": item.search_states,
                     "candidate_attempts": item.candidate_attempts,
                     "pair_search_order": item.pair_search_order,
+                    "pair_state_limit": item.pair_state_limit,
+                    "pair_budget_exhausted": item.pair_budget_exhausted,
                     "pair_searches": item.pair_searches,
                     "local_candidate_attempts": item.local_candidate_attempts,
                     "guide_length_nm": item.guide_length_nm,
@@ -164,6 +168,7 @@ def route_critical_nets(
     global_route: GlobalRoutingResult,
     *, on_progress: Callable[[str, tuple[str, ...], CriticalNetResult | None], None] | None = None,
     reserved_accesses: FanoutResult | None = None,
+    pair_state_limit: int | None = None,
 ) -> CriticalRoutingResult:
     """Route critical groups around explicit, immutable ordinary package access.
 
@@ -171,6 +176,8 @@ def route_critical_nets(
     Reservations cannot be arbitrary prior area copper or critical-net stubs.
     """
 
+    if pair_state_limit is not None and pair_state_limit <= 0:
+        raise ValueError("critical pair aggregate state bound must be positive")
     from .hard_macros import macro_source, materialize_hard_macros
     board = materialize_hard_macros(macro_source(board))
     if board.hard_macros and global_route.placement_fingerprint != _placement_fingerprint(board):
@@ -289,9 +296,21 @@ def route_critical_nets(
                              else (paired_candidates, paired_via_candidates))
                 for searcher in searchers:
                     for pitch_nm in (1_000_000, 500_000, 250_000):
+                        # A limited tier samples both families and all pitches,
+                        # rather than spending its entire cap on the first port.
+                        # Full-budget standalone calls retain historical bounds.
+                        limits = {}
+                        if pair_state_limit is not None:
+                            remaining = pair_state_limit - stats.expanded_states
+                            if remaining <= 0:
+                                break
+                            slice_size = min(remaining, max(1, pair_state_limit // 6))
+                            limits = {"maximum_total_states": stats.expanded_states + slice_size,
+                                      "maximum_states": max(1, (slice_size + 1) // 2),
+                                      "maximum_searches": 2}
                         for candidate in searcher(
                             search_board, first, second, routes[first.net], routes[second.net],
-                            stats=stats, pitch_nm=pitch_nm,
+                            stats=stats, pitch_nm=pitch_nm, **limits,
                         ):
                             attempt, proposed_tracks, proposed_vias = _route_pair(
                                 board, first, second, routes,
@@ -319,7 +338,11 @@ def route_critical_nets(
                         break
                 result = replace(result, search_states=stats.expanded_states,
                                  candidate_attempts=stats.candidates, pair_searches=stats.searches,
-                                 pair_search_order=("via_first_internal_lands" if prefer_vias else "surface_first"))
+                                 pair_search_order=("via_first_internal_lands" if prefer_vias else "surface_first"),
+                                 pair_state_limit=pair_state_limit,
+                                 pair_budget_exhausted=(pair_state_limit is not None
+                                                       and stats.expanded_states >= pair_state_limit
+                                                       and not result.connected))
                 if not result.connected:
                     result = replace(result, diagnostics=(*result.diagnostics,
                         f"joint pair search: {stats.searches} searches, {stats.expanded_states} states, "

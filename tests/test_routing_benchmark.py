@@ -170,6 +170,40 @@ def test_repair_switches_are_allowed_but_other_settings_are_not_erased(tmp_path)
     assert result["eligible_for_timing_review"]
 
 
+@pytest.mark.parametrize("option", (["--package-initial-pair-states", "0"],
+                                     ["--package-initial-pair-states=0"],
+                                     ["--package-initial-pair-states", "6000"]))
+def test_staged_comparison_switch_keeps_other_budgets_and_quality_gates(tmp_path, option):
+    save_run(tmp_path / "before")
+    manifest = save_run(tmp_path / "after")
+    manifest["routing_command"] += option
+    path = tmp_path / "after/run.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    baseline, candidate = benchmark.summarize_run(tmp_path / "before"), benchmark.summarize_run(tmp_path / "after")
+    assert benchmark.compare_runs(baseline, candidate)["eligible_for_timing_review"]
+    manifest["routing_command"] += ["--search-budget", "100"]
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert not benchmark.compare_runs(baseline, benchmark.summarize_run(tmp_path / "after"))["eligible_for_timing_review"]
+
+
+def test_work_counts_discarded_critical_searches_without_adding_tiers_twice(tmp_path):
+    save_run(tmp_path / "run")
+    events = []
+    for phase, details in (("critical_group", {"search_states": 6000, "pair_budget_exhausted": True}),
+        ("critical_group", {"search_states": 67}),
+        ("package_search_tier", {"name": "initial", "expanded_states": 6067, "ready": False}),
+        ("critical_group", {"search_states": 2000}),
+        ("package_search_tier", {"name": "full", "expanded_states": 2000, "ready": True}),
+        ("package_search_fallback", {"selected": "full"})):
+        events.extend([{"phase": phase, "event": "started", "elapsed_seconds": len(events), "details": {}},
+            {"phase": phase, "event": "finished", "elapsed_seconds": len(events) + 1, "details": details}])
+    (tmp_path / "run/routing.log").write_text("".join("PROGRESS " + json.dumps(e) + "\n" for e in events), encoding="utf-8")
+    work = benchmark.summarize_run(tmp_path / "run")["work"]
+    assert work["critical_expanded_states"] == 8067
+    assert work["pair_state_budget_exhaustions"] == work["package_search_fallbacks"] == 1
+    assert [t["name"] for t in work["package_search_tiers"]] == ["initial", "full"]
+
+
 def test_cli_running_summary_is_read_only_and_comparison_exit_is_not_success(tmp_path, capsys):
     save_run(tmp_path / "before")
     save_run(tmp_path / "after", running=True)

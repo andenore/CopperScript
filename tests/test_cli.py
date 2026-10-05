@@ -366,6 +366,9 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["package_access"]["stage_order"][0] == "ordinary_package_exits"
     assert "trials" in document["package_access"]
     assert document["package_access"]["pattern_trial_limit"] == 2
+    assert document["package_access"]["initial_pair_state_limit"] == 6000
+    assert len(document["package_access"]["search_tiers"]) >= 1
+    assert any(t["selected"] for t in document["package_access"]["search_tiers"])
     assert isinstance(document["package_access"]["pattern_trials"], list)
     boundary = document["package_access"]["boundary"]
     assert boundary["materialized"] == document["package_access"]["ordinary_area_started"]

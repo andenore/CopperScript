@@ -36,13 +36,21 @@ def _settings(manifest: dict) -> list[str] | None:
     args = command[command.index("route-board") + 1:]
     if not args or not all(isinstance(arg, str) for arg in args):
         return None
-    # Output paths/progress are observational. These two explicit switches are
+    # Output paths/progress are observational. Explicit repair/staging switches are
     # the interventions under test, not permission to ignore different budgets.
     ignored_flags = {"--progress", "--no-incremental-placement-repair"}
     ignored_values = {"--report", "-o", "--zone-dependency-expansions"}
     result = []
     iterator = iter(args[1:])  # Board contents are compared using recorded hashes.
     for item in iterator:
+        if item == "--package-initial-pair-states" or item.startswith("--package-initial-pair-states="):
+            value = next(iterator, None) if "=" not in item else item.split("=", 1)[1]
+            try:
+                if value is None or int(value) < 0:
+                    return None
+            except ValueError:
+                return None
+            continue
         if item in ignored_flags:
             continue
         if item in ignored_values:
@@ -85,13 +93,23 @@ def summarize_run(directory: Path) -> dict:
                 span["started_details"].get("kind") == "probe_only" for span in spans),
             "incremental_fallbacks": sum(span["phase"] == "zone_incremental_trial" and
                 span["finished_details"].get("decision") == "fallback to full pipeline" for span in spans),
+            "critical_expanded_states": (sum(span["finished_details"].get("search_states", 0)
+                for span in spans if span["phase"] == "critical_group")
+                if any(span["phase"] == "critical_group" for span in spans) else None),
+            "package_search_tiers": [span["finished_details"] for span in spans
+                                     if span["phase"] == "package_search_tier"],
+            "package_search_fallbacks": sum(span["phase"] == "package_search_fallback" for span in spans),
+            "pair_state_budget_exhaustions": sum(span["phase"] == "critical_group"
+                and span["finished_details"].get("pair_budget_exhausted", False) for span in spans),
             "trial_decisions": {phase: dict(sorted(Counter(span["finished_details"].get("decision", "unknown")
                 for span in spans if span["phase"] == phase).items()))
                 for phase in ("zone_full_trial", "zone_incremental_trial")},
             "unfinished": phases["unfinished"], "malformed_events": phases["malformed_events"],
             "phase_inclusive_seconds": {phase: round(sum(span["duration_seconds"]
                 for span in spans if span["phase"] == phase), 3) for phase in sorted({s["phase"] for s in spans})},
-            "note": "Only paired completed stages counted; inclusive phase times overlap. Not expanded maze states."}
+            "note": "Only paired completed stages counted; inclusive phase times overlap. "
+                    "Critical state counts include discarded probes; do not add tier counts again. "
+                    "General area state counts are not yet recorded."}
         if not phases["events"]:
             # Older runs have a plain-text log but no structured telemetry.
             # Zero observed events cannot establish zero routing work.

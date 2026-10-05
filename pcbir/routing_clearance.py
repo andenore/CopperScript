@@ -9,10 +9,10 @@ as a broad phase.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from .drc import non_plated_holes, placed_pad_shape
-from .geometry import RoundedConvexShape, shapes_clear
+from .geometry import Bounds, RoundedConvexShape, shapes_clear
 from .physical import (
     BoardSide,
     CopperLayer,
@@ -46,6 +46,7 @@ class _KeepoutObject:
     block_tracks: bool
     block_vias: bool
     has_holes: bool
+    clearance_nm: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,8 @@ class RoutingClearanceIndex:
     """Reserve copper; same-net tracks may join, but vias must avoid pads."""
 
     def __init__(self, board: PhysicalBoard, bin_size_nm: int = nm_from_mm(2)) -> None:
+        if bin_size_nm <= 0:
+            raise ValueError("clearance bin size must be positive")
         self.board = board
         self.bin_size_nm = bin_size_nm
         self.rules: dict[str, NetRoutingRule] = {
@@ -85,6 +88,7 @@ class RoutingClearanceIndex:
             )
             for item in resolved_copper_keepouts(board)
         )
+        self._index_static_regions()
         self._max_clearance_nm = max(
             board.rules.minimum_clearance_nm,
             board.rules.minimum_hole_clearance_nm,
@@ -232,23 +236,84 @@ class RoutingClearanceIndex:
             if not shape_in_board(self.board, shape, self.board.rules.minimum_clearance_nm,
                                   self.board.rules.minimum_hole_clearance_nm):
                 return False  # Always locked, including speculative soft rip-up.
-        layer_set = set(layers)
-        if any(layer_set.intersection(region_layers) and not shapes_clear(shape, region_shape, 1)
-               for region_layers, region_shape in self._macro_regions):
-            return False  # immutable access reservation, including same-net rip-up
-        for keepout in self._keepouts:
+        if not self._static_regions:
+            return True
+        # Unsupported keepout holes fail closed even far from the query, as in
+        # native DRC and the original linear implementation.
+        blocked_layers = self._static_hole_via_layers if for_via else self._static_hole_track_layers
+        if any(layer in blocked_layers for layer in layers):
+            return False
+        for keepout in self._overlapping_static_regions(shape, layers):
             if not (keepout.block_vias if for_via else keepout.block_tracks):
                 continue
-            if not layer_set.intersection(keepout.layers):
+            area = shape.bounds.expanded(keepout.clearance_nm) if keepout.clearance_nm else shape.bounds
+            if not area.intersects(keepout.shape.bounds):
                 continue
-            if keepout.has_holes:
-                # Match DRC's fail-closed treatment of unsupported holes.
-                return False
-            if not shape.bounds.intersects(keepout.shape.bounds):
-                continue
-            if not shapes_clear(shape, keepout.shape):
+            if not shapes_clear(shape, keepout.shape, keepout.clearance_nm):
                 return False
         return True
+
+    _STATIC_BIN_LIMIT = 512
+
+    def _index_static_regions(self) -> None:
+        """Build a snapshot-local broad phase, separate from mutable copper.
+
+        Large regions stay in per-layer fallback lists rather than allocating
+        board-sized bin arrays. Queries with huge envelopes scan layer lists.
+        Original indices preserve deterministic deduplication/order.
+        """
+        self._static_regions = (*(_KeepoutObject(layers, shape, True, True, False, 1)
+                                  for layers, shape in self._macro_regions),
+                                *(region for region in self._keepouts
+                                  if region.block_tracks or region.block_vias))
+        bins, large, by_layer = {}, {}, {}
+        hole_tracks, hole_vias = set(), set()
+        for identity, region in enumerate(self._static_regions):
+            area = region.shape.bounds
+            xs, ys = self._static_cells(area)
+            for layer in region.layers:
+                by_layer.setdefault(layer, []).append(identity)
+                if region.has_holes:
+                    if region.block_tracks:
+                        hole_tracks.add(layer)
+                    if region.block_vias:
+                        hole_vias.add(layer)
+                if len(xs) * len(ys) > self._STATIC_BIN_LIMIT:
+                    large.setdefault(layer, []).append(identity)
+                else:
+                    for x in xs:
+                        for y in ys:
+                            bins.setdefault((layer, x, y), []).append(identity)
+        self._static_bins = {key: tuple(ids) for key, ids in bins.items()}
+        self._static_large = {key: tuple(ids) for key, ids in large.items()}
+        self._static_by_layer = {key: tuple(ids) for key, ids in by_layer.items()}
+        self._static_hole_track_layers = frozenset(hole_tracks)
+        self._static_hole_via_layers = frozenset(hole_vias)
+
+    def _static_cells(self, area: Bounds) -> tuple[range, range]:
+        return (range(area.min_x // self.bin_size_nm, area.max_x // self.bin_size_nm + 1),
+                range(area.min_y // self.bin_size_nm, area.max_y // self.bin_size_nm + 1))
+
+    def _overlapping_static_regions(self, shape: RoundedConvexShape,
+                                     layers: tuple[CopperLayer, ...]) -> Iterator[_KeepoutObject]:
+        # Macro access reservations reject even exact contact (one nm margin).
+        # Expand the QUERY so an adjacent-bin contact cannot be lost.
+        if not any(layer in self._static_by_layer for layer in layers):
+            return
+        xs, ys = self._static_cells(shape.bounds.expanded(1))
+        identities = set()
+        for layer in layers:
+            if layer not in self._static_by_layer:
+                continue
+            if len(xs) * len(ys) > self._STATIC_BIN_LIMIT:
+                identities.update(self._static_by_layer.get(layer, ()))
+            else:
+                identities.update(self._static_large.get(layer, ()))
+                for x in xs:
+                    for y in ys:
+                        identities.update(self._static_bins.get((layer, x, y), ()))
+        for identity in sorted(identities):
+            yield self._static_regions[identity]
 
     def add_track(self, track: TrackSegment, *, locked: bool = False) -> None:
         self._add(_CopperObject(

@@ -151,3 +151,105 @@ def test_critical_owner_rejects_corrupted_paired_transition_atomically(fault):
     rejected,created,vias=_validate_candidate(board,proposed,created,vias,[],[])
     assert not rejected.connected and rejected.candidate_rejected
     assert created==vias==()
+
+
+@pytest.mark.parametrize("engine", (paired_candidates, paired_via_candidates))
+def test_aggregate_state_cap_is_shared_across_candidate_calls(monkeypatch, engine):
+    board = replace(board_fixture(), copper_keepouts=())
+    routes = {r.net: r for r in route_global(board).routes}
+    stats, budgets = PairSearchStats(), []
+    def exhausted(*args):
+        budgets.append(args[-2])
+        args[-1].expanded_states += args[-2]
+        return None
+    module = "pcbir.pair_search" if engine is paired_candidates else "pcbir.pair_vias"
+    monkeypatch.setattr(module + "._search", exhausted)
+    assert not list(engine(board, *board.net_routing_rules, routes['A'], routes['B'],
+        stats=stats, maximum_states=4, maximum_total_states=7))
+    assert budgets == [4, 3] and stats.expanded_states == 7
+    # Reusing the telemetry shares the cap, rather than silently resetting it.
+    assert not list(engine(board, *board.net_routing_rules, routes['A'], routes['B'],
+        stats=stats, pitch_nm=500_000, maximum_total_states=7))
+    assert budgets == [4, 3] and board.tracks == board.vias == ()
+    with pytest.raises(ValueError, match="aggregate"):
+        list(engine(board, *board.net_routing_rules, routes['A'], routes['B'], maximum_total_states=0))
+
+
+def test_real_pair_search_honors_tiny_budget_without_committing_copper():
+    board = replace(board_fixture(), copper_keepouts=())
+    routes = {r.net: r for r in route_global(board).routes}
+    stats = PairSearchStats()
+    assert not list(paired_candidates(board, *board.net_routing_rules, routes['A'], routes['B'],
+        maximum_total_states=1, stats=stats))
+    assert stats.expanded_states == 1 and board.tracks == board.vias == ()
+
+
+def test_critical_limited_tier_samples_both_families_and_all_pitches(monkeypatch):
+    budgets = []
+    def exhausted(*args, **kwargs):
+        stats = kwargs['stats']
+        budgets.append((kwargs['pitch_nm'], kwargs['maximum_total_states'] - stats.expanded_states))
+        stats.expanded_states = kwargs['maximum_total_states']
+        stats.searches += 1
+        return iter(())
+    monkeypatch.setattr('pcbir.critical.paired_candidates', exhausted)
+    monkeypatch.setattr('pcbir.critical.paired_via_candidates', exhausted)
+    board = board_fixture()
+    result = route_critical_nets(board, route_global(board), pair_state_limit=60)
+    assert budgets == [(pitch, 10) for _ in range(2) for pitch in (1_000_000, 500_000, 250_000)]
+    pair = result.nets[0]
+    assert not pair.connected and pair.search_states == 60
+    assert pair.pair_state_limit == 60 and pair.pair_budget_exhausted
+    assert result.board.tracks == result.board.vias == ()
+    with pytest.raises(ValueError, match="aggregate"):
+        route_critical_nets(board, route_global(board), pair_state_limit=0)
+
+
+def test_easy_via_pair_is_still_exactly_accepted_with_initial_cap(monkeypatch):
+    monkeypatch.setattr('pcbir.critical.paired_candidates', lambda *a, **k: iter(()))
+    board = board_fixture(True)
+    # A short real pair fits the exploratory slices. The longer retained
+    # corridor needs 1,574 states for its first candidate and exercises the
+    # historical full-budget route in the existing owner test instead.
+    wall = CopperKeepout('short-wall', (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+        Point.mm(8, 0), Point.mm(10, 0), Point.mm(10, 25), Point.mm(8, 25)))))
+    board = replace(board, placements=(board.placements[0],
+        replace(board.placements[1], position=Point.mm(12, 12))), copper_keepouts=(wall,))
+    result = route_critical_nets(board, route_global(board), pair_state_limit=6000)
+    pair = result.nets[0]
+    assert pair.connected and pair.paired_via_transitions == 2 and pair.return_via_count == 2
+    assert pair.search_states <= 6000 and not pair.pair_budget_exhausted
+    assert not [f for f in run_physical_drc(result.board).findings
+                if f.severity.value == 'error' and f.code != 'DRC-ROUTE-INCOMPLETE']
+
+
+def test_actual_package_preflight_full_fallback_recovers_long_pair(monkeypatch):
+    from pcbir import PackageAccessOptions, preflight_package_access
+    from pcbir.fanout import FanoutOptions
+    # Suppress futile surface search only in this retained top-wall fixture;
+    # vias, actual joint maze search, coupling, DRC and acceptance remain real.
+    monkeypatch.setattr('pcbir.critical.paired_candidates', lambda *a, **k: iter(()))
+    board = board_fixture(True)
+    result = preflight_package_access(board, route_global(board), FanoutOptions(),
+                                     options=PackageAccessOptions(maximum_trials=0))
+    assert result.ready and not result.hard_findings
+    assert len(result.search_tiers) == 2
+    assert not result.search_tiers[0].ready and result.search_tiers[1].ready
+    assert result.search_tiers[1].selected and result.search_tiers[1].pair_state_limit is None
+    pair = result.critical.nets[0]
+    assert pair.connected and pair.paired_via_transitions == 2 and pair.return_via_count == 2
+    assert board.tracks == board.vias == ()
+
+
+@pytest.mark.parametrize("initial,patterns", ((0, 2), (6000, 0)))
+def test_paired_preflight_disable_modes_keep_historical_budget(monkeypatch, initial, patterns):
+    from pcbir import PackageAccessOptions, preflight_package_access
+    from pcbir.fanout import FanoutOptions
+    monkeypatch.setattr('pcbir.critical.paired_candidates', lambda *a, **k: iter(()))
+    board = board_fixture(True)
+    result = preflight_package_access(board, route_global(board), FanoutOptions(),
+        options=PackageAccessOptions(maximum_trials=0, initial_pair_state_limit=initial,
+                                     maximum_pattern_trials=patterns))
+    assert result.ready and len(result.search_tiers) == 1
+    assert result.search_tiers[0].name == "full" and result.search_tiers[0].selected
+    assert result.critical.nets[0].pair_state_limit is None
