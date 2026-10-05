@@ -12,7 +12,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from .clusters import cluster_placement_matches, footprint_geometry_digest
+from .clusters import (cluster_placement_matches, footprint_geometry_digest,
+                       legacy_footprint_geometry_digest)
 from .geometry import RoundedConvexShape, shapes_clear
 from .placement import transformed_local_point
 from .syntax import CopperScriptError
@@ -93,7 +94,10 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
             _keys(row, "reference footprint footprint_digest center_nm rotation_degrees edge_clearance_nm")
             pose = poses[bindings[row["reference"]]]
             footprint = board.footprints[pose.footprint]
-            if _macro_footprint_digest(footprint, row["footprint"], asset) != row["footprint_digest"]:
+            digest = _macro_footprint_digest(footprint, row["footprint"], asset)
+            legacy_digest = (legacy_footprint_geometry_digest(footprint)
+                             if digest is not None else None)
+            if digest != row["footprint_digest"] and legacy_digest != row["footprint_digest"]:
                 raise ValueError(f"hard-macro footprint identity mismatch: {pose.reference}")
             position = _point(row["center_nm"])
             members.append(RigidPlacementMember(pose.reference, pose.footprint, footprint_geometry_digest(footprint), position, row["rotation_degrees"]))

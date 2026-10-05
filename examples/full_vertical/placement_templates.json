@@ -8,9 +8,9 @@
       "bindings": {"U1": "U_NRF", "C3": "C_BT_MATCH", "L1": "L_BT_MATCH"},
       "net_bindings": {"raw": "NRF_RF_RAW", "ground": "GND", "feed": "NRF_RF_ANT"},
       "footprint_digests": {
-        "U1": "5573f44f5a1df036d8bc6e48b156fa3b5fac13152ce7c628de3e7e295eadd4a1",
-        "C3": "5a62c537e80dd0b467c6efe692e82724875ef7a68fa53b55dee5cbe53ff99723",
-        "L1": "1d3e892648d297f14d5f985b99ea1bbfcd1b7bda9fd3968879c06537ef1055ac"
+        "U1": "cb810b0416966534962bcc4220c4f39bb8a6b22d45da13753297f20bf77ce078",
+        "C3": "6626461e823efd255bfbdef7bdf64c8feb10fc410b0cacfd6353137e29252eda",
+        "L1": "5562c5cb01e540b6441fb2b3587074acffff71760023c276b03b69c374da1580"
       },
       "allowed_rotations": [0, 45, 90, 135, 180, 225, 270, 315],
       "internal_clearance_nm": 0

@@ -21,8 +21,8 @@ from .physical import (
 )
 
 
-def footprint_geometry_digest(footprint: PhysicalFootprint) -> str:
-    """Bind the complete resolved footprint, including source ID and pad geometry."""
+def _footprint_geometry_digest(footprint: PhysicalFootprint, *, portable: bool) -> str:
+    """Serialize resolved footprint identity with optional source-byte portability."""
 
     def document(value):
         if is_dataclass(value):
@@ -42,11 +42,26 @@ def footprint_geometry_digest(footprint: PhysicalFootprint) -> str:
     if not footprint.internal_pad_groups:
         content.pop("internal_pad_groups", None)
     # A local cache/search-root location is provenance, not asset identity.
-    for key in ("source_path", "resolution", "managed_reference", "source_asset",
-                "module_path", "module_version", "module_checksum"):
+    keys = ("source_path", "resolution", "managed_reference", "source_asset",
+            "module_path", "module_version", "module_checksum")
+    if portable:
+        keys += ("source_sha256",)
+    for key in keys:
         content["metadata"].pop(key, None)
     return sha256(json.dumps(content, sort_keys=True,
                              separators=(",", ":")).encode()).hexdigest()
+
+
+def footprint_geometry_digest(footprint: PhysicalFootprint) -> str:
+    """Bind geometry independently of source file line endings and checkout paths."""
+
+    return _footprint_geometry_digest(footprint, portable=True)
+
+
+def legacy_footprint_geometry_digest(footprint: PhysicalFootprint) -> str:
+    """Return the pre-portable digest used by older locked macro assets."""
+
+    return _footprint_geometry_digest(footprint, portable=False)
 
 
 def validate_cluster_bindings(board: PhysicalBoard) -> None:

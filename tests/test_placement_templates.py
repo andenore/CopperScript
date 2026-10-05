@@ -83,7 +83,7 @@ def test_asset_binding_is_independent_of_checkout_location():
     fp = PhysicalFootprint("test", (), Size.mm(1, 1), metadata={"source_path": "old", "source_sha256": "same"})
     assert footprint_geometry_digest(fp) == footprint_geometry_digest(replace(fp, metadata={
         "source_path": "new", "source_sha256": "same"}))
-    assert footprint_geometry_digest(fp) != footprint_geometry_digest(replace(fp, metadata={
+    assert footprint_geometry_digest(fp) == footprint_geometry_digest(replace(fp, metadata={
         "source_path": "new", "source_sha256": "changed"}))
 
 
