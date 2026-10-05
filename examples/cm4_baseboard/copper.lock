@@ -1,7 +1,7 @@
 {
   "modules": [
     {
-      "checksum": "sha256:3a45e6fec193cdb2c54bd424d84bacc98cd1cba6c751ec87a0e990c45cd2956b",
+      "checksum": "sha256:46063f96387689b5d9bf91ead0b8769fd0b83d605fa9abb45f5b4529c75465c6",
       "files": [
         {
           "path": "copper.mod",
@@ -15,7 +15,7 @@
         },
         {
           "path": "packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json",
-          "sha256": "2af31b661e340aea4a5fadd1f47456a55e1a2e44eb43659d38eec8975f46c5cc",
+          "sha256": "3e435afba3184b175533782e9354d0c228615c44a153d081bf90103926aa0348",
           "size": 12422
         },
         {
@@ -251,7 +251,7 @@
       ],
       "module": "github.com/andenore/CopperLib",
       "source": "git:https://github.com/andenore/CopperLib.git",
-      "version": "5deebc3a84a8d4be67d32eaec520b9bba6a1a2d6"
+      "version": "6cc5eab18488be6de75e4f2e0bfa961aa3999844"
     }
   ],
   "schema": "copperscript.package-lock/v1"

@@ -1,7 +1,7 @@
 module github.com/anden/CopperScript
 
 require github.com/copperscript/examples v0.1.0
-require github.com/andenore/CopperLib 5deebc3a84a8d4be67d32eaec520b9bba6a1a2d6
+require github.com/andenore/CopperLib 6cc5eab18488be6de75e4f2e0bfa961aa3999844
 
 footprint-library Connector_Debug github.com/andenore/CopperLib/packages/parts/samtec/ftsh-105-01-l-dv-007-k/footprints
 footprint-library EG800G github.com/andenore/CopperLib/packages/parts/quectel/eg800g-eu/footprints
