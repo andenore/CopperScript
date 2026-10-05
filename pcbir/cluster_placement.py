@@ -76,7 +76,7 @@ def place_rigid_clusters(board, targets, original, options):
     return targets, original, replace(options, fixed_references=options.fixed_references | all_members)
 
 
-def refine_rigid_clusters(board, source, options):
+def refine_rigid_clusters(board, source, options, *, spacing_model=None):
     from .placement import (
         _fast_score, _fixed_placements, _nearby_positions, placement_metrics,
         placement_solution_is_legal,
@@ -92,19 +92,19 @@ def refine_rigid_clusters(board, source, options):
                 continue
             anchor = placements[cluster.anchor.reference]
             best = placements
-            best_rank = (_fast_score(board, placements), anchor.position.y_nm,
+            best_rank = (_fast_score(board, placements, spacing_model), anchor.position.y_nm,
                          anchor.position.x_nm, anchor.rotation_degrees)
-            baseline = placement_metrics(board, placements, options)
+            baseline = placement_metrics(board, placements, options, spacing_model=spacing_model)
             for point in (anchor.position, *_nearby_positions(anchor.position, options)):
                 for angle in cluster.allowed_rotations:
                     pose = replace(anchor, position=point, rotation_degrees=angle)
                     trial = {**placements, **cluster_placements(board, cluster, pose, placements)}
                     if not placement_solution_is_legal(board, trial, options):
                         continue
-                    rank = (_fast_score(board, trial), point.y_nm, point.x_nm, angle)
+                    rank = (_fast_score(board, trial, spacing_model), point.y_nm, point.x_nm, angle)
                     if rank >= best_rank:
                         continue
-                    metrics = placement_metrics(board, trial, options)
+                    metrics = placement_metrics(board, trial, options, spacing_model=spacing_model)
                     if (metrics.constraint_penalty_nm > baseline.constraint_penalty_nm
                             or metrics.congestion_overflow > baseline.congestion_overflow):
                         continue

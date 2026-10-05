@@ -113,7 +113,8 @@ def test_dense_packages_get_a_soft_escape_channel_when_space_is_available() -> N
             Placement("U1", footprint.name, Point.mm(20, 20)),
             Placement("U2", footprint.name, Point.mm(29, 20)),
         ),
-        (),
+        (PhysicalNet("CONNECTED", tuple(PadReference(reference, str(number))
+            for reference in ("U1", "U2") for number in range(1, 33))),),
     )
     options = PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
                                       refinement_passes=0)
@@ -121,8 +122,8 @@ def test_dense_packages_get_a_soft_escape_channel_when_space_is_available() -> N
     plan = plan_placement(board, options)
     after = plan.report.metrics
 
-    assert before.high_pin_spacing_penalty_nm > 0
-    assert after.high_pin_spacing_penalty_nm < before.high_pin_spacing_penalty_nm
+    assert before.escape_channel_penalty_nm > 0
+    assert after.escape_channel_penalty_nm < before.escape_channel_penalty_nm
     assert placement_solution_is_legal(
         board, {item.reference: item for item in plan.board.placements}, options
     )
@@ -150,7 +151,8 @@ def test_layout_report_is_machine_readable() -> None:
     assert document["gates"][2]["status"] == "not_run"
     assert document["metrics"]["component_count"] > 0
     assert "pin_escape_pressure" in document["metrics"]
-    assert "high_pin_spacing_penalty_nm" in document["metrics"]
+    assert "escape_channel_deficit_nm" in document["metrics"]
+    assert "escape_channels" in document
     assert "minimum_constraint_margin_nm" in document["metrics"]
     assert document["candidates"]
     assert "analytical_iterations" in document["candidates"][0]["statistics"]

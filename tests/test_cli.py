@@ -7,6 +7,17 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
+def test_escape_spacing_controls_reach_all_planning_commands():
+    from pcbir.cli import _parser, _planner_options
+    from pcbir.physical import nm_from_mm
+    for command in ("plan-layout", "route-global", "route-board"):
+        args = _parser().parse_args([command, "examples/valid_board/board.copper",
+            "--escape-margin-mm", "0.75", "--escape-transit-lanes", "2"])
+        options = _planner_options(args)
+        assert options.escape_margin_nm == nm_from_mm(.75)
+        assert options.escape_transit_lanes == 2
+
+
 def run_cli(example: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "copperscript", "check", f"examples/{example}"],

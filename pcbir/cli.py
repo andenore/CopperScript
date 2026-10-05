@@ -305,6 +305,11 @@ def _parser() -> argparse.ArgumentParser:
         "--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic"
     )
     board_route_parser.add_argument("--candidates", type=int, default=1)
+    for placement_parser in (layout_parser, global_route_parser, board_route_parser):
+        placement_parser.add_argument("--escape-margin-mm", default="0.5",
+            help="soft placement margin per demanding package side (not DRC clearance)")
+        placement_parser.add_argument("--escape-transit-lanes", type=int, default=1,
+            help="ordinary trace lanes estimated between facing escape banks")
     for physical_parser in (pcb_parser, layout_parser, global_route_parser, board_route_parser):
         physical_parser.add_argument("--width-mm", type=float, default=100)
         physical_parser.add_argument("--height-mm", type=float, default=80)
@@ -487,6 +492,12 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--offline", action="store_true", help="reject remote package cache misses"
     )
+
+
+def _planner_options(args) -> PlacementPlannerOptions:
+    return PlacementPlannerOptions(candidate_count=args.candidates,
+        escape_margin_nm=nm_from_mm(args.escape_margin_mm),
+        escape_transit_lanes=args.escape_transit_lanes)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -819,9 +830,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     layer_preference_cost=max(0, args.layer_preference_cost // 2),
                     direction_preference_cost=max(0, args.direction_preference_cost // 2),
                 )
-                placement_options = PlacementPlannerOptions(
-                    candidate_count=args.candidates,
-                )
+                placement_options = _planner_options(args)
                 feedback_options = PlacementRoutingFeedbackOptions(
                     maximum_iterations=args.feedback_iterations,
                     initial_movement_nm=router_options.tile_size_nm,
@@ -1240,7 +1249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         locked=args.locked,offline=args.offline)
                 flow = optimize_placement_for_routing(
                     physical_board,
-                    PlacementPlannerOptions(candidate_count=args.candidates),
+                    _planner_options(args),
                     router_options,
                     PlacementRoutingFeedbackOptions(
                         maximum_iterations=args.feedback_iterations,
@@ -1310,9 +1319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     layout_report = None
                     if args.command == "plan-layout":
                         try:
-                            planner_options = PlacementPlannerOptions(
-                                candidate_count=args.candidates
-                            )
+                            planner_options = _planner_options(args)
                         except ValueError as exc:
                             print(f"LAYOUT ERROR: {exc}")
                             return 2

@@ -149,7 +149,7 @@ def test_reversed_input_segments_verified_without_rewriting_identity():
     assert path == board.tracks
 
 
-def test_detailed_route_consumes_verified_two_leg_anchor_and_prunes_only_owned_via():
+def test_detailed_route_uses_verified_fanout_and_prunes_unused_owned_tail():
     base = base_board()
     guide = route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
     fanout = route_fanout(base, opts())
@@ -158,8 +158,12 @@ def test_detailed_route_consumes_verified_two_leg_anchor_and_prunes_only_owned_v
         fanout_created_tracks=fanout.created_tracks,
         fanout_created_vias=frozenset((v.net,v.position) for v in fanout.created_vias))
     assert result.nets[0].connected, result.nets[0].diagnostics
-    assert all(t in result.board.tracks for t in fanout.created_tracks)
-    assert not any(f.code == "DRC-OPEN-NET" for f in run_physical_drc(result.board).findings)
+    # The route branches at the elbow, so retaining the second owned leg would
+    # leave a dead-end stub after its now-unused escape via is removed.
+    assert fanout.created_tracks[0] in result.board.tracks
+    assert fanout.created_tracks[1] not in result.board.tracks
+    assert not any(v in result.board.vias for v in fanout.created_vias)
+    assert run_physical_drc(result.board).findings == ()
 
 
 def test_failed_full_cleanup_removes_owned_two_legs_not_preexisting_duplicates():

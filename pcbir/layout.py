@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from enum import Enum
 import json
 from types import MappingProxyType
@@ -16,6 +16,7 @@ from .placement import (
     generate_placement_candidates,
     select_placement_candidate,
 )
+from .placement_escape import EscapeChannel, EscapeSpacingModel
 
 
 class LayoutStage(str, Enum):
@@ -57,6 +58,7 @@ class LayoutReport:
     candidates: tuple[PlacementCandidate, ...] = ()
     selected_candidate: str = "candidate-00"
     algorithm: str = "hierarchical-analytical/hybrid-legalize/route-refine-v0.2"
+    escape_channels: tuple[EscapeChannel, ...] = ()
 
     def to_json(self) -> str:
         return json.dumps(
@@ -88,6 +90,8 @@ class LayoutReport:
                     for finding in self.findings
                 ],
                 "metrics": _metrics_json(self.metrics),
+                "escape_channels": [asdict(channel) | {"deficit_nm": channel.deficit_nm}
+                                    for channel in self.escape_channels],
                 "candidates": [
                     {
                         "id": candidate.candidate_id,
@@ -152,7 +156,9 @@ def plan_placement(
         placements=selected.placements,
         metadata=MappingProxyType(metadata),
     )
-    findings = _findings(board, selected.metrics, candidates)
+    channels = EscapeSpacingModel(board, margin_nm=options.escape_margin_nm,
+        transit_lanes=options.escape_transit_lanes).channels({p.reference: p for p in selected.placements})
+    findings = _findings(board, selected.metrics, candidates, channels)
     gates = _gates(findings)
     return PlacementPlan(
         planned,
@@ -163,6 +169,7 @@ def plan_placement(
             selected.metrics,
             candidates,
             selected.candidate_id,
+            escape_channels=channels,
         ),
         candidates,
     )
@@ -177,7 +184,9 @@ def _metrics_json(metrics: PlacementMetrics) -> dict[str, int]:
         "crossing_count": metrics.crossing_count,
         "estimated_via_count": metrics.estimated_via_count,
         "pin_escape_pressure": metrics.pin_escape_pressure,
-        "high_pin_spacing_penalty_nm": metrics.high_pin_spacing_penalty_nm,
+        "escape_channel_penalty_nm": metrics.escape_channel_penalty_nm,
+        "escape_channel_deficit_nm": metrics.escape_channel_deficit_nm,
+        "escape_channel_pair_count": metrics.escape_channel_pair_count,
         "constraint_penalty_nm": metrics.constraint_penalty_nm,
         "minimum_constraint_margin_nm": metrics.minimum_constraint_margin_nm,
         "group_spread_nm": metrics.group_spread_nm,
@@ -192,6 +201,7 @@ def _findings(
     board: PhysicalBoard,
     metrics: PlacementMetrics,
     candidates: tuple[PlacementCandidate, ...],
+    channels: tuple[EscapeChannel, ...] = (),
 ) -> tuple[LayoutFinding, ...]:
     findings: list[LayoutFinding] = []
     if board.metadata.get("prototype_footprints") == "true":
@@ -232,6 +242,15 @@ def _findings(
                 f"physical constraints target omitted components: {omitted_targets}",
             )
         )
+    for channel in channels:
+        findings.append(LayoutFinding(
+            "ESCAPE_CHANNEL_DEFICIT", LayoutStage.PLACE, GateStatus.WARNING,
+            f"{channel.left}/{channel.right}: facing {channel.axis}-channel has "
+            f"{channel.gap_nm / 1_000_000:.3f} mm, estimated target "
+            f"{channel.required_gap_nm / 1_000_000:.3f} mm; fixed/proximity constraints "
+            "remain authoritative and joint package access must be verified",
+            f"{channel.left},{channel.right}",
+        ))
     if metrics.congestion_overflow:
         findings.append(
             LayoutFinding(

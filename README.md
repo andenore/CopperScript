@@ -219,6 +219,13 @@ The planner estimates global routing congestion but does not generate copper.
 Its report therefore marks Route as not run and Verify as blocked. See the
 [physical layout workflow](docs/layout-workflow.md) for the research,
 consolidated stages, algorithms, and limitations.
+Placement now estimates facing escape corridors from connected SMD pad demand,
+reserving space for via banks from both packages and a transit lane. Fixed
+poses and rigid/proximity units remain authoritative; unresolved corridors
+appear as `ESCAPE_CHANNEL_DEFICIT` warnings in the layout report. Optional
+`--escape-margin-mm 0.5` and `--escape-transit-lanes 1` control this soft
+estimate on `plan-layout`, `route-global` and `route-board`, not DRC clearance.
+See the [escape-aware placement plan](docs/escape-aware-placement-plan.md).
 The [detailed-routing research](docs/detailed-routing-research.md) explains
 the geometry checks, fabrication-rule profile, and current full-board limits.
 
@@ -336,8 +343,9 @@ package exits before critical long routes with `--fanout`. If package access or
 critical compatibility fails, ordinary area routing is blocked with zero search
 passes. Bounded legal placement feedback rebuilds the reservations; use
 `--package-access-trials 0` to disable moves without disabling the gate.
-Joint critical/power/ground access and directional placement margins remain
-follow-up work; an allocated fanout via is not complete-board connectivity.
+Directional placement margins now account for ordinary/power/ground access;
+the joint preflight still verifies the actual reservations. An allocated fanout
+via is not complete-board connectivity.
 The [boundary-capacity increment](docs/package-boundary-access.md) now gates area
 routing on mutually compatible ordinary paths beyond package collars. Its
 matched-placement diagnostic proves 76/76 local witnesses after a multi-bend

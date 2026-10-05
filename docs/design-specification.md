@@ -1311,3 +1311,23 @@ copper continues to update a separate mutable spatial index. No stale legality
 answer may be reused after copper insertion or placement changes.
 
 See the [implementation and validation plan](routing-search-speed-plan.md).
+
+## CS-156 — Directional escape-aware placement (Accepted)
+
+Physical placement SHOULD reserve facing package-access corridors from actual
+connected-pad demand, copper/drill pitches and net/layer eligibility rather than
+requiring both neighbours to exceed a pin-count threshold. Power and ground
+access MUST participate. Signal-layer count MUST NOT multiply surface via-bank
+capacity. This estimate belongs to physical planning, not electrical IR.
+
+Channel deficits SHOULD rank ahead of wire-length improvement, while hard
+mechanical, fixed-pose, rigid-macro and proximity constraints remain unchanged.
+Move constrained units together where possible. Unresolved corridors MUST be
+reported as provisional warnings, not silently override locks or claim a
+fabrication violation. A heuristic-clear placement MUST still pass the existing
+joint package-access reservation before ordinary area routing.
+
+No specific example component or board coordinate may be encoded in the generic
+placer. Dedicated power-plane selection is a separate board policy, not a
+consequence of this spacing heuristic. See the
+[implementation plan](escape-aware-placement-plan.md).

@@ -19,6 +19,7 @@ from .cluster_placement import (
     place_rigid_clusters as _place_rigid_clusters,
     refine_rigid_clusters as _refine_rigid_clusters,
 )
+from .placement_escape import EscapeSpacingModel
 
 from .physical import (
     AlignmentAxis,
@@ -56,6 +57,10 @@ class PlacementPlannerOptions:
     exact_repair_limit: int = 6
     exact_repair_candidates: int = 28
     fixed_references: frozenset[str] = field(default_factory=frozenset)
+    escape_margin_nm: Nanometres = nm_from_mm("0.5")
+    escape_transit_lanes: int = 1
+    escape_spacing_passes: int = 2
+    escape_max_movement_nm: Nanometres = nm_from_mm("16")
 
     def __post_init__(self) -> None:
         positive = (
@@ -74,6 +79,9 @@ class PlacementPlannerOptions:
             raise ValueError("placement refinement settings are invalid")
         if self.candidate_count < 1:
             raise ValueError("placement candidate count must be positive")
+        if (self.escape_margin_nm < 0 or self.escape_transit_lanes < 0
+                or self.escape_spacing_passes < 0 or self.escape_max_movement_nm <= 0):
+            raise ValueError("escape-spacing settings are invalid")
         if (
             self.legalization_candidates < 1
             or self.exact_repair_limit < 2
@@ -92,7 +100,9 @@ class PlacementMetrics:
     crossing_count: int
     estimated_via_count: int
     pin_escape_pressure: int
-    high_pin_spacing_penalty_nm: Nanometres
+    escape_channel_penalty_nm: Nanometres
+    escape_channel_deficit_nm: Nanometres
+    escape_channel_pair_count: int
     constraint_penalty_nm: Nanometres
     minimum_constraint_margin_nm: Nanometres
     group_spread_nm: Nanometres
@@ -105,12 +115,12 @@ class PlacementMetrics:
     def quality_vector(self) -> tuple[int, ...]:
         return (
             self.constraint_penalty_nm,
+            self.escape_channel_deficit_nm,
             self.congestion_overflow,
             self.crossing_count,
             self.estimated_via_count,
             self.pin_escape_pressure,
             -self.minimum_constraint_margin_nm,
-            self.half_perimeter_wire_length_nm + self.high_pin_spacing_penalty_nm,
             self.half_perimeter_wire_length_nm,
             self.group_spread_nm,
         )
@@ -158,12 +168,13 @@ def generate_placement_candidates(
             f"fixed placement references unknown component {unknown_fixed[0]!r}"
         )
     attempts: list[PlacementCandidate] = []
+    spacing = _escape_model(board, options)
     seeds = max(2, options.candidate_count)
     for seed in range(seeds):
         if progress:
             progress("analytical", seed, seeds)
         continuous = _initial_seed(board, placements, options, seed)
-        continuous = _analytical_place(board, continuous, options)
+        continuous = _analytical_place(board, continuous, options, spacing)
         if progress:
             progress("legalization", seed, seeds)
         continuous, seeded_original, phase_options = _place_rigid_clusters(
@@ -173,20 +184,21 @@ def generate_placement_candidates(
             board, continuous, seeded_original, phase_options, seed
         )
         legalized, relative_before = _repair_relative_constraints(
-            board, legalized, phase_options
+            board, legalized, phase_options, spacing
         )
         if progress:
             progress("refinement", seed, seeds)
         refined, moves, swaps, feedback_passes = _detailed_refine(
-            board, legalized, phase_options, seed
+            board, legalized, phase_options, seed, spacing
         )
         refined, relative_after = _repair_relative_constraints(
-            board, refined, phase_options
+            board, refined, phase_options, spacing
         )
-        refined, cluster_moves = _refine_rigid_clusters(board, refined, options)
+        refined, cluster_moves = _refine_rigid_clusters(board, refined, options, spacing_model=spacing)
         moves += cluster_moves
-        refined = _spread_high_pin_components(board, refined, options)
-        metrics = placement_metrics(board, refined, options)
+        refined, spacing_moves = _spread_escape_components(board, refined, options, spacing)
+        moves += spacing_moves
+        metrics = placement_metrics(board, refined, options, spacing_model=spacing)
         if metrics.constraint_penalty_nm or not placement_solution_is_legal(board, refined, options):
             continue
         attempts.append(
@@ -236,8 +248,11 @@ def placement_metrics(
     board: PhysicalBoard,
     placements: Mapping[str, Placement],
     options: PlacementPlannerOptions,
+    *, spacing_model: EscapeSpacingModel | None = None,
 ) -> PlacementMetrics:
     route = _coarse_route(board, placements, options)
+    channels = (spacing_model or _escape_model(board, options)).channels(placements)
+    deficit = sum(c.deficit_nm for c in channels)
     return PlacementMetrics(
         component_count=len(placements),
         net_count=len(board.nets),
@@ -245,8 +260,10 @@ def placement_metrics(
         half_perimeter_wire_length_nm=_hpwl(board, placements),
         crossing_count=route.crossing_count,
         estimated_via_count=route.estimated_vias,
-        pin_escape_pressure=_pin_escape_pressure(board, placements),
-        high_pin_spacing_penalty_nm=_high_pin_spacing_penalty(board, placements),
+        pin_escape_pressure=sum(c.pad_count for c in channels),
+        escape_channel_penalty_nm=deficit * 40,
+        escape_channel_deficit_nm=deficit,
+        escape_channel_pair_count=len(channels),
         constraint_penalty_nm=_relative_penalty(board, placements),
         minimum_constraint_margin_nm=_relative_margin(board, placements),
         group_spread_nm=_group_spread(board, placements),
@@ -615,10 +632,12 @@ def _analytical_place(
     board: PhysicalBoard,
     source: Mapping[str, Placement],
     options: PlacementPlannerOptions,
+    spacing: EscapeSpacingModel | None = None,
 ) -> dict[str, Placement]:
     if not source or options.analytical_iterations == 0:
         return dict(source)
     fixed = set(_fixed_placements(board, source, options))
+    spacing = spacing or _escape_model(board, options)
     coordinates = {
         reference: [item.position.x_nm / 1_000_000, item.position.y_nm / 1_000_000]
         for reference, item in source.items()
@@ -654,10 +673,7 @@ def _analytical_place(
                 right_width, right_height = _half_extents_mm(board, source[right])
                 dx = coordinates[left][0] - coordinates[right][0]
                 dy = coordinates[left][1] - coordinates[right][1]
-                dense_gap = _high_pin_target_gap(board, source[left], source[right]) / 1_000_000
-                # Keep global repulsion gentle; exact clearance is only a soft
-                # refinement score because fixed/proximity rules may need space.
-                clearance = max(options.component_clearance_nm / 1_000_000, min(2.0, dense_gap))
+                clearance = options.component_clearance_nm / 1_000_000
                 limit_x = left_width + right_width + clearance
                 limit_y = left_height + right_height + clearance
                 overlap_x = limit_x - abs(dx)
@@ -672,6 +688,16 @@ def _analytical_place(
                     force = min(4.0, overlap_y) * (1 if dy >= 0 else -1)
                     gradient[left][1] -= force
                     gradient[right][1] += force
+
+        current_poses = {reference: replace(source[reference], position=Point(
+            round(xy[0] * 1_000_000), round(xy[1] * 1_000_000)))
+            for reference, xy in coordinates.items()}
+        for channel in spacing.channels(current_poses):
+            axis = 0 if channel.axis == "x" else 1
+            delta = coordinates[channel.left][axis] - coordinates[channel.right][axis]
+            force = min(4.0, channel.deficit_nm / 1_000_000) * (1 if delta >= 0 else -1)
+            gradient[channel.left][axis] -= force
+            gradient[channel.right][axis] += force
 
         for group in board.placement_groups:
             members = [reference for reference in group.references if reference in coordinates]
@@ -709,7 +735,7 @@ def _analytical_place(
         )
         for reference, item in source.items()
     }
-    return _choose_orientations(board, result, fixed)
+    return _choose_orientations(board, result, fixed, spacing)
 
 
 def _smooth_span_gradient(values: list[float], gamma: float) -> list[float]:
@@ -748,18 +774,20 @@ def _choose_orientations(
     board: PhysicalBoard,
     placements: Mapping[str, Placement],
     fixed: set[str],
+    spacing: EscapeSpacingModel | None = None,
 ) -> dict[str, Placement]:
+    spacing = spacing or EscapeSpacingModel(board)
     result = dict(placements)
     for reference in sorted(result):
         if reference in fixed:
             continue
         current = result[reference]
         best = current
-        best_cost = _fast_score(board, result)
+        best_cost = _fast_score(board, result, spacing)
         for orientation in _allowed_orientations(board, reference):
             candidate = replace(current, rotation_degrees=orientation)
             result[reference] = candidate
-            cost = _fast_score(board, result)
+            cost = _fast_score(board, result, spacing)
             if (cost, int(orientation)) < (best_cost, int(best.rotation_degrees)):
                 best, best_cost = candidate, cost
         result[reference] = best
@@ -1082,7 +1110,9 @@ def _detailed_refine(
     source: Mapping[str, Placement],
     options: PlacementPlannerOptions,
     seed: int,
+    spacing: EscapeSpacingModel | None = None,
 ) -> tuple[dict[str, Placement], int, int, int]:
+    spacing = spacing or _escape_model(board, options)
     placements = dict(source)
     fixed = set(_fixed_placements(board, source, options))
     adjacency = _adjacency(board)
@@ -1091,7 +1121,7 @@ def _detailed_refine(
     feedback_passes = 0
     for _ in range(options.refinement_passes):
         snapshot = dict(placements)
-        before = placement_metrics(board, snapshot, options)
+        before = placement_metrics(board, snapshot, options, spacing_model=spacing)
         changed = False
         for reference in sorted(placements):
             if reference in fixed:
@@ -1100,7 +1130,7 @@ def _detailed_refine(
             without = dict(placements)
             del without[reference]
             best = current
-            best_score = _fast_score(board, placements)
+            best_score = _fast_score(board, placements, spacing)
             positions = (current.position, *_nearby_positions(current.position, options))
             for point in positions:
                 for orientation in _allowed_orientations(board, reference):
@@ -1109,7 +1139,7 @@ def _detailed_refine(
                         continue
                     trial = dict(without)
                     trial[reference] = candidate
-                    score = _fast_score(board, trial)
+                    score = _fast_score(board, trial, spacing)
                     ranked = (score, point.y_nm, point.x_nm, int(orientation))
                     best_ranked = (
                         best_score,
@@ -1145,12 +1175,12 @@ def _detailed_refine(
             if not _legal(swapped_b, trial, board, options):
                 continue
             trial[right] = swapped_b
-            if _fast_score(board, trial) < _fast_score(board, placements):
+            if _fast_score(board, trial, spacing) < _fast_score(board, placements, spacing):
                 placements = trial
                 changed = True
                 swap_count += 1
 
-        after = placement_metrics(board, placements, options)
+        after = placement_metrics(board, placements, options, spacing_model=spacing)
         feedback_passes += 1
         if (
             after.constraint_penalty_nm > before.constraint_penalty_nm
@@ -1167,7 +1197,9 @@ def _repair_relative_constraints(
     board: PhysicalBoard,
     source: Mapping[str, Placement],
     options: PlacementPlannerOptions,
+    spacing: EscapeSpacingModel | None = None,
 ) -> tuple[dict[str, Placement], int]:
+    spacing = spacing or _escape_model(board, options)
     placements = dict(source)
     fixed = set(_fixed_placements(board, source, options))
     repair_count = 0
@@ -1176,7 +1208,7 @@ def _repair_relative_constraints(
         if baseline == 0:
             break
         best_placements: dict[str, Placement] | None = None
-        best_rank = (baseline, _fast_score(board, placements))
+        best_rank = (baseline, _fast_score(board, placements, spacing))
         for rule in board.relative_rules:
             references = sorted(
                 {target.reference for target in rule.targets if target.reference not in fixed},
@@ -1198,7 +1230,7 @@ def _repair_relative_constraints(
                             continue
                         trial = dict(without)
                         trial[reference] = candidate
-                        rank = (_relative_penalty(board, trial), _fast_score(board, trial))
+                        rank = (_relative_penalty(board, trial), _fast_score(board, trial, spacing))
                         if rank < best_rank:
                             best_rank = rank
                             best_placements = trial
@@ -1785,26 +1817,6 @@ def _relative_margin(board: PhysicalBoard, placements: Mapping[str, Placement]) 
     return min(margins, default=0)
 
 
-def _pin_escape_pressure(
-    board: PhysicalBoard, placements: Mapping[str, Placement]
-) -> int:
-    pitch = board.rules.default_track_width_nm + board.rules.minimum_clearance_nm
-    layers = max(1, len(board.stackup.copper_layers))
-    pressure = 0
-    for placement in placements.values():
-        footprint = board.footprints[placement.footprint]
-        electrical_pads = [pad for pad in footprint.pads if pad.number]
-        if not electrical_pads:
-            continue
-        min_x, min_y, max_x, max_y = _point_bounds(
-            _placement_polygon(board, placement)
-        )
-        perimeter = 2 * ((max_x - min_x) + (max_y - min_y))
-        escape_slots = max(1, perimeter // pitch) * layers
-        pressure += max(0, len(electrical_pads) - escape_slots)
-    return pressure
-
-
 def _group_spread(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:
     total = 0
     for group in board.placement_groups:
@@ -1826,99 +1838,67 @@ def _group_spread(board: PhysicalBoard, placements: Mapping[str, Placement]) -> 
     return total
 
 
-def _high_pin_target_gap(board: PhysicalBoard, left: Placement, right: Placement) -> int:
-    """Soft courtyard channel reserved between two dense, same-side packages."""
-
-    if left.side is not right.side:
-        return 0
-    left_pads = len({pad.number for pad in board.footprints[left.footprint].pads if pad.number})
-    right_pads = len({pad.number for pad in board.footprints[right.footprint].pads if pad.number})
-    smaller = min(left_pads, right_pads)
-    if smaller < 32:
-        return 0
-    return nm_from_mm("10" if smaller >= 64 else "8")
+def _escape_model(board: PhysicalBoard, options: PlacementPlannerOptions) -> EscapeSpacingModel:
+    return EscapeSpacingModel(board, margin_nm=options.escape_margin_nm,
+                              transit_lanes=options.escape_transit_lanes)
 
 
-def _high_pin_spacing_penalty(
-    board: PhysicalBoard, placements: Mapping[str, Placement]
-) -> int:
-    """Bounded soft cost for dense packages without an escape corridor."""
-
-    dense = sorted(
-        (item for item in placements.values()
-         if len({pad.number for pad in board.footprints[item.footprint].pads if pad.number}) >= 32),
-        key=lambda item: item.reference,
-    )
-    penalty = 0
-    for index, left in enumerate(dense):
-        left_width, left_height = _half_extents(board, left)
-        for right in dense[index + 1 :]:
-            gap = _high_pin_target_gap(board, left, right)
-            if not gap:
-                continue
-            right_width, right_height = _half_extents(board, right)
-            deficit_x = gap + left_width + right_width - abs(left.position.x_nm - right.position.x_nm)
-            deficit_y = gap + left_height + right_height - abs(left.position.y_nm - right.position.y_nm)
-            if deficit_x > 0 and deficit_y > 0:
-                penalty += min(deficit_x, deficit_y) * 40
-    return penalty
-
-
-def _spread_high_pin_components(
+def _spread_escape_components(
     board: PhysicalBoard,
     source: Mapping[str, Placement],
     options: PlacementPlannerOptions,
-) -> dict[str, Placement]:
-    """Translate dense ICs with close companions into free board space.
-
-    Moving a decoupled IC alone would violate its proximity rule. The small
-    MAX_DISTANCE cluster is moved together, and every trial is fully legalized.
-    This is a bounded soft optimization; fixed placements always win.
-    """
+    spacing: EscapeSpacingModel | None = None,
+) -> tuple[dict[str, Placement], int]:
+    """Relieve facing channels by translating complete constrained units."""
 
     placements = dict(source)
-    dense = sorted(
-        reference for reference, item in placements.items()
-        if len({pad.number for pad in board.footprints[item.footprint].pads if pad.number}) >= 32
-    )
-    if len(dense) < 2:
-        return placements
+    spacing = spacing or _escape_model(board, options)
     fixed = set(_fixed_placements(board, placements, options))
-    companions: dict[str, set[str]] = {reference: {reference} for reference in placements}
-    for rigid in board.rigid_clusters:
-        members = {item.reference for item in rigid.members}
-        for reference in members:
-            companions[reference].update(members)
-    for rule in board.relative_rules:
-        if rule.kind is not RelativePlacementKind.MAX_DISTANCE:
-            continue
-        members = {target.reference for target in rule.targets if target.reference in placements}
-        for reference in members:
-            companions[reference].update(members)
-    offsets = (
-        (dx, dy)
-        for radius in (4, 8, 12, 16)
-        for dx, dy in (
-            (-radius, 0), (radius, 0), (0, -radius), (0, radius),
-            (-radius, -radius), (-radius, radius), (radius, -radius), (radius, radius),
-        )
-    )
-    displacements = tuple(offsets)
-    for _ in range(2):
+    moves = 0
+    for _ in range(options.escape_spacing_passes):
         changed = False
-        for reference in dense:
-            cluster = set(companions[reference])
-            # Include transitive companions so no proximity relation is broken.
-            while any(not companions[item] <= cluster for item in cluster):
-                cluster.update(*(companions[item] for item in tuple(cluster)))
+        channels = spacing.channels(placements)
+        references = {ref for c in channels for ref in (c.left, c.right)}
+        ordered = sorted(references, key=lambda ref: (
+            sum(_footprint_area(board, placements[item]) for item in spacing.units[ref]), ref))
+        visited = set()
+        for reference in ordered:
+            cluster = spacing.units[reference]
+            if cluster in visited:
+                continue
+            visited.add(cluster)
             if cluster & fixed:
                 continue
-            baseline = _fast_score(board, placements)
+            relevant = [c for c in spacing.channels(placements)
+                        if (c.left in cluster) != (c.right in cluster)]
+            if not relevant:
+                continue  # Internal proximity deficits cannot be relieved by translation.
+            offsets = set()
+            for channel in relevant:
+                ref, other = ((channel.left, channel.right) if channel.left in cluster
+                              else (channel.right, channel.left))
+                axis = "x_nm" if channel.axis == "x" else "y_nm"
+                sign = -1 if getattr(placements[ref].position, axis) < getattr(placements[other].position, axis) else 1
+                amount = ((channel.deficit_nm + options.grid_step_nm - 1)
+                          // options.grid_step_nm) * options.grid_step_nm
+                amount = min(options.escape_max_movement_nm, amount) // options.grid_step_nm * options.grid_step_nm
+                if amount:
+                    offsets.add((sign * amount, 0) if channel.axis == "x" else (0, sign * amount))
+            for radius in {options.grid_step_nm, nm_from_mm(2), nm_from_mm(4),
+                           nm_from_mm(8), options.escape_max_movement_nm}:
+                if radius > options.escape_max_movement_nm:
+                    continue
+                radius = radius // options.grid_step_nm * options.grid_step_nm
+                if not radius:
+                    continue
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1),
+                               (-1, -1), (-1, 1), (1, -1), (1, 1)):
+                    if (dx * radius)**2 + (dy * radius)**2 <= options.escape_max_movement_nm**2:
+                        offsets.add((dx * radius, dy * radius))
+            baseline = _fast_score(board, placements, spacing)
             best = placements
             best_rank = (baseline, _hpwl(board, placements))
-            for dx, dy in displacements:
-                offset_x = nm_from_mm(dx)
-                offset_y = nm_from_mm(dy)
+            for offset_x, offset_y in sorted(offsets, key=lambda xy: (abs(xy[0])+abs(xy[1]), xy[1], xy[0])):
                 trial = dict(placements)
                 for item in cluster:
                     current = trial[item]
@@ -1928,7 +1908,7 @@ def _spread_high_pin_components(
                     ))
                 if not placement_solution_is_legal(board, trial, options):
                     continue
-                rank = (_fast_score(board, trial), _hpwl(board, trial))
+                rank = (_fast_score(board, trial, spacing), _hpwl(board, trial))
                 if rank < best_rank:
                     best, best_rank = trial, rank
             if (
@@ -1938,17 +1918,19 @@ def _spread_high_pin_components(
             ):
                 placements = best
                 changed = True
+                moves += 1
         if not changed:
             break
-    return placements
+    return placements, moves
 
 
-def _fast_score(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:
+def _fast_score(board: PhysicalBoard, placements: Mapping[str, Placement],
+                spacing: EscapeSpacingModel | None = None) -> tuple[int, int, int]:
+    channels = (spacing or EscapeSpacingModel(board)).channels(placements)
     return (
-        _hpwl(board, placements)
-        + _high_pin_spacing_penalty(board, placements)
-        + _group_spread(board, placements) // 20
-        + _relative_penalty(board, placements) * 100
+        _relative_penalty(board, placements),
+        sum(c.deficit_nm for c in channels),
+        _hpwl(board, placements) + _group_spread(board, placements) // 20,
     )
 
 
