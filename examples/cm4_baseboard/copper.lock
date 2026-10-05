@@ -251,7 +251,7 @@
       ],
       "module": "github.com/andenore/CopperLib",
       "source": "git:https://github.com/andenore/CopperLib.git",
-      "version": "6cc5eab18488be6de75e4f2e0bfa961aa3999844"
+      "version": "84b246b11781175882fa99008507c9d4e79388b9"
     }
   ],
   "schema": "copperscript.package-lock/v1"
