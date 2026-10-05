@@ -1,7 +1,7 @@
 # Managed footprint dependencies
 
 This isolated project imports reusable resistor/capacitor parts and resolves
-their geometry from the official KiCad 10.0.0 release commit. The resistor uses a
+their geometry from a pinned KiCad Git repository commit. The resistor uses a
 manifest-bound KiCad namespace; the capacitor uses an exact module URL. Both
 share one repository download and one complete content inventory.
 

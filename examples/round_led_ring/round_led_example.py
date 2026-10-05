@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "examples/round_led_ring/board.copper"
 
 
-def make_example(footprint_roots, *, offline=False):
+def make_example(footprint_roots=(), *, offline=False):
     design = compile_design_file(SOURCE, locked=True, offline=offline)
     diagnostics = check(design.electrical)
     if diagnostics:
@@ -122,7 +122,7 @@ def placement_svg(board, *, side=BoardSide.FRONT) -> str:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--footprint-root", action="append", type=Path, required=True)
+    parser.add_argument("--footprint-root", action="append", type=Path, default=[], help="optional local footprint override")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/round-led-ring")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--route", action="store_true", help="attempt package escape and signal routing")

@@ -60370,6 +60370,119 @@
       "module": "github.com/andenore/CopperLib",
       "source": "git:https://github.com/andenore/CopperLib.git",
       "version": "1c1699881d7cc1e63ce64312f09e5a266375b8e0"
+    },
+    {
+      "checksum": "sha256:1ceff53a878c032632fcd305090fff45680dfabc8e3f2778bf1afbea9f374dca",
+      "files": [
+        {
+          "path": "compatibility/ad4134_device.copper",
+          "sha256": "49617ef83d1719b46b8cbd7fc05056f1df958b77a84417d396d5ec935f20da5a",
+          "size": 593
+        },
+        {
+          "path": "compatibility/ad4134bcpz.copper",
+          "sha256": "ef0f042bc603bd1a2d26eee682dec91a63b7ae088f65edc2537b3867df2ef1da",
+          "size": 484
+        },
+        {
+          "path": "compatibility/cyusb4014.copper",
+          "sha256": "54696b92ad9d0c9c8f8fdfff0701220e94ea2828ec8d907d46e5586293960573",
+          "size": 386
+        },
+        {
+          "path": "compatibility/fx10_device.copper",
+          "sha256": "5d9c608bc8934e9eda381342625625ac7c0622fa0fffa636a2745574f1721503",
+          "size": 678
+        },
+        {
+          "path": "compatibility/ice40_device.copper",
+          "sha256": "6fa3edc841a7af72137ddc24fde08bc81b0c66c04e8869e4723483f8abd7cd75",
+          "size": 480
+        },
+        {
+          "path": "compatibility/ice40up5k.copper",
+          "sha256": "fb9f513feafe144b9377f84ab075cf8db4664bf78c47c9f98b91d8ef19e9b182",
+          "size": 332
+        },
+        {
+          "path": "compatibility/iso6721.copper",
+          "sha256": "82d8ce9298e5348b92e9df774b6eab3f3a0690655a51be636ef33ff2d331f438",
+          "size": 417
+        },
+        {
+          "path": "compatibility/iso6721_device.copper",
+          "sha256": "07efbb29e5903e54629aa9dc458e88fe25d996f8971575e3a5605fe6b48d0d26",
+          "size": 563
+        },
+        {
+          "path": "compatibility/nrf52840_device.copper",
+          "sha256": "72bf9dddf448826dbd8f8bf946847a1bff35c3d1562cd1475595319f2c786d15",
+          "size": 821
+        },
+        {
+          "path": "compatibility/nrf52840_qiaa.copper",
+          "sha256": "a0bdbd104d5a62723177ced0f5f3a551737aaada09423f8cbafec5111ad4c812",
+          "size": 340
+        },
+        {
+          "path": "compatibility/opa2197_device.copper",
+          "sha256": "32f87ade3ad18938d16083d0e10e357351d229e5a79b6c3336026af9a714d134",
+          "size": 724
+        },
+        {
+          "path": "compatibility/opa2197id.copper",
+          "sha256": "285e537cfb3ef0e5f55221d1381f9d71963a6713d1a6b819c143366b00ca3bdc",
+          "size": 499
+        },
+        {
+          "path": "nrf52_support/crystal.copper",
+          "sha256": "20ba56a7d295e8f069075dedb6076b6b5bc1f1c7a41564dff758d682bb45035d",
+          "size": 854
+        },
+        {
+          "path": "nrf52_support/led.copper",
+          "sha256": "7a020a2413004b687ccaaef66f96d75f2d7523cedf2cee99f02e0afa4218bacc",
+          "size": 394
+        },
+        {
+          "path": "power/buck_5v_to_3v3.copper",
+          "sha256": "c0f9771888748bebb220dc71b9942858ec4c1ec99fa97c663e88f84cee48bc9a",
+          "size": 1424
+        },
+        {
+          "path": "sensors/bme280.copper",
+          "sha256": "a45df2077853ccdf8f7a530e17b34bfafef63c8a170974e6e4e53ffdd78df465",
+          "size": 850
+        },
+        {
+          "path": "stm32/stm32g0b1_device.copper",
+          "sha256": "9c2f576892c0f60668b90cde9f52ee95d2af688d9f9fd912f5bcf7545731faed",
+          "size": 2432
+        },
+        {
+          "path": "stm32/stm32g0b1cbt6.copper",
+          "sha256": "eb8913333fc9b41fe1172d44168034fa3275acf320142b0bdf161b8f62a1fe24",
+          "size": 754
+        },
+        {
+          "path": "vertical_support/open_drain_driver.copper",
+          "sha256": "81e7bc7da7e71ce94068d1c0bd1534333377ff420b45df4822df68316fc78f58",
+          "size": 499
+        },
+        {
+          "path": "vertical_support/power_tree.copper",
+          "sha256": "be3506387d2785d9bd5b73d2f59f50e46afe0da517d7b4d7ca8e069f36b6a89b",
+          "size": 2964
+        },
+        {
+          "path": "vertical_support/uart_level_shifter.copper",
+          "sha256": "1b618e6e5d46b2cf531a8f0eff9c2cfc54287ad0710429956d03e86bda878705",
+          "size": 1035
+        }
+      ],
+      "module": "github.com/copperscript/examples",
+      "source": "replace:../packages",
+      "version": "v0.1.0"
     }
   ],
   "schema": "copperscript.package-lock/v1"

@@ -44,7 +44,20 @@ def _macro_footprint_digest(footprint, reference, asset):
     module = metadata.get("module_path")
     identity = metadata.get("source_asset")
     if (not module or not identity or metadata.get("resolution") != "managed" or
-            not reference.endswith(".kicad_mod") or "\\" in reference or
+            "\\" in reference or any(p in {"", ".", ".."} for p in reference.split("/"))):
+        return None
+    # A component may select a package asset by its direct URL while the
+    # identity-bound macro records the corresponding logical KiCad namespace.
+    # Require the URL to end in the exact namespace/leaf pair before normalizing
+    # the resolved identity; unrelated files cannot satisfy the binding.
+    if ":" in reference and "/" not in reference:
+        namespace, leaf = reference.split(":", 1)
+        if not namespace or not leaf or not identity.endswith(f"/{namespace}.pretty/{leaf}.kicad_mod"):
+            return None
+        normalized = replace(footprint, name=reference, source_library_id=reference,
+                             metadata={**metadata, "resolved_reference": reference})
+        return footprint_geometry_digest(normalized)
+    if (not reference.endswith(".kicad_mod") or
             any(p in {"", ".", ".."} for p in reference.split("/")) or
             identity != module + "/" + reference):
         return None

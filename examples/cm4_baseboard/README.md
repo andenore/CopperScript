@@ -46,18 +46,16 @@ cooling and surrounding metal in 3D before manufacture.
 ## Run from a CopperScript checkout
 
 At the repository root, install the project once with `uv sync --extra test`.
-KiCad footprint libraries must be installed and supplied explicitly. On Windows:
+The pinned Git footprint providers are resolved from `copper.lock`. On Windows:
 
 ```powershell
 uv run --no-sync copper check examples/cm4_baseboard/board.copper --locked
 uv run --no-sync copper plan-layout examples/cm4_baseboard/board.copper --locked `
   --layers 4 --fab-profile jlcpcb-four-layer `
-  --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints" `
   -o build/cm4-baseboard/cm4_baseboard.kicad_pcb `
   --report build/cm4-baseboard/placement.json
 uv run --no-sync copper edit-mechanical examples/cm4_baseboard/board.copper --locked `
-  --layers 4 --fab-profile jlcpcb-four-layer `
-  --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
+  --layers 4 --fab-profile jlcpcb-four-layer
 ```
 
 The editor shows the locked imported sockets, mounting holes, keepouts and
@@ -73,14 +71,16 @@ make layout
 make edit
 ```
 
-On Linux the shared Makefile uses `/usr/share/kicad/footprints` automatically.
-Set `KICAD_FOOTPRINTS` when KiCad is installed somewhere else. macOS and other
-custom installations should also provide that override.
+The shared Makefile resolves managed footprints from the pinned Git providers.
+Set `KICAD_FOOTPRINTS` only when native KiCad verification needs a nonstandard
+installed footprint path. macOS and other custom installations should also
+provide that override for native checks.
 
 The `Makefile` produces placement drafts under ignored `build/cm4-baseboard`.
 It intentionally does not call this a release/manufacturing build.
 After the initial dependency download, add `--offline` to CLI commands for
-cached builds; the full KiCad footprint library still needs to be installed.
+cached builds. A full KiCad footprint installation is only needed for native
+KiCad verification and routing.
 
 ### Complete routing and ground fill
 

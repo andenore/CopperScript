@@ -80,8 +80,7 @@ New-Item -ItemType Directory -Force build/constrained-placement | Out-Null
 uv run --no-sync python -m copperscript plan-layout examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
   --placement-templates examples/full_vertical/placement_templates.json `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
-  --footprint-root "..\CopperLib\footprints" --candidates 1 `
+  --candidates 1 `
   --report build/constrained-placement/layout-report.json `
   -o build/constrained-placement/placed.kicad_pcb
 ```
@@ -211,8 +210,6 @@ placement/global/critical stages in isolation (after the README setup):
 ```powershell
 uv run --no-sync python -m pcbir.critical_preflight examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
-  --footprint-root "..\CopperLib\footprints" `
   --candidates 1 --placement-candidate candidate-01 `
   --feedback-iterations 1 --router-iterations 5 `
   --report outputs/critical-preflight.json -o outputs/critical-board.kicad_pcb
@@ -277,13 +274,13 @@ this does not qualify impedance or production readiness.
   remain production blockers. The nRF52832-QFAA and STM32G0C1RET6 package maps are complete
   from the Nordic Product Specification v1.9, Table 1 and ST DS13564 Rev 5,
   Table 12 respectively; their support circuits remain incomplete.
-- The installed KiCad 10 plus CopperLib footprint audit resolves all 27
+- The locked Git providers plus CopperLib footprint audit resolves all 27
   selected footprint types, including the TPS62130A buck and its inductor.
   This is package/pad-number coverage, not a board-level electrical or
   assembly qualification. In particular, capacitor dielectric, voltage rating,
   effective capacitance at DC bias, and individual MPNs need review.
 - The orderable GCT SIM socket, Coilcraft USB choke, and U.FL RF connector now
-  resolve to installed KiCad footprints. CopperScript imports the embedded
+  resolve to pinned Git footprint assets. CopperScript imports the embedded
   copper keepouts in the SIM and U.FL footprints and carries them through
   placement, routing, DRC, geometry-bound signoff, and KiCad export.
 - The MAX-M10S footprint is generated in CopperLib from u-blox's published
@@ -387,13 +384,13 @@ python -m copperscript check examples/full_vertical/board.copper
 python -m copperscript power-check examples/full_vertical/board.copper
 python -m copperscript compile examples/full_vertical/board.copper -o board.json
 python -m copperscript export-kicad examples/full_vertical/board.copper -o full_vertical_board.kicad_sch
-python -m copperscript plan-layout examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
-python -m copperscript route-global examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 -o full_vertical.global-route.json
-python -m copperscript route-board examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --candidates 1 --feedback-iterations 1 --router-iterations 5 --pitch-mm 1 --passes 1 --report full_vertical.route-report.json -o full_vertical.routed-draft.kicad_pcb
-python -m copperscript audit-footprints examples/full_vertical/board.copper --locked --offline --footprint-root path/to/kicad-footprints --footprint-root ../CopperLib/footprints --json
+python -m copperscript plan-layout examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --candidates 2 -o full_vertical_placed.kicad_pcb --report full_vertical_layout.json
+python -m copperscript route-global examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --candidates 1 --feedback-iterations 1 --router-iterations 5 -o full_vertical.global-route.json
+python -m copperscript route-board examples/full_vertical/board.copper --locked --offline --layers 4 --fab-profile jlcpcb-four-layer --candidates 1 --feedback-iterations 1 --router-iterations 5 --pitch-mm 1 --passes 1 --report full_vertical.route-report.json -o full_vertical.routed-draft.kicad_pcb
+python -m copperscript audit-footprints examples/full_vertical/board.copper --locked --offline --json
 ```
 
 The last command emits a deterministic JSON coverage list (`passed`,
-`resolved`, `total`, and per-footprint errors) for the separate CopperLib
-generation workflow. All 27 selected footprint types currently resolve with
-KiCad 10 and the sibling CopperLib checkout; a new mismatch makes it fail.
+`resolved`, `total`, and per-footprint errors). Standard geometry comes from
+the pinned KiCad Git repository; legacy connector, terminal-block, inductor
+and transceiver geometry is carried by the pinned CopperLib packages.

@@ -99,12 +99,12 @@ tee values and enclosure/radiation behavior remain unqualified. Copying
 evaluation values does not tune the combined system. The normal full-vertical
 board remains unchanged pending qualification and pipeline integration.
 
-From CopperScript with installed KiCad footprints (CopperLib is URL-resolved):
+From CopperScript with the pinned Git footprint providers (CopperLib is
+URL-resolved):
 
 ```powershell
 uv sync --extra test
-uv run python -m examples.nrf_antenna_macro.hard_macro_trial `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
+uv run python -m examples.nrf_antenna_macro.hard_macro_trial --offline
 ```
 
 Ignored `build/nrf-hard-macro/` contains PCB/project/local library, a diagnostic

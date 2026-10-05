@@ -22,15 +22,15 @@ from pcbir.physical import Point
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def make_trial(footprint_roots, rotation=0):
+def make_trial(footprint_roots=(), rotation=0, *, offline=False):
     source = ROOT / "examples/nrf_antenna_macro/board.copper"
-    electrical = compile_file(source,locked=True)
+    electrical = compile_file(source,locked=True,offline=offline)
     diagnostics = check(electrical)
-    board = resolved_physicalize(electrical, FootprintResolver(source.parent, tuple(footprint_roots), locked=True),
+    board = resolved_physicalize(electrical, FootprintResolver(source.parent, tuple(footprint_roots), locked=True, offline=offline),
         PrototypePhysicalOptions(board_width_mm=50, board_height_mm=40,
                                  copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     scene_path = ROOT / "examples/nrf_antenna_macro/hard_macro.json"
-    board = apply_hard_macro_scene(board, scene_path)
+    board = apply_hard_macro_scene(board, scene_path, offline=offline)
     current = {p.reference: p for p in board.placements}
     # Default assembly mounts at the upper-right corner of a 50x40 mm probe.
     # The 45-degree transform uses a larger centred probe: corner mounting is
@@ -79,12 +79,13 @@ def annotation_svg(board):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--footprint-root", action="append", type=Path, required=True)
+    parser.add_argument("--footprint-root", action="append", type=Path, default=[], help="optional local footprint override")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/nrf-hard-macro")
     parser.add_argument("--rotation", type=int, default=0, choices=(0,45,90,135,180,225,270,315))
+    parser.add_argument("--offline", action="store_true", help="use only an already verified package cache")
     args = parser.parse_args(argv)
     profiler = cProfile.Profile()
-    board = profiler.runcall(make_trial,args.footprint_root,args.rotation)
+    board = profiler.runcall(make_trial,args.footprint_root,args.rotation,offline=args.offline)
     report = run_physical_drc(board, policy=PhysicalDrcPolicy(require_completed_detailed_route=False))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     profiler.dump_stats(args.output_dir / "profile.pstats")

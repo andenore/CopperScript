@@ -20,11 +20,11 @@ board Nrf52CoinCell {
     component X1: nrf52_support.REFERENCE_XTAL_2016 { value = 32MHz; }
 
     // RF component values/geometry are the existing experimental hard macro.
-    component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
-    component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
-    component C_ANT_SERIES: CAPACITOR { value = 1pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
-    component L_ANT_SHUNT: INDUCTOR { value = 2.7nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
-    component L_ANT_SERIES: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
+    component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod"; }
+    component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/footprints/Inductor_SMD.pretty/L_0402_1005Metric.kicad_mod"; }
+    component C_ANT_SERIES: CAPACITOR { value = 1pF; footprint = "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod"; }
+    component L_ANT_SHUNT: INDUCTOR { value = 2.7nH; footprint = "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/footprints/Inductor_SMD.pretty/L_0402_1005Metric.kicad_mod"; }
+    component L_ANT_SERIES: INDUCTOR { value = 3.9nH; footprint = "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/footprints/Inductor_SMD.pretty/L_0402_1005Metric.kicad_mod"; }
 
     // Nordic QFAA LDO reference: DEC2 is unconnected (C6 not mounted),
     // DCC is unconnected and firmware MUST leave the DC/DC regulator disabled.

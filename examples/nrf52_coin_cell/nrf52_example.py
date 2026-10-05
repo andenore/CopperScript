@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "examples/nrf52_coin_cell/board.copper"
 
 
-def make_example(footprint_roots, *, offline=False):
+def make_example(footprint_roots=(), *, offline=False):
     electrical = compile_file(SOURCE, locked=True, offline=offline)
     diagnostics = check(electrical)
     if diagnostics:
@@ -53,7 +53,7 @@ def make_example(footprint_roots, *, offline=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--footprint-root", action="append", type=Path, required=True)
+    parser.add_argument("--footprint-root", action="append", type=Path, default=[], help="optional local footprint override")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/nrf52-coin-cell")
     parser.add_argument("--route", action="store_true", help="run the complete standard routing pipeline")
     parser.add_argument("--offline", action="store_true", help="use only an already verified package cache")

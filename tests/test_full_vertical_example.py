@@ -47,12 +47,8 @@ def test_fixed_floorplan_is_legal_on_installed_footprints_and_preserves_rf_macro
     from pcbir.placement import placement_solution_is_legal, transformed_footprint_polygon, transformed_pad_position
     from pcbir.placement_templates import apply_placement_templates
 
-    footprints = Path("C:/Program Files/KiCad/10.0/share/kicad/footprints")
-    library = ROOT.parent / "CopperLib"
-    if not footprints.is_dir() or not library.is_dir():
-        pytest.skip("optional mechanical regression requires installed KiCad and sibling CopperLib")
-    physical = resolved_physicalize(compile_file(EXAMPLE),
-        FootprintResolver(EXAMPLE.parent, (footprints, library / "footprints")),
+    physical = resolved_physicalize(compile_file(EXAMPLE, locked=True, offline=True),
+        FootprintResolver(EXAMPLE.parent, (), locked=True, offline=True),
         PrototypePhysicalOptions(copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     physical = apply_placement_templates(physical, EXAMPLE.parent / "placement_templates.json")
     refs = set(FIXED_FLOORPLAN) | {"C_BT_MATCH", "L_BT_MATCH"}
@@ -229,7 +225,7 @@ def test_stm32g0c1re_standard_lqfp64_bonds_are_complete() -> None:
 def test_gct_nano_sim_socket_uses_c7_for_io_and_connects_shell() -> None:
     board = compile_file(EXAMPLE)
     part = board.library["gct_sim.SIM8060_6_0_14_00_A"]
-    assert part.footprints == ("Connector_Card:nanoSIM_GCT_SIM8060-6-0-14-00",)
+    assert part.footprints == ("github.com/andenore/CopperLib/packages/parts/gct/sim8060/footprints/Connector_Card.pretty/nanoSIM_GCT_SIM8060-6-0-14-00.kicad_mod",)
     assert part.pins["VPP"].number == "6"
     assert part.pins["IO"].number == "7"
     assert part.pins["SHIELD"].number == "SH"
@@ -268,7 +264,7 @@ def test_usb_c_power_entry_detects_3a_source_and_defaults_modem_off() -> None:
     board = compile_file(EXAMPLE)
     part = board.library["gct_usb.GCT_USB4135_GF_A"]
     assert part.footprints == (
-        "Connector_USB:USB_C_Receptacle_GCT_USB4135-GF-A_6P_TopMnt_Horizontal",
+        "github.com/andenore/CopperLib/packages/parts/gct/usb4135/footprints/Connector_USB.pretty/USB_C_Receptacle_GCT_USB4135-GF-A_6P_TopMnt_Horizontal.kicad_mod",
     )
     assert {name: pin.number for name, pin in part.pins.items()} == {
         "CC1": "A5", "VBUS_A": "A9", "GND_A": "A12",
@@ -319,7 +315,7 @@ def test_modem_rail_uses_real_buck_power_stage() -> None:
     assert {pin.number for pin in buck.pins.values()} == {
         str(number) for number in range(1, 18)
     }
-    assert inductor.footprints == ("Inductor_SMD:L_Coilcraft_XAL4020-XXX",)
+    assert inductor.footprints == ("github.com/andenore/CopperLib/packages/parts/coilcraft/xal4020/footprints/Inductor_SMD.pretty/L_Coilcraft_XAL4020-XXX.kicad_mod",)
     assert {("PWR/U_MODEM", "SW_1"), ("PWR/U_MODEM", "SW_2"),
             ("PWR/U_MODEM", "SW_3"), ("PWR/L_MODEM", "A")} <= nets["PWR/MODEM_SW"]
     assert {("PWR/L_MODEM", "B"), ("PWR/U_MODEM", "VOS"),

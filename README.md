@@ -42,8 +42,8 @@ uv run copper edit-mechanical examples/mechanical_editor_demo/board.copper --foo
 ```
 
 The tool opens a loopback-only browser UI; Ctrl+C stops the service.
-Use `--no-browser` to open its printed URL yourself. Footprints must resolve from
-explicit roots or pinned library assets; proxy inspection is opt-in only.
+Use `--no-browser` to open its printed URL yourself. Footprints may resolve from
+explicit roots or pinned Git library assets; proxy inspection is opt-in only.
 Scroll the wheel to zoom under the pointer; hold the right mouse button to pan.
 Ordinary left-drags apply after checking (with Undo). Numeric poses and rough
 auto-placement remain explicit previews; apply or discard them before more edits.
@@ -59,7 +59,7 @@ files. They create no electrical connections. Try the fictional carrier demo
 
 ```powershell
 uv run copper check examples/mechanical_profile_project/board.copper --locked
-uv run copper edit-mechanical examples/mechanical_profile_project/board.copper --locked --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
+uv run copper edit-mechanical examples/mechanical_profile_project/board.copper --locked
 ```
 
 For a real host pattern, see the [CM4 baseboard example](examples/cm4_baseboard/README.md).
@@ -90,7 +90,6 @@ Its circle, rear ground pour and all fixed placements are declared directly in
 
 ```powershell
 uv run copper export-kicad-pcb examples/round_led_ring/board.copper --locked `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   -o build/round-led-ring/round_led_ring.kicad_pcb
 ```
 
@@ -98,7 +97,7 @@ The optional example wrapper adds placement previews, profiling and native check
 
 ```powershell
 uv run python -m examples.round_led_ring.round_led_example `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
+  --offline
 ```
 
 Output: ignored `build/round-led-ring/`; default is a placed, unrouted inspection
@@ -124,7 +123,7 @@ the pinned URL dependency automatically:
 
 ```powershell
 uv run python -m examples.nrf_antenna_macro.hard_macro_trial `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
+  --offline
 ```
 
 Output: ignored `build/nrf-hard-macro/`. This is an RF-only geometry probe,
@@ -135,8 +134,7 @@ SWD connector, two LEDs, two buttons and the radio support circuit:
 
 ```powershell
 uv run python -m copperscript check examples/nrf52_coin_cell/board.copper --locked
-uv run python -m examples.nrf52_coin_cell.nrf52_example `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
+uv run python -m examples.nrf52_coin_cell.nrf52_example --offline
 ```
 
 Output: `build/nrf52-coin-cell/`. The RF macro is locked and pre-routed;
@@ -158,7 +156,7 @@ then reproduce without network access:
 ```console
 python -m copperscript check examples/full_vertical/board.copper --locked
 python -m copperscript check examples/full_vertical/board.copper --locked --offline
-python -m copperscript audit-footprints examples/full_vertical/board.copper --locked --offline --footprint-root path/to/kicad-footprints
+python -m copperscript audit-footprints examples/full_vertical/board.copper --locked --offline
 ```
 
 Compile a valid design to normalized JSON IR:
@@ -386,9 +384,9 @@ does not imply routing success. No Gerbers are generated.
 
 The generic runner uses the current Python/uv environment and downloads the locked
 dependencies if uncached; it never updates `copper.lock`. Set `RESOLVE_ARGS="--locked --offline"`
-to prohibit fetching. It discovers
-`kicad-cli` on PATH or the standard Windows KiCad 10 installation. Footprints
-use `KICAD10_FOOTPRINT_DIR`, the KiCad installation, or `/usr/share/kicad/footprints`.
+to prohibit fetching. It discovers `kicad-cli` on PATH or the standard Windows
+KiCad 10 installation. Managed Git footprints are resolved from the lock; the
+optional `KICAD_FOOTPRINTS` setting is used for native KiCad verification.
 Override paths when needed, preview without routing using `BUILD_ARGS=--dry-run`, or
 select a new/empty directory inside `build/`:
 
@@ -427,14 +425,12 @@ For the equivalent explicit CLI invocation, adjust the KiCad paths if your
 installation is elsewhere. From the CopperScript repository root, run:
 
 ```powershell
-$kicadFootprints = "C:\Program Files\KiCad\10.0\share\kicad\footprints"
 $kicadCli = "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe"
 New-Item -ItemType Directory -Force "build/full-vertical" | Out-Null
 
 uv run --no-sync python -m copperscript route-board examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
   --placement-templates examples/full_vertical/placement_templates.json `
-  --footprint-root $kicadFootprints `
   --candidates 1 --placement-candidate candidate-01 `
   --feedback-iterations 1 --router-iterations 5 --critical-feedback-trials 0 `
   --pitch-mm 1 --passes 2 --search-budget 20000 `

@@ -12,15 +12,9 @@ FAB_PROFILE ?= generic
 RESOLVE_ARGS ?= --locked
 PROFILE ?= cprofile
 KICAD_CLI ?=
-# KiCad's standard Linux install path makes physical targets usable without
-# repeating the footprint argument. Keep the environment variable and an
-# explicit KICAD_FOOTPRINTS override authoritative for other installations.
+# Optional native KiCad path for independent refill/DRC; CopperScript resolves
+# managed footprints from the Git dependencies declared by each example.
 KICAD_FOOTPRINTS ?= $(KICAD10_FOOTPRINT_DIR)
-ifeq ($(strip $(KICAD_FOOTPRINTS)),)
-  ifeq ($(shell uname -s 2>/dev/null),Linux)
-    KICAD_FOOTPRINTS := /usr/share/kicad/footprints
-  endif
-endif
 PHYSICAL_ARGS ?=
 PLACEMENT_TEMPLATES ?=
 HARD_MACRO ?=
@@ -35,7 +29,6 @@ KICAD_PYTHON ?= /usr/bin/python3
 
 _paths = $(if $(strip $(KICAD_CLI)),--kicad-cli "$(KICAD_CLI)") $(if $(strip $(KICAD_FOOTPRINTS)),--kicad-footprints "$(KICAD_FOOTPRINTS)")
 _physical_common = --layers $(LAYERS) --fab-profile $(FAB_PROFILE) \
- $(if $(strip $(KICAD_FOOTPRINTS)),--footprint-root "$(KICAD_FOOTPRINTS)") \
  $(if $(strip $(PLACEMENT_TEMPLATES)),--placement-templates "$(PLACEMENT_TEMPLATES)") \
  $(if $(strip $(HARD_MACRO)),--hard-macro "$(HARD_MACRO)")
 _physical = $(_physical_common) $(PHYSICAL_ARGS)

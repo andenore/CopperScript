@@ -10,7 +10,7 @@ remain strings in electrical IR; geometry is resolved only for physical flows.
   from the consuming project's `require` entry, fetch once into `.copper-cache`,
   and verify the same complete `copper.lock` inventory used for reusable parts.
 - Add `footprint-library NAME MODULE/DIRECTORY` in `copper.mod`. For example,
-  `footprint-library Resistor_SMD gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty`
+  `footprint-library Resistor_SMD github.com/KiCad/kicad-footprints/Resistor_SMD.pretty`
   resolves `Resistor_SMD:R_0402_1005Metric` without a machine-specific root.
   Require a matching module requirement. Duplicate or malformed bindings fail.
 - Resolve relative `.kicad_mod` paths in imported parts and modules from their
@@ -77,5 +77,7 @@ escape hatch, with their provenance and locked-mode limits visible.
 - Rebased over exact mechanical paths/slots (`4873543`); integration checks:
   **248 passed, 13 optional skips**, covering footprints, CLI, packages, rigid
   macros, mechanical curves/anchors/assembly, routing policy and build helpers.
-- Implementation and integration are complete. The guide and example are ready;
-  asynchronous Linux CI confirms the pushed Make registration assertion.
+- Implementation and integration are complete. The examples now pin the KiCad
+  footprint repository through Git, and legacy footprints absent upstream are
+  bundled with their owning CopperLib packages. Root, CM4 and managed examples
+  each carry a generated lockfile and pass locked offline resolution.

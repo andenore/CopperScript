@@ -1,5 +1,5 @@
 module example/managed-footprints
 
-// Official KiCad 10.0.0 footprint library, pinned to the release commit.
-require gitlab.com/kicad/libraries/kicad-footprints eff413fd489b7ade27fc108781a95c4b28ccf0b7
-footprint-library Resistor_SMD gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty
+// Official KiCad footprint library, pinned to a complete Git revision.
+require github.com/KiCad/kicad-footprints 7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd
+footprint-library Resistor_SMD github.com/KiCad/kicad-footprints/Resistor_SMD.pretty

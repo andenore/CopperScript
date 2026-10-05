@@ -22,30 +22,29 @@ Bind that namespace in the consuming project's `copper.mod`:
 
 ```text
 module example/my-board
-require gitlab.com/kicad/libraries/kicad-footprints eff413fd489b7ade27fc108781a95c4b28ccf0b7
-footprint-library Resistor_SMD gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty
+require github.com/KiCad/kicad-footprints 7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd
+footprint-library Resistor_SMD github.com/KiCad/kicad-footprints/Resistor_SMD.pretty
 ```
 
-That revision is the official KiCad 10.0.0 footprint release commit. The binding
+That revision is a complete pinned KiCad footprint repository commit. The binding
 selects exactly `Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod` inside that
 revision. Repeat `footprint-library` for each namespace needed by the project;
 all bindings to the same module share its download and inventory. A binding may
 also select the module root. Duplicate namespace bindings, malformed paths and
 bindings without matching `require` entries are errors.
 
-Current official KiCad libraries are hosted on
-[GitLab](https://gitlab.com/kicad/libraries/kicad-footprints). The former
-[GitHub repository](https://github.com/KiCad/kicad-footprints) is archived.
-Both hosts are supported by the package transport; GitLab subgroup paths are
-supported. Choose an explicit published tag or full commit SHA in `require`.
-The repository itself does not need to contain CopperScript source files.
+The example uses the [KiCad footprint repository on GitHub](https://github.com/KiCad/kicad-footprints)
+and pins a full commit SHA. GitLab repositories and subgroup paths are also
+supported by the package transport. Choose an explicit published tag or full
+commit SHA in `require`; the repository itself does not need to contain
+CopperScript source files.
 
 ## Exact module asset URLs
 
 Instead of a namespace binding, set an exact asset path in a part or component:
 
 ```copper
-footprint = "https://gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod";
+footprint = "https://github.com/KiCad/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod";
 ```
 
 The equivalent path without `https://` also works. The project's `require`

@@ -29,13 +29,12 @@ not DRC exclusions or a claim of a qualified fabrication process.
 
 ## Reproduce
 
-From the repository root, with installed KiCad footprints (PowerShell):
+From the repository root, with the pinned Git footprint providers (PowerShell):
 
 Use the generic compiler directly (no example builder required):
 
 ```powershell
 uv run copper export-kicad-pcb examples/round_led_ring/board.copper --locked `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   -o build/round-led-ring/round_led_ring.kicad_pcb
 ```
 
@@ -44,7 +43,6 @@ The optional repository-only wrapper adds previews, profiling and native checks:
 ```powershell
 uv run python -m copperscript check examples/round_led_ring/board.copper --locked
 uv run python -m examples.round_led_ring.round_led_example `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe"
 ```
 
@@ -58,7 +56,6 @@ To attempt package escapes and detailed signal routing with native ground refill
 
 ```powershell
 uv run python -m examples.round_led_ring.round_led_example --route `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
   --output-dir build/round-led-ring-routed
 ```

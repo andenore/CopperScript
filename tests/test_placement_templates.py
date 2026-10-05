@@ -102,7 +102,7 @@ def test_cli_physical_paths_apply_templates_once(command, tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("rotation", [0, 45])
-def test_source_bound_nordic_matching_routes_on_installed_footprints(rotation):
+def test_source_bound_nordic_matching_routes_on_managed_footprints(rotation):
     from pathlib import Path
     from pcbir import compile_file, resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
     from pcbir.physical import PhysicalNet, CopperLayer
@@ -111,12 +111,8 @@ def test_source_bound_nordic_matching_routes_on_installed_footprints(rotation):
     from pcbir.drc import run_physical_drc
 
     root = Path(__file__).resolve().parents[1]
-    footprints = Path("C:/Program Files/KiCad/10.0/share/kicad/footprints")
-    library = root.parent / "CopperLib"
-    if not footprints.is_dir() or not library.is_dir():
-        pytest.skip("optional real-reference regression requires installed KiCad and sibling CopperLib")
-    original = resolved_physicalize(compile_file(root / "examples/full_vertical/board.copper"),
-        FootprintResolver(root / "examples", (footprints, library / "footprints")),
+    original = resolved_physicalize(compile_file(root / "examples/full_vertical/board.copper", locked=True, offline=True),
+        FootprintResolver(root / "examples", (), locked=True, offline=True),
         PrototypePhysicalOptions(copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     refs = {"U_NRF", "C_BT_MATCH", "L_BT_MATCH"}
     poses = tuple(item for item in original.placements if item.reference in refs)

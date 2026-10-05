@@ -15,16 +15,14 @@ documented in [internal pad connectivity](internal-pad-connectivity.md). They
 remove redundant airwires without inventing PCB copper; bare-board continuity
 and installed-component continuity remain distinct.
 
-CopperLib parts, footprints and macro assets download automatically from its
-pinned GitHub revision through `copper.mod`/`copper.lock`. No library checkout or
-lock refresh is required. Install KiCad footprints, then run
-from CopperScript's root (PowerShell):
+CopperLib parts, footprints and macro assets download automatically from their
+pinned GitHub revisions through `copper.mod`/`copper.lock`. No library checkout or
+lock refresh is required. Run from CopperScript's root (PowerShell):
 
 ```powershell
 uv sync --extra test
 uv run python -m copperscript check examples/nrf52_coin_cell/board.copper --locked
-uv run python -m examples.nrf52_coin_cell.nrf52_example `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints"
+uv run python -m examples.nrf52_coin_cell.nrf52_example --offline
 ```
 
 `build/nrf52-coin-cell/` is ignored by Git. It contains a self-contained KiCad
@@ -53,7 +51,6 @@ placement/global/package-access/critical/plane/detailed pipeline:
 
 ```powershell
 uv run python -m examples.nrf52_coin_cell.nrf52_example --route `
-  --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
   --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
   --output-dir build/nrf52-routed
 ```

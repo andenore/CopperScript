@@ -222,7 +222,7 @@ def test_example_makefile_shares_root_recipes(make):
     assert result.returncode == 0 and "pcbir.build" in result.stdout
 
 
-def test_linux_edit_uses_standard_kicad_footprints_by_default(make):
+def test_linux_edit_uses_managed_footprints_by_default(make):
     if platform.system() != "Linux":
         pytest.skip("Linux footprint default is platform-specific")
     environment = os.environ.copy()
@@ -231,7 +231,7 @@ def test_linux_edit_uses_standard_kicad_footprints_by_default(make):
     result = subprocess.run([make, "-n", "EXAMPLE=cm4", "edit"], cwd=ROOT,
                             text=True, capture_output=True, env=environment)
     assert result.returncode == 0, result.stderr
-    assert '--footprint-root "/usr/share/kicad/footprints"' in result.stdout
+    assert "--footprint-root" not in result.stdout and "--locked" in result.stdout
 
 
 def test_edit_does_not_receive_layout_only_dimensions(make):

@@ -379,8 +379,8 @@ It can also use KiCad's `Library:Footprint` identifier form. Bind the library
 to a versioned provider in the consuming project's `copper.mod`:
 
 ```text
-require gitlab.com/kicad/libraries/kicad-footprints eff413fd489b7ade27fc108781a95c4b28ccf0b7
-footprint-library Resistor_SMD gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty
+require github.com/KiCad/kicad-footprints 7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd
+footprint-library Resistor_SMD github.com/KiCad/kicad-footprints/Resistor_SMD.pretty
 ```
 
 `Resistor_SMD:R_0402_1005Metric` then resolves its exact footprint through the
@@ -388,7 +388,7 @@ managed cache and lock without `--footprint-root`. A part or component may also
 name an exact `.kicad_mod` module asset URL, with or without `https://`:
 
 ```copper
-footprint = "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod";
+footprint = "github.com/KiCad/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod";
 ```
 
 Relative `.kicad_mod` paths authored in imported parts/modules resolve from the
