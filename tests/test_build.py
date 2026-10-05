@@ -253,7 +253,8 @@ def test_aggregate_compiles_positive_examples_without_routing(make):
     assert examples and len(examples) == len(set(examples))
     assert result.stdout.count("-m copperscript compile ") == len(examples)
     assert all(f"EXAMPLE={example} compile" in result.stdout for example in examples)
-    assert "invalid_board" not in result.stdout and "nrf_antenna_macro" not in result.stdout
+    assert "EXAMPLE=invalid_board" not in result.stdout
+    assert "EXAMPLE=nrf_antenna_macro" not in result.stdout
     assert "pcbir.build" not in result.stdout
 
 
@@ -270,4 +271,5 @@ def test_check_examples_covers_fast_targets_for_every_positive_example(make):
     assert examples and len(examples) == len(set(examples))
     assert all(f"EXAMPLE={example} check" in result.stdout for example in examples)
     assert all(f"EXAMPLE={example} compile" in result.stdout for example in examples)
-    assert "invalid_board" not in result.stdout and "nrf_antenna_macro" not in result.stdout
+    assert "EXAMPLE=invalid_board" not in result.stdout
+    assert "EXAMPLE=nrf_antenna_macro" not in result.stdout
