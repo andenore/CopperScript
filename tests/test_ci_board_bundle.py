@@ -36,7 +36,8 @@ def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
     original = b'{"modules": []}\n'
     (tmp_path / "copper.lock").write_bytes(original)
     for name in ("full_vertical/board.copper", "full_vertical/placement_templates.json",
-                 "nrf52_coin_cell/board.copper", "nrf_antenna_macro/hard_macro.json"):
+                 "nrf52_coin_cell/board.copper", "nrf_antenna_macro/hard_macro.json",
+                 "cm4_baseboard/board.copper"):
         path = tmp_path / "examples" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fixture\n")
@@ -49,7 +50,10 @@ def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
     monkeypatch.setattr(pcbir.compiler, "compile_file", lambda source, **kw: calls.append((source, kw)))
     CI.prepare(tmp_path / "build/run")
     assert (tmp_path / "copper.lock").read_bytes() == original
-    assert all(kwargs == {"locked": True, "offline": True} for _, kwargs in calls)
+    assert all(kwargs["locked"] is True for _, kwargs in calls)
+    assert sum(kwargs["offline"] is False for _, kwargs in calls) == 1
+    assert sum(path.name == "board.copper" and "cm4_baseboard" in path.parts
+               for path, _ in calls) == 2
     provenance = json.loads((tmp_path / "build/run/provenance.json").read_text())
     assert provenance["library_source"] == "https://github.com/andenore/CopperLib.git"
     assert not provenance["lock_modified"]
