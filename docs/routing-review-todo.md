@@ -311,6 +311,20 @@ requirements remain separate from route completion.
 
 ## First implementation pass
 
+### Ordinary-track stub regression (2026-10-05)
+
+- [x] Reproduce accepted-path backtracking and overlapping access tails.
+- [x] Erase physical-node excursions before copper commitment, and prune owned
+  unanchored track leaves without severing terminal/interior/via contacts.
+- [x] Preserve input occurrences, hard-macro copper and reusable boundary proofs;
+  derive reported ordinary copper counts/lengths from the accepted geometry.
+- [x] Verify focused routing/ownership regressions and independent KiCad DRC.
+- [ ] Reroute and review full-vertical layers using the new cleanup. The running
+  `0919f0b` timing experiment uses the earlier implementation.
+
+The mechanism and conservative limits are documented in
+[route-stub-cleanup.md](route-stub-cleanup.md).
+
 R1–R4 are implemented with focused regression tests. Subset cleanup filters
 its access mapping, requires explicit via ownership before removing input vias,
 and preserves fanout on failed repairs. Local acceptance checks unaffected

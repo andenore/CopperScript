@@ -14,9 +14,10 @@ from math import hypot, isqrt
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
-from .geometry import (RoundedConvexShape, point_on_segment, point_in_polygon,
+from .geometry import (RoundedConvexShape, orientation, point_on_segment, point_in_polygon,
                        segment_in_polygon, shape_distance_squared)
 from .route_style import chamfer_ordinary_corners
+from .route_cleanup import prune_track_stubs
 from .mechanical import point_in_material, shape_in_board
 from .physical import (
     BoardSide,
@@ -499,11 +500,27 @@ def route_detailed(
         vias=all_vias,
         metadata=MappingProxyType(metadata),
     )
+    # Report accepted copper, not pre-cleanup tentative segments. Occurrence
+    # subtraction preserves the established immutable-prefix metric convention.
+    actual_tracks = Counter(routed.tracks) - Counter(board.tracks)
+    actual_vias = Counter(routed.vias) - Counter(board.vias)
+    net_results = tuple(replace(
+        item.result,
+        track_count=sum(count for track, count in actual_tracks.items() if track.net == item.result.net),
+        via_count=sum(count for via, count in actual_vias.items() if via.net == item.result.net),
+        length_nm=sum(round(hypot(track.end.x_nm - track.start.x_nm,
+                                 track.end.y_nm - track.start.y_nm)) * count
+                      for track, count in actual_tracks.items() if track.net == item.result.net),
+    ) for item in best.nets)
+    metrics = replace(metrics,
+        track_count=sum(item.track_count for item in net_results),
+        via_count=sum(item.via_count for item in net_results),
+        total_length_nm=sum(item.length_nm for item in net_results))
     fingerprint = _fingerprint(global_route.routing_fingerprint, routed, metrics)
     return DetailedRoutingResult(
         DetailedRoutingStatus.SUCCESS if success else DetailedRoutingStatus.PARTIAL,
         routed,
-        _with_search_policy(tuple(item.result for item in best.nets), zone_nets,
+        _with_search_policy(net_results, zone_nets,
                             options, best.metrics, neutral_metrics, False),
         metrics,
         len(board.tracks),
@@ -617,6 +634,27 @@ def _prune_fanout_copper(
     vias = tuple(via for via in vias
                  if (via.net, via.position) not in prunable
                  or len(used_layers[(via.net, via.position)]) >= 2)
+    # A successful area path can meet a lead-in before its old anchor, leaving
+    # an overlapping out-and-back tail. Cleanup owns new copper and explicitly
+    # supplied fanout occurrences only; identical locked occurrences survive.
+    locked = Counter(board.tracks)
+    reserved_nets = {net_by_pad[pad] for pad, anchor in accesses.items()
+                     if isinstance(anchor, RoutingAccess)}
+    for track in created_tracks or ():
+        if track.net in successful_nets and track.net not in reserved_nets and locked[track]:
+            locked[track] -= 1
+    immutable, mutable = [], []
+    for track in tracks:
+        if locked[track]:
+            locked[track] -= 1
+            immutable.append(track)
+        elif track.net in successful_nets:
+            mutable.append(track)
+        else:
+            immutable.append(track)
+    tracks = tuple((*immutable, *prune_track_stubs(
+        replace(board, tracks=tuple(immutable), vias=vias), tuple(mutable),
+    )))
     return tracks, vias
 
 
@@ -1061,6 +1099,10 @@ def _route_net(
         if found is None:
             return _failed(name, f"detailed search cannot reach {target_entry[0].component}.{target_entry[0].pad}")
         path, root, target = found
+        # Heading-aware/weighted searches can revisit a physical node with a
+        # different state. A reconstructed walk is not necessarily a simple
+        # copper path; erase its closed excursions before committing edges.
+        path = _erase_path_loops(path)
         internal_root = pending_internal_accesses.pop(root, None)
         if internal_root is not None:
             chosen_accesses.append(internal_root)
@@ -1123,8 +1165,6 @@ def _route_net(
                     *via_span,
                 )
             )
-    for first, second in route_edges:
-        resources.update(_edge_resources(grid, first, second))
     for _, pad_position, access in chosen_accesses:
         access_position = grid.point(access)
         escape = _access_path(board, clearance, name, pad_position, access_position,
@@ -1132,6 +1172,21 @@ def _route_net(
         if escape is None:
             return _failed(name, "selected pin access no longer has a legal octilinear path")
         tracks.extend(escape)
+    unpruned = tuple(tracks)
+    tracks = list(prune_track_stubs(board, unpruned, tuple(vias), clearance=clearance))
+    copper_changed = Counter(tracks) != Counter(unpruned)
+    for first, second in route_edges:
+        if copper_changed and first.layer_index == second.layer_index:
+            a, b = grid.point(first), grid.point(second)
+            axis = "x_nm" if a.x_nm != b.x_nm else "y_nm"
+            low, high = sorted((getattr(a, axis), getattr(b, axis)))
+            if not any(track.layer == grid.layers[first.layer_index]
+                       and orientation(a, b, track.start) == orientation(a, b, track.end) == 0
+                       and max(low, min(getattr(track.start, axis), getattr(track.end, axis)))
+                       < min(high, max(getattr(track.start, axis), getattr(track.end, axis)))
+                       for track in tracks):
+                continue  # Retired tails must not keep phantom congestion usage.
+        resources.update(_edge_resources(grid, first, second))
     tracks = list(_merge_collinear_tracks(tracks))
     tracks = list(chamfer_ordinary_corners(
         board, tuple(tracks), tuple(vias), clearance,
@@ -1455,6 +1510,31 @@ def _search_once(
         current = parent
     edges.reverse()
     return tuple(edges), current[0], final[0]
+
+
+def _erase_path_loops(
+    path: tuple[tuple[DetailedNode, DetailedNode, int], ...],
+) -> tuple[tuple[DetailedNode, DetailedNode, int], ...]:
+    """Erase physical-node excursions in linear time, retaining layer identity."""
+    if not path:
+        return path
+    nodes = [path[0][0]]
+    positions = {nodes[0]: 0}
+    edges = []
+    for first, second, outside in path:
+        if first != nodes[-1]:
+            raise ValueError("detailed path is not a continuous walk")
+        position = positions.get(second)
+        if position is not None:
+            for node in nodes[position + 1:]:
+                del positions[node]
+            del nodes[position + 1:]
+            del edges[position:]
+        else:
+            edges.append((first, second, outside))
+            positions[second] = len(nodes)
+            nodes.append(second)
+    return tuple(edges)
 
 
 def _compact_path(

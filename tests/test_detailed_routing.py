@@ -873,8 +873,9 @@ def test_detailed_router_connects_distinct_pads_snapped_to_one_grid_node() -> No
     )
 
     assert result.status is DetailedRoutingStatus.SUCCESS
-    # The off-axis access now uses two octilinear legs, not an oblique chord.
-    assert len(result.board.tracks) == 3
+    # The off-axis access stays octilinear. Its old unused shared-grid tail
+    # is pruned rather than retained as a third segment.
+    assert len(result.board.tracks) == 2
     assert all(detailed_module._octilinear(track.start, track.end) for track in result.board.tracks)
     assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
         "DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET",
