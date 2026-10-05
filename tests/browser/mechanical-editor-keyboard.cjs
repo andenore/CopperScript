@@ -43,10 +43,16 @@ const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||"playwright");
     await page.keyboard.press("f");assert.equal(await board.getAttribute("viewBox"),fit);
     for(let i=0;i<7;i++)await page.keyboard.press("+");
     await page.waitForFunction(()=>document.querySelectorAll(".pad-label").length>0);
+    const pad=page.locator('[data-reference="R1"] .pad-hit').first();
+    const padLabel=pad.locator(".pad-label");
+    assert.equal(await padLabel.evaluate(element=>getComputedStyle(element).visibility),"hidden");
+    await pad.hover();
+    await page.waitForFunction(()=>getComputedStyle(document.querySelector('[data-reference="R1"] .pad-label')).visibility==="visible");
+    assert(Number(await padLabel.getAttribute("font-size"))>0);
     await page.keyboard.press("f");
     await page.keyboard.press("Escape");assert.equal(await page.locator("#measurement").innerText(),"No measurement");
     if(screenshot)await page.screenshot({path:screenshot,fullPage:true});
     assert.deepEqual(errors,[]);assert.deepEqual(fs.readFileSync(source),original);
-    console.log("PASS: accessible footprint roles, Shift multi-select/group drag, arrows/Shift snaps, forward/reverse rotation, lock/unlock, zoomed pad labels, Enter/focus, keyboard zoom/fit/Escape; source unchanged");
+    console.log("PASS: accessible footprint roles, Shift multi-select/group drag, arrows/Shift snaps, forward/reverse rotation, lock/unlock, hover pad labels, Enter/focus, keyboard zoom/fit/Escape; source unchanged");
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -23,8 +23,9 @@ keeping manufacturing legality outside the temporary preview path.
 6. **Origin-correct footprint rendering** — derive the editor body envelope from
    local graphics/pads for offset-origin connectors; retain a safe proxy
    fallback.
-7. **Zoom-aware pad labels** — expose optional electrical pin names and render
-   labels only at inspection zoom to avoid board-scale clutter.
+7. **Pad labels** — expose optional electrical pin names, keep labels hidden
+   until the corresponding pad is hovered, and size them in pad/user
+   coordinates so they fit the land at every zoom level.
 8. **Keyboard parity** — add lock/unlock, reverse rotation, side flip, undo,
    redo, and Home-to-fit shortcuts; update the accessibility help text.
 9. **Verification** — add unit regressions for offset bodies and relative
@@ -44,5 +45,6 @@ keeping manufacturing legality outside the temporary preview path.
   navigator that cycles through warning records.
 * Add a visual measurement of the actual selected constraint target pads, not
   only component-level warning markers.
-* Make the pad-label threshold a user preference while retaining a deterministic
-  default for automated screenshots.
+* Add an optional pad-label display preference if a future inspection workflow
+  needs labels for an entire package at once; hover remains the uncluttered
+  default.

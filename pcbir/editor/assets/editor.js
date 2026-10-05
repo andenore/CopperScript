@@ -78,6 +78,26 @@ function shape(data, cls) {
   if (spine.length === 2) {attrs.fill="none"; return node("polyline",attrs);}
   return node("polygon",attrs);
 }
+function padLabelLayout(pad,label) {
+  const spine=pad.shape?.spine||[], radius=mm(Number(pad.shape?.radius_nm)||0);
+  const xs=spine.map(point=>mm(point[0])), ys=spine.map(point=>mm(point[1]));
+  const width=Math.max(0.02,(Math.max(...xs)-Math.min(...xs))+2*radius);
+  const height=Math.max(0.02,(Math.max(...ys)-Math.min(...ys))+2*radius);
+  const inset=Math.min(0.04,width*.12,height*.12);
+  const availableWidth=Math.max(0.01,width-2*inset), availableHeight=Math.max(0.01,height-2*inset);
+  // SVG text without a unit is measured in the same user coordinates as the
+  // pad geometry.  It therefore zooms with the pad instead of staying at a
+  // browser/CSS-pixel size.  Reserve vertical room for glyph ascenders and
+  // compress only long names horizontally when they would exceed the land.
+  const fontSize=Math.max(0.01,Math.min(0.55,availableHeight*.72));
+  const naturalWidth=label.length*fontSize*.62;
+  const attrs={"font-size":fontSize.toFixed(3)};
+  if(naturalWidth>availableWidth) {
+    attrs.textLength=availableWidth.toFixed(3);
+    attrs.lengthAdjust="spacingAndGlyphs";
+  }
+  return attrs;
+}
 function resetFit() {
   if (!scene()) return;
   const b = scene().bounds.map(mm), margin = 4;
@@ -88,10 +108,6 @@ function render() {
   const s=scene(),liveSvg=$("board");if(!s)return;
   pruneSelection();
   const selectedSet=selectionSet();
-  // Keep labels quiet at board scale and readable when the user inspects a
-  // package.  The threshold is in world millimetres, so it is independent of
-  // browser DPI and viewport size.
-  const padLabelsVisible=!!viewbox && viewbox[2] <= 35;
   const focused=document.activeElement?.closest?.(".component")?.dataset.reference;
   const svg=node("g"); // Build off-document; one DOM replacement avoids layout churn.
   const c = s.outline.circle;
@@ -223,17 +239,21 @@ function render() {
       marker.append(node("title",{},`${component.reference}: relative placement constraint warning`));g.append(marker);
     }
     for (const pad of component.pads) {
+      const padGroup=node("g",{class:"pad-hit","data-pad-number":pad.number});
       if (pad.kind !== "non_plated_through_hole") {
         const n = shape(pad.shape,"pad");
         n.append(node("title",{},`${component.reference}.${pad.number}${pad.name ? ` (${pad.name})` : ""}: ${pad.net || "no net"}`));
-        g.append(n);
-        if (padLabelsVisible && pad.number) {
+        padGroup.append(n);
+        if (pad.number) {
           const center=pad.shape.spine.reduce((sum,point)=>[sum[0]+point[0],sum[1]+point[1]],[0,0]);
           center[0]/=pad.shape.spine.length;center[1]/=pad.shape.spine.length;
-          g.append(node("text",{x:mm(center[0]),y:mm(center[1]),class:"pad-label"},pad.name || pad.number));
+          const label=pad.name || pad.number;
+          padGroup.append(node("text",{x:mm(center[0]),y:mm(center[1]),class:"pad-label",
+            ...padLabelLayout(pad,label)},label));
         }
       }
-      if (pad.drill) g.append(shape(pad.drill,"drill"));
+      if (pad.drill) padGroup.append(shape(pad.drill,"drill"));
+      if (padGroup.childNodes.length) g.append(padGroup);
     }
     g.append(node("text",{x:mm(component.position[0]),y:mm(component.position[1])-1.4,class:"ref"},component.reference));
     g.addEventListener("pointerdown",event=>startDrag(event,component,g)); svg.append(g);

@@ -35,9 +35,11 @@ unchanged.
 Before this change, pads had a browser `<title>` containing the reference,
 number, and net, but no visible label.  The physicalizer now carries optional
 part pin names as board metadata.  The scene exposes that name per pad and the
-editor renders the name (or physical pad number when no name is available) once
-the viewport is zoomed to 35 mm or less.  The complete reference/net tooltip
-remains available at every zoom level.
+editor renders the name (or physical pad number when no name is available) for
+each pad.  Labels are hidden until the pointer hovers the corresponding pad,
+use the pad's user-coordinate geometry for their font size, and compress long
+names to the available land width.  The complete reference/net tooltip remains
+available at every zoom level.
 
 ## E-003 — connector body boxes can be offset from the actual footprint
 

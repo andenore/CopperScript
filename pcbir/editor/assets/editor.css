@@ -191,14 +191,18 @@ footer {
   pointer-events:none}
 
 .pad-label {
-  font-size:.55px;
   fill:#172027;
   stroke:#f7e6b0;
   stroke-width:.07px;
   paint-order:stroke;
   text-anchor:middle;
   dominant-baseline:central;
-  pointer-events:none}
+  pointer-events:none;
+  visibility:hidden}
+
+.pad-hit:hover .pad-label,
+.pad-hit:focus .pad-label {
+  visibility:visible}
 
 .component {
   cursor:grab}
