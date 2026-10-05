@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Iterator
 
+from .boundary_access import BoundaryAccessOptions, BoundaryAccessResult, analyze_boundary_access
 from .clusters import move_placement_unit
 from .critical import (CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets,
                        _fingerprint as _critical_fingerprint)
@@ -30,6 +31,7 @@ class PackageAccessOptions:
     maximum_trials: int = 8
     movement_nm: int = nm_from_mm("0.5")
     maximum_pattern_trials: int = 2
+    boundary_options: BoundaryAccessOptions = BoundaryAccessOptions()
 
     def __post_init__(self):
         if self.maximum_trials < 0 or self.movement_nm <= 0:
@@ -72,6 +74,7 @@ class PackageAccessResult:
     trials: tuple[PackageAccessTrial, ...] = ()
     accepted_moves: int = 0
     pattern_trials: tuple[PackagePatternTrial, ...] = ()
+    boundary: BoundaryAccessResult | None = None
 
     @property
     def board(self) -> PhysicalBoard:
@@ -80,13 +83,15 @@ class PackageAccessResult:
     @property
     def pending_pads(self) -> frozenset[PadReference]:
         return frozenset((*self.fanout.pending_pads,
-                          *(self.plane_stitch.pending_pads if self.plane_stitch else ())))
+                          *(self.plane_stitch.pending_pads if self.plane_stitch else ()),
+                          *(self.boundary.pending_pads if self.boundary else ())))
 
     @property
     def ready(self) -> bool:
         return (self.global_route.status is GlobalRoutingStatus.SUCCESS
                 and self.critical.status is not CriticalRoutingStatus.FAILED
-                and not self.pending_pads and not self.failed_critical_nets and not self.hard_findings)
+                and not self.pending_pads and not self.failed_critical_nets and not self.hard_findings
+                and self.boundary is not None and self.boundary.ready)
 
 
 def preflight_package_access(
@@ -103,6 +108,7 @@ def preflight_package_access(
     No ordinary area search or placement change is launched here.
     """
     from .hard_macros import macro_source, materialize_hard_macros
+    options = options or PackageAccessOptions()
     board = macro_source(board)
     owner_board = materialize_hard_macros(board)
     if global_route.placement_fingerprint != _placement_fingerprint(board):
@@ -114,9 +120,10 @@ def preflight_package_access(
          pending_pads=[f"{p.component}.{p.pad}" for p in fanout.pending_pads])
     critical = route_critical_nets(board, global_route, reserved_accesses=fanout,
                                    on_progress=critical_progress(on_progress))
-    result = _access_result(board, global_route, fanout, critical, plane_options)
+    result = _access_result(board, global_route, fanout, critical, plane_options,
+                           options.boundary_options, on_progress)
     result = _negotiate_patterns(result, owner_board, fanout_options,
-                                 options or PackageAccessOptions(), plane_options, on_progress)
+                                 options, plane_options, on_progress)
     emit(on_progress, "package_access", "finished", ready=result.ready,
          pending_pads=[f"{p.component}.{p.pad}" for p in sorted(result.pending_pads)],
          failed_critical_nets=sorted(result.failed_critical_nets), hard_findings=result.hard_findings)
@@ -126,6 +133,8 @@ def preflight_package_access(
 def _access_result(
     board: PhysicalBoard, guides: GlobalRoutingResult, fanout: FanoutResult,
     critical: CriticalRoutingResult, plane_options: PlaneStitchOptions | None,
+    boundary_options: BoundaryAccessOptions | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> PackageAccessResult:
     plane = stitch_zone_pads(critical.board, plane_options) if plane_options else None
     failed, hard = _failures(board, critical)
@@ -134,7 +143,12 @@ def _access_result(
         hard = sum(finding.severity.value == "error"
                    and finding.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
                    for finding in run_physical_drc(plane.board).findings)
-    return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard)
+    emit(on_progress, "package_boundary_access", "started")
+    boundary = analyze_boundary_access(plane.board if plane else critical.board, fanout, boundary_options)
+    emit(on_progress, "package_boundary_access", "finished", allocated=len(boundary.ports),
+         pending_pads=[f"{p.component}.{p.pad}" for p in boundary.pending_pads],
+         native_accepted=boundary.native_accepted)
+    return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard, boundary=boundary)
 
 
 def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccessResult) -> str:
@@ -142,6 +156,13 @@ def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccess
     tested = {item.pad for item in candidate.fanout.pin_analysis}
     if candidate.hard_findings:
         return "hard_drc"
+    if baseline.boundary is not None:
+        if (candidate.boundary is None or not candidate.boundary.native_accepted
+                or not {p.pad for p in baseline.boundary.pin_analysis} <=
+                       {p.pad for p in candidate.boundary.pin_analysis}
+                or not {p.pad for p in baseline.boundary.ports} <=
+                       {p.pad for p in candidate.boundary.ports}):
+            return "access_not_improved"
     # Counts alone cannot hide a lost pin or exchange one failed interface for
     # another. The same identity-preserving gate is used for placement trials.
     if not (required <= tested
@@ -166,7 +187,7 @@ def _negotiate_patterns(
     are then rebuilt against those stubs. Failed trials retain the full incumbent.
     """
     plane_pending = bool(baseline.plane_stitch and baseline.plane_stitch.pending_pads)
-    ordinary_pending = bool(baseline.fanout.pending_pads)
+    ordinary_pending = bool(baseline.fanout.pending_pads or baseline.boundary and baseline.boundary.pending_pads)
     other_owners = bool(baseline.critical.nets or plane_options and baseline.source.zones)
     if (not options.maximum_pattern_trials or baseline.hard_findings
             or baseline.global_route.status is not GlobalRoutingStatus.SUCCESS
@@ -227,7 +248,8 @@ def _negotiate_patterns(
             seen.add(signature)
             verified = route_critical_nets(baseline.source, baseline.global_route,
                 reserved_accesses=proposed, on_progress=critical_progress(on_progress))
-            candidate = _access_result(baseline.source, baseline.global_route, proposed, verified, plane_options)
+            candidate = _access_result(baseline.source, baseline.global_route, proposed, verified, plane_options,
+                                       options.boundary_options, on_progress)
             outcome = _improvement_outcome(accepted, candidate)
         evidence = candidate or accepted
         records.append(PackagePatternTrial(len(records) + 1, strategy,

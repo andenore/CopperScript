@@ -53,14 +53,15 @@ With `route-board --fanout`, the order is now:
 3. Profile-driven critical routing around those local reservations.
    Pairs still use the coupled search; generic fanout never creates their stubs.
 4. Explicitly requested early plane contacts, checked against both stages.
-5. Bounded cross-owner pattern negotiation when critical/selected plane access
-   fails, then the package-access gate and optional bounded placement feedback.
+5. Allocate compatible provisional ordinary paths beyond package collars.
+   Bounded cross-owner pattern negotiation and placement feedback repair failed
+   access before the fail-closed gate.
 6. Ordinary area routing, only if the gate passes; normal late plane contacts,
    native DRC, independent KiCad refill/connectivity and signoff follow.
 
 The gate requires successful global planning, no pending requested access,
-fresh critical-net connectivity, non-failed critical status and no hard native
-finding. A blocked result preserves diagnostic copper, reports zero ordinary
+fresh critical-net connectivity, non-failed critical status, compatible ordinary
+boundary witnesses and no hard native finding. A blocked result preserves diagnostic copper, reports zero ordinary
 search passes and cannot claim fabrication readiness. The ordinary stage and
 late ground feedback cannot bypass it. Physically failed reservations produce
 a failed design report; stale/unowned reservations are invalid API arguments.
@@ -159,9 +160,12 @@ placement trial outcomes and whether ordinary area routing started.
   owner-order negotiation and full transactional revalidation.
 - [ ] Extend to joint critical paired/single-ended access-domain allocation with
   ordinary and dense power/GND exits, beyond the alternate-order proposals.
-- [ ] Add local access collars/boundary ports and verify enough onward channel
-  capacity on permitted signal layers. A through-via consumes physical space on
-  every spanned layer; it is not automatically a usable exit beyond the package.
+- [x] Add local collars and jointly compatible ordinary boundary-capacity
+  witnesses on permitted layers, with a fail-closed gate and bounded multi-bend
+  fallback. See [boundary access](package-boundary-access.md) for scope/evidence.
+- [ ] Reserve layer-aware boundary ports as detailed-router anchors and extend
+  them to specialized critical/power/GND domains. Witnesses are provisional;
+  through-via access is not end-to-end connectivity.
 - [ ] Generate constrained multi-bend alternatives with extended exact anchor
   verification/ownership when simple patterns are insufficient.
 - [ ] Derive directional placement margins from connected-pin bank demand,

@@ -104,6 +104,32 @@ def test_pending_exit_stops_area_router_with_zero_search_passes(monkeypatch):
     assert all("preflight" in item.diagnostics[0] for item in result.detailed.nets)
 
 
+def test_pending_boundary_channel_stops_area_despite_complete_dogbones(monkeypatch):
+    board, guides, settings, _ = fixture()
+    monkeypatch.setattr("pcbir.flow.optimize_placement_for_routing", lambda *_:
+        PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
+    real = access.analyze_boundary_access
+    def blocked(source, fan, options=None):
+        result = real(source, fan, options)
+        return replace(result, ports=result.ports[1:], pending_pads=(result.ports[0].pad,))
+    monkeypatch.setattr(access, "analyze_boundary_access", blocked)
+    monkeypatch.setattr("pcbir.flow.route_detailed", lambda *args, **kwargs: pytest.fail("area must not start"))
+    result = run_routing_pipeline(board, fanout_options=settings,
+        package_access_options=access.PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=0))
+    assert not result.fanout.pending_pads and result.package_access.boundary.pending_pads
+    assert not result.package_access.ready and result.detailed.metrics.passes == 0
+    assert result.package_access.pending_pads == frozenset(result.package_access.boundary.pending_pads)
+    proposals = list(access.package_placement_trials(result.package_access, PlacementPlannerOptions(), nm_from_mm(.5)))
+    assert proposals and {ref for ref, _ in proposals} == {"U"}
+
+
+def test_missing_boundary_evidence_cannot_make_access_ready():
+    board, guides, settings, _ = fixture()
+    result = access.preflight_package_access(board, guides, settings)
+    assert result.ready and result.boundary.ready
+    assert not replace(result, boundary=None).ready
+
+
 def test_failed_critical_group_also_stops_area_and_preserves_ordinary_exits(monkeypatch):
     board, guides, options, _ = fixture(critical=True)
     real = access.route_critical_nets
@@ -259,8 +285,8 @@ def test_pattern_proposal_is_revalidated_and_rolls_back_atomically(monkeypatch, 
     baseline = access.preflight_package_access(board, guides, settings,
         options=access.PackageAccessOptions(maximum_pattern_trials=0))
     real = access._access_result
-    def unsafe(source, route, fan, critical, plane):
-        result = real(source, route, fan, critical, plane)
+    def unsafe(source, route, fan, critical, plane, *args):
+        result = real(source, route, fan, critical, plane, *args)
         if not result.failed_critical_nets:  # Final revalidation, not the incumbent.
             if defect == "lost_exit":
                 return replace(result, fanout=replace(result.fanout, accesses={}))

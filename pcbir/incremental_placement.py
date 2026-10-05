@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from hashlib import sha256
 
+from .boundary_access import analyze_boundary_access
 from .critical import CriticalRoutingStatus, _fingerprint as critical_fingerprint
 from .detailed import DetailedRouterOptions
 from .drc import PhysicalDrcPolicy
@@ -149,7 +150,21 @@ def repair_placement_trial(
         critical = replace(critical, reserved_track_count=len(fan_tracks), reserved_via_count=len(fan_vias))
     access = (replace(initial.package_access, source=trial, global_route=global_route,
         fanout=access_fanout, critical=critical, plane_stitch=early,
-        hard_findings=0, trials=(), accepted_moves=0, pattern_trials=()) if initial.package_access is not None else None)
+        hard_findings=0, trials=(), accepted_moves=0, pattern_trials=(), boundary=None)
+        if initial.package_access is not None else None)
+    if access is not None:
+        # Even moving a sparse neighbour can close an ordinary collar channel.
+        # Never relabel or retain old witness coordinates after placement.
+        if access_fanout is None or initial.package_access.boundary is None:
+            return fallback("boundary ownership evidence missing")
+        try:
+            boundary = analyze_boundary_access(early.board, access_fanout,
+                                               initial.package_access.boundary.options)
+        except ValueError:
+            return fallback("boundary source requires full preflight")
+        if not boundary.ready:
+            return fallback("placement closes package boundary access")
+        access = replace(access, boundary=boundary)
     boot = replace(initial,
         placement_and_global=replace(initial.placement_and_global, board=trial, global_route=global_route,
             full_route_certified=True, status=FeedbackStatus.PASS, iterations=(),

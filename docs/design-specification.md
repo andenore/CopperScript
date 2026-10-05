@@ -2,7 +2,7 @@
 
 **Status:** Draft specification with accepted architectural decisions
 **Applies to:** CopperScript language, compiler, IRs, rule engines, and backends
-**Last updated:** 2026-09-20
+**Last updated:** 2026-10-05
 
 This document records the durable design decisions for CopperScript. It is the
 normative architectural reference; the README explains usage and the language
@@ -859,7 +859,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 
 | CS-130 | Accepted | Ordinary fanout retains an immutable-geometry greedy incumbent and may improve only newly proposed selected escapes through exact lazy candidate conflicts and a bounded local CSP. A pending pin and its proven selected blockers may expand off-ray domains with both legal straight/45-degree orders; failed local solutions may grow by one selected outside blocker ranked by consumed-domain pressure. Defaults bound allocation to eight root trials, 12 pins per group, 20,000 attempted assignments per root, 200,000 exact compatibility checks and 2,000,000 total compatibility queries per call. Conservative disjoint-bound tests do not consume the exact-check budget or populate its cache; total queries include cached/broad-phase requests and remain separately bounded. MRV/forward checking, incumbent-first deterministic alternatives and cached conflicts change search ordering, not rules. A complete solution must retain every prior escaped identity and all fixed outside/input copper. Final exact materialization/native acceptance is mandatory; failed improvements revert to greedy, and failed greedy proposals revert to input. Telemetry distinguishes total queries, exact checks, broad-phase acceptance, provisional solutions and final native acceptance. This is not optimal assignment, area connectivity, onward-route cost or authority to displace critical/GND/input copper. Existing multi-leg ownership/anchor contracts must be extended explicitly before adding a different escape representation. |
 
-| CS-131 | Accepted | With fanout enabled, allocate compatible ordinary crowded-pin exits against an unrouted placement before committing critical long routes; specialized critical pair/clock/RF owners must honor those reservations and all original profiles. Explicit early plane contacts follow. Gate ordinary area routing on successful global planning, compatible requested exits, fresh critical connectivity/non-failed status and no hard native finding. Failed preflight preserves diagnostic copper, records zero area-search passes and cannot be bypassed by late plane feedback. Bounded legal placement trials rebuild all stages from an unrouted source and accept only a strict identity-preserving access/critical improvement with no hard native finding. Prior ordinary exits, critical connectivity, fixed/rigid/proximity/orientation rules and ownership remain mandatory; declared 45-degree rotations are allowed. Reservations are not proof of onward capacity or area connectivity. CS-151 adds bounded alternate-owner pattern replacement before placement repair; this is not joint enumeration of all critical/power/GND domains. Directional demand-based margins and boundary-port/onward checks remain explicit future work in [package-access-first](package-access-first.md). |
+| CS-131 | Accepted | With fanout enabled, allocate compatible ordinary crowded-pin exits against an unrouted placement before committing critical long routes; specialized critical pair/clock/RF owners must honor those reservations and all original profiles. Explicit early plane contacts follow. Gate ordinary area routing on successful global planning, compatible requested exits, fresh critical connectivity/non-failed status and no hard native finding. Failed preflight preserves diagnostic copper, records zero area-search passes and cannot be bypassed by late plane feedback. Bounded legal placement trials rebuild all stages from an unrouted source and accept only a strict identity-preserving access/critical improvement with no hard native finding. Prior ordinary exits, critical connectivity, fixed/rigid/proximity/orientation rules and ownership remain mandatory; declared 45-degree rotations are allowed. Dogbones are not proof of onward capacity or area connectivity. CS-151 adds bounded owner-order negotiation; CS-152 adds a mandatory provisional ordinary boundary-capacity gate. Joint critical/power/GND allocation, committed layer-aware boundary anchors and directional demand-based margins remain future work in [package-access-first](package-access-first.md). |
 
 | CS-132 | Accepted | USB/differential routing is not inherently restricted to F.Cu. After the coarse-guide route fails, perimeter terminals prefer surface-only joint search, while internal SMD terminal pairs may prefer matched via escapes first (CS-135). Permitted profiles may use matched terminal via pairs and a jointly searched middle spine on another allowed signal layer. Short exact straight/45-degree collars widen to manufacturing-legal via pitch and taper back to trace pitch; explicit transition provenance, equal via counts/dimensions/spans, full physical-span copper/drill checks, required nearby return-net vias, original budgets and fresh native DRC gate atomic acceptance. No independent member repair, imaginary blind via, dedicated-plane signal routing or displacement of input reservations is permitted. The bounded terminal-transition topology supersedes CS-115's statement that new paired transitions are unsupported; general 3-D paired maze routing remains unsupported. Surface-spine refinement cannot remove multilayer transitions. Plane adjacency is a preference, while return-plane continuity, actual layer-specific impedance, via stubs and manufacturing qualification require independent evidence. See [paired-layer-transitions](paired-layer-transitions.md). |
 
@@ -1213,3 +1213,29 @@ outcomes and timing events explicit. This is a repair heuristic, not an optimal
 simultaneous-escape solver, proof of onward capacity, or manufacturing signoff.
 The unchanged fail-closed CS-131 gate remains mandatory before area routing.
 See [package-access-first](package-access-first.md#cross-owner-pattern-negotiation).
+
+## CS-152 — Provisional ordinary boundary-capacity gate (Accepted)
+
+With fanout enabled, ordinary area routing MUST also require a jointly compatible
+local path beyond a package collar for every allocated ordinary launch. Recheck
+actual pad-to-via connectivity and source/copper ownership, use transformed
+courtyard/body and land geometry, and restrict witnesses to allowed signal
+layers reached by the actual via. Through-vias occupy their full physical span;
+dedicated planes, hard macros, holes, keepouts and original manufacturing rules
+remain mandatory obstacles/constraints.
+
+Generate bounded exact straight/45-degree paths with anchor-local adaptive
+sampling and a bounded heading-aware multi-bend fallback. Select compatible
+domains with explicit CSP budgets, then temporarily materialize and native-check
+the entire witness set. Independent pin success or a width-only capacity count
+MUST NOT certify a shared channel. Unproven access joins pending identities and
+blocks area routing with zero passes; finite-domain failure is not impossibility.
+Pattern/placement acceptance MUST preserve previous boundary proofs by identity.
+Incremental placement MUST rebuild evidence or request a full preflight fallback.
+
+Witnesses are diagnostic physical objects, not electrical/schematic IR data and
+not silently committed copper. They MUST be reported as provisional and MUST NOT
+claim end-to-end connectivity or fabrication readiness. Layer-aware boundary
+anchor ownership, joint critical/power/GND domains, directional placement margins
+and independent filled-board signoff remain follow-ups.
+See [ordinary package boundary access](package-boundary-access.md).

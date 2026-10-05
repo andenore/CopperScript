@@ -338,6 +338,10 @@ passes. Bounded legal placement feedback rebuilds the reservations; use
 `--package-access-trials 0` to disable moves without disabling the gate.
 Joint critical/power/ground access and directional placement margins remain
 follow-up work; an allocated fanout via is not complete-board connectivity.
+The [boundary-capacity increment](docs/package-boundary-access.md) now gates area
+routing on mutually compatible ordinary paths beyond package collars. Its
+matched-placement diagnostic proves 76/76 local witnesses after a multi-bend
+fallback; witness copper is provisional, not a replacement full-board route.
 [Pass 18](docs/routing-review-pass18.md) allocates all 76 ordinary exits at the
 unchanged saved placement, but the modem-side USB pair then fails. The access
 gate correctly blocks area routing; this is not a new full-board success.

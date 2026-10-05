@@ -367,6 +367,11 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert "trials" in document["package_access"]
     assert document["package_access"]["pattern_trial_limit"] == 2
     assert isinstance(document["package_access"]["pattern_trials"], list)
+    boundary = document["package_access"]["boundary"]
+    assert "not committed" in boundary["scope"]
+    assert boundary["status"] in {"ready", "blocked"}
+    assert isinstance(boundary["ports"], list) and isinstance(boundary["pin_analysis"], list)
+    assert "package_boundary_access" in document["package_access"]["stage_order"]
     if document["package_access"]["status"] == "blocked":
         assert document["package_access"]["ordinary_area_started"] is False
         assert document["detailed"]["metrics"]["passes"] == 0

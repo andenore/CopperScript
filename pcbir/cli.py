@@ -31,6 +31,7 @@ from .drc import DrcDecision, run_physical_drc
 from .flow import PhysicalFlowStatus, run_routing_pipeline
 from .fanout import FanoutOptions
 from .package_access import PackageAccessOptions
+from .boundary_access import BoundaryAccessOptions
 from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
 from .pad_stitch import stitch_duplicate_pads
 from .plane import PlaneStitchOptions, stitch_zone_pads
@@ -336,6 +337,8 @@ def _parser() -> argparse.ArgumentParser:
         help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
     board_route_parser.add_argument("--package-pattern-trials", type=int, choices=range(3), default=2,
         help="alternate ordinary/critical/plane escape patterns before placement repair (default: up to 2; 0 disables negotiation)")
+    board_route_parser.add_argument("--package-boundary-step-mm", type=_positive_mm, default="0.5",
+        help="coarse boundary-port sampling with --fanout (default: 0.5 mm, locally refined to 0.1 mm)")
     board_route_parser.add_argument("--fanout-step-mm", type=_positive_mm, default="0.5",
         help="coarse package escape candidate step (default: 0.5 mm)")
     board_route_parser.add_argument("--fanout-maze", action="store_true",
@@ -845,7 +848,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     package_access_options=PackageAccessOptions(
                         maximum_trials=args.package_access_trials,
                         movement_nm=nm_from_mm(args.package_access_movement_mm),
-                        maximum_pattern_trials=args.package_pattern_trials),
+                        maximum_pattern_trials=args.package_pattern_trials,
+                        boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
+                            refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
                     on_progress=progress,
                 )
                 escape_feedback = (
@@ -859,7 +864,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         package_access_options=PackageAccessOptions(
                             maximum_trials=args.package_access_trials,
                             movement_nm=nm_from_mm(args.package_access_movement_mm),
-                            maximum_pattern_trials=args.package_pattern_trials),
+                            maximum_pattern_trials=args.package_pattern_trials,
+                            boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
+                                refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
                         options=EscapeFeedbackOptions(
                             maximum_trials=args.zone_escape_trials,
                             maximum_local_trials=args.zone_local_ripup_trials,
@@ -940,7 +947,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 access = result.package_access
                 report["package_access"] = {
                     "status": "ready" if access.ready else "blocked",
-                    "stage_order": ["ordinary_package_exits", "critical_routes", "selected_plane_contacts", "ordinary_area"],
+                    "stage_order": ["ordinary_package_exits", "critical_routes", "selected_plane_contacts", "package_boundary_access", "ordinary_area"],
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in sorted(access.pending_pads)],
                     "failed_critical_nets": sorted(access.failed_critical_nets),
                     "hard_findings": access.hard_findings,
@@ -952,6 +959,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                                for trial in access.trials],
                     "ordinary_area_started": access.ready,
                 }
+                if access.boundary is not None:
+                    boundary = access.boundary
+                    report["package_access"]["boundary"] = {
+                        "scope": "provisional ordinary local channel capacity; witness copper is not committed",
+                        "status": "ready" if boundary.ready else "blocked",
+                        "native_accepted": boundary.native_accepted,
+                        "limits": asdict(boundary.options),
+                        "pending_pads": [f"{p.component}.{p.pad}" for p in boundary.pending_pads],
+                        "collars": [{"reference": c.reference, "bounds_nm": asdict(c.bounds)} for c in boundary.collars],
+                        "ports": [{"pad": f"{p.pad.component}.{p.pad.pad}", "position_nm": asdict(p.position),
+                                   "layer": p.layer.value, "edge": p.edge,
+                                   "path": [asdict(t) for t in p.path]} for p in boundary.ports],
+                        "pin_analysis": [{**asdict(p), "pad": f"{p.pad.component}.{p.pad.pad}"}
+                                         for p in boundary.pin_analysis],
+                        "assignment": asdict(boundary.assignment),
+                    }
             if escape_feedback is not None:
                 report["zone_escape_feedback"] = {
                     "dependency_expansion_limit": args.zone_dependency_expansions,
