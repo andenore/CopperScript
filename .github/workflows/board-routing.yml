@@ -78,21 +78,7 @@ jobs:
           echo "NGSPICE=$RUNNER_TEMP/copper-ngspice/bin/ngspice" >> "$GITHUB_ENV"
           echo 'COPPER_SIM_REQUIRED=1' >> "$GITHUB_ENV"
       - name: Run complete test suite
-        id: complete-tests
-        continue-on-error: true
-        run: |
-          set +e
-          python -m pytest 2>&1 | tee build/pytest.log
-          status=${PIPESTATUS[0]}
-          set -e
-          if [ "$status" -ne 0 ]; then
-            summary="$(tail -c 3500 build/pytest.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')"
-            echo "::error title=Complete test suite failed::${summary}"
-            exit "$status"
-          fi
-      - name: Annotate complete test failures
-        if: steps.complete-tests.outcome == 'failure'
-        run: exit 1
+        run: python -m pytest
       - name: Package shared mechanical editor (offline VSIX)
         run: |
           node integrations/vscode/build.cjs
