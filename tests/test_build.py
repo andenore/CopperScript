@@ -248,3 +248,19 @@ def test_aggregate_compiles_positive_examples_without_routing(make):
     assert all(f"EXAMPLE={example} compile" in result.stdout for example in examples)
     assert "invalid_board" not in result.stdout and "nrf_antenna_macro" not in result.stdout
     assert "pcbir.build" not in result.stdout
+
+
+def test_check_examples_covers_fast_targets_for_every_positive_example(make):
+    result = subprocess.run([make, "-n", "check-examples"], cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    registered = subprocess.run(
+        [make, "--no-print-directory", "-s",
+         "--eval=print-positive-examples:;@echo $(EXAMPLES)", "print-positive-examples"],
+        cwd=ROOT, text=True, capture_output=True,
+    )
+    assert registered.returncode == 0, registered.stderr
+    examples = registered.stdout.split()
+    assert examples and len(examples) == len(set(examples))
+    assert all(f"EXAMPLE={example} check" in result.stdout for example in examples)
+    assert all(f"EXAMPLE={example} compile" in result.stdout for example in examples)
+    assert "invalid_board" not in result.stdout and "nrf_antenna_macro" not in result.stdout

@@ -22,6 +22,7 @@ make EXAMPLE=full-vertical route
 make EXAMPLE=nrf52 route
 make EXAMPLE=round-led-ring route
 make compile-examples
+make check-examples
 ```
 
 Targets:
@@ -34,13 +35,18 @@ Targets:
 | `layout` | Placement draft and report, not a routed board |
 | `edit` | Mechanical/floorplan editor |
 | `route` | Profiled package escape/routing, saved copper fill and native DRC |
-| `compile-examples` (root only) | Compile all 13 registered complete examples |
+| `compile-examples` (root only) | Compile all 16 registered complete examples |
+| `check-examples` (root only) | Run `check`, `compile`, and a dry-run of `route` for every registered complete example |
 
-`compile-examples` excludes `examples/invalid_board/board.copper` and the intentionally
+`compile-examples` and `check-examples` exclude `examples/invalid_board/board.copper` and the intentionally
 incomplete `examples/nrf_antenna_macro/board.copper` probe. It does not waive ERC. A selectable
 example is not a promise of successful routing or production readiness: only
 an actual passed route/fill/DRC run establishes that board's connectivity.
 The CM4 four-layer routing preset has been verified with KiCad 10.0.6.
+
+`check-examples` checks the fast targets and expands every route recipe without starting
+routing. CI additionally runs the `layout` and non-interactive `edit` targets for every
+registered example on each commit. Actual routing remains limited to release tags.
 
 Compilation/placement outputs live under ignored `build/<board-name>/`.
 Each route gets a fresh `build/<board-name>/runs/<UTC-id>/`; open its

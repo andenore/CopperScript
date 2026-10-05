@@ -50,6 +50,27 @@ jobs:
           test "$actual" = "$expected"
           echo 'KICAD_CLI=/usr/bin/kicad-cli' >> "$GITHUB_ENV"
           echo 'KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints' >> "$GITHUB_ENV"
+      - name: Exercise Make targets for every example
+        env:
+          PYTHON: python
+          RESOLVE_ARGS: --locked --offline
+        run: |
+          set -euo pipefail
+          make --no-print-directory check-examples
+
+          mkdir -p build/make-target-smoke
+          examples="$(make --no-print-directory -s --eval='print-examples:;@echo $(EXAMPLES)' print-examples)"
+          for example in $examples; do
+            echo "::group::${example} layout"
+            make --no-print-directory EXAMPLE="$example" layout
+            echo "::endgroup::"
+
+            echo "::group::${example} edit"
+            make --no-print-directory EXAMPLE="$example" \
+              EDITOR_ARGS="--no-browser --scene-output build/make-target-smoke/${example}/scene.json" \
+              edit
+            echo "::endgroup::"
+          done
       - name: Install pinned ngspice
         run: |
           sudo apt-get install --yes build-essential bison flex
