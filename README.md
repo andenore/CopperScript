@@ -281,6 +281,11 @@ Accepted ordinary copper is straightened unless `--no-route-smoothing` is
 given. Opt-in `--layer-assignment-passes`, `--local-demand-cost` and
 `--guide-escape-mm` move ordinary guide runs away from same-layer crossings and
 full channels; see the [layer-balance review](docs/routing-layer-balance-review.md).
+A reserved package escape is one terminal of its pin, beside the pin's own
+surface access and its launch via on every layer; escape copper the finished
+route does not need is removed (`--no-escape-terminals` restores port-only
+terminals). Opt-in `--package-destination-ports` turns boundary ports toward
+each pin's nearest other terminal.
 For intentional diagonal placement, add a
 `constraint allowed_orientations(U1) { values = "0,45,90"; }`; unconstrained
 parts retain 0/90/180/270-degree candidates.

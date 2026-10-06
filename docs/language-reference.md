@@ -1258,7 +1258,12 @@ change; planes, explicit layers and critical/paired/power guides are fixed.
 Opt-in `--guide-escape-mm` lets the detailed corridor change layer next to a
 reserved fixed-layer terminal. Accepted ordinary copper is straightened by
 default; `--no-route-smoothing` keeps it as searched. Smoothing never moves
-vias, reserved or immutable copper.
+vias, reserved or immutable copper. With `--fanout`, a reserved boundary port is
+one terminal of its pin, beside the pin's surface access and its launch via;
+afterwards, escape copper the net does not need is removed transactionally
+(CS-163; `--no-escape-terminals` keeps port-only terminals and all escape
+copper). Opt-in `--package-destination-ports` prefers boundary ports facing
+each pin's nearest terminal on another component.
 
 ## KiCad schematic export
 

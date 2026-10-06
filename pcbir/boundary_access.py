@@ -36,6 +36,9 @@ class BoundaryAccessOptions:
     maze_escapes: bool = True
     maze_state_budget: int = 12_000
     assignment_options: EscapeAssignmentOptions = EscapeAssignmentOptions()
+    # Prefer ports on a collar edge facing the net's nearest other-component
+    # terminal before layer rank (R18); off keeps rank-first ordering.
+    destination_ports: bool = False
 
     def __post_init__(self):
         if min(self.collar_margin_nm, self.port_step_nm, self.refinement_step_nm,
@@ -232,6 +235,7 @@ def analyze_boundary_access(
            rules[net_by_pad[p]].kind is not RouteKind.GENERAL) for p in required):
         raise ValueError("boundary witnesses require ordinary connected fanout pins")
     ranks, _ = signal_layer_preferences(board)
+    destinations = _destinations(board, required, net_by_pad) if options.destination_ports else {}
     candidates: dict[PadReference, dict[EscapeCandidate, BoundaryPort]] = {}
     diagnostics = {}
     maze_states, maze_counts, maze_cache = {}, {}, {}
@@ -275,7 +279,9 @@ def analyze_boundary_access(
                 maze_states[pad], maze_counts[pad] = expanded, len(additions)
             for port in maze_cache[pad]:
                 choices[(port.path, None)] = port
+        destination = destinations.get(pad)
         return tuple(sorted(choices, key=lambda c: (
+            0 if destination is None else _facing(choices[c].edge, area, destination),
             ranks[c[0][0].layer],
             sum(max(abs(t.end.x_nm-t.start.x_nm), abs(t.end.y_nm-t.start.y_nm))
                 for t in c[0]), len(c[0]), layers.index(c[0][0].layer),
@@ -340,6 +346,29 @@ def analyze_boundary_access(
         maze_states.get(p, 0), maze_counts.get(p, 0)) for p in required)
     return BoundaryAccessResult(tuple(collars.values()), ports, pending, analysis, assignment, native, options,
                                 physical_board_digest(board))
+
+
+def _destinations(board: PhysicalBoard, pads, net_by_pad) -> dict[PadReference, Point]:
+    """Nearest terminal of each pad's net on another component, if any."""
+    from .placement import transformed_pad_position
+    poses = {p.reference: p for p in board.placements}
+    members = {net.name: tuple(net.pads) for net in board.nets}
+    result = {}
+    for pad in pads:
+        start = transformed_pad_position(board, poses[pad.component], pad.pad)
+        others = [transformed_pad_position(board, poses[other.component], other.pad)
+                  for other in members[net_by_pad[pad]] if other.component != pad.component]
+        if others:
+            result[pad] = min(others, key=lambda p: (abs(p.x_nm - start.x_nm) + abs(p.y_nm - start.y_nm),
+                                                       p.x_nm, p.y_nm))
+    return result
+
+
+def _facing(edge: str, area: Bounds, destination: Point) -> int:
+    """0 when the destination lies beyond this collar edge, else 1."""
+    beyond = {"left": destination.x_nm < area.min_x, "right": destination.x_nm > area.max_x,
+              "top": destination.y_nm < area.min_y, "bottom": destination.y_nm > area.max_y}
+    return 0 if beyond[edge] else 1
 
 
 def reserve_boundary_access(

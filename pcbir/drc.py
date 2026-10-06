@@ -484,6 +484,7 @@ def physical_board_digest(board: PhysicalBoard) -> str:
 def explicit_copper_connectivity(
     board: PhysicalBoard, *, only_nets: frozenset[str] | None = None,
     include_internal_connections: bool = True,
+    tracks: tuple[TrackSegment, ...] | None = None, vias: tuple[Via, ...] | None = None,
 ) -> PhysicalCopperConnectivity:
     """Build the shared exact graph used by native DRC and land closure.
 
@@ -491,7 +492,11 @@ def explicit_copper_connectivity(
     filter saves work for local stitching without changing contact semantics.
     Declared installed-component groups join roots by default; disable them
     for bare-board continuity. Internal edges never add fabrication geometry.
+    ``tracks``/``vias`` evaluate candidate copper against the board's pads
+    without building (and revalidating) a whole replacement board.
     """
+    tracks = board.tracks if tracks is None else tracks
+    vias = board.vias if vias is None else vias
     objects: list[CopperContact] = []
     pad_nodes: dict[PadReference, list[str]] = {}
     internal_connections = []
@@ -525,9 +530,9 @@ def explicit_copper_connectivity(
                     internal_connections.append(nodes)
     objects.extend(CopperContact(f"track:{index}", track.net, (track.layer,),
                                 RoundedConvexShape((track.start, track.end), track.width_nm // 2))
-                   for index, track in enumerate(board.tracks)
+                   for index, track in enumerate(tracks)
                    if only_nets is None or track.net in only_nets)
-    for index, via in enumerate(board.vias):
+    for index, via in enumerate(vias):
         if only_nets is not None and via.net not in only_nets:
             continue
         layers = tuple(layer for layer in board.stackup.copper_layers

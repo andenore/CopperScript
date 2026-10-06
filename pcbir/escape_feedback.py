@@ -21,6 +21,7 @@ from .fanout import FanoutOptions
 from .package_access import PackageAccessOptions
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
 from .physical import PadReference, PhysicalBoard, Placement, Point, TrackSegment, Via, nm_from_mm
+from .pin_escape import RoutingAccess
 from .placement import PlacementPlannerOptions, placement_solution_is_legal
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .routeflow import PlacementRoutingFeedbackOptions
@@ -476,11 +477,19 @@ def _reroute_local_dependencies(
     if not changed:
         return _with_preserved_area(fixed, movable_tracks, movable_vias, changed), None, changed, 0
 
+    accesses = initial.fanout.routing_accesses if initial.fanout else None
+    if accesses and detailed_options.escape_terminals:
+        # Escape copper released after the main route no longer exists; those
+        # pins are ordinary surface terminals (R18), not stale reservations.
+        present = Counter(initial.board.tracks)
+        accesses = {pad: anchor for pad, anchor in accesses.items()
+                    if not isinstance(anchor, RoutingAccess) or not Counter(anchor.path) - present}
+
     def search(source, names, kind, expansion):
         emit(on_progress, "zone_subset_search", "started", kind=kind,
              affected_nets=sorted(names), expansion=expansion)
         result = route_detailed(source, initial.placement_and_global.global_route,
-            detailed_options, fanout_accesses=initial.fanout.routing_accesses if initial.fanout else None,
+            detailed_options, fanout_accesses=accesses,
             # Local transactions do not own/prune the fixed fanout prefix.
             fanout_created_vias=frozenset(), fanout_created_tracks=(), only_nets=names,
             on_progress=on_progress)

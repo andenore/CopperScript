@@ -394,6 +394,8 @@ def _parser() -> argparse.ArgumentParser:
         help="initial aggregate pair-search state cap with --fanout (default: 6000; 0 disables staged search; full-budget fallback if incomplete)")
     board_route_parser.add_argument("--package-boundary-step-mm", type=_positive_mm, default="0.5",
         help="coarse boundary-port sampling with --fanout (default: 0.5 mm, locally refined to 0.1 mm)")
+    board_route_parser.add_argument("--package-destination-ports", action="store_true",
+        help="opt-in: prefer boundary ports facing each escaped pin's nearest other-component terminal")
     board_route_parser.add_argument("--fanout-step-mm", type=_positive_mm, default="0.5",
         help="coarse package escape candidate step (default: 0.5 mm)")
     board_route_parser.add_argument("--fanout-maze", action="store_true",
@@ -445,6 +447,10 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument(
         "--no-route-smoothing", action="store_true",
         help="keep accepted ordinary copper instead of straightening removable bends and detours",
+    )
+    board_route_parser.add_argument(
+        "--no-escape-terminals", action="store_true",
+        help="route escaped package pins only from their reserved boundary port and keep all escape copper",
     )
     board_route_parser.add_argument(
         "--zone-escape-movement-mm", default="0.5", type=_positive_mm,
@@ -937,6 +943,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     direction_preference_cost=args.direction_preference_cost,
                     guide_escape_nm=nm_from_mm(args.guide_escape_mm),
                     route_smoothing=not args.no_route_smoothing,
+                    escape_terminals=not args.no_escape_terminals,
                 )
                 fanout_options = FanoutOptions(
                     step_nm=nm_from_mm(args.fanout_step_mm),
@@ -961,6 +968,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         maximum_pattern_trials=args.package_pattern_trials,
                         initial_pair_state_limit=args.package_initial_pair_states,
                         boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
+                            destination_ports=args.package_destination_ports,
                             refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
                     on_progress=progress,
                 )
@@ -979,6 +987,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             maximum_pattern_trials=args.package_pattern_trials,
                             initial_pair_state_limit=args.package_initial_pair_states,
                             boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
+                                destination_ports=args.package_destination_ports,
                                 refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
                         options=EscapeFeedbackOptions(
                             maximum_trials=args.zone_escape_trials,

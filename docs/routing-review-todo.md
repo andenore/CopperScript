@@ -156,16 +156,58 @@ Completion means tested implementation, not automatic manufacturing signoff.
   ([layer-balance review](routing-layer-balance-review.md)). They also make
   opt-in layer assignment fragile. Planned work, each exact, transactional
   and ownership-safe:
-  - [ ] Offer the pad's own surface access as an alternative terminal to its
+  - [x] Offer the pad's own surface access as an alternative terminal to its
     reserved escape, and remove unused escape and witness copper after
-    routing.
+    routing (CS-163, `escape_terminals`; board router default, opt out with
+    `--no-escape-terminals`). The escape stays reserved while routing; after
+    it, land/via/witness copper the net does not need is released in tiers,
+    each a settled, connectivity-checked transaction.
   - [ ] Choose port edge and layer from the net's guide or destination; allow
-    surface and other signal-layer ports.
-  - [ ] Treat the pad and its connected launch copper as part of the terminal
+    surface and other signal-layer ports. Other-layer and surface exits now
+    come from the launch via (a terminal on every permitted layer it spans)
+    and the pad itself, so ports stay In2.Cu but 100 of 104 witnesses are
+    released. Destination-facing ports exist as opt-in
+    `--package-destination-ports`; on nrf52 they added 18.5 mm and three
+    sharp turns, so they are not the default. Guide-layer ports remain open.
+  - [x] Treat the pad and its connected launch copper as part of the terminal
     set, so a route touching it terminates; remove copper cycles in cleanup.
+    Land/witness centre-line nodes and launch-via layers are terminals; a
+    connected pad's other terminals are virtual tree roots; a walk through
+    the tree starts from its last tree node; released-copper cleanup prunes
+    dead ends beyond land/via centres and cuts redundant loop branches.
   - [ ] Collapse escape-via, port-stub and router-via chains when a direct
-    replacement validates.
-  - [ ] Escape only pins whose direct access is actually constrained.
+    replacement validates. Not implemented: after the items above only one
+    escape-via/router-via pair within 2 mm remains on full-vertical (35
+    before).
+  - [x] Escape only pins whose direct access is actually constrained, done as
+    the allowed fallback form: every escape is reserved as before but
+    dropped if unused. Selection is unchanged on evidence: full-vertical
+    still uses 67 of 104 escapes (63 via only, 4 with the port); nrf52
+    without small-package escapes closed but kept 3 more vias, 14 mm more
+    track and 2 more sharp turns.
+
+  Pass record (unprofiled `make … route`, KiCad 10.0.6 refill + all-severity
+  DRC; "before" is the smoothing base; lengths mm / sharp-turn candidates):
+
+  | Board | Run | F.Cu | In2.Cu | In3.Cu | In4.Cu | B.Cu | Total | Vias (router) | Time | KiCad |
+  | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+  | nrf52 | before | 146.1 / 5 | 216.2 / 18 | 11.1 / 0 | 0 | 0 | 373.3 / 23 | 52 (18) | 90.6 s | 0 / 0 |
+  | nrf52 | R18 | 171.4 / 6 | 164.6 / 0 | 7.9 / 0 | 0 | 6.3 / 0 | 350.1 / 6 | 34 (5) | 61.2 s | 0 / 0 |
+  | full-vertical | before | 874.0 / 22 | 1,325.0 / 76 | 51.6 / 0 | 44.0 / 0 | 98.6 / 1 | 2,393.2 / 99 | 280 (115) | 886.6 s | 0 / 0 |
+  | full-vertical | R18 | 966.6 / 33 | 1,132.0 / 6 | 49.1 / 0 | 36.8 / 0 | 95.0 / 1 | 2,279.4 / 40 | 183 (55) | 338 s | 0 / 0 |
+
+  Both boards close with no open ordinary net. On full-vertical 17 F.Cu
+  candidates are unchanged GND stitch copper; ordinary candidates fall from
+  82 to 23, but F.Cu ordinary ones rise from 5 to 16 (eight on V3V3, half
+  with a leg under 0.5 mm: surface lead-in jogs, R7). Of 104 escapes, 37 are
+  released completely, 63 keep only land and via, 4 keep their port path.
+  Same-net loops fall from 2 (CAN_H, USER_BUTTON) to 0 and escape-via/router
+  via chains within 2 mm from 35 to 1. V1V8_MODEM is 12.9 mm with no via
+  (19.0 mm, 4 vias before), GNSS_TX/RX 2 vias each (8), CAN_H 31.2 mm with no
+  via (48.0 mm, 2). Detailed attempts fall from 201 to 123. Run dirs (this
+  worktree): `build/r18-src-v5/build/nrf52-v5`, `…/fv-r18`; the "before"
+  nrf52 rerun is `build/r18-src-base/build/nrf52-base`, and
+  `--no-escape-terminals` reproduces it exactly (`…/nrf52-v5-off`).
 
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,
   including orthogonal-first/budget-fallback routes; protect pads, junctions,

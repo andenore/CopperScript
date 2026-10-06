@@ -19,7 +19,7 @@ from typing import Iterable, Mapping
 from .geometry import (RoundedConvexShape, orientation, point_on_segment, point_in_polygon,
                        segment_in_polygon, shape_distance_squared)
 from .route_style import chamfer_ordinary_corners
-from .route_cleanup import prune_track_stubs
+from .route_cleanup import EscapeChain, prune_track_stubs, release_unused_escapes
 from .route_smoothing import smooth_owned_tracks
 from .mechanical import point_in_material, shape_in_board
 from .physical import (
@@ -195,6 +195,9 @@ class DetailedRouterOptions:
     defer_zone_nets: bool = True
     guide_escape_nm: int = 0
     route_smoothing: bool = False
+    # A reserved package escape becomes one alternative terminal of its pad
+    # (see _escape_terminals); unused escape copper is released afterwards.
+    escape_terminals: bool = False
     maximum_ripup_blockers: int = 4
     minimum_repair_pitch_nm: int = nm_from_mm("0.1")
     # Bound of the per-run memo of exactly repeated repair searches; 0 disables
@@ -683,7 +686,7 @@ def route_detailed(
             frozenset(item.result.net for item in best.nets if item.result.connected),
             fanout_created_vias,
             fanout_created_tracks,
-            smooth=options.route_smoothing,
+            smooth=options.route_smoothing, release=options.escape_terminals,
         )
     routed = replace(
         board,
@@ -809,12 +812,16 @@ def _prune_fanout_copper(
     successful_nets: frozenset[str],
     created_vias: frozenset[tuple[str, Point]] | None,
     created_tracks: tuple[TrackSegment, ...] | None = None,
-    *, smooth: bool = False,
+    *, smooth: bool = False, release: bool = False,
 ) -> tuple[tuple[TrackSegment, ...], tuple[Via, ...]]:
     """Prune only explicitly owned lead-ins and unused owned anchor vias.
 
     With ``smooth``, the same owned copper is then straightened by
     ``route_smoothing``; immutable copper is never an input to that pass.
+    With ``release`` (R18), owned land/via/witness copper of a reserved
+    boundary access that a successful net does not need is removed first
+    (``release_unused_escapes``), and the rest of it may lose dead-end tails
+    to stub pruning; it is still never smoothed.
     """
 
     net_by_pad = {pad: net.name for net in board.nets for pad in net.pads}
@@ -838,6 +845,35 @@ def _prune_fanout_copper(
         else:
             retained.append(track)
     tracks = tuple(retained)
+    released: set[tuple[str, Point]] = set()
+    settled: set[str] = set()
+    if release and created_tracks is not None:
+        clearance = RoutingClearanceIndex(board)
+        chains = []
+        for pad, anchor in sorted(accesses.items()):
+            net = net_by_pad[pad]
+            if not isinstance(anchor, RoutingAccess) or net not in successful_nets:
+                continue
+            chain = verified_routing_access(board, pad, net, anchor, clearance)
+            if chain is None:
+                continue
+            via = next((item for item in vias if item.net == net
+                        and item.position == anchor.launch_position
+                        and (net, item.position) in (created_vias or frozenset())), None)
+            chains.append(EscapeChain(net, chain[:len(chain) - len(anchor.path)], anchor.path, via))
+            # Exact contact checks below decided this via; a centre-line test
+            # would miss a route touching its barrel off-centre.
+            released.add((net, anchor.launch_position))
+        # The settled copper must match the pruning below: new route copper
+        # and owned escape copper are disposable, as are new vias and owned
+        # launch vias of the released nets.
+        mutable = Counter(track for track in tracks if track.net in successful_nets)
+        mutable -= Counter(board.tracks) - owned
+        removable = Counter(via for via in vias if via.net in successful_nets) - Counter(board.vias)
+        removable.update(chain.via for chain in chains if chain.via is not None)
+        tracks, vias = release_unused_escapes(
+            board, tracks, vias, tuple(chains), owned, mutable_tracks=mutable,
+            removable_vias=removable, clearance=clearance, settled=settled)
     used_layers: dict[tuple[str, Point], set[CopperLayer]] = {
         anchor: set() for anchor in anchors
     }
@@ -846,7 +882,7 @@ def _prune_fanout_copper(
             net, point = key
             if track.net == net and point_on_segment(point, track.start, track.end):
                 used_layers[key].add(track.layer)
-    prunable = anchors & (created_vias or frozenset())
+    prunable = (anchors & (created_vias or frozenset())) - released
     vias = tuple(via for via in vias
                  if (via.net, via.position) not in prunable
                  or len(used_layers[(via.net, via.position)]) >= 2)
@@ -856,9 +892,15 @@ def _prune_fanout_copper(
     locked = Counter(board.tracks)
     reserved_nets = {net_by_pad[pad] for pad, anchor in accesses.items()
                      if isinstance(anchor, RoutingAccess)}
+    reserved = Counter()
     for track in created_tracks or ():
-        if track.net in successful_nets and track.net not in reserved_nets and locked[track]:
-            locked[track] -= 1
+        if track.net in successful_nets and locked[track]:
+            if track.net not in reserved_nets:
+                locked[track] -= 1
+            elif track.net in settled:
+                # Retained escape copper: prunable tails, never smoothed.
+                locked[track] -= 1
+                reserved[track] += 1
     immutable, mutable = [], []
     for track in tracks:
         if locked[track]:
@@ -871,6 +913,22 @@ def _prune_fanout_copper(
     mutable = prune_track_stubs(
         replace(board, tracks=tuple(immutable), vias=vias), tuple(mutable),
     )
+    if reserved:
+        originals = tuple(reserved)
+        routed = []
+        for track in mutable:
+            if reserved[track]:
+                reserved[track] -= 1
+                immutable.append(track)
+            elif any(item.net == track.net and item.layer is track.layer
+                     and item.width_nm == track.width_nm
+                     and point_on_segment(track.start, item.start, item.end)
+                     and point_on_segment(track.end, item.start, item.end)
+                     for item in originals):
+                immutable.append(track)  # A pruned remnant of escape copper.
+            else:
+                routed.append(track)
+        mutable = tuple(routed)
     if smooth:
         mutable = _smooth_owned(board, tuple(immutable), mutable, vias)
     return (*immutable, *mutable), vias
@@ -1209,6 +1267,7 @@ def _route_net(
     access_origins: dict[tuple[PadReference, DetailedNode], Point] = {}
     processed_groups = set()
     interconnected_accesses: set[PadReference] = set()
+    escaped: set[PadReference] = set()
     from .hard_macros import macro_routing_ports
     macro_ports = macro_routing_ports(board, name)
     for pad in sorted(pads):
@@ -1222,12 +1281,25 @@ def _route_net(
             processed_groups.add(key)
         anchor = (fanout_accesses or {}).get(pad)
         if isinstance(anchor, RoutingAccess):
-            if verified_routing_access(board, pad, name, anchor, clearance) is None:
+            chain = verified_routing_access(board, pad, name, anchor, clearance)
+            if chain is None:
                 return _failed(name, f"unverified boundary anchor for {pad.component}.{pad.pad}")
             pad_position = anchor.position
             node = DetailedNode(grid.layers.index(anchor.layer), grid.xs.index(pad_position.x_nm),
                                 grid.ys.index(pad_position.y_nm))
             candidates = (node,) if node not in grid.blocked else ()
+            if options.escape_terminals:
+                escaped.add(pad)
+                access_origins.setdefault((pad, node), pad_position)
+                alternatives = _escape_terminals(
+                    board, grid, name, anchor, chain, allowed, _surface_accesses(
+                        board, grid, pad, placement, footprint, group, macro_ports, allowed,
+                        clearance, name, width, options, allow_movable_conflicts)[0])
+                for candidate, origin in alternatives:
+                    access_origins.setdefault((pad, candidate), origin)
+                candidates = tuple(dict.fromkeys((*candidates, *(item for item, _ in alternatives))))
+                if len(candidates) > 1:
+                    interconnected_accesses.add(pad)
         elif anchor is not None:
             via = next((item for item in board.vias
                         if item.net == name and item.position == anchor), None)
@@ -1246,38 +1318,33 @@ def _route_net(
             pad_position = anchor
         else:
             pad_position = _pad_position(board, pad)
-            if group is None or pad in macro_ports:
-                origins = ((pad, pad_position, None),)
-            else:
-                from .placement import transformed_local_point
-                origins = tuple((PadReference(pad.component, land.number),
-                                 transformed_local_point(placement, land.position), land)
-                                for land in footprint.pads if land.number in group.numbers)
-                if len(origins) > 1:
-                    interconnected_accesses.add(pad)
-            all_candidates = []
-            for physical_reference, origin, land in origins:
-                for candidate in _access_candidates(
-                    board, grid, physical_reference, origin, allowed, clearance, name, width,
-                    options.pin_access_candidates, allow_movable_conflicts, physical_pad=land,
-                ):
-                    all_candidates.append(candidate)
-                    access_origins.setdefault((pad, candidate), origin)
-            candidates = tuple(dict.fromkeys(all_candidates))
+            surface, interconnected = _surface_accesses(
+                board, grid, pad, placement, footprint, group, macro_ports, allowed,
+                clearance, name, width, options, allow_movable_conflicts)
+            if interconnected:
+                interconnected_accesses.add(pad)
+            for candidate, origin in surface:
+                access_origins.setdefault((pad, candidate), origin)
+            candidates = tuple(dict.fromkeys(candidate for candidate, _ in surface))
         for candidate in candidates:
             access_origins.setdefault((pad, candidate), pad_position)
         if not candidates:
             return _failed(name, f"no legal pin access for {pad.component}.{pad.pad}")
         access_options.append((pad, pad_position, candidates))
+    # An escaped pin keeps the priority of its single reserved port: its
+    # alternative terminals do not make a crowded package pin unconstrained.
+    def constraint(item):
+        return 1 if item[0] in escaped else len(item[2])
     if options.constrained_pins_first and len(access_options) > 1:
-        access_options.sort(key=lambda item: (len(item[2]), item[0]))
+        access_options.sort(key=lambda item: (constraint(item), item[0]))
     tree: set[DetailedNode] = set()
     chosen_accesses: list[tuple[PadReference, Point, DetailedNode]] = []
     pending_internal_accesses: dict[DetailedNode, tuple[PadReference, Point, DetailedNode]] = {}
 
     def attach_internal_accesses(entry: tuple[PadReference, Point, tuple[DetailedNode, ...]]) -> None:
-        # Only declared conductive groups can create virtual tree roots.
-        # Materialize an off-pad access stub only if a later branch uses it.
+        # Only declared conductive groups and the alternative terminals of an
+        # escaped pad (R18) create virtual tree roots. Materialize an off-pad
+        # access stub only if a later branch uses it.
         if entry[0] not in interconnected_accesses:
             return
         for candidate in entry[2]:
@@ -1338,7 +1405,7 @@ def _route_net(
         target_entry = min(
             remaining,
             key=lambda item: (
-                len(item[2]) if options.constrained_pins_first else 0,
+                constraint(item) if options.constrained_pins_first else 0,
                 min(_heuristic(grid, candidate, node, options)
                     for candidate in item[2] for node in starts),
                 item[0],
@@ -1387,6 +1454,15 @@ def _route_net(
         # different state. A reconstructed walk is not necessarily a simple
         # copper path; erase its closed excursions before committing edges.
         path = _erase_path_loops(path)
+        if escaped and tree:
+            # Terminate on touch: a walk that passes another tree node, or a
+            # not yet materialized alternative terminal, already connects
+            # there. Start from the last such node instead of closing a loop.
+            last = max((index for index, (first, _, _) in enumerate(path) if first in tree),
+                       default=0)
+            path = path[last:]
+            if path:
+                root = path[0][0]
         internal_root = pending_internal_accesses.pop(root, None)
         if internal_root is not None:
             chosen_accesses.append(internal_root)
@@ -1991,6 +2067,10 @@ def _build_grid(
         access_position(fanout_accesses[pad]) for pad in pads
         if fanout_accesses is not None and pad in fanout_accesses
     )
+    if options.escape_terminals and fanout_accesses is not None:
+        # A reserved launch via is itself a terminal on each layer it spans.
+        pin_points += tuple(fanout_accesses[pad].launch_position for pad in pads
+                            if isinstance(fanout_accesses.get(pad), RoutingAccess))
     xs = tuple(sorted(set(range(min_x, max_x + 1, options.pitch_nm)).union(
         point.x_nm for point in pin_points
     )))
@@ -2059,6 +2139,77 @@ def _access_path(
     """
     return checked_access_path(board, clearance, net, start, end, width_nm, layer,
                                allow_movable_conflicts)
+
+
+def _surface_accesses(
+    board: PhysicalBoard, grid: _Grid, pad: PadReference, placement: Placement,
+    footprint, group, macro_ports, allowed: tuple[CopperLayer, ...],
+    clearance: RoutingClearanceIndex, net: str, width_nm: int,
+    options: DetailedRouterOptions, allow_movable_conflicts: bool,
+) -> tuple[tuple[tuple[DetailedNode, Point], ...], bool]:
+    """A pad's own exact access candidates with their land origins.
+
+    Returns (candidate, origin) pairs in selection order and whether several
+    lands of a declared conductive group contribute.
+    """
+    if group is None or pad in macro_ports:
+        origins = ((pad, _pad_position(board, pad), None),)
+    else:
+        from .placement import transformed_local_point
+        origins = tuple((PadReference(pad.component, land.number),
+                         transformed_local_point(placement, land.position), land)
+                        for land in footprint.pads if land.number in group.numbers)
+    result = []
+    for physical_reference, origin, land in origins:
+        for candidate in _access_candidates(
+            board, grid, physical_reference, origin, allowed, clearance, net, width_nm,
+            options.pin_access_candidates, allow_movable_conflicts, physical_pad=land,
+        ):
+            result.append((candidate, origin))
+    return tuple(result), len(origins) > 1
+
+
+def _escape_terminals(
+    board: PhysicalBoard, grid: _Grid, net: str, anchor: RoutingAccess,
+    chain: tuple[TrackSegment, ...], allowed: tuple[CopperLayer, ...],
+    surface: tuple[tuple[DetailedNode, Point], ...],
+) -> tuple[tuple[DetailedNode, Point], ...]:
+    """Alternative terminals of a pad whose escape is reserved (R18).
+
+    The reserved port is only one way into the pad. Grid nodes on the
+    verified land/witness centre lines and the launch via's allowed layers
+    touch copper already connected to the pad, so they need no access path;
+    the pad's own surface candidates keep their checked lead-ins. Copper
+    the final route leaves unused is released by ``release_unused_escapes``.
+    """
+    result: list[tuple[DetailedNode, Point]] = []
+    layer_indexes = {layer: index for index, layer in enumerate(grid.layers)}
+    launch = anchor.launch_position
+    via = next((item for item in board.vias if item.net == net and item.position == launch), None)
+    span = range(layer_indexes[via.from_layer], layer_indexes[via.to_layer] + 1) if via else ()
+    x_index, y_index = bisect_left(grid.xs, launch.x_nm), bisect_left(grid.ys, launch.y_nm)
+    if (x_index < len(grid.xs) and grid.xs[x_index] == launch.x_nm
+            and y_index < len(grid.ys) and grid.ys[y_index] == launch.y_nm):
+        for layer in allowed:
+            index = layer_indexes[layer]
+            if index in span:
+                node = DetailedNode(index, x_index, y_index)
+                if node not in grid.blocked:
+                    result.append((node, launch))
+    for track in chain:
+        if track.layer not in allowed:
+            continue
+        index = layer_indexes[track.layer]
+        low_x, high_x = sorted((track.start.x_nm, track.end.x_nm))
+        low_y, high_y = sorted((track.start.y_nm, track.end.y_nm))
+        for xi in range(bisect_left(grid.xs, low_x), bisect_left(grid.xs, high_x + 1)):
+            for yi in range(bisect_left(grid.ys, low_y), bisect_left(grid.ys, high_y + 1)):
+                point = Point(grid.xs[xi], grid.ys[yi])
+                node = DetailedNode(index, xi, yi)
+                if node not in grid.blocked and point_on_segment(point, track.start, track.end):
+                    result.append((node, point))
+    result.extend(surface)
+    return tuple(result)
 
 
 def _access_candidates(

@@ -798,12 +798,12 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-082 | Accepted | Non-plated footprint drills are mechanical obstacles across every copper layer, including when their pad number is empty. Routing and native DRC enforce the board's explicit minimum copper-to-hole clearance, which is exported to KiCad project rules and bound to the physical signoff digest. The only exception is a `hole_clearance(COMPONENT)` constraint: it applies a smaller, reasoned value between that component's own copper pads and its own non-plated holes, and nothing else. Native DRC records every pair that passes only because of it, the value enters the signoff digest, and the export writes a matching same-stem `.kicad_dru` rule so KiCad's DRC agrees. |
 | CS-083 | Accepted | Detailed-route repair distinguishes an exhausted search budget from an exhaustive no-path result. A coarse-grid no-path failure receives one bounded half-pitch retry (not finer than 0.25 mm); budget exhaustion does not inflate the search graph. All retries retain exact copper and hole-clearance checks. |
 | CS-084 | Accepted | Multi-pass detailed routing retains two baseline admissible-heuristic passes, then varies weighted-A* guidance deterministically across later passes. Every proposed route still passes exact geometric clearance, and the merge stage accepts only compatible complete alternatives; search-weight diversity never weakens the physical-rule gate. |
-| CS-085 | Accepted | Dense SMD fanout is an explicit physical package-access stage before ordinary detailed routing. With fanout enabled, CS-131 moves ordinary local reservations ahead of critical long routes. It uses legal, non-via-in-pad track/via pairs, preserves exact clearance, records unresolved pads, and exposes only verifiable locked-copper via anchors to the downstream router. Fanout is not electrical connectivity intent or a proof of overall route completion. |
+| CS-085 | Accepted | Dense SMD fanout is an explicit physical package-access stage before ordinary detailed routing. With fanout enabled, CS-131 moves ordinary local reservations ahead of critical long routes. It uses legal, non-via-in-pad track/via pairs, preserves exact clearance, records unresolved pads, and exposes only verifiable locked-copper via anchors to the downstream router. Fanout is not electrical connectivity intent or a proof of overall route completion. With CS-163 a reserved escape is one terminal of its pad, not its replacement. |
 | CS-086 | Accepted | Placement feedback may use exact detailed-routing failures after global routing. It moves only legal, movable components on a bounded trial set, reruns every routing and DRC stage from an unrouted placement, and accepts only a strictly improved completion/DRC score. Existing copper is never dragged implicitly with a component. |
 | CS-087 | Accepted | Detailed repair may transactionally rip up a bounded group of ordinary nets, but cannot displace locked critical/fanout copper. It tries deterministic displaced-net orders, rebuilds the clearance state for each trial, and commits only when the candidate and every displaced net reconnect. A failed trial leaves the original route unchanged. Within one routing run, a search repeated with identical inputs (board and checkpoint identity, ordered clearance insertions, net, rule, guide, anchors, congestion, mode and options) may return the earlier attempt from a bounded memo; any changed blocking geometry is a new search, and reuse never changes selected copper. |
 | CS-088 | Accepted | Filled-plane connectivity requires version-qualified, same-stem KiCad PCB/project refill and DRC evidence bound to the exact source, exported, filled-board, and report bytes. Any open connection, isolated island, missing report field, tool error, or other DRC violation fails the gate. Provisional zone outlines and pad stitching never count as this evidence. |
 | CS-089 | Accepted | Drill-to-drill spacing is checked independently of electrical net, including same-net via pairs and via-to-plated-pad holes. The incremental router and authoritative native DRC share this requirement; copper clearance alone cannot certify hole spacing. An existing same-net via may be reused at its exact position without drilling another hole. |
-| CS-090 | Accepted | Pre-escape vias are provisional until a detailed route uses a second copper layer. After routing, an unused fanout via is removed while its connected surface stub may remain; abandoned stubs and vias of failed nets are removed. KiCad dangling-via findings remain a required independent check. |
+| CS-090 | Accepted | Pre-escape vias are provisional until a detailed route uses a second copper layer. After routing, an unused fanout via is removed while its connected surface stub may remain; abandoned stubs and vias of failed nets are removed. With CS-163, the land, via and boundary witness copper a successful net does not need is released transactionally and no stub is left open. KiCad dangling-via findings remain a required independent check. |
 | CS-091 | Accepted | Global resources estimate usable copper crossings and legal via sites from physical geometry, never from footprint courtyards. A through-via consumes one shared site resource across its full physical span. Pads may offer multiple individually DRC-checked local access candidates; a `region_only` access certifies only its pad exit, not a complete path to the coarse guide center, and is reported separately. Only detailed copper plus DRC can establish connectivity. |
 | CS-092 | Accepted | A nearly board-wide inner copper zone reserves that layer for its net. Foreign-net global, critical, fanout, and detailed tracks may not consume it; legal through-vias may cross it. Coarse guides are geometric capacity reservations rather than mandatory detailed-route layers, so bounded detailed search may project a guide across other allowed signal layers while retaining exact via and copper checks. |
 | CS-093 | Accepted | Repeated footprint lands with one logical pad number remain separate physical copper objects. A bounded, exact-clearance post-route stitch may join them; separate legal plane contacts may also join them only after authoritative filled-plane verification. Blocked lands are reported, not silently accepted as externally connected. Native logical-pin connectivity and independent KiCad physical connectivity must both pass before release. |
@@ -1251,7 +1251,8 @@ per-net allowed layers/widths and fresh native geometry. Invalid arguments MUST
 fail without changing input geometry. Blocked preflights MUST NOT commit witnesses.
 
 Detailed routing and subset repairs consume explicit selected-layer ports,
-not unrestricted via-center aliases. Every claimed path MUST exist and validate;
+not unrestricted via-center aliases (with CS-163, as one of the pad's verified
+terminals). Every claimed path MUST exist and validate;
 missing or stale access MUST NOT silently revert to pad-center routing.
 Preserve dogbone identities separately for upstream pattern negotiation.
 Only newly appended ordinary track occurrences acquire cleanup ownership;
@@ -1451,3 +1452,37 @@ copper MUST remain; a net whose explicit-copper islands or via contacts would
 change keeps its original copper. Vias, immutable, critical, reserved boundary
 and zone-net copper are never inputs. The library default is off; the board
 router enables it unless `--no-route-smoothing` is given.
+
+## CS-163 — Escape terminals and release of unused escape copper (Accepted)
+
+A materialized ordinary boundary access (CS-153) MAY be one terminal of its pad
+rather than its replacement. With `escape_terminals` (library default off; the
+board router enables it unless `--no-escape-terminals` is given) detailed
+routing also offers grid nodes on the verified land and witness centre lines and
+the launch via on each permitted layer it spans, which need no lead-in, and the
+pad's own exact surface access candidates. The escape stays reserved for the
+whole routing run and the pin keeps its constrained-first priority, so a
+genuinely constrained pin keeps a legal exit. Once one terminal of the pad
+connects, the others are virtual tree roots, materialized only if a later
+branch starts there; a branch walk that passes a tree node starts from the last
+such node instead of closing a loop. Unverified access still fails closed.
+
+After routing, owned escape copper a successful net does not need is released
+transactionally, per access: land, via and witness; else via and witness; else
+the witness. A bounded pass then removes disposable branches that close
+same-net loops. Each trial simulates cleanup (pruning owned dead ends, including
+those beyond a land or via centre, and deleting new or owned vias left on one
+layer) and is kept only if, judged on copper shrunk by 1 µm, the net stays
+connected and gains no island, open track end or single-layer via. Only owned
+occurrences of that net change; critical, macro, plane, input and other-net
+copper never do. Retained escape copper may lose dead-end tails but is never
+smoothed (CS-162). The CS-131/CS-152/CS-153 readiness gates, exact clearance,
+ownership and rollback are unchanged. A released escape is not a stale
+reservation: later subset reroutes treat that pin as an ordinary surface
+terminal. Only nets with a reserved escape are affected.
+
+Escape selection is unchanged: every escape is now a fallback dropped if unused,
+not proof that an unreserved pin would have routed. Destination-facing boundary
+ports (`--package-destination-ports`) remain opt-in because they lengthened
+routes on the iteration board. See R18 in the
+[routing review checklist](routing-review-todo.md).
