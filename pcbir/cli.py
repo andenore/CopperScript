@@ -431,6 +431,22 @@ def _parser() -> argparse.ArgumentParser:
         help="soft detailed-route inner-layer heading cost; global cost is half (default: 2; 0 disables)",
     )
     board_route_parser.add_argument(
+        "--layer-assignment-passes", type=int, choices=range(9), default=0,
+        help="opt-in crossing/demand-aware relabelling sweeps of ordinary global runs (default: 0, off)",
+    )
+    board_route_parser.add_argument(
+        "--local-demand-cost", type=int, default=0,
+        help="soft per-mm layer-assignment cost of a full global edge at --pitch-mm lanes (default: 0)",
+    )
+    board_route_parser.add_argument(
+        "--guide-escape-mm", default="0", type=_nonnegative_mm,
+        help="opt-in corridor radius around fixed-layer terminals that may change to the guide layer (default: 0, off)",
+    )
+    board_route_parser.add_argument(
+        "--no-route-smoothing", action="store_true",
+        help="keep accepted ordinary copper instead of straightening removable bends and detours",
+    )
+    board_route_parser.add_argument(
         "--zone-escape-movement-mm", default="0.5", type=_positive_mm,
         help="local placement step for plane-pad escape feedback (default: 0.5 mm)",
     )
@@ -895,6 +911,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     maximum_iterations=args.router_iterations,
                     layer_preference_cost=max(0, args.layer_preference_cost // 2),
                     direction_preference_cost=max(0, args.direction_preference_cost // 2),
+                    layer_assignment_passes=args.layer_assignment_passes,
+                    local_demand_cost=max(0, args.local_demand_cost),
+                    local_demand_pitch_nm=nm_from_mm(args.pitch_mm),
                 )
                 placement_options = _planner_options(args)
                 feedback_options = PlacementRoutingFeedbackOptions(
@@ -916,6 +935,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     search_reuse_entries=args.search_reuse_entries,
                     layer_preference_cost=args.layer_preference_cost,
                     direction_preference_cost=args.direction_preference_cost,
+                    guide_escape_nm=nm_from_mm(args.guide_escape_mm),
+                    route_smoothing=not args.no_route_smoothing,
                 )
                 fanout_options = FanoutOptions(
                     step_nm=nm_from_mm(args.fanout_step_mm),

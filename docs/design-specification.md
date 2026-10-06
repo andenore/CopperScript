@@ -2,7 +2,7 @@
 
 **Status:** Draft specification with accepted architectural decisions
 **Applies to:** CopperScript language, compiler, IRs, rule engines, and backends
-**Last updated:** 2026-10-05
+**Last updated:** 2026-10-06
 
 This document records the durable design decisions for CopperScript. It is the
 normative architectural reference; the README explains usage and the language
@@ -1418,3 +1418,36 @@ Native refill/all-severity DRC and manufacturing gates are unchanged. Never
 remove mandatory vias under the default policy, add dummy copper merely to
 suppress a warning, or suppress `via_dangling`. See the
 [implementation plan](shared-reference-return-plan.md).
+
+## CS-161 — Crossing- and demand-aware ordinary layer assignment (Accepted)
+
+After negotiated global routing, an ordinary (`GENERAL`) net's via-bounded
+planar guide run MAY be relabelled to another permitted signal layer when that
+lowers its soft cost: the unchanged rank/heading preference, one via pair per
+forced same-layer crossing (two guides passing straight through one tile in
+perpendicular directions) and an optional local-demand cost against detailed
+lanes. The pass MUST keep every tile path, via position and count, access pad
+and the global quality vector; it MUST NOT move dedicated planes, explicit
+`allowed_layers`, critical/paired/power guides, non-via pin accesses or
+inner-to-inner transitions, merge same-net runs, or exceed edge capacity.
+Detailed corridor search MAY admit the projected corridor on any permitted
+layer within a configured radius of a fixed-layer terminal, so a reserved port
+can change to its guide layer there. Both mechanisms are opt-in: while every
+ordinary package terminal is a rank-0 boundary port, forcing other layers adds
+transitions beside package collars and destabilized full-vertical closure.
+Guides remain intent, never clearance evidence; exact checks and acceptance
+gates are unchanged. Spare-looking layers are not qualified reference planes.
+See the [layer-balance review](routing-layer-balance-review.md).
+
+## CS-162 — Ownership-safe smoothing of accepted ordinary copper (Accepted)
+
+After detailed routing and owned-stub pruning, owned ordinary track chains MAY
+be straightened: a sub-chain between anchors (vias, branches, width changes,
+immutable copper and interior contacts) is replaced by one straight or one
+45-degree-plus-straight connection only if it is never longer, never sharper,
+and shorter or less sharp overall. Every new segment MUST pass exact clearance,
+keepout and outline checks; every pad and via-layer contact of the retired
+copper MUST remain; a net whose explicit-copper islands or via contacts would
+change keeps its original copper. Vias, immutable, critical, reserved boundary
+and zone-net copper are never inputs. The library default is off; the board
+router enables it unless `--no-route-smoothing` is given.

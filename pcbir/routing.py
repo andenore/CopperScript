@@ -261,6 +261,9 @@ class GlobalRouterOptions:
     layer_preference_cost: int = 2
     direction_preference_cost: int = 1
     guide_half_width_tiles: int = 1
+    layer_assignment_passes: int = 0
+    local_demand_cost: int = 0
+    local_demand_pitch_nm: int = 0
     pin_access_candidates: int = 4
     escape_radius_nm: int = nm_from_mm("3")
     escape_step_nm: int = nm_from_mm("0.5")
@@ -278,6 +281,9 @@ class GlobalRouterOptions:
             self.bend_cost,
             self.layer_preference_cost,
             self.direction_preference_cost,
+            self.layer_assignment_passes,
+            self.local_demand_cost,
+            self.local_demand_pitch_nm,
         ) < 0:
             raise ValueError("global router costs cannot be negative")
         if self.guide_half_width_tiles < 0:
@@ -303,6 +309,7 @@ class _Graph:
     via_sites: Mapping[str, tuple[Point, ...]]
     layer_ranks: Mapping[CopperLayer, int]
     preferred_headings: Mapping[CopperLayer, str]
+    demand_lanes: int = 0
 
     def point(self, node: GridNode) -> Point:
         return Point(self.xs[node.x_index], self.ys[node.y_index])
@@ -365,6 +372,11 @@ def route_global(
             history[identifier] += max(0, used - capacities[identifier])
         present *= max(1, options.present_penalty_growth)
     assert best is not None
+    if options.layer_assignment_passes:
+        from .layer_assignment import assign_ordinary_layers
+        assigned = assign_ordinary_layers(board, graph, best.routes, rules, access_options, options)
+        if assigned != best.routes:
+            best = _attempt(board, graph, rules, assigned, options, best.metrics.iterations)
     metrics = GlobalRoutingMetrics(
         best.metrics.routed_net_count,
         best.metrics.unrouted_net_count,
@@ -411,7 +423,6 @@ def _route_iteration(
     iteration: int,
 ) -> _Attempt:
     usage: dict[str, int] = {item.identifier: 0 for item in graph.resources.values()}
-    contributors: dict[str, list[str]] = {item.identifier: [] for item in graph.resources.values()}
     routes: list[GlobalNetRoute] = []
     ordered_nets = sorted(
         (net for net in board.nets if len(net.pads) >= 2),
@@ -454,7 +465,30 @@ def _route_iteration(
         } | {item.resource_id for item in route.vias}
         for identifier in sorted(used_resources):
             usage[identifier] += demand
-            contributors[identifier].append(net.name)
+    return _attempt(board, graph, rules, tuple(routes), options, iteration)
+
+
+def _attempt(
+    board: PhysicalBoard,
+    graph: _Graph,
+    rules: Mapping[str, NetRoutingRule],
+    routes: tuple[GlobalNetRoute, ...],
+    options: GlobalRouterOptions,
+    iteration: int,
+) -> _Attempt:
+    """Measure committed guides in routing order; usage is per net and resource."""
+    usage: dict[str, int] = {item.identifier: 0 for item in graph.resources.values()}
+    contributors: dict[str, list[str]] = {item.identifier: [] for item in graph.resources.values()}
+    for route in routes:
+        if not route.connected:
+            continue
+        demand = _net_demand(board, rules.get(route.net), options)
+        used_resources = {
+            item.resource_id for item in route.segments
+        } | {item.resource_id for item in route.vias}
+        for identifier in sorted(used_resources):
+            usage[identifier] += demand
+            contributors[identifier].append(route.net)
     capacities = {
         resource.identifier: resource.capacity
         for resource in graph.resources.values()
@@ -811,8 +845,10 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
     if not resources:
         raise ValueError("global routing capacity graph is empty")
     layer_ranks, preferred_headings = signal_layer_preferences(board)
+    demand_lanes = (max(1, options.tile_size_nm // options.local_demand_pitch_nm)
+                    if options.local_demand_pitch_nm else 0)
     return _Graph(tuple(board.stackup.copper_layers), xs, ys, frozenset(legal),
-                  resources, via_sites, layer_ranks, preferred_headings)
+                  resources, via_sites, layer_ranks, preferred_headings, demand_lanes)
 
 
 def _add_resource(

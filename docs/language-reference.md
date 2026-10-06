@@ -1249,6 +1249,17 @@ coordinates does not change the cost of an identical straight run. Physical
 and exact copper clearance checks. This does not guarantee that every route
 will be octilinear: short pad accesses and orthogonal-budget fallbacks remain.
 
+Opt-in `--layer-assignment-passes N` (default 0) relabels ordinary
+via-bounded guide runs onto another permitted signal layer after global
+negotiation when that avoids forced same-layer crossings (priced as one via
+pair each) or, with `--local-demand-cost` (per mm at a full edge, counted in
+`--pitch-mm` lanes), a crowded channel. Tile paths and via counts do not
+change; planes, explicit layers and critical/paired/power guides are fixed.
+Opt-in `--guide-escape-mm` lets the detailed corridor change layer next to a
+reserved fixed-layer terminal. Accepted ordinary copper is straightened by
+default; `--no-route-smoothing` keeps it as searched. Smoothing never moves
+vias, reserved or immutable copper.
+
 ## KiCad schematic export
 
 Generate a KiCad 8 schematic after ERC succeeds:

@@ -139,5 +139,10 @@ remain; these files are not an order approval or an assembled-board guarantee.
   [exact repair-search reuse](repair-search-reuse.md).
 - [ ] Improve ownership-safe corridor/layer choices and confirmed removable
   bends without losing the accepted clean board or its reference assumptions.
+  Partly addressed by crossing/demand-aware ordinary layer assignment, corridor
+  escape and owned-route smoothing; see the
+  [layer-balance review](routing-layer-balance-review.md). Most remaining
+  In2.Cu sharp turns sit at reserved In2.Cu boundary ports, a separate
+  terminal-access work item.
 - [ ] Qualify concrete parts/support circuits, layer-specific impedance and
   assembly data before labeling this fixture a production-ready reference.

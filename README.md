@@ -277,6 +277,10 @@ move components under existing copper. Soft plane-aware layer costs and
 alternating inner-layer directions can be tuned with
 `--layer-preference-cost` and `--direction-preference-cost` (zero disables
 either preference); they do not override explicit layer restrictions or DRC.
+Accepted ordinary copper is straightened unless `--no-route-smoothing` is
+given. Opt-in `--layer-assignment-passes`, `--local-demand-cost` and
+`--guide-escape-mm` move ordinary guide runs away from same-layer crossings and
+full channels; see the [layer-balance review](docs/routing-layer-balance-review.md).
 For intentional diagonal placement, add a
 `constraint allowed_orientations(U1) { values = "0,45,90"; }`; unconstrained
 parts retain 0/90/180/270-degree candidates.

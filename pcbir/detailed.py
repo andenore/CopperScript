@@ -20,6 +20,7 @@ from .geometry import (RoundedConvexShape, orientation, point_on_segment, point_
                        segment_in_polygon, shape_distance_squared)
 from .route_style import chamfer_ordinary_corners
 from .route_cleanup import prune_track_stubs
+from .route_smoothing import smooth_owned_tracks
 from .mechanical import point_in_material, shape_in_board
 from .physical import (
     BoardSide,
@@ -192,6 +193,8 @@ class DetailedRouterOptions:
     progressive_guides: bool = False
     repair_budget_multiplier: int = 1
     defer_zone_nets: bool = True
+    guide_escape_nm: int = 0
+    route_smoothing: bool = False
     maximum_ripup_blockers: int = 4
     minimum_repair_pitch_nm: int = nm_from_mm("0.1")
     # Bound of the per-run memo of exactly repeated repair searches; 0 disables
@@ -213,6 +216,7 @@ class DetailedRouterOptions:
             self.layer_preference_cost,
             self.direction_preference_cost,
             self.guide_margin_nm,
+            self.guide_escape_nm,
         ) < 0:
             raise ValueError("detailed router costs cannot be negative")
         if not 100 <= self.heuristic_weight_percent <= 300:
@@ -663,6 +667,8 @@ def route_detailed(
     )
     all_tracks = tuple((*board.tracks, *new_tracks))
     all_vias = tuple((*board.vias, *new_vias))
+    if options.route_smoothing and not fanout_accesses:
+        all_tracks = (*board.tracks, *_smooth_owned(board, board.tracks, new_tracks, all_vias))
     if fanout_accesses:
         cleanup_accesses = fanout_accesses
         if only_nets is not None:
@@ -677,6 +683,7 @@ def route_detailed(
             frozenset(item.result.net for item in best.nets if item.result.connected),
             fanout_created_vias,
             fanout_created_tracks,
+            smooth=options.route_smoothing,
         )
     routed = replace(
         board,
@@ -802,8 +809,13 @@ def _prune_fanout_copper(
     successful_nets: frozenset[str],
     created_vias: frozenset[tuple[str, Point]] | None,
     created_tracks: tuple[TrackSegment, ...] | None = None,
+    *, smooth: bool = False,
 ) -> tuple[tuple[TrackSegment, ...], tuple[Via, ...]]:
-    """Prune only explicitly owned lead-ins and unused owned anchor vias."""
+    """Prune only explicitly owned lead-ins and unused owned anchor vias.
+
+    With ``smooth``, the same owned copper is then straightened by
+    ``route_smoothing``; immutable copper is never an input to that pass.
+    """
 
     net_by_pad = {pad: net.name for net in board.nets for pad in net.pads}
     abandoned_nets: set[str] = set()
@@ -856,10 +868,21 @@ def _prune_fanout_copper(
             mutable.append(track)
         else:
             immutable.append(track)
-    tracks = tuple((*immutable, *prune_track_stubs(
+    mutable = prune_track_stubs(
         replace(board, tracks=tuple(immutable), vias=vias), tuple(mutable),
-    )))
-    return tracks, vias
+    )
+    if smooth:
+        mutable = _smooth_owned(board, tuple(immutable), mutable, vias)
+    return (*immutable, *mutable), vias
+
+
+def _smooth_owned(
+    board: PhysicalBoard, immutable: tuple[TrackSegment, ...],
+    owned: tuple[TrackSegment, ...], vias: tuple[Via, ...],
+) -> tuple[TrackSegment, ...]:
+    """Straighten accepted owned copper against the complete final board."""
+    clearance = RoutingClearanceIndex(replace(board, tracks=(*immutable, *owned), vias=vias))
+    return smooth_owned_tracks(replace(board, tracks=immutable, vias=vias), owned, clearance)
 
 
 def _repair_from_passes(
@@ -1591,6 +1614,12 @@ def _search_once(
             heuristic_cache[node] = value
         return value
 
+    escape = options.guide_escape_nm if corridor_only and not project_guide_layers else 0
+    terminals: dict[tuple[int, int], list[Point]] = {}
+    for node in (*starts, *targets) if escape else ():
+        point = grid.point(node)
+        terminals.setdefault((point.x_nm // escape, point.y_nm // escape), []).append(point)
+
     def inside_guide(node: DetailedNode) -> bool:
         value = guide_cache.get(node)
         if value is None:
@@ -1598,6 +1627,16 @@ def _search_once(
                 grid, node, guide, guide_margin_nm,
                 ignore_layer=project_guide_layers,
             )
+            if not value and escape:
+                # A fixed terminal layer may differ from its guide layer.
+                # Admit any allowed layer of the projected corridor beside
+                # a terminal so the search can change layer there.
+                point = grid.point(node)
+                column, row = point.x_nm // escape, point.y_nm // escape
+                value = (any(max(abs(point.x_nm - item.x_nm), abs(point.y_nm - item.y_nm)) <= escape
+                             for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                             for item in terminals.get((column + dx, row + dy), ()))
+                         and _inside_guide(grid, node, guide, guide_margin_nm, ignore_layer=True))
             guide_cache[node] = value
         return value
 

@@ -21,3 +21,15 @@ def preference_cost(first: Point, second: Point, rank: int, layer_cost: int,
     # Half-rate diagonal heading penalties retain integer-nanometre precision.
     rate_twice = 2 * rank * layer_cost + (wrong_way_cost if diagonal else 2 * wrong_way_cost)
     return length_cost(first, second, rate_twice) // 2
+
+
+def demand_cost(first: Point, second: Point, rate: int, usage: int, capacity: int) -> int:
+    """Soft run cost of already-committed local demand, before any overflow.
+
+    ``rate`` is charged per millimetre at full utilization, in the same units
+    as ``length_cost``. Saturating at capacity keeps overflow a separate,
+    negotiated penalty rather than double counting it here.
+    """
+    if rate <= 0 or usage <= 0 or capacity <= 0:
+        return 0
+    return length_cost(first, second, rate) * min(usage, capacity) // capacity
