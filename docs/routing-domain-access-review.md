@@ -160,3 +160,9 @@ the ordinary ones; the remaining GND warning was already present at preflight.
 
 See the [next closure checklist](power-domain-routing-plan.md#next-closure-work).
 Manufacturing export remains blocked until the corrected complete flow passes.
+
+**Subsequent result:** the [clean `52adb05` rerun](routing-shared-reference-review.md)
+now passes with zero resource overflow and zero native violations/opens. All
+six saved layers were reviewed and manufacturing files generated using the
+user-requested native-only CAM workflow. This does not change the historical
+failed reports above or qualify the electrical design/assembly selections.

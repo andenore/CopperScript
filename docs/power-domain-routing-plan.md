@@ -144,11 +144,16 @@ is waived and no manufacturing output is released.
   occupies a removed corner; retain live resource conflicts and exact DRC.
   Applies per tentative net, before installing occupancy for the next search;
   the complete board still needs a rerun after the correction.
-- [ ] Resolve the unconnected-surface USB return via generically. Check actual
+- [x] Resolve the unconnected-surface USB return via generically. Check actual
   reference-layer/contact requirements and preserve explicit source requirements;
   do not delete a required via, invent copper solely to silence DRC, or waive the
   warning. A shared reference-plane case needs an explicit modeled policy.
   Implementation/verification is tracked in the
   [shared-reference return plan](shared-reference-return-plan.md).
-- [ ] Repeat the complete flow after those fixes, requiring zero native opens
+- [x] Repeat the complete flow after those fixes, requiring zero native opens
   and violations and no stale/real resource overflow before manufacturing export.
+
+The [subsequent clean-revision rerun](routing-shared-reference-review.md) passes
+all routing/native gates, audits all six filled layers and generates native
+Gerber/drill files. The old failed run is retained. Qualification and the
+separate repository-wide CAM/CM4 fixture issues are not represented as fixed.

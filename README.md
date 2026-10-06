@@ -311,46 +311,47 @@ duplicate-land closure and feedback reports without changing the verified copper
 
 This runs the complete placement/global-routing, fanout, detailed-routing,
 package-ground escape feedback, native DRC and independent KiCad plane-check
-workflow used for the [second routing review](docs/routing-review-pass2.md).
-It generates a **reviewable PCB draft**, not production Gerbers.
+workflow. The [2026-10-06 clean-revision rerun](docs/routing-shared-reference-review.md)
+at `52adb05` passes with **49/49 ordinary nets, all eight critical nets, zero
+resource overflow and zero KiCad violations/unconnected items**. Every saved
+copper layer has zero via/pad overlaps and zero off-angle tracks. The run takes
+about 30 minutes without function profiling. Native manufacturing-file export
+also succeeds; electrical, impedance and assembly qualification remain separate.
 
-The current example adds explicit critical USB/RF profiles. Those change the
-input intent relative to the recorded second/third-pass run. The
-[pass-5 joint paired search](docs/routing-review-pass5.md) connected both USB
-pairs without vias or hard copper violations. Subsequent source-backed
-[RF circuit corrections](docs/rf-layout-audit.md) change the netlist again:
-at the old placement, new critical reservations leave the modem pair pending.
-The command below is still the full workflow, not a reproduction of the
-historical zero-open copper. Run the [cheap critical preflight](docs/full-vertical-example.md#explicit-critical-profiles-and-cheap-preflight)
-first; RF cluster placement, return-path and complete-board rerun work remain.
+The current example has explicit USB/RF profiles, source-backed
+[RF circuit corrections](docs/rf-layout-audit.md), fixed mechanical anchors,
+power-domain-aware placement and negotiated package access. USB transitions
+explicitly share the declared In1.Cu reference; required return vias remain the
+default for other policies. The command below recomputes the current source,
+not a historical board. The [cheap critical preflight](docs/full-vertical-example.md#explicit-critical-profiles-and-cheap-preflight)
+is also available for inspecting access before a long run.
 
 If exact critical routing fails, optionally add `--critical-feedback-trials 1`
 to `route-board` or the critical preflight. This bounded
 [critical placement feedback](docs/critical-placement-feedback.md) tries legal
 whole-unit rotations/moves and rebuilds all critical copper; it does not relax
 profile limits or imply fabrication readiness. Each trial can take minutes.
-The [pass-9 verification](docs/routing-review-pass9.md) connects both USB pairs
-geometrically, but used an incorrect choke winding mapping. **Do not fabricate
-those historical USB routes.** [Pass 11](docs/routing-review-pass11.md) corrects
-the CopperLib mapping from Coilcraft's schematic and reruns from fresh placement.
-Copper DRC cannot validate internal component connections. Ordinary routing and
-electrical qualification remain open.
+The historical [pass-9 verification](docs/routing-review-pass9.md) used an
+incorrect choke winding mapping. **Do not fabricate those historical USB
+routes.** [Pass 11](docs/routing-review-pass11.md) corrected the CopperLib mapping
+from Coilcraft's schematic. Copper DRC cannot validate internal component
+connections; electrical qualification remains open even with clean routing.
 The [paired refinement pass](docs/routing-review-pass10.md) removes redundant
 search-step segments while preserving connectivity. It does not yet shorten
 the real-board USB detours.
 The [access/miter review](docs/routing-review-pass12.md) removes the oblique RF
 access segments and small USB backtrack at the unchanged corrected placement.
-All eight critical nets remain connected. The corrected-input
-[full rerun and six-layer review](docs/routing-review-pass13.md) keeps their
+All eight critical nets remain connected. The earlier corrected-input
+[full rerun and six-layer review](docs/routing-review-pass13.md) kept their
 copper and all 51 placements unchanged: KiCad finds zero GND/critical opens,
 but three ordinary signal nets remain open (34 unconnected items), alongside
 the eight library findings. The review records spare inner/bottom capacity,
-guide-cost and tree/seam cleanup tasks. New [per-net policy telemetry](docs/routing-search-policy.md)
+guide-cost and tree/seam cleanup tasks. [Per-net policy telemetry](docs/routing-search-policy.md)
 reports requested/effective detailed layer costs without changing routing.
 Production gates remain outstanding.
-The [compatible-escape increment](docs/routing-review-pass17.md) improves the
+The historical [compatible-escape increment](docs/routing-review-pass17.md) improved the
 matched partial package stage from 72 to 74 exits. Two MCU exits remain pending;
-the latest full-board routing result above has not been replaced by a full rerun.
+that stage predates the successful current full rerun linked above.
 The [escape-first increment](docs/package-access-first.md) now reserves ordinary
 package exits before critical long routes with `--fanout`. If package access or
 critical compatibility fails, ordinary area routing is blocked with zero search
@@ -369,19 +370,19 @@ witnesses only. Neither local access nor those stubs replace full-board routing.
 unchanged saved placement, but the modem-side USB pair then fails. The access
 gate correctly blocks area routing. Subsequent alternate-owner preflight passes
 both USB pairs, four RF groups, selected ground contacts and all 76 ordinary
-boundary paths. A new profiled full-area/fill/DRC run is still required before
-claiming full-board success.
+boundary paths. The current full rerun subsequently reserves 104 ordinary exits
+and all 80 requested GND contacts and passes full-area/fill/native DRC gates.
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
-KiCad 10 with its footprint libraries first. The recorded run used KiCad 10.0.6
-and Python 3.12. Only CopperScript needs checking out:
+KiCad 10 with its footprint libraries first. The latest closure run used
+KiCad 10.0.6 and Python 3.13.1. Only CopperScript needs checking out:
 
 ```powershell
 # Use consistent package line endings in these new checkouts.
 git clone -c core.autocrlf=false -c core.eol=lf https://github.com/andenore/CopperScript.git
 Set-Location CopperScript
 
-uv sync --python 3.12
+uv sync --python 3.13
 # Fetch the exact locked URL dependency (subsequent runs can use --offline).
 uv run --no-sync python -m copperscript check examples/full_vertical/board.copper --locked
 ```
@@ -492,12 +493,12 @@ footprint inputs when comparing runs.
 The explicit CLI outputs are `board.kicad_pcb`, its same-stem `board.kicad_pro`, and
 `route-report.json` under `build/full-vertical/`. Open the board with its project
 so KiCad uses the exported design rules. The report includes the independent
-`plane_verification` result. The historical profile-free run exited **1** despite
-zero KiCad unconnected items. The latest corrected-library/template run also
-exits **1**, with three ordinary open nets (`MCU_NRF_TX`, `MODEM_EN`, `V3V3`),
-34 KiCad unconnected items, zero GND/critical opens and eight library findings.
-Neither run is production signoff. An output file or zero airwires is not
-manufacturing acceptance; USB/RF/return-path qualification remains outstanding.
+`plane_verification` result. The [latest complete run](docs/routing-shared-reference-review.md)
+exits **0** with no ordinary opens, native violations, unconnected items or
+resource overflow. Its explicit-copper IR report still defers GND to native
+plane fill; `routing_complete=true` does not mean `fabrication_ready=true`.
+An output file or zero airwires is not electrical, USB/RF or assembly
+qualification. Older failed reports remain unchanged as historical evidence.
 Vias avoid all pads by default, including same-net pads and annulus-edge contact.
 The shared routing workflow does not enable blanket via-in-pad. Explicit
 `--ground-via-in-pad` permits filled-and-capped GND vias for this six-layer
@@ -506,6 +507,23 @@ ordering a board.
 
 For independent copper-layer plots and via/pad/bend metrics, see
 [the layer-review workflow](docs/routing-layer-review.md).
+
+After a run passes, generate native Gerbers/drills from its saved filled board
+using the [manufacturing-file workflow](docs/manufacturing-files.md):
+
+```powershell
+uv run --no-sync python -m copperscript export-manufacturing `
+  "build/full-vertical/runs/<run-id>/board.kicad_pcb" `
+  --kicad-cli "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe" `
+  --skip-independent-cam `
+  -o "build/full-vertical/runs/<run-id>/manufacturing"
+```
+
+This refuses native opens/violations. It produces `gerbers-drill.zip` and
+`manufacturing-package.zip`, not an independently qualified release. The
+explicit CAM skip follows the requested prototype workflow. This fixture has
+no reviewed assembly BOM/CPL; supplier availability and component/support-circuit
+qualification still require review before ordering.
 
 To repeat the final independent refill/DRC on a saved copy without modifying
 the routed draft:

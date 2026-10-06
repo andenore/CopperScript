@@ -39,11 +39,11 @@ Native refill/all-severity DRC and existing manufacturing gates remain intact.
 - [x] Explicitly annotate the four full-vertical USB member rules; do not edit
   old boards or claim an old report was produced by the new source.
 - [x] Verify focused physical, paired-route, ownership and native KiCad tests.
-- [ ] Commit the feature, then rerun the shared unprofiled full pipeline from
+- [x] Commit the feature, then rerun the shared unprofiled full pipeline from
   source and pinned libraries in a new ignored build directory.
-- [ ] Refill/check every layer; require zero native opens/violations and zero
+- [x] Refill/check every layer; require zero native opens/violations and zero
   detailed resource overflow. Locate any remaining conflict rather than waive it.
-- [ ] If native gates pass, generate manufacturing files using the explicit
+- [x] If native gates pass, generate manufacturing files using the explicit
   `--skip-independent-cam` workflow requested by the user. Do not claim supplier
   availability, assembly qualification, USB/RF performance or order approval.
 
@@ -72,6 +72,12 @@ via. Unknown references/default policies still create required vias; different
 reference planes retain bridging GND vias. The owner rejects missing contact
 layers, projected plane voids and track envelopes outside declared coverage.
 
-The complete example run has not yet been repeated at this feature revision.
-Old board/run evidence is unchanged. The next shared `make` run uses
-`PROFILE=none`, locked/offline inputs and a new ignored output directory.
+The complete example at clean `52adb05` now passes the shared pipeline with
+`PROFILE=none` and locked/offline inputs: 49/49 ordinary nets, all eight critical
+nets, zero resource overflow and zero native violations/opens. All six saved
+layers were audited/plotted and have no via/pad overlaps or off-angle segments.
+The modem pair reports two shared-reference transitions and no redundant return
+via. Native manufacturing export also passes; independent CAM is skipped by
+request, with no assembly BOM or qualified-release claim. See the
+[full rerun, layer review and manufacturing record](routing-shared-reference-review.md).
+Old failed board/run evidence remains unchanged.

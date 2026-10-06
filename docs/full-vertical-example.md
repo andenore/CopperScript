@@ -17,6 +17,13 @@ design. A clean ERC result means the currently modelled electrical rules are
 satisfied; it does not certify RF layout, regulator stability, EMC, antenna
 performance, USB or CAN signal integrity, or regulatory compliance.
 
+The [2026-10-06 full rerun](routing-shared-reference-review.md) at `52adb05`
+now completes all routing and native DRC gates: 49 ordinary nets, eight critical
+nets, zero resource overflow, and zero KiCad violations/unconnected items.
+Native Gerber/drill files are generated, with independent CAM skipped by request.
+No assembly BOM or qualified-production claim is made. Earlier four-layer
+experiments below are historical; the current shared Make preset uses six layers.
+
 ## Selected parts
 
 | Function | Initial selection | Reason |
@@ -374,10 +381,18 @@ this does not qualify impedance or production readiness.
 
 USB profiles now permit matched terminal vias to `In2.Cu`, adjacent to the
 declared `In1.Cu` GND plane, instead of requiring zero-via top-only routing.
-The limit is two signal vias per member with nearby GND return vias. This is
-provisional geometric intent; common nominal width/gap does not establish
+The limit is two signal vias per member. Required GND return vias remain the
+default; this example explicitly uses `return_via_policy = "reference_change"`
+and `shared_reference_layer = "In1.Cu"` for both members of each USB pair.
+Matched F.Cu/In2.Cu transitions sharing that declared reference need no redundant
+single-plane-only return via. This is provisional geometric intent; common nominal width/gap does not establish
 layer-specific 90-ohm impedance or filled-plane continuity. RF profiles remain
 unchanged. See [paired layer transitions](paired-layer-transitions.md).
+
+Use `make EXAMPLE=full-vertical route PROFILE=none` for the current complete
+six-layer pipeline. The lower-level four-layer commands below document earlier
+experiments, not the successful current run. See the
+[complete run and native manufacturing export commands](routing-shared-reference-review.md).
 
 ```text
 python -m copperscript check examples/full_vertical/board.copper
