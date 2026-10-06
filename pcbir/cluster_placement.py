@@ -92,7 +92,7 @@ def refine_rigid_clusters(board, source, options, *, spacing_model=None):
                 continue
             anchor = placements[cluster.anchor.reference]
             best = placements
-            best_rank = (_fast_score(board, placements, spacing_model), anchor.position.y_nm,
+            best_rank = (_fast_score(board, placements, spacing_model, options.power_domain_weight), anchor.position.y_nm,
                          anchor.position.x_nm, anchor.rotation_degrees)
             baseline = placement_metrics(board, placements, options, spacing_model=spacing_model)
             for point in (anchor.position, *_nearby_positions(anchor.position, options)):
@@ -101,7 +101,7 @@ def refine_rigid_clusters(board, source, options, *, spacing_model=None):
                     trial = {**placements, **cluster_placements(board, cluster, pose, placements)}
                     if not placement_solution_is_legal(board, trial, options):
                         continue
-                    rank = (_fast_score(board, trial, spacing_model), point.y_nm, point.x_nm, angle)
+                    rank = (_fast_score(board, trial, spacing_model, options.power_domain_weight), point.y_nm, point.x_nm, angle)
                     if rank >= best_rank:
                         continue
                     metrics = placement_metrics(board, trial, options, spacing_model=spacing_model)

@@ -584,6 +584,48 @@ The selected layers must exist in the chosen physical stackup. A zone declaratio
 does not establish electrical connectivity or fabrication readiness: its
 actual fill and connected copper require later verification.
 
+A zone may instead have an explicit regional boundary. Choose exactly one:
+`x`, `y`, `width`, `height` (all typed lengths); `region` referencing a named
+`placement_region`; or `polygon_mm`, a semicolon-separated string of `x,y`
+coordinates in millimeters. Named regions may be declared after the zone.
+`priority` is an optional nonnegative integer for overlapping zone intent.
+
+```copper
+constraint copper_zone(V3V3) {
+    id = "logic-power";
+    layers = "In2.Cu";
+    polygon_mm = "4,4; 35,4; 35,28; 4,28";
+    priority = 1;
+    pad_connection = solid;
+}
+```
+
+The polygon must be simple and wholly inside the board. A completely enclosed
+board cutout is retained; a partially intersecting cutout is rejected because
+general polygon clipping is not implemented. Nonzero `inset` currently requires
+a rectangular or circular boundary. Boundary modes cannot be combined. A
+regional pour does not automatically distribute power to distant pads: deferred
+zone terminals must still reach prospective contacts, and native refill must
+prove that all contacts actually join. Regions never authorize split reference
+planes or waive current/impedance review.
+
+Physical placement derives overlapping power-domain membership from nonzero
+supply nets and active power-pin profiles. Ground is excluded. Distinct nets
+remain distinct even at the same voltage. `--power-domain-weight` on
+`plan-layout`, `route-global` and `route-board` sets the soft source-to-load
+distribution attraction (default `0.25`, range `0..1`, `0` disables it).
+Source-free rails use a consumer centroid; consumers are normalized by
+component, not supply-pin count. Fixed/relative/macro constraints and escape
+space remain stronger objectives. Multi-domain parts are not forced to a
+geometric midpoint. Layout reports expose `power_domain_penalty_nm` and
+`weighted_wire_length_nm`; raw HPWL remains separately reported.
+
+With fanout enabled, package preflight now reserves declared plane contacts
+before ordinary area routing by default. Critical routes and plane contacts
+are revalidated together with ordinary escape-pattern alternatives. Use
+`--no-early-plane-stitch` for an explicit late-contact comparison, or
+`--early-plane-pad` to select contacts. These options never certify zone fill.
+
 A pad-scoped fabrication permission is separate from connectivity:
 
 ```copper

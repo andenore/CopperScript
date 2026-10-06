@@ -94,6 +94,7 @@ class DetailedNetResult:
     diagnostics: tuple[str, ...] = ()
     orthogonal_mode_used: bool = False
     search_policy: DetailedSearchPolicy | None = None
+    resumed_branch_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +159,7 @@ class DetailedRoutingResult:
                     "diagnostics": list(item.diagnostics),
                     "orthogonal_mode_used": item.orthogonal_mode_used,
                     "search_policy": asdict(item.search_policy) if item.search_policy else None,
+                    "resumed_branch_count": item.resumed_branch_count,
                 }
                 for item in self.nets
             ],
@@ -252,6 +254,35 @@ class _Grid:
 
 
 @dataclass(frozen=True, slots=True)
+class _CheckpointGrid:
+    """Mesh identity only: do not retain failed searches' large query caches."""
+
+    layers: tuple[CopperLayer, ...]
+    xs: tuple[int, ...]
+    ys: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _BranchCheckpoint:
+    """Private tentative tree, never output copper or committed congestion."""
+
+    source: PhysicalBoard = field(compare=False, repr=False)
+    grid: _CheckpointGrid = field(compare=False, repr=False)
+    net: str
+    pads: tuple[PadReference, ...]
+    allowed: tuple[CopperLayer, ...]
+    width_nm: int
+    anchors: tuple[tuple[PadReference, Point | RoutingAccess], ...]
+    tree: frozenset[DetailedNode]
+    chosen: tuple[tuple[PadReference, Point, DetailedNode], ...]
+    internal: tuple[tuple[DetailedNode, tuple[PadReference, Point, DetailedNode]], ...]
+    remaining: frozenset[PadReference]
+    edges: frozenset[tuple[DetailedNode, DetailedNode]]
+    deviations: int
+    orthogonal_mode_used: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _NetAttempt:
     result: DetailedNetResult
     tracks: tuple[TrackSegment, ...]
@@ -260,6 +291,7 @@ class _NetAttempt:
     # Search provenance, not physical geometry or a schema field. A fine-grid
     # candidate can displace neighbours whose launches need that same mesh.
     pitch_nm: int | None = field(default=None, compare=False, repr=False)
+    checkpoint: _BranchCheckpoint | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -536,6 +568,7 @@ def _search_detailed_net(
     clearance: RoutingClearanceIndex, options: DetailedRouterOptions, *,
     fanout_accesses: Mapping[PadReference, Point | RoutingAccess],
     repair: bool = True, allow_movable_conflicts: bool = False,
+    resume: _BranchCheckpoint | None = None,
     on_progress: ProgressCallback | None = None, stage: str,
     **context: object,
 ) -> _NetAttempt:
@@ -556,10 +589,11 @@ def _search_detailed_net(
     search = _route_repair_net if repair else _route_net
     attempt = search(board, grid, net.name, net.pads, rule, guide, usage, history,
         clearance, options, fanout_accesses=fanout_accesses,
-        allow_movable_conflicts=allow_movable_conflicts)
+        allow_movable_conflicts=allow_movable_conflicts, resume=resume)
     emit(on_progress, "detailed_net", "finished", net=net.name, stage=stage,
          connected=attempt.result.connected, track_count=len(attempt.tracks),
          via_count=len(attempt.vias), diagnostics=list(attempt.result.diagnostics),
+         resumed_branch_count=attempt.result.resumed_branch_count,
          final_pitch_nm=attempt.pitch_nm or options.pitch_nm, **context)
     return attempt
 
@@ -683,8 +717,13 @@ def _repair_from_passes(
                 clearance.add_via(via)
 
     alternatives: dict[str, list[_NetAttempt]] = {}
+    checkpoints: dict[str, _BranchCheckpoint] = {}
     for completed_pass in completed:
         for item in completed_pass.nets:
+            checkpoint = item.checkpoint
+            if checkpoint is not None and (item.result.net not in checkpoints
+                    or len(checkpoint.chosen) > len(checkpoints[item.result.net].chosen)):
+                checkpoints[item.result.net] = checkpoint
             if item.result.connected and not selected[item.result.net].result.connected:
                 alternatives.setdefault(item.result.net, []).append(item)
 
@@ -700,6 +739,7 @@ def _repair_from_passes(
                 board, net,
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
                 options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
+                resume=checkpoints.get(net.name),
                 on_progress=on_progress, stage="soft_merge",
             )
             if soft_candidate.result.connected:
@@ -740,6 +780,7 @@ def _repair_from_passes(
                 board, net,
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
                 options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
+                resume=checkpoints.get(net.name),
                 on_progress=on_progress, stage="soft_ripup",
             )
             if soft_candidate.result.connected:
@@ -844,6 +885,7 @@ def _repair_from_passes(
             board, net,
             rules.get(net.name), guides.get(net.name), usage, {}, clearance,
             repair_options, fanout_accesses=fanout_accesses,
+            resume=checkpoints.get(net.name),
             on_progress=on_progress, stage="final_retry",
         )
         if not attempt.result.connected:
@@ -882,6 +924,7 @@ def _route_repair_net(
     clearance: RoutingClearanceIndex, options: DetailedRouterOptions,
     *, allow_movable_conflicts: bool = False,
     fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
+    resume: _BranchCheckpoint | None = None,
 ) -> _NetAttempt:
     """Bounded fine-grid search shared by every transactional repair stage.
 
@@ -892,7 +935,8 @@ def _route_repair_net(
     """
     attempt = _route_net(board, grid, name, pads, rule, guide, usage, history,
                          clearance, options, allow_movable_conflicts=allow_movable_conflicts,
-                         fanout_accesses=fanout_accesses)
+                         fanout_accesses=fanout_accesses, resume=resume)
+    checkpoint = attempt.checkpoint
     for _ in range(4):
         if (attempt.result.connected
                 or not any("cannot reach" in message for message in attempt.result.diagnostics)
@@ -906,7 +950,11 @@ def _route_repair_net(
             allow_movable_conflicts=allow_movable_conflicts,
             fanout_accesses=fanout_accesses,
         )
-    return replace(attempt, pitch_nm=options.pitch_nm)
+        if attempt.checkpoint is not None and (checkpoint is None
+                or len(attempt.checkpoint.chosen) > len(checkpoint.chosen)):
+            checkpoint = attempt.checkpoint
+    return replace(attempt, pitch_nm=options.pitch_nm,
+                   checkpoint=None if attempt.result.connected else checkpoint)
 
 
 def _ripup_orders(blockers: set[str]) -> tuple[tuple[str, ...], ...]:
@@ -946,6 +994,7 @@ def _route_net(
     fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
     forbidden_via_positions: frozenset[Point] = frozenset(),
     via_repair_round: int = 0,
+    resume: _BranchCheckpoint | None = None,
 ) -> _NetAttempt:
     options = _net_search_options(options, len(pads))
     if board.materialized_macros:
@@ -1047,6 +1096,49 @@ def _route_net(
     route_edges: set[tuple[DetailedNode, DetailedNode]] = set()
     deviations = 0
     orthogonal_mode_used = not options.octilinear_search
+    resumed_branches = 0
+    anchors = tuple(sorted((fanout_accesses or {}).items()))
+    if (resume is not None and resume.source is board and resume.net == name
+            and resume.pads == pads and resume.width_nm == width
+            and resume.allowed == tuple(allowed) and resume.anchors == anchors
+            and not forbidden_via_positions
+            and (resume.grid.layers, resume.grid.xs, resume.grid.ys) == (grid.layers, grid.xs, grid.ys)):
+        # Different passes may have placed movable copper over the old tree.
+        # Revalidate before reuse; soft proposals may cross only movable owners.
+        legal = True
+        for first, second in resume.edges:
+            if first.layer_index == second.layer_index:
+                track = TrackSegment(name, grid.point(first), grid.point(second), width,
+                                     grid.layers[first.layer_index])
+                legal = (not clearance.blocking_track_nets(track)[1] if allow_movable_conflicts
+                         else clearance.can_track(name, track.start, track.end, width, track.layer))
+            else:
+                legal = _cached_via_legality(grid, first, second, clearance, name,
+                                             allow_movable_conflicts, {})[0]
+            if not legal:
+                break
+        legal &= all(_access_path(board, clearance, name, origin, grid.point(node), width,
+                        grid.layers[node.layer_index], allow_movable_conflicts) is not None
+                     for _, origin, node in resume.chosen)
+        if legal:
+            tree = set(resume.tree)
+            route_edges = set(resume.edges)
+            chosen_accesses = list(resume.chosen)
+            pending_internal_accesses = dict(resume.internal)
+            remaining = [entry for entry in access_options if entry[0] in resume.remaining]
+            deviations = resume.deviations
+            orthogonal_mode_used |= resume.orthogonal_mode_used
+            resumed_branches = max(0, len({entry[0] for entry in resume.chosen}) - 1)
+
+    def suspend(message: str) -> _NetAttempt:
+        failure = _failed(name, message)
+        if not tree or not route_edges:
+            return failure
+        checkpoint = _BranchCheckpoint(board, _CheckpointGrid(grid.layers, grid.xs, grid.ys), name, pads, tuple(allowed), width,
+            anchors, frozenset(tree), tuple(chosen_accesses), tuple(pending_internal_accesses.items()),
+            frozenset(entry[0] for entry in remaining), frozenset(route_edges), deviations, orthogonal_mode_used)
+        return replace(failure, checkpoint=checkpoint,
+            result=replace(failure.result, resumed_branch_count=resumed_branches))
     while remaining:
         starts = tree if tree else set(access_options[0][2])
         target_entry = min(
@@ -1076,8 +1168,7 @@ def _route_net(
             )
         except _SearchBudgetExceeded:
             if not options.octilinear_search:
-                return _failed(
-                    name,
+                return suspend(
                     f"search budget of {options.maximum_search_states} states exhausted "
                     f"for {target_entry[0].component}.{target_entry[0].pad}",
                 )
@@ -1091,13 +1182,12 @@ def _route_net(
                 )
                 orthogonal_mode_used = True
             except _SearchBudgetExceeded:
-                return _failed(
-                    name,
+                return suspend(
                     f"octilinear and fallback search budgets exhausted "
                     f"for {target_entry[0].component}.{target_entry[0].pad}",
                 )
         if found is None:
-            return _failed(name, f"detailed search cannot reach {target_entry[0].component}.{target_entry[0].pad}")
+            return suspend(f"detailed search cannot reach {target_entry[0].component}.{target_entry[0].pad}")
         path, root, target = found
         # Heading-aware/weighted searches can revisit a physical node with a
         # different state. A reconstructed walk is not necessarily a simple
@@ -1227,6 +1317,7 @@ def _route_net(
             deviations,
             tuple(diagnostics),
             orthogonal_mode_used,
+            resumed_branch_count=resumed_branches,
         ),
         tuple(tracks),
         tuple(vias),

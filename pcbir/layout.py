@@ -190,6 +190,8 @@ def _metrics_json(metrics: PlacementMetrics) -> dict[str, int]:
         "constraint_penalty_nm": metrics.constraint_penalty_nm,
         "minimum_constraint_margin_nm": metrics.minimum_constraint_margin_nm,
         "group_spread_nm": metrics.group_spread_nm,
+        "power_domain_penalty_nm": metrics.power_domain_penalty_nm,
+        "weighted_wire_length_nm": metrics.weighted_wire_length_nm,
         "congestion_bin_count": metrics.congestion_bin_count,
         "congestion_capacity_per_bin": metrics.congestion_capacity_per_bin,
         "congestion_overflow": metrics.congestion_overflow,

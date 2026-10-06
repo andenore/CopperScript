@@ -226,6 +226,15 @@ appear as `ESCAPE_CHANNEL_DEFICIT` warnings in the layout report. Optional
 `--escape-margin-mm 0.5` and `--escape-transit-lanes 1` control this soft
 estimate on `plan-layout`, `route-global` and `route-board`, not DRC clearance.
 See the [escape-aware placement plan](docs/escape-aware-placement-plan.md).
+The physical planner also uses soft supply-domain distribution objectives:
+`--power-domain-weight 0.25` is the default; `0` disables domain attraction.
+Multi-supply parts participate in each rail group without a hard boundary or
+midpoint rule. Declared plane nets have reduced generic wirelength attraction.
+Package preflight reserves plane contacts by default with fanout enabled;
+`--no-early-plane-stitch` opts out for comparisons. Regional power pours are
+explicit `copper_zone` constraints, not automatically inferred planes. See the
+[power-domain and routing plan](docs/power-domain-routing-plan.md) and
+[language reference](docs/language-reference.md).
 The [detailed-routing research](docs/detailed-routing-research.md) explains
 the geometry checks, fabrication-rule profile, and current full-board limits.
 

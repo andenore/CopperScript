@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
-from math import cos, exp, hypot, radians, sin
+from math import cos, exp, hypot, isfinite, radians, sin
 from typing import Iterable, Mapping
 
 from .clusters import (
@@ -20,6 +20,7 @@ from .cluster_placement import (
     refine_rigid_clusters as _refine_rigid_clusters,
 )
 from .placement_escape import EscapeSpacingModel
+from .power_planning import power_domain_gradient, power_domain_penalty
 
 from .physical import (
     AlignmentAxis,
@@ -61,6 +62,7 @@ class PlacementPlannerOptions:
     escape_transit_lanes: int = 1
     escape_spacing_passes: int = 2
     escape_max_movement_nm: Nanometres = nm_from_mm("16")
+    power_domain_weight: float = 0.25
 
     def __post_init__(self) -> None:
         positive = (
@@ -73,6 +75,8 @@ class PlacementPlannerOptions:
             raise ValueError("placement planner dimensions must be positive")
         if self.analytical_iterations < 0 or self.analytical_step_mm <= 0:
             raise ValueError("analytical placement settings are invalid")
+        if not isfinite(self.power_domain_weight) or not 0 <= self.power_domain_weight <= 1:
+            raise ValueError("power-domain weight must be finite and in [0, 1]")
         if not 0 <= self.analytical_momentum < 1:
             raise ValueError("analytical momentum must be in [0, 1)")
         if self.refinement_passes < 0 or self.refinement_radius_steps < 1:
@@ -110,6 +114,8 @@ class PlacementMetrics:
     congestion_capacity_per_bin: int
     congestion_overflow: int
     maximum_congestion_utilization_ppm: int
+    power_domain_penalty_nm: Nanometres = 0
+    weighted_wire_length_nm: Nanometres | None = None
 
     @property
     def quality_vector(self) -> tuple[int, ...]:
@@ -121,7 +127,8 @@ class PlacementMetrics:
             self.estimated_via_count,
             self.pin_escape_pressure,
             -self.minimum_constraint_margin_nm,
-            self.half_perimeter_wire_length_nm,
+            (self.weighted_wire_length_nm if self.weighted_wire_length_nm is not None
+             else self.half_perimeter_wire_length_nm) + self.power_domain_penalty_nm,
             self.group_spread_nm,
         )
 
@@ -271,6 +278,8 @@ def placement_metrics(
         congestion_capacity_per_bin=route.capacity,
         congestion_overflow=route.overflow,
         maximum_congestion_utilization_ppm=route.maximum_utilization_ppm,
+        power_domain_penalty_nm=power_domain_penalty(board, placements, options.power_domain_weight),
+        weighted_wire_length_nm=_planning_wirelength(board, placements),
     )
 
 
@@ -645,6 +654,7 @@ def _analytical_place(
     velocity = {reference: [0.0, 0.0] for reference in source}
     gamma = max(1.0, options.congestion_bin_nm / 1_000_000)
     bounds = _outline_bounds(board.outline)
+    plane_nets = {zone.net for zone in board.zones}
 
     for _ in range(options.analytical_iterations):
         gradient = {reference: [0.0, 0.0] for reference in source}
@@ -660,9 +670,10 @@ def _analytical_place(
                 ys.append(coordinates[pad.component][1] + offset[1])
             gx = _smooth_span_gradient(xs, gamma)
             gy = _smooth_span_gradient(ys, gamma)
+            net_weight = 0.25 if net.name in plane_nets else 1.0
             for pad, dx, dy in zip(pads, gx, gy, strict=True):
-                gradient[pad.component][0] += dx
-                gradient[pad.component][1] += dy
+                gradient[pad.component][0] += dx * net_weight
+                gradient[pad.component][1] += dy * net_weight
 
         references = sorted(source)
         for index, left in enumerate(references):
@@ -692,6 +703,10 @@ def _analytical_place(
         current_poses = {reference: replace(source[reference], position=Point(
             round(xy[0] * 1_000_000), round(xy[1] * 1_000_000)))
             for reference, xy in coordinates.items()}
+        domain_gradient = power_domain_gradient(board, current_poses, options.power_domain_weight)
+        for reference, force in domain_gradient.items():
+            gradient[reference][0] += force[0]
+            gradient[reference][1] += force[1]
         for channel in spacing.channels(current_poses):
             axis = 0 if channel.axis == "x" else 1
             delta = coordinates[channel.left][axis] - coordinates[channel.right][axis]
@@ -735,7 +750,7 @@ def _analytical_place(
         )
         for reference, item in source.items()
     }
-    return _choose_orientations(board, result, fixed, spacing)
+    return _choose_orientations(board, result, fixed, spacing, options.power_domain_weight)
 
 
 def _smooth_span_gradient(values: list[float], gamma: float) -> list[float]:
@@ -775,6 +790,7 @@ def _choose_orientations(
     placements: Mapping[str, Placement],
     fixed: set[str],
     spacing: EscapeSpacingModel | None = None,
+    power_domain_weight: float = 0.25,
 ) -> dict[str, Placement]:
     spacing = spacing or EscapeSpacingModel(board)
     result = dict(placements)
@@ -783,11 +799,11 @@ def _choose_orientations(
             continue
         current = result[reference]
         best = current
-        best_cost = _fast_score(board, result, spacing)
+        best_cost = _fast_score(board, result, spacing, power_domain_weight)
         for orientation in _allowed_orientations(board, reference):
             candidate = replace(current, rotation_degrees=orientation)
             result[reference] = candidate
-            cost = _fast_score(board, result, spacing)
+            cost = _fast_score(board, result, spacing, power_domain_weight)
             if (cost, int(orientation)) < (best_cost, int(best.rotation_degrees)):
                 best, best_cost = candidate, cost
         result[reference] = best
@@ -1130,7 +1146,7 @@ def _detailed_refine(
             without = dict(placements)
             del without[reference]
             best = current
-            best_score = _fast_score(board, placements, spacing)
+            best_score = _fast_score(board, placements, spacing, options.power_domain_weight)
             positions = (current.position, *_nearby_positions(current.position, options))
             for point in positions:
                 for orientation in _allowed_orientations(board, reference):
@@ -1139,7 +1155,7 @@ def _detailed_refine(
                         continue
                     trial = dict(without)
                     trial[reference] = candidate
-                    score = _fast_score(board, trial, spacing)
+                    score = _fast_score(board, trial, spacing, options.power_domain_weight)
                     ranked = (score, point.y_nm, point.x_nm, int(orientation))
                     best_ranked = (
                         best_score,
@@ -1175,7 +1191,7 @@ def _detailed_refine(
             if not _legal(swapped_b, trial, board, options):
                 continue
             trial[right] = swapped_b
-            if _fast_score(board, trial, spacing) < _fast_score(board, placements, spacing):
+            if _fast_score(board, trial, spacing, options.power_domain_weight) < _fast_score(board, placements, spacing, options.power_domain_weight):
                 placements = trial
                 changed = True
                 swap_count += 1
@@ -1208,7 +1224,7 @@ def _repair_relative_constraints(
         if baseline == 0:
             break
         best_placements: dict[str, Placement] | None = None
-        best_rank = (baseline, _fast_score(board, placements, spacing))
+        best_rank = (baseline, _fast_score(board, placements, spacing, options.power_domain_weight))
         for rule in board.relative_rules:
             references = sorted(
                 {target.reference for target in rule.targets if target.reference not in fixed},
@@ -1230,7 +1246,7 @@ def _repair_relative_constraints(
                             continue
                         trial = dict(without)
                         trial[reference] = candidate
-                        rank = (_relative_penalty(board, trial), _fast_score(board, trial, spacing))
+                        rank = (_relative_penalty(board, trial), _fast_score(board, trial, spacing, options.power_domain_weight))
                         if rank < best_rank:
                             best_rank = rank
                             best_placements = trial
@@ -1596,11 +1612,14 @@ def _nearest_grid(value: int, step: int) -> int:
 
 def _adjacency(board: PhysicalBoard) -> dict[str, dict[str, int]]:
     result = {placement.reference: {} for placement in board.placements}
+    plane_nets = {zone.net for zone in board.zones}
     for net in board.nets:
         references = sorted({pad.component for pad in net.pads if pad.component in result})
         if len(references) < 2:
             continue
         weight = max(1, 1000 // ((len(references) - 1) ** 2))
+        if net.name in plane_nets:
+            weight = max(1, weight // 4)
         for index, left in enumerate(references):
             for right in references[index + 1 :]:
                 result[left][right] = result[left].get(right, 0) + weight
@@ -1667,6 +1686,19 @@ def _hpwl(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:
         if len(points) >= 2:
             total += max(point.x_nm for point in points) - min(point.x_nm for point in points)
             total += max(point.y_nm for point in points) - min(point.y_nm for point in points)
+    return total
+
+
+def _planning_wirelength(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:
+    """Plane rails need terminal access, not a shortest full distribution tree."""
+    planes = {zone.net for zone in board.zones}
+    total = 0
+    for index, net in enumerate(board.nets):
+        points = tuple(_net_points(board, placements, index).values())
+        if len(points) >= 2:
+            span = (max(p.x_nm for p in points) - min(p.x_nm for p in points)
+                    + max(p.y_nm for p in points) - min(p.y_nm for p in points))
+            total += span // 4 if net.name in planes else span
     return total
 
 
@@ -1895,7 +1927,7 @@ def _spread_escape_components(
                                (-1, -1), (-1, 1), (1, -1), (1, 1)):
                     if (dx * radius)**2 + (dy * radius)**2 <= options.escape_max_movement_nm**2:
                         offsets.add((dx * radius, dy * radius))
-            baseline = _fast_score(board, placements, spacing)
+            baseline = _fast_score(board, placements, spacing, options.power_domain_weight)
             best = placements
             best_rank = (baseline, _hpwl(board, placements))
             for offset_x, offset_y in sorted(offsets, key=lambda xy: (abs(xy[0])+abs(xy[1]), xy[1], xy[0])):
@@ -1908,7 +1940,7 @@ def _spread_escape_components(
                     ))
                 if not placement_solution_is_legal(board, trial, options):
                     continue
-                rank = (_fast_score(board, trial, spacing), _hpwl(board, trial))
+                rank = (_fast_score(board, trial, spacing, options.power_domain_weight), _hpwl(board, trial))
                 if rank < best_rank:
                     best, best_rank = trial, rank
             if (
@@ -1925,12 +1957,14 @@ def _spread_escape_components(
 
 
 def _fast_score(board: PhysicalBoard, placements: Mapping[str, Placement],
-                spacing: EscapeSpacingModel | None = None) -> tuple[int, int, int]:
+                spacing: EscapeSpacingModel | None = None,
+                power_domain_weight: float = 0.25) -> tuple[int, int, int]:
     channels = (spacing or EscapeSpacingModel(board)).channels(placements)
     return (
         _relative_penalty(board, placements),
         sum(c.deficit_nm for c in channels),
-        _hpwl(board, placements) + _group_spread(board, placements) // 20,
+        _planning_wirelength(board, placements) + _group_spread(board, placements) // 20
+        + power_domain_penalty(board, placements, power_domain_weight),
     )
 
 

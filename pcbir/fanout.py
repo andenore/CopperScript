@@ -28,6 +28,7 @@ from .escape_assignment import (EscapeAssignmentOptions, EscapeAssignmentReport,
 @dataclass(frozen=True, slots=True)
 class FanoutOptions:
     minimum_component_pads: int = 12
+    escape_small_dense_packages: bool = True
     maximum_neighbor_distance_nm: int = nm_from_mm("1.5")
     step_nm: int = nm_from_mm("0.5")
     maximum_radius_nm: int = nm_from_mm("3")
@@ -109,7 +110,14 @@ def route_fanout(
     pads: list[tuple[int, PadReference, Point, object, object]] = []
     for placement in board.placements:
         footprint = board.footprints[placement.footprint]
-        if len(footprint.pads) < options.minimum_component_pads:
+        # Pad count is not a proxy for access difficulty: an eight-pin TSSOP
+        # can have less via landing space than a much larger package. Keep
+        # explicit low thresholds useful for tests/custom packages, but include
+        # small multi-terminal packages when their local pitch requires escape.
+        electrical_count = len({pad.number for pad in footprint.pads
+                                if pad.kind in {PadKind.SMD, PadKind.THROUGH_HOLE}})
+        if (electrical_count < options.minimum_component_pads
+                and not (options.escape_small_dense_packages and electrical_count >= 3)):
             continue
         surface = [pad for pad in footprint.pads if pad.kind is PadKind.SMD]
         for pad in surface:

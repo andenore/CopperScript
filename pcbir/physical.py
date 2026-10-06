@@ -879,6 +879,30 @@ class PhysicalNet:
             raise ValueError("physical net name cannot be empty")
 
 
+@dataclass(frozen=True, slots=True)
+class PhysicalPowerDomain:
+    """Derived rail membership for physical planning; never new connectivity.
+
+    Identity is the electrical net, not its voltage or a device-local domain
+    name. Sources are known physical supply outputs, not guessed connectors.
+    Members include passive rail terminals, so decouplers share the objective.
+    """
+
+    net: str
+    members: tuple[PadReference, ...]
+    sources: tuple[PadReference, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "members", tuple(self.members))
+        object.__setattr__(self, "sources", tuple(self.sources))
+        if not self.net or not self.members:
+            raise ValueError("physical power domain requires a net and members")
+        if len(set(self.members)) != len(self.members) or len(set(self.sources)) != len(self.sources):
+            raise ValueError("physical power domain terminals must be unique")
+        if not set(self.sources) <= set(self.members):
+            raise ValueError("physical power domain sources must be members")
+
+
 @dataclass(frozen=True, slots=True, order=True)
 class PlacementTarget:
     reference: str
@@ -1254,6 +1278,7 @@ class PhysicalBoard:
     placement_rules: tuple[ComponentPlacementRule, ...] = ()
     relative_rules: tuple[RelativePlacementRule, ...] = ()
     placement_groups: tuple[PlacementGroup, ...] = ()
+    power_domains: tuple[PhysicalPowerDomain, ...] = ()
     net_routing_rules: tuple[NetRoutingRule, ...] = ()
     zones: tuple[CopperZone, ...] = ()
     copper_keepouts: tuple[CopperKeepout, ...] = ()
@@ -1285,6 +1310,7 @@ class PhysicalBoard:
         object.__setattr__(self, "placement_rules", tuple(self.placement_rules))
         object.__setattr__(self, "relative_rules", tuple(self.relative_rules))
         object.__setattr__(self, "placement_groups", tuple(self.placement_groups))
+        object.__setattr__(self, "power_domains", tuple(self.power_domains))
         object.__setattr__(self, "net_routing_rules", tuple(self.net_routing_rules))
         object.__setattr__(self, "zones", tuple(self.zones))
         object.__setattr__(self, "copper_keepouts", tuple(self.copper_keepouts))
@@ -1482,6 +1508,14 @@ class PhysicalBoard:
         if len(keepout_names) != len(set(keepout_names)):
             raise ValueError("physical placement keepout names must be unique")
         known_references = set(placement_refs)
+        domain_nets = set()
+        net_members = {net.name: set(net.pads) for net in self.nets}
+        for domain in self.power_domains:
+            if domain.net in domain_nets:
+                raise ValueError("physical power domains must have unique nets")
+            domain_nets.add(domain.net)
+            if domain.net not in net_members or not set(domain.members) <= net_members[domain.net]:
+                raise ValueError("physical power domain references unknown net or nonmember pad")
         known_regions = set(region_names)
         ruled_references: set[str] = set()
         for rule in self.placement_rules:

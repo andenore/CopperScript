@@ -12,10 +12,17 @@ def test_escape_spacing_controls_reach_all_planning_commands():
     from pcbir.physical import nm_from_mm
     for command in ("plan-layout", "route-global", "route-board"):
         args = _parser().parse_args([command, "examples/valid_board/board.copper",
-            "--escape-margin-mm", "0.75", "--escape-transit-lanes", "2"])
+            "--escape-margin-mm", "0.75", "--escape-transit-lanes", "2", "--power-domain-weight", "0.4"])
         options = _planner_options(args)
         assert options.escape_margin_nm == nm_from_mm(.75)
         assert options.escape_transit_lanes == 2
+        assert options.power_domain_weight == .4
+
+
+def test_early_plane_contacts_default_and_explicit_opt_out():
+    from pcbir.cli import _parser
+    assert _parser().parse_args(["route-board", "board.copper"]).early_plane_stitch
+    assert not _parser().parse_args(["route-board", "board.copper", "--no-early-plane-stitch"]).early_plane_stitch
 
 
 def run_cli(example: str) -> subprocess.CompletedProcess[str]:
@@ -368,7 +375,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["erc_pass"]
     assert isinstance(document["fanout"]["pin_access_analysis"], list)
     assert set(document["fanout"]["assignment"]) == {"pair_checks", "pair_queries", "broad_phase_accepts", "native_accepted", "expanded_pads", "trials"}
-    assert all(set(item) == {"pad", "legal_candidate_count", "selected_candidate_index", "diagnostic", "two_leg_candidate_count"}
+    assert all(set(item) == {"pad", "legal_candidate_count", "selected_candidate_index", "diagnostic", "two_leg_candidate_count", "refined_candidate_count"}
                for item in document["fanout"]["pin_access_analysis"])
     assert document["fabrication_ready"] is False
     # With fanout, critical/access failures share the escape-first controller.

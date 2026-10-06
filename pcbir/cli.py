@@ -310,6 +310,8 @@ def _parser() -> argparse.ArgumentParser:
             help="soft placement margin per demanding package side (not DRC clearance)")
         placement_parser.add_argument("--escape-transit-lanes", type=int, default=1,
             help="ordinary trace lanes estimated between facing escape banks")
+        placement_parser.add_argument("--power-domain-weight", type=float, default=0.25,
+            help="soft supply-domain placement weight in [0, 1]; 0 disables domain attraction")
     for physical_parser in (pcb_parser, layout_parser, global_route_parser, board_route_parser):
         physical_parser.add_argument("--width-mm", type=float, default=100)
         physical_parser.add_argument("--height-mm", type=float, default=80)
@@ -441,8 +443,8 @@ def _parser() -> argparse.ArgumentParser:
         help="experimental local GND escape width; cannot undercut a net rule or 0.09 mm",
     )
     board_route_parser.add_argument(
-        "--early-plane-stitch", action="store_true",
-        help="reserve plane escapes before signal routing (experimental; may reduce signal routability)",
+        "--early-plane-stitch", action=argparse.BooleanOptionalAction, default=True,
+        help="reserve and negotiate plane contacts during package preflight (default; --no-early-plane-stitch opts out)",
     )
     board_route_parser.add_argument(
         "--ground-via-in-pad", action="store_true",
@@ -497,7 +499,8 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
 def _planner_options(args) -> PlacementPlannerOptions:
     return PlacementPlannerOptions(candidate_count=args.candidates,
         escape_margin_nm=nm_from_mm(args.escape_margin_mm),
-        escape_transit_lanes=args.escape_transit_lanes)
+        escape_transit_lanes=args.escape_transit_lanes,
+        power_domain_weight=args.power_domain_weight)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -822,7 +825,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ground_via_in_pad=plane_options.ground_via_in_pad,
                         include_surface_zones=plane_options.include_surface_zones,
                         only_pads=frozenset(early_pads) if early_pads else None,
-                    ) if args.early_plane_stitch or early_pads else None
+                    ) if (args.early_plane_stitch and stitch_enabled) or early_pads else None
                 )
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
@@ -868,6 +871,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     critical_feedback_trials=args.critical_feedback_trials,
                     package_access_options=PackageAccessOptions(
                         maximum_trials=args.package_access_trials,
+                        reserve_plane_contacts=args.early_plane_stitch,
                         movement_nm=nm_from_mm(args.package_access_movement_mm),
                         maximum_pattern_trials=args.package_pattern_trials,
                         initial_pair_state_limit=args.package_initial_pair_states,
@@ -885,6 +889,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         fanout_options=fanout_options,
                         package_access_options=PackageAccessOptions(
                             maximum_trials=args.package_access_trials,
+                            reserve_plane_contacts=args.early_plane_stitch,
                             movement_nm=nm_from_mm(args.package_access_movement_mm),
                             maximum_pattern_trials=args.package_pattern_trials,
                             initial_pair_state_limit=args.package_initial_pair_states,

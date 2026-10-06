@@ -62,6 +62,8 @@ from .physical import (
 from .quantities import Length, Quantity
 from .design import Design
 from .mechanical_profiles import mechanical_provenance
+from .power_planning import lower_power_domains
+from .zone_geometry import lower_zone_outline
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,6 +433,7 @@ def _physicalize(
         footprints=footprints,
         placements=tuple(placements),
         nets=tuple(nets),
+        power_domains=lower_power_domains(flat, nets, _physical_pin_number),
         metadata=metadata,
         regions=regions,
         keepouts=keepouts,
@@ -557,48 +560,24 @@ def _lower_physical_constraints(
             if net not in net_names:
                 raise ValueError(f"copper_zone references unknown net {net!r}")
             parameters = constraint.parameters
-            unknown = set(parameters) - {"layers", "inset", "pad_connection", "clearance", "minimum_width", "island_policy"}
+            unknown = set(parameters) - {"layers", "inset", "pad_connection", "clearance", "minimum_width", "island_policy",
+                                          "region", "polygon_mm", "x", "y", "width", "height", "priority"}
             if unknown:
                 raise ValueError(f"unknown copper_zone parameter {sorted(unknown)[0]!r}")
             layers = _constraint_layers(parameters.get("layers"))
             if not layers:
                 raise ValueError("copper_zone requires at least one copper layer")
-            inset = _optional_constraint_length(parameters, "inset") or 0
-            if inset < 0:
-                raise ValueError("copper_zone inset cannot be negative")
-            xs = [point.x_nm for point in outline.vertices]
-            ys = [point.y_nm for point in outline.vertices]
-            left, right = min(xs) + inset, max(xs) - inset
-            top, bottom = min(ys) + inset, max(ys) - inset
-            if left >= right or top >= bottom:
-                raise ValueError("copper_zone inset consumes the board outline")
-            if outline.circular_boundary is not None:
-                circle = outline.circular_boundary
-                radius = circle.radius_nm - inset
-                if radius <= 0:
-                    raise ValueError("copper_zone inset consumes the board outline")
-                zone_vertices = BoardOutline.circle(Decimal(2*radius) / 1_000_000,
-                    center=circle.center,
-                    maximum_chord_error_mm=Decimal(circle.maximum_chord_error_nm) / 1_000_000).vertices
-            elif set(outline.vertices) == {
-                Point(min(xs), min(ys)), Point(max(xs), min(ys)),
-                Point(max(xs), max(ys)), Point(min(xs), max(ys)),
-            }:
-                zone_vertices = (Point(left, top), Point(right, top), Point(right, bottom), Point(left, bottom))
-            elif inset == 0:
-                zone_vertices = outline.vertices
-            else:
-                raise ValueError("nonzero copper_zone inset requires a rectangular or circular board outline")
-            # Without a general polygon-boolean engine, reject an inset which
-            # intersects a void instead of exporting an invalid hole contour.
-            BoardOutline(zone_vertices, cutouts=outline.cutouts)
+            zone_outline = lower_zone_outline(parameters, outline, flat.constraints)
+            priority = parameters.get("priority", 0)
+            if type(priority) is not int or priority < 0:
+                raise ValueError("copper_zone priority must be a nonnegative integer")
             island_policy = IslandPolicy(str(parameters.get("island_policy", "remove_below_area")))
             zone = CopperZone(
                 id=constraint.constraint_id or f"zone:{net}:{index}",
                 net=net,
                 layers=layers,
-                outline=PolygonWithHoles(PolygonRing(zone_vertices),
-                    tuple(PolygonRing(c.vertices) for c in outline.cutouts)),
+                outline=zone_outline,
+                priority=priority,
                 clearance_nm=_optional_constraint_length(parameters, "clearance"),
                 minimum_width_nm=_optional_constraint_length(parameters, "minimum_width") or nm_from_mm("0.25"),
                 pad_connection=ZoneConnection(str(parameters.get("pad_connection", "thermal"))),

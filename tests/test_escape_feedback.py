@@ -71,6 +71,30 @@ def test_package_reservation_includes_already_escaped_neighbour_not_other_packag
         PadReference("G1", "1"), PadReference("G1", "2")})
 
 
+def test_late_feedback_preserves_contacts_of_other_accepted_packages(monkeypatch):
+    import pcbir.escape_feedback as feedback
+    board = _trapped_ground_board()
+    initial = run_routing_pipeline(board,
+        placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
+            refinement_passes=0, fixed_references=frozenset({"G1", "G2"})),
+        plane_stitch_options=PlaneStitchOptions(only_pads=frozenset({PadReference("G2", "1")})),
+        detailed_options=DetailedRouterOptions(maximum_passes=1))
+    assert initial.plane_stitch.stitched_pads == (PadReference("G2", "1"),)
+    real = feedback.stitch_zone_pads
+    requests = []
+    def observe(source, settings):
+        if settings.only_pads is not None:
+            requests.append(settings.only_pads)
+        return real(source, settings)
+    monkeypatch.setattr(feedback, "stitch_zone_pads", observe)
+    improve_zone_escapes(initial, PlaneStitchOptions(maximum_radius_nm=nm_from_mm(1)),
+        placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0, refinement_passes=0),
+        options=EscapeFeedbackOptions(maximum_trials=1, maximum_local_trials=0,
+                                      incremental_placement=False, nearby_components=0))
+    assert requests
+    assert all({PadReference("G1", "1"), PadReference("G2", "1")} <= request for request in requests)
+
+
 def test_feedback_moves_only_from_unrouted_board_to_open_ground_exit(monkeypatch) -> None:
     board = _trapped_ground_board()
     fixed = PlacementPlannerOptions(

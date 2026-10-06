@@ -1331,3 +1331,69 @@ No specific example component or board coordinate may be encoded in the generic
 placer. Dedicated power-plane selection is a separate board policy, not a
 consequence of this spacing heuristic. See the
 [implementation plan](escape-aware-placement-plan.md).
+
+## CS-156 — Derived physical power domains (Accepted)
+
+Physical planning MAY derive `PhysicalPowerDomain` membership from explicit
+nonzero supply nets and active power-pin profiles. Net identity, not nominal
+voltage or device-local domain name, determines membership. Same-voltage
+switched/filtered nets remain separate; aliases on a net merge. Ground is not
+a placement domain. Supply output pads and explicit physical sources anchor
+distribution; absent sources use a consumer centroid. Passive rail terminals
+participate and a multi-supply component MAY belong to several domains.
+The view MUST remain a subset of actual physical net terminals and MUST NOT
+create connectivity or geometry in the electrical IR.
+
+Domain distribution is a configurable, component-normalized soft objective.
+Actual supply-pad position/orientation matters; source locks, mechanical and
+relative legality, macro ownership and escape-channel deficits remain stronger.
+No mandatory geometric midpoint or analog/digital ground split is inferred.
+Plane-backed nets use reduced generic wirelength attraction. Report raw HPWL,
+weighted wirelength and the domain penalty separately. This is not power
+integrity, current capacity, sequencing or voltage-drop certification.
+
+## CS-157 — Complete small-package and plane access (Accepted)
+
+Crowded ordinary SMD terminals on multi-terminal packages MUST NOT be excluded
+solely because a package has fewer than twelve pins. Default fanout includes
+small packages with at least three distinct electrical terminal numbers when
+local spacing is within its configured threshold. Two-terminal passives remain
+excluded by default; explicit thresholds retain bounded custom opt-in. Keep
+critical/macro ownership, exact candidate and final native gates unchanged.
+
+This decision amends the opt-in/late-plane defaults in CS-094, CS-103 and CS-131:
+with fanout enabled, reserve requested declared-plane contacts during package
+preflight by default, before ordinary area routing. Critical routes retain
+their specialized profiles; cross-owner pattern proposals are revalidated from
+the clean source. Explicit late-contact opt-out and selected-pad scope remain
+available. Late feedback MUST preserve the identities of already accepted
+early contacts when rebuilding placement. A failed gate cannot be bypassed by
+area routing. Prospective contacts are not proof of continuous filled copper.
+
+## CS-158 — Private branch checkpoints for repair (Accepted)
+
+A failed multi-terminal detailed attempt MAY retain its successful tree as a
+private checkpoint for bounded repair. Checkpoints MUST bind source identity,
+grid coordinates/layers, terminal identities, access anchors, width and allowed
+layers. Revalidate old geometry against the current clearance index before
+reuse; soft proposals may cross only movable owners. Resume only remaining
+terminal branches and expose reused-branch telemetry. A changed source or mesh
+invalidates reuse. Checkpoint copper and congestion MUST NOT appear in output
+on failure. Complete candidates still require exact clearance and restoration
+of every displaced net; immutable fanout/critical/source copper is protected.
+This is not permission to publish a partial power tree or to rip arbitrary
+branches from previously completed blocker nets.
+
+## CS-159 — Explicit regional power pours (Accepted)
+
+Source `copper_zone` MAY use an explicit rectangle, a millimeter polygon or a
+named placement-region boundary, with a nonnegative integer priority. Boundary
+modes are exclusive and independent of electrical net definitions. Default
+whole-outline/inset behavior remains available. Validate simple polygons,
+board containment and cutout relationships; reject unsupported offsets and
+partial cutout clipping rather than approximate them. Native authoritative
+fill/connected-copper signoff is unchanged. Do not automatically assign a power
+layer, construct regions from consumer bounding boxes or split GND. Distant
+loads still need legal access; regional intent alone cannot defer away opens.
+
+See the [implementation and validation plan](power-domain-routing-plan.md).

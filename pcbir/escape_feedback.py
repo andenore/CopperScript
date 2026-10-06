@@ -128,6 +128,11 @@ def improve_zone_escapes(
     if options.maximum_trials == 0:
         return EscapeFeedbackResult(initial, baseline_stitch, ())
     targets = frozenset(baseline_stitch.pending_pads)
+    # A late retry must not abandon contacts accepted by the package gate.
+    # Keep every previous owner's identity when rebuilding the unrouted scene,
+    # not just the currently failing package's ground group.
+    if initial.plane_stitch is not None:
+        _reserved_pads = _reserved_pads | frozenset(initial.plane_stitch.stitched_pads)
     package_targets = _package_zone_targets(initial.board, targets)
     zone_nets = {zone.net for zone in initial.board.zones}
     baseline_signal_failures = frozenset(_failed_signals(initial, zone_nets))

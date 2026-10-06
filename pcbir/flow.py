@@ -71,6 +71,10 @@ def run_routing_pipeline(
     placement_options = placement_options or PlacementPlannerOptions()
     global_options = global_options or GlobalRouterOptions()
     detailed_options = detailed_options or DetailedRouterOptions()
+    package_access_options = package_access_options or PackageAccessOptions()
+    if (fanout_options is not None and plane_stitch_options is None
+            and package_access_options.reserve_plane_contacts and board.zones):
+        plane_stitch_options = PlaneStitchOptions()
     feedback_options = feedback_options or PlacementRoutingFeedbackOptions(
         initial_movement_nm=global_options.tile_size_nm
     )

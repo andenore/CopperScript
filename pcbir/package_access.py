@@ -33,6 +33,7 @@ class PackageAccessOptions:
     maximum_pattern_trials: int = 2
     boundary_options: BoundaryAccessOptions = BoundaryAccessOptions()
     initial_pair_state_limit: int = 6_000
+    reserve_plane_contacts: bool = True
 
     def __post_init__(self):
         if self.maximum_trials < 0 or self.movement_nm <= 0:
@@ -139,6 +140,8 @@ def preflight_package_access(
     """
     from .hard_macros import macro_source, materialize_hard_macros
     options = options or PackageAccessOptions()
+    if plane_options is None and options.reserve_plane_contacts and board.zones:
+        plane_options = PlaneStitchOptions()
     board = macro_source(board)
     owner_board = materialize_hard_macros(board)
     if global_route.placement_fingerprint != _placement_fingerprint(board):
