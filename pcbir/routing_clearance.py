@@ -83,6 +83,8 @@ class RoutingClearanceIndex:
         )
         self._objects: list[_CopperObject] = []
         self._holes: list[_DrilledHole] = []
+        # Ordered insertions; with ``board`` they determine the whole index.
+        self._additions: list[tuple[TrackSegment | Via, bool]] = []
         self._bins: dict[tuple[CopperLayer, int, int], list[int]] = {}
         self._keepouts = tuple(
             _KeepoutObject(
@@ -328,7 +330,16 @@ class RoutingClearanceIndex:
         for identity in sorted(identities):
             yield self._static_regions[identity]
 
+    def additions(self) -> tuple[tuple[TrackSegment | Via, bool], ...]:
+        """Every added track/via with its lock flag, in insertion order.
+
+        All other index state derives from ``board`` and ``bin_size_nm``, so
+        these three values identify an index exactly, e.g. for search reuse.
+        """
+        return tuple(self._additions)
+
     def add_track(self, track: TrackSegment, *, locked: bool = False) -> None:
+        self._additions.append((track, locked))
         self._add(_CopperObject(
             track.net, (track.layer,),
             RoundedConvexShape((track.start, track.end), track.width_nm // 2),
@@ -336,6 +347,7 @@ class RoutingClearanceIndex:
         ))
 
     def add_via(self, via: Via, *, locked: bool = False) -> None:
+        self._additions.append((via, locked))
         self._holes.append(_DrilledHole(
             via.net, via.position, via.drill_nm // 2, locked, True,
             (via.from_layer, via.to_layer),

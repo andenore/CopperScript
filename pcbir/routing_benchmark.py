@@ -38,8 +38,9 @@ def _settings(manifest: dict) -> list[str] | None:
         return None
     # Output paths/progress are observational. Explicit repair/staging switches are
     # the interventions under test, not permission to ignore different budgets.
+    # Exact search reuse cannot change copper, so its bound is one as well.
     ignored_flags = {"--progress", "--no-incremental-placement-repair"}
-    ignored_values = {"--report", "-o", "--zone-dependency-expansions"}
+    ignored_values = {"--report", "-o", "--zone-dependency-expansions", "--search-reuse-entries"}
     result = []
     iterator = iter(args[1:])  # Board contents are compared using recorded hashes.
     for item in iterator:
@@ -108,6 +109,8 @@ def summarize_run(directory: Path) -> dict:
                 if any(span["phase"] == "detailed_net" for span in spans) else None),
             "detailed_attempt_stages": dict(sorted(Counter(span["started_details"].get("stage", "unknown")
                 for span in spans if span["phase"] == "detailed_net").items())),
+            "reused_detailed_attempts": sum(span["phase"] == "detailed_net"
+                and span["finished_details"].get("search_reuse") == "hit" for span in spans),
             "trial_decisions": {phase: dict(sorted(Counter(span["finished_details"].get("decision", "unknown")
                 for span in spans if span["phase"] == phase).items()))
                 for phase in ("zone_full_trial", "zone_incremental_trial")},
@@ -116,7 +119,8 @@ def summarize_run(directory: Path) -> dict:
                 for span in spans if span["phase"] == phase), 3) for phase in sorted({s["phase"] for s in spans})},
             "note": "Only paired completed stages counted; inclusive phase times overlap. "
                     "Critical state counts include discarded probes; do not add tier counts again. "
-                    "Detailed attempt counts include rejected work, not unique accepted nets. "
+                    "Detailed attempt counts include rejected work, not unique accepted nets; "
+                    "reused attempts answered an exactly repeated search without searching. "
                     "General area state counts are not yet recorded."}
         if not phases["events"]:
             # Older runs have a plain-text log but no structured telemetry.

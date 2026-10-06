@@ -131,9 +131,12 @@ remain; these files are not an order approval or an assembled-board guarantee.
 
 ## Next improvements, outside this closure increment
 
-- [ ] Measure duplicate displaced-net states; bound any memoization to exact
+- [x] Measure duplicate displaced-net states; bound any memoization to exact
   obstacles, rules, guides, anchors and search options. Never reuse a failure
-  after the blocking geometry changes.
+  after the blocking geometry changes. A later rerun found 12 of 77 displaced
+  searches (and four soft proposals) to be exact repeats; they are now reused
+  by exact identity. Most `V5` failures are distinct states. See
+  [exact repair-search reuse](repair-search-reuse.md).
 - [ ] Improve ownership-safe corridor/layer choices and confirmed removable
   bends without losing the accepted clean board or its reference assumptions.
 - [ ] Qualify concrete parts/support circuits, layer-specific impedance and

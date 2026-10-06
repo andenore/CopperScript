@@ -378,6 +378,11 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum ordinary nets displaced in one transactional repair (1..8)",
     )
     board_route_parser.add_argument(
+        "--search-reuse-entries", type=_nonnegative_int, default=128,
+        help="per-run bound on exactly repeated detailed repair searches answered from memory; "
+             "routed copper is unchanged (default: 128; 0 disables)",
+    )
+    board_route_parser.add_argument(
         "--fanout", action="store_true",
         help="reserve crowded ordinary-pin escapes before critical routes; gate ordinary area routing on access",
     )
@@ -908,6 +913,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     repair_budget_multiplier=args.repair_budget_multiplier,
                     defer_zone_nets=bool(physical_board.zones) or args.defer_zone_nets,
                     maximum_ripup_blockers=args.maximum_ripup_blockers,
+                    search_reuse_entries=args.search_reuse_entries,
                     layer_preference_cost=args.layer_preference_cost,
                     direction_preference_cost=args.direction_preference_cost,
                 )

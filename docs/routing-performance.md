@@ -129,6 +129,14 @@ and local zone dependency reroutes. There are no per-expanded-state callbacks.
 The requested budget is not an aggregate net budget: branch searches, guide
 expansions and bounded pitch refinements can perform several searches.
 
+Every finished net event also carries a process-local `search_identity`.
+Within one repair stage, a search repeated with identical inputs is answered
+from a bounded memo (`search_reuse: "hit"`, with the original `reused_search_seconds`); a
+`detailed_search_reuse` summary follows `detailed_repair`. The attempt is the
+identical earlier result, so copper, reports and fingerprints do not change.
+`--search-reuse-entries 0` disables it for comparison runs; see
+[exact repair-search reuse](repair-search-reuse.md).
+
 Follow a running build in PowerShell:
 
 ```powershell
@@ -136,8 +144,9 @@ Get-Content "build/full-vertical/runs/<run-id>/routing.log" -Tail 20 -Wait
 ```
 
 The read-only summary reports `detailed_net_attempts`,
-`failed_detailed_attempts` and `detailed_attempt_stages`, including tentative
-and rejected work. Counts are **not** unique accepted nets or DRC closure.
+`failed_detailed_attempts`, `detailed_attempt_stages` and
+`reused_detailed_attempts`, including tentative and rejected work. Counts are
+**not** unique accepted nets or DRC closure.
 Older logs without completed per-net events have unknown (`null`) attempt
 counts. Interrupted attempts remain in `work.unfinished`, without an invented
 duration or success; a forcibly killed Windows process may also leave the

@@ -60,7 +60,11 @@ attribute them before choosing a cached-hash or packed-key implementation.
    - [ ] Measure repeated coordinate/placed-pad/port construction and bounded reuse.
    - [ ] Attribute hash/key work and evaluate tighter internal representations
      without changing heap tie-breaking, costs, budgets or target eligibility.
-   - [ ] Inspect repeated repair/search work against exact snapshot identities.
+   - [x] Inspect repeated repair/search work against exact snapshot identities.
+     Exact repeats are 16 of 201 full-vertical detailed attempts, all in repair;
+     they and repeated blocked-node meshes are reused within one repair stage,
+     and blocking tests material once per point. See
+     [exact repair-search reuse](repair-search-reuse.md).
 
 6. [ ] Measure full-board closure and matched uninstrumented timing before claiming
    an end-to-end gain. Continue the shared optimization checklist, including

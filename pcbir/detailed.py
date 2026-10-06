@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from bisect import bisect_left
-from collections import Counter
+from collections import Counter, OrderedDict
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
+from functools import partial
 from hashlib import sha256
 from heapq import heappop, heappush
-from itertools import permutations
+from itertools import count as _count, permutations
 import json
 from math import hypot, isqrt
+from time import perf_counter
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
@@ -192,6 +194,9 @@ class DetailedRouterOptions:
     defer_zone_nets: bool = True
     maximum_ripup_blockers: int = 4
     minimum_repair_pitch_nm: int = nm_from_mm("0.1")
+    # Bound of the per-run memo of exactly repeated repair searches; 0 disables
+    # it. A hit returns the identical earlier attempt, never different copper.
+    search_reuse_entries: int = 128
 
     def __post_init__(self) -> None:
         if min(
@@ -218,6 +223,8 @@ class DetailedRouterOptions:
             raise ValueError("maximum rip-up blockers must be 1..8")
         if self.orthogonal_first_min_pads < 3:
             raise ValueError("orthogonal-first threshold must be at least 3 pads")
+        if self.search_reuse_entries < 0:
+            raise ValueError("detailed search reuse bound cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +310,136 @@ class _Pass:
 
 class _SearchBudgetExceeded(Exception):
     """A bounded detailed search exhausted its configured state budget."""
+
+
+class _Same:
+    """Identity key part that retains its object, so the id cannot be reused."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: object) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Same) and other.value is self.value
+
+    def __hash__(self) -> int:
+        return id(self.value)
+
+
+class _SearchReuse:
+    """Bounded memo of exactly repeated net searches in one run's repair stage.
+
+    The key is every search input: the immutable board and branch checkpoint
+    by identity, the clearance index by its board, bin size and ordered
+    insertions, and net, rule, guide, anchors, usage, history, mode and options
+    by value. A failure is thus reused only against identical blocking copper.
+    The search is deterministic, so a hit returns exactly the recomputed
+    attempt. Counters are telemetry, never routing, report or fingerprint data.
+
+    Blocked grid nodes are a pure function of the board and both grid axes, so
+    a bounded side table also serves repeated grids, e.g. refinement meshes
+    of a blocker that fails in several rip-up orders.
+    """
+
+    _GRID_ENTRIES = 16
+
+    def __init__(self, maximum_entries: int) -> None:
+        self.maximum_entries = maximum_entries
+        self._entries: OrderedDict[tuple[object, ...], tuple[_NetAttempt, float]] = OrderedDict()
+        self._blocked: OrderedDict[tuple[object, ...], frozenset[DetailedNode]] = OrderedDict()
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+        self.saved_seconds = 0.0
+        self.grid_hits = 0
+
+    def lookup(self, key: tuple[object, ...]) -> tuple[_NetAttempt, float] | None:
+        entry = self._entries.get(key)
+        if entry is None:
+            self.misses += 1
+            return None
+        self._entries.move_to_end(key)
+        self.hits += 1
+        self.saved_seconds += entry[1]
+        return entry
+
+    def store(self, key: tuple[object, ...], attempt: _NetAttempt, seconds: float) -> None:
+        self._entries[key] = (attempt, seconds)
+        self._entries.move_to_end(key)
+        while len(self._entries) > self.maximum_entries:
+            self._entries.popitem(last=False)
+            self.evictions += 1
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def blocked_nodes(self, board: PhysicalBoard, xs: tuple[int, ...],
+                      ys: tuple[int, ...]) -> frozenset[DetailedNode] | None:
+        if not self.maximum_entries:
+            return None
+        blocked = self._blocked.get((_Same(board), xs, ys))
+        if blocked is not None:
+            self._blocked.move_to_end((_Same(board), xs, ys))
+            self.grid_hits += 1
+        return blocked
+
+    def store_blocked_nodes(self, board: PhysicalBoard, xs: tuple[int, ...],
+                            ys: tuple[int, ...], blocked: frozenset[DetailedNode]) -> None:
+        if self.maximum_entries:
+            self._blocked[_Same(board), xs, ys] = blocked
+            while len(self._blocked) > min(self.maximum_entries, self._GRID_ENTRIES):
+                self._blocked.popitem(last=False)
+
+
+def _search_key(
+    board: PhysicalBoard, net: PhysicalNet, rule: NetRoutingRule | None,
+    guide: GlobalNetRoute | None, usage: Mapping[str, int], history: Mapping[str, int],
+    clearance: RoutingClearanceIndex, options: DetailedRouterOptions,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess], repair: bool,
+    allow_movable_conflicts: bool, resume: _BranchCheckpoint | None,
+) -> tuple[object, ...]:
+    """Exact identity of one ``_search_detailed_net`` call; see ``_SearchReuse``."""
+
+    return (
+        _Same(board), _Same(clearance.board), clearance.bin_size_nm, clearance.additions(),
+        net, rule, guide, options, tuple(sorted(fanout_accesses.items())),
+        tuple(sorted(usage.items())), tuple(sorted(history.items())),
+        repair, allow_movable_conflicts, None if resume is None else _Same(resume),
+    )
+
+
+# Telemetry only: equal-content boards share a token, so repeated searches can
+# be counted across routing runs. Bounded; holds boards against id reuse.
+_IDENTITY_BOARDS: list[tuple[PhysicalBoard, int]] = []
+_IDENTITY_BOARD_LIMIT = 16
+_IDENTITY_BOARD_TOKENS = _count(1)
+
+
+def _board_identity_token(board: PhysicalBoard) -> int:
+    for known, token in _IDENTITY_BOARDS:
+        if known is board:
+            return token
+    for known, token in _IDENTITY_BOARDS:
+        if known.tracks == board.tracks and known.vias == board.vias and known == board:
+            break
+    else:
+        token = next(_IDENTITY_BOARD_TOKENS)
+    _IDENTITY_BOARDS.append((board, token))
+    del _IDENTITY_BOARDS[:-_IDENTITY_BOARD_LIMIT]
+    return token
+
+
+def _search_identity(key: tuple[object, ...]) -> str:
+    """Process-local content token of a search key, for progress telemetry."""
+
+    content = tuple(
+        (_board_identity_token(part.value) if isinstance(part.value, PhysicalBoard)
+         else (_board_identity_token(part.value.source), part.value, part.value.grid))
+        if isinstance(part, _Same) else part
+        for part in key
+    )
+    return f"{hash(content) & 0xFFFF_FFFF_FFFF_FFFF:016x}"
 
 
 def route_detailed(
@@ -453,14 +590,20 @@ def route_detailed(
     assert best is not None
     if len(completed) > 1 and best.metrics.unrouted_net_count:
         emit(on_progress, "detailed_repair", "started")
+        reuse = _SearchReuse(options.search_reuse_entries)
         repaired = _repair_from_passes(
             board, general_nets, rules, guides, best, completed, options,
-            fanout_accesses, on_progress=on_progress,
+            fanout_accesses, on_progress=on_progress, reuse=reuse,
         )
         improved = repaired.metrics.quality_vector < best.metrics.quality_vector
         emit(on_progress, "detailed_repair", "finished", selected=improved,
              failed_ordinary_nets=[item.result.net for item in repaired.nets
                  if not item.result.connected and item.result.net not in zone_nets])
+        if reuse.maximum_entries:
+            emit(on_progress, "detailed_search_reuse", "summary", hits=reuse.hits,
+                 misses=reuse.misses, evictions=reuse.evictions, retained=len(reuse),
+                 grid_hits=reuse.grid_hits, maximum_entries=reuse.maximum_entries,
+                 saved_seconds_estimate=round(reuse.saved_seconds, 3))
         if improved:
             best = repaired
     # Layer/direction preferences must not strand a signal merely because
@@ -570,6 +713,7 @@ def _search_detailed_net(
     repair: bool = True, allow_movable_conflicts: bool = False,
     resume: _BranchCheckpoint | None = None,
     on_progress: ProgressCallback | None = None, stage: str,
+    reuse: _SearchReuse | None = None,
     **context: object,
 ) -> _NetAttempt:
     """Observe one tentative net attempt, starting before grid construction.
@@ -577,6 +721,7 @@ def _search_detailed_net(
     No per-state callbacks or changes to search ordering/budgets. A repair may
     refine the pitch or try several branch searches; this is not a global state
     cap. Interrupted attempts deliberately retain an unmatched start event.
+    An exactly repeated search is answered from ``reuse`` (see _SearchReuse).
     """
     emit(on_progress, "detailed_net", "started", net=net.name, stage=stage,
          pad_count=len(net.pads), pitch_nm=options.pitch_nm,
@@ -585,16 +730,32 @@ def _search_detailed_net(
          direction_preference_cost=options.direction_preference_cost,
          heuristic_weight_percent=options.heuristic_weight_percent,
          allow_movable_conflicts=allow_movable_conflicts, **context)
-    grid = _build_grid(board, options, net.pads, fanout_accesses)
-    search = _route_repair_net if repair else _route_net
-    attempt = search(board, grid, net.name, net.pads, rule, guide, usage, history,
-        clearance, options, fanout_accesses=fanout_accesses,
-        allow_movable_conflicts=allow_movable_conflicts, resume=resume)
+    reuse = reuse if reuse is not None and reuse.maximum_entries else None
+    key = (_search_key(board, net, rule, guide, usage, history, clearance, options,
+                       fanout_accesses, repair, allow_movable_conflicts, resume)
+           if reuse is not None or on_progress is not None else None)
+    telemetry: dict[str, object] = {}
+    if on_progress is not None:
+        telemetry["search_identity"] = _search_identity(key)
+    cached = reuse.lookup(key) if reuse is not None else None
+    if cached is not None:
+        attempt = cached[0]
+        telemetry.update(search_reuse="hit", reused_search_seconds=round(cached[1], 3))
+    else:
+        started = perf_counter()
+        grid = _build_grid(board, options, net.pads, fanout_accesses, reuse)
+        search = partial(_route_repair_net, reuse=reuse) if repair else _route_net
+        attempt = search(board, grid, net.name, net.pads, rule, guide, usage, history,
+            clearance, options, fanout_accesses=fanout_accesses,
+            allow_movable_conflicts=allow_movable_conflicts, resume=resume)
+        if reuse is not None:
+            reuse.store(key, attempt, perf_counter() - started)
+            telemetry["search_reuse"] = "miss"
     emit(on_progress, "detailed_net", "finished", net=net.name, stage=stage,
          connected=attempt.result.connected, track_count=len(attempt.tracks),
          via_count=len(attempt.vias), diagnostics=list(attempt.result.diagnostics),
          resumed_branch_count=attempt.result.resumed_branch_count,
-         final_pitch_nm=attempt.pitch_nm or options.pitch_nm, **context)
+         final_pitch_nm=attempt.pitch_nm or options.pitch_nm, **telemetry, **context)
     return attempt
 
 
@@ -701,7 +862,7 @@ def _repair_from_passes(
     completed: list[_Pass],
     options: DetailedRouterOptions,
     fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
-    *, on_progress: ProgressCallback | None = None,
+    *, on_progress: ProgressCallback | None = None, reuse: _SearchReuse | None = None,
 ) -> _Pass:
     """Keep the best legal pass and add compatible routes found in other passes."""
 
@@ -740,7 +901,7 @@ def _repair_from_passes(
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
                 options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
                 resume=checkpoints.get(net.name),
-                on_progress=on_progress, stage="soft_merge",
+                on_progress=on_progress, stage="soft_merge", reuse=reuse,
             )
             if soft_candidate.result.connected:
                 candidates.append(soft_candidate)
@@ -781,7 +942,7 @@ def _repair_from_passes(
                 rules.get(net.name), guides.get(net.name), usage, {}, clearance,
                 options, allow_movable_conflicts=True, fanout_accesses=fanout_accesses,
                 resume=checkpoints.get(net.name),
-                on_progress=on_progress, stage="soft_ripup",
+                on_progress=on_progress, stage="soft_ripup", reuse=reuse,
             )
             if soft_candidate.result.connected:
                 candidates.append(soft_candidate)
@@ -853,6 +1014,7 @@ def _repair_from_passes(
                         guides.get(blocker.name), {}, {}, trial_clearance, eviction_options,
                         fanout_accesses=fanout_accesses,
                         on_progress=on_progress, stage="evicted_net", repair_owner=net.name,
+                        reuse=reuse,
                     )
                     if not attempt.result.connected:
                         break
@@ -886,7 +1048,7 @@ def _repair_from_passes(
             rules.get(net.name), guides.get(net.name), usage, {}, clearance,
             repair_options, fanout_accesses=fanout_accesses,
             resume=checkpoints.get(net.name),
-            on_progress=on_progress, stage="final_retry",
+            on_progress=on_progress, stage="final_retry", reuse=reuse,
         )
         if not attempt.result.connected:
             selected[net.name] = attempt
@@ -924,7 +1086,7 @@ def _route_repair_net(
     clearance: RoutingClearanceIndex, options: DetailedRouterOptions,
     *, allow_movable_conflicts: bool = False,
     fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
-    resume: _BranchCheckpoint | None = None,
+    resume: _BranchCheckpoint | None = None, reuse: _SearchReuse | None = None,
 ) -> _NetAttempt:
     """Bounded fine-grid search shared by every transactional repair stage.
 
@@ -945,7 +1107,7 @@ def _route_repair_net(
         options = replace(options,
             pitch_nm=max(options.minimum_repair_pitch_nm, options.pitch_nm // 2))
         attempt = _route_net(
-            board, _build_grid(board, options, pads, fanout_accesses), name, pads,
+            board, _build_grid(board, options, pads, fanout_accesses, reuse), name, pads,
             rule, guide, usage, history, clearance, options,
             allow_movable_conflicts=allow_movable_conflicts,
             fanout_accesses=fanout_accesses,
@@ -1763,6 +1925,7 @@ def _build_grid(
     board: PhysicalBoard, options: DetailedRouterOptions,
     pads: tuple[PadReference, ...],
     fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
+    reuse: _SearchReuse | None = None,
 ) -> _Grid:
     min_x = min(item.x_nm for item in board.outline.vertices)
     max_x = max(item.x_nm for item in board.outline.vertices)
@@ -1786,6 +1949,22 @@ def _build_grid(
     ys = tuple(sorted(set(range(min_y, max_y + 1, options.pitch_nm)).union(
         point.y_nm for point in pin_points
     )))
+    # Blocked nodes depend only on the immutable board and both axes. Repeated
+    # searches of one net at one pitch share them; query caches stay per grid.
+    blocked = reuse.blocked_nodes(board, xs, ys) if reuse is not None else None
+    if blocked is None:
+        blocked = _blocked_nodes(board, xs, ys)
+        if reuse is not None:
+            reuse.store_blocked_nodes(board, xs, ys, blocked)
+    return _Grid(
+        tuple(board.stackup.copper_layers), xs, ys, board, blocked,
+        options.pitch_nm,
+    )
+
+
+def _blocked_nodes(
+    board: PhysicalBoard, xs: tuple[int, ...], ys: tuple[int, ...],
+) -> frozenset[DetailedNode]:
     # Courtyards are assembly geometry, not copper obstacles. The clearance
     # index checks the actual placed pads and existing copper instead.
     copper_keepouts = tuple(
@@ -1793,22 +1972,30 @@ def _build_grid(
         for item in resolved_copper_keepouts(board)
         if item.block_tracks
     )
+    # Material is layer-independent: test each point once, not once per layer.
+    # A keepout polygon is tested only inside its inclusive bounding box.
+    layer_keepouts = tuple(
+        tuple((polygon, _bounds(polygon)) for layers, polygon in copper_keepouts
+              if layer in layers)
+        for layer in board.stackup.copper_layers
+    )
+    layer_indexes = range(len(layer_keepouts))
     blocked: set[DetailedNode] = set()
-    for layer_index, layer in enumerate(board.stackup.copper_layers):
-        for x_index, x in enumerate(xs):
-            for y_index, y in enumerate(ys):
-                point = Point(x, y)
-                if not point_in_material(board, point):
-                    blocked.add(DetailedNode(layer_index, x_index, y_index))
-                elif any(
-                    layer in layers and point_in_polygon(point, polygon)
-                    for layers, polygon in copper_keepouts
+    for x_index, x in enumerate(xs):
+        for y_index, y in enumerate(ys):
+            point = Point(x, y)
+            if not point_in_material(board, point):
+                blocked.update(DetailedNode(layer_index, x_index, y_index)
+                               for layer_index in layer_indexes)
+                continue
+            for layer_index, keepouts in enumerate(layer_keepouts):
+                if any(
+                    box[0] <= x <= box[2] and box[1] <= y <= box[3]
+                    and point_in_polygon(point, polygon)
+                    for polygon, box in keepouts
                 ):
                     blocked.add(DetailedNode(layer_index, x_index, y_index))
-    return _Grid(
-        tuple(board.stackup.copper_layers), xs, ys, board, frozenset(blocked),
-        options.pitch_nm,
-    )
+    return frozenset(blocked)
 
 
 def _access_path(
