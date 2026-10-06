@@ -110,6 +110,7 @@ def test_search_charges_physical_exposure_including_inside_target(monkeypatch, a
     class Clear:
         def can_track(self, *args):
             return True
+        can_route = can_track
     costs = []
     push = detailed.heappush
     def observe(queue, item):

@@ -23,7 +23,7 @@ def local_access_path(
     if start == end:
         return ()
     if _legal_segment(board, clearance, net, start, end, layer, width_nm):
-        return (TrackSegment(net, start, end, width_nm, layer),)
+        return clearance.route_pieces(net, start, end, width_nm, layer)
     if min(step_nm, detour_nm, maximum_states) <= 0:
         raise ValueError("local access search bounds must be positive")
     xs = tuple(sorted(set(range(min(start.x_nm, end.x_nm) - detour_nm,
@@ -82,8 +82,8 @@ def local_access_path(
             compact[-1] = point
         else:
             compact.append(point)
-    return tuple(TrackSegment(net, a, b, width_nm, layer)
-                 for a, b in zip(compact, compact[1:]))
+    return tuple(piece for a, b in zip(compact, compact[1:])
+                 for piece in clearance.route_pieces(net, a, b, width_nm, layer))
 
 
 def _distance(first: Point, second: Point) -> int:
@@ -103,5 +103,6 @@ def _legal_segment(
         return True
     midpoint = Point((start.x_nm + end.x_nm) // 2,
                      (start.y_nm + end.y_nm) // 2)
+    # An ordinary breakout net may neck down next to its lands (plan R1).
     return (point_in_polygon(midpoint, board.outline.vertices)
-            and clearance.can_track(net, start, end, width_nm, layer))
+            and clearance.can_route(net, start, end, width_nm, layer))

@@ -22,6 +22,11 @@ the critical pair search share this one definition:
   the two members of a pair that declares breakout properties, that value is
   the pair gap instead of the clearance. Nets without breakout properties keep
   the plain clearance rule, including between pair members.
+* Ordinary (``GENERAL``) nets neck down the same way: the detailed router,
+  its pad access paths and the global pin access check and emit each
+  centreline as its ``split_tracks`` pieces (``ordinary_pieces``), and cleanup
+  re-cuts changed copper (``neck_down``). A piece is never wider than its
+  check, so narrow copper is always inside a region.
 """
 
 from __future__ import annotations
@@ -31,7 +36,8 @@ from fractions import Fraction
 from typing import Iterable
 
 from .geometry import Bounds, RoundedConvexShape, shape_distance_squared
-from .physical import NetRoutingRule, PadKind, PadReference, PhysicalBoard, Point, TrackSegment
+from .physical import (CopperLayer, NetRoutingRule, PadKind, PadReference, PhysicalBoard, Point,
+                       RouteKind, TrackSegment)
 from .placement import transformed_local_point
 
 
@@ -68,6 +74,10 @@ class BreakoutRegions:
         self.rules: dict[str, NetRoutingRule] = {rule.net: rule for rule in board.net_routing_rules}
         self.declared = frozenset(net for net, rule in self.rules.items()
                                   if rule.breakout_length_nm is not None)
+        # Nets the ordinary detailed router owns; the critical router cuts its own.
+        self.ordinary = frozenset(net for net in self.declared
+                                  if self.rules[net].kind is RouteKind.GENERAL)
+        self.default_track_width_nm = board.rules.default_track_width_nm
         lands: dict[str, list[BreakoutLand]] = {}
         if self.declared:
             assigned = {pad: net.name for net in board.nets if net.name in self.declared
@@ -193,6 +203,44 @@ class BreakoutRegions:
         if land is not None and rule is not None and rule.breakout_width_nm is not None:
             return rule.breakout_width_nm
         return width_nm
+
+    def width_nm(self, net: str) -> int:
+        """The profile width of ``net`` outside its regions: rule width, else board default."""
+        rule = self.rules.get(net)
+        return rule.width_nm if rule is not None and rule.width_nm else self.default_track_width_nm
+
+    def ordinary_pieces(self, net: str, start: Point, end: Point, width_nm: int,
+                        layer: CopperLayer) -> tuple[TrackSegment, ...]:
+        """The copper the ordinary router checks and emits for one centreline.
+
+        An ordinary net with breakout properties is cut at its region
+        boundaries: ``breakout_width`` inside, ``width_nm`` outside. Any other
+        centreline is one track of ``width_nm``.
+        """
+        track = TrackSegment(net, start, end, width_nm, layer)
+        return self.split_tracks((track,), width_nm) if net in self.ordinary else (track,)
+
+    def neck_down(self, tracks: Iterable[TrackSegment]) -> tuple[TrackSegment, ...]:
+        """Re-cut ordinary copper after a geometry change such as pruning.
+
+        Tracks of ordinary breakout nets are cut at region boundaries; inside
+        pieces get the breakout width, outside pieces the profile width. Other
+        tracks are unchanged. Routers keep narrow copper inside regions, so
+        this only narrows checked copper.
+        """
+        result: list[TrackSegment] = []
+        for track in tracks:
+            if track.net in self.ordinary:
+                result.extend(self.split_tracks((track,), self.width_nm(track.net)))
+            else:
+                result.append(track)
+        return tuple(result)
+
+    def required_width_nm(self, track: TrackSegment, width_nm: int) -> int:
+        """The least width of verified ordinary copper: the breakout width inside a region."""
+        if track.net not in self.ordinary:
+            return width_nm
+        return self.track_width_nm(track.net, self.region(track.net, (track.start, track.end)), width_nm)
 
     def pair(self, first: str, second: str) -> bool:
         """Whether two nets are the members of a pair that declares breakout properties."""

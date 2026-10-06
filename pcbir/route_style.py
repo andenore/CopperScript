@@ -3,7 +3,8 @@
 Only degree-two, perpendicular octilinear corners are changed. Ports, vias,
 branch contacts and input copper are immutable; differential pairs must use
 their joint refinement pipeline instead. An obstacle is a reason to retain a
-corner, never a reason to emit an unchecked shortcut.
+corner, never a reason to emit an unchecked shortcut. So is a necked-down
+corner whose diagonal would leave its breakout region (plan R1).
 """
 from collections import defaultdict
 
@@ -69,6 +70,10 @@ def chamfer_ordinary_corners(
                     for shape in removed) for via in (*board.vias, *vias)):
                 continue
             diagonal = TrackSegment(first.net, p, q, first.width_nm, layer)
+            breakout = clearance.breakout
+            if (first.net in breakout.ordinary and first.width_nm < breakout.width_nm(first.net)
+                    and breakout.region(first.net, (p, q)) is None):
+                continue  # A necked-down diagonal must stay inside a breakout region.
             if not _track_inside_board(board, p, q, first.width_nm):
                 continue
             if allow_movable_conflicts:

@@ -45,6 +45,7 @@ from .placement import (
 from .routing import GlobalNetRoute, GlobalRoutingResult
 from .progress import ProgressCallback, emit
 from .routing_clearance import RoutingClearanceIndex
+from .breakout import BreakoutRegions
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
 from .routing_costs import COST_UNIT, length_cost, preference_cost
@@ -929,9 +930,54 @@ def _prune_fanout_copper(
             else:
                 routed.append(track)
         mutable = tuple(routed)
+    breakout = BreakoutRegions(board)
+    if breakout.ordinary:
+        immutable, mutable = _neck_down_changed(board, immutable, mutable, vias, breakout)
     if smooth:
         mutable = _smooth_owned(board, tuple(immutable), mutable, vias)
     return (*immutable, *mutable), vias
+
+
+def _neck_down_changed(
+    board: PhysicalBoard, immutable: list[TrackSegment], mutable: tuple[TrackSegment, ...],
+    vias: tuple[Via, ...], breakout: BreakoutRegions,
+) -> tuple[list[TrackSegment], tuple[TrackSegment, ...]]:
+    """Re-cut pruned copper of ordinary breakout nets at region boundaries.
+
+    Release and stub pruning keep only parts of tracks; part of a wide piece
+    can end up inside a region and then carries the breakout width (plan R1).
+    Owned route copper and pruned escape remnants are cut, input occurrences
+    never. A net whose explicit-copper islands or via contacts would change
+    keeps its copper: a released escape may rely on a route's full width.
+    """
+    from .route_smoothing import _contacts_preserved
+
+    inputs = Counter(board.tracks)
+    changed = [False] * len(immutable)
+    for index, track in enumerate(immutable):
+        if inputs[track]:
+            inputs[track] -= 1
+        else:
+            changed[index] = True  # A pruned remnant of escape copper.
+    copper = [track for index, track in enumerate(immutable) if changed[index]] + list(mutable)
+    fixed = replace(board, tracks=tuple(track for index, track in enumerate(immutable)
+                                        if not changed[index]), vias=vias)
+    nets = {net.name: net for net in board.nets}
+    accepted: set[str] = set()
+    for name in sorted({track.net for track in copper} & breakout.ordinary):
+        before = tuple(track for track in copper if track.net == name)
+        after = breakout.neck_down(before)
+        if after != before and name in nets and _contacts_preserved(fixed, nets[name], before, after):
+            accepted.add(name)
+    if not accepted:
+        return immutable, mutable
+
+    def cut(tracks):
+        return [piece for track in tracks
+                for piece in (breakout.neck_down((track,)) if track.net in accepted else (track,))]
+    return ([piece for index, track in enumerate(immutable)
+             for piece in (cut((track,)) if changed[index] else (track,))],
+            tuple(cut(mutable)))
 
 
 def _smooth_owned(
@@ -1369,10 +1415,10 @@ def _route_net(
         legal = True
         for first, second in resume.edges:
             if first.layer_index == second.layer_index:
-                track = TrackSegment(name, grid.point(first), grid.point(second), width,
-                                     grid.layers[first.layer_index])
-                legal = (not clearance.blocking_track_nets(track)[1] if allow_movable_conflicts
-                         else clearance.can_track(name, track.start, track.end, width, track.layer))
+                segment = (name, grid.point(first), grid.point(second), width,
+                           grid.layers[first.layer_index])
+                legal = (not clearance.route_blockers(*segment)[1] if allow_movable_conflicts
+                         else clearance.can_route(*segment))
             else:
                 legal = _cached_via_legality(grid, first, second, clearance, name,
                                              allow_movable_conflicts, {})[0]
@@ -1492,15 +1538,11 @@ def _route_net(
     via_positions: set[tuple[Point, CopperLayer, CopperLayer, str | None]] = set()
     for first, second in sorted(route_edges):
         if first.layer_index == second.layer_index:
-            tracks.append(
-                TrackSegment(
-                    name,
-                    grid.point(first),
-                    grid.point(second),
-                    width,
-                    grid.layers[first.layer_index],
-                )
-            )
+            # Exactly the pieces the search checked (necked down near lands).
+            tracks.extend(clearance.route_pieces(
+                name, grid.point(first), grid.point(second), width,
+                grid.layers[first.layer_index],
+            ))
         else:
             via_span = physical_via_span(
                 board, grid.layers[first.layer_index], grid.layers[second.layer_index]
@@ -1533,11 +1575,15 @@ def _route_net(
         tracks.extend(escape)
     unpruned = tuple(tracks)
     tracks = list(prune_track_stubs(board, unpruned, tuple(vias), clearance=clearance))
-    tracks = list(_merge_collinear_tracks(tracks))
+    tracks = list(_merge_collinear_tracks(tracks, clearance.breakout))
     tracks = list(chamfer_ordinary_corners(
         board, tuple(tracks), tuple(vias), clearance,
         allow_movable_conflicts=allow_movable_conflicts,
     ))
+    if name in clearance.breakout.ordinary:
+        # Pruning and chamfers can leave part of a wide piece inside a region;
+        # it necks down too. Every contact here is on a centre line.
+        tracks = list(clearance.breakout.neck_down(tracks))
     resources = _emitted_edge_resources(grid, route_edges, tuple(tracks),
         tuple(v for v in (*board.vias, *vias) if v.net == name))
     length = sum(
@@ -1752,6 +1798,8 @@ def _search_once(
             if next_direction == "v" and grid.point(node) in forbidden_via_positions:
                 continue
             edge = _edge_key(node, neighbor)
+            # One search has one net and profile width, so an edge determines
+            # the widths it is checked at, necked or not (``route_pieces``).
             legal = legal_edge_cache.get(edge)
             if legal is None:
                 movable_count = 0
@@ -1762,14 +1810,14 @@ def _search_once(
                     )
                 else:
                     if allow_movable_conflicts:
-                        movable, locked = clearance.blocking_track_nets(TrackSegment(
+                        movable, locked = clearance.route_blockers(
                             net, grid.point(node), grid.point(neighbor), width_nm,
                             grid.layers[node.layer_index],
-                        ))
+                        )
                         legal = not locked
                         movable_count = len(movable)
                     else:
-                        legal = clearance.can_track(
+                        legal = clearance.can_route(
                             net, grid.point(node), grid.point(neighbor), width_nm,
                             grid.layers[node.layer_index],
                         )
@@ -1929,7 +1977,7 @@ def _compact_path(
                 continue
             if not _grid_line_clear(grid, nodes[start], nodes[candidate]):
                 continue
-            if not clearance.can_track(
+            if not clearance.can_route(
                 net, grid.point(nodes[start]), grid.point(nodes[candidate]),
                 width_nm, grid.layers[nodes[start].layer_index],
             ):
@@ -2473,8 +2521,15 @@ def _net_search_options(
     return options
 
 
-def _merge_collinear_tracks(tracks: Iterable[TrackSegment]) -> tuple[TrackSegment, ...]:
-    """Coalesce exact straight runs without moving copper or branch points."""
+def _merge_collinear_tracks(
+    tracks: Iterable[TrackSegment], breakout: BreakoutRegions | None = None,
+) -> tuple[TrackSegment, ...]:
+    """Coalesce exact straight runs without moving copper or branch points.
+
+    With ``breakout``, runs of an ordinary breakout net merge only if they are
+    both outside a region, or the joined run is inside one: copper checked at
+    a region's values must stay inside it (plan R1).
+    """
 
     active = list(tracks)
     while True:
@@ -2502,6 +2557,11 @@ def _merge_collinear_tracks(tracks: Iterable[TrackSegment]) -> tuple[TrackSegmen
             if (first_dx * second_dy != first_dy * second_dx
                     or first_dx * second_dx + first_dy * second_dy <= 0):
                 continue
+            if breakout is not None and first.net in breakout.ordinary:
+                inside = breakout.region(first.net, (first.start, first.end)) is not None
+                if (inside != (breakout.region(second.net, (second.start, second.end)) is not None)
+                        or inside and breakout.region(first.net, (outer_first, outer_second)) is None):
+                    continue
             merge = (first_index, second_index, TrackSegment(
                 first.net, outer_first, outer_second, first.width_nm, layer,
             ))

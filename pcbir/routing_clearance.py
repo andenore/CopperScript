@@ -148,6 +148,24 @@ class RoutingClearanceIndex:
         shape = RoundedConvexShape((start, end), width_nm // 2)
         return self._keepout_clear(shape, (layer,), for_via=False) and self._clear(net, shape, (layer,))
 
+    def route_pieces(
+        self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer,
+    ) -> tuple[TrackSegment, ...]:
+        """Ordinary copper for one centreline, necked down inside breakout regions."""
+        return self.breakout.ordinary_pieces(net, start, end, width_nm, layer)
+
+    def can_route(
+        self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer,
+    ) -> bool:
+        """``can_track`` for each piece ordinary routing emits (``route_pieces``).
+
+        Nets without breakout properties check the one ``width_nm`` track.
+        """
+        if net not in self.breakout.ordinary:
+            return self.can_track(net, start, end, width_nm, layer)
+        return all(self.can_track(net, piece.start, piece.end, piece.width_nm, layer)
+                   for piece in self.route_pieces(net, start, end, width_nm, layer))
+
     def can_area(self, net: str, shape: RoundedConvexShape, layer: CopperLayer) -> bool:
         """Like ``can_track`` for any swept shape, such as a whole tuning bump."""
         return self._keepout_clear(shape, (layer,), for_via=False) and self._clear(net, shape, (layer,))
@@ -362,6 +380,20 @@ class RoutingClearanceIndex:
         """Return movable blocker nets and whether immutable geometry blocks a track."""
         shape = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
         return self._blockers(track.net, shape, (track.layer,), for_via=False)
+
+    def route_blockers(
+        self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer,
+    ) -> tuple[frozenset[str], bool]:
+        """``blocking_track_nets`` over the pieces of ``route_pieces``."""
+        if net not in self.breakout.ordinary:
+            return self.blocking_track_nets(TrackSegment(net, start, end, width_nm, layer))
+        movable: set[str] = set()
+        locked = False
+        for piece in self.route_pieces(net, start, end, width_nm, layer):
+            names, fixed = self.blocking_track_nets(piece)
+            movable.update(names)
+            locked |= fixed
+        return frozenset(movable), locked
 
     def blocking_via_nets(self, via: Via) -> tuple[frozenset[str], bool]:
         """Return movable blocker nets and whether immutable geometry blocks a via."""

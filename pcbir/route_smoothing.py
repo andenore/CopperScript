@@ -15,6 +15,9 @@ exactly against other nets, keepouts and the outline, and every pad the
 removed copper touched must still be touched. A net whose explicit copper
 connectivity or via-layer contacts would change keeps its original copper.
 No via, immutable, critical or reserved copper is moved or used as input.
+New copper of an ordinary net with breakout properties is checked and emitted
+as its pieces: the breakout width inside a region, the profile width outside
+(plan R1). Width changes stay anchors, so a necked chain is never widened.
 """
 from __future__ import annotations
 
@@ -123,9 +126,17 @@ def _smooth_layer(board: PhysicalBoard, owned: tuple[TrackSegment, ...], layer: 
         if simplified == points:
             result.extend(owned[index] for index in indexes)
         else:
-            result.extend(TrackSegment(net, a, b, width, layer)
-                          for a, b in zip(simplified, simplified[1:]))
+            result.extend(_pieces(clearance, net, layer, width, simplified))
     return result
+
+
+def _pieces(clearance: RoutingClearanceIndex, net: str, layer: CopperLayer, width: int,
+            points) -> list[TrackSegment]:
+    """New copper along ``points``; an ordinary breakout net necks down near its lands."""
+    breakout = clearance.breakout
+    outside = max(width, breakout.width_nm(net)) if net in breakout.ordinary else width
+    return [piece for a, b in zip(points, points[1:])
+            for piece in clearance.route_pieces(net, a, b, outside, layer)]
 
 
 def _chains(owned, incident, anchors, protected):
@@ -284,13 +295,13 @@ def _simplify(board, net, layer, width, points, external, clearance, others, via
 
 def _legal(board, net, layer, width, old, candidate, clearance, others, vias) -> bool:
     """Exact clearance for new copper; every pad touched by retired copper stays touched."""
-    if not all(_track_inside_board(board, a, b, width)
-               and clearance.can_track(net, a, b, width, layer)
-               for a, b in zip(candidate, candidate[1:])):
+    pieces = _pieces(clearance, net, layer, width, candidate)
+    if not all(_track_inside_board(board, t.start, t.end, t.width_nm)
+               and clearance.can_track(net, t.start, t.end, t.width_nm, layer)
+               for t in pieces):
         return False
-    radius = width // 2
-    new = [RoundedConvexShape((a, b), radius) for a, b in zip(candidate, candidate[1:])]
-    retired = [RoundedConvexShape((a, b), radius) for a, b in zip(old, old[1:])]
+    new = [RoundedConvexShape((t.start, t.end), t.width_nm // 2) for t in pieces]
+    retired = [RoundedConvexShape((a, b), width // 2) for a, b in zip(old, old[1:])]
     kept = [RoundedConvexShape((t.start, t.end), t.width_nm // 2) for t in others]
     via_shapes = [RoundedConvexShape((v.position,), v.size_nm // 2) for v in vias]
     lost = _touched_pads(clearance, retired, layer) - _touched_pads(clearance, new, layer)

@@ -226,7 +226,9 @@ Shared rules for every item:
   land and breakout length), plus a `breakout_regions` coverage entry when a
   rule declares breakout properties; reports without them are unchanged.
   `critical._validate_candidate` is unchanged; it runs the region-aware DRC.
-  Tests: `tests/test_breakout_regions.py`.
+  Tests: `tests/test_breakout_regions.py`. Ordinary nets neck down too
+  (CS-164, `BreakoutRegions.ordinary_pieces`/`neck_down`,
+  `tests/test_ordinary_neck_down.py`).
 - [x] **R2 Mismatched-pitch taper.** Generalise `_aligned_pair_paths` to
   terminals whose pitch differs from the declared pair pitch (for example a
   0.5 mm QFN to a 0.4 mm connector). It produces symmetric 45° tapers whose uncoupled

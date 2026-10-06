@@ -987,9 +987,11 @@ def _pin_access_candidates(
         if layer not in direct_layers:
             continue
         endpoint = graph.point(node)
-        if position != endpoint and not clearance.can_track(net, position, endpoint, width, layer):
+        # An ordinary breakout net may neck down next to its lands (plan R1).
+        if position != endpoint and not clearance.can_route(net, position, endpoint, width, layer):
             continue
-        tracks = (TrackSegment(net, position, endpoint, width, layer),) if position != endpoint else ()
+        tracks = (clearance.route_pieces(net, position, endpoint, width, layer)
+                  if position != endpoint else ())
         found.append(PinAccess(pad, position, node, endpoint, layer, tracks))
         if len(found) >= options.pin_access_candidates:
             break
@@ -1024,7 +1026,7 @@ def _pin_access_candidates(
                     continue
                 if not _inside_outline_with_margin(anchor, board.outline.vertices, margin):
                     continue
-                if not clearance.can_track(net, position, anchor, width, side):
+                if not clearance.can_route(net, position, anchor, width, side):
                     continue
                 for layer in allowed_layers:
                     if layer is side:
@@ -1046,13 +1048,13 @@ def _pin_access_candidates(
                     if identifier not in graph.via_sites or not graph.via_sites[identifier]:
                         continue
                     endpoint = graph.point(node)
-                    if anchor != endpoint and not clearance.can_track(
+                    if anchor != endpoint and not clearance.can_route(
                         net, anchor, endpoint, width, layer,
                     ):
                         continue
-                    tracks = [TrackSegment(net, position, anchor, width, side)]
+                    tracks = list(clearance.route_pieces(net, position, anchor, width, side))
                     if anchor != endpoint:
-                        tracks.append(TrackSegment(net, anchor, endpoint, width, layer))
+                        tracks.extend(clearance.route_pieces(net, anchor, endpoint, width, layer))
                     via = Via(net, anchor, board.rules.default_via_size_nm,
                               board.rules.default_via_drill_nm, *span)
                     found.append(PinAccess(pad, position, node, endpoint, layer,
@@ -1073,7 +1075,7 @@ def _pin_access_candidates(
                 if not _inside_outline_with_margin(
                     anchor, board.outline.vertices,
                     width // 2 + board.rules.minimum_clearance_nm,
-                ) or not clearance.can_track(net, position, anchor, width, side):
+                ) or not clearance.can_route(net, position, anchor, width, side):
                     continue
                 candidates = [node for node in nearby
                               if graph.layers[node.layer_index] is side
@@ -1088,7 +1090,7 @@ def _pin_access_candidates(
                 ))
                 found.append(PinAccess(
                     pad, position, node, anchor, side,
-                    (TrackSegment(net, position, anchor, width, side),),
+                    clearance.route_pieces(net, position, anchor, width, side),
                     region_only=True,
                 ))
             if len(found) >= options.pin_access_candidates:

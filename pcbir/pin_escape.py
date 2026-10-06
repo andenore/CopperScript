@@ -56,8 +56,9 @@ def verified_routing_access(
         return None
     cursor = access.launch_position
     for track in access.path:
+        # Inside a breakout region an ordinary net may neck down (plan R1).
         if (track.net != net or track.layer is not access.layer or track.start != cursor
-                or track.width_nm < width
+                or track.width_nm < clearance.breakout.required_width_nm(track, width)
                 or not (track.start.x_nm == track.end.x_nm or track.start.y_nm == track.end.y_nm
                         or abs(track.end.x_nm-track.start.x_nm) == abs(track.end.y_nm-track.start.y_nm))
                 or not _track_inside_board(board, track.start, track.end, track.width_nm)
@@ -114,15 +115,17 @@ def checked_access_paths(
             paths += ((start, Point(start.x_nm, end.y_nm), end),
                       (start, Point(end.x_nm, start.y_nm), end))
     for points in paths:
-        tracks = tuple(TrackSegment(net, a, b, width_nm, layer)
-                       for a, b in zip(points, points[1:]) if a != b)
+        # Each leg is checked and emitted as its pieces: an ordinary breakout
+        # net necks down inside its regions (plan R1), any other is one track.
+        tracks = tuple(piece for a, b in zip(points, points[1:]) if a != b
+                       for piece in clearance.route_pieces(net, a, b, width_nm, layer))
         for track in tracks:
-            if not _track_inside_board(board, track.start, track.end, width_nm):
+            if not _track_inside_board(board, track.start, track.end, track.width_nm):
                 break
             if allow_movable_conflicts:
                 if clearance.blocking_track_nets(track)[1]:
                     break
-            elif not clearance.can_track(net, track.start, track.end, width_nm, layer):
+            elif not clearance.can_track(net, track.start, track.end, track.width_nm, layer):
                 break
         else:
             yield tracks
@@ -175,9 +178,12 @@ def _verified_land_path(board, terminal, placement, net, anchor, clearance, *,
         from collections import defaultdict, deque
         adjacency = defaultdict(list)
         for track in tracks:
+            # A land path of an ordinary breakout net may neck down (plan R1).
+            required = (clearance.breakout.required_width_nm(track, required_width_nm)
+                        if required_width_nm else 0)
             if ((track.start.x_nm == track.end.x_nm or track.start.y_nm == track.end.y_nm
                  or abs(track.start.x_nm-track.end.x_nm) == abs(track.start.y_nm-track.end.y_nm))
-                    and track.width_nm >= max(board.rules.minimum_track_width_nm, required_width_nm or 0)
+                    and track.width_nm >= max(board.rules.minimum_track_width_nm, required)
                     and _track_inside_board(board, track.start, track.end, track.width_nm)
                     and clearance.can_track(net, track.start, track.end, track.width_nm, layer)):
                 adjacency[track.start].append((track.end, track))

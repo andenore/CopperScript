@@ -404,6 +404,11 @@ def test_legal_pad_exit_can_attach_to_region_without_center_stub() -> None:
         def can_track(self, net, start, end, width, layer):
             return end not in centers and base.can_track(net, start, end, width, layer)
 
+        can_route = can_track  # No breakout properties: one whole track.
+
+        def route_pieces(self, *segment):
+            return base.route_pieces(*segment)
+
         def can_via(self, net, position, size, first, second):
             return False
 

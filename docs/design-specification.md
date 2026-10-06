@@ -1486,3 +1486,25 @@ not proof that an unreserved pin would have routed. Destination-facing boundary
 ports (`--package-destination-ports`) remain opt-in because they lengthened
 routes on the iteration board. See R18 in the
 [routing review checklist](routing-review-todo.md).
+
+## CS-164 — Neck-down of ordinary nets near terminal lands (Accepted)
+
+An ordinary (`GENERAL`) net whose rule declares breakout properties (D-PHY plan
+R1) MUST use `breakout_width` and `breakout_clearance` only inside a terminal
+land's breakout region, and `width` and `clearance` elsewhere, as the critical
+router does. Detailed search edges and line-of-sight shortcuts, pad access
+paths (shared with fan-out and boundary escapes), escape verification and
+global pin access check every centreline as its `BreakoutRegions.split_tracks`
+pieces and emit exactly those pieces, so an edge crossing the boundary is
+narrow up to the region edge and wide beyond. Copper is never emitted narrower
+than it was checked: collinear runs merge only when the result stays outside
+every region or inside one, a necked corner is chamfered only inside its
+region, smoothing checks and emits new segments as pieces with width changes
+as anchors, and stub pruning joins pieces of one centre line that touch only by
+width across a neck-down cut. After pruning and escape release, changed owned
+copper is re-cut so a remnant inside a region carries the breakout width; a net
+whose explicit-copper islands or via contacts would change keeps its copper.
+Global-routing demand, placement escape estimates and the package-escape maze
+keep the full width (conservative). Nets without breakout properties MUST route
+byte-identically. See R19 in the
+[routing review checklist](routing-review-todo.md).

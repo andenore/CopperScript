@@ -1103,8 +1103,8 @@ location.
 
 A breakout region lets a pair leave a fine-pitch pin field (a 0.4–0.5 mm
 pitch package or connector) with small spacing while the channel beyond keeps
-the full clearance. The router, the routing clearance checks and physical DRC
-share one definition:
+the full clearance, and lets a wide ordinary net reach such pins. The
+routers, the routing clearance checks and physical DRC share one definition:
 
 - **Region.** Every land of every pad on the net is a terminal land. Its
   region is every point within `breakout_length` of the land's copper
@@ -1144,6 +1144,24 @@ share one definition:
   router) applies the region values to copper inside a region; a queried
   segment that crosses the boundary is outside. Global-routing demand still
   uses `clearance`.
+- **Ordinary nets.** A `general` net with breakout properties necks down
+  too, so a wide rail stays wide in the open field and narrows at
+  fine-pitch pins. For example, `width = 0.4mm; breakout_width = 0.2mm;
+  breakout_length = 1mm` lets a supply rail reach the middle pin of a
+  0.4 mm-pitch row, where no 0.4 mm track fits between the neighbouring
+  lands. The detailed router's search edges and line-of-sight shortcuts,
+  pad access paths (including fan-out lead-ins and package escapes) and the
+  global router's pin access are each checked as their pieces, cut at the
+  region boundary: `breakout_width` and `breakout_clearance` inside, `width`
+  and `clearance` outside. The router emits exactly those pieces. Straight
+  runs merge only when the result stays outside every region or inside one,
+  and a necked corner is chamfered only inside its region. After stub
+  pruning and the release of unused escapes the changed copper is cut
+  again, unless narrowing would split the net. Route smoothing checks and
+  emits its new segments as pieces, with width changes as anchors. A necked
+  piece is thus always inside a region, and copper outside always has
+  `width`. Global-routing demand and the package-escape maze keep `width`.
+  Nets without breakout properties route exactly as before.
 - **DRC.** Track width, copper spacing (tracks, vias, pads) and zone-fill
   spacing apply the breakout values only to copper inside its region, and the
   pair gap between the members of a breakout pair. A violation is the usual

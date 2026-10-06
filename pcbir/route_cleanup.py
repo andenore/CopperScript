@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from math import isqrt
 
 from .geometry import (RoundedConvexShape, SpatialIndex, SpatialItem,
-                       point_on_segment, shapes_clear)
+                       orientation, point_on_segment, shapes_clear)
 from .physical import BoardSide, CopperLayer, PadKind, PhysicalBoard, Point, TrackSegment, Via
 from .routing_clearance import RoutingClearanceIndex
 
@@ -32,6 +32,9 @@ def prune_track_stubs(
     centres, and a piece whose only contact is one same-net land (at a land
     centre end) or one via (at its centre end) is an overhang: only that end
     is protected, so a dead end beyond the land or via can be pruned.
+    Pieces of an ordinary breakout net that touch only through the width of
+    collinear pieces between them are joined by those pieces: such cuts are
+    neck-down boundaries (plan R1), not uncertain contacts.
     """
     if not tracks:
         return tracks
@@ -124,6 +127,9 @@ def prune_track_stubs(
                 if {first.start, first.end}.intersection((second.start, second.end)):
                     continue  # Exact split junction is represented by adjacency.
                 if not shapes_clear(shapes[index], shapes[other], 1):
+                    if (net in clearance.breakout.ordinary
+                            and _bridged(first, second, active, adjacency)):
+                        continue
                     # Non-grid crossings/annular or width-only contacts are not
                     # safely represented by the centre-line graph. Preserve them.
                     protected.update((first.start, first.end, second.start, second.end))
@@ -154,6 +160,40 @@ def prune_track_stubs(
                 result.extend(pieces[key] for key in remaining)
             emitted.update(remaining)
     return tuple(result)
+
+
+def _bridged(first: TrackSegment, second: TrackSegment, active, adjacency) -> bool:
+    """Whether collinear pieces join two disjoint pieces of one centre line."""
+    a, b = first.start, first.end
+    if orientation(a, b, second.start) or orientation(a, b, second.end):
+        return False
+    dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
+
+    def along(point: Point) -> int:
+        return (point.x_nm - a.x_nm) * dx + (point.y_nm - a.y_nm) * dy
+    low, high = sorted((first.start, first.end), key=along)
+    other_low, other_high = sorted((second.start, second.end), key=along)
+    if along(high) <= along(other_low):
+        cursor, target = high, other_low
+    elif along(other_high) <= along(low):
+        cursor, target = other_high, low
+    else:
+        return False  # Overlapping runs, not a cut.
+    sign = 1 if along(target) > along(cursor) else -1
+    while cursor != target:
+        step = None
+        for edge in adjacency.get(cursor, ()):
+            piece = active[edge]
+            far = piece.end if piece.start == cursor else piece.start
+            if (not orientation(a, b, far)
+                    and 0 < sign * (along(far) - along(cursor))
+                    and sign * (along(far) - along(target)) <= 0):
+                step = far
+                break
+        if step is None:
+            return False
+        cursor = step
+    return True
 
 
 def _land_centres(board: PhysicalBoard, net: str, layer: CopperLayer) -> dict:

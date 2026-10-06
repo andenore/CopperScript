@@ -209,6 +209,22 @@ Completion means tested implementation, not automatic manufacturing signoff.
   nrf52 rerun is `build/r18-src-base/build/nrf52-base`, and
   `--no-escape-terminals` reproduces it exactly (`…/nrf52-v5-off`).
 
+- [ ] R19 (power-rail access finding): 0.3–0.4 mm ordinary rails exhausted
+  their search budget at 0.4–0.5 mm-pitch IC pins, because the detailed router
+  checked and emitted the full `width` up to the pad, and a full-width track
+  cannot land between neighbouring pins.
+  - [x] Neck down ordinary nets with breakout properties (CS-164): search
+    edges, shortcuts, pad access, escape verification and global pin access
+    are checked and emitted as region pieces (`breakout_width` inside,
+    `width` outside); merging, chamfers, smoothing, stub pruning and escape
+    release keep a necked piece inside its region. Synthetic coverage in
+    `tests/test_ordinary_neck_down.py`; nrf52 (no breakout properties)
+    routes byte-identically apart from KiCad UUIDs.
+  - [ ] Declare `breakout_width`/`breakout_length` on the rails of a board
+    that showed the failure, reroute it and review the necked copper,
+    search budgets and KiCad DRC. Global demand and the package-escape maze
+    still use the full width.
+
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,
   including orthogonal-first/budget-fallback routes; protect pads, junctions,
   vias, and exact clearance. Improve topology without breaking existing trees.
