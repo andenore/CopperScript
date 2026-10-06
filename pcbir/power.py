@@ -7,6 +7,7 @@ from typing import Mapping
 
 from .elaborate import elaborate
 from .erc import Diagnostic, Severity
+from .modes import active_bonded_pads, active_device_pads
 from .model import (
     Board,
     ComponentInstance,
@@ -124,7 +125,7 @@ def _component_domain_states(
         for domain in device.power_domains.values():
             states: list[PowerRailState] = []
             for pin in part.pins.values():
-                if not {bond.pad for bond in pin.bonds if bond.when is None or bond.when.matches(component.modes)} & set(domain.supply_pads):
+                if not set(active_bonded_pads(component, pin, device)) & set(domain.supply_pads):
                     continue
                 endpoint = Endpoint(component.ref, pin.name)
                 for net_name in pin_nets.get(endpoint, []):
@@ -188,15 +189,7 @@ def _bonded_pads(
     part: PartDefinition,
     pin: PackagePinDefinition,
 ) -> tuple[DevicePadDefinition, ...]:
-    device = board.devices.get(part.device or "")
-    if device is None:
-        return ()
-    return tuple(
-        device.pads[bond.pad]
-        for bond in pin.bonds
-        if bond.pad in device.pads
-        and (bond.when is None or bond.when.matches(component.modes))
-    )
+    return active_device_pads(component, pin, board.devices.get(part.device or ""))
 
 
 def _profiles(board, component, part, pin):

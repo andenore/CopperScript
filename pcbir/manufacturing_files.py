@@ -146,6 +146,9 @@ def export_manufacturing_files(
         if not project.is_file():
             raise ManufacturingFilesError("matching .kicad_pro required to retain design rules")
         shutil.copy2(project, native.with_suffix(".kicad_pro"))
+        # Exported component-scoped custom rules belong to the same project.
+        if pcb.with_suffix(".kicad_dru").is_file():
+            shutil.copy2(pcb.with_suffix(".kicad_dru"), native.with_suffix(".kicad_dru"))
         for path in (pcb.parent / "fp-lib-table", pcb.parent / "CopperScript.pretty"):
             if path.is_dir():
                 shutil.copytree(path, stage / path.name)

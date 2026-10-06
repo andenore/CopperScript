@@ -45,6 +45,8 @@ from .detailed import (
     route_detailed,
 )
 from .drc import (
+    DrcBreakoutRelaxation,
+    DrcHoleClearanceRelaxation,
     DrcCompleteness,
     DrcCoverage,
     DrcCoverageStatus,
@@ -62,6 +64,15 @@ from .drc import (
 )
 from .erc import Diagnostic, Severity, check, has_errors
 from .engineering import AnalysisStatus, EngineeringResult, EvidenceGrade, creepage_screen, dc_net_voltage_drop, dc_trace_resistance, external_solver_result, microstrip_impedance, propagation_delay, return_path_continuity, thermal_screen
+from .engineering import (edge_coupled_microstrip_impedance, edge_coupled_stripline_impedance,
+                          microstrip_effective_permittivity, return_path_coverage, stripline_impedance)
+from .mechanical_stackup import MechanicalStackup
+from .signal_integrity import (
+    ImpedanceEstimate, LayerGeometry, LayerGroupMember, LayerGroupReport, MatchGroupResult,
+    MatchMemberLength, ReturnPathResult, SiCheckReport, SiWarning, effective_permittivity,
+    layer_geometry, layer_group_report, layer_group_warnings, reference_plane_warnings,
+    return_path_report, routed_track_length_nm, screen_impedance, si_check, verify_match_groups,
+)
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
@@ -121,6 +132,7 @@ from .model import (
     PowerRailState,
     PowerState,
     QuantityRange,
+    RelativeVoltage,
     RouteRule,
     SelectorScheme,
     SelectionUsage,
@@ -155,6 +167,7 @@ from .quantities import (
     volts,
 )
 from .power import analyze_power_states
+from .modes import active_bonded_pads, effective_modes
 from .process_drc import FabricationAssemblyProfile, ProcessCapability, ProcessDrcReport, ProcessFinding, ProcessGateStatus, run_process_drc
 from .shove import CleanupResult, ShoveResult, cleanup_acute_angles, shove_bundle, shove_track, shove_via
 from .importers import (
@@ -174,6 +187,7 @@ from .physical import (
     CircularBoardBoundary,
     MechanicalHole,
     BoardSide,
+    ComponentHoleClearance,
     ComponentPlacementRule,
     CopperKeepout,
     CopperLayer,
@@ -188,6 +202,7 @@ from .physical import (
     FootprintPolygon,
     FootprintRectangle,
     IslandPolicy,
+    NetMatchGroup,
     NetRoutingRule,
     PadKind,
     PadReference,
@@ -321,6 +336,7 @@ __all__ = [
     "GerbvSubprocessAdapter",
     "CamVerificationReport",
     "ComponentInstance",
+    "ComponentHoleClearance",
     "ComponentPlacementRule",
     "CommandResult",
     "Constraint",
@@ -346,6 +362,8 @@ __all__ = [
     "DetailedSearchPolicy",
     "DetailedRoutingResult",
     "DetailedRoutingStatus",
+    "DrcBreakoutRelaxation",
+    "DrcHoleClearanceRelaxation",
     "DrcCompleteness",
     "DrcCoverage",
     "DrcCoverageStatus",
@@ -411,6 +429,7 @@ __all__ = [
     "ManufacturingRelease",
     "MuxOption",
     "ModuleDefinition",
+    "NetMatchGroup",
     "NetRoutingRule",
     "NormalizedCamLayer",
     "NormalizedDrillProgram",
@@ -470,6 +489,7 @@ __all__ = [
     "PolygonWithHoles",
     "PrototypePhysicalOptions",
     "QuantityRange",
+    "RelativeVoltage",
     "RouteRule",
     "SelectorScheme",
     "Quantity",
@@ -522,9 +542,36 @@ __all__ = [
     "microstrip_impedance",
     "propagation_delay",
     "return_path_continuity",
+    "return_path_coverage",
+    "edge_coupled_microstrip_impedance",
+    "edge_coupled_stripline_impedance",
+    "microstrip_effective_permittivity",
+    "stripline_impedance",
+    "MechanicalStackup",
+    "ImpedanceEstimate",
+    "LayerGeometry",
+    "LayerGroupMember",
+    "LayerGroupReport",
+    "MatchGroupResult",
+    "MatchMemberLength",
+    "ReturnPathResult",
+    "SiCheckReport",
+    "SiWarning",
+    "effective_permittivity",
+    "layer_geometry",
+    "layer_group_report",
+    "layer_group_warnings",
+    "reference_plane_warnings",
+    "return_path_report",
+    "routed_track_length_nm",
+    "screen_impedance",
+    "si_check",
+    "verify_match_groups",
     "thermal_screen",
     "capsules_clear",
     "analyze_power_states",
+    "active_bonded_pads",
+    "effective_modes",
     "audit_resolved_footprints",
     "compile_file",
     "compile_source",

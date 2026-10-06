@@ -133,3 +133,38 @@ def test_feedback_interruption_retains_baseline_and_proposed_pose(tmp_path, monk
 def test_preflight_rejects_negative_feedback_before_loading(tmp_path):
     assert main([str(tmp_path / "does-not-exist.copper"), "--critical-feedback-trials", "-1",
                  "--report", str(tmp_path / "report.json")]) == 2
+
+
+def test_preflight_physicalizes_the_mechanical_block(tmp_path, monkeypatch) -> None:
+    import pcbir.critical_preflight as preflight
+    from pcbir import nm_from_mm
+
+    board_file = tmp_path / "board.copper"
+    board_file.write_text("""board Stack {
+        mechanical {
+            outline rectangle { width = 30mm; height = 20mm; }
+            stackup {
+                copper F.Cu { thickness = 0.035mm; }
+                dielectric P1 { thickness = 0.2mm; er = 4.3; }
+                copper In1.Cu { thickness = 0.0175mm; }
+                dielectric C1 { thickness = 1.065mm; er = 4.6; }
+                copper In2.Cu { thickness = 0.0175mm; }
+                dielectric P2 { thickness = 0.2mm; er = 4.3; }
+                copper B.Cu { thickness = 0.035mm; }
+            }
+        }
+    }""")
+    seen = []
+
+    def capture(board, *args, **kwargs):
+        seen.append(board)
+        raise ValueError("stop after physicalization")
+
+    monkeypatch.setattr(preflight, "optimize_placement_for_routing", capture)
+    assert main([str(board_file), "--allow-proxy-footprints", "--layers", "4",
+                 "--fab-profile", "generic", "--report", str(tmp_path / "report.json")]) == 2
+    (board,) = seen
+    # The declared outline and stack-up reach the routed board, not defaults.
+    assert max(point.x_nm for point in board.outline.vertices) == nm_from_mm("30")
+    assert max(point.y_nm for point in board.outline.vertices) == nm_from_mm("20")
+    assert len(board.stackup.physical_layers) == 7

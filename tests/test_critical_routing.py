@@ -28,7 +28,8 @@ from pcbir import (
     TrackSegment, CopperKeepout, PolygonRing, PolygonWithHoles,
     DetailedRouterOptions, route_detailed, run_physical_drc,
 )
-from pcbir.critical import _route_pair, _tune_pair, _validate_candidate, _coupled_length
+from pcbir.critical import (_route_pair, _track_length, _tune_pair, _validate_candidate,
+                            _coupled_length)
 
 
 def _pair_board() -> PhysicalBoard:
@@ -215,11 +216,113 @@ def test_pair_rejects_overlapping_return_via_and_floating_transition() -> None:
                    for f in run_physical_drc(result.board).findings)
 
 
+def test_pair_guide_without_segments_is_rejected_and_exact_search_still_runs() -> None:
+    board = _pair_board()
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    # Terminals sharing one global tile give connected guides without
+    # segments; a proposed transition also rules out the aligned channel.
+    routes = tuple(
+        replace(route, segments=(), vias=(GlobalViaProposal(route.net, Point.mm(20, 12),
+                                                             CopperLayer.FRONT,
+                                                             CopperLayer.BACK,
+                                                             "test-via"),))
+        for route in guides.routes
+    )
+    result, tracks, vias = _route_pair(
+        board, *board.net_routing_rules, {route.net: route for route in routes},
+    )
+    assert not result.connected
+    assert result.diagnostics == ("coarse pair guide has no segments to offset",)
+    assert tracks == vias == ()
+    critical = route_critical_nets(board, replace(guides, routes=routes))
+    pair = critical.nets[0]
+    assert pair.pair_searches > 0
+    assert pair.connected
+
+
+def test_pre_existing_footprint_finding_does_not_reject_an_unrelated_pair() -> None:
+    from pcbir import PadKind, PadShape
+    board = _pair_board()
+    # A footprint whose own land sits on top of its locating hole, far from the
+    # pair: a hard finding that exists before any critical copper.
+    land = FootprintPad("1", Point.mm(0, 0), Size.mm("0.6", "0.6"))
+    hole = FootprintPad("", Point.mm("0.4", 0), Size.mm("0.4", "0.4"),
+                        kind=PadKind.NON_PLATED_THROUGH_HOLE, shape=PadShape.CIRCLE,
+                        drill=Size.mm("0.4", "0.4"), has_solder_paste=False)
+    offender = PhysicalFootprint("test/land-near-hole", (land, hole), Size.mm(2, 2))
+    board = replace(
+        board,
+        footprints={**board.footprints, offender.name: offender},
+        placements=(*board.placements, Placement("X1", offender.name, Point.mm(20, 3))),
+    )
+    pre_existing = {f.code for f in run_physical_drc(board).findings}
+    assert "DRC-HOLE-CLEARANCE" in pre_existing
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    result = route_critical_nets(board, guides)
+    pair = result.nets[0]
+    assert pair.connected, pair.diagnostics
+    # Final verification still reports the footprint's own finding.
+    assert "DRC-HOLE-CLEARANCE" in {f.code for f in run_physical_drc(result.board).findings}
+
+
+def _bumps(tracks: list[TrackSegment], baseline_y: int) -> list[tuple[int, int, int]]:
+    """(x_start, x_end, height) of each raised run off a horizontal baseline."""
+    return sorted((min(t.start.x_nm, t.end.x_nm), max(t.start.x_nm, t.end.x_nm),
+                   abs(t.start.y_nm - baseline_y))
+                  for t in tracks if t.start.y_nm == t.end.y_nm != baseline_y)
+
+
 def test_tuning_is_bounded_but_requires_candidate_geometry_validation() -> None:
-    first = [TrackSegment("A", Point.mm(5, 5), Point.mm(15, 5), nm_from_mm("0.25"), CopperLayer.FRONT)]
-    second = [TrackSegment("B", Point.mm(5, 8), Point.mm(17, 8), nm_from_mm("0.25"), CopperLayer.FRONT)]
-    assert _tune_pair(first, second, nm_from_mm("0.1"), nm_from_mm("0.4")) == nm_from_mm("0.8")
-    assert max(track.end.y_nm for track in first) == nm_from_mm("5.4")
+    # The partner runs 2 mm past the shorter member's end, so the mismatch
+    # originates at that terminal. Before D5 one 0.4 mm bump went in the middle
+    # of the longest segment, toward the partner, compensating only 0.8 mm.
+    width = nm_from_mm("0.25")
+    first = [TrackSegment("A", Point.mm(5, 5), Point.mm(15, 5), width, CopperLayer.FRONT)]
+    second = [TrackSegment("B", Point.mm(5, 8), Point.mm(17, 8), width, CopperLayer.FRONT)]
+    added = _tune_pair(first, second, nm_from_mm("0.1"), nm_from_mm("0.4"))
+    excess = nm_from_mm("1.9")
+    assert excess <= added < excess + 6
+    assert _track_length(tuple(first)) == nm_from_mm(10) + added
+    assert nm_from_mm(12) - _track_length(tuple(first)) <= nm_from_mm("0.1")
+    bumps = _bumps(first, nm_from_mm(5))
+    assert len(bumps) == 3
+    assert all(height <= nm_from_mm("0.4") and end - start == 3 * width for start, end, height in bumps)
+    assert all(b[0] - a[1] >= 3 * width for a, b in zip(bumps, bumps[1:]))
+    # Bumps sit next to the mismatching terminal, at least 3 x width from it,
+    # and bulge away from the partner (which is above, at y = 8 mm).
+    assert bumps[-1][1] == nm_from_mm(15) - 3 * width
+    assert bumps[0][0] > nm_from_mm(10)
+    assert max(max(t.start.y_nm, t.end.y_nm) for t in first) == nm_from_mm(5)
+    # Compensation beyond the bounded bump count leaves geometry unchanged
+    # for the skew gate to report.
+    untouched = [TrackSegment("A", Point.mm(5, 5), Point.mm(15, 5), width, CopperLayer.FRONT)]
+    assert _tune_pair(untouched, second, nm_from_mm("0.1"), nm_from_mm("0.1")) == 0
+    assert len(untouched) == 1
+
+
+def test_tuning_compensates_next_to_the_bend_where_the_mismatch_arises() -> None:
+    # Inner lane of a bend near the east end, after a long straight run. The
+    # old tuner put its bump in the middle of the 20 mm run (x = 6.7..13.3 mm).
+    width, layer = nm_from_mm("0.25"), CopperLayer.FRONT
+    inner = [TrackSegment("A", Point.mm(0, 0), Point.mm(20, 0), width, layer),
+             TrackSegment("A", Point.mm(20, 0), Point.mm(20, 4), width, layer)]
+    outer = [TrackSegment("B", Point.mm(0, "-0.45"), Point.mm("20.45", "-0.45"), width, layer),
+             TrackSegment("B", Point.mm("20.45", "-0.45"), Point.mm("20.45", 4), width, layer)]
+    added = _tune_pair(inner, outer, nm_from_mm("0.1"), nm_from_mm("0.3"))
+    assert added >= nm_from_mm("0.8")
+    bumps = _bumps(inner, 0)
+    assert len(bumps) == 2
+    assert all(height <= nm_from_mm("0.3") for _, _, height in bumps)
+    # Next to the bend at x = 20 mm, at least 3 x width from it, on the side
+    # away from the outer partner lane.
+    assert bumps[-1][1] == nm_from_mm(20) - 3 * width
+    assert bumps[0][0] >= nm_from_mm(15)
+    assert all(min(t.start.y_nm, t.end.y_nm) >= 0 for t in inner)
+    # The reversed walk direction and segment order give the same placement.
+    reversed_inner = [TrackSegment("A", Point.mm(20, 4), Point.mm(20, 0), width, layer),
+                      TrackSegment("A", Point.mm(20, 0), Point.mm(0, 0), width, layer)]
+    assert _tune_pair(reversed_inner, outer, nm_from_mm("0.1"), nm_from_mm("0.3")) == added
+    assert _bumps(reversed_inner, 0) == bumps
 
 
 @pytest.mark.parametrize("obstacle", ("pad", "keepout", "edge", "pair_clearance"))

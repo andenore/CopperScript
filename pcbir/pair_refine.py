@@ -85,7 +85,8 @@ def paired_shortcuts(
         lanes = _lane_paths(points, start.heading, inbound, offset, start.sign)
         if lanes is None:
             return None
-        a, b = _tracks(first_rule.net, lanes[0], width, layer), _tracks(second_rule.net, lanes[1], width, layer)
+        a = _tracks(first_rule.net, lanes[0], width, layer, index.breakout)
+        b = _tracks(second_rule.net, lanes[1], width, layer, index.breakout)
         if not _legal(board, index, a, b, clearance):
             return None
         result = ((*start.first, *a, *(replace(t, start=t.end, end=t.start) for t in reversed(end.first))),

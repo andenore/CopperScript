@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
-from math import cos, exp, hypot, isfinite, radians, sin
+from math import ceil, cos, exp, hypot, isfinite, radians, sin
 from typing import Iterable, Mapping
 
 from .clusters import (
@@ -33,6 +33,7 @@ from .physical import (
     PhysicalBoard,
     Placement,
     PlacementGroup,
+    PlacementKeepout,
     PlacementTarget,
     Point,
     PolygonRing,
@@ -156,6 +157,42 @@ class PlacementAlgorithmError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class ReservedCorridor:
+    """Placement keepout derived from a ``reserve_corridor`` differential pair.
+
+    The keepout is checked exactly like a hand-drawn :class:`PlacementKeepout`,
+    except that the pair's own terminal components are exempt from it.
+    """
+
+    nets: tuple[str, str]
+    keepout: PlacementKeepout
+    terminal_references: tuple[str, ...]
+    margin_nm: Nanometres
+
+    @property
+    def name(self) -> str:
+        return self.keepout.name
+
+    @property
+    def side(self) -> BoardSide | None:
+        return self.keepout.side
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedCorridor:
+    """A requested corridor that was not derived, with the reason."""
+
+    nets: tuple[str, ...]
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class CorridorReservation:
+    corridors: tuple[ReservedCorridor, ...] = ()
+    skipped: tuple[SkippedCorridor, ...] = ()
+
+
 def generate_placement_candidates(
     board: PhysicalBoard,
     options: PlacementPlannerOptions | None = None,
@@ -174,6 +211,11 @@ def generate_placement_candidates(
         raise PlacementAlgorithmError(
             f"fixed placement references unknown component {unknown_fixed[0]!r}"
         )
+    conflicts = reserved_corridor_conflicts(
+        board, _fixed_placements(board, placements, options)
+    )
+    if conflicts:
+        raise PlacementAlgorithmError("; ".join(conflicts))
     attempts: list[PlacementCandidate] = []
     spacing = _escape_model(board, options)
     seeds = max(2, options.candidate_count)
@@ -473,6 +515,9 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
             if not any(e.startswith(ref + ":") for e in errors):
                 names = [k.name for k in board.keepouts if (k.side is None or k.side is pose.side)
                          and _polygons_too_close(shape.spine, k.outline.vertices, 0)]
+                names += [c.name for c in reserved_corridors(board).corridors
+                          if ref not in c.terminal_references
+                          and _keepout_blocks(board, c.keepout, pose, shape.spine)]
                 if rule and rule.region:
                     names.append(rule.region)
                 names += [k.id for k in board.copper_keepouts
@@ -489,6 +534,175 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
     if _relative_penalty(board, placements):
         errors.append("relative placement constraint (alignment/distance) is not satisfied")
     return tuple(dict.fromkeys(errors)) or ("pose violates a represented physical constraint",)
+
+
+_CORRIDOR_CACHE: dict[int, tuple[PhysicalBoard, CorridorReservation]] = {}
+_CORRIDOR_CACHE_SIZE = 8
+_EMPTY_RESERVATION = CorridorReservation()
+# tan(pi/8): a regular octagon with this half-side per unit inradius
+# circumscribes the unit disc, so expanded lands stay conservative.
+_OCTAGON_HALF_SIDE = 0.41421356237309515
+
+
+def reserved_corridors(board: PhysicalBoard) -> CorridorReservation:
+    """Derive placement keepouts for ``reserve_corridor`` differential pairs.
+
+    A corridor is derived only when every terminal component of both pair
+    nets has a source-fixed position and rotation. It is the convex hull of
+    the pair's terminal lands, expanded on every side by the pair's track
+    width + pair gap + clearance (falling back to the board's default track
+    width and minimum clearance). Pairs that cannot be derived are reported
+    as skipped with a reason; nothing is guessed. The result is a pure,
+    deterministic function of the board and is cached per board object.
+    """
+
+    cached = _CORRIDOR_CACHE.get(id(board))
+    if cached is not None and cached[0] is board:
+        return cached[1]
+    if not any(rule.reserve_corridor for rule in board.net_routing_rules):
+        return _EMPTY_RESERVATION
+    result = _derive_reserved_corridors(board)
+    if len(_CORRIDOR_CACHE) >= _CORRIDOR_CACHE_SIZE:
+        _CORRIDOR_CACHE.clear()
+    # The entry holds the board itself, so its id cannot be reused while cached.
+    _CORRIDOR_CACHE[id(board)] = (board, result)
+    return result
+
+
+def reserved_corridor_conflicts(
+    board: PhysicalBoard, poses: Mapping[str, Placement]
+) -> tuple[str, ...]:
+    """Explain fixed non-terminal components that obstruct a derived corridor."""
+
+    messages: list[str] = []
+    for corridor in reserved_corridors(board).corridors:
+        for reference in sorted(poses):
+            if reference in corridor.terminal_references:
+                continue
+            pose = poses[reference]
+            if _keepout_blocks(board, corridor.keepout, pose, _placement_polygon(board, pose)):
+                messages.append(
+                    f"reserved corridor {corridor.name!r} for differential pair "
+                    f"{corridor.nets[0]}/{corridor.nets[1]} overlaps fixed component "
+                    f"{reference!r}; move {reference} out of the corridor or remove "
+                    "reserve_corridor from the pair's routing profile"
+                )
+    return tuple(messages)
+
+
+def _derive_reserved_corridors(board: PhysicalBoard) -> CorridorReservation:
+    pairs: set[tuple[str, ...]] = set()
+    for rule in board.net_routing_rules:
+        if rule.reserve_corridor:
+            pairs.add((rule.net,) if rule.differential_partner is None
+                      else tuple(sorted((rule.net, rule.differential_partner))))
+    corridors: list[ReservedCorridor] = []
+    skipped: list[SkippedCorridor] = []
+    for members in sorted(pairs):
+        result = _derive_corridor(board, members)
+        if isinstance(result, str):
+            skipped.append(SkippedCorridor(members, result))
+        else:
+            corridors.append(result)
+    return CorridorReservation(tuple(corridors), tuple(skipped))
+
+
+def _derive_corridor(board: PhysicalBoard, members: tuple[str, ...]) -> ReservedCorridor | str:
+    """Return one pair's corridor, or the reason it cannot be derived."""
+
+    from .drc import placed_pad_shape
+
+    if len(members) != 2:
+        return "reserve_corridor requires a differential partner"
+    nets = {net.name: net for net in board.nets}
+    for net in members:
+        if net not in nets:
+            return f"pair net {net} has no physical pads"
+        if len(nets[net].pads) < 2:
+            return f"pair net {net} has fewer than two terminal lands"
+    pads = sorted({pad for net in members for pad in nets[net].pads})
+    references = tuple(sorted({pad.component for pad in pads}))
+    source = {item.reference: item for item in board.placements}
+    unplaced = [ref for ref in references if ref not in source]
+    if unplaced:
+        return f"terminal component(s) {', '.join(unplaced)} are not placed"
+    placement_rules = _rules(board)
+    movable = [
+        ref for ref in references
+        if ref not in placement_rules
+        or placement_rules[ref].fixed_position is None
+        or placement_rules[ref].fixed_rotation_degrees is None
+    ]
+    if movable:
+        return (
+            f"terminal component(s) {', '.join(movable)} are not fixed; reserve_corridor "
+            "needs fixed_placement with position and rotation on every terminal component"
+        )
+    poses = {
+        ref: replace(
+            source[ref],
+            position=placement_rules[ref].fixed_position,
+            rotation_degrees=placement_rules[ref].fixed_rotation_degrees,
+            side=placement_rules[ref].side or source[ref].side,
+        )
+        for ref in references
+    }
+    routing_rules = {rule.net: rule for rule in board.net_routing_rules}
+    pair_rules = [routing_rules[net] for net in members if net in routing_rules]
+    width = max((rule.width_nm for rule in pair_rules if rule.width_nm),
+                default=board.rules.default_track_width_nm)
+    gap = max((rule.pair_gap_nm for rule in pair_rules if rule.pair_gap_nm),
+              default=board.rules.minimum_clearance_nm)
+    clearance = max((board.rules.minimum_clearance_nm,
+                     *(rule.clearance_nm for rule in pair_rules if rule.clearance_nm)))
+    margin = width + gap + clearance
+    points: list[tuple[int, int]] = []
+    for pad_ref in pads:
+        pose = poses[pad_ref.component]
+        lands = [pad for pad in board.footprints[pose.footprint].pads if pad.number == pad_ref.pad]
+        if not lands:
+            return f"terminal pad {pad_ref.component}.{pad_ref.pad} is not in its footprint"
+        for land in lands:
+            shape = placed_pad_shape(transformed_local_point(pose, land.position), land, pose)
+            radius = shape.radius_nm + margin
+            half = ceil(radius * _OCTAGON_HALF_SIDE)
+            for spine in shape.spine:
+                points.extend(
+                    (spine.x_nm + dx, spine.y_nm + dy)
+                    for dx, dy in ((radius, half), (half, radius), (-half, radius),
+                                   (-radius, half), (-radius, -half), (-half, -radius),
+                                   (half, -radius), (radius, -half))
+                )
+    sides = {pose.side for pose in poses.values()}
+    name = f"reserved-corridor:{members[0]}/{members[1]}"
+    return ReservedCorridor(
+        (members[0], members[1]),
+        PlacementKeepout(name, BoardOutline(_convex_hull(points)),
+                         next(iter(sides)) if len(sides) == 1 else None),
+        references,
+        margin,
+    )
+
+
+def _convex_hull(points: Iterable[tuple[int, int]]) -> tuple[Point, ...]:
+    """Return the deterministic monotone-chain convex hull without collinear points."""
+
+    ordered = sorted(set(points))
+
+    def cross(o: tuple[int, int], a: tuple[int, int], b: tuple[int, int]) -> int:
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list[tuple[int, int]] = []
+    for point in ordered:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+    upper: list[tuple[int, int]] = []
+    for point in reversed(ordered):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+    return tuple(Point(x, y) for x, y in (*lower[:-1], *upper[:-1]))
 
 
 def _dominates(left: PlacementMetrics, right: PlacementMetrics) -> bool:
@@ -1341,7 +1555,7 @@ def _legal(
                       else options.edge_clearance_nm)
     from .mechanical import shape_in_board
     from .geometry import RoundedConvexShape, shapes_clear
-    from .mechanical_assembly import body_in_material,assembly_pose_legal,component_height
+    from .mechanical_assembly import body_in_material,assembly_pose_legal
     inside = (body_in_material(board,candidate,RoundedConvexShape(polygon),edge_clearance)
               if board.body_overhangs else (shape_in_board(board, RoundedConvexShape(polygon), edge_clearance)
               if board.outline.circular_boundary or board.outline.boundary_path or board.outline.cutouts or board.mechanical_holes or board.mechanical_slots
@@ -1379,13 +1593,11 @@ def _legal(
                 ):
                     return False
     for keepout in board.keepouts:
-        if keepout.side is not None and candidate.side is not keepout.side:
-            continue
-        if keepout.maximum_component_height_nm is not None:
-            height=component_height(board,candidate)
-            if height is not None and height <= keepout.maximum_component_height_nm:
-                continue
-        if _polygons_too_close(polygon, keepout.outline.vertices, 0):
+        if _keepout_blocks(board, keepout, candidate, polygon):
+            return False
+    for corridor in reserved_corridors(board).corridors:
+        if (candidate.reference not in corridor.terminal_references
+                and _keepout_blocks(board, corridor.keepout, candidate, polygon)):
             return False
     if cluster_keepouts is None:
         cluster_keepouts = resolved_cluster_keepouts(board, {**placed, candidate.reference: candidate})
@@ -1428,6 +1640,24 @@ def _legal(
         ):
             return False
     return True
+
+
+def _keepout_blocks(
+    board: PhysicalBoard,
+    keepout: PlacementKeepout,
+    candidate: Placement,
+    polygon: tuple[Point, ...],
+) -> bool:
+    """Return whether a placement keepout excludes this placed body."""
+
+    if keepout.side is not None and candidate.side is not keepout.side:
+        return False
+    if keepout.maximum_component_height_nm is not None:
+        from .mechanical_assembly import component_height
+        height = component_height(board, candidate)
+        if height is not None and height <= keepout.maximum_component_height_nm:
+            return False
+    return _polygons_too_close(polygon, keepout.outline.vertices, 0)
 
 
 def _placement_polygon(board: PhysicalBoard, placement: Placement) -> tuple[Point, ...]:

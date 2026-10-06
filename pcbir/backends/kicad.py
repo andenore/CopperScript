@@ -15,6 +15,7 @@ from typing import Mapping
 import uuid
 
 from ..elaborate import elaborate
+from ..modes import pins_bonded_to_pad
 from ..model import (
     Board,
     ComponentInstance,
@@ -210,15 +211,7 @@ def _physical_pin_name(
     terminal = unit.terminals.get(terminal_name) if unit is not None else None
     if terminal is None:
         return None
-    matches = [
-        pin.name
-        for pin in part.pins.values()
-        if any(
-            bond.pad == terminal.pad
-            and (bond.when is None or bond.when.matches(component.modes))
-            for bond in pin.bonds
-        )
-    ]
+    matches = [pin.name for pin in pins_bonded_to_pad(component, part, device, terminal.pad)]
     return matches[0] if len(matches) == 1 else None
 
 

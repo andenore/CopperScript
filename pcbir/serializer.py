@@ -19,6 +19,7 @@ from .model import (
     PartDefinition,
     PeripheralSelection,
     PowerState,
+    RelativeVoltage,
     SourceReference,
     Supply,
 )
@@ -373,7 +374,7 @@ def _device_to_dict(device: DeviceDefinition) -> dict[str, object]:
 def _profile_to_dict(profile) -> object:
     if profile is None:
         return None
-    return {
+    result = {
         "domains": sorted(item.value for item in profile.domains),
         "directions": sorted(item.value for item in profile.directions),
         "drive_modes": sorted(item.value for item in profile.drive_modes),
@@ -381,6 +382,11 @@ def _profile_to_dict(profile) -> object:
         "voltage": _range_to_dict(profile.voltage),
         "current": _range_to_dict(profile.current),
     }
+    # Emitted only when declared so the electrical digest of designs without
+    # absolute-maximum ratings is unchanged.
+    if profile.absolute_voltage is not None:
+        result["absolute_voltage"] = _range_to_dict(profile.absolute_voltage)
+    return result
 
 
 def _range_to_dict(value) -> object:
@@ -412,6 +418,12 @@ def _source_to_dict(source: SourceReference | None) -> object:
 
 
 def _value(value: object) -> object:
+    if isinstance(value, RelativeVoltage):
+        return {
+            "reference": value.reference,
+            "offset": _value(value.offset),
+            "limit": _value(value.limit),
+        }
     if isinstance(value, Quantity):
         return {
             "value": str(value.value.normalize()),

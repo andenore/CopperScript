@@ -12,6 +12,7 @@ from typing import Iterable
 
 from .physical import (
     BoardSide,
+    ComponentHoleClearance,
     CopperLayer,
     NetRoutingRule,
     PadKind,
@@ -36,6 +37,7 @@ from .geometry import (
     shapes_clear,
 )
 from .placement import placement_solution_is_legal
+from .breakout import BreakoutRegions
 from .copper_connectivity import (CopperContact, PhysicalCopperConnectivity,
                                   copper_contact_roots)
 
@@ -106,6 +108,47 @@ class DrcFinding:
 
 
 @dataclass(frozen=True, slots=True)
+class DrcBreakoutRelaxation:
+    """A width, clearance or pair-gap check passed only under breakout values.
+
+    ``required_nm`` is the normal value the copper does not meet and
+    ``relaxed_nm`` the breakout value it does meet (plan R1). Like
+    ``measured_nm`` they are track widths or copper-to-copper spacings; a zone
+    fill spacing is not measured. ``regions`` names, for each net whose
+    breakout value applied, the terminal land whose region holds its copper
+    and the net's breakout length.
+    """
+
+    check: str  # "track_width", "clearance" or "pair_gap"
+    objects: tuple[str, ...]
+    nets: tuple[str, ...]
+    layers: tuple[str, ...]
+    required_nm: int
+    relaxed_nm: int
+    measured_nm: int | None
+    regions: tuple[tuple[str, str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DrcHoleClearanceRelaxation:
+    """A pad-to-own-hole check passed only under a component-scoped rule.
+
+    ``objects`` are the component's pad and its own non-plated hole.
+    ``required_nm`` is the board ``minimum_hole_clearance`` the pad does not
+    meet, ``relaxed_nm`` the scoped ``hole_clearance`` it does meet and
+    ``measured_nm`` the pad-copper-to-drill spacing.
+    """
+
+    component: str
+    objects: tuple[str, ...]
+    nets: tuple[str, ...]
+    required_nm: int
+    relaxed_nm: int
+    measured_nm: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class DrcWaiver:
     finding_fingerprint: str
     reason: str
@@ -152,6 +195,10 @@ class PhysicalDrcReport:
     findings: tuple[DrcFinding, ...]
     coverage: tuple[DrcCoverage, ...]
     token: SignoffToken
+    # Checks that passed only because breakout-region values applied.
+    breakout_relaxations: tuple[DrcBreakoutRelaxation, ...] = ()
+    # Pad-to-own-hole checks that passed only under a component hole_clearance.
+    hole_clearance_relaxations: tuple[DrcHoleClearanceRelaxation, ...] = ()
 
     def to_json(self) -> str:
         return json.dumps(_report_document(self, include_token=True), indent=2, sort_keys=True) + "\n"
@@ -165,6 +212,7 @@ class _PadCopper:
     shape: RoundedConvexShape
     layers: tuple[CopperLayer, ...]
     clearance_nm: int = 0
+    component: str = ""
 
 
 def placement_copper_findings(board: PhysicalBoard) -> tuple[DrcFinding, ...]:
@@ -192,6 +240,7 @@ def run_physical_drc(
     policy = policy or PhysicalDrcPolicy()
     findings: list[DrcFinding] = []
     coverage: list[DrcCoverage] = []
+    relaxations: list[DrcBreakoutRelaxation] = []
 
     if policy.require_completed_detailed_route and board.metadata.get("detailed_routing") != "complete":
         findings.append(
@@ -212,18 +261,38 @@ def run_physical_drc(
     ):
         findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR, "component placement violates board, keepout, or courtyard legality"))
     coverage.append(DrcCoverage("placement_legality", DrcCoverageStatus.EXECUTED, True))
-    _check_track_rules(board, findings)
+    _check_track_rules(board, findings, relaxations)
     coverage.append(DrcCoverage("track_width_and_budgets", DrcCoverageStatus.EXECUTED, True))
     _check_differential_rules(board, findings)
     coverage.append(DrcCoverage("differential_geometry", DrcCoverageStatus.EXECUTED, True))
+    _check_length_match(board, findings)
+    coverage.append(DrcCoverage(
+        "length_match",
+        DrcCoverageStatus.EXECUTED if board.match_groups else DrcCoverageStatus.NOT_APPLICABLE,
+        True,
+        "group skew is checked once every member net is connected" if board.match_groups else "",
+    ))
     _check_vias(board, findings)
     coverage.append(DrcCoverage("via_geometry_and_budgets", DrcCoverageStatus.EXECUTED, True))
     _check_board_edge(board, findings)
     coverage.append(DrcCoverage("copper_to_board_edge", DrcCoverageStatus.EXECUTED, True))
-    _check_copper_spacing(board, findings)
+    _check_copper_spacing(board, findings, relaxations)
     coverage.append(DrcCoverage("shorts_and_clearance", DrcCoverageStatus.EXECUTED, True))
-    _check_non_plated_hole_clearance(board, findings)
+    if any(rule.breakout_length_nm is not None for rule in board.net_routing_rules):
+        coverage.append(DrcCoverage(
+            "breakout_regions", DrcCoverageStatus.EXECUTED, True,
+            "breakout width, pair gap and clearance apply only to copper within breakout_length "
+            "of a terminal land; checks they relaxed are listed in breakout_relaxations",
+        ))
+    hole_relaxations: list[DrcHoleClearanceRelaxation] = []
+    _check_non_plated_hole_clearance(board, findings, hole_relaxations)
     coverage.append(DrcCoverage("non_plated_hole_clearance", DrcCoverageStatus.EXECUTED, True))
+    if board.component_hole_clearances:
+        coverage.append(DrcCoverage(
+            "component_hole_clearance", DrcCoverageStatus.EXECUTED, True,
+            "scoped hole_clearance applies only between a component's own pads and its own "
+            "non-plated holes; checks it relaxed are listed in hole_clearance_relaxations",
+        ))
     _check_filled_via_hole_clearance(board, findings)
     coverage.append(DrcCoverage("filled_via_hole_to_copper", DrcCoverageStatus.EXECUTED, True))
     _check_drill_spacing(board, findings)
@@ -237,7 +306,7 @@ def run_physical_drc(
     ))
 
     if board.zone_fills:
-        _check_zone_fill_spacing(board, findings)
+        _check_zone_fill_spacing(board, findings, relaxations)
         coverage.append(DrcCoverage("copper_zones", DrcCoverageStatus.EXECUTED, False,
                                     "checked content-bound normalized fill polygons"))
         if board.outline.circular_boundary or board.outline.boundary_path or board.outline.cutouts or board.mechanical_holes or board.mechanical_slots:
@@ -312,6 +381,8 @@ def run_physical_drc(
         tuple(waived),
         tuple(coverage),
         SignoffToken("copperscript-signoff/v0.1", board_digest, rules_digest, "", decision, completeness),
+        tuple(sorted(relaxations, key=lambda item: (item.check, item.objects, item.nets, item.layers))),
+        tuple(sorted(hole_relaxations, key=lambda item: (item.component, item.objects))),
     )
     report_digest = _digest(_report_document(provisional, include_token=False))
     token = replace(provisional.token, report_digest=report_digest)
@@ -386,6 +457,14 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "tracks": [_track_identity(track) for track in sorted(board.tracks, key=_track_identity)],
             "vias": [_via_identity(via) for via in sorted(board.vias, key=_via_identity)],
             "routing_rules": [_routing_rule_document(rule) for rule in sorted(board.net_routing_rules, key=lambda item: item.net)],
+            **({"match_groups": [(group.id, group.nets, group.max_skew_nm)
+                                 for group in sorted(board.match_groups, key=lambda item: item.id)]}
+               if board.match_groups else {}),
+            # Present only when declared, so other boards' digests are unchanged.
+            **({"component_hole_clearances": [
+                (rule.reference, rule.clearance_nm, rule.reason)
+                for rule in sorted(board.component_hole_clearances, key=lambda item: item.reference)]}
+               if board.component_hole_clearances else {}),
             "regions": [repr(item) for item in sorted(board.regions, key=lambda item: item.name)],
             "keepouts": [repr(item) for item in sorted(board.keepouts, key=lambda item: item.name)],
             "placement_rules": [repr(item) for item in sorted(board.placement_rules, key=lambda item: item.reference)],
@@ -478,16 +557,28 @@ def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> Non
             )
 
 
-def _check_track_rules(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+def _check_track_rules(board: PhysicalBoard, findings: list[DrcFinding],
+                       relaxations: list[DrcBreakoutRelaxation] | None = None) -> None:
     rules = {item.net: item for item in board.net_routing_rules}
+    spacing = (_BreakoutSpacing(board, relaxations)
+               if any(rule.breakout_width_nm is not None for rule in rules.values()) else None)
     for index, track in enumerate(board.tracks):
         rule = rules.get(track.net)
         required = max(
             board.rules.minimum_track_width_nm,
             rule.width_nm if rule and rule.width_nm is not None else 0,
         )
-        if track.width_nm < required:
-            findings.append(_finding("DRC-TRACK-WIDTH", DrcSeverity.ERROR, f"track {index} on {track.net!r} is below its minimum or routing profile width", objects=(f"track:{index}",), nets=(track.net,), layers=(track.layer.value,), required_nm=required, measured_nm=track.width_nm))
+        # Inside a breakout region the breakout width replaces the profile width.
+        relaxed, land = required, None
+        if spacing is not None and rule is not None and rule.breakout_width_nm is not None:
+            land = spacing.land(track.net, (track.start, track.end))
+            if land is not None:
+                relaxed = min(required, max(board.rules.minimum_track_width_nm, rule.breakout_width_nm))
+        if track.width_nm < relaxed:
+            findings.append(_finding("DRC-TRACK-WIDTH", DrcSeverity.ERROR, f"track {index} on {track.net!r} is below its minimum or routing profile width", objects=(f"track:{index}",), nets=(track.net,), layers=(track.layer.value,), required_nm=relaxed, measured_nm=track.width_nm))
+        elif track.width_nm < required and spacing is not None:
+            spacing.record("track_width", (f"track:{index}",), ((track.net, land),),
+                           (track.layer.value,), required, relaxed, track.width_nm)
     for net, rule in sorted(rules.items()):
         net_tracks = [item for item in board.tracks if item.net == net]
         length = sum(round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm)) for item in net_tracks)
@@ -549,6 +640,25 @@ def _check_differential_rules(board: PhysicalBoard, findings: list[DrcFinding]) 
                                      nets=tuple(sorted(pair))))
 
 
+def _check_length_match(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+    """Hard group-skew check for fully routed ``length_match`` groups."""
+    if not board.match_groups:
+        return
+    from .signal_integrity import verify_match_groups
+
+    for result in verify_match_groups(board):
+        if result.status != "fail":
+            continue
+        members = ", ".join(f"{member.net} {member.length_nm} nm" for member in result.members)
+        findings.append(_finding(
+            "DRC-LENGTH-MATCH", DrcSeverity.ERROR,
+            f"length-match group {result.id!r} skew is {result.skew_nm} nm ({members})",
+            objects=(f"match_group:{result.id}",),
+            nets=tuple(sorted(member.net for member in result.members)),
+            required_nm=result.max_skew_nm, measured_nm=result.skew_nm,
+        ))
+
+
 def _check_board_edge(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
     clearance = board.rules.minimum_clearance_nm
     from .mechanical import ring_edges, shape_in_outline
@@ -594,44 +704,74 @@ def _check_board_edge(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
             findings.append(_finding("DRC-BOARD-EDGE", DrcSeverity.ERROR, f"{pad.identity} violates copper-to-board-edge clearance", objects=(pad.identity,), nets=(pad.net,), layers=tuple(layer.value for layer in pad.layers), required_nm=clearance, measured_nm=max(0, round(margin))))
 
 
-def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
-    rules = {item.net: item for item in board.net_routing_rules}
+def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding],
+                          relaxations: list[DrcBreakoutRelaxation] | None = None) -> None:
+    spacing = _BreakoutSpacing(board, relaxations)
     tracks = list(enumerate(board.tracks))
+    track_lands = [spacing.land(track.net, (track.start, track.end)) for track in board.tracks]
+    via_lands = [spacing.land(via.net, (via.position,)) for via in board.vias]
     for position, (left_index, left) in enumerate(tracks):
         for right_index, right in tracks[position + 1 :]:
             if left.net == right.net or left.layer is not right.layer:
                 continue
-            required_twice = left.width_nm + right.width_nm + 2 * _clearance(board, rules.get(left.net), rules.get(right.net))
+            clearance, normal = spacing.between(left.net, track_lands[left_index], right.net, track_lands[right_index])
+            required_twice = left.width_nm + right.width_nm + 2 * clearance
             if not segment_distance_at_least(left.start, left.end, right.start, right.end, required_twice, denominator=2):
                 distance_squared = segment_distance_squared(left.start, left.end, right.start, right.end)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"tracks {left_index} and {right_index} violate copper spacing", objects=(f"track:{left_index}", f"track:{right_index}"), nets=tuple(sorted((left.net, right.net))), layers=(left.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
+                findings.append(_finding(code, DrcSeverity.ERROR, f"tracks {left_index} and {right_index} violate {spacing.subject(left.net, right.net)}", objects=(f"track:{left_index}", f"track:{right_index}"), nets=tuple(sorted((left.net, right.net))), layers=(left.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
+            elif clearance < normal:
+                spacing.note(segment_distance_squared(left.start, left.end, right.start, right.end),
+                             left.width_nm + right.width_nm, normal, clearance,
+                             (f"track:{left_index}", f"track:{right_index}"),
+                             ((left.net, track_lands[left_index]), (right.net, track_lands[right_index])),
+                             (left.layer.value,))
     for track_index, track in tracks:
         for via_index, via in enumerate(board.vias):
             if track.net == via.net or not _via_covers_layer(board, via, track.layer):
                 continue
-            required_twice = track.width_nm + via.size_nm + 2 * _clearance(board, rules.get(track.net), rules.get(via.net))
+            clearance, normal = spacing.between(track.net, track_lands[track_index], via.net, via_lands[via_index])
+            required_twice = track.width_nm + via.size_nm + 2 * clearance
             if not point_segment_distance_at_least(via.position, track.start, track.end, required_twice, denominator=2):
                 distance_squared = point_segment_distance_squared(via.position, track.start, track.end)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and via {via_index} violate copper spacing", objects=(f"track:{track_index}", f"via:{via_index}"), nets=tuple(sorted((track.net, via.net))), layers=(track.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
+                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and via {via_index} violate {spacing.subject(track.net, via.net)}", objects=(f"track:{track_index}", f"via:{via_index}"), nets=tuple(sorted((track.net, via.net))), layers=(track.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
+            elif clearance < normal:
+                spacing.note(point_segment_distance_squared(via.position, track.start, track.end),
+                             track.width_nm + via.size_nm, normal, clearance,
+                             (f"track:{track_index}", f"via:{via_index}"),
+                             ((track.net, track_lands[track_index]), (via.net, via_lands[via_index])),
+                             (track.layer.value,))
     for left_index, left in enumerate(board.vias):
         for right_index in range(left_index + 1, len(board.vias)):
             right = board.vias[right_index]
             if left.net == right.net or not _via_spans_overlap(board, left, right):
                 continue
             distance_squared = (left.position.x_nm - right.position.x_nm) ** 2 + (left.position.y_nm - right.position.y_nm) ** 2
-            required_twice = left.size_nm + right.size_nm + 2 * _clearance(board, rules.get(left.net), rules.get(right.net))
+            clearance, normal = spacing.between(left.net, via_lands[left_index], right.net, via_lands[right_index])
+            required_twice = left.size_nm + right.size_nm + 2 * clearance
             if 4 * distance_squared < required_twice * required_twice:
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"vias {left_index} and {right_index} violate copper spacing", objects=(f"via:{left_index}", f"via:{right_index}"), nets=tuple(sorted((left.net, right.net))), required_nm=(required_twice + 1) // 2, measured_nm=isqrt(distance_squared)))
+                findings.append(_finding(code, DrcSeverity.ERROR, f"vias {left_index} and {right_index} violate {spacing.subject(left.net, right.net)}", objects=(f"via:{left_index}", f"via:{right_index}"), nets=tuple(sorted((left.net, right.net))), required_nm=(required_twice + 1) // 2, measured_nm=isqrt(distance_squared)))
+            elif clearance < normal:
+                spacing.note(distance_squared, left.size_nm + right.size_nm, normal, clearance,
+                             (f"via:{left_index}", f"via:{right_index}"),
+                             ((left.net, via_lands[left_index]), (right.net, via_lands[right_index])), ())
     pads = _copper_pads(board)
     pad_by_id = {pad.identity: pad for pad in pads}
+    pad_lands = {pad.identity: spacing.land(pad.net, pad.shape.spine) for pad in pads}
+
+    def pad_reach(pad: _PadCopper) -> int:
+        reach = max(board.rules.minimum_clearance_nm, pad.clearance_nm)
+        rule = spacing.rules.get(pad.net)
+        if rule is not None and pad.net in spacing.regions.declared:
+            # Compare a breakout net's lands at their normal spacing too, so
+            # the region that lets a pin field pass is recorded.
+            reach = max(reach, rule.clearance_nm or 0, rule.pair_gap_nm or 0)
+        return reach
+
     pad_index = SpatialIndex(
-        SpatialItem(
-            pad.identity,
-            pad.shape.bounds.expanded(max(board.rules.minimum_clearance_nm, pad.clearance_nm)),
-        )
+        SpatialItem(pad.identity, pad.shape.bounds.expanded(pad_reach(pad)))
         for pad in pads
     )
     for track_index, track in tracks:
@@ -639,12 +779,19 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
         for pad in pads:
             if track.net == pad.net or track.layer not in pad.layers:
                 continue
-            clearance = max(pad.clearance_nm, _clearance(board, rules.get(track.net), rules.get(pad.net)))
+            relaxed, normal = spacing.between(track.net, track_lands[track_index], pad.net, pad_lands[pad.identity])
+            clearance, normal = max(pad.clearance_nm, relaxed), max(pad.clearance_nm, normal)
             required = track_shape.radius_nm + pad.shape.radius_nm + clearance
             if not shapes_clear(track_shape, pad.shape, clearance):
                 distance_squared = shape_distance_squared(track_shape, pad.shape)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and {pad.identity} violate copper spacing", objects=(f"track:{track_index}", pad.identity), nets=tuple(sorted((track.net, pad.net))), layers=(track.layer.value,), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
+                findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and {pad.identity} violate {spacing.subject(track.net, pad.net)}", objects=(f"track:{track_index}", pad.identity), nets=tuple(sorted((track.net, pad.net))), layers=(track.layer.value,), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
+            elif clearance < normal:
+                spacing.note(shape_distance_squared(track_shape, pad.shape),
+                             2 * (track_shape.radius_nm + pad.shape.radius_nm), normal, clearance,
+                             (f"track:{track_index}", pad.identity),
+                             ((track.net, track_lands[track_index]), (pad.net, pad_lands[pad.identity])),
+                             (track.layer.value,))
     for via_index, via in enumerate(board.vias):
         via_shape = RoundedConvexShape((via.position,), via.size_nm // 2)
         for pad in pads:
@@ -660,17 +807,21 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
                                      if _via_covers_layer(board, via, layer)),
                     ))
                 continue
-            clearance = max(pad.clearance_nm, _clearance(board, rules.get(via.net), rules.get(pad.net)))
+            relaxed, normal = spacing.between(via.net, via_lands[via_index], pad.net, pad_lands[pad.identity])
+            clearance, normal = max(pad.clearance_nm, relaxed), max(pad.clearance_nm, normal)
             required = via_shape.radius_nm + pad.shape.radius_nm + clearance
             if not shapes_clear(via_shape, pad.shape, clearance):
                 distance_squared = shape_distance_squared(via_shape, pad.shape)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"via {via_index} and {pad.identity} violate copper spacing", objects=(f"via:{via_index}", pad.identity), nets=tuple(sorted((via.net, pad.net))), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
+                findings.append(_finding(code, DrcSeverity.ERROR, f"via {via_index} and {pad.identity} violate {spacing.subject(via.net, pad.net)}", objects=(f"via:{via_index}", pad.identity), nets=tuple(sorted((via.net, pad.net))), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
+            elif clearance < normal:
+                spacing.note(shape_distance_squared(via_shape, pad.shape),
+                             2 * (via_shape.radius_nm + pad.shape.radius_nm), normal, clearance,
+                             (f"via:{via_index}", pad.identity),
+                             ((via.net, via_lands[via_index]), (pad.net, pad_lands[pad.identity])), ())
     visited_pad_pairs: set[tuple[str, str]] = set()
     for left in pads:
-        for right_id in pad_index.query(
-            left.shape.bounds.expanded(max(board.rules.minimum_clearance_nm, left.clearance_nm))
-        ):
+        for right_id in pad_index.query(left.shape.bounds.expanded(pad_reach(left))):
             if right_id == left.identity:
                 continue
             pair = tuple(sorted((left.identity, right_id)))
@@ -680,12 +831,20 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> N
             right = pad_by_id[right_id]
             if left.net == right.net or not set(left.layers).intersection(right.layers):
                 continue
-            clearance = max(left.clearance_nm, right.clearance_nm, _clearance(board, rules.get(left.net), rules.get(right.net)))
+            relaxed, normal = spacing.between(left.net, pad_lands[left.identity], right.net, pad_lands[right.identity])
+            clearance = max(left.clearance_nm, right.clearance_nm, relaxed)
+            normal = max(left.clearance_nm, right.clearance_nm, normal)
             required = left.shape.radius_nm + right.shape.radius_nm + clearance
             if not shapes_clear(left.shape, right.shape, clearance):
                 distance_squared = shape_distance_squared(left.shape, right.shape)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
-                findings.append(_finding(code, DrcSeverity.ERROR, f"{left.identity} and {right.identity} violate copper spacing", objects=(left.identity, right.identity), nets=tuple(sorted((left.net, right.net))), layers=tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
+                findings.append(_finding(code, DrcSeverity.ERROR, f"{left.identity} and {right.identity} violate {spacing.subject(left.net, right.net)}", objects=(left.identity, right.identity), nets=tuple(sorted((left.net, right.net))), layers=tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
+            elif clearance < normal:
+                spacing.note(shape_distance_squared(left.shape, right.shape),
+                             2 * (left.shape.radius_nm + right.shape.radius_nm), normal, clearance,
+                             (left.identity, right.identity),
+                             ((left.net, pad_lands[left.identity]), (right.net, pad_lands[right.identity])),
+                             tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))))
 
 
 def _check_copper_keepouts(
@@ -781,7 +940,7 @@ def _copper_pads(board: PhysicalBoard) -> tuple[_PadCopper, ...]:
             position = transformed_local_point(placement, pad.position)
             result.append(_PadCopper(f"pad:{placement.reference}.{pad.number}:{pad_index}", net,
                                      position, placed_pad_shape(position, pad, placement), layers,
-                                     footprint.clearance_nm or 0))
+                                     footprint.clearance_nm or 0, placement.reference))
     return tuple(result)
 
 
@@ -805,18 +964,43 @@ def non_plated_holes(board: PhysicalBoard) -> tuple[tuple[str, RoundedConvexShap
                        else PadShape.OVAL),
             )
             position = transformed_local_point(placement, pad.position)
-            holes.append((f"hole:{placement.reference}.{pad.number}:{index}",
+            holes.append((_footprint_hole_identity(placement.reference, pad.number, index),
                           placed_pad_shape(position, drill_pad, placement)))
     return tuple(holes)
 
 
+def _footprint_hole_identity(reference: str, number: str, index: int) -> str:
+    return f"hole:{reference}.{number}:{index}"
+
+
+def _scoped_hole_rules(board: PhysicalBoard) -> dict[str, ComponentHoleClearance]:
+    """Footprint NPTH identities of each component with a ``hole_clearance`` rule."""
+    scoped = {rule.reference: rule for rule in board.component_hole_clearances}
+    owned: dict[str, ComponentHoleClearance] = {}
+    for placement in board.placements:
+        rule = scoped.get(placement.reference)
+        if rule is None:
+            continue
+        for index, pad in enumerate(board.footprints[placement.footprint].pads):
+            if pad.kind is PadKind.NON_PLATED_THROUGH_HOLE:
+                owned[_footprint_hole_identity(placement.reference, pad.number, index)] = rule
+    return owned
+
+
 def _check_non_plated_hole_clearance(
-    board: PhysicalBoard, findings: list[DrcFinding]
+    board: PhysicalBoard, findings: list[DrcFinding],
+    relaxations: list[DrcHoleClearanceRelaxation] | None = None,
 ) -> None:
+    """Copper-to-NPTH clearance; a component's scoped rule covers only its own pads and holes."""
     clearance = board.rules.minimum_hole_clearance_nm
+    scoped = _scoped_hole_rules(board)
+    pads = _copper_pads(board)
     for identity, hole in non_plated_holes(board):
-        for pad in _copper_pads(board):
-            if not shapes_clear(pad.shape, hole, clearance):
+        rule = scoped.get(identity)
+        for pad in pads:
+            if rule is not None and pad.component == rule.reference:
+                _check_scoped_pad_hole(pad, identity, hole, rule, clearance, findings, relaxations)
+            elif not shapes_clear(pad.shape, hole, clearance):
                 findings.append(_finding("DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
                     f"{pad.identity} violates {identity} drill clearance",
                     objects=(pad.identity, identity), nets=(pad.net,)))
@@ -837,6 +1021,31 @@ def _check_non_plated_hole_clearance(
                     f"via {index} violates {identity} drill clearance",
                     objects=(f"via:{index}", identity), nets=(via.net,),
                 ))
+
+
+def _check_scoped_pad_hole(
+    pad: _PadCopper, identity: str, hole: RoundedConvexShape, rule: ComponentHoleClearance,
+    board_clearance: int, findings: list[DrcFinding],
+    relaxations: list[DrcHoleClearanceRelaxation] | None,
+) -> None:
+    """Check one pad against its own footprint's hole under the component's scoped rule."""
+    if shapes_clear(pad.shape, hole, board_clearance):
+        return
+    distance_squared = shape_distance_squared(pad.shape, hole)
+    measured = max(0, (_fraction_sqrt_floor(Fraction(4 * distance_squared))
+                       - 2 * (pad.shape.radius_nm + hole.radius_nm)) // 2)
+    if not shapes_clear(pad.shape, hole, rule.clearance_nm):
+        findings.append(_finding(
+            "DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
+            f"{pad.identity} violates {identity} drill clearance "
+            f"(checked against the scoped hole_clearance of {rule.reference})",
+            objects=(pad.identity, identity), nets=(pad.net,),
+            required_nm=rule.clearance_nm, measured_nm=measured,
+        ))
+    elif relaxations is not None:
+        relaxations.append(DrcHoleClearanceRelaxation(
+            rule.reference, (pad.identity, identity), (pad.net,),
+            board_clearance, rule.clearance_nm, measured, rule.reason))
 
 
 def _check_filled_via_hole_clearance(
@@ -943,10 +1152,15 @@ def _check_drill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> No
                     ))
 
 
-def _check_zone_fill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+def _check_zone_fill_spacing(board: PhysicalBoard, findings: list[DrcFinding],
+                             relaxations: list[DrcBreakoutRelaxation] | None = None) -> None:
     zone_nets = {zone.id: zone.net for zone in board.zones}
     pads = _copper_pads(board)
-    rules = {item.net: item for item in board.net_routing_rules}
+    spacing = _BreakoutSpacing(board, relaxations)
+    # Fill copper is never in a breakout region; the other object may be.
+    track_lands = [spacing.land(track.net, (track.start, track.end)) for track in board.tracks]
+    via_lands = [spacing.land(via.net, (via.position,)) for via in board.vias]
+    pad_lands = {pad.identity: spacing.land(pad.net, pad.shape.spine) for pad in pads}
     for fill in sorted(board.zone_fills, key=lambda item: (item.zone_id, item.layer.value)):
         net = zone_nets[fill.zone_id]
         for polygon_index, polygon in enumerate(fill.polygons):
@@ -955,34 +1169,44 @@ def _check_zone_fill_spacing(board: PhysicalBoard, findings: list[DrcFinding]) -
                 if track.net == net or track.layer is not fill.layer:
                     continue
                 shape = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
-                clearance = _clearance(board, rules.get(net), rules.get(track.net))
+                clearance, normal = spacing.between(net, None, track.net, track_lands[track_index])
                 if not _shape_clear_of_region(shape, polygon, clearance):
                     findings.append(_finding("DRC-ZONE-CLEARANCE", DrcSeverity.ERROR,
                                              f"{objects} violates track {track_index} clearance",
                                              objects=(objects, f"track:{track_index}"),
                                              nets=tuple(sorted((net, track.net))), layers=(fill.layer.value,)))
+                elif clearance < normal and not _shape_clear_of_region(shape, polygon, normal):
+                    spacing.record(spacing.check(net, track.net), (objects, f"track:{track_index}"),
+                                   ((net, None), (track.net, track_lands[track_index])),
+                                   (fill.layer.value,), normal, clearance, None)
             for via_index, via in enumerate(board.vias):
                 if via.net == net or not _via_covers_layer(board, via, fill.layer):
                     continue
                 shape = RoundedConvexShape((via.position,), via.size_nm // 2)
-                clearance = _clearance(board, rules.get(net), rules.get(via.net))
+                clearance, normal = spacing.between(net, None, via.net, via_lands[via_index])
                 if not _shape_clear_of_region(shape, polygon, clearance):
                     findings.append(_finding("DRC-ZONE-CLEARANCE", DrcSeverity.ERROR,
                                              f"{objects} violates via {via_index} clearance",
                                              objects=(objects, f"via:{via_index}"),
                                              nets=tuple(sorted((net, via.net))), layers=(fill.layer.value,)))
+                elif clearance < normal and not _shape_clear_of_region(shape, polygon, normal):
+                    spacing.record(spacing.check(net, via.net), (objects, f"via:{via_index}"),
+                                   ((net, None), (via.net, via_lands[via_index])),
+                                   (fill.layer.value,), normal, clearance, None)
             for pad in pads:
                 if pad.net == net or fill.layer not in pad.layers:
                     continue
-                clearance = max(
-                    pad.clearance_nm,
-                    _clearance(board, rules.get(net), rules.get(pad.net)),
-                )
+                relaxed, normal = spacing.between(net, None, pad.net, pad_lands[pad.identity])
+                clearance, normal = max(pad.clearance_nm, relaxed), max(pad.clearance_nm, normal)
                 if not _shape_clear_of_region(pad.shape, polygon, clearance):
                     findings.append(_finding("DRC-ZONE-CLEARANCE", DrcSeverity.ERROR,
                                              f"{objects} violates {pad.identity} clearance",
                                              objects=(objects, pad.identity),
                                              nets=tuple(sorted((net, pad.net))), layers=(fill.layer.value,)))
+                elif clearance < normal and not _shape_clear_of_region(pad.shape, polygon, normal):
+                    spacing.record(spacing.check(net, pad.net), (objects, pad.identity),
+                                   ((net, None), (pad.net, pad_lands[pad.identity])),
+                                   (fill.layer.value,), normal, clearance, None)
 
 
 def _shape_clear_of_region(shape: RoundedConvexShape, region: object,
@@ -1041,6 +1265,69 @@ def _rotate_offset(center: Point, x: int, y: int, degrees: float) -> Point:
 
 def _clearance(board: PhysicalBoard, first: NetRoutingRule | None, second: NetRoutingRule | None) -> int:
     return max(board.rules.minimum_clearance_nm, first.clearance_nm if first and first.clearance_nm else 0, second.clearance_nm if second and second.clearance_nm else 0)
+
+
+class _BreakoutSpacing:
+    """Region-aware copper spacing for physical DRC (plan R1).
+
+    Every requirement is exactly ``_clearance`` when no routing rule declares
+    breakout properties. A check that passes only under breakout values is
+    recorded with the regions that justified it.
+    """
+
+    def __init__(self, board: PhysicalBoard,
+                 relaxations: list[DrcBreakoutRelaxation] | None) -> None:
+        self.board = board
+        self.rules = {item.net: item for item in board.net_routing_rules}
+        self.regions = BreakoutRegions(board)
+        self.relaxations = relaxations
+
+    def land(self, net: str, spine: tuple[Point, ...]) -> str | None:
+        """The terminal land whose breakout region holds this copper of ``net``."""
+        return self.regions.region(net, spine) if net in self.regions.declared else None
+
+    def between(self, first: str, first_land: str | None,
+                second: str, second_land: str | None) -> tuple[int, int]:
+        """Required spacing with breakout regions applied, and without them."""
+        if not self.regions:
+            value = _clearance(self.board, self.rules.get(first), self.rules.get(second))
+            return value, value
+        return (self.regions.spacing_nm(first, first_land, second, second_land),
+                self.regions.spacing_nm(first, None, second, None))
+
+    def check(self, first: str, second: str) -> str:
+        return "pair_gap" if self.regions and self.regions.pair(first, second) else "clearance"
+
+    def subject(self, first: str, second: str) -> str:
+        return "pair gap" if self.check(first, second) == "pair_gap" else "copper spacing"
+
+    def note(self, distance_squared: Fraction | int, radii_twice: int, required: int, relaxed: int,
+             objects: tuple[str, ...], copper: tuple[tuple[str, str | None], ...],
+             layers: tuple[str, ...]) -> None:
+        """Record a relaxation when copper meets ``relaxed`` but not ``required``.
+
+        ``distance_squared`` is between the spines and ``radii_twice`` the sum
+        of both copper widths; ``copper`` pairs each net with its region.
+        """
+        needed = radii_twice + 2 * required
+        if 4 * distance_squared >= needed * needed:
+            return
+        measured = (_fraction_sqrt_floor(Fraction(4 * distance_squared)) - radii_twice) // 2
+        self.record(self.check(copper[0][0], copper[1][0]), objects, copper, layers,
+                    required, relaxed, measured)
+
+    def record(self, check: str, objects: tuple[str, ...],
+               copper: tuple[tuple[str, str | None], ...], layers: tuple[str, ...],
+               required: int, relaxed: int, measured: int | None) -> None:
+        if self.relaxations is None:
+            return
+        regions = tuple(sorted({
+            (net, land, self.rules[net].breakout_length_nm or 0)
+            for net, land in copper if land is not None and self.regions.relaxes(net, land, check)
+        }))
+        self.relaxations.append(DrcBreakoutRelaxation(
+            check, objects, tuple(sorted({net for net, _ in copper})), layers,
+            required, relaxed, measured, regions))
 
 
 def _via_covers_layer(board: PhysicalBoard, via: Via, layer: CopperLayer) -> bool:
@@ -1106,6 +1393,23 @@ def _report_document(report: PhysicalDrcReport, *, include_token: bool) -> dict[
         "coverage": [{"check": item.check, "status": item.status.value, "required": item.required, "detail": item.detail} for item in report.coverage],
         "findings": [{"fingerprint": item.fingerprint, "code": item.code, "severity": item.severity.value, "message": item.message, "objects": list(item.objects), "nets": list(item.nets), "layers": list(item.layers), "required_nm": item.required_nm, "measured_nm": item.measured_nm, "disposition": item.disposition.value, "waiver_reason": item.waiver_reason} for item in report.findings],
     }
+    if report.breakout_relaxations:
+        # Present only when breakout values relaxed a check, so reports and
+        # digests of boards without breakout regions are unchanged.
+        document["breakout_relaxations"] = [{
+            "check": item.check, "objects": list(item.objects), "nets": list(item.nets),
+            "layers": list(item.layers), "required_nm": item.required_nm,
+            "relaxed_nm": item.relaxed_nm, "measured_nm": item.measured_nm,
+            "regions": [{"net": net, "land": land, "breakout_length_nm": length}
+                        for net, land, length in item.regions],
+        } for item in report.breakout_relaxations]
+    if report.hole_clearance_relaxations:
+        # Likewise present only when a component-scoped hole_clearance relaxed a check.
+        document["hole_clearance_relaxations"] = [{
+            "component": item.component, "objects": list(item.objects), "nets": list(item.nets),
+            "required_nm": item.required_nm, "relaxed_nm": item.relaxed_nm,
+            "measured_nm": item.measured_nm, "reason": item.reason,
+        } for item in report.hole_clearance_relaxations]
     if include_token:
         document["token"] = {"schema": report.token.schema, "board_digest": report.token.board_digest, "rules_digest": report.token.rules_digest, "report_digest": report.token.report_digest, "decision": report.token.decision.value, "completeness": report.token.completeness.value, "token_digest": report.token.token_digest}
     return document
@@ -1129,15 +1433,23 @@ def _via_identity(item: Via) -> tuple[object, ...]:
 
 
 def _routing_rule_document(item: NetRoutingRule) -> tuple[object, ...]:
-    return (item.net, item.kind.value, item.priority, item.width_nm, item.clearance_nm,
+    document = (item.net, item.kind.value, item.priority, item.width_nm, item.clearance_nm,
             tuple(layer.value for layer in item.allowed_layers), item.max_vias,
             item.max_length_nm, item.differential_partner, item.pair_gap_nm,
             item.max_skew_nm, item.topology, item.target_impedance_ohms,
             item.maximum_uncoupled_length_nm, item.maximum_stub_length_nm,
-            item.tuning_amplitude_limit_nm, item.require_return_vias,
+            item.tuning_amplitude_limit_nm, item.require_return_vias, item.reserve_corridor,
             item.return_via_net, item.maximum_return_via_distance_nm,
             item.impedance_evidence_digest, item.return_via_policy.value,
             item.shared_reference_layer.value if item.shared_reference_layer is not None else None)
+    # Signal-integrity/breakout intent extends the document only when declared,
+    # so digests of rules that do not use it are unchanged.
+    signal_intent = (
+        item.target_single_ended_ohms,
+        None if item.impedance_tolerance_percent is None else str(item.impedance_tolerance_percent),
+        item.layer_group, item.breakout_length_nm, item.breakout_width_nm,
+        item.breakout_gap_nm, item.breakout_clearance_nm)
+    return (*document, signal_intent) if any(value is not None for value in signal_intent) else document
 
 
 def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:

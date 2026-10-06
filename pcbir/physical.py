@@ -569,6 +569,8 @@ class StackupLayer:
     material: str | None = None
     relative_permittivity: Decimal | None = None
     loss_tangent: Decimal | None = None
+    # Optional fabrication construction of a dielectric: "core" or "prepreg".
+    dielectric_type: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id or self.thickness_nm <= 0:
@@ -578,6 +580,11 @@ class StackupLayer:
         for value in (self.relative_permittivity, self.loss_tangent):
             if value is not None and value <= 0:
                 raise ValueError("dielectric properties must be positive")
+        if self.dielectric_type is not None:
+            if self.kind is not StackupLayerKind.DIELECTRIC:
+                raise ValueError("only dielectric stackup layers have a dielectric type")
+            if self.dielectric_type not in {"core", "prepreg"}:
+                raise ValueError("dielectric type must be core or prepreg")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1112,11 +1119,31 @@ class NetRoutingRule:
     maximum_stub_length_nm: Nanometres | None = None
     tuning_amplitude_limit_nm: Nanometres | None = None
     require_return_vias: bool = False
+    # Placement keeps other components out of the pair's terminal corridor.
+    reserve_corridor: bool = False
     return_via_net: str | None = None
     maximum_return_via_distance_nm: Nanometres | None = None
     impedance_evidence_digest: str | None = None
     return_via_policy: ReturnViaPolicy = ReturnViaPolicy.ALWAYS
     shared_reference_layer: CopperLayer | None = None
+    # Signal-integrity screening intent (D-PHY plan L2/L5). A differential
+    # rule's ``target_impedance_ohms`` is its differential target; this is the
+    # single-ended target of each member (or of a single-ended net).
+    target_single_ended_ohms: int | None = None
+    # None means the documented default of 10 percent; see
+    # ``effective_impedance_tolerance_percent``.
+    impedance_tolerance_percent: Decimal | None = None
+    layer_group: str | None = None
+    # Breakout-region relaxations (plan L6). The router, its clearance index
+    # and physical DRC apply them near terminal lands (``pcbir.breakout``).
+    breakout_length_nm: Nanometres | None = None
+    breakout_width_nm: Nanometres | None = None
+    breakout_gap_nm: Nanometres | None = None
+    breakout_clearance_nm: Nanometres | None = None
+
+    @property
+    def effective_impedance_tolerance_percent(self) -> Decimal:
+        return Decimal(10) if self.impedance_tolerance_percent is None else self.impedance_tolerance_percent
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_layers", tuple(self.allowed_layers))
@@ -1162,6 +1189,106 @@ class NetRoutingRule:
             raise ValueError("impedance evidence digest must be SHA-256")
         if not self.topology:
             raise ValueError("routing topology cannot be empty")
+        self._validate_signal_integrity_intent()
+
+    def _validate_signal_integrity_intent(self) -> None:
+        if self.target_single_ended_ohms is not None:
+            if isinstance(self.target_single_ended_ohms, bool) or not isinstance(self.target_single_ended_ohms, int):
+                raise ValueError("target single-ended impedance must be an integer")
+            if self.target_single_ended_ohms <= 0:
+                raise ValueError("target single-ended impedance must be positive")
+            if (self.kind not in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}
+                    and self.target_impedance_ohms is not None
+                    and self.target_impedance_ohms != self.target_single_ended_ohms):
+                raise ValueError("a single-ended rule's target_impedance_ohms and "
+                                 "target_single_ended_ohms must agree")
+        if self.impedance_tolerance_percent is not None:
+            tolerance = self.impedance_tolerance_percent
+            if isinstance(tolerance, bool) or not isinstance(tolerance, (Decimal, int, float)):
+                raise ValueError("impedance tolerance must be a numeric percentage")
+            tolerance = Decimal(str(tolerance))
+            if not tolerance.is_finite():
+                raise ValueError("impedance tolerance must be a finite percentage")
+            object.__setattr__(self, "impedance_tolerance_percent", tolerance)
+            if not Decimal(0) < tolerance < Decimal(100):
+                raise ValueError("impedance tolerance must be greater than 0 and below 100 percent")
+            if self.target_impedance_ohms is None and self.target_single_ended_ohms is None:
+                raise ValueError("impedance tolerance requires target_impedance_ohms or target_single_ended_ohms")
+        if self.layer_group is not None and (not isinstance(self.layer_group, str) or not self.layer_group.strip()):
+            raise ValueError("routing layer group must be a nonempty name")
+        breakout = {
+            "breakout width": self.breakout_width_nm,
+            "breakout gap": self.breakout_gap_nm,
+            "breakout clearance": self.breakout_clearance_nm,
+        }
+        for name, value in (("breakout length", self.breakout_length_nm), *breakout.items()):
+            if value is not None and value <= 0:
+                raise ValueError(f"routing {name} must be positive")
+        relaxations = [name for name, value in breakout.items() if value is not None]
+        if relaxations and self.breakout_length_nm is None:
+            raise ValueError("breakout width, gap or clearance requires a positive breakout_length")
+        if self.breakout_length_nm is not None and not relaxations:
+            raise ValueError("breakout_length requires breakout_width, breakout_gap or breakout_clearance")
+        # Breakout values relax the declared profile; they never tighten it.
+        if (self.breakout_width_nm is not None and self.width_nm is not None
+                and self.breakout_width_nm > self.width_nm):
+            raise ValueError("breakout width may only relax (not exceed) the routing width")
+        if self.breakout_gap_nm is not None:
+            if self.pair_gap_nm is None:
+                raise ValueError("breakout gap requires a differential pair gap")
+            if self.breakout_gap_nm > self.pair_gap_nm:
+                raise ValueError("breakout gap may only relax (not exceed) the pair gap")
+        if (self.breakout_clearance_nm is not None and self.clearance_nm is not None
+                and self.breakout_clearance_nm > self.clearance_nm):
+            raise ValueError("breakout clearance may only relax (not exceed) the routing clearance")
+
+
+@dataclass(frozen=True, slots=True)
+class NetMatchGroup:
+    """Nets whose routed lengths must agree within ``max_skew_nm`` (plan L4).
+
+    Lengths are total routed track length per net; the group skew is the
+    longest minus the shortest member. Verification applies only once every
+    member net is connected.
+    """
+
+    id: str
+    nets: tuple[str, ...]
+    max_skew_nm: Nanometres
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "nets", tuple(self.nets))
+        if not self.id:
+            raise ValueError("length-match group requires an id")
+        if len(self.nets) < 2:
+            raise ValueError(f"length-match group {self.id!r} requires at least two nets")
+        if len(set(self.nets)) != len(self.nets) or any(not net for net in self.nets):
+            raise ValueError(f"length-match group {self.id!r} nets must be unique and nonempty")
+        if self.max_skew_nm <= 0:
+            raise ValueError(f"length-match group {self.id!r} maximum skew must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentHoleClearance:
+    """A documented drill clearance scoped to one component's own footprint.
+
+    ``clearance_nm`` applies only between the copper pads and the non-plated
+    holes of the same footprint instance. Every other pair (tracks, vias,
+    other components' pads, other holes) keeps the board's
+    ``minimum_hole_clearance_nm``, which this value may only relax.
+    """
+
+    reference: str
+    clearance_nm: Nanometres
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reference:
+            raise ValueError("component hole clearance requires a component reference")
+        if self.clearance_nm <= 0:
+            raise ValueError(f"hole clearance for {self.reference!r} must be positive")
+        if not self.reason.strip():
+            raise ValueError(f"hole clearance for {self.reference!r} requires a reason")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1312,8 +1439,12 @@ class PhysicalBoard:
     assembly_access: tuple[AssemblyAccess, ...] = ()
     mechanical_slots: tuple[MechanicalSlot,...] = ()
     mechanical_references: tuple["MechanicalReference",...] = ()
+    match_groups: tuple[NetMatchGroup, ...] = ()
+    component_hole_clearances: tuple[ComponentHoleClearance, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "match_groups", tuple(self.match_groups))
+        object.__setattr__(self, "component_hole_clearances", tuple(self.component_hole_clearances))
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
         object.__setattr__(self, "placements", tuple(self.placements))
         object.__setattr__(self, "nets", tuple(self.nets))
@@ -1603,6 +1734,49 @@ class PhysicalBoard:
                 )
             if rule.return_via_net is not None and rule.return_via_net not in known_nets:
                 raise ValueError(f"routing rule for {rule.net!r} references unknown return net {rule.return_via_net!r}")
+            # Breakout relaxations are checked against the effective profile,
+            # including board defaults when the rule leaves a value implicit.
+            if rule.breakout_width_nm is not None:
+                if rule.breakout_width_nm > (rule.width_nm or self.rules.default_track_width_nm):
+                    raise ValueError(f"routing rule for {rule.net!r}: breakout width may only relax "
+                                     "(not exceed) the effective routing width")
+                if rule.breakout_width_nm < self.rules.minimum_track_width_nm:
+                    raise ValueError(f"routing rule for {rule.net!r}: breakout width is below the "
+                                     "board minimum track width")
+            if rule.breakout_clearance_nm is not None:
+                if rule.breakout_clearance_nm > max(rule.clearance_nm or 0, self.rules.minimum_clearance_nm):
+                    raise ValueError(f"routing rule for {rule.net!r}: breakout clearance may only relax "
+                                     "(not exceed) the effective routing clearance")
+                if rule.breakout_clearance_nm < self.rules.minimum_clearance_nm:
+                    raise ValueError(f"routing rule for {rule.net!r}: breakout clearance is below the "
+                                     "board minimum clearance")
+        group_ids = [group.id for group in self.match_groups]
+        if len(group_ids) != len(set(group_ids)):
+            raise ValueError("length-match group ids must be unique")
+        grouped: dict[str, str] = {}
+        for group in self.match_groups:
+            for net in group.nets:
+                if net not in known_nets:
+                    raise ValueError(f"length-match group {group.id!r} references unknown net {net!r}")
+                if net in grouped:
+                    raise ValueError(f"net {net!r} belongs to length-match groups "
+                                     f"{grouped[net]!r} and {group.id!r}")
+                grouped[net] = group.id
+        scoped: set[str] = set()
+        for rule in self.component_hole_clearances:
+            if rule.reference in scoped:
+                raise ValueError(f"component {rule.reference!r} has more than one hole clearance")
+            scoped.add(rule.reference)
+            placement = next((p for p in self.placements if p.reference == rule.reference), None)
+            if placement is None:
+                raise ValueError(f"hole clearance references unknown placement {rule.reference!r}")
+            if not any(pad.kind is PadKind.NON_PLATED_THROUGH_HOLE
+                       for pad in self.footprints[placement.footprint].pads):
+                raise ValueError(f"hole clearance for {rule.reference!r}: its footprint has no "
+                                 "non-plated holes")
+            if rule.clearance_nm > self.rules.minimum_hole_clearance_nm:
+                raise ValueError(f"hole clearance for {rule.reference!r} may only relax (not exceed) "
+                                 "the board minimum hole clearance")
 
 
 def _via_span_depth(stackup: Stackup, first: CopperLayer, second: CopperLayer) -> int:

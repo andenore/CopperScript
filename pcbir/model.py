@@ -86,6 +86,58 @@ Q = TypeVar("Q", bound=Quantity)
 
 
 @dataclass(frozen=True, slots=True)
+class RelativeVoltage:
+    """A voltage limit that follows the supply on another pad of the same part.
+
+    ``reference`` names a package pin or a device pad of the same component;
+    the limit is the voltage of the declared supply on that pad's net plus
+    ``offset`` (for example ``VTERM+0.1V``). An optional fixed ``limit``
+    also applies and the tighter of the two wins (``VTERM+0.1V, 1.36V`` is
+    ``min(VTERM + 0.1 V, 1.36 V)`` as a maximum). ERC resolves it per
+    component.
+    """
+
+    reference: str
+    offset: Voltage
+    limit: Voltage | None = None
+
+    def __post_init__(self) -> None:
+        if not self.reference:
+            raise ValueError("relative voltage limit requires a reference pad")
+        if not isinstance(self.offset, Voltage):
+            raise TypeError("relative voltage offset must be a Voltage")
+        if self.limit is not None and not isinstance(self.limit, Voltage):
+            raise TypeError("relative voltage fixed limit must be a Voltage")
+
+    def resolve(self, reference_voltage: Voltage, *, upper: bool) -> Voltage:
+        """The bound for ``reference_voltage``; ``upper`` for a maximum."""
+
+        value = Voltage(reference_voltage.base_value + self.offset.base_value, "V")
+        if self.limit is None:
+            return value
+        if upper:
+            return self.limit if self.limit < value else value
+        return self.limit if value < self.limit else value
+
+    def __str__(self) -> str:
+        text = self.reference
+        if self.offset.base_value != 0:
+            sign = "-" if self.offset.base_value < 0 else "+"
+            magnitude = Voltage(abs(self.offset.base_value), self.offset.display_unit)
+            text = f"{text}{sign}{_plain_voltage(magnitude)}"
+        return text if self.limit is None else f"{text}, {_plain_voltage(self.limit)}"
+
+
+def _plain_voltage(voltage: Voltage) -> str:
+    """Fixed-point text (``300 mV``, never ``3E+2 mV``) for limit display."""
+
+    return f"{format(voltage.value.normalize(), 'f')} {voltage.display_unit}"
+
+
+VoltageLimit = Voltage | RelativeVoltage
+
+
+@dataclass(frozen=True, slots=True)
 class QuantityRange(Generic[Q]):
     minimum: Q | None = None
     typical: Q | None = None
@@ -102,6 +154,10 @@ class ElectricalProfile:
     traits: frozenset[str] = frozenset()
     voltage: QuantityRange[Voltage] | None = None
     current: QuantityRange[Current] | None = None
+    # Absolute-maximum ratings (``rating="absolute"``). Bounds are fixed
+    # voltages or :class:`RelativeVoltage` limits; ``voltage`` stays the
+    # operating range.
+    absolute_voltage: "QuantityRange[Voltage] | None" = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "domains", frozenset(self.domains))
@@ -147,6 +203,8 @@ class ConstraintKind(str, Enum):
     ROUTING = "routing"
     COPPER_ZONE = "copper_zone"
     VIA_IN_PAD = "via_in_pad"
+    LENGTH_MATCH = "length_match"
+    HOLE_CLEARANCE = "hole_clearance"
 
 
 @dataclass(frozen=True, slots=True)

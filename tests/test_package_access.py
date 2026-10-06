@@ -570,3 +570,25 @@ def test_stale_feedback_source_rejected_even_when_moves_disabled():
     baseline = replace(baseline, global_route=replace(guides, placement_fingerprint="stale"))
     with pytest.raises(ValueError, match="stale"):
         access.improve_package_access(baseline, options, options=access.PackageAccessOptions(maximum_trials=0))
+
+
+def test_pre_existing_footprint_finding_does_not_fail_package_reservations():
+    from pcbir import PadKind, PadShape
+    board, _, options, guides_options = fixture(critical=True)
+    # A footprint whose own land sits on top of its locating hole, away from
+    # the package: a hard finding that exists before any routing copper.
+    land = FootprintPad("1", Point.mm(0, 0), Size.mm("0.6", "0.6"))
+    hole = FootprintPad("", Point.mm("0.4", 0), Size.mm("0.4", "0.4"),
+                        kind=PadKind.NON_PLATED_THROUGH_HOLE, shape=PadShape.CIRCLE,
+                        drill=Size.mm("0.4", "0.4"), has_solder_paste=False)
+    offender = PhysicalFootprint("land-near-hole", (land, hole), Size.mm(2, 2))
+    board = replace(board, footprints={**board.footprints, offender.name: offender},
+                    placements=(*board.placements, Placement("X1", offender.name, Point.mm(2, 14))))
+    assert "DRC-HOLE-CLEARANCE" in {f.code for f in run_physical_drc(board).findings}
+    guides = route_global(board, guides_options)
+    exits = fanout.route_fanout(board, options)
+    result = route_critical_nets(board, guides, reserved_accesses=exits)
+    assert all(item.nets != ("<package-reservations>",) for item in result.nets)
+    assert result.status.value != "failed" and all(item.connected for item in result.nets)
+    # Final verification still reports the footprint's own finding.
+    assert "DRC-HOLE-CLEARANCE" in {f.code for f in run_physical_drc(result.board).findings}

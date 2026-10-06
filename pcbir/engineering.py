@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from decimal import Decimal, getcontext
 from enum import Enum
 from hashlib import sha256
-from math import log, pi, sqrt
+from math import exp, log, pi, sqrt
 
 from .geometry import point_in_polygon
-from .physical import PhysicalBoard
+from .physical import PhysicalBoard, TrackSegment
 
 getcontext().prec = 28
 
@@ -68,11 +68,9 @@ def creepage_screen(measured_nm: int, required_nm: int, *, profile_source: str |
                              ("pollution degree, material group, coating, altitude, and transients must match profile",))
 
 
-def microstrip_impedance(width_nm: int, copper_thickness_nm: int,
-                         dielectric_height_nm: int, relative_permittivity: Decimal,
-                         *, target_ohms: Decimal | None = None,
-                         tolerance_ohms: Decimal = Decimal("0")) -> EngineeringResult:
-    """Hammerstad-style microstrip screening, not field-solver signoff."""
+def _hammerstad_microstrip(width_nm: int, copper_thickness_nm: int, dielectric_height_nm: int,
+                           relative_permittivity: Decimal) -> tuple[float, float]:
+    """Return (single-ended ohms, effective permittivity) for a microstrip."""
     if min(width_nm, copper_thickness_nm, dielectric_height_nm) <= 0 or relative_permittivity <= 1:
         raise ValueError("microstrip geometry and permittivity are invalid")
     width = width_nm / dielectric_height_nm
@@ -84,13 +82,134 @@ def microstrip_impedance(width_nm: int, copper_thickness_nm: int,
                  if effective_width <= 1 else
                  120 * pi / (sqrt(effective_er) * (effective_width + 1.393
                                                     + 0.667 * log(effective_width + 1.444))))
-    value = Decimal(str(round(impedance, 9)))
-    status = AnalysisStatus.INDETERMINATE if target_ohms is None else (
-        AnalysisStatus.PASS if abs(value - target_ohms) <= tolerance_ohms else AnalysisStatus.FAIL)
-    return EngineeringResult("microstrip_impedance", status, EvidenceGrade.SCREENING,
+    return impedance, effective_er
+
+
+def _ohms(value: float) -> Decimal:
+    return Decimal(str(round(value, 9)))
+
+
+def _target_status(value: Decimal, target_ohms: Decimal | None,
+                   tolerance_ohms: Decimal) -> AnalysisStatus:
+    if target_ohms is None:
+        return AnalysisStatus.INDETERMINATE
+    return AnalysisStatus.PASS if abs(value - target_ohms) <= tolerance_ohms else AnalysisStatus.FAIL
+
+
+def microstrip_impedance(width_nm: int, copper_thickness_nm: int,
+                         dielectric_height_nm: int, relative_permittivity: Decimal,
+                         *, target_ohms: Decimal | None = None,
+                         tolerance_ohms: Decimal = Decimal("0")) -> EngineeringResult:
+    """Hammerstad-style microstrip screening, not field-solver signoff."""
+    impedance, _ = _hammerstad_microstrip(width_nm, copper_thickness_nm,
+                                          dielectric_height_nm, relative_permittivity)
+    value = _ohms(impedance)
+    return EngineeringResult("microstrip_impedance", _target_status(value, target_ohms, tolerance_ohms),
+                             EvidenceGrade.SCREENING,
                              value, "ohm", "uniform isolated microstrip estimate",
                              ("requires field-solver qualification for fabrication release",
                               "ignores solder mask, roughness, weave and local copper"))
+
+
+def microstrip_effective_permittivity(width_nm: int, copper_thickness_nm: int,
+                                      dielectric_height_nm: int,
+                                      relative_permittivity: Decimal) -> Decimal:
+    """Hammerstad quasi-static effective permittivity (screening, for delay estimates)."""
+    _, effective_er = _hammerstad_microstrip(width_nm, copper_thickness_nm,
+                                             dielectric_height_nm, relative_permittivity)
+    return Decimal(str(round(effective_er, 9)))
+
+
+def edge_coupled_microstrip_impedance(width_nm: int, gap_nm: int, copper_thickness_nm: int,
+                                      dielectric_height_nm: int, relative_permittivity: Decimal,
+                                      *, target_ohms: Decimal | None = None,
+                                      tolerance_ohms: Decimal = Decimal("0")) -> EngineeringResult:
+    """Edge-coupled microstrip differential impedance (screening).
+
+    The single-ended Hammerstad estimate is coupled with the IPC-2141A factor
+    ``Zdiff = 2 * Z0 * (1 - 0.48 * exp(-0.96 * s / h))``.
+    """
+    if gap_nm <= 0:
+        raise ValueError("differential gap must be positive")
+    single, _ = _hammerstad_microstrip(width_nm, copper_thickness_nm,
+                                       dielectric_height_nm, relative_permittivity)
+    differential = 2 * single * (1 - 0.48 * exp(-0.96 * gap_nm / dielectric_height_nm))
+    value = _ohms(differential)
+    validity = ["requires field-solver qualification for fabrication release",
+                "ignores solder mask, roughness, weave and local copper"]
+    w_h, s_h = width_nm / dielectric_height_nm, gap_nm / dielectric_height_nm
+    if not (0.1 <= w_h <= 2.0 and 0.2 <= s_h <= 3.0):
+        validity.append("outside the IPC-2141A fitted range 0.1 <= w/h <= 2, 0.2 <= s/h <= 3")
+    return EngineeringResult("edge_coupled_microstrip_impedance",
+                             _target_status(value, target_ohms, tolerance_ohms),
+                             EvidenceGrade.SCREENING, value, "ohm",
+                             "Hammerstad single-ended with IPC-2141A edge coupling",
+                             tuple(validity))
+
+
+def _symmetric_stripline(width_nm: int, copper_thickness_nm: int, plane_spacing_nm: int,
+                         relative_permittivity: Decimal) -> float:
+    """IPC-2141A centred stripline; ``plane_spacing_nm`` is the plane-to-plane distance."""
+    argument = 4 * plane_spacing_nm / (0.67 * pi * (0.8 * width_nm + copper_thickness_nm))
+    if argument <= 1:
+        raise ValueError("stripline trace is too wide for the IPC-2141A estimate")
+    return 60 / sqrt(float(relative_permittivity)) * log(argument)
+
+
+def stripline_impedance(width_nm: int, copper_thickness_nm: int, height_above_nm: int,
+                        height_below_nm: int, relative_permittivity: Decimal,
+                        *, target_ohms: Decimal | None = None,
+                        tolerance_ohms: Decimal = Decimal("0")) -> EngineeringResult:
+    """Symmetric or offset stripline single-ended impedance (screening).
+
+    Heights are the dielectric thicknesses from the trace to the planes above
+    and below. Equal heights use the IPC-2141A symmetric stripline formula
+    with plane spacing ``b = h1 + h2 + t``; an offset trace combines the two
+    symmetric lines of spacing ``2h + t`` in parallel, ``Z = 2 Za Zb / (Za + Zb)``.
+    """
+    if min(width_nm, copper_thickness_nm, height_above_nm, height_below_nm) <= 0 or relative_permittivity < 1:
+        raise ValueError("stripline geometry and permittivity are invalid")
+    spacing = height_above_nm + height_below_nm + copper_thickness_nm
+    if height_above_nm == height_below_nm:
+        impedance = _symmetric_stripline(width_nm, copper_thickness_nm, spacing, relative_permittivity)
+        scope = "IPC-2141A symmetric stripline estimate"
+    else:
+        above = _symmetric_stripline(width_nm, copper_thickness_nm,
+                                     2 * height_above_nm + copper_thickness_nm, relative_permittivity)
+        below = _symmetric_stripline(width_nm, copper_thickness_nm,
+                                     2 * height_below_nm + copper_thickness_nm, relative_permittivity)
+        impedance = 2 * above * below / (above + below)
+        scope = "offset stripline estimate (parallel symmetric lines)"
+    value = _ohms(impedance)
+    validity = ["requires field-solver qualification for fabrication release",
+                "assumes solid reference planes above and below and a homogeneous dielectric"]
+    if width_nm / spacing >= 0.35 or copper_thickness_nm / spacing >= 0.25:
+        validity.append("outside the IPC-2141A fitted range w/b < 0.35, t/b < 0.25")
+    return EngineeringResult("stripline_impedance", _target_status(value, target_ohms, tolerance_ohms),
+                             EvidenceGrade.SCREENING, value, "ohm", scope, tuple(validity))
+
+
+def edge_coupled_stripline_impedance(width_nm: int, gap_nm: int, copper_thickness_nm: int,
+                                     height_above_nm: int, height_below_nm: int,
+                                     relative_permittivity: Decimal,
+                                     *, target_ohms: Decimal | None = None,
+                                     tolerance_ohms: Decimal = Decimal("0")) -> EngineeringResult:
+    """Edge-coupled stripline differential impedance (screening).
+
+    ``Zdiff = 2 * Z0 * (1 - 0.347 * exp(-2.9 * s / b))`` (IPC-2141A), with the
+    symmetric/offset single-ended ``Z0`` and plane spacing ``b``.
+    """
+    if gap_nm <= 0:
+        raise ValueError("differential gap must be positive")
+    single = stripline_impedance(width_nm, copper_thickness_nm, height_above_nm,
+                                 height_below_nm, relative_permittivity)
+    spacing = height_above_nm + height_below_nm + copper_thickness_nm
+    differential = 2 * float(single.value) * (1 - 0.347 * exp(-2.9 * gap_nm / spacing))
+    value = _ohms(differential)
+    return EngineeringResult("edge_coupled_stripline_impedance",
+                             _target_status(value, target_ohms, tolerance_ohms),
+                             EvidenceGrade.SCREENING, value, "ohm",
+                             f"{single.claim_scope} with IPC-2141A edge coupling", single.validity)
 
 
 def propagation_delay(length_nm: int, effective_permittivity: Decimal,
@@ -108,35 +227,48 @@ def propagation_delay(length_nm: int, effective_permittivity: Decimal,
 
 def return_path_continuity(board: PhysicalBoard, net: str,
                            reference_net: str) -> EngineeringResult:
+    return return_path_coverage(board, net, (reference_net,))[0]
+
+
+def return_path_coverage(board: PhysicalBoard, net: str, reference_nets: tuple[str, ...]
+                         ) -> tuple[EngineeringResult, tuple[TrackSegment, ...]]:
+    """Midpoint coverage of ``net``'s tracks by adjacent-layer reference fills.
+
+    Returns the screening result and the uncovered track segments in board
+    order. A fill of any zone on one of ``reference_nets`` counts.
+    """
     zones = {zone.id: zone.net for zone in board.zones}
-    fills = [fill for fill in board.zone_fills if zones.get(fill.zone_id) == reference_net]
+    references = set(reference_nets)
+    fills = [fill for fill in board.zone_fills if zones.get(fill.zone_id) in references]
     tracks = [track for track in board.tracks if track.net == net]
     if not tracks or not fills:
         return EngineeringResult("return_path_continuity", AnalysisStatus.INDETERMINATE,
                                  EvidenceGrade.SCREENING, None, "fraction",
                                  "midpoint coverage by adjacent reference-plane fill",
-                                 ("route or normalized reference-plane fill is unavailable",))
+                                 ("route or normalized reference-plane fill is unavailable",)), ()
     layer_index = {layer: index for index, layer in enumerate(board.stackup.copper_layers)}
-    covered = 0
+    uncovered: list[TrackSegment] = []
     for track in tracks:
         midpoint = type(track.start)((track.start.x_nm + track.end.x_nm) // 2,
                                      (track.start.y_nm + track.end.y_nm) // 2)
         index = layer_index[track.layer]
         adjacent = {value for value in (index - 1, index + 1)
                     if 0 <= value < len(board.stackup.copper_layers)}
-        if any(layer_index[fill.layer] in adjacent
-               and any(point_in_polygon(midpoint, polygon.outer.vertices)
-                       and not any(point_in_polygon(midpoint, hole.vertices)
-                                   for hole in polygon.holes)
-                       for polygon in fill.polygons)
-               for fill in fills):
-            covered += 1
+        if not any(layer_index[fill.layer] in adjacent
+                   and any(point_in_polygon(midpoint, polygon.outer.vertices)
+                           and not any(point_in_polygon(midpoint, hole.vertices)
+                                       for hole in polygon.holes)
+                           for polygon in fill.polygons)
+                   for fill in fills):
+            uncovered.append(track)
+    covered = len(tracks) - len(uncovered)
     fraction = Decimal(covered) / Decimal(len(tracks))
     return EngineeringResult("return_path_continuity",
                              AnalysisStatus.PASS if covered == len(tracks) else AnalysisStatus.FAIL,
                              EvidenceGrade.SCREENING, fraction, "fraction",
                              "track-midpoint coverage on an adjacent reference layer",
-                             ("does not model plane resonances, stitching inductance or split-edge fringing",))
+                             ("does not model plane resonances, stitching inductance or split-edge fringing",)
+                             ), tuple(uncovered)
 
 
 def dc_net_voltage_drop(board: PhysicalBoard, net: str, current_amperes: Decimal,

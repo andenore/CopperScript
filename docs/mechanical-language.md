@@ -60,6 +60,14 @@ length properties are `minimum_clearance`, `minimum_hole_clearance`,
 `default_via_drill`, `minimum_slot_width`. Omitted values keep the selected fabrication profile's
 defaults. This is design intent, not manufacturing qualification.
 
+`minimum_hole_clearance` applies to all copper near every non-plated hole. A
+vendor land pattern whose pads sit closer to the part's own holes takes a
+documented `constraint hole_clearance(J1) { clearance = ...; reason = ...; }`
+instead of a lower board rule. It relaxes only that footprint's pads against
+that footprint's own holes; tracks, vias, other components and board-owned
+holes and slots keep `minimum_hole_clearance`. See
+[the language reference](language-reference.md#constraints).
+
 A source outline is authoritative. CLI `--width-mm` / `--height-mm` are a
 rectangle fallback only when the source has no mechanical block. Inspection
 grid placement uses the source bounding box; real placement legality still
@@ -149,3 +157,53 @@ Deferred: concave curved paths, curved cutouts, plated board-owned holes, multip
 panelization, a general polygon-offset engine, and independent CAM qualification
 of nonrectangular releases. Existing manufacturing gates remain closed for
 unqualified mechanical geometry; exporting/routing is not production signoff.
+
+## Board stack-up
+
+A board's `mechanical` block may declare its stack-up once, ordered from top
+to bottom. Copper layers and dielectrics alternate, starting and ending with
+copper:
+
+```copper
+mechanical {
+    outline rectangle { width = 60mm; height = 40mm; }
+    stackup {
+        copper F.Cu { thickness = 0.035mm; }
+        dielectric P1 { thickness = 0.1mm; er = 4.1; loss_tangent = 0.02; material = "3313"; type = prepreg; }
+        copper In1.Cu { thickness = 0.0175mm; }
+        dielectric C1 { thickness = 0.55mm; er = 4.6; type = core; }
+        copper In2.Cu { thickness = 0.0175mm; }
+        dielectric P2 { thickness = 0.1mm; er = 4.1; }
+        copper In3.Cu { thickness = 0.0175mm; }
+        dielectric C2 { thickness = 0.55mm; er = 4.6; }
+        copper In4.Cu { thickness = 0.0175mm; }
+        dielectric P3 { thickness = 0.1mm; er = 4.1; material = "3313"; }
+        copper B.Cu { thickness = 0.035mm; }
+    }
+}
+```
+
+- `copper NAME` names a KiCad copper layer: `F.Cu`, then `In1.Cu`, `In2.Cu`
+  … in order, then `B.Cu`. Its only property is `thickness`.
+- `dielectric NAME` requires `thickness` and the relative permittivity `er`
+  (a unitless number of at least 1). `loss_tangent` (positive number),
+  `material` (nonempty name) and `type` (`core` or `prepreg`) are optional.
+  Names are unique across the stack-up.
+- Thicknesses are positive typed lengths in exact integer nanometres.
+- The total thickness becomes the board thickness (`Stackup.thickness_nm`).
+
+Layer, order and property errors fail at compile time with source locations
+(`MEC006`; an unknown layer kind is `PAR014`). The stack-up lowers to
+`Stackup.physical_layers` during physicalization. The selected copper-layer
+count (`--layers`) must name exactly the declared copper layers; otherwise
+physicalization fails with the stack-up's location. A stack-up belongs to the
+board, so `board_profile` definitions cannot declare one.
+
+When a stack-up is declared, the KiCad PCB export writes it to the board
+setup with KiCad's `dielectric 1`, `dielectric 2` … names. A dielectric
+without a `type` follows KiCad's default construction: `core` on a two-layer
+board, otherwise prepreg and core alternating from the top. Undeclared
+material and loss tangent are left to KiCad's defaults. Impedance screening
+(`copper si-check`, see the [language reference](language-reference.md#signal-integrity-screening))
+uses the declared geometry. The stack-up is design intent and screening input;
+the fabricator's stack-up and impedance qualification remain authoritative.

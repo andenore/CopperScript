@@ -19,12 +19,15 @@ def critical_progress(callback: ProgressCallback | None):
     def observe(event, nets, result):
         order = getattr(result, "pair_search_order", None)
         limit = getattr(result, "pair_state_limit", None)
+        rejections = getattr(result, "rejections", ())
         emit(callback, "critical_group", event, nets=list(nets),
              **({"connected": result.connected, "strategy": result.strategy,
                  "search_states": result.search_states} if result is not None else {}),
              **({"pair_search_order": order} if order is not None else {}),
              **({"pair_state_limit": limit, "pair_budget_exhausted": result.pair_budget_exhausted}
-                if limit is not None else {}))
+                if limit is not None else {}),
+             **({"rejections": dict(rejections),
+                 "rejection_examples": list(result.rejection_examples)} if rejections else {}))
     return observe
 
 

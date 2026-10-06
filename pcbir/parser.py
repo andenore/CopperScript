@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .lexer import Token, TokenKind, tokenize
+from .mechanical_stackup import StackupDecl, StackupLayerDecl
 from .syntax import (
     BindingDecl,
     ComponentDecl,
@@ -167,9 +168,30 @@ class Parser:
         while not self._at_symbol("}"):
             start = self.current.location
             kind = self._name("mechanical declaration")
-            items.append(self._mechanical_item(kind, start))
+            if kind == "stackup":
+                items.append(self._stackup(start))
+            else:
+                items.append(self._mechanical_item(kind, start))
         self._expect_symbol("}")
         return MechanicalDecl(location, tuple(items))
+
+    def _stackup(self, location) -> StackupDecl:
+        """Ordered top-to-bottom ``copper NAME { ... }`` / ``dielectric NAME { ... }``."""
+        self._expect_symbol("{")
+        layers: list[StackupLayerDecl] = []
+        while not self._at_symbol("}"):
+            token = self.current
+            kind = self._name("stackup layer kind")
+            if kind not in {"copper", "dielectric"}:
+                self._error(
+                    "PAR014",
+                    f"unknown stackup layer kind {kind!r}; expected 'copper' or 'dielectric'",
+                    token,
+                )
+            name = self._qualified_name(f"{kind} layer name")
+            layers.append(StackupLayerDecl(token.location, kind, name, self._assignment_block()))
+        self._expect_symbol("}")
+        return StackupDecl(location, tuple(layers))
 
     def _mechanical_item(self, kind, location, *, profile=False):
         if kind == "use":

@@ -1,5 +1,6 @@
 """Electrical terminal resolution independent of PCB geometry and backend syntax."""
 from .model import ComponentInstance, FlatElectricalView, PackagePinDefinition
+from .modes import pins_bonded_to_pad
 
 
 def resolve_package_pin(view: FlatElectricalView, component: ComponentInstance,
@@ -15,9 +16,7 @@ def resolve_package_pin(view: FlatElectricalView, component: ComponentInstance,
         unit = device.units.get(unit_name) if device and separator else None
         binding = unit.terminals.get(terminal_name) if unit else None
         if binding:
-            matches = [p for p in part.pins.values() if any(
-                b.pad == binding.pad and (b.when is None or b.when.matches(component.modes))
-                for b in p.bonds)]
+            matches = list(pins_bonded_to_pad(component, part, device, binding.pad))
     if matches and len({p.number for p in matches}) == 1:
         return sorted(matches, key=lambda p: p.name)[0]
     raise ValueError(f"{component.ref}.{terminal}: unknown or ambiguous package terminal")

@@ -13,15 +13,18 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from time import perf_counter
+import traceback
 
 from .backends.kicad_pcb import KiCadPcbBackend
 from .backends.kicad_project import write_kicad_project
-from .critical import CriticalRoutingStatus, route_critical_nets
+from .critical import (CriticalRoutingStatus, critical_lane_table, critical_net_document,
+                       route_critical_nets)
 from .critical_feedback import improve_critical_placement
+from .critical_tuning import match_tuning_line
 from .drc import run_physical_drc
 from .erc import check, has_errors
 from .footprints import FootprintResolver
-from .loader import BoardLoadError, load_board
+from .loader import BoardLoadError, load_design
 from .physical import nm_from_mm
 from .physicalize import PrototypePhysicalOptions, prototype_physicalize, resolved_physicalize
 from .placement import PlacementPlannerOptions
@@ -48,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tile-size-mm", default="5")
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("-o", "--output", type=Path, help="optional partial KiCad PCB")
+    parser.add_argument("--debug", action="store_true",
+                        help="print the full traceback of an error before its one-line summary")
     args = parser.parse_args(argv)
     timings: dict[str, float] = {}
     report: dict[str, object] = {
@@ -65,8 +70,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.critical_feedback_trials < 0:
             raise ValueError("critical placement feedback trial count cannot be negative")
         started = perf_counter()
-        electrical = load_board(args.board, locked=args.locked, offline=args.offline)
-        diagnostics = check(electrical)
+        # The full design, not just its electrical IR: the mechanical block
+        # carries the outline, holes, rules, edges and stack-up.
+        design = load_design(args.board, locked=args.locked, offline=args.offline)
+        diagnostics = check(design.electrical)
         if has_errors(diagnostics):
             for diagnostic in diagnostics:
                 print(diagnostic)
@@ -74,9 +81,11 @@ def main(argv: list[str] | None = None) -> int:
         options = PrototypePhysicalOptions(copper_layers=args.layers,
                                           fabrication_profile=args.fab_profile)
         board = (
-            prototype_physicalize(electrical, options) if args.allow_proxy_footprints else
-            resolved_physicalize(electrical, FootprintResolver(
-                args.board.resolve().parent, tuple(args.footprint_root)), options)
+            prototype_physicalize(design, options) if args.allow_proxy_footprints else
+            resolved_physicalize(design, FootprintResolver(
+                base_directory=args.board.resolve().parent,
+                search_roots=tuple(root.resolve() for root in args.footprint_root),
+                locked=args.locked, offline=args.offline), options)
         )
         if args.placement_templates:
             board = apply_placement_templates(board, args.placement_templates)
@@ -113,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
                 progress.append({"nets": list(nets), "state": "running"})
             else:
                 progress[-1].update(state="finished", seconds=perf_counter() - group_started[key],
-                                    result=asdict(result))
+                                    result=critical_net_document(result))
             report["critical_progress"] = progress
             checkpoint("critical_group_running" if event == "started" else "critical_group_complete")
             print(f"  {key}: {event}", flush=True)
@@ -155,8 +164,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{','.join(item.nets)}: {'connected' if item.connected else 'FAILED'} ({item.strategy})")
             for diagnostic in item.diagnostics:
                 print(f"  {diagnostic}")
+        for lane in critical_lane_table(critical.board, critical.nets):
+            delay = (f"{lane['estimated_delay_ps']} ps screening delay"
+                     if lane["estimated_delay_ps"] is not None else f"delay n/a ({lane['delay_reason']})")
+            print(f"lane {lane['net']}: {lane['routed_length_nm'] / 1e6:.3f} mm, {lane['via_count']} vias, "
+                  f"layers {','.join(lane['layers']) or '-'}, {delay}")
+        for bundle in critical.bundles:
+            print(f"bundle {'-'.join(bundle.components)}: order "
+                  f"{', '.join('/'.join(group) for group in bundle.order)}; repairs "
+                  f"{bundle.repairs_accepted}/{bundle.repairs_attempted} accepted "
+                  f"(limit {bundle.repair_limit})")
+        for tuning in critical.match_tuning:
+            print(match_tuning_line(tuning))
         return 0 if report["global_route_certified"] and critical.status is not CriticalRoutingStatus.FAILED else 1
     except (BoardLoadError, ValueError, OSError) as exc:
+        if args.debug:
+            traceback.print_exc()
         print(f"CRITICAL PREFLIGHT ERROR: {exc}")
         return 2
 

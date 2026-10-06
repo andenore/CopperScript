@@ -1,0 +1,323 @@
+# D-PHY and differential-pair routing work list
+
+This plan adds MIPI D-PHY (and general differential-pair) routing support.
+It is based on a review of published MIPI layout guidance (TI SPRACP4A,
+Renesas R01AN5871, Efinix UG-PCB-MIPI, Toradex layout guide) against what
+CopperScript can express and route, using a four-lane D-PHY board
+(QFN-to-0.4 mm-pitch-connector lanes, 2.5 Gbit/s) as the test case. Each item
+names its syntax, IR, checks and tests, so items can be built in parallel
+without colliding.
+
+Shared rules for every item:
+- **Fail closed.** Unknown or invalid properties are errors with source locations.
+- **Screening is labelled.** Impedance and return-path results are screening
+  evidence (`EvidenceGrade.SCREENING`), never sign-off.
+- **No invented limits.** Defaults never add a constraint the source did not
+  declare.
+- **Determinism.** Identical inputs give byte-identical reports and geometry.
+- **Tests.** Every item adds tests. Existing tests keep passing; the known
+  environment-only failures (KiCad overlay probe, stale caches) are unchanged.
+- **Docs.** `docs/language-reference.md` documents every new property.
+
+## W0 — Already fixed during the review
+
+- [x] `critical._route_pair`: a short pair whose terminals share one global
+  tile produced an empty offset guide and crashed in `_pair_pin_stubs`. The
+  coarse candidate is now rejected and the exact search still runs.
+  Test: `test_pair_guide_without_segments_is_rejected_and_exact_search_still_runs`.
+- [x] `critical._validate_candidate`: candidates are rejected only for hard
+  findings they introduce. Pre-existing footprint findings are no longer
+  attributed to them; open nets are never subtracted.
+  Test: `test_pre_existing_footprint_finding_does_not_reject_an_unrelated_pair`.
+- [x] `critical_preflight` physicalised only the electrical IR (`load_board`),
+  so the preflight dropped the whole `mechanical` block: the outline (it used
+  the 100 mm default), holes, rules, edges, overhangs and stack-up. Its lane
+  table then reported "no stack-up declared". It now loads the full design
+  like the CLI, and passes `--locked`/`--offline` to the footprint resolver.
+  Test: `test_preflight_physicalizes_the_mechanical_block`.
+- [x] `route_critical_nets` with package-access reservations ran a full-board DRC
+  and failed the reservations (`<package-reservations>`) on *any* hard finding.
+  A footprint's own land-to-locating-hole finding therefore blocked every
+  critical pair and the ordinary area router in `route-board` (0 pair searches,
+  0 ordinary nets routed). Only findings the reservations introduce now count.
+  Test: `test_pre_existing_footprint_finding_does_not_fail_package_reservations`.
+
+## W1 — Diagnostics and robustness
+
+- [x] **D1 Rejection reasons.** For each critical group, record the
+  first-failing gate of every rejected exact candidate. Gates: DRC code, skew,
+  uncoupled length, via budget, return via, plane reservation and
+  connectivity. Report them as counted summaries, for example
+  `rejections: {"DRC-CLEARANCE": 4, "skew": 2}`, plus up to three example
+  messages, in `CriticalNetResult` and the progress events.
+  Done: `CriticalNetResult.rejections` / `rejection_examples`, the
+  "none accepted (first-failing gates: …)" diagnostic, both reports and
+  `critical_group` progress events. Tests: `tests/test_critical_diagnostics.py`.
+- [x] **D2 Tracebacks.** `critical_preflight --debug` and `route-board --debug`
+  print the full traceback of unexpected exceptions. The default stays a
+  one-line error.
+  Tests: `test_preflight_debug_prints_the_full_traceback`,
+  `test_route_board_debug_prints_the_full_traceback`.
+- [x] **D3 Coarse-guide transitions.** The coarse pair candidate must not place
+  transition vias where pad clearance or the escape keep-out rules them out.
+  For a pair whose profile allows no vias or a single layer, it proposes none.
+  Done in `critical._coarse_transition_conflict`; the exact searches still run.
+  Tests: `test_coarse_guide_*` in `tests/test_critical_diagnostics.py`.
+- [x] **D4 Lane table.** Report each critical net's routed length, via count
+  and layers in the route and preflight reports, plus estimated delay when a
+  stack-up is declared (L1).
+  Done: `critical_lane_table`, the `lanes` list of the critical report (in
+  both reports) and preflight console lines. Tests: `test_lane_table_*`.
+- [x] **D5 Skew compensation near the mismatch.** `_tune_pair` compensates on
+  the shorter member's segment nearest the terminal or bend where the
+  mismatch arises. It uses bounded serpentine bumps no taller than
+  `tuning_amplitude_limit`, spaced at least 3 × width apart, instead of one
+  bump on the longest segment anywhere.
+  Tests: `test_tuning_*` in `tests/test_critical_routing.py` and
+  `test_drc_rejections_are_recorded_even_when_a_later_candidate_is_accepted`.
+
+## W2 — Language and IR
+
+- [x] **L1 Stack-up declaration.** Inside `mechanical`, ordered top to bottom:
+
+  ```copper
+  stackup {
+      copper F.Cu { thickness = 0.035mm; }
+      dielectric P1 { thickness = 0.1mm; er = 4.1; loss_tangent = 0.02; material = "3313"; }
+      copper In1.Cu { thickness = 0.0175mm; }
+      ...
+  }
+  ```
+
+  Lowers to `Stackup.physical_layers`, whose fields already exist. Validation:
+  - copper layers alternate with dielectrics;
+  - copper names and count match the selected `--layers`;
+  - thicknesses and `er` are positive;
+  - the total thickness becomes `Stackup.thickness_nm`.
+
+  KiCad export writes the board stack-up when it is declared.
+  Done: `mechanical_stackup.py` (optional dielectric `type = core|prepreg` for
+  the KiCad export). Tests: `tests/test_stackup_declaration.py`.
+- [x] **L2 Impedance screening.** Add edge-coupled differential screening to
+  the existing single-ended Hammerstad microstrip: IPC-2141A coupling for
+  microstrip, and the symmetric/offset stripline estimates for inner layers.
+  New routing properties:
+  - `target_single_ended_ohms` (integer)
+  - `impedance_tolerance_percent` (default 10)
+
+  For every rule with a target on every allowed layer, compute the
+  differential and single-ended estimates from width, gap and the declared
+  stack-up. Report a warning `SI-IMPEDANCE` when an estimate is outside the
+  tolerance, and `SI-NO-STACKUP` when a target exists without a stack-up.
+  Done: `engineering.edge_coupled_microstrip_impedance`,
+  `stripline_impedance`, `edge_coupled_stripline_impedance` and
+  `signal_integrity.screen_impedance`. The JLCPCB anchor (0.14/0.26 mm over
+  0.10 mm, εr 4.1) screens to 99.7 Ω differential, 51.9 Ω single-ended.
+  Tests: `tests/test_signal_integrity.py`.
+- [x] **L3 Reference-plane adjacency.** Warning `SI-NO-REFERENCE-PLANE` when a
+  differential, clock or RF rule allows a layer with no `copper_zone` on an
+  adjacent copper layer. After a native fill, run
+  `engineering.return_path_continuity` for every critical net, reporting the
+  fraction and a list of uncovered segments.
+  Done: `signal_integrity.reference_plane_warnings` and
+  `signal_integrity.return_path_report` (to be wired into the route report).
+- [x] **L4 Length matching.** New constraint kind:
+
+  ```copper
+  constraint length_match(CSI_SRC_CKP, CSI_SRC_CKN, CSI_SRC_DA0P, ...) {
+      id = "csi-src-lanes"; max_skew = 1.5mm;
+  }
+  ```
+
+  It lowers to an IR `NetMatchGroup(id, nets, max_skew_nm)`. Every net must
+  exist, a net can belong to only one group, and at least two nets are
+  required. The route report gives each member's length and the group skew.
+  A group over the limit is a hard verification failure
+  (`DRC-LENGTH-MATCH`). Tuning toward the group comes later (R3).
+  Done: `NetMatchGroup`, `PhysicalBoard.match_groups`,
+  `signal_integrity.verify_match_groups` (lengths, skew, shortfall) and the
+  DRC check. The route report itself is not wired yet. Note: critical
+  candidate validation runs the full DRC, so a candidate that completes an
+  over-skew group now fails with `DRC-LENGTH-MATCH`; R3 should decide whether
+  `critical._validate_candidate` defers this code.
+  Tests: `tests/test_dphy_routing_intent.py`.
+- [x] **L5 Layer groups.** Routing property `layer_group = "name"`.
+  - **Pre-route:** a warning when members of a group allow different layer sets.
+  - **Post-route:** a report of each member's layers, and a warning when
+    members' main runs end up on different layers.
+  Done: `signal_integrity.layer_group_warnings` (`SI-LAYER-GROUP`) and
+  `layer_group_report` (`SI-LAYER-GROUP-SPLIT`).
+- [x] **L6 Breakout properties.** Routing properties `breakout_length`,
+  `breakout_width`, `breakout_gap` and `breakout_clearance`, all optional.
+  Within `breakout_length` of a terminal pad, the breakout values replace
+  `width`, `pair_gap` and `clearance`. Outside it, `clearance` applies to
+  every foreign object. IR fields on `NetRoutingRule`, validated (breakout
+  values may only relax, never tighten). Router and DRC use them in R1.
+  Done: IR fields `breakout_*_nm`; compile-time (`CMP110`) and board-level
+  validation against the effective width/clearance and fabrication minimums.
+- [x] **L7 `copper si-check` command.** Runs L2, L3 and L5 before routing, plus
+  a summary of match groups. Same resolution flags as `check`.
+  Done: `copper si-check BOARD [--locked --offline --layers N --fab-profile P
+  --footprint-root R --allow-proxy-footprints --json]`; exits 0 with warnings.
+
+- [x] **L8 Mode defaults for bonds and pads.** A `mode_group` default only
+  applies to group conditions today. Bond and pad conditions (`PAD@MODE=CHOICE`)
+  without an explicit `modes` selection leave pins `UNMODELED_PIN`. That blocked
+  modelling the MAX96792A/MAX96793 C-PHY alternate function in CopperLib.
+  Apply defaults in `erc.active_bonded_pads`, `pin_profile`, physicalize, the
+  KiCad backends, pin resolution and power analysis.
+  Done: every mode condition is evaluated through `pcbir/modes.py`
+  (`effective_modes` = explicit `modes` over each group's `default`;
+  `active_bonded_pads`, `active_device_pads`, `pins_bonded_to_pad`). Used by
+  ERC (`_Context.modes`/`active_bonded_pads`/`pin_profile`, mux and route
+  options, signal groups), `pin_resolution.resolve_package_pin`,
+  `power._bonded_pads`/domain states, `physicalize._physical_pin_number`,
+  `backends.kicad._physical_pin_name` and the compiler's `configure`
+  lowering. Explicit selections still override; a group with neither default
+  nor selection matches no condition (`MODE_NOT_SELECTED`).
+  Tests: `tests/test_mode_defaults.py`.
+- [x] **L9 Absolute-maximum limits.** Pins can only carry operating
+  `voltage_min`/`voltage_max`. Add `absolute_min`/`absolute_max` (ERC error)
+  alongside the operating range (ERC warning), and allow limits relative to
+  another pin's supply (MAX96792A: `VTERM + 0.1 V`).
+  Done: pin/pad properties `absolute_min`/`absolute_max` (a voltage,
+  `"PAD[+|-]OFFSET"`, or a capped `"VTERM+0.1V, 1.36V"` where the tighter
+  bound wins) lower to `ElectricalProfile.absolute_voltage`
+  (`rating="absolute"`, bounds `Voltage` or `RelativeVoltage`); compile errors
+  `CMP120` (malformed), `CMP121` (inconsistent with the operating range),
+  `CMP122` (unknown reference). ERC `_check_pin_voltage`: outside absolute is
+  `SUPPLY_VOLTAGE_ABSOLUTE_LOW/HIGH` (error), outside operating but inside a
+  declared absolute bound is `SUPPLY_VOLTAGE_LOW/HIGH` as a warning, and
+  operating-only parts keep the error. Relative limits resolve per component
+  from the reference pad's declared supply (`_Context.reference_voltage`);
+  failure is `VOLTAGE_LIMIT_UNRESOLVED`. Serialized as
+  `profile.absolute_voltage` only when declared (existing electrical digests
+  are unchanged). Tests: `tests/test_absolute_voltage_limits.py`.
+
+- [ ] **L10 Operating-range severity on power pins.** Once a pin declares an
+  absolute bound, an operating-range violation inside that bound is only a
+  warning (L9). That suits signal pins, but a supply pin outside its operating
+  range is a design error. Keep it an error for `domains = "power"` pins (or
+  add a per-pin severity), so supply pins can also carry absolute ratings.
+- [ ] **L11 Multi-band operating ranges.** Some supply pins accept two
+  disjoint ranges (e.g. 0.95–1.05 V or 1.14–1.26 V; 1.7–1.9 V or 3.0–3.6 V).
+  One `voltage_min`/`voltage_max` envelope accepts values between the bands.
+  Allow several bands per pin, optionally selected by a mode.
+
+## W3 — Router and placement
+
+- [x] **R1 Region-aware breakout.** The pair search, critical validation and
+  physical DRC apply breakout width, gap and clearance only within
+  `breakout_length` of the pad. The DRC records the region that justified a
+  smaller clearance.
+  Done: `pcbir/breakout.py` (`BreakoutRegions`). A terminal land's region is
+  its copper swept by `breakout_length` in plan view; copper is inside when
+  its whole centreline is (both track ends, a via centre). `split` and
+  `split_tracks` cut octilinear tracks at the boundary and give the inside
+  pieces the breakout width. When a pair declares breakout properties, its
+  members are spaced by `pair_gap` (`breakout_gap` inside a region), not
+  `clearance`. Uses: `RoutingClearanceIndex` (every query), the pair search
+  (`pair_search._tracks`/`_legal`, `pair_refine`), `critical._route_pair`
+  (cut before and after tuning), `_route_single` and `_improve_pair_spine`.
+  DRC: `_check_track_rules`, `_check_copper_spacing` and
+  `_check_zone_fill_spacing` through `_BreakoutSpacing`. Relaxed checks go to
+  `PhysicalDrcReport.breakout_relaxations` (`DrcBreakoutRelaxation`: check,
+  objects, normal and breakout values, measurement, and the justifying net,
+  land and breakout length), plus a `breakout_regions` coverage entry when a
+  rule declares breakout properties; reports without them are unchanged.
+  `critical._validate_candidate` is unchanged; it runs the region-aware DRC.
+  Tests: `tests/test_breakout_regions.py`.
+- [x] **R2 Mismatched-pitch taper.** Generalise `_aligned_pair_paths` to
+  terminals whose pitch differs from the declared pair pitch (for example a
+  0.5 mm QFN to a 0.4 mm connector). It produces symmetric 45° tapers whose uncoupled
+  length counts against `maximum_uncoupled_length`.
+  Done in `critical._aligned_pair_paths`: both ends must share one midpoint
+  and member order on one layer; the land pitch is free at either or both
+  ends and each end gets its own 45° ramp. The equal-pitch case is unchanged.
+  Tests: `tests/test_pair_taper.py`.
+- [x] **R3 Length-match tuning.** After all critical groups are accepted, tune
+  the shortest members of each `length_match` group toward the longest, using
+  D5's bounded serpentines and the same atomic validation.
+  Done: `critical._tune_match_groups` / `_tune_match_group` tune each group
+  over its `max_skew`, unit by unit (a pair is one unit: both members get the
+  same bumps at the pair spacing, so its own skew is kept; a single-ended net
+  is tuned alone). A unit first matches the group's longest member, then falls
+  back to the least length that reaches `max_skew`; every step passes the
+  profile gates (`_retuned_result`) and `_validate_candidate`, and a group's
+  copper changes only when it ends within the limit. Placement rule in
+  `pcbir/critical_tuning.py` (`UnitTuner`): slots on straight runs, most free
+  room first (swept area against other copper, lands, keep-outs and the edge,
+  via `RoutingClearanceIndex.can_area`), then farthest from the terminals; at
+  most `MATCH_TUNING_BUMP_LIMIT` = 16 bumps per unit, no taller than
+  `tuning_amplitude_limit`. `_validate_candidate` defers `DRC-LENGTH-MATCH`
+  during routing; a failed group fails the stage and final DRC still reports
+  it. Report: `CriticalRoutingResult.match_tuning` (`match_tuning` in the
+  critical report) and one preflight line per group. With R1, tuned copper of
+  breakout nets is re-cut at the region boundaries (`split_tracks`), so a bump
+  never carries the breakout width outside a region.
+  Tests: `tests/test_length_match_tuning.py`.
+- [x] **R4 Corridor reservation.** Routing property `reserve_corridor = true`.
+  When both terminal components of a critical pair are fixed, placement keeps
+  other components out of the corridor between their terminal lands, sized
+  pair width + gap + clearance on each side. It behaves like hand-drawn
+  placement keepouts, and the report lists the derived corridors.
+  Implemented by `placement.reserved_corridors`: the corridor is the convex
+  hull of both nets' terminal lands, expanded by the margin. Movable terminals
+  skip the corridor with a `CORRIDOR_NOT_RESERVED` warning. A fixed
+  non-terminal component inside the corridor is an error. `plan-layout
+  --report` lists `reserved_corridors` and `skipped_corridors`.
+  Tests: `tests/test_corridor_reservation.py`.
+- [x] **R6 Bundle-aware critical ordering.** Critical groups are routed one
+  at a time, and accepted pairs are immutable. On the test board, later lanes failed on
+  clearance against lanes routed earlier (`tracks 148 and 162 violate copper
+  spacing`). Route a bundle's pairs in physical order (outermost first,
+  following terminal order). On a clearance failure against a committed group
+  in the same bundle, try a bounded rip-up of that group and reroute both, with
+  the same atomic validation.
+  Done: `pcbir/critical_bundles.py` plans bundles (same two components, kind
+  and priority) and their outermost-first order; `critical.route_critical_nets`
+  routes them in the bundle's slots and runs `_bundle_repair` (at most
+  `BUNDLE_REPAIR_LIMIT` = 4 attempts per bundle, `bundle_repair_limit`
+  argument). The critical report lists `bundles` with order and repairs.
+  Tests: `tests/test_critical_bundles.py`.
+- [ ] **R5 Planned crossings.** When the pair order at the two ends of a
+  bundle is inverted, as on a symmetric CSI pinout, plan one paired layer swap
+  with return vias for the crossing pair before the surface search. Design
+  note first; implementation bounded by the existing paired-via machinery.
+
+- [ ] **R7 Nested exits at package corners.** When a bundle leaves a package
+  across a corner (some pairs on one edge, the rest on the next), each
+  side-edge pair runs past the column of its far-end terminal before turning
+  and then comes back (an S-bend). On a 0.5 mm QFN this added about 1–2 mm to
+  the outermost pair: package-escape planning reserves each pair's exit region
+  on its own, so the outer pair clears the inner pair's whole exit region.
+  Plan nested exits instead: each outer pair turns as soon as it clears the
+  inner pair's actual exit copper. Shorter corner wraps reduce the structural
+  bundle skew that R3 would otherwise have to tune out.
+
+## Order
+
+1. In parallel: W1 (D1–D5), W2 (L1–L7), R4, and the CopperLib work below.
+2. Then: R1 (needs L6), R2, R3 (needs L4 and D5).
+3. Then R5 and R6 (R6 done; R5 lowest priority, since a pad-ordered pinout avoids it).
+4. R7 when corner-wrap skew matters.
+5. Finally the test board adopts each feature and its critical preflight is re-run.
+
+## CopperLib (separate repository)
+
+- [x] Device models for MAX96792A and MAX96793 with `differential_pair` groups
+  for every D-PHY lane and clock. Part and pin names stay unchanged. C-PHY is
+  modelled with L8: a `PHY` mode group (MAX96793) or `PHY_A`/`PHY_B` (MAX96792A),
+  D-PHY by default, with trio bonds per the data-sheet pin tables. Lane 2/3 pins
+  have no documented C-PHY function and are unmodelled in C-PHY mode; trios have
+  no group type yet.
+- [x] D-PHY pin voltage limits: MAX96793 1.35 V absolute maximum; MAX96792A
+  VTERM + 0.1 V, 1.36 V at most, as L9 `absolute_min`/`absolute_max` (-0.3 V
+  lower bound on both). Supply pins deliberately keep operating ranges only: an
+  absolute bound would turn an operating-range violation on a supply pin (e.g. a
+  1.2 V core pin on a 1.8 V rail) from an ERC error into a warning (see L10).
+- [x] Four-lane CSI-2 cable interface modules `CSI2_DPHY_X4_SOURCE_PORT` and
+  `CSI2_DPHY_X4_SINK_PORT` in `interfaces/mipi/csi2-dphy-x4-cabline-ca`
+  (40-position I-PEX 20525-040E-02 pinout in the GMSL parts' D-PHY pad order,
+  so no pair crosses; source and sink share positions and a straight cable
+  loops back).

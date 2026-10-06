@@ -5,6 +5,7 @@ import json
 from pathlib import Path, PurePosixPath
 
 from .base import ArtifactManifest
+from .kicad_pcb import KICAD_RULES_MARKER
 
 
 def kicad_export_digest(manifest: ArtifactManifest) -> str:
@@ -17,9 +18,12 @@ def kicad_export_digest(manifest: ArtifactManifest) -> str:
 def write_kicad_project(manifest: ArtifactManifest, output: Path) -> tuple[Path, ...]:
     """Write PCB, same-stem project, library table and canonical footprints.
 
-    Only the first two filenames follow a user-selected output stem. Generated
-    library assets use project-relative paths and may be shared by exports in
-    one directory. Unrelated library tables are never replaced or merged.
+    Only the PCB, the project and an optional custom-rules file follow a
+    user-selected output stem. Generated library assets use project-relative
+    paths and may be shared by exports in one directory. Unrelated library
+    tables are never replaced or merged. A same-stem rules file left by an
+    earlier CopperScript export is removed when this export has none, so it
+    can never relax KiCad DRC for a board that no longer declares it.
     """
     output = Path(output)
     if manifest.backend != "kicad-pcb" or len(manifest.artifacts) < 3:
@@ -36,6 +40,8 @@ def write_kicad_project(manifest: ArtifactManifest, output: Path) -> tuple[Path,
             path = output
         elif index == 1:
             path = output.with_suffix(".kicad_pro")
+        elif relative.suffix == ".kicad_dru" and len(relative.parts) == 1:
+            path = output.with_suffix(".kicad_dru")
         else:
             path = root / Path(*relative.parts)
         if not path.resolve().is_relative_to(root):
@@ -49,8 +55,14 @@ def write_kicad_project(manifest: ArtifactManifest, output: Path) -> tuple[Path,
     existing_table = root / "fp-lib-table"
     if existing_table.exists() and existing_table.read_bytes() != table.content.encode("utf-8"):
         raise FileExistsError("refusing to overwrite an unrelated fp-lib-table; export to a separate build directory")
+    rules = output.with_suffix(".kicad_dru")
+    stale_rules = (rules not in destinations and rules.is_file()
+                   and KICAD_RULES_MARKER in rules.read_text(encoding="utf-8", errors="replace"))
     # Check every path before writing anything. No recursive deletion of stale
     # assets: older content-addressed files may belong to another board export.
+    # Only a generated same-stem rules file is removed; hand-written ones stay.
+    if stale_rules:
+        rules.unlink()
     for artifact, path in zip(manifest.artifacts, destinations, strict=True):
         path.parent.mkdir(parents=True, exist_ok=True)
         content = artifact.content

@@ -8,9 +8,10 @@ as a broad phase.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Iterator
 
+from .breakout import BreakoutRegions
 from .drc import non_plated_holes, placed_pad_shape
 from .geometry import Bounds, RoundedConvexShape, shapes_clear
 from .physical import (
@@ -37,6 +38,8 @@ class _CopperObject:
     locked: bool = True
     is_pad: bool = False
     pad_reference: PadReference | None = None
+    # Terminal land whose breakout region holds this copper (plan R1).
+    breakout_land: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +73,9 @@ class RoutingClearanceIndex:
         self.rules: dict[str, NetRoutingRule] = {
             rule.net: rule for rule in board.net_routing_rules
         }
+        # Breakout regions relax width, gap and clearance next to terminal
+        # lands. Without breakout rules every query is exactly as before.
+        self.breakout = BreakoutRegions(board)
         from .hard_macros import macro_reservations
         self._macro_regions = tuple(
             (frozenset(r.layers), RoundedConvexShape(r.outline.outer.vertices))
@@ -94,6 +100,9 @@ class RoutingClearanceIndex:
             board.rules.minimum_hole_clearance_nm,
             *(rule.clearance_nm or 0 for rule in self.rules.values()),
             *(footprint.clearance_nm or 0 for footprint in board.footprints.values()),
+            # A pair with breakout properties is spaced by its gap, not clearance.
+            *(rule.pair_gap_nm or 0 for rule in self.rules.values()
+              if rule.breakout_length_nm is not None),
         )
         assigned = {pad: net.name for net in board.nets for pad in net.pads}
         for placement in sorted(board.placements, key=lambda item: item.reference):
@@ -135,6 +144,10 @@ class RoutingClearanceIndex:
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer
     ) -> bool:
         shape = RoundedConvexShape((start, end), width_nm // 2)
+        return self._keepout_clear(shape, (layer,), for_via=False) and self._clear(net, shape, (layer,))
+
+    def can_area(self, net: str, shape: RoundedConvexShape, layer: CopperLayer) -> bool:
+        """Like ``can_track`` for any swept shape, such as a whole tuning bump."""
         return self._keepout_clear(shape, (layer,), for_via=False) and self._clear(net, shape, (layer,))
 
     def can_via(
@@ -368,17 +381,11 @@ class RoutingClearanceIndex:
             return frozenset(), True
         movable: set[str] = set()
         locked = False
+        land = self._breakout_land(net, shape)
         for other in self._overlapping_objects(shape, layers):
             if other.net == net:
                 continue
-            own_rule = self.rules.get(net)
-            other_rule = self.rules.get(other.net)
-            clearance = max(
-                self.board.rules.minimum_clearance_nm,
-                own_rule.clearance_nm or 0 if own_rule else 0,
-                other_rule.clearance_nm or 0 if other_rule else 0,
-                other.clearance_nm,
-            )
+            clearance = max(self._rule_clearance(net, land, other), other.clearance_nm)
             if shapes_clear(shape, other.shape, clearance):
                 continue
             if other.locked:
@@ -395,6 +402,8 @@ class RoutingClearanceIndex:
         return layers[first:last + 1]
 
     def _add(self, item: _CopperObject) -> None:
+        if item.net in self.breakout.declared:
+            item = replace(item, breakout_land=self.breakout.region(item.net, item.shape.spine))
         identity = len(self._objects)
         self._objects.append(item)
         bounds = item.shape.bounds
@@ -407,21 +416,36 @@ class RoutingClearanceIndex:
         self, net: str, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...],
         *, clearance_floor_nm: int = 0,
     ) -> bool:
+        land = self._breakout_land(net, shape)
         for other in self._overlapping_objects(shape, layers):
             if other.net == net:
                 continue
-            own_rule = self.rules.get(net)
-            other_rule = self.rules.get(other.net)
             clearance = max(
-                self.board.rules.minimum_clearance_nm,
+                self._rule_clearance(net, land, other),
                 clearance_floor_nm,
-                own_rule.clearance_nm or 0 if own_rule else 0,
-                other_rule.clearance_nm or 0 if other_rule else 0,
                 other.clearance_nm,
             )
             if not shapes_clear(shape, other.shape, clearance):
                 return False
         return True
+
+    def _breakout_land(self, net: str, shape: RoundedConvexShape) -> str | None:
+        """The breakout region holding a queried shape's centreline, if any."""
+        if net not in self.breakout.declared:
+            return None
+        return self.breakout.region(net, shape.spine)
+
+    def _rule_clearance(self, net: str, land: str | None, other: _CopperObject) -> int:
+        """Net-rule spacing between queried copper and ``other``, region-aware."""
+        if self.breakout:
+            return self.breakout.spacing_nm(net, land, other.net, other.breakout_land)
+        own_rule = self.rules.get(net)
+        other_rule = self.rules.get(other.net)
+        return max(
+            self.board.rules.minimum_clearance_nm,
+            own_rule.clearance_nm or 0 if own_rule else 0,
+            other_rule.clearance_nm or 0 if other_rule else 0,
+        )
 
     def _overlapping_objects(
         self, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...]

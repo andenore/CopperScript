@@ -15,6 +15,7 @@ import re
 from typing import Callable, Mapping
 
 from .elaborate import elaborate
+from .modes import pins_bonded_to_pad
 from .pad_connections import merge_internal_pad_groups
 from .footprints import FootprintResolver
 from .importers import FootprintImportResult
@@ -30,6 +31,7 @@ from .physical import (
     AlignmentAxis,
     BoardOutline,
     BoardSide,
+    ComponentHoleClearance,
     ComponentPlacementRule,
     CopperLayer,
     CopperZone,
@@ -42,6 +44,7 @@ from .physical import (
     PhysicalBoard,
     PhysicalFootprint,
     PhysicalNet,
+    NetMatchGroup,
     NetRoutingRule,
     Placement,
     PlacementGroup,
@@ -414,22 +417,25 @@ def _physicalize(
                              if fixed_rules[p.reference].fixed_rotation_degrees is not None else p.rotation_degrees),
                          side=fixed_rules[p.reference].side or p.side)
                   if p.reference in fixed_rules else p for p in placements]
+    copper_layers = (
+        (CopperLayer.FRONT, CopperLayer.BACK)
+        if options.copper_layers == 2
+        else (
+            CopperLayer.FRONT,
+            CopperLayer.INTERNAL_1,
+            CopperLayer.INTERNAL_2,
+            *((CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4) if options.copper_layers == 6 else ()),
+            CopperLayer.BACK,
+        )
+    )
+    # A declared source stack-up must name exactly the selected copper layers.
+    stackup = (mechanical.stackup.to_stackup(copper_layers)
+               if mechanical and mechanical.stackup is not None
+               else Stackup(copper_layers=copper_layers))
     return PhysicalBoard(
         name=board.name,
         outline=outline,
-        stackup=Stackup(
-            copper_layers=(
-                (CopperLayer.FRONT, CopperLayer.BACK)
-                if options.copper_layers == 2
-                else (
-                    CopperLayer.FRONT,
-                    CopperLayer.INTERNAL_1,
-                    CopperLayer.INTERNAL_2,
-                    *((CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4) if options.copper_layers == 6 else ()),
-                    CopperLayer.BACK,
-                )
-            )
-        ),
+        stackup=stackup,
         rules=rules,
         footprints=footprints,
         placements=tuple(placements),
@@ -455,6 +461,8 @@ def _physicalize(
         assembly_access=mechanical.assembly_access if mechanical else (),
         mechanical_slots=mechanical.slots if mechanical else (),
         mechanical_references=mechanical.references if mechanical else (),
+        match_groups=_lower_match_groups(flat),
+        component_hole_clearances=_lower_hole_clearances(flat, footprints, placements, rules, metadata),
     )
 
 
@@ -614,15 +622,27 @@ def _lower_physical_constraints(
                     maximum_stub_length_nm=_optional_constraint_length(parameters, "maximum_stub_length"),
                     tuning_amplitude_limit_nm=_optional_constraint_length(parameters, "tuning_amplitude_limit"),
                     require_return_vias=_constraint_bool(parameters, "require_return_vias", False),
+                    reserve_corridor=_reserve_corridor(net, parameters),
                     return_via_net=_optional_string(parameters, "return_via_net"),
                     maximum_return_via_distance_nm=_optional_constraint_length(parameters, "maximum_return_via_distance"),
                     impedance_evidence_digest=_optional_string(parameters, "impedance_evidence_digest"),
                     return_via_policy=ReturnViaPolicy(str(parameters.get("return_via_policy", "always"))),
                     shared_reference_layer=(CopperLayer(str(parameters["shared_reference_layer"]))
                                             if "shared_reference_layer" in parameters else None),
+                    target_single_ended_ohms=_optional_constraint_int(parameters, "target_single_ended_ohms"),
+                    impedance_tolerance_percent=_optional_percent(parameters, "impedance_tolerance_percent"),
+                    layer_group=_optional_string(parameters, "layer_group"),
+                    breakout_length_nm=_optional_constraint_length(parameters, "breakout_length"),
+                    breakout_width_nm=_optional_constraint_length(parameters, "breakout_width"),
+                    breakout_gap_nm=_optional_constraint_length(parameters, "breakout_gap"),
+                    breakout_clearance_nm=_optional_constraint_length(parameters, "breakout_clearance"),
                 )
             )
             continue
+        if constraint.kind is ConstraintKind.LENGTH_MATCH:
+            continue  # net groups lower separately; see _lower_match_groups
+        if constraint.kind is ConstraintKind.HOLE_CLEARANCE:
+            continue  # needs footprint geometry; see _lower_hole_clearances
         lowered_targets = targets(constraint.targets)
         if lowered_targets is None:
             continue
@@ -798,6 +818,85 @@ def _lower_physical_constraints(
     )
 
 
+def _lower_match_groups(flat: FlatElectricalView) -> tuple[NetMatchGroup, ...]:
+    """Lower ``length_match`` constraints to physical ``NetMatchGroup`` IR."""
+
+    net_names = {item.name for item in flat.nets}
+    groups: list[NetMatchGroup] = []
+    owner: dict[str, str] = {}
+    for index, constraint in enumerate(flat.constraints):
+        if constraint.kind is not ConstraintKind.LENGTH_MATCH:
+            continue
+        origin = constraint.origins[0] if constraint.origins else "length_match"
+        try:
+            group_id = constraint.constraint_id or f"length_match:{index}"
+            if any(group.id == group_id for group in groups):
+                raise ValueError(f"duplicate length_match id {group_id!r}")
+            for net in constraint.targets:
+                if net not in net_names:
+                    raise ValueError(f"length_match references unknown net {net!r}")
+                if net in owner:
+                    raise ValueError(f"net {net!r} already belongs to length_match group {owner[net]!r}")
+                owner[net] = group_id
+            groups.append(NetMatchGroup(group_id, tuple(constraint.targets),
+                                        _constraint_length(constraint.parameters, "max_skew")))
+        except ValueError as exc:
+            raise ValueError(f"{origin}: {exc}") from exc
+    return tuple(groups)
+
+
+def _lower_hole_clearances(
+    flat: FlatElectricalView,
+    footprints: Mapping[str, PhysicalFootprint],
+    placements: list[Placement],
+    rules: DesignRules,
+    metadata: Mapping[str, str],
+) -> tuple[ComponentHoleClearance, ...]:
+    """Lower ``hole_clearance`` constraints once footprint geometry is known.
+
+    Errors carry the constraint's source location and compile error code.
+    Proxy footprints have no holes, so inspection-only proxy boards keep the
+    board rule everywhere instead of failing.
+    """
+
+    if metadata.get("prototype_footprints") == "true":
+        return ()
+    poses = {placement.reference: placement for placement in placements}
+    components = {component.ref for component in flat.components}
+    lowered: dict[str, ComponentHoleClearance] = {}
+    for constraint in flat.constraints:
+        if constraint.kind is not ConstraintKind.HOLE_CLEARANCE:
+            continue
+        origin = constraint.origins[0] if constraint.origins else "hole_clearance"
+        reference = constraint.targets[0]
+        if reference not in components:
+            raise ValueError(f"{origin}: CMP113: hole_clearance target {reference!r} is not a component")
+        if reference in lowered:
+            raise ValueError(f"{origin}: CMP114: component {reference!r} already has a hole_clearance constraint")
+        pose = poses.get(reference)
+        if pose is None or not any(pad.kind is PadKind.NON_PLATED_THROUGH_HOLE
+                                   for pad in footprints[pose.footprint].pads):
+            raise ValueError(f"{origin}: CMP115: component {reference!r} has no footprint with "
+                             "non-plated holes for hole_clearance to apply to")
+        clearance = _constraint_length(constraint.parameters, "clearance")
+        if clearance > rules.minimum_hole_clearance_nm:
+            raise ValueError(f"{origin}: CMP116: hole_clearance for {reference!r} may only relax "
+                             f"(not exceed) the board minimum hole clearance "
+                             f"({rules.minimum_hole_clearance_nm} nm)")
+        lowered[reference] = ComponentHoleClearance(
+            reference, clearance, str(constraint.parameters["reason"]))
+    return tuple(lowered[reference] for reference in sorted(lowered))
+
+
+def _optional_percent(parameters: Mapping[str, object], name: str) -> Decimal | None:
+    if name not in parameters:
+        return None
+    value = parameters[name]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"routing constraint parameter {name!r} must be numeric")
+    return Decimal(str(value))
+
+
 def _merge_rule(
     existing: ComponentPlacementRule | None,
     reference: str,
@@ -849,6 +948,15 @@ def _constraint_bool(parameters: Mapping[str, object], name: str, default: bool)
     if not isinstance(value, bool):
         raise ValueError(f"routing constraint parameter {name!r} must be boolean")
     return value
+
+
+def _reserve_corridor(net: str, parameters: Mapping[str, object]) -> bool:
+    reserve = _constraint_bool(parameters, "reserve_corridor", False)
+    if reserve and "partner" not in parameters:
+        raise ValueError(
+            f"routing constraint for {net!r}: reserve_corridor requires a differential partner"
+        )
+    return reserve
 
 
 def _constraint_layers(value: object) -> tuple[CopperLayer, ...]:
@@ -978,15 +1086,7 @@ def _physical_pin_number(
     terminal = unit.terminals.get(terminal_name) if unit is not None else None
     if terminal is None:
         return None
-    matches = [
-        pin.number
-        for pin in part.pins.values()
-        if any(
-            bond.pad == terminal.pad
-            and (bond.when is None or bond.when.matches(component.modes))
-            for bond in pin.bonds
-        )
-    ]
+    matches = [pin.number for pin in pins_bonded_to_pad(component, part, device, terminal.pad)]
     return matches[0] if len(matches) == 1 else None
 
 

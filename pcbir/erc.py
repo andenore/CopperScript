@@ -5,13 +5,21 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Callable, Iterable, TypeVar
+from typing import Callable, Iterable, Mapping, TypeVar
 
 from .elaborate import elaborate
+from .modes import (
+    active_bonded_pads,
+    active_device_pads,
+    component_device,
+    condition_active,
+    effective_modes,
+)
 from .model import (
     Board,
     ComponentInstance,
     ConnectionPolicy,
+    DeviceDefinition,
     Direction,
     DriveMode,
     ElectricalProfile,
@@ -22,6 +30,7 @@ from .model import (
     PartDefinition,
     PackagePinDefinition,
     PeripheralSelection,
+    RelativeVoltage,
     SelectionUsage,
     Supply,
     SignalDomain,
@@ -83,46 +92,76 @@ class _Context:
         resolved = self.resolve_pin(endpoint)
         return Endpoint(endpoint.component, resolved[2].name) if resolved else None
 
+    def device_for(self, component: ComponentInstance) -> DeviceDefinition | None:
+        return component_device(
+            component, self.board.library.get(component.part), self.board.devices
+        )
+
+    def modes(self, component: ComponentInstance) -> Mapping[str, str]:
+        """Explicit selections layered over the device's mode-group defaults."""
+
+        return effective_modes(component, self.device_for(component))
+
     def active_bonded_pads(
         self, component: ComponentInstance, pin: PackagePinDefinition
     ) -> tuple[str, ...]:
-        return tuple(
-            bond.pad
-            for bond in pin.bonds
-            if bond.when is None or bond.when.matches(component.modes)
-        )
+        return active_bonded_pads(component, pin, self.device_for(component))
 
     def pin_profile(
         self, component: ComponentInstance, part: PartDefinition, pin: PackagePinDefinition
     ) -> ElectricalProfile | None:
         profiles = [pin.profile] if pin.profile is not None else []
-        if part.device is not None:
-            device = self.board.devices.get(part.device)
-            if device is not None:
-                for pad_name in self.active_bonded_pads(component, pin):
-                    pad = device.pads.get(pad_name)
-                    if pad is not None and (pad.when is None or pad.when.matches(component.modes)):
-                        profiles.append(pad.profile)
+        profiles.extend(
+            pad.profile
+            for pad in active_device_pads(component, pin, self.board.devices.get(part.device or ""))
+        )
         if not profiles:
             return None
         voltage = next((profile.voltage for profile in profiles if profile.voltage), None)
+        absolute = next(
+            (profile.absolute_voltage for profile in profiles if profile.absolute_voltage), None
+        )
         return ElectricalProfile(
             frozenset().union(*(profile.domains for profile in profiles)),
             frozenset().union(*(profile.directions for profile in profiles)),
             frozenset().union(*(profile.drive_modes for profile in profiles)),
             frozenset().union(*(profile.traits for profile in profiles)),
             voltage,
+            absolute_voltage=absolute,
         )
 
-    def pin_voltage_limits(
-        self, component: ComponentInstance, part: PartDefinition, pin: PackagePinDefinition
-    ) -> tuple[Voltage | None, Voltage | None]:
-        profile = self.pin_profile(component, part, pin)
-        voltage = profile.voltage if profile else None
-        return (
-            voltage.minimum if voltage else None,
-            voltage.maximum if voltage else None,
-        )
+    def reference_voltage(
+        self, component: ComponentInstance, part: PartDefinition, reference: str
+    ) -> tuple[Voltage | None, str]:
+        """Voltage of the declared supply on a named pin or device pad.
+
+        ``reference`` may name a package pin or a device pad bonded (in the
+        component's effective modes) to one. Returns the voltage, or ``None``
+        and the reason it cannot be resolved.
+        """
+
+        device = self.device_for(component)
+        pins = [
+            pin
+            for pin in part.pins.values()
+            if pin.name == reference or reference in active_bonded_pads(component, pin, device)
+        ]
+        if not pins:
+            return None, f"{component.ref} has no pin or active device pad {reference!r}"
+        voltages: dict[object, Voltage] = {}
+        for pin in pins:
+            for net_name in self.pin_to_nets.get(Endpoint(component.ref, pin.name), ()):
+                supply = next(
+                    (item for item in self.board.supplies if item.net == net_name), None
+                )
+                if supply is not None:
+                    voltages.setdefault(supply.voltage.base_value, supply.voltage)
+        if not voltages:
+            return None, f"{reference} is not connected to a declared supply"
+        if len(voltages) > 1:
+            listed = ", ".join(str(item) for item in voltages.values())
+            return None, f"{reference} is connected to supplies with different voltages ({listed})"
+        return next(iter(voltages.values())), ""
 
 
 def check(board: Board | FlatElectricalView) -> list[Diagnostic]:
@@ -404,26 +443,7 @@ def _check_supplies(context: _Context) -> list[Diagnostic]:
             resolved = context.resolve_pin(endpoint)
             if resolved is None:
                 continue
-            pin = resolved[2]
-            voltage_min, voltage_max = context.pin_voltage_limits(resolved[0], resolved[1], pin)
-            if voltage_min is not None and supply.voltage < voltage_min:
-                diagnostics.append(
-                    Diagnostic(
-                        Severity.ERROR,
-                        "SUPPLY_VOLTAGE_LOW",
-                        f"{supply.voltage} is below the pin minimum {voltage_min}",
-                        str(endpoint),
-                    )
-                )
-            if voltage_max is not None and voltage_max < supply.voltage:
-                diagnostics.append(
-                    Diagnostic(
-                        Severity.ERROR,
-                        "SUPPLY_VOLTAGE_HIGH",
-                        f"{supply.voltage} exceeds the pin maximum {voltage_max}",
-                        str(endpoint),
-                    )
-                )
+            diagnostics.extend(_check_pin_voltage(context, endpoint, resolved, supply))
             component, part, pin = resolved
             device = context.board.devices.get(part.device or "")
             if device is None:
@@ -450,6 +470,132 @@ def _check_supplies(context: _Context) -> list[Diagnostic]:
                                 str(endpoint),
                             )
                         )
+    return diagnostics
+
+
+def _check_pin_voltage(
+    context: _Context,
+    endpoint: Endpoint,
+    resolved: tuple[ComponentInstance, PartDefinition, PackagePinDefinition],
+    supply: Supply,
+) -> list[Diagnostic]:
+    """Compare a supply voltage with a pin's absolute and operating limits.
+
+    Outside the absolute-maximum range is an error. Outside the operating range
+    is a warning only when an absolute bound on that side is declared, resolved
+    and respected; a part that declares only operating limits keeps them as
+    hard (error) limits.
+    """
+
+    component, part, pin = resolved
+    profile = context.pin_profile(component, part, pin)
+    if profile is None:
+        return []
+    diagnostics: list[Diagnostic] = []
+    voltage = supply.voltage
+    subject = str(endpoint)
+    operating = profile.voltage
+    absolute = profile.absolute_voltage
+
+    def absolute_bound(name: str, bound: object) -> tuple[Voltage | None, str, bool]:
+        """(bound value, display text, whether the value is exact)."""
+
+        if bound is None or isinstance(bound, Voltage):
+            return bound, str(bound), bound is not None
+        if isinstance(bound, RelativeVoltage):
+            reference, reason = context.reference_voltage(component, part, bound.reference)
+            if reference is None:
+                diagnostics.append(
+                    Diagnostic(
+                        Severity.ERROR,
+                        "VOLTAGE_LIMIT_UNRESOLVED",
+                        f"{name} {bound} cannot be evaluated against {voltage}: {reason}",
+                        subject,
+                    )
+                )
+                # A fixed cap still bounds the pin, but the true limit may be
+                # tighter, so it never downgrades an operating violation.
+                return bound.limit, str(bound.limit), False
+            value = bound.resolve(reference, upper=name == "absolute_max")
+            return value, f"{value} ({bound}; {bound.reference} = {reference})", True
+        diagnostics.append(
+            Diagnostic(
+                Severity.ERROR,
+                "VOLTAGE_LIMIT_UNRESOLVED",
+                f"{name} has an unsupported value {bound!r}",
+                subject,
+            )
+        )
+        return None, str(bound), False
+
+    absolute_min, absolute_min_text, exact_min = absolute_bound(
+        "absolute_min", absolute.minimum if absolute else None
+    )
+    absolute_max, absolute_max_text, exact_max = absolute_bound(
+        "absolute_max", absolute.maximum if absolute else None
+    )
+    below_absolute = absolute_min is not None and voltage < absolute_min
+    above_absolute = absolute_max is not None and absolute_max < voltage
+    if below_absolute:
+        diagnostics.append(
+            Diagnostic(
+                Severity.ERROR,
+                "SUPPLY_VOLTAGE_ABSOLUTE_LOW",
+                f"{voltage} is below the pin absolute minimum {absolute_min_text}",
+                subject,
+            )
+        )
+    if above_absolute:
+        diagnostics.append(
+            Diagnostic(
+                Severity.ERROR,
+                "SUPPLY_VOLTAGE_ABSOLUTE_HIGH",
+                f"{voltage} exceeds the pin absolute maximum {absolute_max_text}",
+                subject,
+            )
+        )
+    voltage_min = operating.minimum if operating else None
+    voltage_max = operating.maximum if operating else None
+    if voltage_min is not None and voltage < voltage_min and not below_absolute:
+        if exact_min:
+            diagnostics.append(
+                Diagnostic(
+                    Severity.WARNING,
+                    "SUPPLY_VOLTAGE_LOW",
+                    f"{voltage} is below the pin operating minimum {voltage_min} "
+                    f"but within the absolute minimum {absolute_min_text}",
+                    subject,
+                )
+            )
+        else:
+            diagnostics.append(
+                Diagnostic(
+                    Severity.ERROR,
+                    "SUPPLY_VOLTAGE_LOW",
+                    f"{voltage} is below the pin minimum {voltage_min}",
+                    subject,
+                )
+            )
+    if voltage_max is not None and voltage_max < voltage and not above_absolute:
+        if exact_max:
+            diagnostics.append(
+                Diagnostic(
+                    Severity.WARNING,
+                    "SUPPLY_VOLTAGE_HIGH",
+                    f"{voltage} exceeds the pin operating maximum {voltage_max} "
+                    f"but is within the absolute maximum {absolute_max_text}",
+                    subject,
+                )
+            )
+        else:
+            diagnostics.append(
+                Diagnostic(
+                    Severity.ERROR,
+                    "SUPPLY_VOLTAGE_HIGH",
+                    f"{voltage} exceeds the pin maximum {voltage_max}",
+                    subject,
+                )
+            )
     return diagnostics
 
 
@@ -740,20 +886,21 @@ def _check_peripheral_selections(context: _Context) -> list[Diagnostic]:
                 )
                 continue
             active_pads = context.active_bonded_pads(component, physical_pin)
+            modes = context.modes(component)
             options = [
                 option
                 for option in device.mux_options
                 if option.pad in active_pads
                 and option.peripheral == selection.peripheral
                 and option.signal == signal_name
-                and (option.when is None or option.when.matches(component.modes))
+                and condition_active(option.when, modes)
             ]
             routes = [
                 route
                 for route in device.route_rules
                 if route.peripheral == selection.peripheral
                 and route.signal == signal_name
-                and (route.when is None or route.when.matches(component.modes))
+                and condition_active(route.when, modes)
                 and any(
                     pad in device.pad_sets[route.pad_set].pads for pad in active_pads
                 )
@@ -909,15 +1056,12 @@ def _check_modes_and_groups(context: _Context) -> list[Diagnostic]:
         device = context.board.devices.get(part.device or "") if part else None
         if device is None:
             continue
-        effective_modes = {
-            name: component.modes.get(name, group.default)
-            for name, group in device.mode_groups.items()
-        }
+        modes = context.modes(component)
         for name in component.modes:
             if name not in device.mode_groups:
                 diagnostics.append(Diagnostic(Severity.ERROR, "UNKNOWN_MODE_GROUP", f"unknown mode group {name!r}", component.ref))
-        for name, choice in effective_modes.items():
-            group = device.mode_groups[name]
+        for name, group in device.mode_groups.items():
+            choice = modes.get(name)
             if choice is None:
                 diagnostics.append(Diagnostic(Severity.ERROR, "MODE_NOT_SELECTED", f"mode group {name!r} has no selection", component.ref))
             elif choice not in group.choices:
@@ -929,7 +1073,7 @@ def _check_modes_and_groups(context: _Context) -> list[Diagnostic]:
             for pad in context.active_bonded_pads(component, pin)
         }
         for group in device.signal_groups.values():
-            if group.when is not None and not group.when.matches(effective_modes):
+            if not condition_active(group.when, modes):
                 continue
             if (group.kind == "differential_pair" or getattr(group.kind, "value", None) == "differential_pair"):
                 present = {name for name, pad in group.members.items() if pad in connected_pads}

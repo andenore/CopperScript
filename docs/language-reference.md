@@ -17,6 +17,24 @@ Electrical connectivity remains geometry-free. Generic `export-kicad-pcb`,
 `plan-layout`, `route-global` and `route-board` consume the source outline.
 Source geometry takes precedence over rectangle fallback dimensions.
 
+The `mechanical` block may also declare the board stack-up, top to bottom:
+
+```copper
+stackup {
+    copper F.Cu { thickness = 0.035mm; }
+    dielectric P1 { thickness = 0.1mm; er = 4.1; loss_tangent = 0.02; material = "3313"; type = prepreg; }
+    copper In1.Cu { thickness = 0.0175mm; }
+    ...
+    copper B.Cu { thickness = 0.035mm; }
+}
+```
+
+It lowers to `Stackup.physical_layers`; the selected `--layers` must name
+exactly the declared copper layers. The stack-up feeds impedance screening
+(see [signal-integrity screening](#signal-integrity-screening)) and the KiCad
+board stack-up. See [the mechanical language specification](mechanical-language.md#board-stack-up)
+for its validation rules.
+
 ## Permanent component-internal pad connections
 
 Parts may declare `internal_pad_groups = "1; 2";`. Semicolons separate
@@ -124,7 +142,9 @@ part BME280 {
 Supported part properties are open `category` and `traits` strings,
 `manufacturer`, `assembled` (boolean, default `true`), one `footprint`, and an
 optional package-independent `device`. Every pin requires a quoted `number`;
-`voltage_min` and `voltage_max` are optional typed voltage quantities.
+`voltage_min` and `voltage_max` are optional typed voltage quantities (the
+operating range), and `absolute_min` and `absolute_max` are optional
+absolute-maximum ratings (see [Voltage limits](#voltage-limits)).
 Standalone parts declare `domains` and `directions`, with optional
 `drive_modes` and `traits`. Domains are `digital`, `analog`, `power`, `ground`,
 `clock`, and `rf`. Directions are `input`, `output`, `bidirectional`, and
@@ -140,6 +160,62 @@ Set `assembled = false` for bare-board targets such as Tag-Connect programming
 pads; the KiCad schematic then excludes them from its BOM while retaining them
 on the board. The selected footprint must separately carry KiCad's
 `exclude_from_bom` and `exclude_from_pos_files` attributes for PCB export.
+
+### Voltage limits
+
+Package pins and device pads carry two independent voltage ranges:
+
+```copper
+pad VDD {
+    domains = "power"; directions = "input";
+    voltage_min = 1.0V;   voltage_max = 1.3V;    // operating range
+    absolute_min = -0.3V; absolute_max = 1.5V;   // absolute-maximum ratings
+}
+pad AUX {
+    domains = "power"; directions = "input";
+    voltage_max = 1.3V;
+    absolute_max = "VTERM+0.1V, 1.36V";          // relative, capped at 1.36 V
+}
+```
+
+An absolute limit is either a voltage (`V` or `mV`) or a quoted
+pad-relative limit `"PAD"`, `"PAD+OFFSET"` or `"PAD-OFFSET"`, for example
+`"VTERM+0.1V"` or `"VDDIO - 300mV"`. A relative limit may add one fixed
+voltage after a comma; the tighter of the two applies, so
+`absolute_max = "VTERM+0.1V, 1.36V"` means `min(VTERM + 0.1 V, 1.36 V)` and
+`absolute_min = "VSS-0.3V, -0.5V"` means `max(VSS - 0.3 V, -0.5 V)`. `PAD`
+names another package pin of the same part or, for a device-backed part, a
+device pad of the same device; a device pad's reference must name a pad of its
+own device. Unknown references are rejected at compile time (`CMP122`),
+malformed values with `CMP120`. Fixed absolute limits (including the fixed part
+of a capped relative limit) must enclose the fixed operating limits, and
+`absolute_min` may not exceed `absolute_max` (`CMP121`).
+
+ERC compares the voltage of every declared supply with the limits of each pin
+on its net:
+
+| Supply voltage | Diagnostic |
+| --- | --- |
+| outside the absolute range | error `SUPPLY_VOLTAGE_ABSOLUTE_LOW` / `SUPPLY_VOLTAGE_ABSOLUTE_HIGH` |
+| outside the operating range, inside a declared absolute bound on that side | warning `SUPPLY_VOLTAGE_LOW` / `SUPPLY_VOLTAGE_HIGH` |
+| outside the operating range, no absolute bound on that side | error `SUPPLY_VOLTAGE_LOW` / `SUPPLY_VOLTAGE_HIGH` |
+
+Parts that declare only `voltage_min`/`voltage_max` therefore keep their
+operating range as a hard limit. A relative limit is evaluated per component:
+the reference pin (or every package pin actively bonded to the reference
+device pad in the component's modes) must sit on a net with a declared supply,
+and the limit is that supply's voltage plus the offset. When it cannot be
+resolved, because the reference is not on a declared supply, is connected to
+supplies with different voltages, or names no pin or active pad, ERC reports
+the error `VOLTAGE_LIMIT_UNRESOLVED`, a fixed cap still applies on its own, and
+the operating bound on that side stays a hard limit. Limits are only evaluated
+for pins on nets with a declared supply; signal nets carry no voltage in the
+IR. When several active profiles of one package pin declare a range, the
+package pin's own range wins, then the first bonded device pad's.
+Power-domain `voltage_min`/`voltage_max` remain operating limits checked as
+errors. The serialized IR carries the absolute range as
+`profile.absolute_voltage` (`rating = "absolute"`); a relative bound is
+`{"reference", "offset", "limit"}`.
 
 Part and device provenance is optional. Definitions may use
 `source_document`, `source_revision`, `source_location`, `source_url`, and
@@ -223,7 +299,9 @@ part STM32G0B1CBT6 {
 `bond` is a comma-separated list when one package pin connects to multiple
 device pads. A conditional entry uses `PAD@MODE=CHOICE`. Multiple package pins
 may also name the same device pad. A device-backed package pin combines its
-electrical profile with its active bonded pads.
+electrical profile with its active bonded pads, that is the bonds whose
+condition holds and whose device pad's own `when` condition holds in the
+component's effective modes (see below).
 
 Devices may define functional units, differential groups, finite modes, and
 regular routing rules:
@@ -240,6 +318,28 @@ Unit terminals may be used as net endpoints, for example `U1.A.OUT`. The
 compiler resolves them to canonical package pins before ERC. Components select
 non-default modes with `modes = "PORT0=LVDS"`. Conditions are comma-separated
 equality selections; general boolean expressions are intentionally unsupported.
+
+A component's effective modes are its explicit `modes` selections layered over
+the `default` of every mode group it does not select. They govern every mode
+condition: bond conditions (`PAD@MODE=CHOICE` and a pin-level `when`), pad
+`when`, mux options, route rules and signal groups, in ERC, pin resolution,
+power-state analysis, physical lowering and the KiCad backends alike. A device
+can therefore bond its package pins for the default mode without each
+component repeating `modes`:
+
+```copper
+mode_group PHY { choices = "DPHY,CPHY"; default = DPHY; }
+group DA0: differential_pair { positive = DA0P; negative = DA0N; when = "PHY=DPHY"; }
+
+// in the package part
+pin L0 { number = "3"; bond = "DA0P@PHY=DPHY,TA0A@PHY=CPHY"; }
+pin L1 { number = "4"; bond = "DA0N@PHY=DPHY,TA0B@PHY=CPHY"; }
+```
+
+`component U1: BRIDGE;` uses the D-PHY bonding and checks the `DA0` pair;
+`component U1: BRIDGE { modes = "PHY=CPHY"; }` uses the C-PHY bonding instead.
+A mode group without a default and without a selection has no active choice:
+no condition on it holds and ERC reports `MODE_NOT_SELECTED`.
 
 Boards and modules explicitly select peripheral pins:
 
@@ -533,7 +633,8 @@ constraint routing(USB_DP) {
 
 Known constraint kinds are `max_distance`, `min_distance`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
-`placement_group`, `keepout`, `routing`, `copper_zone`, `via_in_pad`, and `note`. Coordinates and rectangle dimensions
+`placement_group`, `keepout`, `routing`, `copper_zone`, `via_in_pad`,
+`length_match`, `hole_clearance`, and `note`. Coordinates and rectangle dimensions
 are lengths in the physical board coordinate system; orientation values are
 unitless degrees. The legalizer accepts any explicitly permitted angle,
 including 45-degree increments; unconstrained components still default to
@@ -552,7 +653,10 @@ placement/routing defaults when neither is stated. Routing parameters lower to
 `maximum_uncoupled_length`, `maximum_stub_length`,
 `tuning_amplitude_limit`, `require_return_vias`, `return_via_net`,
 `maximum_return_via_distance`, `return_via_policy`, `shared_reference_layer`,
-and `impedance_evidence_digest`.
+`impedance_evidence_digest`, `target_single_ended_ohms`,
+`impedance_tolerance_percent`, `layer_group`, `breakout_length`,
+`breakout_width`, `breakout_gap`, and `breakout_clearance` (see
+[signal-integrity routing intent](#signal-integrity-routing-intent)).
 
 USB/differential profiles need not be top-layer-only. For example,
 `allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;` permits matched terminal
@@ -582,6 +686,42 @@ Dedicated plane layers
 remain unavailable to foreign signal tracks. See
 [paired layer transitions](paired-layer-transitions.md) for the bounded
 implementation and its impedance/return-path limitations.
+
+The routing property `reserve_corridor` (boolean, default `false`) reserves
+the space between a differential pair's terminal lands during placement:
+
+```copper
+constraint routing(CSI_D0P) {
+    kind = differential;
+    partner = CSI_D0N;
+    width = 0.1mm;
+    pair_gap = 0.1mm;
+    clearance = 0.1mm;
+    reserve_corridor = true;
+}
+```
+
+It must be set on a profile that declares `partner`, and it applies to the
+pair when either member sets it. The corridor is derived only when every
+component with a land on either pair net has a `fixed_placement` with both
+position and rotation. It is the convex hull of all terminal lands of both
+nets, expanded on every side by the pair's `width` + `pair_gap` + clearance.
+Clearance is the larger of the rule's `clearance` and the board minimum
+clearance. A missing `width` falls back to the board default track width,
+and a missing `pair_gap` to the board minimum clearance. The corridor applies
+on the terminal components' side, or on both sides when they are on
+different sides. Placement treats it like a hand-drawn `keepout()` for every
+component except the pair's own terminal components. Tracks may still pass
+through it. Component legality checks enforce it, including the placement
+editor, placement feedback and the DRC placement check. If a terminal
+component is movable, or a net has fewer than two lands, the corridor is not
+derived. `plan-layout` then reports a `CORRIDOR_NOT_RESERVED` warning with
+the reason. A fixed component that is not one of the pair's terminals and
+overlaps the corridor is an error that names the corridor and the component.
+`plan-layout --report` lists each derived corridor under
+`reserved_corridors`, sorted by net pair, with its nets, side, margin,
+terminal components and polygon in nanometres. Skipped requests are listed
+under `skipped_corridors`.
 
 A provisional plane can be declared separately from electrical connectivity:
 
@@ -667,6 +807,81 @@ unselected pads retain the no-pad-overlap default. The route report records
 the filled/capped fabrication requirement; geometry alone does not order that
 manufacturing process or prove filled-plane continuity.
 
+A component-scoped drill clearance is a documented exception to the board's
+`minimum_hole_clearance` (mechanical `rules`, default 0.25 mm), for a vendor
+land pattern that puts pads closer to the part's own non-plated holes:
+
+```copper
+constraint hole_clearance(J1) {
+    clearance = 0.19mm;
+    reason = "Vendor land pattern: GND pads 0.194 mm from the receptacle's own plastic locating pegs";
+}
+```
+
+The target is exactly one component, local (`J1`) or a module descendant
+(`OUT_PORT/J`). `clearance` (a positive length, at most the board
+`minimum_hole_clearance`) and `reason` (a nonempty string) are required;
+there are no other parameters besides the ownership metadata. It lowers to
+`ComponentHoleClearance(reference, clearance_nm, reason)` in
+`PhysicalBoard.component_hole_clearances`, sorted by reference and bound by
+the physical signoff digest.
+
+The scope is deliberately narrow. The value applies only between the copper
+pads of that component's footprint and the non-plated holes of the same
+footprint instance. Every other pair keeps `minimum_hole_clearance`: tracks
+and vias of any net (the component's own nets included) near those holes,
+other components' pads near them, and the component's pads near any other
+hole. Board-owned mechanical `hole`s and slots are never covered. Routing is
+unchanged: the router only adds tracks and vias, which keep the board value.
+
+Physical DRC checks each of these pad/hole pairs against the scoped value. A
+pad still below it is the usual `DRC-HOLE-CLEARANCE`; the message says it was
+checked against the component's scoped `hole_clearance` and the finding
+carries `required_nm` (the scoped value) and `measured_nm`. A pair that passes
+only because of the scoped value is recorded in
+`PhysicalDrcReport.hole_clearance_relaxations` and under
+`hole_clearance_relaxations` in the report JSON: the component, the objects
+(pad and hole), the pad's net, the board value it does not meet
+(`required_nm`), the scoped value it meets (`relaxed_nm`), the measured
+pad-copper-to-drill spacing (`measured_nm`) and the reason. The coverage
+entry `component_hole_clearance` appears when any scoped rule exists. Boards
+without the constraint give byte-identical reports, digests and KiCad exports.
+
+The KiCad export keeps the board value in Board Setup and writes
+`<board>.kicad_dru` beside the same-stem `.kicad_pro`, one custom rule per
+component:
+
+```
+(version 1)
+# Generated by CopperScript from hole_clearance constraints; do not edit.
+# J1: Vendor land pattern: GND pads 0.194 mm from the receptacle's own plastic locating pegs
+(rule "J1 hole clearance"
+  (constraint hole_clearance (min 0.19mm))
+  (condition "A.memberOfFootprint('J1') && B.memberOfFootprint('J1') && (A.Pad_Type == 'NPTH, mechanical' || B.Pad_Type == 'NPTH, mechanical')"))
+```
+
+Checked with KiCad 10 `kicad-cli pcb drc`: a matching custom
+`hole_clearance` rule replaces the Board Setup value, also below it, so Board
+Setup is not a floor and stays at the board value. Tracks, vias, zones and
+other footprints (including exported board holes) are never members of the
+footprint, so they keep the board value. The condition uses the exported
+KiCad reference (`OUT_PORT/J` becomes `OUT_PORT_J`), which must be unique on
+the board. KiCad silently ignores a malformed rules file, so keep the
+generated file unedited beside the project. An export without scoped rules
+removes a stale generated rules file of the same stem; a hand-written one is
+kept. `export-manufacturing` copies the file with the project. Proxy
+footprints (`--allow-proxy-footprints`) have no holes, so the constraint is
+not lowered there.
+
+Errors carry the constraint's source location. `CMP112` is a malformed
+declaration (not exactly one target, a pin target, a missing or invalid
+`clearance` or `reason`, an unknown parameter), `CMP113` a target that is not
+a component and `CMP114` a second `hole_clearance` for one component,
+including one declared inside its module. These are compile errors.
+`CMP115` (the component has no footprint with non-plated holes) and `CMP116`
+(`clearance` exceeds the board `minimum_hole_clearance`) need the resolved
+footprint and rules, so physicalization reports them.
+
 Package escape sampling is configurable on `route-board`: `--fanout-step-mm`
 defaults to 0.5 mm and `--fanout-refinement-step-mm` defaults to 0.1 mm. Empty
 coarse domains and conflicting selected escapes receive bounded finer radial
@@ -687,13 +902,131 @@ the routing `strategy` and whether a materialized candidate was rejected.
 Measured candidate lengths may remain in a rejection report for diagnosis;
 accepted track/via counts are zero.
 
-Aligned terminals use a midpoint channel with 45-degree tapers. Other pair
-geometries currently depend on coarse-guide candidates and can fail preflight;
-joint package-access search remains necessary. Single-ended critical nets can
+Aligned terminals use a midpoint channel with 45-degree tapers. Terminals are
+aligned when, at each end, the two lands sit side by side across one straight
+channel on the same layer, both ends share one midpoint and the members keep
+their order. The land pitch may differ from the pair pitch (width + gap) at
+either or both ends, for example 0.5 mm package lands to 0.4 mm connector
+lands: each land then tapers at 45 degrees onto its lane, symmetrically about
+the channel centre. Tapers are uncoupled length, so they count in
+`uncoupled_lengths_nm` and against `maximum_uncoupled_length`. Native DRC and
+connectivity still gate the channel. Other pair geometries (for example
+midpoints that need a jog) depend on coarse-guide candidates and the joint
+searches and can fail preflight; joint package-access search remains necessary. Single-ended critical nets can
 use bounded exact search while earlier critical copper stays immutable.
 General fanout/subset repair skips critical nets. Duplicate-land cleanup may
 reuse an existing critical connection but leaves new bridges pending for the
 owning critical router rather than altering pair skew or adding RF stubs.
+
+Critical groups are routed one at a time by priority, kind and net name, and
+accepted copper is immutable. A *bundle* is two or more differential (or CAN)
+groups of the same kind and priority whose members each connect the same two
+components, for example the data and clock lanes between a package and a
+connector. A bundle is routed outermost first along the terminal row instead
+of by name: each group's depth is its distance in ranks from the nearer end of
+the row at both components (summed), with the lower row position at the
+alphabetically first component, then the net names, breaking ties. The bundle
+keeps the slots its groups held in the default order, so other groups keep
+their place. A group with a different priority is not part of the bundle.
+
+When a bundle group still fails, and a rejected candidate's first-failing gate
+is a spacing finding (`DRC-CLEARANCE`, `DRC-SHORT`, `DRC-HOLE-CLEARANCE` or
+`DRC-DRILL-SPACING`) against copper of an already accepted group of the same
+bundle, the router tries a bounded repair: it removes that group's copper,
+routes the failed group first, then routes the removed group again. Both use
+the same coarse candidate, joint searches, state budget and atomic validation
+as the main pass. Both are kept only when both are accepted; otherwise the
+state is restored exactly. Candidates are the blocking groups in acceptance
+order, one per attempt, at most 4 attempts per bundle (the
+`bundle_repair_limit` argument of `route_critical_nets`; `BUNDLE_REPAIR_LIMIT`
+in `pcbir.critical_bundles`). Spacing findings come from the coarse candidate
+and from exact candidates; an exact search that finds no candidate at all is
+not evidence of a blocking group and triggers no repair. A repaired group keeps
+its place in the report and is committed after the failed group; progress
+reports it again as `started`/`finished`. The critical report's `bundles` list
+gives, per bundle, the `components`, `kind`, `priority`, the `order` used,
+the default `name_order`, `repair_limit`, `repairs_attempted`,
+`repairs_accepted` and each repair (`failed`, `ripped_up`, `accepted`,
+`reason`). `python -m pcbir.critical_preflight` prints one line per bundle.
+
+Each group in the critical report records why exact pair candidates were
+rejected. `rejections` counts the first-failing gate of every rejected joint
+search candidate, for example `{"DRC-CLEARANCE": 4, "skew": 2}`, and
+`rejection_examples` keeps at most three messages, one per gate first. The
+profile gates `length_budget`, `via_budget`, `via_pairing`, `return_via`,
+`skew` and `uncoupled_length` are evaluated first, then `plane_reservation`,
+then native DRC, whose codes are reported verbatim. `connectivity` (the pair is
+left open) counts only when no other gate failed. The counts are kept when a later candidate is accepted, appear
+in the "none accepted" diagnostic, and are streamed in `route-board --progress`
+`critical_group` events and preflight checkpoints.
+
+The coarse global-guide candidate places no layer transitions for a pair with
+`max_vias = 0` or a single common allowed layer. Otherwise every guide
+transition (both signal vias and any return via) must clear all lands, drilled
+holes, via keep-outs and the board edge, or the coarse candidate is rejected
+without copper and the exact paired searches decide. When `max_skew` and
+`tuning_amplitude_limit` are both set, skew beyond the limit is compensated on
+the shorter member: rectangular bumps no taller than the amplitude limit,
+3 × width wide and 3 × width from each other and from the segment ends, on the
+axis-aligned segments nearest the terminal or bend where the length difference
+arises, bulging away from the partner. At most eight bumps are used; when they
+do not fit, the geometry is unchanged and the skew gate reports it. Tuned
+candidates pass the same atomic budget and native DRC gates.
+
+Once every critical group is accepted, each `length_match` group whose skew
+exceeds its `max_skew` is tuned, group by group in declaration order. Tuning
+works on accepted critical groups (*units*). A differential pair is one unit:
+both members get the same rectangular bumps, bent together at the pair's
+lane spacing, so each gains exactly the same length and the pair's own skew
+and `max_skew` are unaffected. A single-ended critical net is tuned alone.
+Each unit is first lengthened so that its longest group member matches the
+group's longest member; when that does not fit or does not validate, by the
+least length that brings its shortest member within `max_skew`. Bumps are no
+taller than the unit's `tuning_amplitude_limit` (the smaller of a pair); a
+unit without one is not tuned. They sit on straight axis-aligned runs (for a
+pair, where both members are parallel at the pair spacing), at least
+3 × width from either end of the run and 3 × width apart, and are 3 × width
+wide (the outer member of a pair 3 × width + 2 × spacing), on either side of
+the run. Placement rule: the room of each slot is the tallest bump, up to the
+amplitude limit, whose swept area clears all other copper, lands, holes,
+keep-outs and the board edge by the applicable clearance; slots with the most
+room are used first, then those farthest from the unit's terminals, then by
+position. The fewest bumps that provide the length are used, at most 16 per
+unit (`MATCH_TUNING_BUMP_LIMIT` in `pcbir.critical_tuning`), with levelled
+heights. Each tuned unit passes the same profile gates (length and via
+budgets, pair skew and `maximum_uncoupled_length`) and atomic native-DRC
+validation against all other copper as a routed candidate. In the coupled-length
+measure, a rectangular pair bump adds about four lane spacings of uncoupled
+length per member, so a tight `maximum_uncoupled_length` can rule tuning out.
+A group's copper changes only when every unit is accepted and the group ends
+within `max_skew`. Otherwise its copper and results are kept exactly as
+routed, the group is reported `failed` with the reason, the critical stage
+fails, and final verification reports `DRC-LENGTH-MATCH`. Groups within their
+limit are untouched. Groups with a member that is not connected after critical
+routing (for example an ordinary net) are `incomplete` and left to final
+verification. Candidate validation during critical routing does not reject a
+candidate for `DRC-LENGTH-MATCH`, because group skew depends on every member
+and on this tuning pass. The critical report's `match_tuning` list gives, per
+group, `id`, `max_skew_nm`, `status` (`within_limit`, `tuned`, `failed` or
+`incomplete`), `skew_before_nm`, `skew_after_nm`, the `members` with
+`length_before_nm`, `length_after_nm` and `added_length_nm`, the number of
+`bumps` and the `reason`. The `nets` entries and `lanes` table report the
+tuned copper. `python -m pcbir.critical_preflight` prints one line per group.
+
+The critical report also has a `lanes` table with one row per critical net:
+`routed_length_nm`, `layer_lengths_nm`, `layers` in stack-up order and the net's
+own `via_count` (return vias count for their reference net). When the board
+declares a physical stack-up, `estimated_delay_ps` is a quasi-TEM screening
+estimate (`delay_evidence_grade: "screening"`), never sign-off. Outer layers use
+the Hammerstad-Jensen microstrip effective permittivity of the inward dielectric
+and the net's dominant width. Inner layers use the thickness-weighted
+permittivity of both adjacent dielectrics. Via barrels are excluded. Without a
+stack-up the delay is `null` with `delay_reason: "no stack-up declared"`.
+`python -m pcbir.critical_preflight` also prints one line per lane.
+
+`route-board --debug` and `python -m pcbir.critical_preflight --debug` print the
+full traceback of an error before the usual one-line message. Without the flag,
+output is unchanged.
 
 An impedance target is not proof that the provisional width/gap meets it.
 Missing stackup/field-solver evidence stays an explicit assumption. Nordic's
@@ -701,6 +1034,175 @@ chip-side matching connection is not labelled a generic 50-ohm RF feed; its
 multi-terminal antenna/matching network remains unqualified critical geometry.
 The prototype does not yet certify matching-network topology or reference
 layout, RF isolation, antenna keepouts, or the continuous return path.
+
+### Signal-integrity routing intent
+
+These routing properties describe D-PHY-style intent. All are optional; none
+adds a limit the source does not declare.
+
+```copper
+constraint routing(CSI_SRC_CKP) {
+    kind = differential; partner = CSI_SRC_CKN;
+    width = 0.14mm; pair_gap = 0.26mm; clearance = 0.52mm;
+    allowed_layers = "F.Cu"; max_vias = 0;
+    target_impedance_ohms = 100;          // differential target for a pair
+    target_single_ended_ohms = 50;        // each member's single-ended target
+    impedance_tolerance_percent = 15;     // default 10
+    layer_group = "csi-src";              // clock and data on the same layers
+    breakout_length = 1.2mm;              // breakout region around terminal pads
+    breakout_width = 0.12mm;
+    breakout_gap = 0.2mm;
+    breakout_clearance = 0.15mm;
+}
+
+constraint length_match(CSI_SRC_CKP, CSI_SRC_CKN, CSI_SRC_DA0P, CSI_SRC_DA0N) {
+    id = "csi-src-lanes";
+    max_skew = 1.5mm;
+}
+```
+
+- `target_impedance_ohms` is the **differential** target on a `differential`
+  or `can_bus` rule and the single-ended target on any other kind.
+  `target_single_ended_ohms` (positive integer) adds the single-ended target
+  of each pair member; on a single-ended rule it must agree with
+  `target_impedance_ohms` when both are given.
+- `impedance_tolerance_percent` (number, greater than 0 and below 100,
+  default 10) applies to both targets and requires one of them.
+- `layer_group` (nonempty name) groups nets that should route on the same
+  layers, such as a D-PHY clock and its data lanes.
+- `breakout_length`, `breakout_width`, `breakout_gap` and
+  `breakout_clearance` (positive lengths) describe the pin-field breakout:
+  within `breakout_length` of a terminal pad, the breakout values replace
+  `width`, `pair_gap` and `clearance`. Breakout values may only relax the
+  profile, never tighten it: `breakout_width` may not exceed `width` (or the
+  board default track width), `breakout_gap` requires and may not exceed
+  `pair_gap`, and `breakout_clearance` may not exceed `clearance` (or the
+  board minimum clearance). Width and clearance may not go below the board
+  minimum track width and clearance. `breakout_length` is required with any
+  other breakout value and is meaningless alone. The router, its clearance
+  checks and physical DRC apply them as described under
+  [breakout regions](#breakout-regions).
+- `length_match(NET, NET, ...)` lowers to `NetMatchGroup(id, nets,
+  max_skew_nm)` on the physical board. It needs at least two distinct nets
+  (not pins), each existing net may belong to only one group, and
+  `max_skew` (a positive length) is the only parameter besides the ownership
+  metadata. A group without `id` is named `length_match:<index>`. A member's
+  length is its total routed track length (via barrels are not counted) and
+  the group skew is the longest minus the shortest member. Once every member
+  net is connected, a skew above `max_skew` is the hard DRC finding
+  `DRC-LENGTH-MATCH`; before that the group is reported as incomplete. The
+  critical router tunes critically routed members toward the group's longest
+  member (see [critical routing](#critical-routing-and-qualification)).
+
+Invalid values fail with source locations (`CMP110` for routing properties,
+`CMP111` for `length_match`); semantic errors found while lowering (unknown
+nets, a net in two groups, duplicate group ids) carry the constraint's
+location.
+
+### Breakout regions
+
+A breakout region lets a pair leave a fine-pitch pin field (a 0.4–0.5 mm
+pitch package or connector) with small spacing while the channel beyond keeps
+the full clearance. The router, the routing clearance checks and physical DRC
+share one definition:
+
+- **Region.** Every land of every pad on the net is a terminal land. Its
+  region is every point within `breakout_length` of the land's copper
+  outline: straight-line distance in plan view, the same on every copper
+  layer. A point on the land is at distance 0, so the length counts from the
+  land's edge, not its centre. The region is the land swept by
+  `breakout_length`, so it is convex.
+- **Inside.** Copper is inside when its whole centreline is inside one
+  terminal land's region: both ends of a track segment, the centre of a via,
+  every vertex of a pad outline. Each pad of the net is inside its own region.
+  A segment that crosses the boundary is outside and keeps the normal values.
+  The router cuts its tracks at the boundary instead: an octilinear segment is
+  cut at its last whole-nanometre step inside, so the outside piece starts on
+  the region's edge. Segments in other directions are not cut.
+- **Values.** Inside, the net's copper uses `breakout_width` as its minimum
+  width, `breakout_clearance` toward foreign copper and `breakout_gap` toward
+  its partner. Outside, `width`, `clearance` and `pair_gap` apply to every
+  foreign object. An undeclared breakout value leaves the normal one in
+  force. Two objects of different nets keep the larger of the two nets'
+  values and the board minimum clearance, each net's value taken at its own
+  copper. A lane inside its region still keeps another net's normal
+  clearance from that net's copper outside its region.
+- **Pair members.** When either member of a pair declares breakout
+  properties, the members are spaced by `pair_gap` (`breakout_gap` inside a
+  region) instead of `clearance`. The channel clearance can then exceed the
+  gap, for example `pair_gap = 0.26mm; clearance = 0.52mm`. A pair without
+  breakout properties keeps `clearance` between its members as before. Each
+  member contributes its own values, so declare the same breakout values on
+  both.
+- **Router.** The critical pair candidates (coarse, aligned, joint, paired-via
+  and shortcut proposals) and the single-ended guide candidate cut their
+  tracks at the region boundary. Pieces inside carry `breakout_width`, a
+  neck-down at the land; the rest keeps `width`. The coupled channel keeps its
+  `width + pair_gap` pitch. Inside a region the members may come as close as
+  `breakout_gap`, for example on a taper from narrow-pitch lands. Every
+  routing clearance query (pad access, fan-out, the pair search, the detailed
+  router) applies the region values to copper inside a region; a queried
+  segment that crosses the boundary is outside. Global-routing demand still
+  uses `clearance`.
+- **DRC.** Track width, copper spacing (tracks, vias, pads) and zone-fill
+  spacing apply the breakout values only to copper inside its region, and the
+  pair gap between the members of a breakout pair. A violation is the usual
+  `DRC-TRACK-WIDTH`, `DRC-CLEARANCE` or `DRC-SHORT`; between pair members the
+  message names the `pair gap`. A check that passes only because of a breakout
+  value is recorded in `PhysicalDrcReport.breakout_relaxations` and under
+  `breakout_relaxations` in the report JSON. Each entry gives the check
+  (`track_width`, `clearance` or `pair_gap`), objects, nets and layers; the
+  normal value it does not meet (`required_nm`), the breakout value it meets
+  (`relaxed_nm`) and the measured width or copper-to-copper spacing
+  (`measured_nm`, `null` for zone fills); and, for each relaxed net, the
+  terminal land whose region holds its copper and the breakout length. For
+  example, a 0.2 mm gap from a lane to a neighbouring land lists the lane's
+  net, `pad:U1.3:2` and `1000000`. The coverage entry `breakout_regions`
+  appears when any rule declares breakout properties. Boards without breakout
+  properties give byte-identical reports.
+
+### Signal-integrity screening
+
+`copper si-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
+[--footprint-root R] [--allow-proxy-footprints] [--json]` physicalizes the
+board and runs the pre-route screening below, then summarises the
+`length_match` groups and layer groups. It prints one line per estimate and
+warning (or deterministic JSON with `--json`, schema
+`copperscript-si-check/v0.1`) and exits 0 when it reports only warnings; a
+compile or physicalization error exits 2. Every result is screening evidence
+(`EvidenceGrade.SCREENING`), never sign-off: confirm impedance with the
+fabricator's calculator or a field solver and record it in
+`impedance_evidence_digest`.
+
+- **Impedance (`SI-IMPEDANCE`, `SI-NO-STACKUP`).** For every rule with an
+  impedance target, on every allowed layer (all copper layers when
+  `allowed_layers` is empty), the declared stack-up gives the line geometry.
+  Outer layers are microstrip over the adjacent dielectric: Hammerstad
+  single-ended impedance and IPC-2141A edge coupling,
+  `Zdiff = 2·Z0·(1 − 0.48·e^(−0.96·s/h))`. Inner layers are stripline between
+  the dielectrics above and below: the IPC-2141A symmetric stripline, or the
+  offset stripline (two symmetric lines in parallel) when the heights differ,
+  with `Zdiff = 2·Z0·(1 − 0.347·e^(−2.9·s/b))`. Stripline permittivity is the
+  thickness-weighted mean of both dielectrics. Width defaults to the board
+  default track width. An estimate outside `target ± tolerance` is the
+  warning `SI-IMPEDANCE`; a target without a declared stack-up is
+  `SI-NO-STACKUP`. For example, JLCPCB's six-layer outer layer (0.10 mm
+  prepreg, εr 4.1, 0.035 mm copper) with 0.14 mm width and 0.26 mm gap screens
+  to about 99.7 Ω differential and 51.9 Ω single-ended.
+- **Reference planes (`SI-NO-REFERENCE-PLANE`).** A `differential`, `clock`
+  or `rf_feed` rule that allows a layer with no `copper_zone` on an adjacent
+  copper layer is warned about. Whether the plane is continuous under the
+  route is checked after a fill: `signal_integrity.return_path_report` runs
+  `engineering.return_path_continuity` for every critical net of a board with
+  normalized zone fills and returns the covered fraction and the uncovered
+  track segments. The reference is the rule's `return_via_net`, otherwise
+  every zone net.
+- **Layer groups (`SI-LAYER-GROUP`, `SI-LAYER-GROUP-SPLIT`).** Before
+  routing, members of one `layer_group` that allow different layer sets (or
+  a group with a single member) are warned about. After routing,
+  `signal_integrity.layer_group_report` lists each member's routed layers and
+  main layer (the layer with the most track length) and warns when members'
+  main runs differ.
 
 ### Native copper connectivity and package escape
 
@@ -788,7 +1290,9 @@ item           = library | package_import | port | pin | pad | power_domain
                | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
                | power_state | interface | constraint | mechanical ;
-mechanical     = "mechanical", "{", mechanical_item*, "}" ;
+mechanical     = "mechanical", "{", (mechanical_item | stackup)*, "}" ;
+stackup        = "stackup", "{", stackup_layer*, "}" ;   (* board mechanical only *)
+stackup_layer  = ("copper" | "dielectric"), qualified_name, properties ;
 profile_use    = "use", qualified_name, ["as", name], properties ;
 (* board_profile bodies permit imports and mechanical items, including
    profile_use and connector roles, but no electrical declarations. *)

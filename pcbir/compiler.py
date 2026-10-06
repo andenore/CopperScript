@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+import re
 from typing import Callable, Mapping
 
 from .library import LIBRARIES, library_factory
 from .design import Design, lower_mechanical
 from .mechanical_profiles import MechanicalProfileDefinition
 from .pad_connections import InternalPadGroup
+from .modes import active_bonded_pads, condition_active, effective_modes
 from .model import (
     BondDefinition,
     Board,
@@ -45,6 +47,7 @@ from .model import (
     PowerRailState,
     PowerState,
     QuantityRange,
+    RelativeVoltage,
     RouteRule,
     SelectorScheme,
     SelectionUsage,
@@ -446,6 +449,7 @@ def _compile_board(
     if ports:
         _error("CMP024", "ports may only be declared inside a module", document.location)
     instances = _validate_instances(body, declarations, modules)
+    _validate_hole_clearance_targets(document, body, instances, modules)
     for net in body.nets:
         for endpoint in net.endpoints:
             if endpoint.component == "port":
@@ -487,6 +491,7 @@ def _compile_module(
     if body.power_states:
         _error("CMP072", "power states may only be declared on a board", document.location)
     instances = _validate_instances(body, declarations, modules)
+    _validate_hole_clearance_targets(document, body, instances, modules)
     return ModuleDefinition(
         name=name or document.name,
         ports=ports,
@@ -750,6 +755,8 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
                     "unpowered",
                     "voltage_min",
                     "voltage_max",
+                    "absolute_min",
+                    "absolute_max",
                     "when",
                 },
                 declaration.location,
@@ -930,6 +937,13 @@ def _compile_device(document: Document, qualified_name: str) -> DeviceDefinition
         if mux.resource is not None and mux.resource not in resources:
             _error("CMP069", f"mux references undeclared resource {mux.resource!r}", document.location)
     for pad in pads.values():
+        for reference in _relative_limit_references(pad.profile):
+            if reference not in pads:
+                _error(
+                    "CMP122",
+                    f"pad {pad.name!r} voltage limit references unknown device pad {reference!r}",
+                    document.location,
+                )
         if pad.power_domain is not None and pad.power_domain not in power_domains:
             _error("CMP077", f"pad {pad.name!r} references unknown power domain {pad.power_domain!r}", document.location)
     for domain in power_domains.values():
@@ -1005,6 +1019,8 @@ def _compile_part(
                     "bond",
                     "voltage_min",
                     "voltage_max",
+                    "absolute_min",
+                    "absolute_max",
                     "connection",
                     "required_net_traits",
                     "when",
@@ -1033,7 +1049,7 @@ def _compile_part(
                     name in declaration.attributes
                     for name in (
                         "domains", "directions", "drive_modes", "traits",
-                        "voltage_min", "voltage_max",
+                        "voltage_min", "voltage_max", "absolute_min", "absolute_max",
                     )
                 )
                 else None
@@ -1118,6 +1134,18 @@ def _compile_part(
             unknown = sorted({bond.pad for bond in pin.bonds} - set(device_definition.pads))
             if unknown:
                 _error("CMP081", f"pin {pin.name!r} bonds unknown device pad {unknown[0]!r}", document.location)
+        for reference in _relative_limit_references(pin.profile):
+            known = reference in pins or (
+                device_definition is not None and reference in device_definition.pads
+            )
+            # An unresolved device is reported elsewhere; only reject a
+            # reference that cannot name any pin or pad of a known part.
+            if not known and (not resolved_device or device_definition is not None):
+                _error(
+                    "CMP122",
+                    f"pin {pin.name!r} voltage limit references unknown pin or device pad {reference!r}",
+                    document.location,
+                )
     if not pins:
         _error("CMP050", "part must declare at least one pin", document.location)
     pin_numbers = [pin.number for pin in pins.values()]
@@ -1170,15 +1198,12 @@ def _configuration(
         _error("CMP082", f"unknown configuration usage {raw_usage!r}; expected: {allowed}", declaration.location)
 
     signals: dict[str, PeripheralSignalSelection] = {}
+    modes = effective_modes(component, device) if component is not None else {}
     for signal, pin in raw_signals.items():
         package_pin = part.pins.get(pin) if part is not None else None
         bonded_pads = (
-            tuple(
-                bond.pad
-                for bond in package_pin.bonds
-                if bond.when is None or bond.when.matches(component.modes if component else {})
-            )
-            if package_pin is not None
+            active_bonded_pads(component, package_pin, device)
+            if package_pin is not None and component is not None
             else ()
         )
         options = (
@@ -1202,7 +1227,7 @@ def _configuration(
                     if rule.peripheral == declaration.peripheral
                     and rule.signal == signal
                     and selected_pad in device.pad_sets[rule.pad_set].pads
-                    and (rule.when is None or rule.when.matches(component.modes))
+                    and condition_active(rule.when, modes)
                 ),
                 None,
             )
@@ -1294,12 +1319,14 @@ def _electrical_profile(
         )
     except ValueError as exc:
         _error("CMP084", str(exc), location)
+    operating = _voltage_range(attributes, location)
     return ElectricalProfile(
         domains,
         directions,
         drive_modes,
         frozenset(_csv_names(attributes.get("traits", ""), "electrical traits", location)),
-        _voltage_range(attributes, location),
+        operating,
+        absolute_voltage=_absolute_voltage_range(attributes, operating, location),
     )
 
 
@@ -1309,6 +1336,122 @@ def _voltage_range(
     minimum = _optional_voltage(attributes.get("voltage_min"), location)
     maximum = _optional_voltage(attributes.get("voltage_max"), location)
     return QuantityRange(minimum=minimum, maximum=maximum) if minimum or maximum else None
+
+
+# ``VTERM``, ``VTERM+0.1V`` or ``VDDIO - 300mV``: a pad name and an optional
+# signed voltage offset. The lazy reference lets names contain ``-``.
+_RELATIVE_LIMIT = re.compile(
+    r"\s*(?P<reference>[A-Za-z_][A-Za-z0-9_-]*?)\s*"
+    r"(?:(?P<sign>[+-])\s*(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>[A-Za-z]+))?\s*"
+)
+_FIXED_LIMIT = re.compile(r"\s*(?P<number>[+-]?\d+(?:\.\d+)?)\s*(?P<unit>[A-Za-z]+)\s*")
+
+
+def _voltage_limit(
+    value: Scalar | None, label: str, location: SourceLocation
+) -> Voltage | RelativeVoltage | None:
+    """A fixed voltage, or ``"PAD[+|-]OFFSET"`` optionally with a fixed cap.
+
+    ``"VTERM+0.1V, 1.36V"`` is the tighter of the pad-relative and the fixed
+    limit.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, RawQuantity):
+        compiled = _quantity(value, location)
+        if not isinstance(compiled, Voltage):
+            _error("CMP120", f"{label} must use V or mV", location)
+        return compiled
+    usage = (
+        f"{label} must be a voltage such as 1.35V or a pad-relative limit such as "
+        f"\"VTERM+0.1V\", optionally capped as \"VTERM+0.1V, 1.36V\""
+    )
+    if not isinstance(value, str):
+        _error("CMP120", usage, location)
+    terms = value.split(",")
+    if len(terms) > 2:
+        _error("CMP120", usage, location)
+    relative: tuple[str, Voltage] | None = None
+    fixed: Voltage | None = None
+    for term in terms:
+        fixed_match = _FIXED_LIMIT.fullmatch(term)
+        relative_match = None if fixed_match else _RELATIVE_LIMIT.fullmatch(term)
+        if fixed_match is not None:
+            if fixed is not None or fixed_match["unit"] not in Voltage.UNITS:
+                _error("CMP120", usage, location)
+            fixed = Voltage.of(fixed_match["number"], fixed_match["unit"])
+        elif relative_match is not None:
+            if relative is not None:
+                _error("CMP120", usage, location)
+            if relative_match["number"] is None:
+                offset = Voltage.of(0, "V")
+            else:
+                if relative_match["unit"] not in Voltage.UNITS:
+                    _error("CMP120", f"{label} offset must use V or mV", location)
+                sign = "" if relative_match["sign"] == "+" else "-"
+                offset = Voltage.of(f"{sign}{relative_match['number']}", relative_match["unit"])
+            relative = (relative_match["reference"], offset)
+        else:
+            _error("CMP120", usage, location)
+    if relative is None:
+        return fixed
+    return RelativeVoltage(relative[0], relative[1], fixed)
+
+
+def _absolute_voltage_range(
+    attributes: Mapping[str, Scalar],
+    operating: QuantityRange[Voltage] | None,
+    location: SourceLocation,
+) -> QuantityRange[Voltage] | None:
+    """Absolute-maximum ratings; fixed bounds must enclose the operating range."""
+
+    minimum = _voltage_limit(attributes.get("absolute_min"), "absolute_min", location)
+    maximum = _voltage_limit(attributes.get("absolute_max"), "absolute_max", location)
+    if minimum is None and maximum is None:
+        return None
+    # Only fixed parts can be compared before a component resolves references.
+    fixed_minimum = minimum.limit if isinstance(minimum, RelativeVoltage) else minimum
+    fixed_maximum = maximum.limit if isinstance(maximum, RelativeVoltage) else maximum
+    if fixed_minimum is not None and fixed_maximum is not None and fixed_maximum < fixed_minimum:
+        _error(
+            "CMP121",
+            f"absolute_min {fixed_minimum} exceeds absolute_max {fixed_maximum}",
+            location,
+        )
+    if operating is not None:
+        if (
+            fixed_minimum is not None
+            and operating.minimum is not None
+            and operating.minimum < fixed_minimum
+        ):
+            _error(
+                "CMP121",
+                f"voltage_min {operating.minimum} is below absolute_min {fixed_minimum}",
+                location,
+            )
+        if (
+            fixed_maximum is not None
+            and operating.maximum is not None
+            and fixed_maximum < operating.maximum
+        ):
+            _error(
+                "CMP121",
+                f"voltage_max {operating.maximum} exceeds absolute_max {fixed_maximum}",
+                location,
+            )
+    return QuantityRange(minimum=minimum, maximum=maximum, rating="absolute")
+
+
+def _relative_limit_references(profile: ElectricalProfile | None) -> tuple[str, ...]:
+    absolute = profile.absolute_voltage if profile is not None else None
+    if absolute is None:
+        return ()
+    return tuple(
+        bound.reference
+        for bound in (absolute.minimum, absolute.maximum)
+        if isinstance(bound, RelativeVoltage)
+    )
 
 
 def _key_values(value: Scalar, label: str, location: SourceLocation) -> dict[str, str]:
@@ -1475,6 +1618,12 @@ def _constraint(declaration: ConstraintDecl) -> Constraint:
     verifier = declaration.parameters.get("verifier")
     if verifier is not None and not isinstance(verifier, str):
         _error("CMP014", "constraint verifier must be a string", declaration.location)
+    if kind is ConstraintKind.ROUTING:
+        _validate_routing_signal_intent(declaration, parameters)
+    elif kind is ConstraintKind.LENGTH_MATCH:
+        _validate_length_match(declaration, parameters)
+    elif kind is ConstraintKind.HOLE_CLEARANCE:
+        _validate_hole_clearance(declaration, parameters)
     try:
         return Constraint(
             kind=kind,
@@ -1488,6 +1637,156 @@ def _constraint(declaration: ConstraintDecl) -> Constraint:
         )
     except ValueError as exc:
         _error("CMP014", str(exc), declaration.location)
+
+
+_BREAKOUT_RELAXES = {
+    "breakout_width": "width",
+    "breakout_gap": "pair_gap",
+    "breakout_clearance": "clearance",
+}
+
+
+def _positive_length(parameters: Mapping[str, object], name: str, label: str,
+                     location: SourceLocation) -> Length | None:
+    value = parameters.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, Length):
+        _error("CMP110" if label == "routing" else "CMP111",
+               f"{label} parameter {name!r} must be a length", location)
+    if value.base_value <= 0:
+        _error("CMP110" if label == "routing" else "CMP111",
+               f"{label} parameter {name!r} must be positive", location)
+    return value
+
+
+def _validate_routing_signal_intent(declaration: ConstraintDecl,
+                                    parameters: Mapping[str, object]) -> None:
+    """Located checks for the signal-integrity routing properties (plan L2/L5/L6)."""
+    location = declaration.location
+    target = parameters.get("target_single_ended_ohms")
+    if target is not None and (isinstance(target, bool) or not isinstance(target, int) or target <= 0):
+        _error("CMP110", "routing parameter 'target_single_ended_ohms' must be a positive integer", location)
+    tolerance = parameters.get("impedance_tolerance_percent")
+    if tolerance is not None:
+        if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)) or not 0 < tolerance < 100:
+            _error("CMP110", "routing parameter 'impedance_tolerance_percent' must be a number "
+                   "greater than 0 and below 100", location)
+        if "target_impedance_ohms" not in parameters and target is None:
+            _error("CMP110", "'impedance_tolerance_percent' requires 'target_impedance_ohms' or "
+                   "'target_single_ended_ohms'", location)
+    group = parameters.get("layer_group")
+    if group is not None and (not isinstance(group, str) or not group.strip()):
+        _error("CMP110", "routing parameter 'layer_group' must be a nonempty name", location)
+    breakout_length = _positive_length(parameters, "breakout_length", "routing", location)
+    relaxed = [name for name in _BREAKOUT_RELAXES if name in parameters]
+    for name in relaxed:
+        value = _positive_length(parameters, name, "routing", location)
+        base_name = _BREAKOUT_RELAXES[name]
+        base = parameters.get(base_name)
+        if name == "breakout_gap" and base is None:
+            _error("CMP110", "'breakout_gap' requires a differential 'pair_gap'", location)
+        if isinstance(base, Length) and value.base_value > base.base_value:
+            _error("CMP110", f"'{name}' may only relax '{base_name}', never tighten it "
+                   f"({name} exceeds {base_name})", location)
+    if relaxed and breakout_length is None:
+        _error("CMP110", "breakout properties require a positive 'breakout_length'", location)
+    if breakout_length is not None and not relaxed:
+        _error("CMP110", "'breakout_length' requires 'breakout_width', 'breakout_gap' or "
+               "'breakout_clearance'", location)
+
+
+def _validate_length_match(declaration: ConstraintDecl, parameters: Mapping[str, object]) -> None:
+    location = declaration.location
+    if len(declaration.targets) < 2:
+        _error("CMP111", "length_match requires at least two nets", location)
+    duplicates = sorted(name for name, count in Counter(declaration.targets).items() if count > 1)
+    if duplicates:
+        _error("CMP111", f"length_match lists net {duplicates[0]!r} more than once", location)
+    pins = [target for target in declaration.targets if "." in target]
+    if pins:
+        _error("CMP111", f"length_match targets must be nets, not pins ({pins[0]!r})", location)
+    unknown = sorted(set(parameters) - {"max_skew"})
+    if unknown:
+        _error("CMP111", f"unknown length_match parameter {unknown[0]!r}", location)
+    if "max_skew" not in parameters:
+        _error("CMP111", "length_match requires 'max_skew'", location)
+    _positive_length(parameters, "max_skew", "length_match", location)
+
+
+def _validate_hole_clearance(declaration: ConstraintDecl, parameters: Mapping[str, object]) -> None:
+    """Located checks for one component's scoped pad-to-own-NPTH clearance."""
+    location = declaration.location
+    if len(declaration.targets) != 1:
+        _error("CMP112", "hole_clearance requires exactly one component", location)
+    if "." in declaration.targets[0]:
+        _error("CMP112", f"hole_clearance targets a component, not a pin ({declaration.targets[0]!r})",
+               location)
+    unknown = sorted(set(parameters) - {"clearance", "reason"})
+    if unknown:
+        _error("CMP112", f"unknown hole_clearance parameter {unknown[0]!r}", location)
+    clearance = parameters.get("clearance")
+    if clearance is None:
+        _error("CMP112", "hole_clearance requires 'clearance'", location)
+    if not isinstance(clearance, Length) or clearance.base_value <= 0:
+        _error("CMP112", "hole_clearance parameter 'clearance' must be a positive length", location)
+    reason = parameters.get("reason")
+    if reason is None:
+        _error("CMP112", "hole_clearance requires 'reason'", location)
+    if not isinstance(reason, str) or not reason.strip():
+        _error("CMP112", "hole_clearance parameter 'reason' must be a nonempty string", location)
+
+
+def _validate_hole_clearance_targets(
+    document: Document,
+    body: Board,
+    instances: tuple[ModuleInstance, ...],
+    modules: Mapping[str, ModuleDefinition],
+) -> None:
+    """Resolve each ``hole_clearance`` target and reject a second rule for one component.
+
+    A target is a local component or a module-instance path (``MOD/J``) to a
+    descendant component. Rules declared inside instantiated modules count
+    too, under their instance-qualified reference.
+    """
+    covered = {
+        f"{instance.ref}/{reference}"
+        for instance in instances
+        for reference in _module_hole_clearances(modules[instance.module], modules)
+    }
+    for declaration in document.declarations:
+        if not isinstance(declaration, ConstraintDecl) or declaration.kind != ConstraintKind.HOLE_CLEARANCE.value:
+            continue
+        target = declaration.targets[0]
+        if not _component_path_exists(target, body.components, instances, modules):
+            _error("CMP113", f"hole_clearance target {target!r} is not a component", declaration.location)
+        if target in covered:
+            _error("CMP114", f"component {target!r} already has a hole_clearance constraint",
+                   declaration.location)
+        covered.add(target)
+
+
+def _module_hole_clearances(definition: ModuleDefinition,
+                            modules: Mapping[str, ModuleDefinition]) -> set[str]:
+    """Module-relative references owning a ``hole_clearance``, including nested ones."""
+    result = {constraint.targets[0] for constraint in definition.constraints
+              if constraint.kind is ConstraintKind.HOLE_CLEARANCE}
+    for instance in definition.module_instances:
+        result.update(f"{instance.ref}/{reference}"
+                      for reference in _module_hole_clearances(modules[instance.module], modules))
+    return result
+
+
+def _component_path_exists(target: str, components: tuple[ComponentInstance, ...],
+                           instances: tuple[ModuleInstance, ...],
+                           modules: Mapping[str, ModuleDefinition]) -> bool:
+    *path, leaf = target.split("/")
+    for segment in path:
+        module = next((instance.module for instance in instances if instance.ref == segment), None)
+        if module is None:
+            return False
+        components, instances = modules[module].components, modules[module].module_instances
+    return any(component.ref == leaf for component in components)
 
 
 def _quantity(value: Scalar, location: SourceLocation) -> Quantity:

@@ -9,11 +9,13 @@ from types import MappingProxyType
 
 from .physical import PhysicalBoard
 from .placement import (
+    CorridorReservation,
     PlacementAlgorithmError,
     PlacementCandidate,
     PlacementMetrics,
     PlacementPlannerOptions,
     generate_placement_candidates,
+    reserved_corridors,
     select_placement_candidate,
 )
 from .placement_escape import EscapeChannel, EscapeSpacingModel
@@ -59,6 +61,7 @@ class LayoutReport:
     selected_candidate: str = "candidate-00"
     algorithm: str = "hierarchical-analytical/hybrid-legalize/route-refine-v0.2"
     escape_channels: tuple[EscapeChannel, ...] = ()
+    corridors: CorridorReservation = CorridorReservation()
 
     def to_json(self) -> str:
         return json.dumps(
@@ -108,6 +111,24 @@ class LayoutReport:
                         },
                     }
                     for candidate in self.candidates
+                ],
+                "reserved_corridors": [
+                    {
+                        "name": corridor.name,
+                        "nets": list(corridor.nets),
+                        "side": corridor.side.value if corridor.side is not None else "both",
+                        "margin_nm": corridor.margin_nm,
+                        "terminal_components": list(corridor.terminal_references),
+                        "polygon_nm": [
+                            [point.x_nm, point.y_nm]
+                            for point in corridor.keepout.outline.vertices
+                        ],
+                    }
+                    for corridor in self.corridors.corridors
+                ],
+                "skipped_corridors": [
+                    {"nets": list(item.nets), "reason": item.reason}
+                    for item in self.corridors.skipped
                 ],
             },
             indent=2,
@@ -170,6 +191,7 @@ def plan_placement(
             candidates,
             selected.candidate_id,
             escape_channels=channels,
+            corridors=reserved_corridors(board),
         ),
         candidates,
     )
@@ -253,6 +275,28 @@ def _findings(
             "remain authoritative and joint package access must be verified",
             f"{channel.left},{channel.right}",
         ))
+    corridors = reserved_corridors(board)
+    for skipped in corridors.skipped:
+        findings.append(
+            LayoutFinding(
+                "CORRIDOR_NOT_RESERVED",
+                LayoutStage.PREPARE,
+                GateStatus.WARNING,
+                f"reserve_corridor for {'/'.join(skipped.nets)} was not applied: {skipped.reason}",
+                "/".join(skipped.nets),
+            )
+        )
+    if corridors.corridors:
+        findings.append(
+            LayoutFinding(
+                "RESERVED_CORRIDORS",
+                LayoutStage.PLACE,
+                GateStatus.PASS,
+                f"kept {len(corridors.corridors)} differential-pair corridor(s) free of "
+                "non-terminal components: "
+                + ", ".join("/".join(item.nets) for item in corridors.corridors),
+            )
+        )
     if metrics.congestion_overflow:
         findings.append(
             LayoutFinding(

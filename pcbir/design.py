@@ -19,6 +19,7 @@ from .physical import BoardDatum, BoardEdge
 from .physical import BodyOverhang, ComponentHeight, AssemblyEnvelope, AssemblyAccess
 from .physical import MechanicalSlot,BoundaryLine,BoundaryArc,BoardBoundaryPath
 from .mechanical_references import MechanicalReference, lower_reference
+from .mechanical_stackup import MechanicalStackup, StackupDecl, lower_stackup
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,7 @@ class MechanicalDesign:
     assembly_access: tuple[AssemblyAccess, ...] = ()
     slots: tuple[MechanicalSlot,...] = ()
     references: tuple[MechanicalReference,...] = ()
+    stackup: MechanicalStackup | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holes", tuple(self.holes))
@@ -96,7 +98,12 @@ def lower_mechanical(document: Document,
     boundary_items,slots=[],[]
     references=[]
     path_options=None
-    items, sources, instances = expand_mechanical_items(block.items, profiles or {})
+    stackups = [item for item in block.items if isinstance(item, StackupDecl)]
+    if len(stackups) > 1:
+        raise CopperScriptError("MEC006", "only one stackup is allowed", stackups[1].location)
+    stackup = lower_stackup(stackups[0]) if stackups else None
+    items, sources, instances = expand_mechanical_items(
+        tuple(item for item in block.items if not isinstance(item, StackupDecl)), profiles or {})
 
     def length(value):
         if not isinstance(value, RawQuantity):
@@ -269,6 +276,6 @@ def lower_mechanical(document: Document,
         assembly = lower_assembly(assembly_items, replace(outline,cutouts=tuple(cutouts)), edges, point, length)
         return MechanicalDesign(replace(outline, cutouts=tuple(cutouts)), tuple(holes), rules,
             tuple(connectors), tuple(keepouts), tuple(copper_keepouts), instances, sources,
-            datums, edges, attachments, *assembly, tuple(slots), tuple(references))
+            datums, edges, attachments, *assembly, tuple(slots), tuple(references), stackup)
     except (ValueError, TypeError) as exc:
         raise CopperScriptError("MEC003", str(exc), block.location) from exc

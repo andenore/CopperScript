@@ -66,12 +66,17 @@ def normalize_constraints(constraints: tuple[object, ...]) -> tuple[NormalizedCo
     normalized: list[NormalizedConstraint] = []
     for index, constraint in enumerate(constraints):
         kind = constraint.kind.value
-        routing = kind == "routing"
+        length_match = kind == "length_match"
+        routing = kind == "routing" or length_match
         zone = kind == "copper_zone"
         via_in_pad = kind == "via_in_pad"
+        hole_clearance = kind == "hole_clearance"
+        copper = zone or via_in_pad or hole_clearance
         default_consumers = (
             ("physicalizer", "plane_stitch", "physical_drc") if via_in_pad
             else ("physicalizer", "kicad_zone_refill", "physical_drc") if zone
+            else ("physicalizer", "physical_drc", "kicad_rules") if hole_clearance
+            else ("physical_drc",) if length_match
             else ("critical_router", "physical_drc") if routing
             else ("placement", "physical_drc")
         )
@@ -79,13 +84,15 @@ def normalize_constraints(constraints: tuple[object, ...]) -> tuple[NormalizedCo
             NormalizedConstraint(
                 constraint.constraint_id or f"{kind}:{index}",
                 ",".join(constraint.targets),
-                f"copper.{kind}" if zone or via_in_pad else f"route.{kind}" if routing else f"placement.{kind}",
+                f"copper.{kind}" if copper else f"route.{kind}" if routing else f"placement.{kind}",
                 constraint.mode,
-                "physical" if zone or via_in_pad else "routing" if routing else "placement",
+                "physical" if copper else "routing" if routing else "placement",
                 constraint.origins,
                 constraint.consumers or default_consumers,
                 constraint.verifier or (
-                    "DRC-VIA-PAD-OVERLAP" if via_in_pad else "KICAD-ZONE-FILL" if zone else "DRC-ROUTING" if routing else "DRC-PLACEMENT"
+                    "DRC-VIA-PAD-OVERLAP" if via_in_pad else "KICAD-ZONE-FILL" if zone
+                    else "DRC-HOLE-CLEARANCE" if hole_clearance
+                    else "DRC-LENGTH-MATCH" if length_match else "DRC-ROUTING" if routing else "DRC-PLACEMENT"
                 ),
             )
         )

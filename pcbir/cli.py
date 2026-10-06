@@ -8,6 +8,7 @@ from dataclasses import asdict
 from decimal import InvalidOperation
 from math import isqrt
 from pathlib import Path
+import traceback
 from typing import Sequence
 
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
@@ -44,6 +45,13 @@ from .routeflow import (
 )
 from .serializer import board_to_json, write_json
 from .progress import console_progress, emit
+
+
+def _print_error(args: argparse.Namespace, label: str, exc: BaseException) -> None:
+    """One-line error; commands with ``--debug`` print the traceback first."""
+    if getattr(args, "debug", False):
+        traceback.print_exception(exc)
+    print(f"{label}: {exc}")
 
 
 def _positive_mm(value: str) -> str:
@@ -135,6 +143,27 @@ def _parser() -> argparse.ArgumentParser:
     check_parser = subparsers.add_parser("check", help="run electrical-rules checks")
     check_parser.add_argument("board", type=Path, help="a .copper source file")
     _add_resolution_options(check_parser)
+
+    si_parser = subparsers.add_parser(
+        "si-check",
+        help="screen impedance, reference planes, layer groups and length-match groups before routing",
+    )
+    si_parser.add_argument("board", type=Path, help="a .copper source file")
+    _add_resolution_options(si_parser)
+    si_parser.add_argument("--layers", type=int, choices=(2, 4, 6), default=2)
+    si_parser.add_argument(
+        "--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic",
+        help="physical clearance and track-width profile",
+    )
+    si_parser.add_argument(
+        "--footprint-root", action="append", default=[], type=Path,
+        help="explicit KiCad footprint search root (repeatable)",
+    )
+    si_parser.add_argument(
+        "--allow-proxy-footprints", action="store_true",
+        help="use generated inspection-only pads instead of resolving .kicad_mod files",
+    )
+    si_parser.add_argument("--json", action="store_true", help="emit deterministic machine-readable JSON")
 
     lock_parser = subparsers.add_parser(
         "lock", help="resolve package content and update copper.lock"
@@ -332,6 +361,8 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--search-budget", type=int, default=50_000)
     board_route_parser.add_argument("--minimum-repair-pitch-mm", type=_positive_mm, default="0.1",
         help="resolution floor for up to four failed-net-only no-path refinement rounds (default: 0.1 mm)")
+    board_route_parser.add_argument("--debug", action="store_true",
+        help="print the full traceback of an error before its one-line summary")
     board_route_parser.add_argument("--progress", action="store_true",
         help="stream elapsed phase/group/trial events; telemetry is not completion or signoff evidence")
     board_route_parser.add_argument(
@@ -646,6 +677,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (BoardLoadError, SimulationError, OSError) as exc:
             print(f"SIMULATION ERROR: {exc}")
             return 2
+    if args.command == "si-check":
+        from .signal_integrity import si_check
+        try:
+            design = load_design(args.board, locked=args.locked, offline=args.offline)
+        except BoardLoadError as exc:
+            print(f"COMPILE ERROR: {exc}")
+            return 2
+        try:
+            options = PrototypePhysicalOptions(copper_layers=args.layers, fabrication_profile=args.fab_profile)
+            if args.allow_proxy_footprints:
+                physical = prototype_physicalize(design, options)
+            else:
+                physical = resolved_physicalize(design, FootprintResolver(
+                    base_directory=args.board.resolve().parent,
+                    search_roots=tuple(root.resolve() for root in args.footprint_root),
+                    locked=args.locked, offline=args.offline), options)
+        except (ValueError, OSError) as exc:
+            print(f"SI CHECK ERROR: {exc}")
+            return 2
+        report = si_check(physical)
+        if args.json:
+            print(report.to_json(), end="")
+        else:
+            for line in report.lines():
+                print(line)
+        # Screening findings are warnings; they never fail the command.
+        return 0
     if args.command == "check-footprint":
         try:
             result = load_kicad_mod(args.footprint, strict=args.strict)
@@ -679,7 +737,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 offline=getattr(args, "offline", False),
             )
         except BoardLoadError as exc:
-            print(f"COMPILE ERROR: {exc}")
+            _print_error(args, "COMPILE ERROR", exc)
             return 2
         board = design.electrical
         if args.command == "lock":
@@ -910,7 +968,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if escape_feedback is not None:
                     result = escape_feedback.pipeline
             except ValueError as exc:
-                print(f"ROUTING ERROR: {exc}")
+                _print_error(args, "ROUTING ERROR", exc)
                 return 2
             emit(progress, "final_contacts_native_drc", "started")
             stitch = (escape_feedback.plane_stitch if escape_feedback is not None
@@ -937,7 +995,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                          unconnected=plane_verification.unconnected_count,
                          other_violations=plane_verification.other_violation_count)
             except RuntimeError as exc:
-                print(f"PLANE VERIFICATION ERROR: {exc}")
+                _print_error(args, "PLANE VERIFICATION ERROR", exc)
                 return 2
             duplicate_pending, duplicate_verified = reconcile_zone_lands(
                 output_board, duplicate_stitch.pending, plane_verification)
@@ -1202,7 +1260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                  source_revision=editor_source_revision)
                 emit(progress, "export", "finished", report=str(report_path), status=closure_status.value)
             except (OSError, ValueError) as exc:
-                print(f"OUTPUT ERROR: {exc}")
+                _print_error(args, "OUTPUT ERROR", exc)
                 return 2
             print(
                 f"BOARD ROUTE: {closure_status.value} - "

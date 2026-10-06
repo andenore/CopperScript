@@ -14,6 +14,7 @@ from itertools import product
 from math import ceil, hypot, sqrt
 from typing import Iterator, NamedTuple
 
+from .breakout import BreakoutRegions
 from .geometry import RoundedConvexShape, shapes_clear
 from .physical import BoardSide, CopperLayer, NetRoutingRule, PhysicalBoard, Point, TrackSegment, Via, nm_from_mm
 from .routing import GlobalNetRoute
@@ -112,9 +113,13 @@ def _paths(start: Point, end: Point) -> tuple[tuple[Point, ...], ...]:
             (start, Point(end.x_nm - sx * distance, end.y_nm - sy * distance), end))
 
 
-def _tracks(net: str, points: tuple[Point, ...], width: int, layer: CopperLayer) -> tuple[TrackSegment, ...]:
-    return tuple(TrackSegment(net, a, b, width, layer)
-                 for a, b in zip(points, points[1:]) if a != b)
+def _tracks(net: str, points: tuple[Point, ...], width: int, layer: CopperLayer,
+            breakout: BreakoutRegions | None = None) -> tuple[TrackSegment, ...]:
+    tracks = tuple(TrackSegment(net, a, b, width, layer)
+                   for a, b in zip(points, points[1:]) if a != b)
+    # Lanes of a net with breakout properties are cut at the region boundary
+    # and carry the breakout width inside it, exactly as they will be emitted.
+    return breakout.split_tracks(tracks, width) if breakout else tracks
 
 
 def _legal(board: PhysicalBoard, index: RoutingClearanceIndex,
@@ -124,6 +129,15 @@ def _legal(board: PhysicalBoard, index: RoutingClearanceIndex,
                 or not _track_inside_board(board, track.start, track.end, track.width_nm)
                 or not index.can_track(track.net, track.start, track.end, track.width_nm, track.layer)):
             return False
+    breakout = index.breakout
+    if first and second and breakout.pair(first[0].net, second[0].net):
+        # Members of a breakout pair are spaced by the pair gap, relaxed to
+        # the breakout gap where each member's copper is inside its region.
+        lands = {track: breakout.region(track.net, (track.start, track.end)) for track in (*first, *second)}
+        return all(shapes_clear(RoundedConvexShape((a.start, a.end), a.width_nm // 2),
+                                RoundedConvexShape((b.start, b.end), b.width_nm // 2),
+                                breakout.spacing_nm(a.net, lands[a], b.net, lands[b]))
+                   for a in first for b in second if a.layer is b.layer)
     return all(shapes_clear(RoundedConvexShape((a.start, a.end), a.width_nm // 2),
                             RoundedConvexShape((b.start, b.end), b.width_nm // 2), clearance)
                for a in first for b in second if a.layer is b.layer)
@@ -156,8 +170,8 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                 if (_heading(a[-2], a[-1]) != heading
                         or _heading(b[-2], b[-1]) != heading):
                     continue
-                first_tracks, second_tracks = (_tracks(first_name, a, width, layer),
-                                               _tracks(second_name, b, width, layer))
+                first_tracks, second_tracks = (_tracks(first_name, a, width, layer, index.breakout),
+                                               _tracks(second_name, b, width, layer, index.breakout))
                 if _legal(board, index, first_tracks, second_tracks, clearance):
                     ports.append(_Port(center, heading, sign, first_tracks, second_tracks, preference))
                     break
@@ -327,8 +341,8 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
             points = (point, ahead) if initial_step else (behind, point, ahead)
             lanes = _lane_paths(points, old, new, offset, start.sign)
             legal_cache[key] = lanes is not None and _legal(
-                board, index, _tracks(first_name, lanes[0], width, layer),
-                _tracks(second_name, lanes[1], width, layer), clearance)
+                board, index, _tracks(first_name, lanes[0], width, layer, index.breakout),
+                _tracks(second_name, lanes[1], width, layer, index.breakout), clearance)
         return legal_cache[key]
 
     while queue and expanded < budget:
@@ -352,7 +366,8 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                 lanes = _lane_paths(points, start.heading, inward, offset, start.sign)
                 if lanes is None:
                     continue
-                a, b = _tracks(first_name, lanes[0], width, layer), _tracks(second_name, lanes[1], width, layer)
+                a = _tracks(first_name, lanes[0], width, layer, index.breakout)
+                b = _tracks(second_name, lanes[1], width, layer, index.breakout)
                 if _legal(board, index, a, b, clearance):
                     return _SpineSearchResult(a, b, expanded, points)
         for new in ((heading - 1) % 8, heading, (heading + 1) % 8):
