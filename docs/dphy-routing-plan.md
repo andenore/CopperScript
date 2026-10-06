@@ -295,6 +295,14 @@ Shared rules for every item:
   inner pair's actual exit copper. Shorter corner wraps reduce the structural
   bundle skew that R3 would otherwise have to tune out.
 
+- [ ] **R8 Bundle corridors for corner wraps.** `reserve_corridor` keeps
+  components out of the band between each pair's own terminals. When a
+  bundle leaves a package across a corner, the outer pairs route outside
+  their own band, around the inner pairs. On a QFN-32 a passive and its
+  stitch via placed in the outer pair's wrap left that pair with no
+  candidate. Reserve one corridor for the whole bundle, sized by the
+  nesting width of the inner pairs, instead of per-pair bands.
+
 ## Order
 
 1. In parallel: W1 (D1–D5), W2 (L1–L7), R4, and the CopperLib work below.

@@ -133,6 +133,40 @@ Completion means tested implementation, not automatic manufacturing signoff.
   - [ ] Co-allocate critical/ordinary/plane package access, verify onward ports,
     derive directional placement margins, then perform the full rerun. See the
     implementation sequence in package-access-first; a legal via is not closure.
+- [ ] R18 (escape-terminal review of the clean full-vertical rerun): Package
+  escapes are reserved before routing and then *replace* the pad as the
+  detailed router's terminal. On the clean rerun all 104 boundary ports are
+  In2.Cu (the rank-0 layer). The detailed router must start or end at that
+  single port: `_route_net` offers no pad access candidates once a
+  `RoutingAccess` exists. Observed consequences:
+  - Escape via, port stub and router via chains within 0.25-2 mm. V1V8_MODEM
+    is 16 mm of F.Cu with four vias, where a direct surface route has none.
+    SIM_RST, SIM_IO, GNSS_*, CAN_L/TX/RX show the same chain.
+  - Hairpins, because escape and port direction ignore the destination.
+    GNSS_TX escapes south, then runs 4 mm north past its own pad.
+  - Loops: CAN_H climbs from U_CAN.7's port and crosses its own pad on F.Cu,
+    because touching the pad does not count as connected.
+  - Every pin of small fine-pitch parts is escaped
+    (`escape_small_dense_packages`, 1.5 mm neighbour distance), e.g. a
+    VSSOP-8.
+  - CS-090 cleanup never removes these escapes: the port stub always counts
+    as used.
+
+  Most remaining In2 sharp-turn candidates sit on these ports
+  ([layer-balance review](routing-layer-balance-review.md)). They also make
+  opt-in layer assignment fragile. Planned work, each exact, transactional
+  and ownership-safe:
+  - [ ] Offer the pad's own surface access as an alternative terminal to its
+    reserved escape, and remove unused escape and witness copper after
+    routing.
+  - [ ] Choose port edge and layer from the net's guide or destination; allow
+    surface and other signal-layer ports.
+  - [ ] Treat the pad and its connected launch copper as part of the terminal
+    set, so a route touching it terminates; remove copper cycles in cleanup.
+  - [ ] Collapse escape-via, port-stub and router-via chains when a direct
+    replacement validates.
+  - [ ] Escape only pins whose direct access is actually constrained.
+
 - [ ] R7: Branch-safe straight/45-degree cleanup for multi-terminal trees,
   including orthogonal-first/budget-fallback routes; protect pads, junctions,
   vias, and exact clearance. Improve topology without breaking existing trees.
