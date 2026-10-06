@@ -86,3 +86,18 @@ def test_invalid_source_permission_fails_closed(target,process,extra):
     with pytest.raises(ValueError):
         prototype_physicalize(compile_source(source(target,process,extra)),
             PrototypePhysicalOptions(copper_layers=6,fabrication_profile="jlcpcb-six-layer"))
+
+
+def test_editor_projection_digest_keeps_via_in_pad_profile(tmp_path):
+    from pcbir.drc import physical_board_digest
+    from pcbir.editor.overlay import projection_digest, write_intent
+    board = replace(qualified_board(), via_in_pad_rules=(PadViaInPadRule(PadReference("J1", "1")),))
+    # Stripping all metadata would fail the via-in-pad profile validation.
+    assert projection_digest(board) == projection_digest(replace(board, metadata={**board.metadata, "run": "x"}))
+    source = tmp_path / "board.copper"
+    source.write_text("board B {}\n")
+    write_intent(source, board, stitch_zone_pads(board).board, tmp_path / "board.editor-intent.json")
+    # Boards without permissions keep the metadata-free digest they had before.
+    plain = qualified_board()
+    assert projection_digest(plain) == physical_board_digest(
+        replace(plain, tracks=(), vias=(), zone_fills=(), materialized_macros=(), metadata={}))

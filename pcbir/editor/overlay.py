@@ -44,8 +44,12 @@ def _json(path):
 
 def projection_digest(board):
     # Exclude derived copper and execution metadata, not physical source rules.
+    # Via-in-pad permissions are validated against the fabrication profile, so
+    # boards that carry them keep it; all other digests are unchanged.
+    metadata = ({"fabrication_profile": board.metadata["fabrication_profile"]}
+                if board.via_in_pad_rules and "fabrication_profile" in board.metadata else {})
     return physical_board_digest(replace(board, tracks=(), vias=(), zone_fills=(),
-                                          materialized_macros=(), metadata={}))
+                                          materialized_macros=(), metadata=metadata))
 
 
 def electrical_digest(board):
