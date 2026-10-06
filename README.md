@@ -235,6 +235,10 @@ Package preflight reserves plane contacts by default with fanout enabled;
 explicit `copper_zone` constraints, not automatically inferred planes. See the
 [power-domain and routing plan](docs/power-domain-routing-plan.md) and
 [language reference](docs/language-reference.md).
+The [unprofiled full rerun and layer review](docs/routing-domain-access-review.md)
+connects all signal nets and GND pads; one USB return-via warning still blocks
+signoff. It also documents the subsequent removed-corner occupancy correction
+and the remaining full-rerun requirement.
 The [detailed-routing research](docs/detailed-routing-research.md) explains
 the geometry checks, fabrication-rule profile, and current full-board limits.
 

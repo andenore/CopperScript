@@ -123,11 +123,30 @@ run's complete generated project is in `native-preflight/`; its
 `access-smoke.json` explicitly records `ordinary_area_routing_run: false` and
 `fabrication_ready: false`. Independent KiCad 10.0.6 refill/DRC of that exact
 project finds **zero GND opens and no clearance/short violations**. It still
-reports 95 ordinary-net opens and 104 `via_dangling` warnings on unused fanout
-exits. These are expected at preflight, but are not waived for a completed
-board: the native result remains a failure and no manufacturing release exists.
+reports 95 ordinary-net opens and 104 `via_dangling` warnings: 103 ordinary
+fanout vias and one GND return via. These are unfinished preflight findings,
+not waived for a completed board: the native result remains a failure and no
+manufacturing release exists.
 
-The next closure run is the README's shared full-vertical build with
-`--profile none`. It must complete ordinary routing, ownership-aware cleanup,
-native refill/zero-open DRC and manufacturing gates. This increment proves
-compatible early access at the new placement, **not a fully routed board**.
+The shared full-vertical build has subsequently completed with `--profile none`.
+See [the full rerun and layer review](routing-domain-access-review.md): all 49
+ordinary nets and eight critical nets connect, and independent KiCad refill has
+zero unconnected items. Completion/signoff still fails on one dangling GND
+return via and one reported detailed-resource conflict. Neither closure finding
+is waived and no manufacturing output is released.
+
+### Next closure work
+
+- [x] Complete the shared unprofiled full routing run and independently refill,
+  check and plot every copper layer. Preserve raw failed-gate evidence.
+- [x] Bind detailed resource accounting to final emitted copper after stub
+  pruning and corner chamfering. Add a regression in which a legal later route
+  occupies a removed corner; retain live resource conflicts and exact DRC.
+  Applies per tentative net, before installing occupancy for the next search;
+  the complete board still needs a rerun after the correction.
+- [ ] Resolve the unconnected-surface USB return via generically. Check actual
+  reference-layer/contact requirements and preserve explicit source requirements;
+  do not delete a required via, invent copper solely to silence DRC, or waive the
+  warning. A shared reference-plane case needs an explicit modeled policy.
+- [ ] Repeat the complete flow after those fixes, requiring zero native opens
+  and violations and no stale/real resource overflow before manufacturing export.

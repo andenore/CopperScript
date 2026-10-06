@@ -1220,7 +1220,6 @@ def _route_net(
     tracks: list[TrackSegment] = []
     vias: list[Via] = []
     via_positions: set[tuple[Point, CopperLayer, CopperLayer, str | None]] = set()
-    resources: set[str] = set()
     for first, second in sorted(route_edges):
         if first.layer_index == second.layer_index:
             tracks.append(
@@ -1264,24 +1263,13 @@ def _route_net(
         tracks.extend(escape)
     unpruned = tuple(tracks)
     tracks = list(prune_track_stubs(board, unpruned, tuple(vias), clearance=clearance))
-    copper_changed = Counter(tracks) != Counter(unpruned)
-    for first, second in route_edges:
-        if copper_changed and first.layer_index == second.layer_index:
-            a, b = grid.point(first), grid.point(second)
-            axis = "x_nm" if a.x_nm != b.x_nm else "y_nm"
-            low, high = sorted((getattr(a, axis), getattr(b, axis)))
-            if not any(track.layer == grid.layers[first.layer_index]
-                       and orientation(a, b, track.start) == orientation(a, b, track.end) == 0
-                       and max(low, min(getattr(track.start, axis), getattr(track.end, axis)))
-                       < min(high, max(getattr(track.start, axis), getattr(track.end, axis)))
-                       for track in tracks):
-                continue  # Retired tails must not keep phantom congestion usage.
-        resources.update(_edge_resources(grid, first, second))
     tracks = list(_merge_collinear_tracks(tracks))
     tracks = list(chamfer_ordinary_corners(
         board, tuple(tracks), tuple(vias), clearance,
         allow_movable_conflicts=allow_movable_conflicts,
     ))
+    resources = _emitted_edge_resources(grid, route_edges, tuple(tracks),
+        tuple(v for v in (*board.vias, *vias) if v.net == name))
     length = sum(
         round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm))
         for item in tracks
@@ -1982,6 +1970,67 @@ def _inside_guide(
         and abs(point.y_nm - access.access_position.y_nm) <= margin
         for access in guide.accesses
     )
+
+
+def _emitted_edge_resources(
+    grid: _Grid, edges: Iterable[tuple[DetailedNode, DetailedNode]],
+    tracks: tuple[TrackSegment, ...], vias: tuple[Via, ...],
+) -> frozenset[str]:
+    """Keep maze hints only where the owner's final copper supports them.
+
+    Pruning can shorten an edge; chamfering can retire its original corner.
+    Resource hints are not an alternate DRC: exact physical clearance still
+    checks every candidate, including new diagonal segments and via spans.
+    All supplied copper belongs to this one tentative net.
+    """
+    by_layer = {layer: tuple(t for t in tracks if t.layer is layer)
+                for layer in grid.layers}
+    spans: dict[Point, list[tuple[int, int]]] = {}
+    for via in vias:
+        low, high = sorted((grid.layers.index(via.from_layer), grid.layers.index(via.to_layer)))
+        spans.setdefault(via.position, []).append((low, high))
+    resources: set[str] = set()
+    for first, second in edges:
+        first, second = _edge_key(first, second)
+        a, b = grid.point(first), grid.point(second)
+        if first.layer_index != second.layer_index:
+            cursor = first.layer_index
+            for low, high in sorted(spans.get(a, ())):
+                if low > cursor:
+                    break
+                cursor = max(cursor, high)
+            if a == b and cursor >= second.layer_index:
+                resources.update(_edge_resources(grid, first, second))
+            continue
+        selected = by_layer[grid.layers[first.layer_index]]
+        axis = "x_nm" if a.x_nm != b.x_nm else "y_nm"
+        low, high = sorted((getattr(a, axis), getattr(b, axis)))
+        intervals = []
+        for track in selected:
+            if orientation(a, b, track.start) != 0 or orientation(a, b, track.end) != 0:
+                continue
+            start = max(low, min(getattr(track.start, axis), getattr(track.end, axis)))
+            end = min(high, max(getattr(track.start, axis), getattr(track.end, axis)))
+            if start < end:
+                intervals.append((start, end))
+        if not intervals:
+            continue  # A fully retired edge must never contribute maze usage.
+        keys = _edge_resources(grid, first, second)
+        for point, node, key in ((a, first, keys[0]), (b, second, keys[1])):
+            if (any(low <= node.layer_index <= high for low, high in spans.get(point, ()))
+                    or any(point_on_segment(point, t.start, t.end) for t in selected)):
+                resources.add(key)
+        cursor = low
+        for start, end in sorted(intervals):
+            if end <= cursor:
+                continue
+            if start > cursor:
+                break
+            cursor = end
+            if cursor >= high:
+                resources.add(keys[2])
+                break
+    return frozenset(resources)
 
 
 def _edge_resources(
