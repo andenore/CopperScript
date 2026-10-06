@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .drc import placed_pad_shape, run_physical_drc
-from .geometry import point_in_polygon
+from .geometry import point_in_polygon, point_segment_distance_at_least
 from .physical import (
     BoardSide, CopperLayer, FootprintPad, PadKind, PadReference, PhysicalBoard,
     Placement, Point, RouteKind, TrackSegment, Via, nm_from_mm,
@@ -152,12 +152,13 @@ def route_fanout(
     pin_by_ref = {}
     for item in pads:
         pin_by_ref.setdefault(item[1], []).append(item)
+    outline = _OutlineSites(board.outline.vertices)
     def choices_for(reference, index, candidate_options, *, elbows=False, multiple_orders=False):
         choices = []
         for _, _, position, placement, pad in pin_by_ref[reference]:
             sites = (_two_leg_candidates if elbows else _candidates)(position, placement.position, candidate_options)
             choices.extend(_legal_choices(board, index, net_by_pad[reference], position,
-                placement, pad, sites, multiple_orders=multiple_orders))
+                placement, pad, sites, multiple_orders=multiple_orders, outline=outline))
         return tuple(dict.fromkeys(choices))
     refinement_cache = {}
     def refine(reference):
@@ -298,7 +299,9 @@ def _maze_choices(board, clearance, net, pins, options) -> tuple[EscapeCandidate
 
 def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
                    position: Point, placement: Placement, pad: FootprintPad,
-                   endpoints, *, multiple_orders: bool = False) -> tuple[EscapeCandidate, ...]:
+                   endpoints, *, multiple_orders: bool = False,
+                   outline: "_OutlineSites | None" = None) -> tuple[EscapeCandidate, ...]:
+    outline = outline or _OutlineSites(board.outline.vertices)
     rule = next((r for r in board.net_routing_rules if r.net == net), None)
     side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
     allowed = routing_layers(board, net, rule)
@@ -313,8 +316,7 @@ def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: 
     choices = []
     for endpoint in endpoints:
         margin = size // 2 + board.rules.minimum_clearance_nm
-        if (not point_in_polygon(endpoint, board.outline.vertices)
-                or _distance_to_outline(endpoint, board.outline.vertices) < margin):
+        if not outline.admits(endpoint, margin):
             continue
         if (bounds.min_x - size // 2 <= endpoint.x_nm <= bounds.max_x + size // 2
                 and bounds.min_y - size // 2 <= endpoint.y_nm <= bounds.max_y + size // 2):
@@ -368,10 +370,39 @@ def _candidates(position: Point, center: Point, options: FanoutOptions):
                         position.y_nm + dy * step * options.step_nm)
 
 
-def _distance_to_outline(point: Point, vertices: tuple[Point, ...]) -> float:
-    from .geometry import point_segment_distance_squared
-    return min(float(point_segment_distance_squared(point, first, second)) ** 0.5
-               for first, second in zip(vertices, (*vertices[1:], vertices[0])))
+class _OutlineSites:
+    """Exact inside-and-margin tests of via sites against one board outline.
+
+    The outline is fixed for a fanout run and candidate sites repeat across
+    pins and refinement passes, so each (site, margin) answer is kept.
+    """
+
+    def __init__(self, vertices: tuple[Point, ...]) -> None:
+        self.vertices = vertices
+        self.edges = tuple(zip(vertices, (*vertices[1:], vertices[0])))
+        self._admitted: dict[tuple[int, int, int], bool] = {}
+
+    def admits(self, point: Point, margin_nm: int) -> bool:
+        key = (point.x_nm, point.y_nm, margin_nm)
+        admitted = self._admitted.get(key)
+        if admitted is None:
+            admitted = self._admitted[key] = (point_in_polygon(point, self.vertices)
+                                              and self._clear(point, margin_nm))
+        return admitted
+
+    def _clear(self, point: Point, margin_nm: int) -> bool:
+        x, y = point.x_nm, point.y_nm
+        for first, second in self.edges:
+            # An edge whose bounding box, grown by the margin, misses the
+            # site is at least that far away; only nearby edges are measured.
+            if (x < min(first.x_nm, second.x_nm) - margin_nm
+                    or x > max(first.x_nm, second.x_nm) + margin_nm
+                    or y < min(first.y_nm, second.y_nm) - margin_nm
+                    or y > max(first.y_nm, second.y_nm) + margin_nm):
+                continue
+            if not point_segment_distance_at_least(point, first, second, margin_nm):
+                return False
+        return True
 
 
 def _two_leg_candidates(position: Point, center: Point, options: FanoutOptions):

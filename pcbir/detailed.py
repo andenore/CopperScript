@@ -248,6 +248,11 @@ class _Grid:
         default_factory=dict, compare=False, repr=False,
     )
     _query_context: tuple[int, int, int] = field(init=False, compare=False, repr=False)
+    # Node coordinates, built once per grid instance (never shared by a
+    # replaced grid, whose axes may differ).
+    _points: dict[tuple[int, int], Point] = field(
+        default_factory=dict, init=False, compare=False, repr=False,
+    )
 
     def __post_init__(self) -> None:
         key = (id(self.xs), id(self.ys), id(self.blocked))
@@ -257,7 +262,11 @@ class _Grid:
         self.query_contexts.setdefault(key, (self.xs, self.ys, self.blocked))
 
     def point(self, node: DetailedNode) -> Point:
-        return Point(self.xs[node.x_index], self.ys[node.y_index])
+        key = (node.x_index, node.y_index)
+        point = self._points.get(key)
+        if point is None:
+            point = self._points[key] = Point(self.xs[node.x_index], self.ys[node.y_index])
+        return point
 
 
 @dataclass(frozen=True, slots=True)
