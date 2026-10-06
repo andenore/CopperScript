@@ -34,6 +34,12 @@ independently. The sequence is:
    Signal drills must stay outside solderable SMD lands; same-net clearance
    exemptions cannot silently introduce an unqualified signal via-in-pad.
 4. Where requested, find a legal nearby reference-net via at each transition.
+   Default `always` behavior is unchanged. Explicit `reference_change` rules
+   may omit it only for two actual signal layers adjacent to the same declared
+   `shared_reference_layer`; both member policies/return nets must agree.
+   Owning validation checks actual contact layers and the complete pair's
+   declared reference-zone coverage. Unknown/different references still need
+   return vias; intent never proves refilled copper or SI.
    After axis-aligned slots, a bounded 0.125 mm local lattice within 2 mm
    tries lateral sites; all original distance/copper/drill constraints apply.
 5. Taper back to the declared trace pitch on another jointly allowed signal
@@ -61,7 +67,12 @@ surface-only shared-spine refinement does not own these multilayer transitions.
 
 All four USB member profiles in `examples/full_vertical/board.copper` now
 allow `F.Cu,In2.Cu`, with `max_vias = 2`, required `GND` return vias and a
-2 mm maximum distance to both signal vias. This is an explicit provisional
+2 mm maximum distance to both signal vias when the reference changes. The four
+members explicitly select `reference_change` and `shared_reference_layer =
+"In1.Cu"`: F.Cu and In2.Cu are on opposite sides of this same declared plane,
+so no single-plane-only GND via is generated for that topology. This is an
+explicit topology inference, not evidence of filled continuity or impedance.
+The default `always` profile still requires vias. This is an explicit provisional
 geometric bound, not a vendor-qualified SI limit. The initial 1.5 mm bound
 introduced with this feature left no legal reference-via site in the saved
 terminal pattern; copper/drill fabrication limits were not changed. In2 is adjacent to the declared

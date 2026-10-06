@@ -101,6 +101,8 @@ def test_full_vertical_explicit_critical_profiles_lower_without_claiming_qualifi
             assert rule.allowed_layers == (CopperLayer.FRONT,CopperLayer.INTERNAL_2)
             assert rule.max_vias == 2
             assert rule.require_return_vias and rule.return_via_net == 'GND'
+            assert rule.return_via_policy.value == 'reference_change'
+            assert rule.shared_reference_layer is CopperLayer.INTERNAL_1
             assert rule.maximum_return_via_distance_nm == nm_from_mm(2)
     for name in ("CELL_RF", "GNSS_RF"):
         assert profiles[name].kind is RouteKind.RF_FEED

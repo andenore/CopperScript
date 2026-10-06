@@ -1397,3 +1397,24 @@ layer, construct regions from consumer bounding boxes or split GND. Distant
 loads still need legal access; regional intent alone cannot defer away opens.
 
 See the [implementation and validation plan](power-domain-routing-plan.md).
+
+## CS-160 — Explicit shared-reference return topology (Accepted)
+
+Required paired return vias remain mandatory by default (`always`). An explicit
+`reference_change` policy with a typed `shared_reference_layer` MAY omit a via
+only when both actual signal-contact layers are adjacent to the identical
+declared reference plane. Both member policies and return nets must agree;
+ambiguous, absent, different and nonadjacent references retain the required-via
+behavior. Source annotations, not component names or signal names, choose this
+policy. Keep the whole emitted pair inside a single unperforated declared
+reference-zone outline and reject projected zone keepouts.
+
+The critical owner MUST recompute signal contact layers from emitted copper,
+not a through-via's barrel endpoints, and validate the complete pair atomically.
+Bind the policy and reference layer into physical/ownership digests and report
+shared-reference transition counts. A declared shared reference is not evidence
+of refilled copper continuity, controlled impedance or USB/RF performance.
+Native refill/all-severity DRC and manufacturing gates are unchanged. Never
+remove mandatory vias under the default policy, add dummy copper merely to
+suppress a warning, or suppress `via_dangling`. See the
+[implementation plan](shared-reference-return-plan.md).

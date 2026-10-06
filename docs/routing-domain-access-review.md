@@ -148,6 +148,12 @@ failed status have **not** been rewritten, and the board has not yet been
 fully rerouted with the correction. The USB return-via warning is separate and
 is not resolved by changing the occupancy ledger.
 
+The subsequent [explicit shared-reference feature](shared-reference-return-plan.md)
+models the same-plane topology rather than suppressing the warning or adding
+dummy copper. The example now opts in for F.Cu/In2.Cu with In1.Cu as the common
+reference. The default required-via policy is unchanged. A fresh full run is
+still required; this historical board and its failed status are not rewritten.
+
 The preflight DRC previously contained 104 dangling-via warnings: 103 ordinary
 fanout vias and this one GND via. Ordinary routing/ownership cleanup resolves
 the ordinary ones; the remaining GND warning was already present at preflight.

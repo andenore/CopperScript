@@ -1136,7 +1136,8 @@ def _routing_rule_document(item: NetRoutingRule) -> tuple[object, ...]:
             item.maximum_uncoupled_length_nm, item.maximum_stub_length_nm,
             item.tuning_amplitude_limit_nm, item.require_return_vias,
             item.return_via_net, item.maximum_return_via_distance_nm,
-            item.impedance_evidence_digest)
+            item.impedance_evidence_digest, item.return_via_policy.value,
+            item.shared_reference_layer.value if item.shared_reference_layer is not None else None)
 
 
 def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:

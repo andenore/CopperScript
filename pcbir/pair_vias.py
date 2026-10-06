@@ -23,6 +23,7 @@ from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
 from .surface_path import via_inside_board
+from .return_paths import shared_reference_plane
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,8 +79,12 @@ def _signal_drills_outside_smd(board: PhysicalBoard, pair: tuple[Via, Via]) -> b
 
 def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
                 port: _Port, pair: tuple[Via, Via], first: NetRoutingRule,
-                second: NetRoutingRule) -> tuple[Via, ...] | None:
+                second: NetRoutingRule, surface: CopperLayer,
+                layer: CopperLayer) -> tuple[Via, ...] | None:
     if not (first.require_return_vias or second.require_return_vias):
+        return ()
+    if shared_reference_plane(board, first, second, (surface, layer),
+                              tuple(via.position for via in pair)) is not None:
         return ()
     requested = [rule for rule in (first, second) if rule.require_return_vias]
     if len({rule.return_via_net for rule in requested}) != 1:
@@ -141,7 +146,7 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
         reserved = RoutingClearanceIndex(escaped)
         if not _reserve_vias(board, reserved, pair):
             continue
-        returns = _return_via(board, reserved, collar, pair, first, second)
+        returns = _return_via(board, reserved, collar, pair, first, second, surface, layer)
         if returns is None:
             continue
         escaped = replace(escaped, vias=(*board.vias, *pair, *returns))

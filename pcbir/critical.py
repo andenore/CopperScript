@@ -36,6 +36,8 @@ from .pair_search import PairSearchCandidate, PairSearchStats, paired_candidates
 from .pair_vias import paired_via_candidates, transition_spacing
 from .pair_refine import PairRefinementStats, paired_shortcuts
 from .local_critical import local_surface_candidates
+from .return_paths import (shared_reference_plane, transition_contact_layers,
+                           pair_reference_intent_covers)
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -72,6 +74,7 @@ class CriticalNetResult:
     pair_search_order: str | None = None
     pair_state_limit: int | None = None
     pair_budget_exhausted: bool = False
+    shared_reference_transition_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +111,7 @@ class CriticalRoutingResult:
                     "uncoupled_lengths_nm": list(item.uncoupled_lengths_nm),
                     "paired_via_transitions": item.paired_via_transitions,
                     "return_via_count": item.return_via_count,
+                    "shared_reference_transition_count": item.shared_reference_transition_count,
                     "tuned_length_nm": item.tuned_length_nm,
                     "evidence_digests": list(item.evidence_digests),
                     "strategy": item.strategy,
@@ -501,7 +505,7 @@ def _validate_candidate(
     if not result.connected or diagnostics:
         return replace(
             result, connected=False, track_count=0, via_count=0,
-            return_via_count=0, paired_via_transitions=0,
+            return_via_count=0, paired_via_transitions=0, shared_reference_transition_count=0,
             diagnostics=tuple(diagnostics), candidate_rejected=True,
         ), (), ()
     return result, tracks, vias
@@ -788,7 +792,8 @@ def _route_pair(
                 board, net, item,
                 Point(item.position.x_nm + sign * offset, item.position.y_nm),
             ))
-        if first.require_return_vias or second.require_return_vias:
+        if (first.require_return_vias or second.require_return_vias) and shared_reference_plane(
+                board, first, second, (item.from_layer, item.to_layer), (item.position,)) is None:
             return_net = first.return_via_net or second.return_via_net
             assert return_net is not None
             return_vias.append(_guide_via(board, return_net, item, item.position))
@@ -807,6 +812,7 @@ def _route_pair(
     diagnostics.extend(
         _budget_diagnostics(second, tuple(second_tracks), tuple(v for v in pair_vias if v.net == second.net))
     )
+    shared_references: list[CopperLayer] = []
     if exact_via_pairs:
         # Via-pad spacing is deliberately wider than trace pitch. Require
         # explicit matched transition provenance; never infer a pair from two
@@ -825,15 +831,26 @@ def _route_pair(
             diagnostics.append("explicit differential transition geometry is not paired")
         if exact_tracks is None:
             diagnostics.append("explicit via transitions require exact joint tracks")
-        if first.require_return_vias or second.require_return_vias:
-            requested = [r for r in (first,second) if r.require_return_vias]
-            for a,b in exact_via_pairs:
-                if not any(all(v.net == r.return_via_net
-                    and (v.from_layer,v.to_layer) == (a.from_layer,a.to_layer)
-                    and max(hypot(v.position.x_nm-s.position.x_nm,v.position.y_nm-s.position.y_nm)
-                            for s in (a,b)) <= r.maximum_return_via_distance_nm
-                    for r in requested) for v in return_vias):
-                    diagnostics.append("paired transition lacks a permitted nearby return via")
+    if first.require_return_vias or second.require_return_vias:
+        requested = [r for r in (first,second) if r.require_return_vias]
+        transition_pairs = exact_via_pairs or tuple(zip(first_pair_vias, second_pair_vias))
+        for a,b in transition_pairs:
+            first_layers = transition_contact_layers(tuple(first_tracks), a)
+            second_layers = transition_contact_layers(tuple(second_tracks), b)
+            reference = (shared_reference_plane(board, first, second, first_layers,
+                         (a.position, b.position)) if first_layers == second_layers else None)
+            if reference is not None:
+                if pair_reference_intent_covers(board, reference, first.return_via_net,
+                                                tuple((*first_tracks, *second_tracks))):
+                    shared_references.append(reference)
+                    continue
+                diagnostics.append("declared shared reference does not cover the complete paired route")
+            if not any(all(v.net == r.return_via_net
+                and (v.from_layer,v.to_layer) == (a.from_layer,a.to_layer)
+                and max(hypot(v.position.x_nm-s.position.x_nm,v.position.y_nm-s.position.y_nm)
+                        for s in (a,b)) <= r.maximum_return_via_distance_nm
+                for r in requested) for v in return_vias):
+                diagnostics.append("paired transition lacks a permitted nearby return via")
     if max_skew is not None and skew > max_skew:
         diagnostics.append(f"pair skew {skew} nm exceeds {max_skew} nm")
     uncoupled_limit = min(
@@ -869,6 +886,11 @@ def _route_pair(
         assumptions = (*assumptions,
             "layer transitions require layer-specific impedance and via-stub qualification",
             "reference-via placement does not verify refilled ground-plane continuity")
+    if shared_references:
+        assumptions = (*assumptions,
+            "shared-reference transitions use declared "
+            + ",".join(sorted({layer.value for layer in shared_references}))
+            + "; zone intent does not certify filled return-path continuity or impedance")
     evidence = tuple(dict.fromkeys((*_external_evidence(first), *_external_evidence(second))))
     tracks = tuple((*first_tracks, *second_tracks))
     return (
@@ -890,6 +912,7 @@ def _route_pair(
             strategy=("joint_pair_via_search" if exact_via_pairs else
                       "joint_pair_search" if exact_tracks is not None else
                       "aligned_pair" if aligned is not None else "global_guide"),
+            shared_reference_transition_count=len(shared_references),
         ),
         tracks,
         tuple((*pair_vias, *return_vias)),

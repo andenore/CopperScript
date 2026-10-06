@@ -357,12 +357,15 @@ board FullVerticalTracker {
     // USB may transition as a matched via pair to In2.Cu, next to the
     // In1.Cu return plane. Two vias/member allow escape and return to F.Cu.
     // These provisional common width/gap values still need layer-specific
-    // stackup qualification; nearby GND vias do not certify filled continuity.
+    // stackup qualification. Both allowed signal layers share In1.Cu; require
+    // stitching when that reference changes, not a one-plane-only dummy via.
+    // This declared topology still does not certify actual filled continuity.
     constraint routing(USB_DP_MCU) {
         kind = differential; priority = 100; partner = USB_DM_MCU;
         width = 0.18mm; pair_gap = 0.2mm; target_impedance_ohms = 90;
         allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;
         require_return_vias = true; return_via_net = "GND";
+        return_via_policy = "reference_change"; shared_reference_layer = "In1.Cu";
         maximum_return_via_distance = 2mm;
     }
     constraint routing(USB_DM_MCU) {
@@ -370,6 +373,7 @@ board FullVerticalTracker {
         width = 0.18mm; pair_gap = 0.2mm; target_impedance_ohms = 90;
         allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;
         require_return_vias = true; return_via_net = "GND";
+        return_via_policy = "reference_change"; shared_reference_layer = "In1.Cu";
         maximum_return_via_distance = 2mm;
     }
     constraint routing(USB_DP_MODEM) {
@@ -377,6 +381,7 @@ board FullVerticalTracker {
         width = 0.18mm; pair_gap = 0.2mm; target_impedance_ohms = 90;
         allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;
         require_return_vias = true; return_via_net = "GND";
+        return_via_policy = "reference_change"; shared_reference_layer = "In1.Cu";
         maximum_return_via_distance = 2mm;
     }
     constraint routing(USB_DM_MODEM) {
@@ -384,6 +389,7 @@ board FullVerticalTracker {
         width = 0.18mm; pair_gap = 0.2mm; target_impedance_ohms = 90;
         allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;
         require_return_vias = true; return_via_net = "GND";
+        return_via_policy = "reference_change"; shared_reference_layer = "In1.Cu";
         maximum_return_via_distance = 2mm;
     }
     constraint routing(CELL_RF) {

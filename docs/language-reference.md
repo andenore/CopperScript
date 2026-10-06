@@ -551,14 +551,34 @@ placement/routing defaults when neither is stated. Routing parameters lower to
 `max_skew`, `topology`, `target_impedance_ohms`,
 `maximum_uncoupled_length`, `maximum_stub_length`,
 `tuning_amplitude_limit`, `require_return_vias`, `return_via_net`,
-`maximum_return_via_distance`, and `impedance_evidence_digest`.
+`maximum_return_via_distance`, `return_via_policy`, `shared_reference_layer`,
+and `impedance_evidence_digest`.
 
 USB/differential profiles need not be top-layer-only. For example,
 `allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;` permits matched terminal
 transitions and another-layer paired middle route. `max_vias` counts signal
 vias **per member**, not across both nets; return-net vias are reported
 separately. Required return vias must satisfy `return_via_net` and
-`maximum_return_via_distance` at each transition. Dedicated plane layers
+`maximum_return_via_distance` at each transition by default
+(`return_via_policy = "always"`). For an explicitly declared common reference,
+opt in with:
+
+```copper
+require_return_vias = true;
+return_via_net = "GND";
+maximum_return_via_distance = 2mm;
+return_via_policy = "reference_change";
+shared_reference_layer = "In1.Cu";
+```
+
+Both paired rules must agree. Only actual signal layers adjacent to that same
+unambiguous dedicated return plane can omit a stitching via; unknown or
+different references still require one. The owning router checks the entire
+pair against declared plane bounds/voids, not just the transition sites.
+`shared_reference_layer` requires `reference_change` and an available layer
+which is not a permitted signal layer. Native filled-plane validation remains
+required; this policy is not impedance or return-path qualification.
+Dedicated plane layers
 remain unavailable to foreign signal tracks. See
 [paired layer transitions](paired-layer-transitions.md) for the bounded
 implementation and its impedance/return-path limitations.

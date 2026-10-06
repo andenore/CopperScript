@@ -54,6 +54,7 @@ from .physical import (
     RelativePlacementKind,
     RelativePlacementRule,
     RouteKind,
+    ReturnViaPolicy,
     Size,
     Stackup,
     ZoneConnection,
@@ -616,6 +617,9 @@ def _lower_physical_constraints(
                     return_via_net=_optional_string(parameters, "return_via_net"),
                     maximum_return_via_distance_nm=_optional_constraint_length(parameters, "maximum_return_via_distance"),
                     impedance_evidence_digest=_optional_string(parameters, "impedance_evidence_digest"),
+                    return_via_policy=ReturnViaPolicy(str(parameters.get("return_via_policy", "always"))),
+                    shared_reference_layer=(CopperLayer(str(parameters["shared_reference_layer"]))
+                                            if "shared_reference_layer" in parameters else None),
                 )
             )
             continue

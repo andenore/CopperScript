@@ -148,5 +148,7 @@ is waived and no manufacturing output is released.
   reference-layer/contact requirements and preserve explicit source requirements;
   do not delete a required via, invent copper solely to silence DRC, or waive the
   warning. A shared reference-plane case needs an explicit modeled policy.
+  Implementation/verification is tracked in the
+  [shared-reference return plan](shared-reference-return-plan.md).
 - [ ] Repeat the complete flow after those fixes, requiring zero native opens
   and violations and no stale/real resource overflow before manufacturing export.

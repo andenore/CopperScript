@@ -85,6 +85,11 @@ class ViaKind(str, Enum):
     MICROVIA = "microvia"
 
 
+class ReturnViaPolicy(str, Enum):
+    ALWAYS = "always"
+    REFERENCE_CHANGE = "reference_change"
+
+
 class PadKind(str, Enum):
     SMD = "smd"
     APERTURE = "aperture"
@@ -1110,9 +1115,19 @@ class NetRoutingRule:
     return_via_net: str | None = None
     maximum_return_via_distance_nm: Nanometres | None = None
     impedance_evidence_digest: str | None = None
+    return_via_policy: ReturnViaPolicy = ReturnViaPolicy.ALWAYS
+    shared_reference_layer: CopperLayer | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_layers", tuple(self.allowed_layers))
+        object.__setattr__(self, "return_via_policy", ReturnViaPolicy(self.return_via_policy))
+        if self.shared_reference_layer is not None:
+            object.__setattr__(self, "shared_reference_layer", CopperLayer(self.shared_reference_layer))
+        if self.return_via_policy is ReturnViaPolicy.REFERENCE_CHANGE:
+            if not self.require_return_vias or self.shared_reference_layer is None:
+                raise ValueError("reference_change requires return vias and an explicit shared reference layer")
+        elif self.shared_reference_layer is not None:
+            raise ValueError("shared reference layer requires reference_change return-via policy")
         if not self.net:
             raise ValueError("routing rule requires a net")
         if self.priority < 0:
@@ -1569,6 +1584,10 @@ class PhysicalBoard:
                 raise ValueError(f"net {rule.net!r} has multiple routing rules")
             routed_rule_nets.add(rule.net)
             unavailable = set(rule.allowed_layers) - layers
+            if rule.shared_reference_layer is not None and rule.shared_reference_layer not in layers:
+                raise ValueError(f"routing rule for {rule.net!r} uses unavailable shared reference layer")
+            if rule.shared_reference_layer in rule.allowed_layers:
+                raise ValueError(f"routing rule for {rule.net!r} routes on its declared reference plane")
             if unavailable:
                 raise ValueError(
                     f"routing rule for {rule.net!r} uses unavailable layer "
