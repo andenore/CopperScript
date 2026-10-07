@@ -134,7 +134,10 @@ def run_routing_pipeline(
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
     if access:
         emit(on_progress, "package_boundary_reservation", "started")
-    fanout = reserve_boundary_access(pre_fanout, access.fanout, access.boundary) if access else None
+    deferred_zones = (frozenset(zone.net for zone in pre_fanout.zones)
+                      if detailed_options.defer_zone_nets else frozenset())
+    fanout = reserve_boundary_access(pre_fanout, access.fanout, access.boundary,
+                                     deferred_nets=deferred_zones) if access else None
     if access:
         emit(on_progress, "package_boundary_reservation", "finished", anchors=len(fanout.boundary_accesses),
              added_tracks=len(fanout.created_tracks) - len(access.fanout.created_tracks))
@@ -157,11 +160,6 @@ def run_routing_pipeline(
     # A deferred zone net is awaiting external fill evidence, not a detailed
     # maze-route failure. Moving components to "repair" it cannot improve the
     # detailed search and can displace already-routed signals.
-    deferred_zones = (
-        {zone.net for zone in board.zones}
-        if detailed_options is not None and detailed_options.defer_zone_nets
-        else set()
-    )
     failed_nets = frozenset(
         item.net for item in detailed.nets
         if not item.connected and item.net not in deferred_zones
@@ -201,7 +199,8 @@ def run_routing_pipeline(
             if trial_access:
                 emit(on_progress, "package_boundary_reservation", "started", trial=trials_run)
             trial_fanout = reserve_boundary_access(trial_pre_fanout, trial_access.fanout,
-                                                  trial_access.boundary) if trial_access else None
+                trial_access.boundary, deferred_nets=frozenset(zone.net for zone in trial_pre_fanout.zones)
+                if detailed_options.defer_zone_nets else frozenset()) if trial_access else None
             if trial_access:
                 emit(on_progress, "package_boundary_reservation", "finished", trial=trials_run,
                      anchors=len(trial_fanout.boundary_accesses),

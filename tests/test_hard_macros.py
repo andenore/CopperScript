@@ -95,6 +95,35 @@ def test_owner_copper_and_same_net_private_access_are_immutable(tmp_path):
     with pytest.raises(ValueError,match="changed or removed"): replace(board,placements=tuple(poses.values()))
 
 
+def test_omitted_private_pad_cannot_hide_a_broken_internal_net(tmp_path):
+    original, asset, bind = fixture(tmp_path)
+    bound = bind()
+    # One remaining bound node would appear connected if coverage were only
+    # checked against the asset's own incomplete pad list.
+    asset.update(pad_nets=asset["pad_nets"][:1], ports=[])
+    asset["tracks"][0]["points"][-1] = [500000, 0]
+    with pytest.raises(ValueError, match="requires an external port"):
+        materialize_hard_macros(bind(data=asset))
+    macro = bound.hard_macros[0]
+    with pytest.raises(ValueError, match="requires an external port"):
+        materialize_hard_macros(replace(bound, hard_macros=(replace(macro,
+            pad_bindings=macro.pad_bindings[:1], ports=(),
+            tracks=(replace(macro.tracks[0], end=Point(500000, 0)),)),)))
+    assert not original.tracks and not original.hard_macros
+
+
+def test_member_ic_can_retain_unrelated_public_pads(tmp_path):
+    original, asset, bind = fixture(tmp_path)
+    fp = replace(original.footprints["test"], pads=(
+        *original.footprints["test"].pads, FootprintPad("2", Point.mm(0, 1), Size.mm(.2, .2))))
+    for member in asset["members"]:
+        member["footprint_digest"] = footprint_geometry_digest(fp)
+    public = PhysicalNet("GPIO", (PadReference("U1", "2"), PadReference("R1", "2")))
+    board = replace(original, footprints={"test": fp}, nets=(*original.nets, public))
+    result = materialize_hard_macros(bind(input_board=board))
+    assert macro_routing_pads(result, public) == public.pads
+
+
 def test_bad_copper_port_and_via_are_rejected_without_partial_commit(tmp_path):
     _,asset,bind=fixture(tmp_path)
     asset["vias"]=[dict(net="signal",position_nm=[2000000,0],size_nm=600000,drill_nm=300000,
@@ -105,6 +134,66 @@ def test_bad_copper_port_and_via_are_rejected_without_partial_commit(tmp_path):
     asset["vias"]=[]
     asset["ports"][0]["point"]=[-500000,0]
     with pytest.raises(ValueError,match="no owner copper contact"): materialize_hard_macros(bind())
+
+
+def test_internal_net_without_a_port_still_requires_complete_copper(tmp_path):
+    _, asset, bind = fixture(tmp_path)
+    asset["ports"] = []
+    assert materialize_hard_macros(bind()).tracks
+    asset["tracks"][0]["points"][-1] = [500000, 0]
+    with pytest.raises(ValueError, match="internal net.*not connected"):
+        materialize_hard_macros(bind())
+
+
+def test_private_net_with_external_consumer_requires_a_boundary_port(tmp_path):
+    original, asset, bind = fixture(tmp_path)
+    asset["ports"] = []
+    board = replace(original, placements=(*original.placements, Placement("J", "test", Point.mm(5, 5))),
+        nets=(replace(original.nets[0], pads=(*original.nets[0].pads, PadReference("J", "1"))),))
+    with pytest.raises(ValueError, match="requires an external port"):
+        materialize_hard_macros(bind(input_board=board))
+
+
+def test_ports_cannot_silently_omit_disconnected_bound_pads(tmp_path):
+    _, asset, bind = fixture(tmp_path)
+    asset["ports"][0]["pads"] = [["chip", "1"]]
+    asset["tracks"][0]["points"][-1] = [500000, 0]
+    with pytest.raises(ValueError, match="ports omit private pads"):
+        materialize_hard_macros(bind())
+
+
+def test_macro_filled_via_finish_requires_scoped_permission_and_containment(tmp_path):
+    from pcbir.physical import CopperZone, PadViaInPadRule, PolygonRing, PolygonWithHoles, Stackup
+    original, asset, _ = fixture(tmp_path)
+    fp = replace(original.footprints["test"], pads=(FootprintPad("1", Point(0, 0), Size.mm(1, 1)),))
+    for member in asset["members"]:
+        member["footprint_digest"] = footprint_geometry_digest(fp)
+    asset["vias"] = [dict(net="signal", position_nm=[0, 0], size_nm=300000,
+        drill_nm=200000, from_layer="F.Cu", to_layer="B.Cu", technology=None, finish="filled-capped")]
+    board = replace(original, footprints={fp.name: fp}, nets=(replace(original.nets[0], name="GND"),),
+        stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
+                        CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4, CopperLayer.BACK)),
+        metadata={"fabrication_profile": "jlcpcb-six-layer"},
+        zones=(CopperZone("ground", "GND", (CopperLayer.INTERNAL_1,), PolygonWithHoles(PolygonRing(
+            (Point.mm(1, 1), Point.mm(29, 1), Point.mm(29, 29), Point.mm(1, 29))))),))
+    def bind_ground(source):
+        path = tmp_path / "ground.json"
+        path.write_text(json.dumps(asset))
+        return bind_hard_macro(source, path, expected_sha256=sha256(path.read_bytes()).hexdigest(),
+            name="ground", bindings={"chip": "U1", "passive": "R1"}, net_bindings={"signal": "GND"})
+    with pytest.raises(ValueError, match="explicit permission"):
+        materialize_hard_macros(bind_ground(board))
+    qualified = replace(board, via_in_pad_rules=(PadViaInPadRule(PadReference("U1", "1")),))
+    result = materialize_hard_macros(bind_ground(qualified))
+    assert result.vias[0].finish == "filled-capped"
+    from pcbir.hard_macros import macro_source
+    assert materialize_hard_macros(macro_source(result)).vias == result.vias
+    asset["vias"][0]["position_nm"] = [450000, 0]
+    with pytest.raises(ValueError, match="contained"):
+        materialize_hard_macros(bind_ground(qualified))
+    asset["vias"][0]["finish"] = "unqualified"
+    with pytest.raises(ValueError, match="unsupported via finish"):
+        bind_ground(qualified)
 
 
 def test_general_router_connects_only_external_port_and_preserves_owner(tmp_path):

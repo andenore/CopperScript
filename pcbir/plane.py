@@ -325,6 +325,15 @@ def _stitch_land(
         )
         if path is not None:
             return path, None
+    reserved_region = any(zone.reserve_routing for zone in zones)
+    if reserved_region:
+        # Preserve the jointly assigned package exit before adding a drill.
+        tail = _existing_via_zone_tail(
+            board, clearance, net, zones, position, side, width, outer_layers, options,
+            committed_tracks, committed_vias,
+        )
+        if tail is not None:
+            return tail
     pad_bounds = placed_pad_shape(position, pad, placement).bounds
     legal_via_targets: list[Point] = []
     for candidate in _candidate_points(position, options):
@@ -412,6 +421,56 @@ def _stitch_land(
                 net, position, size, drill, outer_layers[0], outer_layers[1],
                 finish="filled-capped",
             )
+    return None if reserved_region else _existing_via_zone_tail(
+        board, clearance, net, zones, position, side, width, outer_layers, options,
+        committed_tracks, committed_vias,
+    )
+
+
+def _existing_via_zone_tail(
+    board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
+    zones: list[CopperZone], position: Point, side: CopperLayer, width: int,
+    outer_layers: tuple[CopperLayer, CopperLayer], options: PlaneStitchOptions,
+    committed_tracks: tuple[TrackSegment, ...], committed_vias: tuple[Via, ...],
+) -> tuple[tuple[TrackSegment, ...], None] | None:
+    """Retain an existing escape and contact a nearby zone."""
+    def distance_squared(point: Point) -> int:
+        return ((point.x_nm - position.x_nm) ** 2
+                + (point.y_nm - position.y_nm) ** 2)
+
+    radius_squared = options.maximum_radius_nm ** 2
+    rule = next((r for r in board.net_routing_rules if r.net == net), None)
+    layers = tuple(dict.fromkeys(
+        layer for zone in zones for layer in zone.layers
+        if layer is not side and (rule is None or not rule.allowed_layers
+                                  or layer in rule.allowed_layers)
+    ))
+    reusable = sorted(
+        (via for via in committed_vias if via.net == net
+         and (via.from_layer, via.to_layer) == outer_layers
+         and distance_squared(via.position) <= radius_squared
+         and not any(_point_in_zone(via.position, z.outline) for z in zones)),
+        key=lambda via: (distance_squared(via.position), via.position.x_nm, via.position.y_nm),
+    )
+    for via in reusable:
+        access = surface_path(
+            board, clearance, net, position, via.position, width, side,
+            committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
+        )
+        if access is None:
+            continue
+        for target in _candidate_points(position, options):
+            if distance_squared(target) > radius_squared:
+                continue
+            for layer in layers:
+                if not any(layer in z.layers and _point_in_zone(target, z.outline) for z in zones):
+                    continue
+                tail = surface_path(
+                    board, clearance, net, via.position, target, width, layer,
+                    (*committed_tracks, *access), maximum_detour_nm=options.maximum_detour_nm,
+                )
+                if tail is not None:
+                    return (*access, *tail), None
     return None
 
 

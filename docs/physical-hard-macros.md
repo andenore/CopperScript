@@ -57,6 +57,17 @@ owner-aware access reservations are enforced by CopperScript, not exported as
 blanket track keepouts that would reject owner copper. Manually unlocking/editing
 KiCad output does not preserve this contract; revalidate authoritative physical IR.
 
+An asset via may specify `finish = "filled-capped"`; omission keeps the legacy
+`standard` finish. A filled/capped macro via overlapping an SMD land requires
+the scoped `via_in_pad` permission, complete annulus containment and the
+supported six-layer GND process. Finish survives transformation and replay.
+Because native KiCad board geometry does not encode the fabrication process,
+exports with non-standard vias include a same-stem `.via-process.json` sidecar
+listing net, position, diameter, drill, layers, finish and fabrication profile.
+Keep it with the project: the export digest covers it, but it grants no
+manufacturing qualification. Re-export removes only a marked, generated stale
+sidecar; unrelated process records are preserved.
+
 The normal `route-board` pipeline accepts repeatable `--hard-macro SCENE.json`.
 Planning materializes owner copper in a scratch board, includes occupied copper
 and private reservations in capacity/access searches, and recognizes already

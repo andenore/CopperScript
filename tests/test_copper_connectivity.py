@@ -35,6 +35,73 @@ def opens(board):
     return [f for f in run_physical_drc(board).findings if f.code == "DRC-OPEN-NET"]
 
 
+def tangent_board(*, overlap=False):
+    """An end-to-side tangency found on a routed six-layer board."""
+    footprint = PhysicalFootprint("test/small", (FootprintPad("1", Point(0, 0), Size.mm("0.2", "0.2")),), Size.mm("0.3", "0.3"))
+    a = Point.mm("13.8125", "39.25")
+    b = Point.mm("14.25", "38.25")
+    return PhysicalBoard("Tangency", BoardOutline.rectangle(20, 45), {footprint.name: footprint},
+                         (Placement("A", footprint.name, a), Placement("B", footprint.name, b)),
+                         (PhysicalNet("N", (PadReference("A", "1"), PadReference("B", "1"))),),
+                         tracks=(TrackSegment("N", a, Point.mm("14.01" if overlap else "14", "39.0625"), nm_from_mm("0.25"), F),
+                                 TrackSegment("N", Point.mm("14.25", "39.75"), b, nm_from_mm("0.25"), F)))
+
+
+def test_track_boundary_tangency_is_open_but_positive_overlap_connects():
+    assert opens(tangent_board())
+    assert not opens(tangent_board(overlap=True))
+
+
+def test_cleanup_must_keep_bridge_when_replacement_only_touches_trunk():
+    from pcbir.route_smoothing import _contacts_preserved
+
+    board = tangent_board()
+    bridge = replace(board.tracks[0], start=board.tracks[0].end, end=Point.mm("14.25", "39.0625"))
+    bare = replace(board, tracks=())
+    assert not _contacts_preserved(bare, board.nets[0], (*board.tracks, bridge), board.tracks)
+    assert _contacts_preserved(bare, board.nets[0], (*board.tracks, bridge), tangent_board(overlap=True).tracks)
+
+
+def test_smoothing_keeps_overlapping_trunk_instead_of_shorter_tangent():
+    from pcbir.route_smoothing import smooth_owned_tracks
+    from pcbir.routing_clearance import RoutingClearanceIndex
+
+    board = tangent_board()
+    trunk = tuple(Point.mm(*xy) for xy in (("14.25", "39.75"), ("14.125", "39.625"),
+                                         ("14.125", "38.375"), ("14.25", "38.25")))
+    tracks = (board.tracks[0], *(replace(board.tracks[1], start=a, end=b) for a, b in zip(trunk, trunk[1:])))
+    connected = replace(board, tracks=tracks)
+    assert not opens(connected)
+    result = smooth_owned_tracks(replace(board, tracks=()), tracks, RoutingClearanceIndex(connected))
+    assert result == tracks
+    assert not opens(replace(board, tracks=result))
+
+
+@pytest.mark.parametrize("offset, joined", [("0.99", True), ("1", False), ("1.01", False)])
+@pytest.mark.parametrize("diagonal", [False, True])
+def test_rectangular_copper_needs_area_overlap(offset, joined, diagonal):
+    def square(identity, x, y):
+        p = Point.mm(x, y)
+        d = nm_from_mm(1)
+        shape = RoundedConvexShape((p, Point(p.x_nm + d, p.y_nm), Point(p.x_nm + d, p.y_nm + d), Point(p.x_nm, p.y_nm + d)), 0)
+        return CopperContact(identity, "N", (F,), shape)
+
+    roots = copper_contact_roots((square("a", 0, 0), square("b", offset, offset if diagonal else 0)))
+    assert (roots["a"] == roots["b"]) is joined
+
+
+def test_touching_drill_rim_from_inside_is_not_annular_contact():
+    inside = contact("track", (5, 5), ("5.13", 5), radius="0.02")
+    via = CopperContact("via", "N", (F, B), RoundedConvexShape((Point.mm(5, 5),), nm_from_mm("0.3")),
+                        RoundedConvexShape((Point.mm(5, 5),), nm_from_mm("0.15")))
+    roots = copper_contact_roots((inside, via))
+    assert roots["track"] != roots["via"]
+    roots = copper_contact_roots((inside, replace(via, capped_layers=(F, B))))
+    assert roots["track"] == roots["via"]
+    roots = copper_contact_roots((replace(inside, shape=replace(inside.shape, radius_nm=nm_from_mm("0.021"))), via))
+    assert roots["track"] == roots["via"]
+
+
 @pytest.mark.parametrize("joint", [(5, 5), (5, "5.15")])
 def test_interior_t_and_width_contact_join(joint):
     board = replace(fixture_board(), tracks=(track((2, 5), (8, 5)), track((5, 8), joint)))
@@ -123,7 +190,7 @@ def test_duplicate_lands_are_not_virtually_shortened():
     assert not opens(replace(board, tracks=(*board.tracks, track((2, 5), (2, 6)))))
 
 
-@pytest.mark.parametrize("case", ["t_joint", "pad_edge", "real_gap", "layer_cross", "via_overlap"])
+@pytest.mark.parametrize("case", ["t_joint", "pad_edge", "real_gap", "layer_cross", "via_overlap", "tangent", "positive_overlap"])
 def test_native_connectivity_agrees_with_installed_kicad(case, tmp_path):
     cli = shutil.which("kicad-cli")
     windows_cli = Path("C:/Program Files/KiCad/10.0/bin/kicad-cli.exe")
@@ -144,6 +211,8 @@ def test_native_connectivity_agrees_with_installed_kicad(case, tmp_path):
         if case == "via_overlap":
             board = replace(board, vias=(Via("N", Point.mm(5, "5.2"), nm_from_mm("0.6"), nm_from_mm("0.3")),))
     board = replace(board, tracks=tracks)
+    if case in {"tangent", "positive_overlap"}:
+        board = tangent_board(overlap=case == "positive_overlap")
     from pcbir.backends.kicad_project import write_kicad_project
     write_kicad_project(KiCadPcbBackend().generate(board), tmp_path / "Contacts.kicad_pcb")
     output = tmp_path / "drc.json"

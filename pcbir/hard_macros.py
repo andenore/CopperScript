@@ -9,18 +9,19 @@ from collections import Counter
 from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
+from functools import lru_cache
 import json
 from pathlib import Path
 
 from .clusters import (cluster_placement_matches, footprint_geometry_digest,
                        legacy_footprint_geometry_digest)
-from .geometry import RoundedConvexShape, shapes_clear
+from .geometry import RoundedConvexShape, circle_inside_shape, shapes_clear
 from .placement import transformed_local_point
 from .syntax import CopperScriptError
 from .physical import (
     BoardSide, ComponentPlacementRule, CopperKeepout, CopperLayer, MacroPadBinding, MacroPort, PadReference,
     PhysicalBoard, PhysicalHardMacro, PhysicalNet, PlacementTarget,
-    Point, PolygonRing, PolygonWithHoles, RigidPlacementCluster,
+    PadKind, Point, PolygonRing, PolygonWithHoles, RigidPlacementCluster,
     RigidPlacementMember, TrackSegment, Via,
 )
 
@@ -161,11 +162,13 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
                           for a, b in zip(points, points[1:]))
         vias = []
         for row in data["vias"]:
-            _keys(row, "net position_nm size_nm drill_nm from_layer to_layer technology")
+            row = {"finish": "standard", **row}
+            _keys(row, "net position_nm size_nm drill_nm from_layer to_layer technology finish")
             if any(type(row[k]) is not int for k in ("size_nm", "drill_nm")):
                 raise ValueError("macro via dimensions require integer nanometres")
             vias.append(Via(net_bindings[row["net"]], _point(row["position_nm"]), row["size_nm"], row["drill_nm"],
-                            CopperLayer(row["from_layer"]), CopperLayer(row["to_layer"]), row["technology"]))
+                            CopperLayer(row["from_layer"]), CopperLayer(row["to_layer"]), row["technology"],
+                            row["finish"]))
         ports = []
         for row in data["ports"]:
             _keys(row, "name net point layer pads")
@@ -194,6 +197,12 @@ def resolved_macro_geometry(board, macro, placements=None):
     anchor = poses[cluster.anchor.reference]
     local_anchor = next(m for m in cluster.members if m.reference == anchor.reference)
     frame = replace(anchor, position=transformed_local_point(anchor, Point(-local_anchor.position.x_nm, -local_anchor.position.y_nm)))
+    return _transformed_macro_geometry(macro, frame)
+
+
+@lru_cache(maxsize=256)
+def _transformed_macro_geometry(macro, frame):
+    """Share immutable copper/region transforms across placement probes."""
     transform = lambda p: transformed_local_point(frame, p)
     tracks = tuple(replace(t, start=transform(t.start), end=transform(t.end)) for t in macro.tracks)
     vias = tuple(replace(v, position=transform(v.position)) for v in macro.vias)
@@ -260,6 +269,7 @@ def validate_hard_macros(board):
     for m in board.hard_macros:
         if m.cluster in board.materialized_macros:
             t, v, _, _ = resolved_macro_geometry(board, m)
+            _validate_macro_via_permissions(board, m, v)
             owned_tracks.update(t)
             owned_vias.update(v)
     if owned_tracks - Counter(board.tracks) or owned_vias - Counter(board.vias):
@@ -297,6 +307,37 @@ def validate_hard_macros(board):
         shape = RoundedConvexShape((via.position,), via.size_nm // 2)
         if any(span.intersection(r.layers) and not shapes_clear(shape, RoundedConvexShape(r.outline.outer.vertices), 1) for r in regions):
             raise ValueError("new via intrudes into a protected hard-macro region")
+
+
+def _validate_macro_via_permissions(board, macro, vias):
+    """An asset's finish string cannot authorize otherwise forbidden via-in-pad."""
+    from .drc import placed_pad_shape
+    permitted = {rule.pad for rule in board.via_in_pad_rules}
+    bound = {binding.pad for binding in macro.pad_bindings if binding.net == "GND"}
+    for via in vias:
+        if via.finish != "filled-capped":
+            continue
+        if (via.net != "GND" or board.metadata.get("fabrication_profile") != "jlcpcb-six-layer"
+                or len(board.stackup.copper_layers) != 6
+                or (via.from_layer, via.to_layer) != (CopperLayer.FRONT, CopperLayer.BACK)):
+            raise ValueError("macro filled-capped vias require the six-layer GND through-via process")
+        annulus = RoundedConvexShape((via.position,), via.size_nm // 2)
+        contacts = []
+        for pose in board.placements:
+            for pad in board.footprints[pose.footprint].pads:
+                if pad.kind is not PadKind.SMD:
+                    continue
+                shape = placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose)
+                if shapes_clear(annulus, shape, 1):
+                    continue
+                ref = PadReference(pose.reference, pad.number)
+                if ref not in permitted or ref not in bound:
+                    raise ValueError("macro via-in-pad requires explicit permission for the contacted private pad")
+                if not circle_inside_shape(via.position, via.size_nm // 2, shape):
+                    raise ValueError("macro via-in-pad annulus must be contained in its permitted pad")
+                contacts.append(ref)
+        if len(contacts) > 1:
+            raise ValueError("macro via-in-pad cannot overlap multiple pad lands")
 
 
 def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
@@ -338,6 +379,26 @@ def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
             tuple(PhysicalNet(n.name,tuple(p for p in n.pads if p.component in members)) for n in result.nets),
             stackup=result.stackup, rules=result.rules, tracks=t, vias=v)
         graph = explicit_copper_connectivity(owner)
+        # A wholly private net has no boundary port that could prove it later.
+        # Check all its physical lands now; never borrow another owner's copper.
+        port_nets = {port.net for port in ports}
+        for net in owner.nets:
+            bound = tuple(b.pad for b in macro.pad_bindings if b.net == net.name)
+            if not bound:
+                continue
+            if net.name in port_nets:
+                covered = {pad for port in ports if port.net == net.name for pad in port.pads}
+                if not set(bound) <= covered:
+                    raise ValueError(f"macro ports omit private pads on net {net.name!r}")
+                continue
+            # Ownership is per pad: an unbound pad on a member IC is public
+            # just like a consumer on another component. It cannot disappear
+            # from the connectivity proof for a claimed internal net.
+            if any(p not in bound for p in next(n for n in result.nets if n.name == net.name).pads):
+                raise ValueError(f"macro net {net.name!r} requires an external port")
+            roots = {graph.roots[node] for pad in bound for node in graph.pad_nodes.get(pad, ())}
+            if len(roots) != 1 or any(not graph.pad_nodes.get(pad) for pad in bound):
+                raise ValueError(f"macro internal net {net.name!r} is not connected")
         for port in ports:
             # A via port denotes its plated annulus, not imaginary solid copper
             # at its drill centre. Use that actual object's exact graph root.

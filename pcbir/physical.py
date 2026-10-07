@@ -508,11 +508,15 @@ class CopperZone:
     island_policy: IslandPolicy = IslandPolicy.REMOVE_BELOW_AREA
     minimum_island_area_nm2: int | None = 10_000_000_000_000
     fill_mode: ZoneFillMode = ZoneFillMode.SOLID
+    # Explicitly fingerprinted when enabled; preserve legacy zone repr/digests.
+    reserve_routing: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "layers", tuple(self.layers))
         if not self.id or not self.net or not self.layers:
             raise ValueError("a copper zone requires an id, net, and layer")
+        if type(self.reserve_routing) is not bool:
+            raise ValueError("copper zone reserve_routing must be boolean")
         if len(set(self.layers)) != len(self.layers):
             raise ValueError("copper zone layers must be unique")
         if self.priority < 0 or self.minimum_width_nm <= 0:
@@ -1536,6 +1540,8 @@ class PhysicalBoard:
                 raise ValueError(f"copper zone {zone.id!r} references unknown net {zone.net!r}")
             if not set(zone.layers).issubset(stackup_layers):
                 raise ValueError(f"copper zone {zone.id!r} references a layer outside the stackup")
+        from .zone_geometry import validate_routing_reservations
+        validate_routing_reservations(self.zones)
         for keepout in self.copper_keepouts:
             if not set(keepout.layers).issubset(stackup_layers):
                 raise ValueError(f"copper keepout {keepout.id!r} references a layer outside the stackup")

@@ -277,6 +277,18 @@ def shapes_clear(first: RoundedConvexShape, second: RoundedConvexShape,
     return _spines_at_least_squared(first.spine, second.spine, required * required)
 
 
+def circle_inside_shape(center: Point, radius_nm: int, shape: RoundedConvexShape) -> bool:
+    """Contain a complete disk in a convex swept shape, including tangency."""
+    if radius_nm < 0:
+        raise ValueError("circle radius must be non-negative")
+    margin = shape.radius_nm - radius_nm
+    if margin >= 0:
+        return _point_spine_distance_squared(center, shape.spine) <= margin * margin
+    return (len(shape.spine) >= 3 and point_in_polygon(center, shape.spine)
+            and all(point_segment_distance_at_least(center, a, b, -margin)
+                    for a, b in _spine_edges(shape.spine)))
+
+
 def _spines_at_least_squared(first: tuple[Point, ...], second: tuple[Point, ...],
                              minimum_squared: int) -> bool:
     if minimum_squared == 0:

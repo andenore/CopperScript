@@ -769,6 +769,29 @@ zone terminals must still reach prospective contacts, and native refill must
 prove that all contacts actually join. Regions never authorize split reference
 planes or waive current/impedance review.
 
+Set `reserve_routing = true` to reserve a zone's polygon for its own net's
+tracks on its declared layers. This boolean defaults to `false`. Foreign
+tracks must remain outside the region by their half-width plus the largest
+applicable board, zone or net clearance. Other layers and foreign through-vias
+retain their normal routing rules; native fill supplies via antipads. The
+reservation is net-aware compiler intent, not a blanket KiCad keepout, and it
+does not override hard-macro ownership. Distinct-net reservations on a common
+layer may neither overlap nor touch, regardless of zone priority.
+Dense general-net pads on reserved regions retain their normal joint fanout
+exits before plane stitching. Stitching first tries an existing nearby via,
+including a bounded, legal track to its own zone, before adding a new drill.
+These contacts survive ordinary-routing cleanup and still require native fill
+verification. Unreserved plane nets continue directly to plane stitching,
+without new joint fanout.
+
+The same region checks apply to terminal access, detailed routing, repair,
+smoothing and final physical DRC. Global routing excludes unavailable planar
+guide resources for each foreign net; it does not reserve the whole layer.
+Enabled reservations enter physical/global fingerprints and the editor scene.
+For a surface power pour, use `--stitch-surface-zones` to enable contacts from
+the other side. Neither reservations nor contacts establish filled connectivity:
+native refill must still prove each consumer joins its source.
+
 Physical placement derives overlapping power-domain membership from nonzero
 supply nets and active power-pin profiles. Ground is excluded. Distinct nets
 remain distinct even at the same voltage. `--power-domain-weight` on

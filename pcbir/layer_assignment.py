@@ -23,7 +23,7 @@ from typing import Mapping
 from .physical import NetRoutingRule, PadReference, RouteKind
 from .routing import (GlobalNetRoute, GlobalRouteSegment, GlobalRouterOptions,
                       GlobalViaProposal, GridNode, PinAccess, _edge_key, _Graph,
-                      _net_demand, _preference_cost)
+                      _net_demand, _preference_cost, _route_resource_demands)
 from .routing_costs import COST_UNIT, demand_cost
 from .routing_layers import routing_layers
 
@@ -65,8 +65,8 @@ def assign_ordinary_layers(
         edges_by_route.append(edges)
         if not route.connected:
             continue
-        for identifier in {item.resource_id for item in (*route.segments, *route.vias)}:
-            usage[identifier] += demand
+        for identifier, amount in _route_resource_demands(route, demand).items():
+            usage[identifier] += amount
         for key in _straight_passes(edges):
             passes[key] += 1
     runs = sorted((run for index, route in enumerate(routes)

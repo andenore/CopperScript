@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from .geometry import point_in_polygon, segment_in_polygon, segments_intersect
+from .geometry import (RoundedConvexShape, point_in_polygon, segment_in_polygon,
+                       segments_intersect, shapes_clear)
 from .model import ConstraintKind
-from .physical import BoardOutline, Point, PolygonRing, PolygonWithHoles
+from .physical import BoardOutline, CopperZone, PhysicalBoard, Point, PolygonRing, PolygonWithHoles
 from .quantities import Length
 
 
@@ -94,3 +95,63 @@ def lower_zone_outline(parameters, board_outline, constraints):
                 or any(point_in_polygon(p, cutout.vertices) for p in boundary.vertices)):
             raise ValueError("copper_zone boundary intersects a board cutout")
     return PolygonWithHoles(PolygonRing(boundary.vertices), tuple(holes))
+
+
+def _ring_edges(vertices):
+    return tuple(zip(vertices, (*vertices[1:], vertices[0])))
+
+
+def _inside(point, polygon):
+    return (point_in_polygon(point, polygon.outer.vertices)
+            and not any(point_in_polygon(point, hole.vertices) for hole in polygon.holes))
+
+
+def validate_routing_reservations(zones: tuple[CopperZone, ...]) -> None:
+    """Different rail reservations on one layer must have disjoint boundaries."""
+    reserved = [zone for zone in zones if zone.reserve_routing]
+    for index, first in enumerate(reserved):
+        for second in reserved[:index]:
+            if first.net == second.net or not set(first.layers).intersection(second.layers):
+                continue
+            a, b = first.outline, second.outline
+            edges_a = tuple(edge for ring in (a.outer, *a.holes) for edge in _ring_edges(ring.vertices))
+            edges_b = tuple(edge for ring in (b.outer, *b.holes) for edge in _ring_edges(ring.vertices))
+            if (any(segments_intersect(*x, *y) for x in edges_a for y in edges_b)
+                    or any(_inside(p, b) for p in a.outer.vertices)
+                    or any(_inside(p, a) for p in b.outer.vertices)):
+                raise ValueError(f"reserved copper zones {first.id!r} and {second.id!r} overlap or touch on the same layer")
+
+
+class ZoneRoutingReservations:
+    """Net-aware track reservations, shared by access, routing and final DRC.
+
+    These are routing intent, never filled copper or via/pad obstructions. Actual
+    native fill must still prove continuity and clear foreign through-vias.
+    """
+
+    def __init__(self, board: PhysicalBoard):
+        self.zones = tuple((zone, RoundedConvexShape(zone.outline.outer.vertices))
+                           for zone in board.zones if zone.reserve_routing)
+        self.clearances = {rule.net: rule.clearance_nm or 0 for rule in board.net_routing_rules}
+        self.minimum_clearance_nm = board.rules.minimum_clearance_nm
+
+    def blocking_zones(self, net, shape, layer):
+        for zone, outer in self.zones:
+            if zone.net == net or layer not in zone.layers:
+                continue
+            margin = max(self.minimum_clearance_nm, zone.clearance_nm or 0,
+                         self.clearances.get(net, 0), self.clearances.get(zone.net, 0))
+            if shapes_clear(shape, outer, margin):
+                continue
+            # A swept shape wholly inside a polygon hole does not consume the
+            # reserved copper. Keep the radius and clearance from its boundary.
+            if any(all(segment_in_polygon(a, b, hole.vertices)
+                       for a, b in _ring_edges(shape.spine))
+                   and all(shapes_clear(shape, RoundedConvexShape((a, b)), margin)
+                           for a, b in _ring_edges(hole.vertices))
+                   for hole in zone.outline.holes):
+                continue
+            yield zone
+
+    def can_area(self, net, shape, layer) -> bool:
+        return next(self.blocking_zones(net, shape, layer), None) is None

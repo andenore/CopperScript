@@ -27,6 +27,7 @@ from .physical import (
     nm_from_mm,
 )
 from .placement import resolved_copper_keepouts, transformed_local_point
+from .zone_geometry import ZoneRoutingReservations
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +70,7 @@ class RoutingClearanceIndex:
         if bin_size_nm <= 0:
             raise ValueError("clearance bin size must be positive")
         self.board = board
+        self.zone_reservations = ZoneRoutingReservations(board)
         self.bin_size_nm = bin_size_nm
         self.rules: dict[str, NetRoutingRule] = {
             rule.net: rule for rule in board.net_routing_rules
@@ -146,7 +148,9 @@ class RoutingClearanceIndex:
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer
     ) -> bool:
         shape = RoundedConvexShape((start, end), width_nm // 2)
-        return self._keepout_clear(shape, (layer,), for_via=False) and self._clear(net, shape, (layer,))
+        return (self.zone_reservations.can_area(net, shape, layer)
+                and self._keepout_clear(shape, (layer,), for_via=False)
+                and self._clear(net, shape, (layer,)))
 
     def route_pieces(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer,
@@ -168,7 +172,9 @@ class RoutingClearanceIndex:
 
     def can_area(self, net: str, shape: RoundedConvexShape, layer: CopperLayer) -> bool:
         """Like ``can_track`` for any swept shape, such as a whole tuning bump."""
-        return self._keepout_clear(shape, (layer,), for_via=False) and self._clear(net, shape, (layer,))
+        return (self.zone_reservations.can_area(net, shape, layer)
+                and self._keepout_clear(shape, (layer,), for_via=False)
+                and self._clear(net, shape, (layer,)))
 
     def can_via(
         self, net: str, position: Point, size_nm: int,
@@ -184,12 +190,14 @@ class RoutingClearanceIndex:
                      if allowed_pad is not None else
                      allow_pad_overlap or self.pad_copper_clear(shape, layers))
                 and self._clear(net, shape, layers)
-                and (not check_hole_copper or self._clear(
+                # All plated drills must clear foreign copper, not only
+                # filled/capped contacts. Keep the keyword for old callers.
+                and self._clear(
                     net, RoundedConvexShape(
                         (position,), (drill_nm or self.board.rules.default_via_drill_nm) // 2
                     ), layers,
                     clearance_floor_nm=self.board.rules.minimum_hole_clearance_nm,
-                ))
+                )
                 and self._hole_clear(
                     net, position, (drill_nm or self.board.rules.default_via_drill_nm) // 2,
                     (from_layer, to_layer),
@@ -231,6 +239,19 @@ class RoutingClearanceIndex:
                     via.drill_nm // 2 + earlier.drill_nm // 2
                     + self.board.rules.minimum_hole_clearance_nm
                 )
+                if via.net != earlier.net and set(self._via_layers(via.from_layer, via.to_layer)).intersection(
+                        self._via_layers(earlier.from_layer, earlier.to_layer)):
+                    earlier_shape = RoundedConvexShape((earlier.position,), earlier.size_nm // 2)
+                    earlier_copper = _CopperObject(earlier.net,
+                        self._via_layers(earlier.from_layer, earlier.to_layer), earlier_shape,
+                        breakout_land=self._breakout_land(earlier.net, earlier_shape))
+                    clearance = self._rule_clearance(via.net,
+                        self._breakout_land(via.net, RoundedConvexShape((via.position,), via.size_nm // 2)),
+                        earlier_copper)
+                    required = max(required,
+                        via.drill_nm // 2 + earlier.size_nm // 2 + self.board.rules.minimum_hole_clearance_nm,
+                        earlier.drill_nm // 2 + via.size_nm // 2 + self.board.rules.minimum_hole_clearance_nm,
+                        via.size_nm // 2 + earlier.size_nm // 2 + clearance)
                 if distance_squared < required * required:
                     return via
         return None
@@ -375,6 +396,12 @@ class RoutingClearanceIndex:
             RoundedConvexShape((via.position,), via.size_nm // 2),
             locked=locked,
         ))
+        self._add(_CopperObject(
+            via.net, self._via_layers(via.from_layer, via.to_layer),
+            RoundedConvexShape((via.position,), via.drill_nm // 2),
+            clearance_nm=self.board.rules.minimum_hole_clearance_nm,
+            locked=locked,
+        ))
 
     def blocking_track_nets(self, track: TrackSegment) -> tuple[frozenset[str], bool]:
         """Return movable blocker nets and whether immutable geometry blocks a track."""
@@ -400,6 +427,11 @@ class RoutingClearanceIndex:
         layers = self._via_layers(via.from_layer, via.to_layer)
         shape = RoundedConvexShape((via.position,), via.size_nm // 2)
         movable, locked = self._blockers(via.net, shape, layers, for_via=True)
+        drill_movable, drill_locked = self._blockers(via.net,
+            RoundedConvexShape((via.position,), via.drill_nm // 2), layers,
+            for_via=True, clearance_floor_nm=self.board.rules.minimum_hole_clearance_nm)
+        movable = movable | drill_movable
+        locked |= drill_locked
         locked = locked or not self.pad_copper_clear(shape, layers)
         movable = set(movable)
         for hole in self._holes:
@@ -419,8 +451,10 @@ class RoutingClearanceIndex:
 
     def _blockers(
         self, net: str, shape: RoundedConvexShape,
-        layers: tuple[CopperLayer, ...], *, for_via: bool,
+        layers: tuple[CopperLayer, ...], *, for_via: bool, clearance_floor_nm: int = 0,
     ) -> tuple[frozenset[str], bool]:
+        if not for_via and any(not self.zone_reservations.can_area(net, shape, layer) for layer in layers):
+            return frozenset(), True
         if not self._keepout_clear(shape, layers, for_via=for_via):
             return frozenset(), True
         movable: set[str] = set()
@@ -429,7 +463,8 @@ class RoutingClearanceIndex:
         for other in self._overlapping_objects(shape, layers):
             if other.net == net:
                 continue
-            clearance = max(self._rule_clearance(net, land, other), other.clearance_nm)
+            clearance = max(self._rule_clearance(net, land, other), other.clearance_nm,
+                            clearance_floor_nm)
             if shapes_clear(shape, other.shape, clearance):
                 continue
             if other.locked:

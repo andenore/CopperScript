@@ -373,18 +373,23 @@ def _facing(edge: str, area: Bounds, destination: Point) -> int:
 
 def reserve_boundary_access(
     board: PhysicalBoard, fanout: FanoutResult, boundary: BoundaryAccessResult,
+    *, deferred_nets: frozenset[str] = frozenset(),
 ) -> FanoutResult:
     """Atomically commit complete ordinary witnesses as fanout-owned copper.
 
     Only newly added occurrences are disposable. Existing same-net input tracks
     may support several ports but never acquire ordinary cleanup ownership.
     Native acceptance and exact pad/path/span verification are mandatory again.
+    Deferred zone nets retain their launch copper but need no ordinary-area
+    witness. The caller supplies the actual detailed-router deferral policy.
     """
     if (not boundary.ready or not boundary.source_digest
             or boundary.source_digest != physical_board_digest(board)):
         raise ValueError("boundary reservation requires complete, fresh capacity evidence")
     if fanout.boundary_accesses:
         raise ValueError("boundary reservations are already materialized")
+    if not deferred_nets <= {zone.net for zone in board.zones}:
+        raise ValueError("boundary reservation can defer only declared zone nets")
     if (len({p.pad for p in boundary.ports}) != len(boundary.ports)
             or {p.pad for p in boundary.ports} != set(fanout.accesses)):
         raise ValueError("boundary reservation cannot lose or duplicate ordinary launch identities")
@@ -416,13 +421,14 @@ def reserve_boundary_access(
         if not outside.get(port.edge, False):
             raise ValueError("boundary reservation port does not clear its package collar")
     owned, present = [], set(board.tracks)
-    for port in boundary.ports:
+    materialized = tuple(port for port in boundary.ports if net_by_pad[port.pad] not in deferred_nets)
+    for port in materialized:
         for track in port.path:
             if track not in present:
                 owned.append(track)
                 present.add(track)
     reserved = replace(board, tracks=(*board.tracks, *owned))
-    accesses = {p.pad: RoutingAccess(p.position, p.layer, fanout.accesses[p.pad], p.path) for p in boundary.ports}
+    accesses = {p.pad: RoutingAccess(p.position, p.layer, fanout.accesses[p.pad], p.path) for p in materialized}
     clearance = RoutingClearanceIndex(reserved)
     if any(verified_routing_access(reserved, pad, net_by_pad[pad], anchor, clearance) is None
            for pad, anchor in accesses.items()):

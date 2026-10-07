@@ -17,14 +17,18 @@ EscapeCandidate = tuple[tuple[TrackSegment, ...], Via | None]
 
 @dataclass(frozen=True, slots=True)
 class EscapeAssignmentOptions:
-    maximum_trials: int = 8
+    # None tries each missing root once, within the shared pair/query budgets.
+    maximum_trials: int | None = None
     maximum_cluster_pins: int = 12
     maximum_search_states: int = 20_000
     maximum_pair_checks: int = 200_000
     maximum_pair_queries: int = 2_000_000
 
     def __post_init__(self):
-        if min(self.maximum_trials, self.maximum_cluster_pins,
+        if self.maximum_trials is not None and (
+                not isinstance(self.maximum_trials, int) or self.maximum_trials <= 0):
+            raise ValueError("escape assignment trial budget must be a positive integer or None")
+        if min(self.maximum_cluster_pins,
                self.maximum_search_states, self.maximum_pair_checks, self.maximum_pair_queries) <= 0:
             raise ValueError("escape assignment budgets must be positive")
 
@@ -147,7 +151,7 @@ def improve_escape_assignment(
     for root in ordered:
         if root in selected or not domains[root]:
             continue
-        if len(trials) >= options.maximum_trials:
+        if options.maximum_trials is not None and len(trials) >= options.maximum_trials:
             break
         cluster = {root}
         states = 0

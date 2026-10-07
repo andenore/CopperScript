@@ -25,6 +25,8 @@ from collections import defaultdict
 from dataclasses import replace
 from math import isqrt
 
+from .copper_connectivity import (CopperContact, _positive_area_overlap,
+                                  copper_contacts_overlap, via_copper_contact)
 from .geometry import RoundedConvexShape, point_on_segment, shapes_clear
 from .physical import CopperLayer, PhysicalBoard, PhysicalNet, Point, TrackSegment
 from .routing_clearance import RoutingClearanceIndex
@@ -308,19 +310,21 @@ def _legal(board, net, layer, width, old, candidate, clearance, others, vias) ->
     if lost and lost - _touched_pads(clearance, kept + via_shapes, layer):
         return False
     # A via keeps a track on this layer if retired copper provided one.
-    return all(not _touching(via, retired) or _touching(via, new) or _touching(via, kept)
-               for via in via_shapes)
+    return all(not _touching_via(via, retired, layer) or _touching_via(via, new, layer)
+               or _touching_via(via, kept, layer)
+               for via in (via_copper_contact(v, board.stackup.copper_layers) for v in vias))
 
 
-def _touching(shape: RoundedConvexShape, others) -> bool:
-    return any(not shapes_clear(shape, other, 1) for other in others)
+def _touching_via(via: CopperContact, shapes, layer: CopperLayer) -> bool:
+    return any(copper_contacts_overlap(via, CopperContact("track", via.net, (layer,), shape))
+               for shape in shapes)
 
 
 def _touched_pads(clearance: RoutingClearanceIndex, shapes, layer: CopperLayer) -> set[int]:
     touched = set()
     for shape in shapes:
         for item in clearance._overlapping_objects(shape, (layer,)):
-            if item.is_pad and not shapes_clear(shape, item.shape, 1):
+            if item.is_pad and _positive_area_overlap(shape, item.shape):
                 touched.add(id(item))
     return touched
 
@@ -342,11 +346,12 @@ def _contacts_preserved(board: PhysicalBoard, net: PhysicalNet,
     fixed = tuple(t for t in board.tracks if t.net == net.name)
     before, after = (*before, *fixed), (*after, *fixed)
     for via in (v for v in board.vias if v.net == net.name):
-        shape = RoundedConvexShape((via.position,), via.size_nm // 2)
+        contact = via_copper_contact(via, board.stackup.copper_layers)
 
         def touched(tracks):
             return {t.layer for t in tracks
-                    if not shapes_clear(shape, RoundedConvexShape((t.start, t.end), t.width_nm // 2), 1)}
+                    if copper_contacts_overlap(contact, CopperContact("track", t.net, (t.layer,),
+                        RoundedConvexShape((t.start, t.end), t.width_nm // 2)))}
         if not touched(before) <= touched(after):
             return False
     return True

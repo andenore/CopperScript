@@ -14,7 +14,8 @@ from .physical import Point
 def place_rigid_clusters(board, targets, original, options):
     from .placement import (
         PlacementAlgorithmError, _candidate_positions, _fixed_placements,
-        _hpwl, _legal, transformed_local_point,
+        _hpwl, _legal, transformed_local_point, _relative_cluster_order,
+        _best_legal_choice, _adjacency, _relative_penalty, _pack_local_components,
     )
 
     if not board.rigid_clusters:
@@ -27,7 +28,38 @@ def place_rigid_clusters(board, targets, original, options):
     clusters = sorted(board.rigid_clusters, key=lambda cluster: (
         not any(item.reference in fixed for item in cluster.members), cluster.name
     ))
+    reserved_companions = False
     for cluster in clusters:
+        if not reserved_companions and not any(item.reference in fixed for item in cluster.members):
+            from .placement_escape import placement_units
+            units = placement_units(board)
+            companions = [ref for ref in targets if ref not in all_members and ref not in placed
+                          and units[ref] & placed.keys()]
+            adjacency = _adjacency(board)
+            ordered = _relative_cluster_order(board, sorted(companions), targets)
+            # Reserve constrained companions jointly before unrelated macros
+            # consume their space. A greedy first choice can occupy another
+            # companion's only legal slot even when the group fits together.
+            for group in dict.fromkeys(units[ref] for ref in ordered):
+                references = [ref for ref in ordered if ref in group]
+                if len(references) < 2:
+                    continue
+                packed = _pack_local_components(board, references, placed, targets, options,
+                                                allow_general=True)
+                if packed is not None:
+                    placed = packed
+                    targets.update((ref, packed[ref]) for ref in references)
+            for ref in ordered:
+                if ref in placed:
+                    continue
+                choice = _best_legal_choice(board, ref, targets[ref], placed, targets,
+                    adjacency, options, 0, limit=options.legalization_candidates)
+                if choice is None or _relative_penalty(board, {**placed, ref: choice}) > _relative_penalty(board, placed):
+                    raise PlacementAlgorithmError(
+                        f"cannot reserve fixed-anchor companion {ref!r} before movable rigid clusters")
+                placed[ref] = choice
+                targets[ref] = choice
+            reserved_companions = True
         local_anchor = next(item for item in cluster.members if item.reference == cluster.anchor.reference)
         target = targets[cluster.anchor.reference]
         fixed_members = [item for item in cluster.members if item.reference in fixed]

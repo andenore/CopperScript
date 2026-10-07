@@ -9,6 +9,7 @@ from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, replace
 from math import isqrt
 
+from .copper_connectivity import CopperContact, copper_contacts_overlap, via_copper_contact
 from .geometry import (RoundedConvexShape, SpatialIndex, SpatialItem,
                        orientation, point_on_segment, shapes_clear)
 from .physical import BoardSide, CopperLayer, PadKind, PhysicalBoard, Point, TrackSegment, Via
@@ -311,6 +312,7 @@ def release_unused_escapes(
                 raw, current, score = (trial_tracks, trial_vias), trial, trial_score
                 available -= wanted
                 break
+        current, score = _prune_open_ends(settle, current, score)
         replaced[name] = _cut_cycles(settle, current, score)
         if settled is not None:
             settled.add(name)
@@ -337,6 +339,34 @@ def release_unused_escapes(
             budget[via] -= 1
             kept_vias.append(via)
     return tuple(kept_tracks), tuple(kept_vias)
+
+
+def _prune_open_ends(settle: "_Settler", current, score, *, rounds: int = 8):
+    """Remove owned pad-contacting leaves only after proving robust connectivity.
+
+    The centre-line pruner deliberately keeps ambiguous pad-edge contacts,
+    including coincident lands. The complete-net score can establish whether
+    such a piece is redundant without weakening that conservative local test.
+    """
+    for _ in range(rounds):
+        if not score[1]:
+            break
+        budget = Counter(settle.mutable)
+        candidates = set(settle.open_track_ends(*current))
+        for index, track in enumerate(current[0]):
+            owned = bool(budget[track])
+            budget[track] -= owned
+            if not owned or index not in candidates:
+                continue
+            trial = settle(current[0][:index] + current[0][index + 1:], current[1])
+            trial_score = settle.score(*trial)
+            if (trial_score is not None and trial_score[1] < score[1]
+                    and all(new <= old for new, old in zip(trial_score, score))):
+                current, score = trial, trial_score
+                break
+        else:
+            break
+    return current, score
 
 
 def _cut_cycles(settle: "_Settler", current, score, *, rounds: int = 8):
@@ -509,11 +539,12 @@ class _Settler:
         return tracks, vias
 
     def via_layers(self, via, tracks):
-        shape = RoundedConvexShape((via.position,), via.size_nm // 2)
-        layers = {t.layer for t in tracks if self.covers(via, t.layer)
-                  and not shapes_clear(shape, _robust_shape(t), 1)}
+        contact = via_copper_contact(via, self.board.stackup.copper_layers)
+        layers = {t.layer for t in tracks if copper_contacts_overlap(contact,
+                  CopperContact("track", t.net, (t.layer,), _robust_shape(t)))}
+        contact = replace(contact, shape=_robust_via(via))
         layers.update(layer for pad_layers, pad in self.pads for layer in pad_layers
-                      if self.covers(via, layer) and not shapes_clear(_robust_via(via), pad, 1))
+                      if copper_contacts_overlap(contact, CopperContact("pad", via.net, (layer,), pad)))
         return layers
 
     def covers(self, via, layer) -> bool:
@@ -531,7 +562,12 @@ class _Settler:
                        for v in vias))
         if not graph.net_connected(self.net):
             return None
-        open_ends = 0
+        single = sum(len(self.via_layers(via, tracks)) < 2 for via in vias)
+        return len(set(graph.roots.values())), len(self.open_track_ends(tracks, vias)), single
+
+    def open_track_ends(self, tracks, vias):
+        """Track indices, repeated if both robust endpoints are unconnected."""
+        open_ends = []
         by_layer = defaultdict(list)
         for index, track in enumerate(tracks):
             by_layer[track.layer].append((index, _robust_shape(track)))
@@ -547,9 +583,8 @@ class _Settler:
                 end = RoundedConvexShape((point,), max(1, track.width_nm // 2 - CONTACT_MARGIN_NM))
                 if not any(other != index and not shapes_clear(end, shape, 1)
                            for other, shape in by_layer[track.layer]):
-                    open_ends += 1
-        single = sum(len(self.via_layers(via, tracks)) < 2 for via in vias)
-        return len(set(graph.roots.values())), open_ends, single
+                    open_ends.append(index)
+        return open_ends
 
 
 def _robust_shape(track: TrackSegment) -> RoundedConvexShape:

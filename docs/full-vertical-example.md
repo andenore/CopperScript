@@ -231,6 +231,18 @@ records the first real-footprint run: four connected RF nets, two rejected USB
 pairs, no committed unsafe pair copper. The earlier completely connected
 ordinary-routing draft remains a separate historical artifact.
 
+Add `--package-access` to run the same ordinary fanout, critical routing,
+plane-contact and boundary-access gate used by `route-board --fanout`, without
+ordinary area routing. Its exit status also requires no pending package or
+plane contacts, no failed critical nets and no hard physical findings. The
+report retains pending pad identities and checkpoints interrupted searches.
+Use `--stitch-surface-zones --plane-contact-radius-mm 5` when the full route
+uses those options for opposite-side power pours. This mode exports the board
+including its reserved contacts; it still requires native refill and complete
+board routing. It cannot be combined with critical-only placement feedback.
+Both modes accept repeatable `--hard-macro path/to/scene.json` arguments, bound
+before placement and included in the input provenance.
+
 The [pass-5 review](routing-review-pass5.md) adds joint paired package escape
 and heading-aware channel search with bounded 1/0.5/0.25 mm refinement. Both
 USB pairs connected with zero vias and unchanged placement in that run. Independent

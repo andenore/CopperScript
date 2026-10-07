@@ -280,6 +280,11 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
                      "vertices": [_point(p) for p in r.outline.vertices]} for r in board.regions],
         "components": components, "nets": [n.name for n in sorted(board.nets, key=lambda n: n.name)],
         "zone_nets": sorted({z.net for z in board.zones}),
+        "zone_routing_reservations": [
+            {"id": z.id, "net": z.net, "layers": [layer.value for layer in z.layers],
+             "vertices": [_point(p) for p in z.outline.outer.vertices],
+             "holes": [[_point(p) for p in hole.vertices] for hole in z.outline.holes]}
+            for z in board.zones if z.reserve_routing],
         "power_nets": [],
         "ratsnest": ratsnest_cache.get(board) if ratsnest_cache else ratsnest(board),
         "warnings": warning_data,

@@ -7,6 +7,88 @@ from pcbir.critical_preflight import main
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_package_access_gate_reports_pending_identities_and_exports_contacts(tmp_path, monkeypatch):
+    import pcbir.critical_preflight as preflight
+    from dataclasses import replace
+    from pcbir.physical import PadReference, nm_from_mm
+
+    original = preflight.preflight_package_access
+    seen = []
+    def inspect(board, guides, fanout_options, plane_options, **kwargs):
+        assert plane_options.include_surface_zones
+        assert plane_options.maximum_contact_radius_nm == nm_from_mm("5")
+        result = original(board, guides, fanout_options, plane_options, **kwargs)
+        # A failed contact must fail the gate even when the critical set is empty.
+        result = replace(result, plane_stitch=replace(result.plane_stitch,
+            pending_pads=(PadReference("R1", "1"),)))
+        seen.append(result.board)
+        return result
+    monkeypatch.setattr(preflight, "preflight_package_access", inspect)
+    backend = preflight.KiCadPcbBackend.generate
+    def inspect_export(self, board):
+        assert board is seen[0]
+        return backend(self, board)
+    monkeypatch.setattr(preflight.KiCadPcbBackend, "generate", inspect_export)
+    report = tmp_path / "access.json"
+    output = tmp_path / "access.kicad_pcb"
+    assert main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
+        "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
+        "--package-access", "--stitch-surface-zones", "--plane-contact-radius-mm", "5",
+        "--report", str(report), "-o", str(output)]) == 1
+    data = json.loads(report.read_text())
+    assert data["stage"] == "package_access_complete" and data["complete"]
+    assert not data["fabrication_ready"] and not data["package_access"]["ready"]
+    assert "R1.1" in data["package_access"]["pending_pads"]
+    assert data["package_access_progress"] and output.is_file()
+
+
+def test_package_access_interruption_keeps_checkpoint(tmp_path, monkeypatch):
+    import pcbir.critical_preflight as preflight
+    def interrupt(*args, on_progress):
+        on_progress("ordinary_package_exits", "started", {})
+        raise ValueError("bounded interruption")
+    monkeypatch.setattr(preflight, "preflight_package_access", interrupt)
+    report = tmp_path / "access.json"
+    assert main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
+        "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
+        "--package-access", "--report", str(report)]) == 2
+    data = json.loads(report.read_text())
+    assert data["stage"] == "ordinary_package_exits_started" and not data["complete"]
+    assert not data["fabrication_ready"]
+
+
+def test_preflight_binds_scenes_before_placement_and_preserves_owner_copper(tmp_path, monkeypatch):
+    import pcbir.critical_preflight as preflight
+    from test_hard_macros import fixture
+    from pcbir.hard_macros import resolved_macro_geometry
+    original, _, bind = fixture(tmp_path)
+    bound = bind()
+    scene = tmp_path / "scene.json"
+    scene.write_text('{}\n')
+    seen = []
+    monkeypatch.setattr(preflight, "prototype_physicalize", lambda *args: original)
+    def apply(board, path, **kwargs):
+        assert board is original and path == scene and kwargs == {"locked": True, "offline": True}
+        seen.append(path)
+        return bound
+    monkeypatch.setattr(preflight, "apply_hard_macro_scene", apply)
+    critical = preflight.route_critical_nets
+    def inspect(board, global_route, **kwargs):
+        assert board.hard_macros == bound.hard_macros
+        result = critical(board, global_route, **kwargs)
+        assert result.board.materialized_macros == ("unit",)
+        assert result.board.tracks == resolved_macro_geometry(result.board, result.board.hard_macros[0])[0]
+        return result
+    monkeypatch.setattr(preflight, "route_critical_nets", inspect)
+    report = tmp_path / "preflight.json"
+    main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
+        "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
+        "--locked", "--offline", "--hard-macro", str(scene), "--report", str(report)])
+    assert seen == [scene]
+    data = json.loads(report.read_text())
+    assert data["complete"] and data["hard_macros"][0]["scene"] == str(scene)
+
+
 def test_preflight_exports_partial_artifact_and_never_claims_full_signoff(tmp_path) -> None:
     report = tmp_path / "preflight.json"
     output = tmp_path / "preflight.kicad_pcb"

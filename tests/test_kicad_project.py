@@ -87,6 +87,58 @@ def test_writer_creates_complete_project_and_repeats_with_custom_stem(tmp_path):
     assert (output.parent / "fp-lib-table").is_file()
 
 
+def process_board():
+    from pcbir import PhysicalNet, Stackup, Via
+    return replace(fixture_board(), nets=(PhysicalNet("GND", ()),),
+        stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
+                        CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4, CopperLayer.BACK)),
+        metadata={"fabrication_profile": "jlcpcb-six-layer"},
+        vias=(Via("GND", Point.mm(20, 20), 300000, 200000, finish="filled-capped"),
+              Via("GND", Point.mm(30, 20), 800000, 400000)))
+
+
+def test_via_process_evidence_is_deterministic_content_bound_and_follows_output_stem(tmp_path):
+    board = process_board()
+    manifest = KiCadPcbBackend().generate(board)
+    assert manifest == KiCadPcbBackend().generate(board)
+    process = next(a for a in manifest.artifacts if a.name.endswith(".via-process.json"))
+    data = json.loads(process.content)
+    assert data == {
+        "schema": "copperscript-via-process/v0.1", "generated_by": "CopperScript",
+        "fabrication_profile": "jlcpcb-six-layer", "fabrication_ready": False,
+        "vias": [{"net": "GND", "position_nm": [20000000, 20000000],
+                  "diameter_nm": 300000, "drill_nm": 200000,
+                  "layers": ["F.Cu", "B.Cu"], "finish": "filled-capped", "technology": None}],
+    }
+    assert any(".via-process.json" in warning and "native PCB alone" in warning for warning in manifest.warnings)
+    changed = replace(manifest, artifacts=tuple(replace(a, content=a.content + "\n")
+                                              if a is process else a for a in manifest.artifacts))
+    assert kicad_export_digest(changed) != kicad_export_digest(manifest)
+    output = tmp_path / "chosen.kicad_pcb"
+    paths = write_kicad_project(manifest, output)
+    destination = output.with_suffix(".via-process.json")
+    assert destination in paths and destination.read_text() == process.content
+    assert not (tmp_path / process.name).exists()
+    assert write_kicad_project(manifest, output) == paths
+    plain = replace(board, vias=tuple(replace(via, finish="standard") for via in board.vias))
+    write_kicad_project(KiCadPcbBackend().generate(plain), output)
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("unrelated", ["user instructions", '{"schema": "copperscript-via-process/v0.1"}',
+                                      '{"generated_by": "CopperScript", "schema": "other-format"}'])
+def test_writer_preserves_unrelated_process_sidecars_and_rejects_conflicts_atomically(tmp_path, unrelated):
+    output = tmp_path / "chosen.kicad_pcb"
+    process = output.with_suffix(".via-process.json")
+    process.write_text(unrelated)
+    write_kicad_project(KiCadPcbBackend().generate(fixture_board()), output)
+    assert process.read_text() == unrelated
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    with pytest.raises(FileExistsError, match="unrelated via-process"):
+        write_kicad_project(KiCadPcbBackend().generate(process_board()), output)
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
 def test_writer_preserves_unrelated_library_table_before_writing_anything(tmp_path):
     table = tmp_path / "fp-lib-table"
     table.write_text("user-maintained table")

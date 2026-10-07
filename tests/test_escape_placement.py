@@ -257,3 +257,394 @@ def test_spreading_rejects_coarse_congestion_regression(monkeypatch):
 def test_invalid_escape_options_fail(change):
     with pytest.raises(ValueError, match="escape"):
         options(**change)
+
+
+def local_companion_board():
+    chip = PhysicalFootprint("chip", (
+        FootprintPad("1", Point.mm(1, -.6), Size.mm(.3, .3)),
+        FootprintPad("2", Point.mm(1, .6), Size.mm(.3, .3))), Size.mm(2, 2))
+    cap = PhysicalFootprint("capacitor", (
+        FootprintPad("1", Point.mm(-.3, 0), Size.mm(.3, .3)),
+        FootprintPad("2", Point.mm(.3, 0), Size.mm(.3, .3))), Size.mm(1, .5))
+    board = PhysicalBoard("local", BoardOutline.rectangle(30, 30),
+        {fp.name: fp for fp in (chip, cap)}, (
+            Placement("U", chip.name, Point.mm(10, 10)),
+            Placement("C1", cap.name, Point.mm(20, 20)),
+            Placement("C2", cap.name, Point.mm(23, 20))), (),
+        placement_rules=(ComponentPlacementRule("U", fixed_position=Point.mm(10, 10),
+                                               fixed_rotation_degrees=0),),
+        relative_rules=tuple(RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+            (PlacementTarget(f"C{i}", "1"), PlacementTarget("U", str(i))),
+            distance_nm=nm_from_mm(1.5)) for i in (1, 2)))
+    return board
+
+
+def test_fixed_anchor_companions_share_order_but_stay_flexible_and_legal():
+    from pcbir.placement import _relative_cluster_order
+    board = local_companion_board()
+    outsider = Placement("X", "chip", Point.mm(12, 10))
+    board = replace(board, placements=(*board.placements, outsider))
+    order = _relative_cluster_order(board, ["X", "C2", "C1"], poses(board))
+    assert order == ["C1", "C2", "X"]
+    first = plan_placement(board, options())
+    second = plan_placement(board, options())
+    assert first == second
+    assert poses(first.board)["U"] == poses(board)["U"]
+    assert placement_solution_is_legal(first.board, poses(first.board), options())
+    # Flexible proximity does not preserve the arbitrary original separation.
+    assert (poses(first.board)["C2"].position.x_nm - poses(first.board)["C1"].position.x_nm
+            != poses(board)["C2"].position.x_nm - poses(board)["C1"].position.x_nm)
+
+
+def test_minimum_distance_and_alignment_do_not_merge_local_units():
+    from pcbir.physical import AlignmentAxis
+    from pcbir.placement import _relative_cluster_order
+    from pcbir.placement_escape import placement_units
+    board = local_companion_board()
+    board = replace(board, relative_rules=(
+        RelativePlacementRule(RelativePlacementKind.MIN_DISTANCE,
+            (PlacementTarget("C1"), PlacementTarget("U")), distance_nm=nm_from_mm(2)),
+        RelativePlacementRule(RelativePlacementKind.ALIGN,
+            (PlacementTarget("C2"), PlacementTarget("U")), axis=AlignmentAxis.X)))
+    assert placement_units(board)["C1"] == frozenset({"C1"})
+    assert placement_units(board)["C2"] == frozenset({"C2"})
+    assert _relative_cluster_order(board, ["C2", "C1"], poses(board)) == ["C2", "C1"]
+
+
+@pytest.mark.parametrize("slot_left, slot_right", [(11.66, 12.70), (11.72, 12.74)])
+def test_local_xy_candidates_find_off_grid_slot_missed_by_eight_rays(slot_left, slot_right):
+    board = local_companion_board()
+    chip = replace(board.footprints["chip"], pads=(
+        replace(board.footprints["chip"].pads[0], position=Point.mm(1, 0)),))
+    board = replace(board, footprints={**board.footprints, "chip": chip},
+        placements=(replace(board.placements[0], position=Point.mm(10.13, 10.27)), board.placements[1]),
+        placement_rules=(ComponentPlacementRule("U", fixed_position=Point.mm(10.13, 10.27),
+                                               fixed_rotation_degrees=0),
+                         ComponentPlacementRule("C1", region="slot", fixed_rotation_degrees=0)),
+        regions=(PlacementRegion("slot", BoardOutline((Point.mm(slot_left, 10.64), Point.mm(slot_right, 10.64),
+                                                        Point.mm(slot_right, 11.29), Point.mm(slot_left, 11.29)))),),
+        relative_rules=(replace(board.relative_rules[0], distance_nm=nm_from_mm(1.1)),))
+    plan = plan_placement(board, options())
+    assert placement_solution_is_legal(plan.board, poses(plan.board), options())
+    cap = poses(plan.board)["C1"]
+    assert cap.position.x_nm % nm_from_mm(1) != 0
+    assert cap.position.y_nm % nm_from_mm(1) != 0
+
+
+def test_pad_distance_prefers_facing_pin_even_with_identical_global_wirelength():
+    from pcbir.placement import _hpwl, _choose_orientations, _local_connection_length
+    board = local_companion_board()
+    board = replace(board, placements=(board.placements[0], replace(board.placements[1],
+        position=Point.mm(12.1, 9.4), rotation_degrees=180),
+        Placement("P", "capacitor", Point.mm(5, 5)), Placement("Q", "capacitor", Point.mm(25, 25))),
+        relative_rules=(replace(board.relative_rules[0], distance_nm=nm_from_mm(2)),),
+        nets=(PhysicalNet("POWER", tuple(PadReference(ref, "1") for ref in ("U", "C1", "P", "Q"))),))
+    original = poses(board)
+    facing = {**original, "C1": replace(original["C1"], rotation_degrees=0)}
+    assert _hpwl(board, facing) == _hpwl(board, original)
+    assert _local_connection_length(board, facing) < _local_connection_length(board, original)
+    assert _fast_score(board, facing) < _fast_score(board, original)
+    assert placement_metrics(board, facing, options()).quality_vector < placement_metrics(board, original, options()).quality_vector
+    assert _choose_orientations(board, original, {"U", "P", "Q"})["C1"].rotation_degrees == 0
+
+
+def test_shared_companion_never_translates_either_fixed_anchor():
+    board = local_companion_board()
+    chip = PhysicalFootprint("small-chip", (FootprintPad("1", Point(0, 0), Size.mm(.2, .2)),), Size.mm(1, 1))
+    board = replace(board, footprints={**board.footprints, chip.name: chip},
+        placements=(Placement("U", chip.name, Point.mm(8, 10)), board.placements[1],
+                    Placement("V", chip.name, Point.mm(12, 10))),
+        placement_rules=tuple(ComponentPlacementRule(ref, fixed_position=Point.mm(x, 10),
+            fixed_rotation_degrees=0) for ref, x in (("U", 8), ("V", 12))),
+        relative_rules=tuple(RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+            (PlacementTarget("C1", str(i)), PlacementTarget(ref, "1")), distance_nm=nm_from_mm(2.2))
+            for i, ref in enumerate(("U", "V"), 1)))
+    result = plan_placement(board, options()).board
+    assert placement_solution_is_legal(result, poses(result), options())
+    assert poses(result)["U"] == poses(board)["U"]
+    assert poses(result)["V"] == poses(board)["V"]
+
+
+@pytest.mark.parametrize("unrelated_failure", [False, True])
+def test_local_repair_moves_actual_blocker_instead_of_unrelated_recent_component(unrelated_failure):
+    from pcbir.placement import _exact_repair, _adjacency
+    board = local_companion_board()
+    board = replace(board, placements=(board.placements[0], board.placements[1],
+        Placement("X", "capacitor", Point.mm(12, 9.4)),
+        Placement("Y", "capacitor", Point.mm(20, 20))),
+        relative_rules=(board.relative_rules[0],),
+        placement_rules=(*board.placement_rules, ComponentPlacementRule("C1", region="slot")),
+        regions=(PlacementRegion("slot", BoardOutline((Point.mm(11.4, 8.9), Point.mm(12.6, 8.9),
+                                                        Point.mm(12.6, 9.9), Point.mm(11.4, 9.9)))),))
+    if unrelated_failure:
+        board = replace(board,
+            placements=(*board.placements, Placement("Z", "chip", Point.mm(22, 10))),
+            placement_rules=(*board.placement_rules,
+                ComponentPlacementRule("Z", fixed_position=Point.mm(22, 10), fixed_rotation_degrees=0)),
+            relative_rules=(*board.relative_rules,
+                RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+                    (PlacementTarget("Y", "1"), PlacementTarget("Z", "1")), distance_nm=nm_from_mm(3))))
+    targets = poses(board)
+    placed = {ref: pose for ref, pose in targets.items() if ref != "C1"}
+    opts = options(exact_repair_limit=2)
+    result = _exact_repair(board, "C1", placed, ["X", "Y"], targets, _adjacency(board), opts, 0)
+    assert result is not None
+    assert result["U"] == targets["U"] and result["Y"] == targets["Y"]
+    assert result["X"] != targets["X"]
+    assert placement_solution_is_legal(board, result, opts) is not unrelated_failure
+
+
+def test_fixed_anchor_companion_is_reserved_before_unrelated_movable_macro():
+    from pcbir.cluster_placement import place_rigid_clusters
+    from pcbir.placement import _legal
+    board = local_companion_board()
+    board = replace(board, placements=(board.placements[0], board.placements[1],
+        Placement("M1", "capacitor", Point.mm(12, 9.4)),
+        Placement("M2", "capacitor", Point.mm(14, 9.4))), relative_rules=(board.relative_rules[0],))
+    fp = board.footprints["capacitor"]
+    cluster = RigidPlacementCluster("unrelated", PlacementTarget("M1"), tuple(
+        RigidPlacementMember(ref, fp.name, footprint_geometry_digest(fp), Point.mm(x, 0))
+        for ref, x in (("M1", 0), ("M2", 2))), "synthetic regression", allowed_rotations=(0,))
+    board = replace(board, rigid_clusters=(cluster,))
+    targets, original, phase_options = place_rigid_clusters(board, poses(board), poses(board), options())
+    assert targets["U"] == poses(board)["U"]
+    assert _legal(targets["C1"], {ref: targets[ref] for ref in ("U", "M1", "M2")}, board, options())
+    assert targets["M1"] != poses(board)["M1"]
+    assert "C1" not in phase_options.fixed_references  # Proximity remains flexible.
+    assert {"M1", "M2"} <= phase_options.fixed_references
+    assert cluster_placement_matches(board, targets)
+    assert placement_solution_is_legal(board, targets, options())
+
+
+def test_failed_local_relation_reports_measured_limit_and_blockers_without_moving_lock():
+    from pcbir import PlacementPlanningError
+    board = local_companion_board()
+    board = replace(board, placements=board.placements[:2],
+                    relative_rules=(replace(board.relative_rules[0], distance_nm=nm_from_mm(.1)),))
+    with pytest.raises(PlacementPlanningError, match="maximum distance 100000 nm, actual.*local candidate blockers: U"):
+        plan_placement(board, options())
+    assert board.placements[0].position == Point.mm(10, 10)
+
+
+@pytest.mark.parametrize("movable_macro", [False, True])
+def test_joint_packing_reserves_the_only_slot_for_the_smallest_feasible_domain(movable_macro):
+    from pcbir.placement import _best_legal_choice, _adjacency, _legal
+    board = local_companion_board()
+    board = replace(board,
+        relative_rules=tuple(RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+            (PlacementTarget(ref, "1"), PlacementTarget("U", "1")), distance_nm=nm_from_mm(2))
+            for ref in ("C1", "C2")),
+        placement_rules=(*board.placement_rules,
+            ComponentPlacementRule("C2", region="only-slot", fixed_rotation_degrees=0)),
+        regions=(PlacementRegion("only-slot", BoardOutline((Point.mm(11.5, 9.15), Point.mm(12.5, 9.15),
+                Point.mm(12.5, 9.65), Point.mm(11.5, 9.65)))),))
+    if movable_macro:
+        fp = board.footprints["capacitor"]
+        board = replace(board, placements=(*board.placements,
+            Placement("M1", fp.name, Point.mm(22, 22)),
+            Placement("M2", fp.name, Point.mm(24, 22))),
+            rigid_clusters=(RigidPlacementCluster("unrelated", PlacementTarget("M1"), tuple(
+                RigidPlacementMember(ref, fp.name, footprint_geometry_digest(fp), Point.mm(x, 0))
+                for ref, x in (("M1", 0), ("M2", 2))), "synthetic regression", allowed_rotations=(0,)),))
+    initial = poses(board)
+    opts = options()
+    greedy = _best_legal_choice(board, "C1", initial["C1"], {"U": initial["U"]}, initial,
+                               _adjacency(board), opts, 0, limit=opts.legalization_candidates)
+    only_pose = replace(initial["C2"], position=Point.mm(12, 9.4), rotation_degrees=0)
+    assert not _legal(only_pose, {"C1": greedy, "U": initial["U"]}, board, opts)
+    plan = plan_placement(board, opts)
+    assert poses(plan.board)["C2"] == only_pose
+    assert poses(plan.board)["U"] == initial["U"]
+    assert placement_solution_is_legal(plan.board, poses(plan.board), opts)
+    assert cluster_placement_matches(plan.board, poses(plan.board))
+    assert plan.candidates[0].statistics.exact_repair_count > 0
+    assert plan == plan_placement(board, opts)
+
+
+def test_impossible_local_placement_bounds_illegal_probes(monkeypatch):
+    import pcbir.placement as engine
+    from itertools import repeat
+    board = local_companion_board()
+    initial = poses(board)
+    opts = options(legalization_candidates=2)
+    calls = 0
+
+    def illegal(*args):
+        nonlocal calls
+        calls += 1
+        assert calls <= 256, "an impossible local relation must not exhaust the board grid"
+        return False
+
+    monkeypatch.setattr(engine, "_legal", illegal)
+    monkeypatch.setattr(engine, "_relative_candidates", lambda *args, **kwargs: ())
+    monkeypatch.setattr(engine, "_candidate_positions", lambda *args: repeat(Point.mm(10, 10)))
+    assert engine._best_legal_choice(board, "C1", initial["C1"], {"U": initial["U"]},
+        initial, engine._adjacency(board), opts, 0, limit=2) is None
+    assert calls > 0
+
+
+def test_joint_packing_refines_a_narrow_row_when_individual_coarse_poses_conflict():
+    import pcbir.placement as engine
+    board = local_companion_board()
+    board = replace(board,
+        regions=tuple(PlacementRegion(ref, BoardOutline((
+            Point.mm(11.55, low-.25), Point.mm(12.55, low-.25),
+            Point.mm(12.55, high+.25), Point.mm(11.55, high+.25))))
+            for ref, low, high in (("C1", 9.55, 9.70), ("C2", 10.50, 10.65))),
+        placement_rules=(*board.placement_rules, *(ComponentPlacementRule(
+            ref, region=ref, fixed_rotation_degrees=0) for ref in ("C1", "C2"))))
+    initial, opts = poses(board), options()
+    fixed = {"U": initial["U"]}
+    coarse = {ref: tuple(p for p in engine._relative_candidates(board, ref, initial[ref], fixed, opts)
+                        if engine._legal(p, fixed, board, opts)) for ref in ("C1", "C2")}
+    assert coarse["C1"] and coarse["C2"]
+    assert not any(engine._legal(right, {**fixed, "C1": left}, board, opts)
+                   for left in coarse["C1"] for right in coarse["C2"])
+    result = engine._pack_local_components(board, ["C1", "C2"], fixed, initial, opts, allow_general=False)
+    assert result is not None and result["U"] == initial["U"]
+    assert placement_solution_is_legal(board, result, opts)
+
+
+@pytest.mark.parametrize("intermediate_pad", ["1", "2"])
+def test_anchored_neighborhood_only_composes_identical_pad_targets(intermediate_pad):
+    from pcbir.placement import _anchored_candidate_rules
+    board = local_companion_board()
+    board = replace(board, relative_rules=(board.relative_rules[0],
+        RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+            (PlacementTarget("C2", "1"), PlacementTarget("C1", intermediate_pad)),
+            distance_nm=nm_from_mm(1.5))))
+    derived = _anchored_candidate_rules(board, {"U"})
+    if intermediate_pad == "1":
+        assert derived == (RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+            (PlacementTarget("C2", "1"), PlacementTarget("U", "1")), distance_nm=nm_from_mm(3)),)
+    else:
+        assert derived == ()  # Distinct pins cannot be treated as the same point.
+    assert derived == _anchored_candidate_rules(replace(board, relative_rules=board.relative_rules[::-1]), {"U"})
+
+
+def test_indirect_companion_joins_anchor_pack_and_keeps_exact_pair_distance():
+    board = local_companion_board()
+    board = replace(board, relative_rules=(board.relative_rules[0],
+        RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+            (PlacementTarget("C2", "1"), PlacementTarget("C1", "1")), distance_nm=nm_from_mm(1.5))))
+    plan = plan_placement(board, options())
+    assert plan.candidates[0].statistics.exact_repair_count > 0
+    assert placement_solution_is_legal(plan.board, poses(plan.board), options())
+    assert plan.board.relative_rules == board.relative_rules  # Candidate reach never becomes a source constraint.
+    assert poses(plan.board)["U"] == poses(board)["U"]
+
+
+def test_joint_search_retains_search_budget_when_lookahead_is_exhausted(monkeypatch):
+    import pcbir.placement as engine
+    board = local_companion_board()
+    references = [f"C{i}" for i in range(1, 5)]
+    board = replace(board,
+        placements=(board.placements[0], *(replace(board.placements[1], reference=ref) for ref in references)),
+        relative_rules=tuple(RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+            (PlacementTarget(ref, "1"), PlacementTarget("U", "1")), distance_nm=nm_from_mm(20))
+            for ref in references))
+    initial = poses(board)
+    # Four parts have four interchangeable legal slots. Ranking every slot at
+    # every depth must not consume the budget for this simple feasible packing.
+    monkeypatch.setattr(engine, "_relative_candidates", lambda board, ref, pose, *args, **kwargs:
+        tuple(replace(pose, position=Point.mm(x, 10)) for x in (15, 17, 19, 21)))
+    opts = options(legalization_candidates=1, exact_repair_candidates=1)
+    result = engine._pack_local_components(board, references, {"U": initial["U"]}, initial,
+                                          opts, allow_general=False)
+    assert result is not None and placement_solution_is_legal(board, result, opts)
+
+
+@pytest.mark.parametrize("offset,clearance,expected", [
+    ((1.3, 1.4), .5, False),  # Exact diagonal clearance, not bounding-box clearance.
+    ((1.3, 1.4), .51, True),
+    ((.5, .5), 0, True),
+    ((1, 0), 0, False),
+])
+def test_rectangular_courtyard_clearance_matches_edges_and_diagonals(offset, clearance, expected):
+    from pcbir.placement import _polygons_too_close
+    first = tuple(Point.mm(x, y) for x, y in ((0, 0), (1, 0), (1, 1), (0, 1)))
+    second = tuple(Point.mm(x+offset[0], y+offset[1]) for x, y in ((0, 0), (1, 0), (1, 1), (0, 1)))
+    assert _polygons_too_close(first, second, nm_from_mm(clearance)) is expected
+
+
+@pytest.mark.parametrize("phase", ["local_pack", "legal_choice"])
+def test_local_domain_keeps_outer_candidates_within_the_probe_budget(monkeypatch, phase):
+    import pcbir.placement as engine
+    board = local_companion_board()
+    initial = poses(board)
+    opts = options(legalization_candidates=2)
+    probe_limit = opts.legalization_candidates*64
+    outer = replace(initial["C1"], position=Point.mm(12, 9.4), rotation_degrees=0)
+    # Nearer poses all overlap the fixed IC; only the last outer pose is legal.
+    candidates = tuple(replace(outer, position=Point(nm_from_mm(10.5)+i, nm_from_mm(9.4)))
+                       for i in range(probe_limit)) + (outer,)
+    monkeypatch.setattr(engine, "_relative_candidates", lambda *args, **kwargs: candidates)
+    legal = engine._legal
+    calls = 0
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return legal(*args, **kwargs)
+    monkeypatch.setattr(engine, "_legal", counted)
+    if phase == "local_pack":
+        result = engine._pack_local_components(board, ["C1"], {"U": initial["U"]}, initial,
+                                               opts, allow_general=False)
+        assert result is not None and result["C1"] == outer
+    else:
+        result = engine._best_legal_choice(board, "C1", initial["C1"], {"U": initial["U"]},
+                                           initial, engine._adjacency(board), opts, 0)
+        assert result == outer
+    assert calls <= probe_limit+1  # Domain probes plus final accepted-pose gate.
+
+
+def test_distant_obstacles_do_not_change_local_candidate_sampling():
+    from pcbir.placement import _relative_candidates
+    board = local_companion_board()
+    far = Placement("X", "capacitor", Point.mm(12, 24))
+    board = replace(board, placements=(*board.placements, far))
+    initial = poses(board)
+    local = _relative_candidates(board, "C1", initial["C1"], {"U": initial["U"]}, options())
+    assert local == _relative_candidates(board, "C1", initial["C1"],
+                                         {"U": initial["U"], "X": far}, options())
+
+
+def test_region_sampling_does_not_add_a_second_board_edge_clearance():
+    from pcbir.placement import _candidate_positions, _project_coordinate, _outline_bounds, _legal
+    board = local_companion_board()
+    board = replace(board, placement_rules=(*board.placement_rules,
+        ComponentPlacementRule("C1", region="local-bank", fixed_rotation_degrees=0)),
+        regions=(PlacementRegion("local-bank", BoardOutline((Point.mm(18, 18), Point.mm(20, 18),
+                    Point.mm(20, 20), Point.mm(18, 20)))),))
+    target = poses(board)["C1"]
+    candidates = _candidate_positions(board, target, options())
+    assert Point.mm(19, 19) in candidates
+    assert all(_legal(replace(target, position=point, rotation_degrees=0), {}, board, options())
+               for point in candidates)
+    coordinate = [30., 30.]
+    _project_coordinate(board, target, coordinate, _outline_bounds(board.outline), options())
+    assert coordinate == [19.5, 19.75]
+
+
+@pytest.mark.parametrize("phase", ["local_pack", "legal_choice"])
+def test_invalid_local_domain_does_not_starve_a_legal_region_grid(monkeypatch, phase):
+    import pcbir.placement as engine
+    board = local_companion_board()
+    board = replace(board, placement_rules=(*board.placement_rules,
+        ComponentPlacementRule("C1", region="local-bank", fixed_rotation_degrees=0)),
+        relative_rules=(replace(board.relative_rules[0], distance_nm=nm_from_mm(15)),),
+        regions=(PlacementRegion("local-bank", BoardOutline((Point.mm(18, 18), Point.mm(20, 18),
+                    Point.mm(20, 20), Point.mm(18, 20)))),))
+    initial = poses(board)
+    opts = options(legalization_candidates=2)
+    invalid = tuple(replace(initial["C1"], position=Point(nm_from_mm(10.5)+i, nm_from_mm(9.4)))
+                    for i in range(opts.legalization_candidates*64+1))
+    monkeypatch.setattr(engine, "_relative_candidates", lambda *args, **kwargs: invalid)
+    if phase == "local_pack":
+        packed = engine._pack_local_components(board, ["C1"], {"U": initial["U"]}, initial,
+                                                opts, allow_general=True)
+        assert packed is not None
+        choice = packed["C1"]
+    else:
+        choice = engine._best_legal_choice(board, "C1", initial["C1"], {"U": initial["U"]},
+                                           initial, engine._adjacency(board), opts, 0)
+    assert choice is not None and choice.position == Point.mm(19, 19)

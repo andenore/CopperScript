@@ -1,7 +1,7 @@
 """Layer-aware connectivity of explicit copper; zone outlines are not copper.
 
 Each plated object is one node spanning only its physical copper layers.
-Broad-phase bounds select pairs; exact rounded-shape contact joins nodes.
+Broad-phase bounds select pairs; positive-area copper overlap joins nodes.
 No grid, clearance tolerance or implicit pad-number join is used. Explicit
 component-internal edges are separate facts, never fabricated copper.
 Filled-zone connectivity still requires independent fill verification.
@@ -13,7 +13,7 @@ from typing import Mapping
 
 from .geometry import (RoundedConvexShape, SpatialIndex, SpatialItem,
                        point_segment_distance_squared, shape_distance_squared)
-from .physical import CopperLayer, PadReference, PhysicalNet
+from .physical import CopperLayer, PadReference, PhysicalNet, Via
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,14 +51,60 @@ class CopperContact:
     capped_layers: tuple[CopperLayer, ...] = ()
 
 
+def via_copper_contact(via: Via, copper_layers: tuple[CopperLayer, ...], *, identity: str = "via") -> CopperContact:
+    """The plated span, open drill and any exterior copper caps of a via."""
+    low, high = sorted((copper_layers.index(via.from_layer), copper_layers.index(via.to_layer)))
+    capped = (copper_layers[0], copper_layers[-1]) if via.finish == "filled-capped" else ()
+    return CopperContact(identity, via.net, copper_layers[low:high + 1],
+                         RoundedConvexShape((via.position,), via.size_nm // 2),
+                         RoundedConvexShape((via.position,), via.drill_nm // 2), capped)
+
+
 def _inside_drill(shape: RoundedConvexShape, drill: RoundedConvexShape | None) -> bool:
-    """Reject copper wholly inside a round/oval drilled void, not its rim."""
-    if drill is None or shape.radius_nm >= drill.radius_nm:
+    """Copper inside a drilled void, including a zero-area touch of its rim."""
+    if drill is None or shape.radius_nm > drill.radius_nm:
         return False
     start, end = drill.spine[0], drill.spine[-1]
     margin = drill.radius_nm - shape.radius_nm
-    return all(point_segment_distance_squared(point, start, end) < margin * margin
+    return all(point_segment_distance_squared(point, start, end) <= margin * margin
                for point in shape.spine)
+
+
+def _positive_area_overlap(first: RoundedConvexShape, second: RoundedConvexShape) -> bool:
+    """A shared boundary alone is not a reliable electrical connection."""
+    radius = first.radius_nm + second.radius_nm
+    if radius:
+        return shape_distance_squared(first, second) < radius * radius
+    # Filled convex polygon pads have zero rounding radius. Spine distance is
+    # zero for both an area overlap and a mere edge/vertex touch; strict
+    # separating-axis overlap distinguishes them without a clearance tolerance.
+    for shape in (first, second):
+        points = shape.spine
+        edges = tuple(zip(points, (*points[1:], points[0])))
+        if not sum(a.x_nm * b.y_nm - a.y_nm * b.x_nm for a, b in edges):
+            return False
+        for a, b in edges:
+            dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
+            if dx == dy == 0:
+                continue
+            left = [p.x_nm * dy - p.y_nm * dx for p in first.spine]
+            right = [p.x_nm * dy - p.y_nm * dx for p in second.spine]
+            if max(left) <= min(right) or max(right) <= min(left):
+                return False
+    return True
+
+
+def copper_contacts_overlap(first: CopperContact, second: CopperContact) -> bool:
+    """Positive-area electrical contact on at least one common copper layer."""
+    if first.net != second.net or not _positive_area_overlap(first.shape, second.shape):
+        return False
+    # A cap provides copper at the drill centre on its outer layer;
+    # an open plated drill is not a solid disk.
+    return any(
+        not _inside_drill(second.shape, None if layer in first.capped_layers else first.drill)
+        and not _inside_drill(first.shape, None if layer in second.capped_layers else second.drill)
+        for layer in set(first.layers).intersection(second.layers)
+    )
 
 
 def copper_contact_roots(
@@ -92,17 +138,7 @@ def copper_contact_roots(
                 if identity <= first.identity or find(identity) == find(first.identity):
                     continue
                 second = by_id[identity]
-                radius = first.shape.radius_nm + second.shape.radius_nm
-                if shape_distance_squared(first.shape, second.shape) > radius * radius:
-                    continue
-                # A cap provides copper at the drill centre on its outer layer;
-                # an open plated drill is not a solid disk.
-                common = set(first.layers).intersection(second.layers)
-                if not any(
-                    not _inside_drill(second.shape, None if layer in first.capped_layers else first.drill)
-                    and not _inside_drill(first.shape, None if layer in second.capped_layers else second.drill)
-                    for layer in common
-                ):
+                if not copper_contacts_overlap(first, second):
                     continue
                 left, right = find(first.identity), find(identity)
                 parent[max(left, right)] = min(left, right)

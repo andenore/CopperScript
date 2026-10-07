@@ -9,6 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
+from itertools import chain, count, islice
+from functools import lru_cache
+from heapq import heappop, heappush
 from math import ceil, cos, exp, hypot, isfinite, radians, sin
 from typing import Iterable, Mapping
 
@@ -19,7 +22,7 @@ from .cluster_placement import (
     place_rigid_clusters as _place_rigid_clusters,
     refine_rigid_clusters as _refine_rigid_clusters,
 )
-from .placement_escape import EscapeSpacingModel
+from .placement_escape import EscapeSpacingModel, placement_units
 from .power_planning import power_domain_gradient, power_domain_penalty
 
 from .physical import (
@@ -39,6 +42,7 @@ from .physical import (
     PolygonRing,
     PolygonWithHoles,
     RelativePlacementKind,
+    RelativePlacementRule,
     nm_from_mm,
 )
 
@@ -117,6 +121,7 @@ class PlacementMetrics:
     maximum_congestion_utilization_ppm: int
     power_domain_penalty_nm: Nanometres = 0
     weighted_wire_length_nm: Nanometres | None = None
+    local_connection_length_nm: Nanometres = 0
 
     @property
     def quality_vector(self) -> tuple[int, ...]:
@@ -127,6 +132,7 @@ class PlacementMetrics:
             self.crossing_count,
             self.estimated_via_count,
             self.pin_escape_pressure,
+            self.local_connection_length_nm,
             -self.minimum_constraint_margin_nm,
             (self.weighted_wire_length_nm if self.weighted_wire_length_nm is not None
              else self.half_perimeter_wire_length_nm) + self.power_domain_penalty_nm,
@@ -217,6 +223,7 @@ def generate_placement_candidates(
     if conflicts:
         raise PlacementAlgorithmError("; ".join(conflicts))
     attempts: list[PlacementCandidate] = []
+    closest_rejected = None
     spacing = _escape_model(board, options)
     seeds = max(2, options.candidate_count)
     for seed in range(seeds):
@@ -249,6 +256,8 @@ def generate_placement_candidates(
         moves += spacing_moves
         metrics = placement_metrics(board, refined, options, spacing_model=spacing)
         if metrics.constraint_penalty_nm or not placement_solution_is_legal(board, refined, options):
+            if closest_rejected is None or metrics.constraint_penalty_nm < closest_rejected[0]:
+                closest_rejected = (metrics.constraint_penalty_nm, refined)
             continue
         attempts.append(
             PlacementCandidate(
@@ -267,8 +276,10 @@ def generate_placement_candidates(
             )
         )
     if not attempts:
+        details = _local_failure_details(board, closest_rejected[1], options) if closest_rejected else ""
         raise PlacementAlgorithmError(
             "no legal placement candidate satisfies all represented physical constraints"
+            + (f"; {details}" if details else "")
         )
     frontier = [
         candidate
@@ -322,6 +333,7 @@ def placement_metrics(
         maximum_congestion_utilization_ppm=route.maximum_utilization_ppm,
         power_domain_penalty_nm=power_domain_penalty(board, placements, options.power_domain_weight),
         weighted_wire_length_nm=_planning_wirelength(board, placements),
+        local_connection_length_nm=_local_connection_length(board, placements),
     )
 
 
@@ -990,11 +1002,12 @@ def _project_coordinate(
     half_width, half_height = _half_extents_mm(board, placement)
     min_x, min_y, max_x, max_y = (value / 1_000_000 for value in bounds)
     rule = _rules(board).get(placement.reference)
+    edge = options.edge_clearance_nm / 1_000_000
     if rule is not None and rule.region is not None:
         region = next(item for item in board.regions if item.name == rule.region)
         region_bounds = _outline_bounds(region.outline)
         min_x, min_y, max_x, max_y = (value / 1_000_000 for value in region_bounds)
-    edge = options.edge_clearance_nm / 1_000_000
+        edge = 0  # Region boundaries contain courtyards; they are not board edges.
     coordinate[0] = min(max_x - edge - half_width, max(min_x + edge + half_width, coordinate[0]))
     coordinate[1] = min(max_y - edge - half_height, max(min_y + edge + half_height, coordinate[1]))
 
@@ -1055,7 +1068,27 @@ def _legalize(
     movable = _relative_cluster_order(board, movable, targets)
     placed_order: list[str] = []
     repair_count = 0
+    rigid_members = {m.reference for cluster in board.rigid_clusters for m in cluster.members}
+    candidate_rules = (*board.relative_rules, *_anchored_candidate_rules(board, fixed))
+    direct = {target.reference for rule in candidate_rules
+              if rule.kind is RelativePlacementKind.MAX_DISTANCE
+              and any(t.reference in fixed for t in rule.targets)
+              for target in rule.targets if target.reference not in fixed and target.reference not in rigid_members}
+    units = placement_units(board)
+    groups = {units[ref] & direct for ref in direct}
+    order = {ref: i for i, ref in enumerate(movable)}
+    for group in sorted(groups, key=lambda refs: min(order[ref] for ref in refs)):
+        if len(group) < 2:
+            continue
+        references = sorted(group, key=order.get)
+        packed = _pack_local_components(board, references, placed, targets, options, allow_general=False)
+        if packed is not None:
+            placed = packed
+            placed_order.extend(references)
+            repair_count += 1
     for reference in movable:
+        if reference in placed:
+            continue
         choice = _best_legal_choice(
             board,
             reference,
@@ -1067,7 +1100,7 @@ def _legalize(
             seed,
             limit=options.legalization_candidates,
         )
-        if choice is None:
+        if choice is None or _relative_penalty(board, {**placed, reference: choice}) > _relative_penalty(board, placed):
             repaired = _exact_repair(
                 board,
                 reference,
@@ -1079,11 +1112,15 @@ def _legalize(
                 seed,
             )
             if repaired is None:
-                raise PlacementAlgorithmError(
-                    f"cannot legalize component {reference!r}; enlarge the board or relax constraints"
-                )
-            placed = repaired
-            repair_count += 1
+                if choice is None:
+                    raise PlacementAlgorithmError(
+                        f"cannot legalize component {reference!r} within the local repair budget; "
+                        + _local_failure_details(board, {**placed, reference: targets[reference]}, options)
+                    )
+                placed[reference] = choice
+            else:
+                placed = repaired
+                repair_count += 1
         else:
             placed[reference] = choice
         placed_order.append(reference)
@@ -1095,63 +1132,60 @@ def _relative_cluster_order(
     movable: list[str],
     targets: Mapping[str, Placement],
 ) -> list[str]:
-    """Reserve space for close-placement groups before unrelated components.
-
-    A decoupler placed after most of the board has been legalized may have no
-    vacant position near its IC even on an otherwise roomy board. Keep each
-    connected relative-rule group together, starting with its largest anchor.
-    The normal priority order is retained for unconstrained components.
-    """
+    """Schedule flexible companions together, including paths through fixed ICs."""
+    units = placement_units(board)
     movable_set = set(movable)
-    neighbors: dict[str, set[str]] = {reference: set() for reference in movable}
-    for rule in board.relative_rules:
-        members = [target.reference for target in rule.targets if target.reference in movable_set]
-        for reference in members:
-            neighbors[reference].update(other for other in members if other != reference)
-    visited: set[str] = set()
-    clusters: list[list[str]] = []
-    for reference in movable:
-        if reference in visited or not neighbors[reference]:
-            continue
-        stack = [reference]
-        group: list[str] = []
-        while stack:
-            item = stack.pop()
-            if item in visited:
-                continue
-            visited.add(item)
-            group.append(item)
-            stack.extend(sorted(neighbors[item] - visited, reverse=True))
-        clusters.append(group)
     order = {reference: index for index, reference in enumerate(movable)}
-    clusters.sort(
-        key=lambda group: (
-            -max(_footprint_area(board, targets[reference]) for reference in group),
-            min(order[reference] for reference in group),
-        )
-    )
+    groups = {units[reference] for reference in movable if len(units[reference]) > 1}
+    groups = sorted(groups, key=lambda group: (
+        not bool(group - movable_set),
+        -max(_footprint_area(board, targets[reference]) for reference in group),
+        min(order[reference] for reference in group if reference in order),
+    ))
     result: list[str] = []
-    for group in clusters:
-        anchor = max(group, key=lambda reference: (_footprint_area(board, targets[reference]), -order[reference]))
-        result.append(anchor)
-        companions = [reference for reference in group if reference != anchor]
-        distance_limits = {
-            reference: min(
-                (
-                    rule.distance_nm
-                    for rule in board.relative_rules
-                    if rule.kind is RelativePlacementKind.MAX_DISTANCE
-                    and any(target.reference == reference for target in rule.targets)
-                    and any(target.reference == anchor for target in rule.targets)
-                    and rule.distance_nm is not None
-                ),
-                default=2**63,
-            )
-            for reference in companions
-        }
-        result.extend(sorted(companions, key=lambda reference: (distance_limits[reference], -_footprint_area(board, targets[reference]), order[reference])))
-    result.extend(reference for reference in movable if reference not in visited)
+    for group in groups:
+        pending = set(group & movable_set)
+        anchors = set(group - movable_set)
+        if not anchors:
+            anchor = min(pending, key=lambda ref: (-_footprint_area(board, targets[ref]), order[ref]))
+            result.append(anchor)
+            pending.remove(anchor)
+            anchors.add(anchor)
+        while pending:
+            def difficulty(reference):
+                limits = [rule.distance_nm for rule in board.relative_rules
+                          if rule.kind is RelativePlacementKind.MAX_DISTANCE
+                          and any(t.reference == reference for t in rule.targets)
+                          and any(t.reference in anchors for t in rule.targets)]
+                return (not bool(limits), min(limits, default=2**63), -len(limits),
+                        -_footprint_area(board, targets[reference]), reference)
+            companion = min(pending, key=difficulty)
+            result.append(companion)
+            pending.remove(companion)
+            anchors.add(companion)
+    scheduled = set(result)
+    result.extend(reference for reference in movable if reference not in scheduled)
     return result
+
+
+def _local_obstacles(board, reference, placed):
+    """Test a local target's courtyard before distant fixed board obstacles."""
+    anchors = {t.reference for rule in board.relative_rules
+               if any(t.reference == reference for t in rule.targets) for t in rule.targets}
+    return {ref: placed[ref] for ref in sorted(placed, key=lambda ref: ref not in anchors)}
+
+
+def _bounded_local_candidates(candidates, limit, fallback=()):
+    # Keep outer-row poses within the same legality-probe budget. Taking only
+    # the closest prefix can discard every pose beyond a large anchor.
+    if len(candidates) >= limit:
+        # Reserve bounded ordinary-grid fallback so an invalid local domain
+        # cannot starve a legal regional grid position.
+        fallback = tuple(islice(fallback, limit//4))
+        count = limit-len(fallback)
+        candidates = tuple(candidates[round(i*(len(candidates)-1)/max(1, count-1))]
+                           for i in range(count))
+    return chain(candidates, fallback)
 
 
 def _best_legal_choice(
@@ -1165,116 +1199,150 @@ def _best_legal_choice(
     seed: int,
     limit: int | None = None,
 ) -> Placement | None:
-    best: tuple[int, int, int, int, Placement] | None = None
-    count = 0
+    spacing = _escape_model(board, options)
+    relative_rules = tuple(r for r in board.relative_rules if any(t.reference == reference for t in r.targets))
+    local_rules = tuple(r for r in relative_rules if all(t.pad is not None for t in r.targets))
+    best = None
+    obstacles = _local_obstacles(board, reference, placed)
     orientations = _allowed_orientations(board, reference)
-    orientations = orientations[seed % len(orientations) :] + orientations[: seed % len(orientations)]
-    preferred = _relative_candidate_positions(board, reference, target, placed, options)
-    general = _candidate_positions(board, target, options)
-    positions = tuple(dict.fromkeys((*preferred, *general)))
-    for point in positions:
-        for orientation in orientations:
-            candidate = replace(target, position=point, rotation_degrees=orientation)
-            if not _legal(candidate, placed, board, options):
+    orientations = orientations[seed % len(orientations):] + orientations[:seed % len(orientations)]
+    general = (replace(target, position=point, rotation_degrees=angle)
+               for point in _candidate_positions(board, target, options) for angle in orientations)
+    for step, fallback in ((nm_from_mm("0.25"), general), (nm_from_mm("0.1"), ())):
+        count = 0
+        local_target = best[1] if best is not None else target
+        relative = _relative_candidates(board, reference, local_target, placed, options, step_nm=step)
+        candidates = (_bounded_local_candidates(relative, options.legalization_candidates*64, fallback)
+                      if local_rules else chain(relative, fallback))
+        for probe, candidate in enumerate(candidates):
+            if local_rules and probe >= options.legalization_candidates*64:
+                break
+            if not _legal(candidate, obstacles, board, options):
                 continue
+            trial = {**placed, reference: candidate}
+            penalty = _relative_penalty(board, trial, rules=relative_rules)
+            incremental = _incremental_cost(reference, candidate, placed, adjacency)
+            rank = (penalty if local_rules else incremental + penalty*100,
+                    sum(c.deficit_nm for c in spacing.channels(trial)) if local_rules else 0,
+                    _local_connection_length(board, trial, rules=relative_rules),
+                    incremental if local_rules else 0,
+                    candidate.position.y_nm, candidate.position.x_nm, candidate.rotation_degrees)
+            if best is None or rank < best[0]:
+                best = (rank, candidate)
             count += 1
-            trial = dict(placed)
-            trial[reference] = candidate
-            cost = _incremental_cost(reference, candidate, placed, adjacency)
-            cost += _relative_penalty(board, trial) * 100
-            ranked = (cost, point.y_nm, point.x_nm, int(orientation), candidate)
-            if best is None or ranked[:4] < best[:4]:
-                best = ranked
             if limit is not None and count >= limit:
-                return best[4] if best is not None else None
-    return best[4] if best is not None else None
+                break
+        if best is not None and _relative_penalty(board, {**placed, reference: best[1]}, rules=relative_rules) == 0:
+            break
+    return best[1] if best is not None else None
 
 
-def _relative_candidate_positions(
+def _relative_candidates(
     board: PhysicalBoard,
     reference: str,
     placement: Placement,
     placed: Mapping[str, Placement],
     options: PlacementPlannerOptions,
-) -> tuple[Point, ...]:
-    points: list[Point] = []
+    *, step_nm: int = nm_from_mm("0.25"),
+) -> tuple[Placement, ...]:
+    """Bounded local XY search with orientation-specific pad/courtyard origins.
+
+    The broad grid remains unchanged. Edge-derived samples reach the perimeter
+    of large packages; a small two-dimensional neighbourhood fills gaps missed
+    by rays, including legal positions between off-grid courtyard edges.
+    """
+    result = {}
+    step_nm = min(options.grid_step_nm, step_nm)
     for rule in board.relative_rules:
-        own = next((target for target in rule.targets if target.reference == reference), None)
-        if own is None:
+        own_index = next((i for i, t in enumerate(rule.targets) if t.reference == reference), None)
+        if own_index is None:
             continue
-        own_offsets = (Point(0, 0),)
-        if own.pad is not None:
-            footprint = board.footprints[placement.footprint]
-            pad = next(item for item in footprint.pads if item.number == own.pad)
-            own_offsets = tuple(
-                _transform_local(pad.position, orientation, placement.side)
-                for orientation in _allowed_orientations(board, reference)
-            )
-        companions = [
-            target
-            for target in rule.targets
-            if target.reference != reference and target.reference in placed
-        ]
+        own = rule.targets[own_index]
+        companions = (rule.targets if rule.kind is RelativePlacementKind.ALIGN else
+                      rule.targets[max(0, own_index-1):own_index] + rule.targets[own_index+1:own_index+2])
         for companion in companions:
-            anchor = _target_point(board, placed, companion)
-            if anchor is None:
+            if companion.reference == reference or companion.reference not in placed:
                 continue
-            for own_offset in own_offsets:
-                target_origin = Point(
-                    anchor.x_nm - own_offset.x_nm,
-                    anchor.y_nm - own_offset.y_nm,
-                )
+            anchor = _target_point(board, placed, companion)
+            for angle in _allowed_orientations(board, reference):
+                pose = replace(placement, position=Point(0, 0), rotation_degrees=angle)
+                offset = _target_point(board, {reference: pose}, own)
+                origin = Point(anchor.x_nm-offset.x_nm, anchor.y_nm-offset.y_nm)
+                points = set()
+                if rule.kind is RelativePlacementKind.MAX_DISTANCE and (own.pad is None or companion.pad is None):
+                    radius = max(1, (rule.distance_nm or 0)//options.grid_step_nm)
+                    for distance in range(radius+1):
+                        for dx, dy in ((distance, 0), (-distance, 0), (0, distance), (0, -distance),
+                                       (distance, distance), (distance, -distance),
+                                       (-distance, distance), (-distance, -distance)):
+                            point = Point(origin.x_nm+dx*options.grid_step_nm, origin.y_nm+dy*options.grid_step_nm)
+                            result.setdefault(replace(pose, position=point), len(result))
+                    continue
                 if rule.kind is RelativePlacementKind.MAX_DISTANCE:
-                    radius = max(1, (rule.distance_nm or 0) // options.grid_step_nm)
-                    for distance in range(radius + 1):
-                        for dx, dy in (
-                            (distance, 0),
-                            (-distance, 0),
-                            (0, distance),
-                            (0, -distance),
-                            (distance, distance),
-                            (distance, -distance),
-                            (-distance, distance),
-                            (-distance, -distance),
-                        ):
-                            points.append(
-                                Point(
-                                    target_origin.x_nm + dx * options.grid_step_nm,
-                                    target_origin.y_nm + dy * options.grid_step_nm,
-                                )
-                            )
+                    distance = rule.distance_nm or 0
+                    # Bound each neighbourhood independently of board size.
+                    radius = min(24, distance // step_nm)
+                    points.update(Point(origin.x_nm+x*step_nm, origin.y_nm+y*step_nm)
+                                  for x in range(-radius, radius+1) for y in range(-radius, radius+1)
+                                  if (x*step_nm)**2 + (y*step_nm)**2 <= distance**2)
+                    if step_nm < nm_from_mm("0.25"):
+                        points.update(Point(placement.position.x_nm+x*step_nm, placement.position.y_nm+y*step_nm)
+                                      for x in range(-2, 3) for y in range(-2, 3))
+                    own_bounds = _point_bounds(_placement_polygon(board, pose))
+                    xs, ys = {origin.x_nm}, {origin.y_nm}
+                    for other in placed.values():
+                        if other.side is not placement.side:
+                            continue
+                        bounds = _point_bounds(_placement_polygon(board, other))
+                        gap = options.component_clearance_nm
+                        edges_x = (bounds[0]-gap-own_bounds[2], bounds[2]+gap-own_bounds[0])
+                        edges_y = (bounds[1]-gap-own_bounds[3], bounds[3]+gap-own_bounds[1])
+                        # Distant objects cannot bound this local neighbourhood.
+                        # Their projected edges would crowd out nearby samples.
+                        if (edges_x[1] < origin.x_nm-distance or edges_x[0] > origin.x_nm+distance
+                                or edges_y[1] < origin.y_nm-distance or edges_y[0] > origin.y_nm+distance):
+                            continue
+                        xs.update(x for edge in edges_x for x in (edge-step_nm, edge, edge+step_nm)
+                                  if abs(x-origin.x_nm) <= distance)
+                        ys.update(y for edge in edges_y for y in (edge-step_nm, edge, edge+step_nm)
+                                  if abs(y-origin.y_nm) <= distance)
+                    # Only nearby edge coordinates participate in the Cartesian search.
+                    xs = sorted(xs, key=lambda x: (abs(x-origin.x_nm), x))[:16]
+                    ys = sorted(ys, key=lambda y: (abs(y-origin.y_nm), y))[:16]
+                    points.update(Point(x, y) for x in xs for y in ys
+                                  if (x-origin.x_nm)**2+(y-origin.y_nm)**2 <= distance**2)
+                    # Retain coarse reach for constraints wider than the local window.
+                    steps = max(1, min(64, distance // options.grid_step_nm))
+                    for radius in (i*distance//steps for i in range(steps+1)):
+                        points.update(Point(origin.x_nm+dx*radius, origin.y_nm+dy*radius)
+                                      for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1),
+                                                     (1, 1), (1, -1), (-1, 1), (-1, -1)))
                 elif rule.kind is RelativePlacementKind.MIN_DISTANCE:
-                    radius = max(
-                        1,
-                        ((rule.distance_nm or 0) + options.grid_step_nm - 1)
-                        // options.grid_step_nm,
-                    )
-                    for dx, dy in (
-                        (radius, 0),
-                        (-radius, 0),
-                        (0, radius),
-                        (0, -radius),
-                        (radius, radius),
-                        (radius, -radius),
-                        (-radius, radius),
-                        (-radius, -radius),
-                    ):
-                        points.append(
-                            Point(
-                                target_origin.x_nm + dx * options.grid_step_nm,
-                                target_origin.y_nm + dy * options.grid_step_nm,
-                            )
-                        )
+                    distance = max(1, ((rule.distance_nm or 0)+options.grid_step_nm-1)//options.grid_step_nm)*options.grid_step_nm
+                    points.update(Point(origin.x_nm+dx*distance, origin.y_nm+dy*distance)
+                                  for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1),
+                                                 (1, 1), (1, -1), (-1, 1), (-1, -1)))
                 elif rule.kind is RelativePlacementKind.ALIGN:
-                    if rule.axis is AlignmentAxis.X:
-                        points.append(
-                            Point(target_origin.x_nm, placement.position.y_nm)
-                        )
-                    else:
-                        points.append(
-                            Point(placement.position.x_nm, target_origin.y_nm)
-                        )
-    return tuple(dict.fromkeys(points))
+                    points.add(Point(origin.x_nm, placement.position.y_nm) if rule.axis is AlignmentAxis.X
+                               else Point(placement.position.x_nm, origin.y_nm))
+                for point in sorted(points, key=lambda p: ((p.x_nm-origin.x_nm)**2+(p.y_nm-origin.y_nm)**2,
+                                                          p.y_nm, p.x_nm)):
+                    candidate = replace(pose, position=point)
+                    squared_distance = (point.x_nm-origin.x_nm)**2+(point.y_nm-origin.y_nm)**2
+                    result[candidate] = min(result.get(candidate, squared_distance), squared_distance)
+    if not any(r.kind is RelativePlacementKind.MAX_DISTANCE and all(t.pad is not None for t in r.targets)
+               and any(t.reference == reference for t in r.targets) for r in board.relative_rules):
+        point_order = {point: i for i, point in enumerate(dict.fromkeys(p.position for p in result))}
+        return tuple(sorted(result, key=lambda p: (point_order[p.position], p.rotation_degrees)))
+    local_rules = tuple(r for r in board.relative_rules if any(t.reference == reference for t in r.targets))
+    related = {t.reference for r in local_rules for t in r.targets}
+    anchors = {ref: pose for ref, pose in placed.items() if ref in related}
+    def rank(pose):
+        trial = {**anchors, reference: pose}
+        return (_relative_penalty(board, trial, rules=local_rules),
+                _local_connection_length(board, trial, rules=local_rules), result[pose],
+                pose.position.y_nm, pose.position.x_nm, pose.rotation_degrees)
+    return tuple(sorted(result, key=rank))
 
 
 def _exact_repair(
@@ -1287,52 +1355,210 @@ def _exact_repair(
     options: PlacementPlannerOptions,
     seed: int,
 ) -> dict[str, Placement] | None:
-    movable_tail = [
-        reference
-        for reference in reversed(placed_order)
-        if reference not in options.fixed_references
-    ][: options.exact_repair_limit - 1]
-    repair = [failed, *reversed(movable_tail)]
-    base = {reference: item for reference, item in placed.items() if reference not in repair}
-    ordered = sorted(
-        repair,
-        key=lambda reference: (-_footprint_area(board, targets[reference]), reference),
-    )
+    fixed = _fixed_placements(board, placed, options)
+    movable = set(placed_order) - fixed.keys()
+    # Prefer actual blockers and local companions to an unrelated insertion tail.
+    blockers: dict[str, int] = {}
+    probes = _relative_candidates(board, failed, targets[failed], placed, options)
+    checked = 0
+    for candidate in probes:
+        if not _legal(candidate, fixed, board, options):
+            continue
+        for ref in sorted(movable):
+            if not _legal(candidate, {ref: placed[ref]}, board, options):
+                blockers[ref] = blockers.get(ref, 0) + 1
+        checked += 1
+        if checked >= options.exact_repair_candidates:
+            break
+    companions = placement_units(board)[failed] & movable
+    order = {ref: i for i, ref in enumerate(placed_order)}
+    neighbours = sorted(movable, key=lambda ref: (ref not in blockers, ref not in companions,
+                                                  -blockers.get(ref, 0), -order[ref], ref))
+    repair = [failed, *neighbours[:options.exact_repair_limit-1]]
+    base = {ref: item for ref, item in placed.items() if ref not in repair}
+    return _pack_local_components(board, repair, base, targets, options, allow_general=True)
 
-    def solve(index: int, current: dict[str, Placement]) -> dict[str, Placement] | None:
-        if index == len(ordered):
-            return current
-        reference = ordered[index]
-        candidates: list[Placement] = []
-        orientations = _allowed_orientations(board, reference)
-        for point in _candidate_positions(board, targets[reference], options):
-            for orientation in orientations:
-                candidate = replace(
-                    targets[reference], position=point, rotation_degrees=orientation
-                )
-                if _legal(candidate, current, board, options):
-                    candidates.append(candidate)
-                    if len(candidates) >= options.exact_repair_candidates:
-                        break
-            if len(candidates) >= options.exact_repair_candidates:
+
+def _anchored_candidate_rules(board, anchors):
+    """Safe candidate-only reach bounds through identical intermediate pads.
+
+    If A.1 is within r of B.2, and B.2 is within s of a fixed C.3,
+    A.1 is within r+s of C.3. No distance between distinct pads of B is
+    inferred. Original rules still determine actual placement feasibility.
+    """
+    graph = {}
+    for rule in board.relative_rules:
+        if rule.kind is not RelativePlacementKind.MAX_DISTANCE or any(t.pad is None for t in rule.targets):
+            continue
+        for left, right in zip(rule.targets, rule.targets[1:]):
+            for a, b in ((left, right), (right, left)):
+                neighbours = graph.setdefault(a, {})
+                neighbours[b] = min(neighbours.get(b, rule.distance_nm), rule.distance_nm)
+    key = lambda target: (target.reference, target.pad)
+    serial, pending, reached = count(), [], {}
+    for anchor in sorted((target for target in graph if target.reference in anchors), key=key):
+        heappush(pending, (0, next(serial), anchor, anchor, 0))
+    while pending:
+        distance, _, target, anchor, hops = heappop(pending)
+        if target in reached:
+            continue
+        reached[target] = (distance, anchor, hops)
+        for neighbour, length in sorted(graph[target].items(), key=lambda item: key(item[0])):
+            if neighbour not in reached:
+                heappush(pending, (distance+length, next(serial), neighbour, anchor, hops+1))
+    return tuple(RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+                 (target, anchor), distance_nm=distance)
+                 for target, (distance, anchor, hops) in sorted(reached.items(), key=lambda item: key(item[0]))
+                 if hops > 1 and target.reference not in anchors)
+
+
+def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False):
+    """One bounded domain search for anchored companions and local repair.
+
+    Domains contain individually legal poses; courtyard forward checking removes
+    obvious conflicts, while every selected pose still passes the complete gate.
+    This changes flexible positions, never rigid membership or source locks.
+    """
+    rules = tuple(r for r in board.relative_rules if any(t.reference in references for t in r.targets))
+    derived = _anchored_candidate_rules(board, base)
+    candidate_board = replace(board, relative_rules=(*board.relative_rules, *derived)) if derived else board
+    domains = {}
+    limit = max(2, options.legalization_candidates*4)
+    refinable = False
+    for ref in references:
+        target = targets[ref]
+        obstacles = _local_obstacles(board, ref, base)
+        own_rules = tuple(r for r in rules if any(t.reference == ref for t in r.targets))
+        relative = _relative_candidates(candidate_board, ref, target, base, options)
+        general = (replace(target, position=point, rotation_degrees=angle)
+                   for point in _candidate_positions(board, target, options)
+                   for angle in _allowed_orientations(board, ref)) if allow_general else ()
+        candidates = _bounded_local_candidates(relative, options.legalization_candidates*64, general)
+        legal = []
+        seen = set()
+        for index, candidate in enumerate(candidates):
+            if index >= options.legalization_candidates*64:
                 break
-        candidates.sort(
-            key=lambda item: (
-                _incremental_cost(reference, item, current, adjacency),
-                item.position.y_nm,
-                item.position.x_nm,
-                int(item.rotation_degrees),
-            )
-        )
-        for candidate in candidates:
-            next_current = dict(current)
-            next_current[reference] = candidate
-            solved = solve(index + 1, next_current)
-            if solved is not None:
-                return solved
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
+                    and _legal(candidate, obstacles, board, options)):
+                legal.append(candidate)
+        if not legal:
+            return None
+        narrow = (len(legal) <= options.legalization_candidates
+                  and any(r.kind is RelativePlacementKind.MAX_DISTANCE
+                          and all(t.pad is not None for t in r.targets) for r in own_rules))
+        refinable |= narrow
+        if fine and narrow:
+            # Quarter-grid poses can individually fit a tight row while missing
+            # the small shifts needed to fit together. Refine only narrow
+            # domains; expanding broad bulk-part domains adds no useful space.
+            neighbours = dict.fromkeys(legal)
+            step = min(options.grid_step_nm, nm_from_mm("0.1"))
+            for pose in legal:
+                for dx in (-step, 0, step):
+                    for dy in (-step, 0, step):
+                        neighbours.setdefault(replace(pose, position=Point(
+                            pose.position.x_nm+dx, pose.position.y_nm+dy)), None)
+            candidates = tuple(neighbours)
+            probe_limit = options.legalization_candidates*64
+            if len(candidates) > probe_limit:
+                candidates = tuple(candidates[round(i*(len(candidates)-1)/(probe_limit-1))]
+                                   for i in range(probe_limit))
+            legal = [pose for pose in candidates
+                     if _relative_penalty(board, {**base, ref: pose}, rules=own_rules) == 0
+                     and _legal(pose, obstacles, board, options)]
+        # Preserve candidates across the complete local range, including a
+        # second row; taking only the closest positions can erase the solution.
+        if len(legal) > limit:
+            legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
+        domains[ref] = tuple(legal)
+    polygons = {ref: tuple(_placement_polygon(board, pose) for pose in poses)
+                for ref, poses in domains.items()}
+    remaining = options.legalization_candidates*options.exact_repair_candidates*64
+    heuristic_remaining = remaining//3
+    pair_rules = {}
+    for rule in rules:
+        pair = frozenset(t.reference for t in rule.targets)
+        if len(pair) == 2 and pair <= domains.keys():
+            pair_rules.setdefault(pair, []).append(rule)
+
+    @lru_cache(maxsize=8192)
+    def clash(left, i, right, j):
+        return (domains[left][i].side is domains[right][j].side
+                and _polygons_too_close(polygons[left][i], polygons[right][j], options.component_clearance_nm)
+                or _relative_penalty(board, {left: domains[left][i], right: domains[right][j]},
+                                     rules=pair_rules.get(frozenset((left, right)), ())) > 0)
+
+    def solve(available, current):
+        nonlocal remaining, heuristic_remaining
+        if not available:
+            return current if _relative_penalty(board, current, rules=rules) == 0 else None
+        ref = min(available, key=lambda item: (len(available[item]), references.index(item), item))
+        obstacles = _local_obstacles(board, ref, current)
+        # Among equally feasible poses, leave space for the other companions.
+        # A small, evenly spread sample keeps this look-ahead bounded even for
+        # bulk parts whose allowed placement area is much larger.
+        samples = {other: indices if len(indices) <= 16 else
+                   tuple(indices[round(i*(len(indices)-1)/15)] for i in range(16))
+                   for other, indices in available.items() if other != ref}
+        ranked = []
+        choices = available[ref]
+        if len(choices) > options.exact_repair_candidates:
+            choices = tuple(choices[round(i*(len(choices)-1)/max(1, options.exact_repair_candidates-1))]
+                            for i in range(options.exact_repair_candidates))
+        for index in choices:
+            conflicts = 0.0
+            for other, indices in samples.items():
+                if heuristic_remaining < len(indices):
+                    break
+                heuristic_remaining -= len(indices)
+                conflicts += sum(clash(ref, index, other, j) for j in indices)/len(indices)
+            else:
+                ranked.append((conflicts, index))
+                continue
+            break
+        # Heuristic exhaustion cannot reject an otherwise feasible group.
+        # Reserve the search budget and retain every unranked pose in its
+        # deterministic original order.
+        ranked_indices = {index for _, index in ranked}
+        ordered = [index for _, index in sorted(ranked)]
+        ordered.extend(index for index in available[ref] if index not in ranked_indices)
+        for index in ordered:
+            if remaining <= 0:
+                return None
+            remaining -= 1
+            candidate = domains[ref][index]
+            trial = {**current, ref: candidate}
+            if _relative_penalty(board, trial, rules=rules) or not _legal(candidate, obstacles, board, options):
+                continue
+            rest = {}
+            for other, indices in sorted(available.items(), key=lambda item: (len(item[1]), item[0])):
+                if other == ref:
+                    continue
+                kept = []
+                for j in indices:
+                    if remaining <= 0:
+                        return None
+                    remaining -= 1
+                    if not clash(ref, index, other, j):
+                        kept.append(j)
+                if not kept:
+                    break
+                rest[other] = tuple(kept)
+            else:
+                result = solve(rest, trial)
+                if result is not None:
+                    return result
         return None
 
-    return solve(0, dict(base))
+    result = solve({ref: tuple(range(len(poses))) for ref, poses in domains.items()}, dict(base))
+    if result is None and refinable and not fine:
+        return _pack_local_components(board, references, base, targets, options,
+                                      allow_general=allow_general, fine=True)
+    return result
 
 
 def _detailed_refine(
@@ -1359,26 +1585,38 @@ def _detailed_refine(
             current = placements[reference]
             without = dict(placements)
             del without[reference]
+            obstacles = _local_obstacles(board, reference, without)
             best = current
             best_score = _fast_score(board, placements, spacing, options.power_domain_weight)
             positions = (current.position, *_nearby_positions(current.position, options))
-            for point in positions:
-                for orientation in _allowed_orientations(board, reference):
-                    candidate = replace(current, position=point, rotation_degrees=orientation)
-                    if not _legal(candidate, without, board, options):
-                        continue
-                    trial = dict(without)
-                    trial[reference] = candidate
-                    score = _fast_score(board, trial, spacing, options.power_domain_weight)
-                    ranked = (score, point.y_nm, point.x_nm, int(orientation))
-                    best_ranked = (
-                        best_score,
-                        best.position.y_nm,
-                        best.position.x_nm,
-                        int(best.rotation_degrees),
-                    )
-                    if ranked < best_ranked:
-                        best, best_score = candidate, score
+            local_candidates = (_relative_candidates(board, reference, current, without, options)
+                if any(r.kind is RelativePlacementKind.MAX_DISTANCE and all(t.pad is not None for t in r.targets)
+                       and any(t.reference == reference for t in r.targets) for r in board.relative_rules) else ())
+            candidates = dict.fromkeys((*local_candidates,
+                *(replace(current, position=point, rotation_degrees=angle)
+                  for point in positions for angle in _allowed_orientations(board, reference))))
+            evaluated = 0
+            for candidate in candidates:
+                point, orientation = candidate.position, candidate.rotation_degrees
+                if not _legal(candidate, obstacles, board, options):
+                    continue
+                trial = dict(without)
+                trial[reference] = candidate
+                if _relative_penalty(board, trial) > best_score[0]:
+                    continue
+                evaluated += 1
+                score = _fast_score(board, trial, spacing, options.power_domain_weight)
+                ranked = (score, point.y_nm, point.x_nm, int(orientation))
+                best_ranked = (
+                    best_score,
+                    best.position.y_nm,
+                    best.position.x_nm,
+                    int(best.rotation_degrees),
+                )
+                if ranked < best_ranked:
+                    best, best_score = candidate, score
+                if local_candidates and evaluated >= options.legalization_candidates:
+                    break
             if best != current:
                 placements[reference] = best
                 changed = True
@@ -1433,42 +1671,76 @@ def _repair_relative_constraints(
     placements = dict(source)
     fixed = set(_fixed_placements(board, source, options))
     repair_count = 0
-    for _ in range(max(1, len(board.relative_rules) * 2)):
-        baseline = _relative_penalty(board, placements)
-        if baseline == 0:
+    remaining = options.legalization_candidates * options.exact_repair_limit * 8
+    for _ in range(max(1, min(options.exact_repair_limit, len(board.relative_rules)*2))):
+        if _relative_penalty(board, placements) == 0:
             break
-        best_placements: dict[str, Placement] | None = None
-        best_rank = (baseline, _fast_score(board, placements, spacing, options.power_domain_weight))
-        for rule in board.relative_rules:
-            references = sorted(
-                {target.reference for target in rule.targets if target.reference not in fixed},
-                key=lambda reference: (_footprint_area(board, placements[reference]), reference),
-            )
-            for reference in references:
-                current = placements[reference]
-                without = dict(placements)
-                del without[reference]
-                positions = _relative_candidate_positions(
-                    board, reference, current, without, options
-                )
-                for point in positions:
-                    for orientation in _allowed_orientations(board, reference):
-                        candidate = replace(
-                            current, position=point, rotation_degrees=orientation
-                        )
-                        if not _legal(candidate, without, board, options):
-                            continue
-                        trial = dict(without)
-                        trial[reference] = candidate
-                        rank = (_relative_penalty(board, trial), _fast_score(board, trial, spacing, options.power_domain_weight))
-                        if rank < best_rank:
-                            best_rank = rank
-                            best_placements = trial
-        if best_placements is None:
+        violating = {ref for violation in relative_placement_violations(board, placements)
+                     for ref in violation["references"] if ref not in fixed}
+        changed = False
+        for reference in sorted(violating, key=lambda ref: (_footprint_area(board, placements[ref]), ref)):
+            baseline = _relative_penalty(board, placements)
+            if baseline == 0:
+                break
+            best_placements = None
+            best_rank = (baseline, _fast_score(board, placements, spacing, options.power_domain_weight))
+            current = placements[reference]
+            without = {ref: pose for ref, pose in placements.items() if ref != reference}
+            evaluated = 0
+            obstacles = _local_obstacles(board, reference, without)
+            local_rules = tuple(r for r in board.relative_rules if any(t.reference == reference for t in r.targets))
+            related = {t.reference for r in local_rules for t in r.targets}
+            anchors = {ref: pose for ref, pose in without.items() if ref in related}
+            constant = baseline - _relative_penalty(board, placements, rules=local_rules)
+            candidates = _relative_candidates(board, reference, current, without, options,
+                                               step_nm=nm_from_mm("0.1"))
+            for candidate in _bounded_local_candidates(candidates, max(1, remaining)):
+                if remaining <= 0:
+                    if best_placements is not None:
+                        placements = best_placements
+                        repair_count += 1
+                    return placements, repair_count
+                remaining -= 1
+                penalty = constant + _relative_penalty(board, {**anchors, reference: candidate}, rules=local_rules)
+                if penalty >= baseline or penalty > best_rank[0] or not _legal(candidate, obstacles, board, options):
+                    continue
+                trial = {**without, reference: candidate}
+                rank = (penalty, _fast_score(board, trial, spacing, options.power_domain_weight))
+                if rank < best_rank:
+                    best_rank = rank
+                    best_placements = trial
+                evaluated += 1
+                if evaluated >= options.exact_repair_candidates:
+                    break
+            if best_placements is not None:
+                placements = best_placements
+                repair_count += 1
+                changed = True
+        if not changed:
             break
-        placements = best_placements
-        repair_count += 1
     return placements, repair_count
+
+
+def _local_failure_details(board, placements, options):
+    """Explain bounded-search failure without claiming a constraint is impossible."""
+    violations = relative_placement_violations(board, placements)
+    messages = [item["message"] for item in violations[:3]]
+    blockers = set()
+    for reference in sorted({ref for item in violations[:3] for ref in item["references"]}):
+        if reference in _fixed_placements(board, placements, options):
+            continue
+        without = {ref: pose for ref, pose in placements.items() if ref != reference}
+        probes = _relative_candidates(board, reference, placements[reference], without, options,
+                                      step_nm=nm_from_mm("0.1"))
+        for candidate in probes[:options.exact_repair_candidates]:
+            if not _legal(candidate, {}, board, options):
+                continue
+            for ref, other in without.items():
+                if not _legal(candidate, {ref: other}, board, options):
+                    blockers.add(ref)
+    if blockers:
+        messages.append("local candidate blockers: " + ", ".join(sorted(blockers)[:8]))
+    return "; ".join(messages) or "no legal pose found in the bounded candidate search"
 
 
 def _nearby_positions(center: Point, options: PlacementPlannerOptions) -> tuple[Point, ...]:
@@ -1498,9 +1770,11 @@ def _candidate_positions(
 ) -> tuple[Point, ...]:
     bounds = _outline_bounds(board.outline)
     rule = _rules(board).get(placement.reference)
+    edge = options.edge_clearance_nm
     if rule is not None and rule.region is not None:
         region = next(item for item in board.regions if item.name == rule.region)
         bounds = _outline_bounds(region.outline)
+        edge = 0  # _legal still enforces the independent physical board edge.
     min_x, min_y, max_x, max_y = bounds
     max_half_width = 0
     max_half_height = 0
@@ -1510,13 +1784,13 @@ def _candidate_positions(
         max_half_width = max(max_half_width, half_width)
         max_half_height = max(max_half_height, half_height)
     first_x = _ceil_grid(
-        min_x + options.edge_clearance_nm + max_half_width, options.grid_step_nm
+        min_x + edge + max_half_width, options.grid_step_nm
     )
     first_y = _ceil_grid(
-        min_y + options.edge_clearance_nm + max_half_height, options.grid_step_nm
+        min_y + edge + max_half_height, options.grid_step_nm
     )
-    last_x = max_x - options.edge_clearance_nm - max_half_width
-    last_y = max_y - options.edge_clearance_nm - max_half_height
+    last_x = max_x - edge - max_half_width
+    last_y = max_y - edge - max_half_height
     if first_x > last_x or first_y > last_y:
         return ()
     points = (
@@ -1551,6 +1825,24 @@ def _legal(
     if rule is not None and rule.side is not None and candidate.side is not rule.side:
         return False
     polygon = _placement_polygon(board, candidate)
+    # Reject local courtyard collisions before expensive board/cutout checks.
+    for other in placed.values():
+        if other.side is not candidate.side:
+            continue
+        other_polygon = _placement_polygon(board, other)
+        clearance = options.component_clearance_nm
+        for cluster in board.rigid_clusters:
+            members = {item.reference for item in cluster.members}
+            if (candidate.reference in members and other.reference in members
+                    and cluster.internal_clearance_nm is not None):
+                clearance = cluster.internal_clearance_nm
+                break
+        if _polygons_too_close(
+            polygon,
+            other_polygon,
+            clearance,
+        ):
+            return False
     edge_clearance = (rule.edge_clearance_nm if rule and rule.edge_clearance_nm is not None
                       else options.edge_clearance_nm)
     from .mechanical import shape_in_board
@@ -1626,19 +1918,6 @@ def _legal(
                 0,
             ):
                 return False
-        clearance = options.component_clearance_nm
-        for cluster in board.rigid_clusters:
-            members = {item.reference for item in cluster.members}
-            if (candidate.reference in members and other.reference in members
-                    and cluster.internal_clearance_nm is not None):
-                clearance = cluster.internal_clearance_nm
-                break
-        if _polygons_too_close(
-            polygon,
-            other_polygon,
-            clearance,
-        ):
-            return False
     return True
 
 
@@ -1662,27 +1941,27 @@ def _keepout_blocks(
 
 def _placement_polygon(board: PhysicalBoard, placement: Placement) -> tuple[Point, ...]:
     footprint = board.footprints[placement.footprint]
-    if footprint.courtyard:
-        local = footprint.courtyard
-    else:
-        half_width = (footprint.body_size.width_nm + 1) // 2
-        half_height = (footprint.body_size.height_nm + 1) // 2
-        local = (
-            Point(-half_width, -half_height),
-            Point(half_width, -half_height),
-            Point(half_width, half_height),
-            Point(-half_width, half_height),
-        )
-    return tuple(
-        Point(
-            placement.position.x_nm + transformed.x_nm,
-            placement.position.y_nm + transformed.y_nm,
-        )
-        for point in local
-        for transformed in (_transform_local(point, placement.rotation_degrees, placement.side),)
-    )
+    local = _rotated_courtyard(footprint.courtyard, footprint.body_size,
+                               placement.rotation_degrees, placement.side)
+    return _translated_polygon(local, placement.position)
 
 
+@lru_cache(maxsize=4096)
+def _rotated_courtyard(courtyard, body_size, rotation, side) -> tuple[Point, ...]:
+    if not courtyard:
+        half_width = (body_size.width_nm+1)//2
+        half_height = (body_size.height_nm+1)//2
+        courtyard = (Point(-half_width, -half_height), Point(half_width, -half_height),
+                     Point(half_width, half_height), Point(-half_width, half_height))
+    return tuple(_transform_local(point, rotation, side) for point in courtyard)
+
+
+@lru_cache(maxsize=8192)
+def _translated_polygon(polygon: tuple[Point, ...], position: Point) -> tuple[Point, ...]:
+    return tuple(Point(point.x_nm+position.x_nm, point.y_nm+position.y_nm) for point in polygon)
+
+
+@lru_cache(maxsize=4096)
 def _transform_local(point: Point, rotation: Decimal, side: BoardSide) -> Point:
     x = -point.x_nm if side is BoardSide.BACK else point.x_nm
     # KiCad's positive footprint angle rotates counter-clockwise in its
@@ -1706,6 +1985,10 @@ def _polygons_too_close(
         or second_box[3] + clearance <= first_box[1]
     ):
         return False
+    if _is_axis_rectangle(first) and _is_axis_rectangle(second):
+        dx = max(first_box[0]-second_box[2], second_box[0]-first_box[2], 0)
+        dy = max(first_box[1]-second_box[3], second_box[1]-first_box[3], 0)
+        return (dx == 0 and dy == 0) or dx*dx+dy*dy < clearance*clearance
     if _polygons_intersect(first, second):
         return True
     if clearance <= 0:
@@ -1717,6 +2000,15 @@ def _polygons_too_close(
         for start, end in _edges(other)
     )
     return minimum < clearance
+
+
+@lru_cache(maxsize=8192)
+def _is_axis_rectangle(polygon: tuple[Point, ...]) -> bool:
+    if len(polygon) != 4:
+        return False
+    left, top, right, bottom = _point_bounds(polygon)
+    return set(polygon) == {Point(left, top), Point(right, top),
+                            Point(right, bottom), Point(left, bottom)}
 
 
 def _polygon_inside(
@@ -1808,7 +2100,11 @@ def _outline_bounds(outline: BoardOutline) -> tuple[int, int, int, int]:
 
 
 def _point_bounds(points: Iterable[Point]) -> tuple[int, int, int, int]:
-    values = tuple(points)
+    return _cached_point_bounds(tuple(points))
+
+
+@lru_cache(maxsize=8192)
+def _cached_point_bounds(values: tuple[Point, ...]) -> tuple[int, int, int, int]:
     return (
         min(point.x_nm for point in values),
         min(point.y_nm for point in values),
@@ -1818,7 +2114,9 @@ def _point_bounds(points: Iterable[Point]) -> tuple[int, int, int, int]:
 
 
 def _half_extents(board: PhysicalBoard, placement: Placement) -> tuple[int, int]:
-    bounds = _point_bounds(_placement_polygon(board, replace(placement, position=Point(0, 0))))
+    footprint = board.footprints[placement.footprint]
+    bounds = _point_bounds(_rotated_courtyard(footprint.courtyard, footprint.body_size,
+                                             placement.rotation_degrees, placement.side))
     return max(abs(bounds[0]), abs(bounds[2])), max(abs(bounds[1]), abs(bounds[3]))
 
 
@@ -1947,9 +2245,9 @@ def _target_point(
     )
 
 
-def _relative_penalty(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:
+def _relative_penalty(board: PhysicalBoard, placements: Mapping[str, Placement], *, rules=None) -> int:
     total = 0
-    for rule in board.relative_rules:
+    for rule in board.relative_rules if rules is None else rules:
         points = [_target_point(board, placements, target) for target in rule.targets]
         if any(point is None for point in points):
             continue
@@ -1969,6 +2267,17 @@ def _relative_penalty(board: PhysicalBoard, placements: Mapping[str, Placement])
             ]
             total += max(0, max(values) - min(values) - rule.tolerance_nm) * rule.weight
     return total
+
+
+def _local_connection_length(board: PhysicalBoard, placements: Mapping[str, Placement], *, rules=None) -> int:
+    """Bounded preference inside explicit pin-to-pin maximum-distance limits."""
+    return sum(min(rule.distance_nm or 0, round(hypot(a.x_nm-b.x_nm, a.y_nm-b.y_nm))) * rule.weight
+               for rule in (board.relative_rules if rules is None else rules)
+               if rule.kind is RelativePlacementKind.MAX_DISTANCE
+               for left, right in zip(rule.targets, rule.targets[1:])
+               if left.pad is not None and right.pad is not None
+               if (a := _target_point(board, placements, left)) is not None
+               if (b := _target_point(board, placements, right)) is not None)
 
 
 def relative_placement_violations(
@@ -2188,11 +2497,12 @@ def _spread_escape_components(
 
 def _fast_score(board: PhysicalBoard, placements: Mapping[str, Placement],
                 spacing: EscapeSpacingModel | None = None,
-                power_domain_weight: float = 0.25) -> tuple[int, int, int]:
+                power_domain_weight: float = 0.25) -> tuple[int, int, int, int]:
     channels = (spacing or EscapeSpacingModel(board)).channels(placements)
     return (
         _relative_penalty(board, placements),
         sum(c.deficit_nm for c in channels),
+        _local_connection_length(board, placements),
         _planning_wirelength(board, placements) + _group_spread(board, placements) // 20
         + power_domain_penalty(board, placements, power_domain_weight),
     )

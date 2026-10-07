@@ -170,7 +170,9 @@ def repair_placement_trial(
         if not boundary.ready:
             return fallback("placement closes package boundary access")
         access = replace(access, boundary=boundary)
-        access_fanout = reserve_boundary_access(early.board, access_fanout, boundary)
+        access_fanout = reserve_boundary_access(early.board, access_fanout, boundary,
+            deferred_nets=frozenset(zone.net for zone in early.board.zones)
+            if detailed_options.defer_zone_nets else frozenset())
         early = replace(early, board=access_fanout.board)
     boot = replace(initial,
         placement_and_global=replace(initial.placement_and_global, board=trial, global_route=global_route,

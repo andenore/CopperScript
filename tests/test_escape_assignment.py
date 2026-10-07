@@ -155,8 +155,9 @@ def test_foreign_clearance_overrides_enter_candidate_conflicts():
 
 
 def test_trial_and_invalid_option_budgets_are_explicit():
-    with pytest.raises(ValueError):
-        EscapeAssignmentOptions(maximum_trials=0)
+    for invalid in (0, -1, 1.5, "8"):
+        with pytest.raises(ValueError, match="positive integer"):
+            EscapeAssignmentOptions(maximum_trials=invalid)
     base = board()
     pads = (PadReference("U","1"),PadReference("U","2"))
     choices = {pads[0]:(candidate("A",(5,6),(3,6),via=True),),
@@ -164,6 +165,56 @@ def test_trial_and_invalid_option_budgets_are_explicit():
     selected,report = improve_escape_assignment(base,pads,choices,{},lambda p:(),
                                                EscapeAssignmentOptions(maximum_trials=1))
     assert set(selected) == {pads[0]} and len(report.trials) == 1
+
+
+def independent_assignment_traps():
+    # Ten separated two-pin conflicts, each requiring its incumbent to move.
+    # Expansion exposes the alternative; each missing root needs its own trial.
+    base = PhysicalBoard("independent-traps", BoardOutline.rectangle(110, 14), {}, (),
+        tuple(PhysicalNet(f"{role}{i}", ()) for i in range(10) for role in ("A", "B")))
+    ordered, domains, incumbent, additions = [], {}, {}, {}
+    for i in range(10):
+        first, second = PadReference(f"U{i}", "1"), PadReference(f"U{i}", "2")
+        x = 4 + 10 * i
+        ordered.extend((first, second))
+        domains[first] = (candidate(f"A{i}", (x, 3), (x, 4), via=True),)
+        domains[second] = (candidate(f"B{i}", (x, 3), (x, 4), via=True),)
+        additions[first] = (candidate(f"A{i}", (x + 2, 3), (x + 2, 4), via=True),)
+        incumbent[first] = 0
+    return base, tuple(ordered), domains, incumbent, lambda pad: additions.get(pad, ())
+
+
+def test_default_repairs_more_than_eight_roots_and_explicit_cap_preserves_successes():
+    base, ordered, domains, incumbent, expand = independent_assignment_traps()
+    options = fanout.FanoutOptions().assignment_options
+    selected, report = improve_escape_assignment(base, ordered, dict(domains), incumbent, expand, options)
+    assert selected == {pad: 1 if pad in incumbent else 0 for pad in ordered}
+    assert len(report.trials) == 10 and all(t.solution_found for t in report.trials)
+    assert (selected, report) == improve_escape_assignment(
+        base, ordered, dict(domains), incumbent, expand, options)
+    capped, limited = improve_escape_assignment(base, ordered, dict(domains), incumbent, expand,
+        replace(options, maximum_trials=8))
+    assert len(limited.trials) == 8 and all(t.solution_found for t in limited.trials)
+    assert set(incumbent) <= set(capped)
+    assert capped == {**incumbent, **{pad: selected[pad] for pad in ordered[:16]}}
+    assert limited.trials == report.trials[:8]
+
+
+@pytest.mark.parametrize("budget, counter", [
+    ("maximum_pair_checks", "pair_checks"), ("maximum_pair_queries", "pair_queries")])
+def test_default_root_trials_remain_bounded_by_shared_conflict_budgets(budget, counter):
+    base, ordered, domains, incumbent, expand = independent_assignment_traps()
+    prefix, prefix_report = improve_escape_assignment(base, ordered, dict(domains), incumbent, expand,
+        EscapeAssignmentOptions(maximum_trials=3))
+    limit = getattr(prefix_report, counter)
+    options = EscapeAssignmentOptions(**{budget: limit})
+    selected, report = improve_escape_assignment(base, ordered, dict(domains), incumbent, expand, options)
+    assert selected == prefix  # Exhausting a shared budget cannot lose earlier repairs.
+    assert report.trials[:-1] == prefix_report.trials
+    assert not report.trials[-1].solution_found and "budget exhausted" in report.trials[-1].diagnostic
+    assert getattr(report, counter) == limit
+    assert (selected, report) == improve_escape_assignment(
+        base, ordered, dict(domains), incumbent, expand, options)
 
 
 def test_conflict_driven_cluster_growth_repairs_a_three_pin_chain():

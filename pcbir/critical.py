@@ -343,7 +343,8 @@ def route_critical_nets(
                 or reserved_accesses.board.vias != (*board.vias, *reserved_accesses.created_vias)):
             raise ValueError("package-access reservations are stale or contain unowned copper")
         protected = {rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
-        protected.update(zone.net for zone in board.zones)
+        regional_nets = {zone.net for zone in board.zones if zone.reserve_routing}
+        protected.update(zone.net for zone in board.zones if zone.net not in regional_nets)
         if any(item.net in protected for item in (*reserved_accesses.created_tracks,
                                                   *reserved_accesses.created_vias)):
             raise ValueError("ordinary package-access reservations cannot contain critical or zone copper")

@@ -45,6 +45,8 @@ KICAD_PCB_TARGET_VERSION = "8.0"
 _UUID_SEED = b"CopperScript KiCad PCB backend v0.1\0"
 GENERATED_LIBRARY = "CopperScript"
 GENERATED_LIBRARY_DIRECTORY = "CopperScript.pretty"
+VIA_PROCESS_SCHEMA = "copperscript-via-process/v0.1"
+VIA_PROCESS_GENERATOR = "CopperScript"
 
 
 class KiCadPcbBackend:
@@ -98,6 +100,15 @@ class KiCadPcbBackend:
             warnings.extend(import_warnings.splitlines())
         if not board.tracks:
             warnings.append("The board contains no routed tracks.")
+        via_process = ()
+        if any(via.finish != "standard" for via in board.vias):
+            via_process = (Artifact(f"{_safe_name(board.name)}.via-process.json", "application/json",
+                                    _render_via_process(board)),)
+            warnings.append(
+                "Non-standard via finishes are recorded in the .via-process.json sidecar; "
+                "keep it with the project. The native PCB alone does not encode this process "
+                "and the sidecar is not manufacturing qualification."
+            )
         rules = ()
         if board.component_hole_clearances:
             rules = (Artifact(f"{_safe_name(board.name)}.kicad_dru", "application/x-kicad-rules",
@@ -124,6 +135,7 @@ class KiCadPcbBackend:
                     _render_project(board),
                 ),
                 *rules,
+                *via_process,
                 Artifact("fp-lib-table", "application/x-kicad-library-table", _render_library_table()),
                 *(
                     Artifact(
@@ -136,6 +148,23 @@ class KiCadPcbBackend:
             ),
             warnings=tuple(warnings),
         )
+
+
+def _render_via_process(board: PhysicalBoard) -> str:
+    """Preserve fabrication intent that the native board does not represent."""
+    vias = sorted((via for via in board.vias if via.finish != "standard"),
+                  key=lambda via: (via.net, via.position.x_nm, via.position.y_nm,
+                      via.from_layer.value, via.to_layer.value, via.size_nm, via.drill_nm, via.finish))
+    return json.dumps({
+        "schema": VIA_PROCESS_SCHEMA,
+        "generated_by": VIA_PROCESS_GENERATOR,
+        "fabrication_profile": board.metadata.get("fabrication_profile"),
+        "fabrication_ready": False,
+        "vias": [{"net": via.net, "position_nm": [via.position.x_nm, via.position.y_nm],
+                  "diameter_nm": via.size_nm, "drill_nm": via.drill_nm,
+                  "layers": [via.from_layer.value, via.to_layer.value],
+                  "finish": via.finish, "technology": via.technology} for via in vias],
+    }, indent=2, sort_keys=True) + "\n"
 
 
 def _library_item_name(footprint: PhysicalFootprint) -> str:

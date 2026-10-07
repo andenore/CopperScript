@@ -1,4 +1,5 @@
 from dataclasses import replace
+from collections import Counter
 
 import pytest
 
@@ -9,7 +10,7 @@ from pcbir import (
     route_detailed, route_global, run_physical_drc,
 )
 from pcbir.detailed import DetailedNode, _erase_path_loops, _prune_fanout_copper
-from pcbir.route_cleanup import prune_track_stubs
+from pcbir.route_cleanup import EscapeChain, prune_track_stubs, release_unused_escapes
 
 
 def board():
@@ -148,6 +149,53 @@ def test_successful_owned_fanout_tail_is_trimmed_but_locked_duplicate_survives()
     locked = replace(base, tracks=(lead, lead))
     result, _ = _prune_fanout_copper(locked, (*locked.tracks, *added), locked.vias, *args)
     assert lead in result  # One occurrence was input copper, not owned fanout.
+
+
+@pytest.mark.parametrize("owned_stub", [False, True])
+def test_redundant_duplicate_pad_edge_branch_is_removed_only_when_owned(owned_stub):
+    base = board()
+    footprint = base.footprints["one-pad"]
+    duplicate = replace(footprint, pads=(*footprint.pads, replace(footprint.pads[0], number="2")))
+    base = replace(base, footprints={footprint.name: duplicate}, nets=(replace(
+        base.nets[0], pads=(*base.nets[0].pads, PadReference("J1", "2"), PadReference("J2", "2"))),))
+    lead = track((3, 6), (5, 6))
+    route = track((5, 6), (17, 6))
+    # The branch touches the edge of both coincident lands and the real exit.
+    # Its far endpoint has no connection; conservative local pruning keeps it.
+    stub = track(("3.4", 6), ("3.8", "6.4"), width="0.25")
+    copper = (lead, route, stub)
+    assert stub in prune_track_stubs(base, copper, trim_overhangs=True)
+    mutable = Counter(copper if owned_stub else (lead, route))
+    result, vias = release_unused_escapes(
+        base, copper, (), (EscapeChain("S", (lead,), (), None),), Counter((lead,)),
+        mutable_tracks=mutable, removable_vias=Counter(),
+    )
+    assert (stub not in result) is owned_stub
+    assert not vias
+    # The required land-to-launch path survives; removing it would open J1.
+    from pcbir.drc import explicit_copper_connectivity
+    assert explicit_copper_connectivity(replace(base, tracks=result)).net_connected(base.nets[0])
+    assert any(Point.mm(5, 6) in (t.start, t.end) for t in result)
+
+
+def test_pad_edge_branch_is_kept_when_it_connects_an_interior_land():
+    base = board()
+    small = PhysicalFootprint("small", (
+        FootprintPad("1", Point(0, 0), Size.mm("0.1", "0.1")),), Size.mm("0.2", "0.2"))
+    base = replace(base, footprints={**base.footprints, small.name: small},
+        placements=(*base.placements, Placement("J3", small.name, Point.mm("3.6", "6.25"))),
+        nets=(replace(base.nets[0], pads=(*base.nets[0].pads, PadReference("J3", "1"))),))
+    lead = track((3, 6), (5, 6))
+    branch = track(("3.4", 6), ("3.8", "6.4"), width="0.25")
+    copper = (lead, track((5, 6), (17, 6)), branch)
+    result, _ = release_unused_escapes(
+        base, copper, (), (EscapeChain("S", (lead,), (), None),), Counter((lead,)),
+        mutable_tracks=Counter(copper), removable_vias=Counter(),
+    )
+    # The far endpoint is open, but the branch's interior reaches J3.
+    assert branch in result
+    from pcbir.drc import explicit_copper_connectivity
+    assert explicit_copper_connectivity(replace(base, tracks=result)).net_connected(base.nets[0])
 
 
 @pytest.mark.parametrize("excursion", [False, True])

@@ -570,7 +570,7 @@ def _lower_physical_constraints(
                 raise ValueError(f"copper_zone references unknown net {net!r}")
             parameters = constraint.parameters
             unknown = set(parameters) - {"layers", "inset", "pad_connection", "clearance", "minimum_width", "island_policy",
-                                          "region", "polygon_mm", "x", "y", "width", "height", "priority"}
+                                          "region", "polygon_mm", "x", "y", "width", "height", "priority", "reserve_routing"}
             if unknown:
                 raise ValueError(f"unknown copper_zone parameter {sorted(unknown)[0]!r}")
             layers = _constraint_layers(parameters.get("layers"))
@@ -587,6 +587,7 @@ def _lower_physical_constraints(
                 layers=layers,
                 outline=zone_outline,
                 priority=priority,
+                reserve_routing=_constraint_bool(parameters, "reserve_routing", False),
                 clearance_nm=_optional_constraint_length(parameters, "clearance"),
                 minimum_width_nm=_optional_constraint_length(parameters, "minimum_width") or nm_from_mm("0.25"),
                 pad_connection=ZoneConnection(str(parameters.get("pad_connection", "thermal"))),

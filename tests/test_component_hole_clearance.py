@@ -390,7 +390,9 @@ def test_physical_board_validates_scoped_rules() -> None:
 # Goldens computed before hole_clearance existed: boards without the
 # constraint must keep byte-identical DRC reports, digests and KiCad exports.
 GOLDEN_BOARD_DIGEST = "e81641e915f7bb4c2d432820c42f6713050039262c0bd94782b64cdd57130b06"
-GOLDEN_REPORT_SHA256 = "4611290aeac812375105452d0717065d7fe70bd3a42cb19c37356a67f11e293e"
+# Broadening via-hole checks renamed the coverage entry to via_hole_to_copper;
+# independent HEAD comparison found only that name and its report/token digests changed.
+GOLDEN_REPORT_SHA256 = "463f62f98f89c3de56d1078b4346820e8205c6af8b8fd5299c71ae15a009e107"
 GOLDEN_KICAD_EXPORT_DIGEST = "f6c051483c55022ffd2fff6c0b491c1cfe782748e04982c62443aa5494f2d54b"
 
 

@@ -674,13 +674,16 @@ def route_detailed(
     if options.route_smoothing and not fanout_accesses:
         all_tracks = (*board.tracks, *_smooth_owned(board, board.tracks, new_tracks, all_vias))
     if fanout_accesses:
-        cleanup_accesses = fanout_accesses
+        # Deferred zone contacts remain required even without an area route.
+        deferred_pads = {pad for net in deferred for pad in net.pads}
+        cleanup_accesses = {pad: anchor for pad, anchor in fanout_accesses.items()
+                            if pad not in deferred_pads}
         if only_nets is not None:
             # A failed repair must not remove the input net's locked escape.
             successful_pads = {pad for net in board.nets
                                if any(item.result.net == net.name and item.result.connected
                                       for item in best.nets) for pad in net.pads}
-            cleanup_accesses = {pad: anchor for pad, anchor in fanout_accesses.items()
+            cleanup_accesses = {pad: anchor for pad, anchor in cleanup_accesses.items()
                                 if pad in successful_pads}
         all_tracks, all_vias = _prune_fanout_copper(
             board, all_tracks, all_vias, cleanup_accesses,

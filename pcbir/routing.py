@@ -7,7 +7,7 @@ detailed routers are the only stages that may turn these objects into physical
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from hashlib import sha256
 from heapq import heappop, heappush
@@ -356,10 +356,19 @@ def route_global(
     best: _Attempt | None = None
     present = options.present_penalty
     completed_iterations = 0
+    refined_via_resources: set[str] = set()
     for iteration in range(1, options.maximum_iterations + 1):
         completed_iterations = iteration
         attempt = _route_iteration(board, graph, rules, access_options,
                                    history, present, options, iteration)
+        refined = _refine_overflowed_via_sites(
+            board, graph, attempt.usage, clearance, options.tile_size_nm, refined_via_resources)
+        if refined is not graph:
+            graph = refined
+            capacities = {resource.identifier: resource.capacity for resource in graph.resources.values()}
+            attempt = _attempt(board, graph, rules, attempt.routes, options, iteration)
+            if best is not None:
+                best = _attempt(board, graph, rules, best.routes, options, best.metrics.iterations)
         if best is None or attempt.metrics.quality_vector < best.metrics.quality_vector:
             best = attempt
         if (
@@ -460,11 +469,8 @@ def _route_iteration(
         routes.append(route)
         if not route.connected:
             continue
-        used_resources = {
-            item.resource_id for item in route.segments
-        } | {item.resource_id for item in route.vias}
-        for identifier in sorted(used_resources):
-            usage[identifier] += demand
+        for identifier, amount in _route_resource_demands(route, demand).items():
+            usage[identifier] += amount
     return _attempt(board, graph, rules, tuple(routes), options, iteration)
 
 
@@ -476,18 +482,15 @@ def _attempt(
     options: GlobalRouterOptions,
     iteration: int,
 ) -> _Attempt:
-    """Measure committed guides in routing order; usage is per net and resource."""
+    """Measure planar lanes and distinct physical via sites in routing order."""
     usage: dict[str, int] = {item.identifier: 0 for item in graph.resources.values()}
     contributors: dict[str, list[str]] = {item.identifier: [] for item in graph.resources.values()}
     for route in routes:
         if not route.connected:
             continue
         demand = _net_demand(board, rules.get(route.net), options)
-        used_resources = {
-            item.resource_id for item in route.segments
-        } | {item.resource_id for item in route.vias}
-        for identifier in sorted(used_resources):
-            usage[identifier] += demand
+        for identifier, amount in _route_resource_demands(route, demand).items():
+            usage[identifier] += amount
             contributors[identifier].append(route.net)
     capacities = {
         resource.identifier: resource.capacity
@@ -540,6 +543,17 @@ def _route_net(
     options: GlobalRouterOptions,
 ) -> GlobalNetRoute:
     allowed = routing_layers(board, net, rule)
+    from .zone_geometry import ZoneRoutingReservations
+    reservations = ZoneRoutingReservations(board)
+    width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+    # Capacity is shared across nets; exclude unavailable planar resources for
+    # this net only. Via transitions still use the ordinary physical rules.
+    blocked_resources = frozenset(
+        resource.identifier for resource in graph.resources.values()
+        if resource.layer is not None and not reservations.can_area(net,
+            RoundedConvexShape((graph.point(resource.first), graph.point(resource.second)), width // 2),
+            resource.layer)
+    ) if reservations.zones else frozenset()
     by_pad = {pad: access_options.get((net, pad), ()) for pad in sorted(pads)}
     for pad, choices in by_pad.items():
         if not choices:
@@ -568,7 +582,7 @@ def _route_net(
                 rule.max_vias - via_count - int(candidate.via is not None))
             path = _search(
                 graph, tree_nodes, candidate.node, allowed, demand, usage,
-                history, present, options, allowance,
+                history, present, options, allowance, blocked_resources=blocked_resources,
             )
             if path is not None:
                 path_cost = sum(
@@ -576,7 +590,8 @@ def _route_net(
                      else length_cost(graph.point(a), graph.point(b)))
                     + _preference_cost(graph, a, b, options)
                     + COST_UNIT * present * max(0, usage[graph.resources[_edge_key(a, b)].identifier]
-                                    + demand - graph.resources[_edge_key(a, b)].capacity)
+                                    + (demand if a.layer_index == b.layer_index else 1)
+                                    - graph.resources[_edge_key(a, b)].capacity)
                     + COST_UNIT * options.history_penalty * history[graph.resources[_edge_key(a, b)].identifier]
                     for a, b in path
                 )
@@ -669,6 +684,7 @@ def _search(
     present: int,
     options: GlobalRouterOptions,
     remaining_vias: int | None,
+    *, blocked_resources: frozenset[str] = frozenset(),
 ) -> tuple[tuple[GridNode, GridNode], ...] | None:
     allowed_indexes = {graph.layers.index(layer) for layer in allowed_layers}
     queue: list[tuple[int, int, int, GridNode, str, int, int]] = []
@@ -697,6 +713,8 @@ def _search(
             break
         for neighbor in _neighbors(graph, node, allowed_indexes):
             resource = graph.resources[_edge_key(node, neighbor)]
+            if resource.identifier in blocked_resources:
+                continue
             next_direction = _direction(node, neighbor)
             next_vias = vias_used + (next_direction == "v") if track_vias else 0
             if remaining_vias is not None and next_vias > remaining_vias:
@@ -704,7 +722,8 @@ def _search(
             base = (options.via_cost * COST_UNIT if next_direction == "v"
                     else length_cost(graph.point(node), graph.point(neighbor)))
             bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
-            overflow = max(0, usage[resource.identifier] + demand - resource.capacity)
+            resource_demand = demand if resource.layer is not None else 1
+            overflow = max(0, usage[resource.identifier] + resource_demand - resource.capacity)
             preference = _preference_cost(graph, node, neighbor, options)
             step = (base + preference + COST_UNIT * (bend + present * overflow
                     + options.history_penalty * history[resource.identifier]))
@@ -902,14 +921,73 @@ def _planar_capacity(
     return capacity
 
 
+def _via_site_pitch(board: PhysicalBoard) -> int:
+    size, drill = board.rules.default_via_size_nm, board.rules.default_via_drill_nm
+    return max(size + board.rules.minimum_clearance_nm,
+               drill + board.rules.minimum_hole_clearance_nm,
+               size // 2 + drill // 2 + board.rules.minimum_hole_clearance_nm)
+
+
+def _refine_overflowed_via_sites(
+    board: PhysicalBoard, graph: _Graph, usage: Mapping[str, int],
+    clearance: RoutingClearanceIndex, tile_size_nm: int, refined: set[str],
+) -> _Graph:
+    """Try eight shifted phases once per congested tile, retaining old sites.
+
+    A greedy union counts only mutually legal, distinct-net vias. This remains
+    a bounded capacity witness, not proof that detailed routes can reach them.
+    """
+    sites = dict(graph.via_sites)
+    size, drill = board.rules.default_via_size_nm, board.rules.default_via_drill_nm
+    half_phase = _via_site_pitch(board) // 2
+    limit = tile_size_nm // 2 - (size // 2 + board.rules.minimum_clearance_nm)
+    changed = False
+    for resource in graph.resources.values():
+        identifier = resource.identifier
+        if (resource.layer is not None or identifier in refined
+                or usage.get(identifier, 0) <= resource.capacity):
+            continue
+        refined.add(identifier)
+        center = graph.point(resource.first)
+        span = physical_via_span(board, graph.layers[resource.first.layer_index],
+                                 graph.layers[resource.second.layer_index])
+        assert span is not None
+        pool = set()
+        for dx in (-half_phase, 0, half_phase):
+            for dy in (-half_phase, 0, half_phase):
+                if dx == dy == 0:
+                    continue
+                pool.update(point for point in _legal_via_sites(
+                    board, clearance, Point(center.x_nm + dx, center.y_nm + dy),
+                    tile_size_nm, span[0], span[1])
+                    if abs(point.x_nm - center.x_nm) <= limit
+                    and abs(point.y_nm - center.y_nm) <= limit)
+        selected = list(sites[identifier])
+        peers = RoutingClearanceIndex(board)
+        for i, point in enumerate(selected):
+            peers.add_via(Via(f"<global-via-site-{i}>", point, size, drill, *span), locked=True)
+        for point in sorted(pool - set(selected), key=lambda p: (p.x_nm, p.y_nm)):
+            via = Via(f"<global-via-site-{len(selected)}>", point, size, drill, *span)
+            if peers.can_via(via.net, point, size, span[0], span[1], drill_nm=drill):
+                peers.add_via(via, locked=True)
+                selected.append(point)
+        if len(selected) > resource.capacity:
+            sites[identifier] = tuple(selected)
+            changed = True
+    if not changed:
+        return graph
+    resources = {key: replace(resource, capacity=len(sites[resource.identifier]))
+                 if resource.layer is None else resource for key, resource in graph.resources.items()}
+    return replace(graph, resources=resources, via_sites=sites)
+
+
 def _legal_via_sites(
     board: PhysicalBoard, clearance: RoutingClearanceIndex, center: Point,
     tile_size_nm: int, from_layer: CopperLayer, to_layer: CopperLayer,
 ) -> tuple[Point, ...]:
     """Sample independent, legal drill sites inside one coarse routing cell."""
     size = board.rules.default_via_size_nm
-    pitch = max(size + board.rules.minimum_clearance_nm,
-                board.rules.default_via_drill_nm + board.rules.minimum_hole_clearance_nm)
+    pitch = _via_site_pitch(board)
     edge_margin = size // 2 + board.rules.minimum_clearance_nm
     half = tile_size_nm // 2
     if half < edge_margin:
@@ -1151,6 +1229,18 @@ def _net_order(net: str, rule: NetRoutingRule | None) -> tuple[int, int, str]:
     return hardness, -(rule.priority if rule else 0), net
 
 
+def _route_resource_demands(route: GlobalNetRoute, planar_demand: int) -> dict[str, int]:
+    """Trace width consumes lanes; each distinct via position consumes one site.
+
+    Physical-span IDs merge logical layer transitions through the same hole.
+    Separate terminal escape vias in one tile still consume separate sites.
+    """
+    result = {segment.resource_id: planar_demand for segment in route.segments}
+    for identifier, _position in {(via.resource_id, via.position) for via in route.vias}:
+        result[identifier] = result.get(identifier, 0) + 1
+    return dict(sorted(result.items()))
+
+
 def _net_demand(
     board: PhysicalBoard,
     rule: NetRoutingRule | None,
@@ -1254,6 +1344,9 @@ def _point_in_polygon(point: Point, polygon: tuple[Point, ...]) -> bool:
 def _placement_fingerprint(board: PhysicalBoard) -> str:
     document = {
         "board": board.name,
+        **({"zone_routing_reservations": [repr(zone) for zone in sorted(board.zones, key=lambda z: z.id)
+                                         if zone.reserve_routing]}
+           if any(zone.reserve_routing for zone in board.zones) else {}),
         "rigid_clusters": [repr(item) for item in sorted(board.rigid_clusters, key=lambda item: item.name)],
         "hard_macros": [repr(item) for item in sorted(board.hard_macros, key=lambda item: item.cluster)],
         "via_in_pad_rules": [repr(item) for item in sorted(board.via_in_pad_rules,key=lambda item: item.pad)],
