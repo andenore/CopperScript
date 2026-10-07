@@ -39,6 +39,7 @@ def stitch_duplicate_pads(board: PhysicalBoard) -> DuplicatePadStitchResult:
     net_by_pad = {
         reference: net.name for net in board.nets for reference in net.pads
     }
+    zone_nets = {zone.net for zone in board.zones}
     rules = {rule.net: rule for rule in board.net_routing_rules}
     clearance = RoutingClearanceIndex(board)
     added: list[TrackSegment] = []
@@ -63,6 +64,12 @@ def stitch_duplicate_pads(board: PhysicalBoard) -> DuplicatePadStitchResult:
             if graph.pad_connected(reference):
                 stitched.append(reference)
                 already_connected.append(reference)
+                continue
+            if net in zone_nets:
+                # Separate lands may each reach the same filled plane. Leave
+                # their connectivity to the independent refill check instead
+                # of drawing an unnecessary surface bridge between them.
+                pending.append(reference)
                 continue
             if any(pad.kind is not PadKind.SMD for _, pad in lands):
                 pending.append(reference)

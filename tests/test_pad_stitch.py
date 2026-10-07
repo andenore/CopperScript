@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from pcbir import (
-    BoardOutline, CopperKeepout, CopperLayer, FootprintPad, PadReference,
+    BoardOutline, CopperKeepout, CopperLayer, CopperZone, FootprintPad, PadReference,
     PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point,
-    PolygonRing, PolygonWithHoles, Size, run_physical_drc,
+    PolygonRing, PolygonWithHoles, Size, Stackup, run_physical_drc,
     stitch_duplicate_pads,
 )
 from dataclasses import replace
@@ -119,6 +119,33 @@ def test_existing_pad_edge_via_and_back_layer_path_needs_no_surface_bridge() -> 
     assert result.already_connected == (PadReference("U1", "1"),)
 
 
+def _separate_zone_contacts() -> PhysicalBoard:
+    board = _board(blocking_middle=False)
+    width = nm_from_mm("0.2")
+    return replace(
+        board,
+        stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+                         CopperLayer.INTERNAL_2, CopperLayer.BACK)),
+        zones=(CopperZone("plane", "A", (CopperLayer.INTERNAL_1,),
+                          PolygonWithHoles(PolygonRing(board.outline.vertices))),),
+        tracks=tuple(TrackSegment(
+            "A", Point.mm(10, y), Point.mm(9, y), width, CopperLayer.FRONT,
+        ) for y in (8, 12)),
+        vias=tuple(Via(
+            "A", Point.mm(9, y), nm_from_mm("0.6"), nm_from_mm("0.3"),
+            CopperLayer.FRONT, CopperLayer.BACK,
+        ) for y in (8, 12)),
+    )
+
+
+def test_zone_contacts_do_not_gain_a_duplicate_land_surface_bridge() -> None:
+    board = _separate_zone_contacts()
+    result = stitch_duplicate_pads(board)
+    assert result.board is board
+    assert result.added_track_count == 0
+    assert result.pending == (PadReference("U1", "1"),)
+
+
 def test_partial_existing_tree_only_bridges_disconnected_land_groups() -> None:
     board = _board(blocking_middle=False)
     footprint = board.footprints["test/duplicate-land"]
@@ -200,3 +227,18 @@ def test_installed_kicad_agrees_on_single_logical_pin_land_closure() -> None:
     assert before.unconnected_count > 0
     assert after.unconnected_count == 0
     assert after.passed, after.findings
+
+
+def test_installed_kicad_resolves_separate_duplicate_lands_through_zone() -> None:
+    from pathlib import Path
+    import shutil
+    import pytest
+    from pcbir.plane_verify import verify_filled_planes
+    executable = shutil.which("kicad-cli") or "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
+    if not Path(executable).is_file():
+        pytest.skip("KiCad CLI not installed")
+    board = _separate_zone_contacts()
+    result = stitch_duplicate_pads(board)
+    evidence = verify_filled_planes(result.board, kicad_cli=Path(executable))
+    assert evidence.passed, evidence.findings
+    assert evidence.unconnected_count == 0
