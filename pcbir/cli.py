@@ -493,6 +493,10 @@ def _parser() -> argparse.ArgumentParser:
         help="optional link to a previously escaped same-net pad (default: disabled)",
     )
     board_route_parser.add_argument(
+        "--prefer-local-ground-pad", action="append", default=[], metavar="REF.PAD",
+        help="prefer a short dedicated plane via for this GND pad; repeat as needed",
+    )
+    board_route_parser.add_argument(
         "--plane-stitch-detour-mm", default="0", type=_nonnegative_mm,
         help="optional three-segment pad escape detour (default: disabled)",
     )
@@ -877,6 +881,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if any(zone.net == net.name for zone in physical_board.zones)
                     for pad in net.pads
                 }
+                ground_pads = {
+                    pad for net in physical_board.nets if net.name == "GND"
+                    for pad in net.pads
+                }
+                preferred_ground_pads: set[PadReference] = set()
+                for value in args.prefer_local_ground_pad:
+                    reference, separator, number = value.rpartition(".")
+                    pad = PadReference(reference, number)
+                    if not separator or pad not in ground_pads:
+                        raise ValueError(f"preferred ground pad {value!r} is not a GND pad")
+                    preferred_ground_pads.add(pad)
                 for value in args.early_plane_pad:
                     if "." not in value:
                         raise ValueError(f"invalid early plane pad {value!r}; expected REF.PAD")
@@ -894,6 +909,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                      if args.plane_escape_width_mm else None),
                     ground_via_in_pad=args.ground_via_in_pad,
                     include_surface_zones=args.stitch_surface_zones,
+                    preferred_ground_pads=frozenset(preferred_ground_pads),
                 )
                 if (plane_options.escape_width_nm is not None
                         and plane_options.escape_width_nm
@@ -909,6 +925,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         escape_width_nm=plane_options.escape_width_nm,
                         ground_via_in_pad=plane_options.ground_via_in_pad,
                         include_surface_zones=plane_options.include_surface_zones,
+                        preferred_ground_pads=plane_options.preferred_ground_pads,
                         only_pads=frozenset(early_pads) if early_pads else None,
                     ) if (args.early_plane_stitch and stitch_enabled) or early_pads else None
                 )
@@ -1236,6 +1253,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "escape_width_nm": plane_options.escape_width_nm,
                     "ground_via_in_pad": plane_options.ground_via_in_pad,
                     "include_surface_zones": plane_options.include_surface_zones,
+                    "preferred_ground_pads": [
+                        f"{pad.component}.{pad.pad}"
+                        for pad in sorted(plane_options.preferred_ground_pads)
+                    ],
                     "filled_capped_via_count": sum(
                         via.finish == "filled-capped" for via in stitch.board.vias
                     ),

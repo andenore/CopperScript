@@ -778,8 +778,9 @@ reservation is net-aware compiler intent, not a blanket KiCad keepout, and it
 does not override hard-macro ownership. Distinct-net reservations on a common
 layer may neither overlap nor touch, regardless of zone priority.
 Dense general-net pads on reserved regions retain their normal joint fanout
-exits before plane stitching. Stitching first tries an existing nearby via,
-including a bounded, legal track to its own zone, before adding a new drill.
+exits before plane stitching. By default, stitching first tries an existing
+nearby via, including a bounded, legal track to its own zone, before adding a
+new drill.
 These contacts survive ordinary-routing cleanup and still require native fill
 verification. Unreserved plane nets continue directly to plane stitching,
 without new joint fanout.
@@ -808,6 +809,11 @@ before ordinary area routing by default. Critical routes and plane contacts
 are revalidated together with ordinary escape-pattern alternatives. Use
 `--no-early-plane-stitch` for an explicit late-contact comparison, or
 `--early-plane-pad` to select contacts. These options never certify zone fill.
+For selected bypass capacitors, repeat `--prefer-local-ground-pad REF.PAD` to
+compare a nearby legal GND via with reuse of an existing contact. The choice
+uses the routed surface escape length and a small penalty for another drill or
+shared primary contact. Ordinary pads keep the existing reuse-first policy;
+native refill still has to prove the GND plane connection.
 
 A pad-scoped fabrication permission is separate from connectivity:
 

@@ -8,6 +8,8 @@ copper check remain necessary before a zone net can pass signoff.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from heapq import heappop, heappush
+from math import hypot
 from types import MappingProxyType
 from typing import Iterator
 
@@ -43,6 +45,7 @@ class PlaneStitchOptions:
     candidate_bias: str | None = None
     escape_width_nm: int | None = None
     only_pads: frozenset[PadReference] | None = None
+    preferred_ground_pads: frozenset[PadReference] = frozenset()
     ground_via_in_pad: bool = False
     # Opt-in opposite-side surface zones, e.g. a two-layer rear ground pour.
     # Same-side-only zones are refill intent, not a reason to invent a via.
@@ -51,6 +54,7 @@ class PlaneStitchOptions:
     def __post_init__(self) -> None:
         if self.only_pads is not None:
             object.__setattr__(self, "only_pads", frozenset(self.only_pads))
+        object.__setattr__(self, "preferred_ground_pads", frozenset(self.preferred_ground_pads))
         if self.candidate_bias not in {None, "east", "south", "west", "north"}:
             raise ValueError("plane-stitch candidate bias must be a cardinal direction")
         if (self.step_nm <= 0 or self.maximum_radius_nm < self.step_nm
@@ -113,6 +117,7 @@ def stitch_zone_pads(
     permitted_pads = {rule.pad for rule in board.via_in_pad_rules}
     pending_lands: list[_PendingContact] = []
     anchors_by_net: dict[str, list[tuple[Point, CopperLayer]]] = {}
+    preferred_via_uses: dict[Point, int] = {}
     via_size = board.rules.default_via_size_nm
     via_drill = board.rules.default_via_drill_nm
     outer_layers = (board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
@@ -131,7 +136,9 @@ def stitch_zone_pads(
                 or (options.include_surface_zones and any(layer in outer_layers for layer in zone.layers))):
             zones_by_net.setdefault(zone.net, []).append(zone)
     for net, zones in sorted(zones_by_net.items()):
-        for reference in sorted(net_pads[net]):
+        for reference in sorted(net_pads[net], key=lambda pad: (
+            pad not in options.preferred_ground_pads, pad,
+        )):
             if options.only_pads is not None and reference not in options.only_pads:
                 continue
             placement = placements[reference.component]
@@ -189,6 +196,7 @@ def stitch_zone_pads(
                     replace(options, ground_via_in_pad=True)
                     if PadReference(reference.component, pad.number) in permitted_pads else options,
                     (*board.tracks, *added_tracks), (*board.vias, *added_vias),
+                    preferred_via_uses,
                 )
                 if choice is None:
                     # A declared same-side pour is another *prospective*
@@ -297,8 +305,25 @@ def _stitch_land(
     side: CopperLayer, width: int, via_size: int, via_drill: int,
     outer_layers: tuple[CopperLayer, CopperLayer], options: PlaneStitchOptions,
     committed_tracks: tuple[TrackSegment, ...], committed_vias: tuple[Via, ...],
+    preferred_via_uses: dict[Point, int],
 ) -> tuple[tuple[TrackSegment, ...], Via | None] | None:
     """Find one physical land's provisional contact to an inner zone."""
+
+    preferred = (net == "GND" and PadReference(placement.reference, pad.number)
+                 in options.preferred_ground_pads)
+    choices: list[tuple[float, Point, tuple[TrackSegment, ...], Via | None]] = []
+
+    def consider(path: tuple[TrackSegment, ...], target: Point, via: Via | None) -> None:
+        length = max(
+            _surface_route_length(net, side, width, position, target,
+                                  (*committed_tracks, *path)),
+            sum(hypot(track.start.x_nm - track.end.x_nm,
+                      track.start.y_nm - track.end.y_nm) for track in path),
+        )
+        # A little drilling cost avoids adding a via for negligible shortening.
+        cost = length + (nm_from_mm("0.2") if via else 0)
+        cost += preferred_via_uses.get(target, 0) * nm_from_mm("0.4")
+        choices.append((cost, target, path, via))
 
     # Existing fanout and routed vias need not lie on the half-mm grid.
     reusable = sorted(
@@ -324,7 +349,9 @@ def _stitch_land(
             committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
         )
         if path is not None:
-            return path, None
+            if not preferred:
+                return path, None
+            consider(path, existing.position, None)
     reserved_region = any(zone.reserve_routing for zone in zones)
     if reserved_region:
         # Preserve the jointly assigned package exit before adding a drill.
@@ -337,6 +364,10 @@ def _stitch_land(
     pad_bounds = placed_pad_shape(position, pad, placement).bounds
     legal_via_targets: list[Point] = []
     for candidate in _candidate_points(position, options):
+        distance_x = abs(candidate.x_nm - position.x_nm)
+        distance_y = abs(candidate.y_nm - position.y_nm)
+        if preferred and choices and max(distance_x, distance_y) > nm_from_mm("2"):
+            break
         if not _point_in_outline(candidate, board.outline.vertices):
             continue
         if not any(_point_in_zone(candidate, zone.outline) for zone in zones):
@@ -371,7 +402,15 @@ def _stitch_land(
             committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
         )
         if path is not None:
-            return path, via
+            if not preferred:
+                return path, via
+            consider(path, candidate, via)
+    if choices:
+        _, target, path, via = min(choices, key=lambda item: (
+            item[0], item[3] is not None, item[1].x_nm, item[1].y_nm,
+        ))
+        preferred_via_uses[target] = preferred_via_uses.get(target, 0) + 1
+        return path, via
     # A dense package may have no legal straight, elbow, or short lateral
     # escape. Search its small local neighborhood jointly over path and via
     # location before considering a qualified via in the SMD land itself.
@@ -425,6 +464,38 @@ def _stitch_land(
         board, clearance, net, zones, position, side, width, outer_layers, options,
         committed_tracks, committed_vias,
     )
+
+
+def _surface_route_length(
+    net: str, layer: CopperLayer, width: int, start: Point, end: Point,
+    tracks: tuple[TrackSegment, ...],
+) -> float:
+    """Shortest endpoint-connected front-copper length for a proposed escape."""
+    if start == end:
+        return 0.0
+    neighbors: dict[Point, list[tuple[Point, float]]] = {}
+    for track in tracks:
+        if track.net != net or track.layer is not layer or track.width_nm < width:
+            continue
+        length = hypot(track.start.x_nm - track.end.x_nm,
+                       track.start.y_nm - track.end.y_nm)
+        neighbors.setdefault(track.start, []).append((track.end, length))
+        neighbors.setdefault(track.end, []).append((track.start, length))
+    queue: list[tuple[float, int, Point]] = [(0.0, 0, start)]
+    seen: set[Point] = set()
+    serial = 0
+    while queue:
+        distance, _, point = heappop(queue)
+        if point == end:
+            return distance
+        if point in seen:
+            continue
+        seen.add(point)
+        for neighbor, length in neighbors.get(point, ()):
+            if neighbor not in seen:
+                serial += 1
+                heappush(queue, (distance + length, serial, neighbor))
+    return hypot(start.x_nm - end.x_nm, start.y_nm - end.y_nm)
 
 
 def _existing_via_zone_tail(

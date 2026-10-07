@@ -27,7 +27,7 @@ from .footprints import FootprintResolver
 from .fanout import FanoutOptions
 from .hard_macros import apply_hard_macro_scene
 from .loader import BoardLoadError, load_design
-from .physical import nm_from_mm
+from .physical import PadReference, nm_from_mm
 from .package_access import preflight_package_access
 from .plane import PlaneStitchOptions
 from .physicalize import PrototypePhysicalOptions, prototype_physicalize, resolved_physicalize
@@ -56,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="also verify ordinary package exits and plane contacts before area routing")
     parser.add_argument("--stitch-surface-zones", action="store_true")
     parser.add_argument("--plane-contact-radius-mm", default="0")
+    parser.add_argument("--prefer-local-ground-pad", action="append", default=[], metavar="REF.PAD")
     parser.add_argument("--router-iterations", type=int, default=5)
     parser.add_argument("--tile-size-mm", default="5")
     parser.add_argument("--report", type=Path, required=True)
@@ -104,6 +105,16 @@ def main(argv: list[str] | None = None) -> int:
             board = apply_placement_templates(board, args.placement_templates)
         for scene in args.hard_macro:
             board = apply_hard_macro_scene(board, scene, locked=args.locked, offline=args.offline)
+        ground_pads = {
+            pad for net in board.nets if net.name == "GND" for pad in net.pads
+        }
+        preferred_ground_pads: set[PadReference] = set()
+        for value in args.prefer_local_ground_pad:
+            reference, separator, number = value.rpartition(".")
+            pad = PadReference(reference, number)
+            if not separator or pad not in ground_pads:
+                raise ValueError(f"preferred ground pad {value!r} is not a GND pad")
+            preferred_ground_pads.add(pad)
         report.update(source=str(args.board.resolve()),
                       source_sha256=sha256(args.board.read_bytes()).hexdigest())
         if args.placement_templates:
@@ -156,7 +167,8 @@ def main(argv: list[str] | None = None) -> int:
                 placement.board, placement.global_route, FanoutOptions(),
                 PlaneStitchOptions(
                     maximum_contact_radius_nm=nm_from_mm(args.plane_contact_radius_mm),
-                    include_surface_zones=args.stitch_surface_zones),
+                    include_surface_zones=args.stitch_surface_zones,
+                    preferred_ground_pads=frozenset(preferred_ground_pads)),
                 on_progress=access_progress,
             )
             critical = access.critical
@@ -169,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
                 "plane_contacts": len(access.plane_stitch.stitched_pads) if access.plane_stitch else 0,
                 "surface_zones": args.stitch_surface_zones,
                 "maximum_contact_radius_nm": nm_from_mm(args.plane_contact_radius_mm),
+                "preferred_ground_pads": [f"{pad.component}.{pad.pad}"
+                                          for pad in sorted(preferred_ground_pads)],
             }
         else:
             critical = route_critical_nets(placement.board, placement.global_route, on_progress=critical_progress)

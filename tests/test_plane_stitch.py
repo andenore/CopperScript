@@ -98,6 +98,66 @@ def test_existing_same_net_via_is_reused_not_drilled_twice() -> None:
     assert len(result.board.vias) == 2
 
 
+def test_preferred_ground_pad_chooses_short_local_via_over_long_reuse() -> None:
+    board = _plane_board()
+    existing = Via("GND", Point.mm(5, 6), nm_from_mm("0.6"),
+                   nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK)
+    board = replace(board, vias=(existing,))
+    pad = PadReference("J1", "1")
+    baseline = stitch_zone_pads(board, PlaneStitchOptions(only_pads={pad}))
+    preferred = stitch_zone_pads(board, PlaneStitchOptions(
+        only_pads={pad}, preferred_ground_pads={pad},
+    ))
+
+    assert baseline.added_via_count == 0
+    assert preferred.complete and preferred.added_via_count == 1
+    assert preferred.board.vias[-1].position in {Point.mm(2, 6), Point.mm(4, 6)}
+    assert preferred.board == stitch_zone_pads(board, PlaneStitchOptions(
+        only_pads={pad}, preferred_ground_pads={pad},
+    )).board
+    assert not {finding.code for finding in run_physical_drc(preferred.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-HOLE-CLEARANCE",
+    }
+
+
+def test_preferred_ground_pad_reuses_short_existing_via() -> None:
+    board = _plane_board()
+    existing = Via("GND", Point.mm(4, 6), nm_from_mm("0.6"),
+                   nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK)
+    pad = PadReference("J1", "1")
+    result = stitch_zone_pads(replace(board, vias=(existing,)), PlaneStitchOptions(
+        only_pads={pad}, preferred_ground_pads={pad},
+    ))
+
+    assert result.complete and result.added_via_count == 0
+    assert any(existing.position in (track.start, track.end)
+               for track in result.board.tracks)
+
+
+def test_preferred_ground_pads_do_not_share_a_via_when_local_site_is_free() -> None:
+    board = _plane_board()
+    first = PadReference("J1", "1")
+    second = PadReference("J2", "1")
+    board = replace(
+        board,
+        placements=(board.placements[0], replace(board.placements[1],
+                    position=Point.mm(5, 6))),
+        vias=(Via("GND", Point.mm(4, 6), nm_from_mm("0.6"),
+                  nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),),
+    )
+    result = stitch_zone_pads(board, PlaneStitchOptions(
+        preferred_ground_pads={first, second},
+    ))
+
+    assert result.complete and result.added_via_count == 1
+    assert result.board.vias[-1].position in {
+        Point.mm(5, 5), Point.mm(5, 7), Point.mm(6, 6),
+    }
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-HOLE-CLEARANCE",
+    }
+
+
 def test_reuses_off_grid_same_net_via_before_adding_drill() -> None:
     base = _plane_board()
     existing = Via(
