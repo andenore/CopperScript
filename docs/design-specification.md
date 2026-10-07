@@ -1522,3 +1522,25 @@ Global-routing demand, placement escape estimates and the package-escape maze
 keep the full width (conservative). Nets without breakout properties MUST route
 byte-identically. See R19 in the
 [routing review checklist](routing-review-todo.md).
+
+## CS-165 — Planned paired layer swaps for crossing bundle pairs (Accepted)
+
+When the pair order at the two ends of a critical bundle is inverted, the
+critical router MUST plan the crossings before routing the bundle, not leave
+them to coarse-guide via proposals. Pair ranks are read by angle around each
+component's courtyard centre in one rotational sense, starting away from the
+other component; two pairs cross when their ranks disagree. The surface keeps
+a non-crossing set with as many pairs that cannot swap as possible, then as
+many pairs as possible; every other pair gets one paired layer swap on an
+allowed layer (of its `layer_group` where declared, with an adjacent declared
+zone where any qualifies), never the layer of another moving pair it crosses.
+Moving pairs route first, using only the existing paired-via proposer on that
+layer: matched vias at `transition_spacing`, return vias or a declared shared
+reference (CS-160), no transition via in a breakout region, the reserved
+corridor first. Every candidate passes the unchanged profile, plane and atomic
+native-DRC gates. A member whose `max_vias` is below 2, or a pair with no
+layer left, is reported impossible and fails without a surface or coarse
+fallback. The bundle record lists each crossing, its layer, transitions and
+return-via or shared-reference decision. Bundles without crossings MUST route
+byte-identically. A planned layer is not impedance or via-stub qualification.
+See R5 in the [D-PHY routing plan](dphy-routing-plan.md).

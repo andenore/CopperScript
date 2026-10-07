@@ -282,10 +282,87 @@ Shared rules for every item:
   `BUNDLE_REPAIR_LIMIT` = 4 attempts per bundle, `bundle_repair_limit`
   argument). The critical report lists `bundles` with order and repairs.
   Tests: `tests/test_critical_bundles.py`.
-- [ ] **R5 Planned crossings.** When the pair order at the two ends of a
+- [x] **R5 Planned crossings.** When the pair order at the two ends of a
   bundle is inverted, as on a symmetric CSI pinout, plan one paired layer swap
   with return vias for the crossing pair before the surface search. Design
   note first; implementation bounded by the existing paired-via machinery.
+  Done (CS-165): `critical_bundles.plan_bundles(plan_crossings=True)` plans
+  them (`_plan_crossings`, `_crossing_ranks`, `_surface_pairs`,
+  `_crossing_layers`) into `CriticalBundle.crossings` (`PlannedCrossing`,
+  `CrossingTransition`) and puts moving pairs first in the bundle order.
+  `critical._route_pair_group` routes a planned crossing with
+  `pair_vias.paired_via_candidates(layers=…, site_rank=…)` only
+  (`_crossing_site_rank`), strategy `planned_crossing`; `_bundle_repair`
+  keeps the plan; `_crossing_outcomes`/`crossing_outcome` record the routed
+  transitions. `route_critical_nets(plan_crossings=False)` restores the
+  previous behaviour. Report: `crossings` in the bundle record (only when
+  present) and `crossing_line` in the preflight. `transition_spacing` now
+  spaces the vias of a breakout pair by its pair gap. On the test board,
+  with the same 2000-state budget, the crossing pair found 0 candidates
+  without R5 and routes in 267 states with it. Limitation: with return vias
+  required, `_return_via` places the via on the pair's centre line ahead of
+  the transition, so the inner run may detour back past it (a declared
+  shared reference avoids this); pairs that would need more crossing layers
+  than allowed are reported impossible; via barrels are not counted in
+  lengths. Tests: `tests/test_planned_crossings.py`.
+
+  **R5 design.**
+  - *Detection.* Per R6 bundle, each pair's land centre at a component is
+    ranked by angle around that component's courtyard centre, in one
+    rotational sense for both components, starting from the direction that
+    points away from the other component. Read this way, pairs routed side
+    by side without crossing have reversed ranks at the two ends (facing rows,
+    side-by-side rows and package corners alike), so the second component's
+    ranks are reversed. Two pairs must cross when their ranks are in opposite
+    order at the two ends. A pair centre on the courtyard centre, two pair
+    centres at one angle, coincident component centres or components on
+    different board sides plan nothing (the bundle routes as before).
+  - *Minimum set.* The pairs that stay on the surface have no crossing among
+    them. The set keeps as many pairs that cannot swap layers as possible,
+    then as many pairs as possible, so the fewest pairs move (a longest
+    increasing subsequence of the ranks when every pair can swap). Ties keep
+    the inner pairs (later in the R6 order), so transitions sit at the
+    bundle's edge where vias have room, then the lower ranks at the first
+    component.
+  - *Layer.* An allowed layer of both members (`routing_layers`, so other
+    nets' dedicated planes are excluded) other than the terminal surface, with
+    a legal via span from the surface; with a `layer_group`, a layer every
+    member of that group allows. Layers with a `copper_zone` on an adjacent
+    copper layer (L3) are used when any qualifies (otherwise all candidate
+    layers, and the record lists no reference plane; L3 already warns), in
+    `signal_layer_preferences` rank and stack-up order. Moving pairs take
+    layers in bundle order: never the layer of a moving pair they cross
+    (both would cross there), and the layer of a moving pair of their own
+    `layer_group` when that is legal. A moving pair with no layer left (for
+    example the second outer pair of a full three-pair reversal on a board
+    with one crossing layer) is reported impossible.
+  - *Transitions.* The existing paired-via machinery builds them
+    (`pair_vias._transitions`): a surface collar from the terminal pair, a
+    matched via pair at `transition_spacing`, return vias within
+    `maximum_return_via_distance` unless a declared shared reference covers
+    both contact layers (CS-160), then the planned layer to the other end's
+    transition, so each member gets exactly two vias. For a planned crossing
+    a transition is dropped when a via centre (signal or return) lies in any
+    breakout region (R1), and transitions with every via inside the pair's
+    reserved corridor (R4) are tried first. The search runs on the planned
+    layer only and never uses the coarse guide or its via proposals. Members
+    of a pair with breakout properties are spaced by the pair gap (R1), so
+    `transition_spacing` uses the pair gap when it exceeds the clearance.
+  - *Ordering, repair, tuning and budget.* A bundle with crossings routes its
+    moving pairs first (in R6 order), then the surface pairs in R6 order, so
+    surface pairs route around the transition sites instead of over them.
+    Bundle repair re-routes a crossing pair with its plan. Every candidate
+    still passes the `_route_pair` profile gates, the plane reservation and
+    `_validate_candidate`. Length-match tuning (R3) tunes a routed crossing
+    pair like any pair; via barrels are not counted in lengths. A member whose
+    `max_vias` is below 2 cannot swap: the crossing is reported impossible and
+    the pair fails with that reason, without a surface or coarse fallback.
+  - *Report.* A bundle with crossings gains `crossings`: each moving pair, the
+    pairs it crosses, surface and planned layer, the layer's reference
+    planes, the status (`routed`, `failed` or `impossible`) and reason, and per
+    transition its component, each member's via centre and either the return
+    vias or the shared reference layer. The preflight prints one line per
+    crossing. Bundles without crossings, and their reports, are unchanged.
 
 - [ ] **R7 Nested exits at package corners.** When a bundle leaves a package
   across a corner (some pairs on one edge, the rest on the next), each
@@ -309,7 +386,7 @@ Shared rules for every item:
 
 1. In parallel: W1 (D1–D5), W2 (L1–L7), R4, and the CopperLib work below.
 2. Then: R1 (needs L6), R2, R3 (needs L4 and D5).
-3. Then R5 and R6 (R6 done; R5 lowest priority, since a pad-ordered pinout avoids it).
+3. Then R5 and R6 (both done; a pad-ordered pinout still avoids crossings).
 4. R7 when corner-wrap skew matters.
 5. Finally the test board adopts each feature and its critical preflight is re-run.
 

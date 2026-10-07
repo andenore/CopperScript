@@ -19,6 +19,7 @@ from .backends.kicad_pcb import KiCadPcbBackend
 from .backends.kicad_project import write_kicad_project
 from .critical import (CriticalRoutingStatus, critical_lane_table, critical_net_document,
                        route_critical_nets)
+from .critical_bundles import crossing_line
 from .critical_feedback import improve_critical_placement
 from .critical_tuning import match_tuning_line
 from .drc import run_physical_drc
@@ -233,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"{', '.join('/'.join(group) for group in bundle.order)}; repairs "
                   f"{bundle.repairs_accepted}/{bundle.repairs_attempted} accepted "
                   f"(limit {bundle.repair_limit})")
+            for crossing in bundle.crossings:
+                print(crossing_line(bundle, crossing))
         for tuning in critical.match_tuning:
             print(match_tuning_line(tuning))
         if access is not None:

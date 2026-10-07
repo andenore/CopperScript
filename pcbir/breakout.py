@@ -102,6 +102,10 @@ class BreakoutRegions:
     def land(self, identity: str) -> BreakoutLand:
         return self._by_identity[identity]
 
+    def inside_any(self, point: Point) -> bool:
+        """Whether ``point`` is inside the region of any net's terminal land."""
+        return any(land.contains(point) for land in self._by_identity.values())
+
     def region(self, net: str, spine: Iterable[Point]) -> str | None:
         """The terminal land whose region holds every point of ``spine``.
 

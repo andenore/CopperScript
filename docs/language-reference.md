@@ -978,6 +978,34 @@ the default `name_order`, `repair_limit`, `repairs_attempted`,
 `repairs_accepted` and each repair (`failed`, `ripped_up`, `accepted`,
 `reason`). `python -m pcbir.critical_preflight` prints one line per bundle.
 
+When the pair order of a bundle is inverted between its two components, as on
+a mirrored connector pinout, some pairs must cross others. Each pair's rank at
+a component is read by angle around the component's courtyard centre, starting
+on the side that faces away from the other component, in one rotational sense
+for both components; two pairs must cross when their order differs at the two
+ends. The surface keeps a set of pairs with no crossing among them: as many
+pairs that cannot change layer as possible, then as many pairs as possible
+(the inner pairs, later in the bundle order, on a tie). Every other pair gets
+one planned paired layer swap: a layer both members allow (and every member of
+their `layer_group`), other than the terminal surface and reachable by a via;
+layers next to a declared `copper_zone` come first; never the layer of another
+moving pair it crosses. Moving pairs are routed first in the bundle, using
+only the paired-via search on that layer: matched vias at both ends, return
+vias within `maximum_return_via_distance` or a declared shared reference, no
+transition via inside a breakout region, transitions inside the pair's
+reserved corridor first. They skip the coarse candidate and the surface
+search, so each member gets exactly two vias; every candidate passes the same
+profile, plane and native DRC gates, and bundle repair keeps the plan. A
+member whose `max_vias` is below 2, or a pair with no crossing layer left, is
+reported impossible and fails without copper. A bundle with crossings has a
+`crossings` list: per pair its `group`, the pairs it `crosses`, `surface`,
+`layer`, `reference_planes`, `status` (`routed`, `failed` or `impossible`),
+`reason` and `transitions` (`component`, each member's via centre in `vias`,
+`reference` = `return_vias`, `shared_reference` or `not_required`,
+`return_vias` and `shared_reference_layer`). The preflight prints one line per
+crossing. Bundles without crossings route and report exactly as before
+(`route_critical_nets(plan_crossings=False)` turns planning off).
+
 Each group in the critical report records why exact pair candidates were
 rejected. `rejections` counts the first-failing gate of every rejected joint
 search candidate, for example `{"DRC-CLEARANCE": 4, "skew": 2}`, and
@@ -1162,7 +1190,8 @@ routers, the routing clearance checks and physical DRC share one definition:
   gap, for example `pair_gap = 0.26mm; clearance = 0.52mm`. A pair without
   breakout properties keeps `clearance` between its members as before. Each
   member contributes its own values, so declare the same breakout values on
-  both.
+  both. Matched transition vias of such a pair are spaced by the via size plus
+  the larger of `pair_gap` and the clearance.
 - **Router.** The critical pair candidates (coarse, aligned, joint, paired-via
   and shortcut proposals) and the single-ended guide candidate cut their
   tracks at the region boundary. Pieces inside carry `breakout_width`, a

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
+from functools import partial
 from hashlib import sha256
 import json
 from math import hypot, sqrt
@@ -32,7 +33,7 @@ from .physical import (
 )
 from .routing import GlobalNetRoute, GlobalRoutingResult, GlobalViaProposal, _placement_fingerprint
 from .breakout import BreakoutRegions
-from .geometry import segment_distance_squared
+from .geometry import point_in_polygon, segment_distance_squared
 from .routing_clearance import RoutingClearanceIndex
 from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
@@ -44,8 +45,8 @@ from .pair_refine import PairRefinementStats, paired_shortcuts
 from .local_critical import local_surface_candidates
 from .return_paths import (shared_reference_plane, transition_contact_layers,
                            pair_reference_intent_covers)
-from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle, bundle_document,
-                               bundle_job_order, plan_bundles)
+from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle, PlannedCrossing,
+                               bundle_document, bundle_job_order, crossing_outcome, plan_bundles)
 from .critical_tuning import MatchTuningMember, MatchTuningResult, UnitTuner, match_tuning_document
 
 
@@ -305,6 +306,7 @@ def route_critical_nets(
     reserved_accesses: FanoutResult | None = None,
     pair_state_limit: int | None = None,
     bundle_repair_limit: int = BUNDLE_REPAIR_LIMIT,
+    plan_crossings: bool = True,
 ) -> CriticalRoutingResult:
     """Route critical groups around explicit, immutable ordinary package access.
 
@@ -316,6 +318,11 @@ def route_critical_nets(
     first along their terminal row. A bundle pair that fails on spacing
     against an earlier pair of its bundle may rip that pair up once per
     attempt, at most ``bundle_repair_limit`` attempts per bundle.
+
+    With ``plan_crossings``, the pairs of a bundle that must cross others
+    (their order is inverted at the two ends) are routed first, each with one
+    planned paired layer swap and nothing else (``_route_pair_group``, plan
+    R5). Bundles without crossings route exactly as without it.
 
     After every group is accepted, each ``length_match`` group over its
     ``max_skew`` is tuned (``_tune_match_groups``); a group that cannot be
@@ -379,9 +386,10 @@ def route_critical_nets(
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
     net_by_name = {n.name: n for n in board.nets}
     jobs = _critical_jobs(board)
-    bundles = plan_bundles(board, jobs, rules, bundle_repair_limit)
+    bundles = plan_bundles(board, jobs, rules, bundle_repair_limit, plan_crossings=plan_crossings)
     jobs = bundle_job_order(jobs, bundles)
     bundle_of = {group: index for index, bundle in enumerate(bundles) for group in bundle.order}
+    crossings = {item.group: item for bundle in bundles for item in bundle.crossings}
     repairs: list[list[BundleRepair]] = [[] for _ in bundles]
     # Copper accepted by this stage, per group in acceptance order. ``tracks``
     # and ``vias`` are always the base copper followed by these entries.
@@ -436,6 +444,7 @@ def route_critical_nets(
             blockers: set[str] = set()
             result, pair_tracks, pair_vias = _route_pair_group(
                 board, rule, partner_rule, routes, rules, tracks, vias, pair_state_limit, blockers,
+                crossings.get(group),
             )
             if not result.connected and group in bundle_of:
                 index = bundle_of[group]
@@ -448,7 +457,7 @@ def route_critical_nets(
                         break
                     record, repaired = _bundle_repair(
                         board, routes, rules, pair_state_limit, base_tracks, base_vias, committed,
-                        (rule, partner_rule), group, blocker,
+                        (rule, partner_rule), group, blocker, crossings,
                     )
                     repairs[index].append(record)
                     if repaired is not None:
@@ -555,9 +564,26 @@ def route_critical_nets(
         fingerprint,
         len(reserved_accesses.created_tracks) if reserved_accesses else 0,
         len(reserved_accesses.created_vias) if reserved_accesses else 0,
-        tuple(replace(bundle, repairs=tuple(records)) for bundle, records in zip(bundles, repairs)),
+        tuple(replace(bundle, repairs=tuple(records), crossings=_crossing_outcomes(
+                  board, bundle, rules, results, result_index, committed))
+              for bundle, records in zip(bundles, repairs)),
         match_tuning,
     )
+
+
+def _crossing_outcomes(
+    board: PhysicalBoard, bundle: CriticalBundle, rules: dict[str, NetRoutingRule],
+    results: list[CriticalNetResult], result_index: dict[tuple[str, ...], int], committed: _Committed,
+) -> tuple[PlannedCrossing, ...]:
+    """Each planned crossing of ``bundle`` with its routed transitions or failure."""
+    copper = {group: vias for group, _, vias in committed}
+    outcomes = []
+    for crossing in bundle.crossings:
+        result = results[result_index[crossing.group]]
+        reason = result.diagnostics[-1] if result.diagnostics else "no accepted candidate"
+        outcomes.append(crossing_outcome(board, bundle.components, crossing, rules, result.connected,
+                                         reason, copper.get(crossing.group, ())))
+    return tuple(outcomes)
 
 
 def _critical_jobs(board: PhysicalBoard) -> list[tuple[NetRoutingRule, tuple[str, ...]]]:
@@ -771,13 +797,19 @@ def _route_pair_group(
     board: PhysicalBoard, rule: NetRoutingRule, partner_rule: NetRoutingRule,
     routes: dict[str, GlobalNetRoute], rules: dict[str, NetRoutingRule],
     tracks: list[TrackSegment], vias: list[Via], pair_state_limit: int | None,
-    blockers: set[str] | None = None,
+    blockers: set[str] | None = None, crossing: PlannedCrossing | None = None,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     """Route one symmetric pair against the committed ``tracks``/``vias``.
 
     The coarse candidate is tried first, then the bounded joint searches.
     ``blockers`` collects the other nets named by spacing findings of every
     rejected candidate whose first-failing gate is a spacing gate.
+
+    A planned crossing (plan R5) tries neither the coarse candidate nor the
+    surface search: only paired-via candidates on its planned layer, whose
+    transitions avoid breakout regions (``_crossing_site_rank``). An
+    impossible crossing fails at once with its reason. Every candidate passes
+    the same gates and atomic validation.
     """
     def observe(attempt: CriticalNetResult, found: set[str]) -> None:
         if (blockers is not None and not attempt.connected
@@ -785,30 +817,48 @@ def _route_pair_group(
             blockers.update(found)
 
     partner_name = partner_rule.net
+    first, second = sorted((rule, partner_rule), key=lambda item: item.net)
     found: set[str] = set()
-    result, pair_tracks, pair_vias = _route_pair(
-        board, rule, partner_rule, routes
-    )
-    result, pair_tracks, pair_vias = _reject_reserved_plane_tracks(
-        board, result, pair_tracks, pair_vias, rules,
-    )
-    result, pair_tracks, pair_vias = _validate_candidate(
-        board, result, pair_tracks, pair_vias, tracks, vias, spacing_nets=found,
-    )
-    observe(result, found)
-    if not result.connected and all(
-        routes.get(name) is not None and routes[name].connected
-        for name in (rule.net, partner_name)
-    ):
-        first, second = sorted((rule, partner_rule), key=lambda item: item.net)
+    if crossing is None:
+        result, pair_tracks, pair_vias = _route_pair(
+            board, rule, partner_rule, routes
+        )
+        result, pair_tracks, pair_vias = _reject_reserved_plane_tracks(
+            board, result, pair_tracks, pair_vias, rules,
+        )
+        result, pair_tracks, pair_vias = _validate_candidate(
+            board, result, pair_tracks, pair_vias, tracks, vias, spacing_nets=found,
+        )
+        observe(result, found)
+    else:
+        pair_tracks, pair_vias = (), ()
+        result = CriticalNetResult(
+            (first.net, second.net), False, 0, 0, (), 0,
+            (f"planned crossing is impossible: {crossing.reason}",) if crossing.layer is None else (),
+            strategy="planned_crossing", pair_search_order="planned_crossing")
+        if crossing.layer is None:
+            return result, pair_tracks, pair_vias
+    guided = all(routes.get(name) is not None and routes[name].connected
+                 for name in (rule.net, partner_name))
+    if crossing is not None and not guided:
+        result = replace(result, diagnostics=("both pair members require connected global guides",))
+    if not result.connected and guided:
         search_board = replace(board, tracks=tuple(tracks), vias=tuple(vias))
         stats = PairSearchStats()
-        # The failed coarse-guide candidate has already had an atomic
-        # gate. Internal lands should not consume all surface maze
-        # resolutions before exploring a legal paired layer escape.
-        prefer_vias = _pair_prefers_via_escape(search_board, routes[first.net], routes[second.net])
-        searchers = ((paired_via_candidates, paired_candidates) if prefer_vias
-                     else (paired_candidates, paired_via_candidates))
+        if crossing is not None:
+            assert crossing.layer is not None
+            order = "planned_crossing"
+            searchers: tuple[Callable[..., Iterable[PairSearchCandidate]], ...] = (partial(
+                paired_via_candidates, layers=(crossing.layer,),
+                site_rank=_crossing_site_rank(board, crossing.group)),)
+        else:
+            # The failed coarse-guide candidate has already had an atomic
+            # gate. Internal lands should not consume all surface maze
+            # resolutions before exploring a legal paired layer escape.
+            prefer_vias = _pair_prefers_via_escape(search_board, routes[first.net], routes[second.net])
+            order = "via_first_internal_lands" if prefer_vias else "surface_first"
+            searchers = ((paired_via_candidates, paired_candidates) if prefer_vias
+                         else (paired_candidates, paired_via_candidates))
         rejected: list[tuple[str, str]] = []
         for searcher in searchers:
             for pitch_nm in (1_000_000, 500_000, 250_000):
@@ -820,7 +870,7 @@ def _route_pair_group(
                     remaining = pair_state_limit - stats.expanded_states
                     if remaining <= 0:
                         break
-                    slice_size = min(remaining, max(1, pair_state_limit // 6))
+                    slice_size = min(remaining, max(1, pair_state_limit // (3 * len(searchers))))
                     limits = {"maximum_total_states": stats.expanded_states + slice_size,
                               "maximum_states": max(1, (slice_size + 1) // 2),
                               "maximum_searches": 2}
@@ -844,7 +894,9 @@ def _route_pair_group(
                     )
                     if attempt.connected:
                         result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
-                        if not candidate.via_pairs:
+                        if crossing is not None:
+                            result = replace(result, strategy="planned_crossing")
+                        elif not candidate.via_pairs:
                             result, pair_tracks, pair_vias = _improve_pair_spine(
                                 board, search_board, first, second, routes, candidate,
                                 result, pair_tracks, pair_vias, tracks, vias,
@@ -859,7 +911,7 @@ def _route_pair_group(
         rejections, examples = _rejection_summary(rejected)
         result = replace(result, search_states=stats.expanded_states,
                          candidate_attempts=stats.candidates, pair_searches=stats.searches,
-                         pair_search_order=("via_first_internal_lands" if prefer_vias else "surface_first"),
+                         pair_search_order=order,
                          pair_state_limit=pair_state_limit,
                          pair_budget_exhausted=(pair_state_limit is not None
                                                and stats.expanded_states >= pair_state_limit
@@ -867,11 +919,37 @@ def _route_pair_group(
                          rejections=rejections, rejection_examples=examples)
         if not result.connected:
             reasons = ", ".join(f"{gate}={count}" for gate, count in rejections)
+            label = (f"planned crossing on {crossing.layer.value}"
+                     if crossing is not None and crossing.layer is not None else "joint pair search")
             result = replace(result, diagnostics=(*result.diagnostics,
-                f"joint pair search: {stats.searches} searches, {stats.expanded_states} states, "
+                f"{label}: {stats.searches} searches, {stats.expanded_states} states, "
                 f"{stats.candidates} candidates; none accepted"
                 + (f" (first-failing gates: {reasons})" if reasons else "")))
     return result, pair_tracks, pair_vias
+
+
+def _crossing_site_rank(
+    board: PhysicalBoard, group: tuple[str, ...],
+) -> Callable[[tuple[Via, ...]], int | None]:
+    """Transition sites of a planned crossing (plan R5).
+
+    A transition whose signal or return via centre lies in any breakout
+    region (R1) is dropped. With a reserved corridor for the pair (R4),
+    transitions with every via inside it come first.
+    """
+    from .placement import reserved_corridors
+
+    breakout = BreakoutRegions(board)
+    corridor = next((item.keepout.outline.vertices for item in reserved_corridors(board).corridors
+                     if item.nets == group), None)
+
+    def rank(vias: tuple[Via, ...]) -> int | None:
+        if breakout and any(breakout.inside_any(via.position) for via in vias):
+            return None
+        if corridor is None:
+            return 0
+        return 0 if all(point_in_polygon(via.position, corridor) for via in vias) else 1
+    return rank
 
 
 def _bundle_repair(
@@ -879,27 +957,30 @@ def _bundle_repair(
     pair_state_limit: int | None, base_tracks: tuple[TrackSegment, ...], base_vias: tuple[Via, ...],
     committed: list[tuple[tuple[str, ...], tuple[TrackSegment, ...], tuple[Via, ...]]],
     failed_rules: tuple[NetRoutingRule, NetRoutingRule], failed: tuple[str, ...],
-    blocker: tuple[str, ...],
+    blocker: tuple[str, ...], crossings: dict[tuple[str, ...], PlannedCrossing] | None = None,
 ) -> tuple[BundleRepair, tuple[tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]],
                                tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]] | None]:
     """Rip up ``blocker``, route ``failed`` first, then route ``blocker`` again.
 
     Both routes use the same coarse/exact candidates and atomic validation as
-    the main pass, against all other committed copper. Nothing is changed
-    here: the caller commits both results only when both are accepted, and
-    otherwise keeps its state exactly as it was.
+    the main pass, against all other committed copper; a group with a planned
+    crossing in ``crossings`` keeps its plan. Nothing is changed here: the
+    caller commits both results only when both are accepted, and otherwise
+    keeps its state exactly as it was.
     """
+    crossings = crossings or {}
     others = [entry for entry in committed if entry[0] != blocker]
     reduced_tracks = [*base_tracks, *(t for _, items, _ in others for t in items)]
     reduced_vias = [*base_vias, *(v for _, _, items in others for v in items)]
     first = _route_pair_group(board, *failed_rules, routes, rules,
-                              reduced_tracks, reduced_vias, pair_state_limit)
+                              reduced_tracks, reduced_vias, pair_state_limit,
+                              crossing=crossings.get(failed))
     if not first[0].connected:
         return BundleRepair(failed, blocker, False,
                             "failed group still has no accepted candidate without the ripped-up copper"), None
     second = _route_pair_group(board, rules[blocker[0]], rules[blocker[1]], routes, rules,
                                [*reduced_tracks, *first[1]], [*reduced_vias, *first[2]],
-                               pair_state_limit)
+                               pair_state_limit, crossing=crossings.get(blocker))
     if not second[0].connected:
         return BundleRepair(failed, blocker, False,
                             "ripped-up group has no accepted candidate after the failed group"), None

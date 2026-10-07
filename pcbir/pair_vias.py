@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from itertools import product
 from math import hypot
-from typing import Iterator
+from typing import Callable, Iterator
 
 from .pair_search import (PairSearchCandidate, PairSearchStats, _Port, _HEADS,
                           _legal, _ports, _search, _remaining_states)
@@ -31,13 +31,22 @@ class _Transition:
     port: _Port
     vias: tuple[Via, Via]
     returns: tuple[Via, ...]
+    # Caller's site preference (lower first); 0 unless a site rank is given.
+    rank: int = 0
 
 
 def transition_spacing(board: PhysicalBoard, first: NetRoutingRule,
                        second: NetRoutingRule) -> int:
-    """Via pads/drills need wider spacing than the coupled trace pitch."""
+    """Via pads/drills need wider spacing than the coupled trace pitch.
+
+    The members of a pair that declares breakout properties are spaced by the
+    pair gap instead of the clearance (plan R1), their vias included.
+    """
     clearance = max(board.rules.minimum_clearance_nm, first.clearance_nm or 0,
                     second.clearance_nm or 0)
+    if ((first.breakout_length_nm is not None or second.breakout_length_nm is not None)
+            and first.pair_gap_nm is not None and second.pair_gap_nm is not None):
+        clearance = max(clearance, first.pair_gap_nm, second.pair_gap_nm)
     width = first.width_nm or board.rules.default_track_width_nm
     return max(width + (first.pair_gap_nm or 0),
                board.rules.default_via_size_nm + clearance + 4,
@@ -123,7 +132,9 @@ def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
 
 def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRoutingRule,
                  first_position: Point, second_position: Point, component: str,
-                 surface: CopperLayer, layer: CopperLayer) -> tuple[_Transition, ...]:
+                 surface: CopperLayer, layer: CopperLayer,
+                 site_rank: Callable[[tuple[Via, ...]], int | None] | None = None,
+                 ) -> tuple[_Transition, ...]:
     span = physical_via_span(board, surface, layer)
     if span is None:
         return ()
@@ -149,16 +160,21 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
         returns = _return_via(board, reserved, collar, pair, first, second, surface, layer)
         if returns is None:
             continue
+        # A caller's site rank may drop a transition (``None``) or order it
+        # ahead of others; it never admits a site the checks above refused.
+        rank = 0 if site_rank is None else site_rank((*pair, *returns))
+        if rank is None:
+            continue
         escaped = replace(escaped, vias=(*board.vias, *pair, *returns))
         for inner in _ports(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
                             pair[0].position, pair[1].position, component,
                             width, offset, clearance, layer):
             results.append(_Transition(replace(inner,
                 first=(*collar.first, *inner.first), second=(*collar.second, *inner.second),
-                preference=collar.preference+inner.preference), pair, returns))
+                preference=collar.preference+inner.preference), pair, returns, rank))
     # Preserve orientation diversity, then short collars; domain bound is
     # independent of maze expansion and never mutates previously locked copper.
-    ordered = sorted(results, key=lambda t: (t.port.preference,
+    ordered = sorted(results, key=lambda t: (t.rank, t.port.preference,
         sum(hypot(s.end.x_nm-s.start.x_nm, s.end.y_nm-s.start.y_nm)
             for s in (*t.port.first, *t.port.second)), t.port.center.x_nm,
         t.port.center.y_nm))
@@ -177,8 +193,16 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
                           maximum_searches: int = 8, maximum_states: int = 30_000,
                           pitch_nm: int = nm_from_mm(1),
                           stats: PairSearchStats | None = None,
-                          maximum_total_states: int | None = None) -> Iterator[PairSearchCandidate]:
-    """Propose two matched transitions/member; owner checks DRC and profiles."""
+                          maximum_total_states: int | None = None,
+                          layers: tuple[CopperLayer, ...] | None = None,
+                          site_rank: Callable[[tuple[Via, ...]], int | None] | None = None,
+                          ) -> Iterator[PairSearchCandidate]:
+    """Propose two matched transitions/member; owner checks DRC and profiles.
+
+    ``layers`` restricts the layer between the transitions (a planned
+    crossing, plan R5). ``site_rank`` receives each transition's signal and
+    return vias and returns ``None`` to drop it or a rank, lower first.
+    """
     if min(maximum_searches, maximum_states, pitch_nm) <= 0:
         raise ValueError("paired via search bounds must be positive")
     if maximum_total_states is not None and maximum_total_states <= 0:
@@ -204,13 +228,15 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
         return
     ranks, _ = signal_layer_preferences(board)
     targets = sorted(allowed-set(surfaces), key=lambda layer: (ranks[layer], board.stackup.copper_layers.index(layer)))
+    if layers is not None:
+        targets = [layer for layer in targets if layer in layers]
     clearance = max(board.rules.minimum_clearance_nm, first.clearance_nm or 0, second.clearance_nm or 0)
     offset = (width+first.pair_gap_nm+1)//2
     for layer in targets:
         if not _remaining_states(stats, maximum_states, maximum_total_states):
             break
         groups = tuple(_transitions(board, first, second, a.pad_position,
-            partners[a.pad.component].pad_position, a.pad.component, surface, layer)
+            partners[a.pad.component].pad_position, a.pad.component, surface, layer, site_rank)
             for a, surface in zip(accesses, surfaces))
         combinations = sorted(((a,b) for a,b in product(*groups) if a.port.sign == -b.port.sign),
             key=lambda pair: (pair[0].port.preference+pair[1].port.preference,

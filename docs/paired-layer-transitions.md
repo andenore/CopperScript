@@ -29,6 +29,8 @@ independently. The sequence is:
 1. Enumerate straight/45-degree terminal collars on the actual pad-side layer.
 2. Widen locally to a matched signal-via pitch large enough for copper and
    drill spacing. Trace pitch is not incorrectly reused as via-pad pitch.
+   Members of a pair with breakout properties are spaced by the pair gap
+   (D-PHY plan R1), so its via pitch uses the pair gap when that is larger.
 3. Select a physically supported via span; absent an explicit technology table,
    use through-vias across the entire stackup, not fictional blind vias.
    Signal drills must stay outside solderable SMD lands; same-net clearance
@@ -56,6 +58,12 @@ existing plane-adjacency preference order. Terminal domains retain at most
 all reverse-heading alternatives with a single sorted truncation. At most
 eight compatible terminal-pattern combinations per target layer are searched
 at each 1/0.5/0.25 mm pitch, with 30,000 expanded states per search.
+
+A planned crossing of a bundle (D-PHY plan R5, CS-165) uses this proposer
+alone, restricted to its planned layer (`layers`), with a site rank that drops
+transitions whose vias lie in a breakout region and tries the pair's reserved
+corridor first (`site_rank`). Without those arguments the proposer is
+unchanged.
 
 Search/report provenance records both signal-via pairs explicitly. The
 critical owner verifies matched dimensions, spans and widened spacing, equal
