@@ -158,6 +158,38 @@ def test_preferred_ground_pads_do_not_share_a_via_when_local_site_is_free() -> N
     }
 
 
+def test_preferred_ground_pad_keeps_its_existing_local_plane_contact() -> None:
+    board = _plane_board()
+    first = PadReference("J1", "1")
+    second = PadReference("J2", "1")
+    board = replace(
+        board,
+        placements=(board.placements[0], replace(board.placements[1],
+                    position=Point.mm("4.75", "5.25"))),
+        tracks=(
+            TrackSegment("GND", Point.mm(3, 6), Point.mm("1.5", 6),
+                         nm_from_mm("0.2"), CopperLayer.FRONT),
+            TrackSegment("GND", Point.mm("4.75", "5.25"),
+                         Point.mm("3.75", "5.25"), nm_from_mm("0.2"),
+                         CopperLayer.FRONT),
+        ),
+        vias=(
+            Via("GND", Point.mm("1.5", 6), nm_from_mm("0.6"),
+                nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),
+            Via("GND", Point.mm("3.75", "5.25"), nm_from_mm("0.6"),
+                nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),
+        ),
+    )
+    result = stitch_zone_pads(board, PlaneStitchOptions(
+        preferred_ground_pads={first, second},
+    ))
+
+    assert result.complete
+    assert result.added_track_count == result.added_via_count == 0
+    assert result.board.tracks == board.tracks
+    assert result.board.vias == board.vias
+
+
 def test_reuses_off_grid_same_net_via_before_adding_drill() -> None:
     base = _plane_board()
     existing = Via(

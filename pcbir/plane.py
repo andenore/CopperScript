@@ -130,6 +130,13 @@ def stitch_zone_pads(
     from .placement import resolved_copper_keepouts
     keepouts = resolved_copper_keepouts(board)
     owner_graph = explicit_copper_connectivity(board) if owned_pads else None
+    preferred_graph = (owner_graph or explicit_copper_connectivity(
+        board, only_nets=frozenset({"GND"}))) if options.preferred_ground_pads else None
+    preferred_roots: dict[str, set[PadReference]] = {}
+    if preferred_graph is not None:
+        for preferred_pad in options.preferred_ground_pads:
+            for node in preferred_graph.pad_nodes.get(preferred_pad, ()):
+                preferred_roots.setdefault(preferred_graph.roots[node], set()).add(preferred_pad)
     owned_pending = set()
     for zone in sorted(board.zones, key=lambda item: item.id):
         if (any(layer not in outer_layers for layer in zone.layers)
@@ -175,6 +182,35 @@ def stitch_zone_pads(
                 if not roots or not roots.issubset(contacts):
                     owned_pending.add(reference)
                 continue
+            if (net == "GND" and preferred_graph is not None
+                    and reference in options.preferred_ground_pads):
+                nodes = preferred_graph.pad_nodes.get(reference, ())
+                if len(nodes) == 1:
+                    root = preferred_graph.roots[nodes[0]]
+                    position = transformed_local_point(placement, lands[0].position)
+                    if preferred_roots[root] == {reference} and any(
+                        via.net == net
+                        and via.from_layer == outer_layers[0]
+                        and via.to_layer == outer_layers[1]
+                        and preferred_graph.roots[f"via:{i}"] == root
+                        and (via.position.x_nm - position.x_nm) ** 2
+                            + (via.position.y_nm - position.y_nm) ** 2
+                            <= options.maximum_radius_nm ** 2
+                        and any(_point_in_zone(via.position, zone.outline)
+                                for zone in reference_zones)
+                        and not any(
+                            k.block_zones
+                            and set(board.stackup.copper_layers).intersection(k.layers)
+                            and _point_in_zone(via.position, k.outline)
+                            for k in keepouts
+                        )
+                        for i, via in enumerate(board.vias)
+                    ):
+                        # The earlier pass already made an independent local
+                        # plane contact. A rescan must not add a front-layer
+                        # branch to another preferred pad's nearby via.
+                        anchors_by_net.setdefault(net, []).append((position, side))
+                        continue
             group = next((g for g in footprint.internal_pad_groups if reference.pad in g.numbers), None)
             if group is not None:
                 key = (placement.reference, group.numbers)
