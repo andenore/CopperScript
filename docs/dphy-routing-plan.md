@@ -382,12 +382,86 @@ Shared rules for every item:
   candidate. Reserve one corridor for the whole bundle, sized by the
   nesting width of the inner pairs, instead of per-pair bands.
 
+- [ ] **R9 45° tuning corners.** R3 bumps and D5 skew bumps are rectangles,
+  so every bump adds four 90° corners. D-PHY and other high-speed guides ask
+  for no 90° corners on these lanes. Chamfer each corner at 45° and keep the
+  perpendicular legs.
+  - With chamfer leg c, a bump of height h adds 2h − 4(2 − √2)c, close to
+    today's 2h. A 45°-sided trapezoid would add only 2(√2 − 1)h ≈ 0.83h.
+  - Both members of a pair get the offset chamfers of a coupled 45° bend, so
+    the pair spacing stays constant.
+  - Each bump still has two left and two right turns, so both members add
+    the same length.
+  - Room checks and the swept area use the chamfered outline.
+  - **Tests:** exact added length per bump; pair skew unchanged; no bend
+    sharper than 45°; native DRC clean.
+
+- [ ] **R10 S-shaped (two-sided) serpentines.** Today every tuning bump
+  leaves its run on one side, returns to the same line, and needs 3 × width
+  of straight track before the next bump. An S-shaped serpentine alternates
+  sides instead: the trace crosses the original line between legs and snakes
+  about it.
+  - **Density:** at the same amplitude per side, each leg adds the full
+    swing and no straight return is needed. That fits about 1.5× the length
+    into a run. For a 0.14/0.26 mm pair at 0.35 mm amplitude:
+    - one-sided bumps add 0.70 mm per 1.64 mm of run;
+    - S-legs at a 0.52 mm leg gap add 0.70 mm per 1.06 mm.
+  - **Limit:** the serpentine needs room on both sides of the run. In a
+    packed bundle each side is shared with a neighbouring pair, so it helps
+    most on outer pairs, fanned-out bundles and single-ended nets.
+  - *Language.* Routing property `tuning_style`:
+    - `"bumps"` is the default and today's geometry;
+    - `"serpentine"` is the S-shape;
+    - both members of a pair must agree.
+    - `tuning_amplitude_limit` stays the maximum excursion on each side of
+      the original line.
+    - New optional `tuning_spacing` sets the minimum edge gap between
+      adjacent legs. It defaults to the larger of 3 × width and the net's
+      `clearance`, so a pair keeps its pair-to-pair spacing between its own
+      legs.
+  - *Geometry.*
+    - On a straight run (axis-aligned first; 45° runs later), legs run
+      perpendicular to the run at a pitch of leg width + `tuning_spacing`.
+    - The legs join alternately at +a₁ and −a₂, each within the room on
+      that side and the amplitude limit.
+    - Each full leg adds a₁ + a₂, and the first and last half-legs add a₁
+      or a₂. Corners use R9's chamfers.
+    - A pair's members follow each other at the pair spacing. The turns
+      alternate left and right, so both members add the same length and the
+      pair's skew is unchanged, exactly in integer nanometres.
+  - *Room and placement.*
+    - Room is measured per side, as in R3: the swept area against foreign
+      copper, lands, keep-outs, holes and the board edge, through
+      `RoutingClearanceIndex.can_area`.
+    - A run takes a serpentine only when both sides have room; otherwise it
+      falls back to one-sided bumps.
+    - The tuner uses the fewest legs that provide the length, with levelled
+      amplitudes, under a leg bound like `MATCH_TUNING_BUMP_LIMIT`.
+    - Every result passes the same atomic validation.
+  - *Scope.* R3 group tuning only. D5's intra-pair compensation keeps
+    one-sided bumps that bulge away from the partner, because an S-shape on
+    one member would swing into its partner.
+  - *Self-coupling.* Adjacent legs couple, so a serpentine's delay is
+    slightly shorter than its length suggests. Reports keep the geometric
+    length. The default leg gap keeps the error small; qualifying it with a
+    field solver is out of scope.
+  - *Report.* Each unit's `match_tuning` entry gains the style, the leg
+    count and the amplitudes. The preflight line names the style.
+  - **Tests:**
+    - exact added length per leg;
+    - pair skew unchanged;
+    - fallback to bumps when one side is blocked;
+    - clearance to neighbours under native DRC;
+    - determinism;
+    - boards without `tuning_style` route byte-identically.
+
 ## Order
 
 1. In parallel: W1 (D1–D5), W2 (L1–L7), R4, and the CopperLib work below.
 2. Then: R1 (needs L6), R2, R3 (needs L4 and D5).
 3. Then R5 and R6 (both done; a pad-ordered pinout still avoids crossings).
-4. R7 when corner-wrap skew matters.
+4. R7 when corner-wrap skew matters. R9, then R10 (which uses R9's corners),
+   when tuned lanes must avoid 90° corners or more length must fit a short run.
 5. Finally the test board adopts each feature and its critical preflight is re-run.
 
 ## CopperLib (separate repository)
