@@ -36,6 +36,7 @@ from .package_access import PackageAccessOptions
 from .boundary_access import BoundaryAccessOptions
 from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
 from .pad_stitch import stitch_duplicate_pads
+from .pad_via_arrays import via_in_pad_array_report
 from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
 from .route_closure import reconcile_zone_lands, routing_complete_with_fill
@@ -1205,6 +1206,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "drill_nm": nm_from_mm("0.20"),
                     "ordering_note": "Explicitly specify filled and capped via-in-pad; KiCad PCB and Gerbers do not encode this process.",
                 }]
+            via_arrays = via_in_pad_array_report(output_board)
+            if via_arrays:
+                report["via_in_pad_arrays"] = via_arrays
             if result.fanout is not None:
                 report["fanout"] = {
                     "step_nm": fanout_options.step_nm,

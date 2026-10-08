@@ -875,7 +875,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 
 | CS-138 | Accepted | GitHub Actions attempts the real full-vertical routing flow with pinned tools, bounded budgets and profiling; tags also attempt the nRF52 macro example and publish source/inspection bundles as experimental prereleases. Preserve incomplete boards, reports, per-layer SVGs, logs and available profiles with checksums and explicit failure status. Independent native KiCad refill/zero opens/violations is required for CI completion; artifact publication never claims fabrication readiness or bypasses manufacturing gates. Separate read-only build jobs from the tag-only release writer; do not expose write tokens to untrusted PR execution. |
 
-| CS-139 | Accepted; bounded implementation | Via-in-pad permission may be expressed per semantic component pin and lowered to typed `PadViaInPadRule` physical intent. Never infer permission from land size. Initial support is filled/capped 0.30/0.20 mm centred through-via fallback for explicitly selected SMD GND lands with an inner GND zone and six-layer JLCPCB profile. Reject unsupported targets/processes/profiles and duplicates. Retain full-span copper, other-pad (even same-net), keepout, edge, drill and fabrication gates; qualified finish and manufacturing requirements remain visible in reports/export. A permission is not a required via or proof of filled connectivity. The legacy broad ground opt-in is distinct and is not enabled by the example. |
+| CS-139 | Accepted; bounded implementation | Via-in-pad permission may be expressed per semantic component pin and lowered to typed `PadViaInPadRule` physical intent. Never infer permission from land size. Initial support is filled/capped 0.30/0.20 mm centred through-via fallback for explicitly selected SMD GND lands with an inner GND zone and six-layer JLCPCB profile. Reject unsupported targets/processes/profiles and duplicates. Retain full-span copper, other-pad (even same-net), keepout, edge, drill and fabrication gates; qualified finish and manufacturing requirements remain visible in reports/export. A permission is not a required via or proof of filled connectivity; with CS-166, `rows`/`columns` request a required array. The legacy broad ground opt-in is distinct and is not enabled by the example. |
 
 | CS-140 | Accepted | Ordinary package escape first uses deterministic coarse candidates, then bounded finer radial/two-leg sampling for empty domains and selected-escape conflicts. Expose coarse/refinement steps (defaults 0.5/0.1 mm), cache immutable-domain refinement, retain constrained-pins-first assignment and exact transactional acceptance, and report refined candidates. Refinement never relaxes clearance, pad overlap or macro ownership; finite sampling cannot prove geometric impossibility. Macro router ownership envelopes may be adapted to expose unrelated neighboring terminals without changing source copper or independent fabrication/fill keepouts; pin immutable assets and regression-test real-board access and retained private geometry. |
 
@@ -1544,6 +1544,34 @@ fallback. The bundle record lists each crossing, its layer, transitions and
 return-via or shared-reference decision. Bundles without crossings MUST route
 byte-identically. A planned layer is not impedance or via-stub qualification.
 See R5 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-166 — Required via-in-pad arrays (Accepted)
+
+A `via_in_pad` permission (CS-139) with `rows` and `columns` MUST become a
+required array: a centred rows × columns grid of filled/capped 0.30/0.20 mm
+through-vias inside the pad's single SMD land, columns along the land's x
+axis. Both counts are positive integers given together; `pitch` is an
+optional length. The default is one square pitch, the smaller of land
+width/columns and height/rows (over axes with more than one via) rounded down
+to 0.01 mm, so outer annuli keep half a cell of margin. Lowering rejects a
+pitch below drill plus `minimum_hole_clearance` and any site whose annulus
+leaves the land. The array is owner copper: `materialize_hard_macros` commits
+it after any macro copper, before package access, critical and ordinary
+routing, and `macro_source` recovers the source without it, so every
+placement rebuilds it; package escape and detailed routing reject a board
+whose declared array is missing. Every site MUST lie in an inner zone of the
+pad's net and pass the fallback via's exact checks (annulus in the land, no
+other land even on the same net, board edge, keepouts and macro regions,
+existing copper, and drill spacing including the array's own vias), or the
+whole array is rejected with the pad and site named; no partial array is
+built. Plane stitching takes the array as the contact of its pad (and the
+pad's internal group) and adds none. Route and preflight reports list each
+array with count, pitch and positions; `via_in_pad_count` and the
+fabrication requirements include its vias. The CS-139 envelope is unchanged,
+and unsupported combinations fail closed. Permissions without an array MUST
+behave byte-identically. An array is not a thermal or current qualification,
+and filled-plane continuity still needs native refill. See R11 in the
+[D-PHY routing plan](dphy-routing-plan.md).
 
 ## CS-167 — 45-degree corners on tuning bumps (Accepted)
 

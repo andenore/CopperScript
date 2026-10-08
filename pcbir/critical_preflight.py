@@ -31,6 +31,7 @@ from .hard_macros import apply_hard_macro_scene
 from .loader import BoardLoadError, load_design
 from .physical import PadReference, nm_from_mm
 from .package_access import preflight_package_access
+from .pad_via_arrays import via_in_pad_array_report
 from .plane import PlaneStitchOptions
 from .physicalize import PrototypePhysicalOptions, prototype_physicalize, resolved_physicalize
 from .placement import PlacementPlannerOptions
@@ -219,6 +220,9 @@ def main(argv: list[str] | None = None) -> int:
         report.update(complete=True, critical=json.loads(critical.to_json()),
                       critical_lane_review=lane_review,
                       native_drc=json.loads(run_physical_drc(result_board).to_json()))
+        via_arrays = via_in_pad_array_report(result_board)
+        if via_arrays:
+            report["via_in_pad_arrays"] = via_arrays
         checkpoint("package_access_complete" if args.package_access else "critical_complete")
         if args.output:
             manifest = KiCadPcbBackend().generate(result_board)

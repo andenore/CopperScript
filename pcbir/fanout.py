@@ -100,6 +100,8 @@ def route_fanout(
 
     if board.hard_macros and not board.materialized_macros:
         raise ValueError("materialize hard macros before package escape")
+    from .pad_via_arrays import require_via_in_pad_arrays
+    require_via_in_pad_arrays(board, "package escape")
     options = options or FanoutOptions()
     if only_nets is not None:
         unknown = only_nets - {net.name for net in board.nets}

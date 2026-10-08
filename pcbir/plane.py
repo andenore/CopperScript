@@ -96,6 +96,11 @@ def stitch_zone_pads(
 
     if board.hard_macros and not board.materialized_macros:
         raise ValueError("materialize hard macros before plane stitching")
+    # A required array is fixed copper and its pad's contact. Routing stages
+    # commit it first; an unrouted early screen may still need it here.
+    from .pad_via_arrays import array_rules, materialize_via_in_pad_arrays
+    board = materialize_via_in_pad_arrays(board)
+    array_pads = {rule.pad for rule in array_rules(board)}
     options = options or PlaneStitchOptions()
     if options.ground_via_in_pad and board.metadata.get("fabrication_profile") != "jlcpcb-six-layer":
         raise ValueError("filled/capped ground via-in-pad requires the JLCPCB six-layer profile")
@@ -161,6 +166,13 @@ def stitch_zone_pads(
             if not lands:
                 continue
             targets.append(reference)
+            if any(PadReference(reference.component, number) in array_pads
+                   for number in next((g.numbers for g in footprint.internal_pad_groups
+                                       if reference.pad in g.numbers), (reference.pad,))):
+                # The array (or its internal group's) is this pad's contact.
+                anchors_by_net.setdefault(net, []).append(
+                    (transformed_local_point(placement, lands[0].position), side))
+                continue
             if reference in owned_pads:
                 # Reuse actual immutable copper, never create a shortcut inside
                 # the private region. This proves only a prospective plane

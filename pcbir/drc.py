@@ -472,6 +472,10 @@ def physical_board_digest(board: PhysicalBoard) -> str:
                 (rule.reference, rule.clearance_nm, rule.reason)
                 for rule in sorted(board.component_hole_clearances, key=lambda item: item.reference)]}
                if board.component_hole_clearances else {}),
+            # Required via-in-pad arrays, likewise only when declared.
+            **({"via_in_pad_arrays": [repr(rule) for rule in sorted(
+                board.via_in_pad_rules, key=lambda item: item.pad) if rule.rows is not None]}
+               if any(rule.rows is not None for rule in board.via_in_pad_rules) else {}),
             "regions": [repr(item) for item in sorted(board.regions, key=lambda item: item.name)],
             "keepouts": [repr(item) for item in sorted(board.keepouts, key=lambda item: item.name)],
             "placement_rules": [repr(item) for item in sorted(board.placement_rules, key=lambda item: item.reference)],

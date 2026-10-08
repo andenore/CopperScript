@@ -837,6 +837,29 @@ unselected pads retain the no-pad-overlap default. The route report records
 the filled/capped fabrication requirement; geometry alone does not order that
 manufacturing process or prove filled-plane continuity.
 
+`rows` and `columns` (positive integers, both or neither) turn the permission
+into a required array, such as the thermal/ground vias of an exposed pad:
+
+```copper
+constraint via_in_pad(U1.EP) { process = "filled-capped"; rows = 3; columns = 3; }
+```
+
+The array is a centred grid of the same 0.30/0.20 mm filled/capped
+through-vias inside the pad's single SMD land; columns run along the land's
+own x axis, rows along its y axis. The default pitch puts the vias at the
+centres of equal cells, using the smaller cell (rounded down to 0.01 mm) for
+both axes, so the outer annuli keep half a cell of margin; a `pitch` length
+overrides it. A pitch below the drill spacing (drill plus the board's
+`minimum_hole_clearance`) or a site outside the land is rejected when the
+board is lowered. The array is fixed copper, placed with hard-macro copper
+before package access, critical and ordinary routing, and it is the pad's
+plane contact: stitching adds no other. Every site must lie in the inner GND
+zone and pass the fallback via's checks, including drill spacing between the
+array's own vias; one failed site rejects the whole array, naming the pad and
+the site. Route and preflight reports list each array (`via_in_pad_arrays`:
+count, pitch, positions), and `via_in_pad_count` and the fabrication
+requirements include its vias.
+
 A component-scoped drill clearance is a documented exception to the board's
 `minimum_hole_clearance` (mechanical `rules`, default 0.25 mm), for a vendor
 land pattern that puts pads closer to the part's own non-plated holes:

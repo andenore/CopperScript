@@ -1313,14 +1313,36 @@ class ComponentHoleClearance:
 
 @dataclass(frozen=True, slots=True)
 class PadViaInPadRule:
-    """Explicit pad-scoped permission, not a global pad-overlap exemption."""
+    """Explicit pad-scoped permission, not a global pad-overlap exemption.
+
+    ``rows`` and ``columns`` turn the permission into a required centred
+    array of filled-capped vias (see ``pad_via_arrays``); ``pitch_nm``
+    overrides its default even spread.
+    """
 
     pad: PadReference
     process: str = "filled-capped"
+    rows: int | None = None
+    columns: int | None = None
+    pitch_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         if self.process != "filled-capped":
             raise ValueError("via-in-pad supports only the filled-capped process")
+        if (self.rows is None) != (self.columns is None):
+            raise ValueError("via-in-pad array rows and columns must be given together")
+        if self.rows is not None and any(
+                type(count) is not int or count <= 0 for count in (self.rows, self.columns)):
+            raise ValueError("via-in-pad array rows and columns must be positive integers")
+        if self.pitch_nm is not None and (self.rows is None or self.pitch_nm <= 0):
+            raise ValueError("via-in-pad array pitch must be positive and requires rows and columns")
+
+    def __repr__(self) -> str:
+        # A permission-only rule keeps its historical repr, and with it the
+        # placement fingerprints of boards that declare one.
+        array = ("" if self.rows is None else
+                 f", rows={self.rows!r}, columns={self.columns!r}, pitch_nm={self.pitch_nm!r}")
+        return f"PadViaInPadRule(pad={self.pad!r}, process={self.process!r}{array})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1641,6 +1663,9 @@ class PhysicalBoard:
             if not any(z.net == "GND" and any(l not in (CopperLayer.FRONT, CopperLayer.BACK)
                                              for l in z.layers) for z in self.zones):
                 raise ValueError("via-in-pad permission requires a declared inner GND zone")
+            if rule.rows is not None:
+                from .pad_via_arrays import validate_array_fit
+                validate_array_fit(self, rule, lands)
         layers = set(self.stackup.copper_layers)
         for track in self.tracks:
             if track.net not in known_nets:

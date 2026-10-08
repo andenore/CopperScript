@@ -556,11 +556,23 @@ def _lower_physical_constraints(
             lowered = targets(constraint.targets)
             if lowered is None or lowered[0].pad is None:
                 raise ValueError("via_in_pad target must resolve to a physical pad")
-            if set(constraint.parameters) - {"process"}:
+            parameters = constraint.parameters
+            if set(parameters) - {"process", "rows", "columns", "pitch"}:
                 raise ValueError("unknown via_in_pad parameter")
+            # rows/columns request a required array; without them this stays
+            # a permission for the single last-resort plane contact.
+            if ("rows" in parameters) != ("columns" in parameters):
+                raise ValueError("via_in_pad rows and columns must be given together")
+            if "pitch" in parameters and "rows" not in parameters:
+                raise ValueError("via_in_pad pitch requires rows and columns")
+            if any(type(parameters[name]) is not int or parameters[name] <= 0
+                   for name in ("rows", "columns") if name in parameters):
+                raise ValueError("via_in_pad rows and columns must be positive integers")
             via_in_pad_rules.append(PadViaInPadRule(
                 PadReference(lowered[0].reference, lowered[0].pad),
-                str(constraint.parameters.get("process", "filled-capped")),
+                str(parameters.get("process", "filled-capped")),
+                parameters.get("rows"), parameters.get("columns"),
+                _optional_constraint_length(parameters, "pitch"),
             ))
             continue
         if constraint.kind is ConstraintKind.COPPER_ZONE:

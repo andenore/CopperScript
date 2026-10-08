@@ -548,6 +548,25 @@ Shared rules for every item:
   the preflight line then lists each step. Tests:
   `tests/test_serpentine_tuning.py`.
 
+- [x] **R11 Via-in-pad arrays.** IC layout guides ask for an array of vias in
+  an exposed pad, for heat and a low-inductance ground return. On a QFN whose
+  exposed pad is its only ground, the single last-resort 0.30/0.20 mm via is
+  far too little. `rows`, `columns` and an optional `pitch` on `via_in_pad`
+  require a centred array of those vias, placed as fixed copper before any
+  routing.
+  Done (CS-166): `pad_via_arrays` computes the grid (`array_pitch_nm`,
+  `via_in_pad_array_vias`), checks its fit when the board is built
+  (`validate_array_fit`) and commits it with the owner prefix
+  (`materialize_via_in_pad_arrays`, called by `materialize_hard_macros`;
+  `macro_source` strips it again). Plane stitching takes the array as the
+  pad's contact; fanout and detailed routing refuse a board whose array is
+  missing; incremental placement repair falls back to the full pipeline when
+  an array's component moves. Report: `via_in_pad_arrays` in the route-board
+  and critical-preflight reports (only when present). Limitation: one land
+  per pad, the fallback via size only and a square pitch; a site that fails at
+  a candidate placement stops the run instead of rejecting that placement.
+  Tests: `tests/test_pad_via_arrays.py`.
+
 - [x] **R12 Tune bundle pairs as they route.** R3 tunes a `length_match`
   group only after every critical group is accepted. By then each bundle
   pair sits at the clearance limit next to its neighbours, so a pair hemmed

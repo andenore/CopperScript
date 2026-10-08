@@ -479,6 +479,8 @@ def route_detailed(
     options = options or DetailedRouterOptions()
     if board.hard_macros and set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
         raise ValueError("materialize hard-macro copper before detailed routing")
+    from .pad_via_arrays import require_via_in_pad_arrays
+    require_via_in_pad_arrays(board, "detailed routing")
     fanout_accesses = fanout_accesses or {}
     rules = {item.net: item for item in board.net_routing_rules}
     guides = {item.net: item for item in global_route.routes}
