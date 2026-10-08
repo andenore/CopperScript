@@ -75,6 +75,22 @@ Shared rules for every item:
   bump on the longest segment anywhere.
   Tests: `test_tuning_*` in `tests/test_critical_routing.py` and
   `test_drc_rejections_are_recorded_even_when_a_later_candidate_is_accepted`.
+- [x] **D6 Routed critical-lane review.** Review the routed copper of every
+  critical net in the route and preflight reports, so lanes can be checked
+  against layout guidance without ad-hoc scripts: per net the track length,
+  layers and signal vias; per pair the skew and per `length_match` group the
+  spread against `max_skew`; the least edge-to-edge spacing to other copper,
+  inside and outside the net's breakout regions, against critical and other
+  signal nets, with location and neighbour; the length closer than
+  2 × `pair_gap` to another critical pair; and the sharpest bend and the bends
+  over 45°.
+  Done (CS-168): `pcbir/critical_review.py` (`critical_lane_review`,
+  `lane_review_line`), on the exported board in `route-board` and on the
+  critical board in the preflight (`critical_lane_review` in both reports, one
+  `CRITICAL LANES:` console line). It reuses `critical_lane_table`,
+  `verify_match_groups`, `BreakoutRegions` and `RoutingClearanceIndex`
+  (`nearby_copper`, a 1 mm search radius). Zone nets are ignored. Report-only:
+  routing and boards are unchanged. Tests: `tests/test_critical_lane_review.py`.
 
 ## W2 — Language and IR
 
@@ -281,6 +297,10 @@ Shared rules for every item:
   routes them in the bundle's slots and runs `_bundle_repair` (at most
   `BUNDLE_REPAIR_LIMIT` = 4 attempts per bundle, `bundle_repair_limit`
   argument). The critical report lists `bundles` with order and repairs.
+  A pair that fails with no candidate at all (no spacing finding names a
+  blocker) tries its two physically nearest routed bundle pairs instead
+  (`_bundle_neighbours`): a middle pair squeezed by a pair-to-pair clearance
+  larger than the package pitch allows routes first, its neighbour after.
   Tests: `tests/test_critical_bundles.py`.
 - [x] **R5 Planned crossings.** When the pair order at the two ends of a
   bundle is inverted, as on a symmetric CSI pinout, plan one paired layer swap
@@ -364,7 +384,7 @@ Shared rules for every item:
     vias or the shared reference layer. The preflight prints one line per
     crossing. Bundles without crossings, and their reports, are unchanged.
 
-- [ ] **R7 Nested exits at package corners.** When a bundle leaves a package
+- [x] **R7 Nested exits at package corners.** When a bundle leaves a package
   across a corner (some pairs on one edge, the rest on the next), each
   side-edge pair runs past the column of its far-end terminal before turning
   and then comes back (an S-bend). On a 0.5 mm QFN this added about 1–2 mm to
@@ -373,6 +393,31 @@ Shared rules for every item:
   Plan nested exits instead: each outer pair turns as soon as it clears the
   inner pair's actual exit copper. Shorter corner wraps reduce the structural
   bundle skew that R3 would otherwise have to tune out.
+  Done (CS-171): the overshoot came from the joint pair search, whose fixed
+  port lengths and 1 mm lattice step make a side pair run straight on before
+  it may turn. `critical_bundles._plan_nested_exits` plans a `NestedExit` per
+  side-edge surface pair of a corner wrap (`_pair_edge`): innermost first,
+  each on its far column or just outside the inner pair's band, and
+  `_nest_order` gives each nest its bundle slots innermost first.
+  `critical._route_nested_exit` tries `pair_search.nested_exit_candidates`
+  before every other candidate: shortest legal port, one 45° diagonal onto the
+  run (longest legal first, so an outer pair hugs the inner pair's copper),
+  the run, and a 45° jog back before the far port when the run lies beyond
+  the column. A run that does not clear, or whose D5 bumps do not, steps out
+  by `NESTED_TURN_STEP_NM` (at most `NESTED_TURN_RANGE_NM`); at most
+  `NESTED_VALIDATION_LIMIT` candidates take the unchanged gates, otherwise the
+  pair routes as before. `route_critical_nets(nested_exits=False)` restores
+  the previous behaviour. Report: `nested_exits` in the bundle record (only
+  when present) and one preflight line per nested exit. On a synthetic QFN
+  corner the outer pair drops from 14.46 to 12.28 mm and the inner from 11.38
+  to 9.79 mm; with a 0.3 mm clearance and a tight connector, the inner pair
+  failed before and now routes. On the test board's sink bundle, D2 drops from
+  13.91/14.03 to 12.40/12.53 mm and D3 from 9.66/9.79 to 9.23/9.36 mm (CK, D0
+  and D1 unchanged), the bundle spread from 6.626 to 5.124 mm; all ten pairs
+  connect and package access stays ready. Limitation: a bundle with every
+  pair on the side edge (no facing pair) is not a corner wrap and routes as
+  before; a far end that also needs a turn is not planned. Tests:
+  `tests/test_nested_exits.py`.
 
 - [ ] **R8 Bundle corridors for corner wraps.** `reserve_corridor` keeps
   components out of the band between each pair's own terminals. When a
@@ -382,7 +427,7 @@ Shared rules for every item:
   candidate. Reserve one corridor for the whole bundle, sized by the
   nesting width of the inner pairs, instead of per-pair bands.
 
-- [ ] **R9 45° tuning corners.** R3 bumps and D5 skew bumps are rectangles,
+- [x] **R9 45° tuning corners.** R3 bumps and D5 skew bumps are rectangles,
   so every bump adds four 90° corners. D-PHY and other high-speed guides ask
   for no 90° corners on these lanes. Chamfer each corner at 45° and keep the
   perpendicular legs.
@@ -396,7 +441,31 @@ Shared rules for every item:
   - **Tests:** exact added length per bump; pair skew unchanged; no bend
     sharper than 45°; native DRC clean.
 
-- [ ] **R10 S-shaped (two-sided) serpentines.** Today every tuning bump
+  Done (CS-167): `critical_tuning.bump_chamfers`, `bump_path` and `bump_gain`
+  build both tuners' bumps. Rule: for height h and width w the member inside a
+  turn gets leg c = min(w, ⌊h/4⌋, ⌊(h − d)/2⌋) and its partner c + d, with
+  d = ⌊(2 − √2) × spacing⌋ (0 for a single net). Flooring d keeps parallel
+  pieces never closer than the spacing (at most 2 nm farther); a bump too low
+  for c ≥ 1 has one 45° ramp per side. The bulge-side member is inside the
+  turn at both run corners, its partner at both top corners, so both gain
+  exactly `bump_gain` in the rounded-per-piece length measure. R3:
+  `UnitTuner.tune` counts each slot's capacity and levels heights by that gain
+  (`_levelled`: one nanometre of height changes it by −2, 0 or +2, so the
+  excess is removed exactly), and `_swept` is the convex outline of the
+  chamfered bump (the rectangle no longer covered the run chamfers). D5:
+  `_tune_pair` takes c from the member's narrowest width and uses the fewest
+  bumps at the least common height that reach the excess. On boards with
+  breakout regions both tuners aim 32 nm inside `max_skew`
+  (`_BREAKOUT_TUNING_MARGIN_NM`): re-cutting a 45° piece at a region boundary
+  may round a nanometre differently. Measured: for pairs, the outside offset d
+  costs about 0.69 × spacing per bump and member, so a 0.2/0.2 mm pair at
+  1 mm height gains about 63% of 2h (single nets lose only 2.34 × c) and
+  needs more or taller bumps; a pair bump adds up to about 3.3 spacings of
+  uncoupled length per member. Tests: `tests/test_length_match_tuning.py`
+  (`test_pair_bumps_have_coupled_45_degree_corners_and_add_exact_lengths`)
+  and the `test_tuning_*` D5 tests in `tests/test_critical_routing.py`.
+
+- [x] **R10 S-shaped (two-sided) serpentines.** Today every tuning bump
   leaves its run on one side, returns to the same line, and needs 3 × width
   of straight track before the next bump. An S-shaped serpentine alternates
   sides instead: the trace crosses the original line between legs and snakes
@@ -455,6 +524,187 @@ Shared rules for every item:
     - determinism;
     - boards without `tuning_style` route byte-identically.
 
+  Done (CS-169): `TuningStyle` and `NetRoutingRule.tuning_style` /
+  `tuning_spacing_nm` (lowered, `CMP110`-checked, pair members must agree,
+  digest-bound only when not the default). `critical_tuning.UnitTuner(style=
+  SERPENTINE)` surveys `_windows`: tops on a grid of pitch lane width + leg
+  gap, each top's room measured like a bump over its two legs
+  (`_room` with the least top and largest foot chamfer), windows of two or
+  more tops with room on alternating sides. Refinements: legs on one line
+  share one chamfer leg c, R9's rule on every leg (`_window_chamfer`), so each
+  leg costs both members exactly `_leg_loss(c)` whatever the heights; tops
+  are levelled with any remaining bumps by R3's `_levelled`, and c is lowered
+  until it suits every leg and makes the length exact. Tops lower than d + 2
+  nm cannot have coupled corners, so small additions (on a 0.14/0.26 mm pair
+  below about 0.53 mm) fall back to bumps. Serpentine units also join collinear
+  pieces (`_straight_lines`): breakout-region cuts had split the test board's
+  source lanes into runs under 2 mm, too short for any bump slot; bump-style
+  units keep per-piece runs, so they tune byte-identically. One serpentine per
+  line, most capacity first, the last trimmed (`_trimmed`); other lines keep
+  bumps; at most `MATCH_TUNING_LEG_LIMIT` = 32 legs; a unit whose serpentines
+  fall short gets R3's bumps alone. Report: `UnitTuning` per step and
+  `MatchTuningUnit` (`units`, with style, legs and amplitudes, and `legs` in
+  the group entry, only when a step used a serpentine or ran while routing);
+  the preflight line then lists each step. Tests:
+  `tests/test_serpentine_tuning.py`.
+
+- [x] **R11 Via-in-pad arrays.** IC layout guides ask for an array of vias in
+  an exposed pad, for heat and a low-inductance ground return. On a QFN whose
+  exposed pad is its only ground, the single last-resort 0.30/0.20 mm via is
+  far too little. `rows`, `columns` and an optional `pitch` on `via_in_pad`
+  require a centred array of those vias, placed as fixed copper before any
+  routing.
+  Done (CS-166): `pad_via_arrays` computes the grid (`array_pitch_nm`,
+  `via_in_pad_array_vias`), checks its fit when the board is built
+  (`validate_array_fit`) and commits it with the owner prefix
+  (`materialize_via_in_pad_arrays`, called by `materialize_hard_macros`;
+  `macro_source` strips it again). Plane stitching takes the array as the
+  pad's contact; fanout and detailed routing refuse a board whose array is
+  missing; incremental placement repair falls back to the full pipeline when
+  an array's component moves. Report: `via_in_pad_arrays` in the route-board
+  and critical-preflight reports (only when present). Limitation: one land
+  per pad, the fallback via size only and a square pitch; a site that fails at
+  a candidate placement stops the run instead of rejecting that placement.
+  Tests: `tests/test_pad_via_arrays.py`.
+
+- [x] **R12 Tune bundle pairs as they route.** R3 tunes a `length_match`
+  group only after every critical group is accepted. By then each bundle
+  pair sits at the clearance limit next to its neighbours, so a pair hemmed
+  in on both sides has no room for even one bump. On a test bundle, a 7 mm
+  lane short by 0.12 mm could not be tuned, and three adjacent straight pairs
+  short by about 5.8 mm each had one usable slot between them.
+  - Right after a bundle pair of a `length_match` group is accepted, tune it
+    toward the longest accepted member of its group, to within `max_skew`,
+    before the next bundle pair routes. Use the same tuner (R3, R9, and R10
+    where declared) and the same atomic validation.
+  - Its bumps or serpentine then claim room, and later pairs route around
+    them. Outermost-first order often routes the longest pairs (those
+    wrapping a package corner) first.
+  - If a later pair turns out longer, the final R3 pass tops up the earlier
+    pairs as today.
+  - Groups already within `max_skew`, and bundles without a `length_match`
+    group, route exactly as before.
+  - **Tests:** a hemmed-in bundle that R3 cannot tune and R12 tunes within
+    `max_skew` with native DRC clean; identity without match groups;
+    determinism.
+
+  Done (CS-170): `critical._tune_bundle_pairs` runs after each accepted
+  bundle pair of a `length_match` group and tunes every accepted pair of the
+  bundle that is short of the longest accepted member (`_tune_unit`, shared
+  with R3). Refinements: (1) not only the pair just accepted: pairs routed
+  before the longest are topped up as soon as it is accepted, while their
+  inner neighbours are still unrouted. On the test board the source bundle
+  routes DA2 and DA1 first and the longest lane DA3 third, so the plan as
+  written would have left them to the final pass. (2) No prediction of the
+  longest member: guide lengths were 8.0–13.5 mm against routed 7.2–14.0 mm
+  there, land-to-land distances miss corner wraps by several millimetres,
+  and a pair tuned past the true longest cannot be shortened. (3) No room is
+  reserved for a pair's own later serpentine or for its neighbours: tuning
+  claims room as copper. A trial that kept the unrouted pairs' land hulls
+  clear left R12 unable to tune any hemmed pair, while tuning into a later
+  pair's way once left that pair with no candidate. So when a later bundle
+  pair finds no candidate, the bundle's tuning from routing is removed and
+  the pair searched once more before any rip-up repair. A pair that fails is
+  retried only after re-routing or when the target grows (`failed_targets`).
+  The final pass tops up the rest. Report: `match_tuning` `units` with
+  `stage` `routing`, lengths before tuning as routed; preflight lines name
+  each step. On the test board (both groups at 0.127 mm, CSI rules
+  `tuning_style = "serpentine"`, amplitudes 0.3/0.35 mm), the source group
+  goes from 0.249 to 0.083 mm (DA2 and DA1 +0.249 mm, CK +0.166 mm, one bump
+  each, tuned while routing), all ten pairs connect, the lane review keeps
+  0.521 mm outside the breakouts and no bend over 45°. The sink group fails:
+  it needs 3.2 mm (D3) to 5.1 mm (CK, D0, D1) per pair, but its open straight
+  runs are 1.4–4.9 mm and neighbouring pairs at the connector's 1.2 mm pitch
+  leave 0.14 mm on each side, below the 0.234 mm a 0.14/0.26 mm pair's
+  coupled corners need, so no serpentine fits and bumps reach 0.34–1.0 mm per
+  pair. Tests: `tests/test_bundle_tuning.py`.
+
+- [x] **R13 Surface-only package escapes.** Package access gives each
+  fine-pitch pin of an ordinary net a via dogbone (`pcbir/fanout.py`) or a
+  boundary witness port. A net restricted to one outer layer
+  (`allowed_layers` with one layer, or `max_vias = 0`) gets no dogbone
+  choices, because `_legal_choices` and `_maze_choices` need two allowed
+  layers. Its pins stay pending, and package access fails.
+  - Give such pins a checked surface escape on their own layer to the package
+    collar, as boundary witness ports do, and never a via.
+  - Nets with two or more allowed layers keep today's choices.
+  - **Tests:** a QFN pin on a one-layer net is escaped without a via, and the
+    board is ready; nets with more layers are unchanged.
+
+  Done (CS-172): `fanout._surface_layer` selects the pins whose net has one
+  routing layer, or `max_vias = 0`, and whose pad layer is allowed. Their
+  choices come from `boundary_access.surface_escapes`: from the pad centre on
+  the pad layer to beyond the collar, through the witness ports and both 45°
+  path orders, then the fine ports and the octilinear maze. They join the joint
+  assignment and the native DRC gate with the dogbones. The selected path is
+  owned fanout copper and `FanoutResult.surface_accesses` (a `RoutingAccess`
+  launched from the pad), merged into `routing_accesses`; `accesses` stay via
+  anchors. A `max_vias = 0` net with several layers got via dogbones before;
+  it now escapes on the surface too. With the crystal constraint on its four
+  crystal nets, the test board's preflight is ready with no pending pads (four
+  were pending): each crystal pin has a 1.32 mm straight F.Cu escape. In its
+  full route both X1 nets route on F.Cu without vias (15.0 and 13.6 mm), but
+  both X2 nets stay unrouted: a crystal ground land and its plane-contact via
+  sit between each X1 pin and its crystal land, so X1 loops around the
+  crystal's X2 land. That needs a crystal placement or orientation change, not
+  a different escape. Tests: `tests/test_surface_package_escape.py`.
+
+- [x] **R14 Group serpentines.** Adjacent units of one `length_match` group
+  that each need about the same length hem each other in: R3/R10/R12 tune a
+  unit alone, which needs free room on its own sides. On the test board three
+  straight sink pairs at the connector's 1.2 mm pitch each need about 5 mm.
+  Bend them together instead, as in DDR byte-lane tuning: every lane follows
+  the same bumps or serpentine, keeps its spacing to the next lane, and the
+  group uses the room beside it.
+  - *Language.* Routing property `tuning_group = "<name>"` on every member
+    (both members of a pair); all units of one name belong to one
+    `length_match` group. Located errors.
+  - *Geometry.* Group bumps, and a two-sided group serpentine where both sides
+    have room. R9's 45° corners with offsets for N lanes; every lane is inside
+    and outside a turn equally, so all gain the same length and pairs keep
+    their skew. A one-sided bump's outer lane interval is the inner lane's
+    plus 2 × the lateral distance between them.
+  - *Room, lengths, timing, gates.* Room on the group's outermost swept area as
+    in R3, within the members' `tuning_amplitude_limit`. The group adds the
+    least its members need, per-unit tuning tops up. Tuned once all members
+    are accepted (R12) and again in the final pass, with the same atomic
+    validation; a group that does not fit leaves the copper and says why.
+  - **Tests:** a hemmed three-pair bundle; a run too short; one- versus
+    two-sided room; identity; determinism; validation errors.
+
+  Done (CS-173): `pcbir/critical_group_tuning.py` (`GroupTuner`,
+  `lane_corners`, `group_path`) and `critical._tune_group`, called by
+  `_tune_bundle_pairs` (R12) and `_tune_match_group` (R3); IR
+  `NetRoutingRule.tuning_group` (`CMP110` value checks, `CMP117` lowering
+  checks, digest-bound only when declared). Refinements: (1) every leg gives
+  each lane one corner with lane N inside and one with lane 1 inside, so
+  bumps and serpentine tops share one corner pattern per run; offsets are
+  lowered by at most 8 nm (`lane_corners`) so that rounded lengths agree
+  exactly. (2) A group top is at least D + 2 nm high, D ≈ 0.59 × the lane
+  span, so a group bump adds at least about 0.83 × D; smaller remainders go
+  to per-unit tuning. (3) Group bumps also lie on grids shifted along the run,
+  since the room beside a long run often ends before the run does. (4) Pairs
+  of an incomplete group wait in R12; a group that fails lets its pairs be
+  tuned one by one; re-routing a unit of a tuned group restores the others as
+  routed (`_drop_group_steps`). Report: group steps in `match_tuning` `units`
+  with `group` and `lanes`, `tuning_groups` per group (status and reason), and
+  the preflight line. On the test board (sink `max_skew` 0.127 mm,
+  `tuning_group` on CK/D0/D1, amplitude 4 mm) the group never fits at the
+  current placement: the longest straight run of all six lanes is 3.455 mm
+  (D1 jogs to the connector pitch last), and a group bump needs 6.860 mm.
+  Moving the sink chip alone does not legalize placement (its placement
+  regions are absolute). Moved with those regions and the corner-wrap
+  keep-out, the run is 3.917 mm at 3 mm and 5.917 mm at 5 mm; at 6 mm the only
+  bump position meets the connector's lands (and D2 fails to route, with or
+  without R14). At 7 mm one group bump of 3.633 mm adds 5.017 mm to all six
+  lanes while routing, D1 is topped up by 0.166 mm, and CK, D0 and D1 end
+  within 0.082 mm of D2; the length-match group still fails on D3 (3.2 mm
+  short, hemmed in between D2 and D0). On breakout boards a re-cut 45° piece
+  may still round a nanometre differently (D0 pair skew 2 nm there).
+  Limitations: axis-aligned runs only; a group tuned while routing is topped
+  up by another group step, not re-planned, when a longer member is accepted
+  later. Tests: `tests/test_group_tuning.py`.
+
 ## Order
 
 1. In parallel: W1 (D1–D5), W2 (L1–L7), R4, and the CopperLib work below.
@@ -462,6 +712,9 @@ Shared rules for every item:
 3. Then R5 and R6 (both done; a pad-ordered pinout still avoids crossings).
 4. R7 when corner-wrap skew matters. R9, then R10 (which uses R9's corners),
    when tuned lanes must avoid 90° corners or more length must fit a short run.
+   R12 with R10, when bundle pairs must match tightly. R13 when a pin-field net
+   must stay on one layer. R14 when adjacent bundle lanes need about the same
+   length and hem each other in.
 5. Finally the test board adopts each feature and its critical preflight is re-run.
 
 ## CopperLib (separate repository)

@@ -13,6 +13,7 @@ from typing import Sequence
 
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .backends.kicad_project import write_kicad_project
+from .critical_review import critical_lane_review, lane_review_line
 from .erc import check, has_errors
 from .footprints import FootprintResolver, FootprintResolutionError, prepare_footprint_dependencies
 from .importers import KiCadModImportError, load_kicad_mod
@@ -35,6 +36,7 @@ from .package_access import PackageAccessOptions
 from .boundary_access import BoundaryAccessOptions
 from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
 from .pad_stitch import stitch_duplicate_pads
+from .pad_via_arrays import via_in_pad_array_report
 from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
 from .route_closure import reconcile_zone_lands, routing_complete_with_fill
@@ -1030,10 +1032,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_board = stitch.board if stitch_enabled else result.board
             duplicate_stitch = stitch_duplicate_pads(output_board)
             output_board = duplicate_stitch.board
+            from collections import Counter
+            from .hard_macros import resolved_macro_geometry
+            from .route_cleanup import trim_dangling_overhangs
+            fixed = Counter(physical_board.tracks)
+            for macro in output_board.hard_macros:
+                if macro.cluster in output_board.materialized_macros:
+                    fixed.update(resolved_macro_geometry(output_board, macro)[0])
+            swept = trim_dangling_overhangs(output_board, fixed)
+            trimmed_overhangs = swept is not output_board
+            output_board = swept
             output_drc = (
                 run_physical_drc(output_board)
                 if stitch_enabled
                 or duplicate_stitch.added_track_count
+                or trimmed_overhangs
                 else result.drc
             )
             emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
@@ -1189,6 +1202,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 "zone_nets_deferred": sorted(zone_nets),
             }
+            # Report-only review of the exported critical copper (plan D6).
+            lane_review = critical_lane_review(output_board, result.critical.nets,
+                                               result.critical.match_tuning)
+            report["critical_lane_review"] = lane_review
             filled_vias = tuple(
                 via for via in output_board.vias if via.finish == "filled-capped"
             )
@@ -1201,6 +1218,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "drill_nm": nm_from_mm("0.20"),
                     "ordering_note": "Explicitly specify filled and capped via-in-pad; KiCad PCB and Gerbers do not encode this process.",
                 }]
+            via_arrays = via_in_pad_array_report(output_board)
+            if via_arrays:
+                report["via_in_pad_arrays"] = via_arrays
             if result.fanout is not None:
                 report["fanout"] = {
                     "step_nm": fanout_options.step_nm,
@@ -1209,6 +1229,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_via_count": result.fanout.added_via_count,
                     "escaped_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.accesses],
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
+                    **({"surface_escaped_pads": [f"{pad.component}.{pad.pad}"
+                                                 for pad in result.fanout.surface_accesses]}
+                       if result.fanout.surface_accesses else {}),
                     "pin_access_analysis": [{
                         "pad": f"{item.pad.component}.{item.pad.pad}",
                         "legal_candidate_count": item.legal_candidate_count,
@@ -1329,6 +1352,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"explicit-copper DRC={output_drc.decision.value}; "
                 f"native filled-board DRC={'pass' if plane_verification and plane_verification.passed else 'not passed'}"
             )
+            if lane_review["nets"]:
+                print(lane_review_line(lane_review))
             print(f"Report -> {report_path}")
             if args.output:
                 print(f"KiCad PCB draft -> {args.output}")

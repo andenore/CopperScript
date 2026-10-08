@@ -798,12 +798,12 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-082 | Accepted | Non-plated footprint drills are mechanical obstacles across every copper layer, including when their pad number is empty. Routing and native DRC enforce the board's explicit minimum copper-to-hole clearance, which is exported to KiCad project rules and bound to the physical signoff digest. The only exception is a `hole_clearance(COMPONENT)` constraint: it applies a smaller, reasoned value between that component's own copper pads and its own non-plated holes, and nothing else. Native DRC records every pair that passes only because of it, the value enters the signoff digest, and the export writes a matching same-stem `.kicad_dru` rule so KiCad's DRC agrees. |
 | CS-083 | Accepted | Detailed-route repair distinguishes an exhausted search budget from an exhaustive no-path result. A coarse-grid no-path failure receives one bounded half-pitch retry (not finer than 0.25 mm); budget exhaustion does not inflate the search graph. All retries retain exact copper and hole-clearance checks. |
 | CS-084 | Accepted | Multi-pass detailed routing retains two baseline admissible-heuristic passes, then varies weighted-A* guidance deterministically across later passes. Every proposed route still passes exact geometric clearance, and the merge stage accepts only compatible complete alternatives; search-weight diversity never weakens the physical-rule gate. |
-| CS-085 | Accepted | Dense SMD fanout is an explicit physical package-access stage before ordinary detailed routing. With fanout enabled, CS-131 moves ordinary local reservations ahead of critical long routes. It uses legal, non-via-in-pad track/via pairs, preserves exact clearance, records unresolved pads, and exposes only verifiable locked-copper via anchors to the downstream router. Fanout is not electrical connectivity intent or a proof of overall route completion. With CS-163 a reserved escape is one terminal of its pad, not its replacement. |
+| CS-085 | Accepted | Dense SMD fanout is an explicit physical package-access stage before ordinary detailed routing. With fanout enabled, CS-131 moves ordinary local reservations ahead of critical long routes. It uses legal, non-via-in-pad track/via pairs, preserves exact clearance, records unresolved pads, and exposes only verifiable locked-copper via anchors to the downstream router. Fanout is not electrical connectivity intent or a proof of overall route completion. With CS-163 a reserved escape is one terminal of its pad, not its replacement. With CS-172 a pin whose net may not change layer escapes on its own surface instead of to a via. |
 | CS-086 | Accepted | Placement feedback may use exact detailed-routing failures after global routing. It moves only legal, movable components on a bounded trial set, reruns every routing and DRC stage from an unrouted placement, and accepts only a strictly improved completion/DRC score. Existing copper is never dragged implicitly with a component. |
 | CS-087 | Accepted | Detailed repair may transactionally rip up a bounded group of ordinary nets, but cannot displace locked critical/fanout copper. It tries deterministic displaced-net orders, rebuilds the clearance state for each trial, and commits only when the candidate and every displaced net reconnect. A failed trial leaves the original route unchanged. Within one routing run, a search repeated with identical inputs (board and checkpoint identity, ordered clearance insertions, net, rule, guide, anchors, congestion, mode and options) may return the earlier attempt from a bounded memo; any changed blocking geometry is a new search, and reuse never changes selected copper. |
 | CS-088 | Accepted | Filled-plane connectivity requires version-qualified, same-stem KiCad PCB/project refill and DRC evidence bound to the exact source, exported, filled-board, and report bytes. Any open connection, isolated island, missing report field, tool error, or other DRC violation fails the gate. Provisional zone outlines and pad stitching never count as this evidence. |
 | CS-089 | Accepted | Drill-to-drill spacing is checked independently of electrical net, including same-net via pairs and via-to-plated-pad holes. The incremental router and authoritative native DRC share this requirement; copper clearance alone cannot certify hole spacing. An existing same-net via may be reused at its exact position without drilling another hole. |
-| CS-090 | Accepted | Pre-escape vias are provisional until a detailed route uses a second copper layer. After routing, an unused fanout via is removed while its connected surface stub may remain; abandoned stubs and vias of failed nets are removed. With CS-163, the land, via and boundary witness copper a successful net does not need is released transactionally and no stub is left open. KiCad dangling-via findings remain a required independent check. |
+| CS-090 | Accepted | Pre-escape vias are provisional until a detailed route uses a second copper layer. After routing, an unused fanout via is removed while its connected surface stub may remain, trimmed back to the centre of a same-net land it crosses so no end is left open; abandoned stubs and vias of failed nets are removed. Before final DRC, route-board sweeps ordinary nets once more and cuts any routed track whose open end runs past a land of its net that it crosses back to that land's centre, if the net stays connected; input, hard-macro, critical and zone copper are never changed. With CS-163, the land, via and boundary witness copper a successful net does not need is released transactionally and no stub is left open. KiCad dangling-via findings remain a required independent check. |
 | CS-091 | Accepted | Global resources estimate usable copper crossings and legal via sites from physical geometry, never from footprint courtyards. A through-via consumes one shared site resource across its full physical span. Pads may offer multiple individually DRC-checked local access candidates; a `region_only` access certifies only its pad exit, not a complete path to the coarse guide center, and is reported separately. Only detailed copper plus DRC can establish connectivity. |
 | CS-092 | Accepted | A nearly board-wide inner copper zone reserves that layer for its net. Foreign-net global, critical, fanout, and detailed tracks may not consume it; legal through-vias may cross it. Coarse guides are geometric capacity reservations rather than mandatory detailed-route layers, so bounded detailed search may project a guide across other allowed signal layers while retaining exact via and copper checks. |
 | CS-093 | Accepted | Repeated footprint lands with one logical pad number remain separate physical copper objects. A bounded, exact-clearance post-route stitch may join them; separate legal plane contacts may also join them only after authoritative filled-plane verification. Blocked lands are reported, not silently accepted as externally connected. Native logical-pin connectivity and independent KiCad physical connectivity must both pass before release. |
@@ -875,7 +875,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 
 | CS-138 | Accepted | GitHub Actions attempts the real full-vertical routing flow with pinned tools, bounded budgets and profiling; tags also attempt the nRF52 macro example and publish source/inspection bundles as experimental prereleases. Preserve incomplete boards, reports, per-layer SVGs, logs and available profiles with checksums and explicit failure status. Independent native KiCad refill/zero opens/violations is required for CI completion; artifact publication never claims fabrication readiness or bypasses manufacturing gates. Separate read-only build jobs from the tag-only release writer; do not expose write tokens to untrusted PR execution. |
 
-| CS-139 | Accepted; bounded implementation | Via-in-pad permission may be expressed per semantic component pin and lowered to typed `PadViaInPadRule` physical intent. Never infer permission from land size. Initial support is filled/capped 0.30/0.20 mm centred through-via fallback for explicitly selected SMD GND lands with an inner GND zone and six-layer JLCPCB profile. Reject unsupported targets/processes/profiles and duplicates. Retain full-span copper, other-pad (even same-net), keepout, edge, drill and fabrication gates; qualified finish and manufacturing requirements remain visible in reports/export. A permission is not a required via or proof of filled connectivity. The legacy broad ground opt-in is distinct and is not enabled by the example. |
+| CS-139 | Accepted; bounded implementation | Via-in-pad permission may be expressed per semantic component pin and lowered to typed `PadViaInPadRule` physical intent. Never infer permission from land size. Initial support is filled/capped 0.30/0.20 mm centred through-via fallback for explicitly selected SMD GND lands with an inner GND zone and six-layer JLCPCB profile. Reject unsupported targets/processes/profiles and duplicates. Retain full-span copper, other-pad (even same-net), keepout, edge, drill and fabrication gates; qualified finish and manufacturing requirements remain visible in reports/export. A permission is not a required via or proof of filled connectivity; with CS-166, `rows`/`columns` request a required array. The legacy broad ground opt-in is distinct and is not enabled by the example. |
 
 | CS-140 | Accepted | Ordinary package escape first uses deterministic coarse candidates, then bounded finer radial/two-leg sampling for empty domains and selected-escape conflicts. Expose coarse/refinement steps (defaults 0.5/0.1 mm), cache immutable-domain refinement, retain constrained-pins-first assignment and exact transactional acceptance, and report refined candidates. Refinement never relaxes clearance, pad overlap or macro ownership; finite sampling cannot prove geometric impossibility. Macro router ownership envelopes may be adapted to expose unrelated neighboring terminals without changing source copper or independent fabrication/fill keepouts; pin immutable assets and regression-test real-board access and retained private geometry. |
 
@@ -1490,7 +1490,9 @@ layer) and is kept only if, judged on copper shrunk by 1 µm, the net stays
 connected and gains no island, open track end or single-layer via. Only owned
 occurrences of that net change; critical, macro, plane, input and other-net
 copper never do. Retained escape copper may lose dead-end tails but is never
-smoothed (CS-162). The CS-131/CS-152/CS-153 readiness gates, exact clearance,
+smoothed (CS-162). An owned escape track left with an open end past a land of
+its net that it crosses (its via deleted because the route reached that land)
+is cut back to the land's centre, kept only under the same test. The CS-131/CS-152/CS-153 readiness gates, exact clearance,
 ownership and rollback are unchanged. A released escape is not a stale
 reservation: later subset reroutes treat that pin as an ordinary surface
 terminal. Only nets with a reserved escape are affected.
@@ -1544,3 +1546,205 @@ fallback. The bundle record lists each crossing, its layer, transitions and
 return-via or shared-reference decision. Bundles without crossings MUST route
 byte-identically. A planned layer is not impedance or via-stub qualification.
 See R5 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-166 — Required via-in-pad arrays (Accepted)
+
+A `via_in_pad` permission (CS-139) with `rows` and `columns` MUST become a
+required array: a centred rows × columns grid of filled/capped 0.30/0.20 mm
+through-vias inside the pad's single SMD land, columns along the land's x
+axis. Both counts are positive integers given together; `pitch` is an
+optional length. The default is one square pitch, the smaller of land
+width/columns and height/rows (over axes with more than one via) rounded down
+to 0.01 mm, so outer annuli keep half a cell of margin. Lowering rejects a
+pitch below drill plus `minimum_hole_clearance` and any site whose annulus
+leaves the land. The array is owner copper: `materialize_hard_macros` commits
+it after any macro copper, before package access, critical and ordinary
+routing, and `macro_source` recovers the source without it, so every
+placement rebuilds it; package escape and detailed routing reject a board
+whose declared array is missing. Every site MUST lie in an inner zone of the
+pad's net and pass the fallback via's exact checks (annulus in the land, no
+other land even on the same net, board edge, keepouts and macro regions,
+existing copper, and drill spacing including the array's own vias), or the
+whole array is rejected with the pad and site named; no partial array is
+built. Plane stitching takes the array as the contact of its pad (and the
+pad's internal group) and adds none. Route and preflight reports list each
+array with count, pitch and positions; `via_in_pad_count` and the
+fabrication requirements include its vias. The CS-139 envelope is unchanged,
+and unsupported combinations fail closed. Permissions without an array MUST
+behave byte-identically. An array is not a thermal or current qualification,
+and filled-plane continuity still needs native refill. See R11 in the
+[D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-167 — 45-degree corners on tuning bumps (Accepted)
+
+Length-match bumps (R3) and intra-pair skew bumps (D5) MUST NOT have 90°
+corners. A bump keeps its perpendicular legs and chamfers every corner at 45°:
+for height h, track width w and d = ⌊(2 − √2) × lane spacing⌋ for a pair (0
+for a single net), the member inside a turn takes chamfer leg
+c = min(w, ⌊h/4⌋, ⌊(h − d)/2⌋) and the other member c + d, the offset chamfers
+of a coupled 45° bend. Every 45° piece has equal integer dx and dy, and
+parallel pieces of the two lanes are never closer than the lane spacing (at
+most 2 nm farther). A bump too low for c ≥ 1 has one 45° ramp per side. Each
+pair member is inside the turn at two corners of a bump and outside at the
+other two, so both gain exactly the same length and the pair's skew is
+unchanged. Tuners MUST count the chamfered gain as critical lengths measure it
+(each piece rounded on its own) when choosing bump counts and levelled
+heights, within the amplitude and bump limits; on boards with breakout regions
+their targets stay 32 nm inside `max_skew`, because re-cut 45° pieces may
+round differently. The R3 room check uses the convex outline of the chamfered
+bump; native DRC still validates every tuned candidate atomically. Boards
+without tuning MUST route byte-identically. A chamfer is not a qualification of
+the bend's impedance. See R9 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-168 — Routed critical-lane review (Accepted)
+
+The route report MUST review the exported copper of every net with a critical
+(non-general) routing rule, and the critical preflight report the critical
+stage's copper, so lanes can be checked against layout guidance from the
+report alone. Per net: the lane-table length (tracks only, via barrels
+excluded, as length matching), layers and own vias; per pair, skew against the
+smaller member `max_skew`; per `length_match` group, the verified skew against
+`max_skew` with its tuning outcome. Spacing is the least edge-to-edge distance
+from the net's tracks and vias to another net's tracks, vias and pads on a
+shared layer, split by the net's own copper inside or outside its breakout
+regions (`BreakoutRegions`) and by critical or other signal neighbours, with
+neighbour, object, layer and location. The pair partner, pads without a net
+and nets that own a copper zone are ignored rather than reported as a third
+class: planes and pours are reference copper, not aggressors. Coupled length
+is a pair member's track length outside its breakout regions that lies closer
+than 2 × `pair_gap` to copper of another critical pair. Bends are measured
+where exactly two of the net's tracks meet on one layer; those over 45° are
+listed. Neighbours come from the `RoutingClearanceIndex` bins within 1 mm,
+never all pairs of objects; farther copper is not reported. The review is
+report-only: routing, boards and every other report section MUST be
+byte-identical. It is geometric screening, not crosstalk or impedance
+qualification. See D6 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-169 — S-shaped serpentines for length-match tuning (Accepted)
+
+A tuning unit (plan R3) whose rules declare `tuning_style = "serpentine"` MUST
+tune toward its `length_match` group with S-shaped legs where both sides of a
+straight run have room. Collinear pieces of one net, layer and width that meet
+end to end with nothing else of the net at the joint are surveyed as one line.
+Legs cross the line perpendicular to it at a pitch of the lane width plus
+`tuning_spacing` (default: the larger of 3 × width and the clearance); the
+tops between them alternate sides, each at most `tuning_amplitude_limit` off
+the line and at least d + 2 nm, so every corner keeps the coupled 45° chamfers
+of CS-167. One chamfer leg c, R9's rule applied to every leg, serves the whole
+unit; each leg has one inside and one outside corner per member, so both
+members gain exactly 2 × (sum of heights) − (n + 1)(f(c) + f(c + d)) for n
+tops, f(k) = 2k − round(k√2), and the pair's skew is unchanged. A top's room
+is that of a bump over its two legs, outlined at the least top and largest
+foot chamfer. A line takes at most one serpentine (two or more consecutive
+tops with room); most capacity first, the last trimmed to the fewest tops, at
+most 32 legs per unit (a bump counts two). Lines without one keep one-sided
+bumps, and a unit falls back to bumps alone when its serpentines cannot
+provide the length. Heights are levelled across tops and bumps, and c is
+lowered until it suits every leg and the length is exact. Intra-pair skew
+compensation (D5) keeps one-sided bumps. Units without the property MUST tune
+byte-identically. Reports keep geometric length; serpentine self-coupling is
+not qualified. See R10 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-170 — Tuning bundle pairs as they route (Accepted)
+
+Each time a bundle pair (same two components, kind and priority; plan R6) of
+a `length_match` group is accepted, every accepted pair of that bundle short
+of the group's longest accepted member by more than `max_skew` MUST be tuned
+toward it, in acceptance order, before the next pair routes: with the R3
+targets, the unit's tuning style (CS-169) and the unchanged gates and atomic
+validation. Later pairs route around that copper, and pairs routed before the
+longest are topped up as soon as it is accepted, not only by the final pass. A
+pair that cannot be tuned keeps its copper and is retried only after it is
+re-routed or the target grows. When a later bundle pair finds no candidate,
+the tuning added while routing is removed from the bundle and that pair is
+searched once more before any rip-up repair. Targets are measured lengths
+only: no prediction of the group's longest member is used, because a pair
+tuned past it cannot be shortened. The final pass tops up what is left.
+Reports list each tuning step with its stage and style, and the lengths as
+routed as the lengths before tuning. Groups within their limit, and bundles
+without a `length_match` group, MUST route byte-identically. See R12 in the
+[D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-171 — Nested exits at package corners (Accepted)
+
+When a critical bundle leaves a package across a corner, its side-edge pairs
+MUST NOT run past their far end's column and back. A pair's edge at a
+component is the outward side of its two lands (one row along x or y, outward
+away from the component origin). A side pair exits perpendicular to the
+direction in which it enters the far component, with the far lands ahead in
+both; the bundle wraps a corner when another of its surface pairs leaves along
+that direction. Side pairs with one exit and travel direction form a nest,
+innermost (nearest the corner) first; a nest whose far columns are out of
+order (its pairs cross, CS-165) is not planned. Each pair plans its run on its
+far column, or, when that is nearer, just outside the pair inside it (both
+half-bands plus the larger clearance), and never nearer than the shortest
+port, a one-pitch diagonal and a lane offset. The nest takes its slots in the
+bundle order innermost first, so each outer pair routes around the inner
+pair's actual copper. The router tries the nested exit before any other
+candidate: the shortest legal port, one 45° diagonal onto the run (the longest
+that clears committed copper, down to one pair pitch), the run, and a 45° jog
+back just before the far port when the run lies beyond the column. A run that
+does not clear, or whose skew-tuning bumps do not, steps outward by 50 µm, at
+most 2 mm, within 256 tuned candidates; at most three take the unchanged
+profile, plane and atomic native-DRC gates. Otherwise the pair routes exactly
+as before. The bundle record lists each nested exit with its column, planned
+and routed run and diagonal, and whether it routed or fell back. Bundles
+without a corner wrap MUST route byte-identically. See R7 in the [D-PHY
+routing plan](dphy-routing-plan.md).
+
+## CS-172 — Surface-only package escapes (Accepted)
+
+A crowded package pin of an ordinary net that may not change layer, because
+the net has one permitted routing layer or `max_vias = 0`, MUST escape on its
+own pad layer and never through a via. Package fanout gives such a pin no
+dogbone choices. Its choices are checked paths from the pad centre to beyond
+the package collar, built from the boundary witness ports, path orders and
+octilinear maze (CS-152) with their default bounds; maze legs are re-cut as
+routed pieces (CS-164) and checked again. The choices join the joint escape
+assignment and the native DRC gate together with the dogbones of other pins,
+so neighbouring dogbones leave the lane open. The selected path is owned fanout
+copper, so critical and plane owners route around it as around a dogbone. It is
+also the pin's routing access: the collar port on the pad layer, launched from
+the pad itself (`FanoutResult.surface_accesses`). The boundary stage witnesses
+only via launches and does not witness it again. Escape terminals and release
+(CS-163) apply unchanged, and incremental placement falls back to a full
+preflight as for boundary reservations. A pin without a legal surface path
+stays pending, so package access is not ready; a land on a layer its net may
+not use stays pending as before. Nets that may change layer MUST route
+byte-identically. See R13 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-173 — Group serpentines for adjacent lanes (Accepted)
+
+Units of one `length_match` group whose routing rules name the same
+`tuning_group` MUST be tuned together where their lanes run side by side:
+every lane of the group follows the same bumps or serpentine tops, rising the
+same height off its own line, so every lane gains the same length and keeps
+its spacing to the next lane through every leg. A run is a stretch where each
+net of the group has one straight line on one axis and layer, each unit's
+lanes adjacent (a pair at its lane spacing). On a leg the lanes turn one
+after another; for a one-sided bump the outermost lane's interval is the
+innermost lane's plus twice the lane span. Corners keep CS-167's 45°
+chamfers generalised to N lanes: at each end of a leg the lane inside the
+turn takes chamfer leg c and every other lane c plus ⌊(2 − √2) × gap⌋ for
+each gap between it and that lane, so parallel pieces never come closer than
+their spacing; every lane takes one corner at each end of every leg, and
+offsets are lowered by at most 8 nm where needed so that the rounded per-piece
+length gain of all lanes is exactly equal and pair skew is unchanged (up to
+CS-167's breakout re-cut rounding). Room is
+measured on the outermost lane's chamfered outline with the innermost lane's
+feet, against all other copper, lands, keep-outs, holes and the board edge,
+up to the smallest `tuning_amplitude_limit` of the members. Bumps follow R3's
+spacing on grids centred in the run or shifted along it; serpentine tops
+(every member `"serpentine"`) follow CS-169 at a pitch of the lane span plus
+width plus leg gap, with bumps where one side has no room. One chamfer leg
+serves a step and heights are levelled, so the added length is exact. The
+group adds the least length its units need, never past the group's longest
+member; each unit's remainder is then tuned on its own. A group is tuned once
+all its units are accepted in one bundle (CS-170; its pairs wait for it) and
+again in the final pass, with every unit's profile gates and one atomic
+native-DRC validation. Re-routing a unit of a group tuned while routing
+returns the others to their copper as routed. A group that does not fit
+leaves the copper unchanged, reports the longest run against the run a group
+bump needs, the amplitude against the least group height, or the room on each
+side, and its units are tuned one by one. Boards without the property MUST
+route byte-identically. See R14 in the [D-PHY routing plan](dphy-routing-plan.md).

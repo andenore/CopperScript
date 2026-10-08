@@ -313,7 +313,7 @@ def release_unused_escapes(
                 raw, current, score = (trial_tracks, trial_vias), trial, trial_score
                 available -= wanted
                 break
-        current, score = _prune_open_ends(settle, current, score)
+        current, score = _prune_open_ends(settle, current, score, trimmable=available)
         replaced[name] = _cut_cycles(settle, current, score)
         if settled is not None:
             settled.add(name)
@@ -342,32 +342,127 @@ def release_unused_escapes(
     return tuple(kept_tracks), tuple(kept_vias)
 
 
-def _prune_open_ends(settle: "_Settler", current, score, *, rounds: int = 8):
+def _prune_open_ends(settle: "_Settler", current, score, *, rounds: int = 8,
+                     trimmable: Counter | None = None):
     """Remove owned pad-contacting leaves only after proving robust connectivity.
 
     The centre-line pruner deliberately keeps ambiguous pad-edge contacts,
     including coincident lands. The complete-net score can establish whether
     such a piece is redundant without weakening that conservative local test.
+
+    A ``trimmable`` (owned escape) track whose open end runs past a land of
+    its net that it crosses, for example a dogbone whose via was deleted
+    because the route reached that land, is cut back to the land's centre
+    instead (``_trimmed_to_land``).
     """
+    trimmable = Counter(trimmable or ())
     for _ in range(rounds):
         if not score[1]:
             break
         budget = Counter(settle.mutable)
+        spare = Counter(trimmable)
         candidates = set(settle.open_track_ends(*current))
         for index, track in enumerate(current[0]):
             owned = bool(budget[track])
             budget[track] -= owned
-            if not owned or index not in candidates:
+            escape = not owned and bool(spare[track])
+            spare[track] -= escape
+            if not (owned or escape) or index not in candidates:
                 continue
-            trial = settle(current[0][:index] + current[0][index + 1:], current[1])
-            trial_score = settle.score(*trial)
-            if (trial_score is not None and trial_score[1] < score[1]
-                    and all(new <= old for new, old in zip(trial_score, score))):
-                current, score = trial, trial_score
-                break
+            rest = current[0][:index] + current[0][index + 1:]
+            trials = ([[*rest, piece] for piece in _trimmed_to_land(settle, track)]
+                      if escape else [rest])
+            for tracks in trials:
+                trial = settle(tracks, current[1])
+                trial_score = settle.score(*trial)
+                if (trial_score is not None and trial_score[1] < score[1]
+                        and all(new <= old for new, old in zip(trial_score, score))):
+                    break
+            else:
+                continue
+            current, score = trial, trial_score
+            trimmable -= Counter((track,))
+            break
         else:
             break
     return current, score
+
+
+def trim_dangling_overhangs(board: PhysicalBoard, protected: Counter) -> PhysicalBoard:
+    """Cut routed tracks back to the land they cross when their far end is open.
+
+    A final sweep over ordinary nets: a track with an open end that crosses a
+    land of its net (for example a fanout dogbone whose launch via a later
+    stage deleted because the route already reached that land) keeps only its
+    piece up to that land's centre (``_prune_open_ends``). A net changes only
+    if it stays connected and loses open ends. ``protected`` occurrences
+    (input and hard-macro copper) and critical, zone and incomplete nets
+    never change.
+    """
+    from .physical import RouteKind
+
+    skip = {zone.net for zone in board.zones} | {
+        rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
+    nets = {net.name: net for net in board.nets}
+    order = {layer: index for index, layer in enumerate(board.stackup.copper_layers)}
+    by_net: dict[str, list[TrackSegment]] = defaultdict(list)
+    for track in board.tracks:
+        by_net[track.net].append(track)
+    clearance = None
+    replaced: dict[str, list[TrackSegment]] = {}
+    for name in sorted(by_net):
+        owned = Counter(by_net[name]) - protected
+        if name in skip or name not in nets or not owned:
+            continue
+        clearance = clearance or RoutingClearanceIndex(board)
+        settle = _Settler(board, name, nets[name], _net_pad_shapes(board, name), order, clearance,
+                          Counter(), Counter())
+        current = (list(by_net[name]), [via for via in board.vias if via.net == name])
+        score = settle.score(*current)
+        if score is None or not score[1]:
+            continue
+        trimmed, trimmed_score = _prune_open_ends(settle, current, score, trimmable=owned)
+        if trimmed_score[1] < score[1]:
+            replaced[name] = list(trimmed[0])
+    if not replaced:
+        return board
+    tracks = [track for track in board.tracks if track.net not in replaced]
+    for name in sorted(replaced):
+        tracks.extend(replaced[name])
+    return replace(board, tracks=tuple(tracks))
+
+
+def _trimmed_to_land(settle: "_Settler", track: TrackSegment) -> list[TrackSegment]:
+    """``track`` cut back to the centre of each same-net land it crosses.
+
+    Each piece keeps one end of ``track`` and stops where the land's centre
+    projects onto it, on the same octilinear direction in whole nanometres;
+    lands at either end are skipped.
+    """
+    pieces = []
+    shape = _robust_shape(track)
+    dx, dy = track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm
+    steps = max(abs(dx), abs(dy))
+    if not steps or (dx and dy and abs(dx) != abs(dy)):
+        return pieces
+    for layers, pad in settle.pads:
+        if track.layer not in layers or shapes_clear(shape, pad, 1):
+            continue
+        cx = sum(p.x_nm for p in pad.spine) // len(pad.spine)
+        cy = sum(p.y_nm for p in pad.spine) // len(pad.spine)
+        # Projection onto the segment, counted in octilinear steps.
+        ux, uy = (dx > 0) - (dx < 0), (dy > 0) - (dy < 0)
+        along = ((cx - track.start.x_nm) * ux + (cy - track.start.y_nm) * uy) // (abs(ux) + abs(uy))
+        if not 0 < along < steps:
+            continue
+        cut = Point(track.start.x_nm + ux * along, track.start.y_nm + uy * along)
+        if shapes_clear(RoundedConvexShape((cut,), 0), pad, 1):
+            continue  # The centre projects outside the land: an edge contact.
+        for keep in (track.start, track.end):
+            piece = replace(track, start=keep, end=cut)
+            if piece not in pieces:
+                pieces.append(piece)
+    return pieces
 
 
 def _cut_cycles(settle: "_Settler", current, score, *, rounds: int = 8):

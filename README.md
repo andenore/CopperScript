@@ -299,6 +299,12 @@ Progress is not completion or signoff evidence; see [routing progress](docs/rout
 `--pitch-mm`, `--passes`, and `--search-budget` bound detailed-routing work;
 exhausting the search budget is reported per net rather than silently accepting
 an unfinished path.
+The report's `critical_lane_review` section reviews the exported copper of every
+critical net: track lengths, layers and vias, pair and `length_match` skew,
+spacing to other copper inside and outside breakout regions, coupled length to
+other pairs and bends. `route-board` and `python -m pcbir.critical_preflight`
+(for its critical copper) print it as one `CRITICAL LANES:` line; see the
+[language reference](docs/language-reference.md#critical-routing-and-qualification).
 For difficult boards, `--fanout` pre-escapes crowded SMD pads, `--soft-ripup`
 and `--maximum-ripup-blockers 4` try bounded transactional rerouting, and
 `--detailed-feedback-trials 4` retries legal placement changes against exact

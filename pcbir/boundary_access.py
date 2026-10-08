@@ -206,6 +206,45 @@ def _maze_path(board, clearance, net, start, width, layer, area, extension, opti
     return None, states
 
 
+def surface_escapes(
+    board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str, start: Point,
+    layer: CopperLayer, area: Bounds, options: BoundaryAccessOptions | None = None,
+    *, refined: bool = False,
+) -> tuple[tuple[TrackSegment, ...], ...]:
+    """Checked paths from a pad centre beyond its package collar on one layer.
+
+    A pin whose net may not change layer gets no dogbone; it escapes on its own
+    surface (plan R13). Ports, path orders and the maze are those of boundary
+    witnesses: ``refined`` uses the fine port lattice and adds the maze, whose
+    legs are re-cut and re-checked as routed pieces. Shortest paths first.
+    """
+    options = options or BoundaryAccessOptions()
+    rule = next((r for r in board.net_routing_rules if r.net == net), None)
+    width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+    extension = max(options.collar_margin_nm, (width + 1) // 2 +
+                    max(board.rules.minimum_clearance_nm, rule.clearance_nm or 0 if rule else 0))
+    step, limit = ((options.refinement_step_nm, options.maximum_refined_ports_per_edge) if refined
+                   else (options.port_step_nm, options.maximum_ports_per_edge))
+    endpoints = tuple(_ports(start, area, extension, step, limit))
+    nearest = min(abs(p.x_nm-start.x_nm) + abs(p.y_nm-start.y_nm) for _, p in endpoints)
+    paths = []
+    for _, end in endpoints:
+        if abs(end.x_nm-start.x_nm) + abs(end.y_nm-start.y_nm) <= nearest + options.maximum_detour_nm:
+            paths.extend(path for path in checked_access_paths(
+                board, clearance, net, start, end, width, layer, allow_orthogonal=False) if path)
+    if refined and options.maze_escapes:
+        found, _ = _maze_path(board, clearance, net, start, width, layer, area, extension, options)
+        if found is not None:
+            pieces = tuple(piece for track in found[1]
+                           for piece in clearance.route_pieces(net, track.start, track.end, width, layer))
+            if all(_track_inside_board(board, t.start, t.end, t.width_nm)
+                   and clearance.can_track(net, t.start, t.end, t.width_nm, layer) for t in pieces):
+                paths.append(pieces)
+    return tuple(sorted(dict.fromkeys(paths), key=lambda path: (
+        sum(max(abs(t.end.x_nm-t.start.x_nm), abs(t.end.y_nm-t.start.y_nm)) for t in path),
+        len(path), path[-1].end.x_nm, path[-1].end.y_nm)))
+
+
 def analyze_boundary_access(
     board: PhysicalBoard, fanout: FanoutResult, options: BoundaryAccessOptions | None = None,
 ) -> BoundaryAccessResult:

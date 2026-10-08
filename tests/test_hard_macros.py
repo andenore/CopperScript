@@ -452,6 +452,21 @@ def test_private_region_placement_is_independent_of_reference_order(tmp_path,out
     assert not placement_solution_is_legal(board,{p.reference:p for p in board.placements})
 
 
+@pytest.mark.parametrize("y_mm,legal",[(11.5,False),(12.5,True)])
+def test_outsider_lands_keep_clear_of_macro_copper_outside_its_regions(tmp_path,y_mm,legal):
+    original,asset,bind=fixture(tmp_path)
+    # A port via and its lead-in track below the chip, outside the protected
+    # region: a foreign land on the via is illegal even though no region is hit.
+    asset["vias"]=[dict(net="signal",position_nm=[0,1500000],size_nm=600000,drill_nm=300000,
+                        from_layer="F.Cu",to_layer="B.Cu",technology=None)]
+    asset["tracks"].append(dict(net="signal",width_nm=200000,layer="F.Cu",
+                                points=[{"pad":["chip","1"]},[0,1500000]]))
+    board=bind(asset,replace(original,placements=(*original.placements,
+                                                  Placement("R9","test",Point.mm(10,y_mm)))))
+    from pcbir.placement import placement_solution_is_legal
+    assert placement_solution_is_legal(board,{p.reference:p for p in board.placements}) is legal
+
+
 def test_existing_fixed_orientation_is_not_broadened_by_macro(tmp_path):
     original,_,bind=fixture(tmp_path)
     from pcbir.physical import ComponentPlacementRule

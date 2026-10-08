@@ -19,8 +19,9 @@ from .backends.kicad_pcb import KiCadPcbBackend
 from .backends.kicad_project import write_kicad_project
 from .critical import (CriticalRoutingStatus, critical_lane_table, critical_net_document,
                        route_critical_nets)
-from .critical_bundles import crossing_line
+from .critical_bundles import crossing_line, nested_exit_line
 from .critical_feedback import improve_critical_placement
+from .critical_review import critical_lane_review, lane_review_line
 from .critical_tuning import match_tuning_line
 from .drc import run_physical_drc
 from .erc import check, has_errors
@@ -30,6 +31,7 @@ from .hard_macros import apply_hard_macro_scene
 from .loader import BoardLoadError, load_design
 from .physical import PadReference, nm_from_mm
 from .package_access import preflight_package_access
+from .pad_via_arrays import via_in_pad_array_report
 from .plane import PlaneStitchOptions
 from .physicalize import PrototypePhysicalOptions, prototype_physicalize, resolved_physicalize
 from .placement import PlacementPlannerOptions
@@ -214,8 +216,13 @@ def main(argv: list[str] | None = None) -> int:
                           global_route_certified=repaired.global_route.status.value == "success")
         timings["package_access" if args.package_access else "critical"] = perf_counter() - started
         result_board = access.board if access is not None else critical.board
+        lane_review = critical_lane_review(critical.board, critical.nets, critical.match_tuning)
         report.update(complete=True, critical=json.loads(critical.to_json()),
+                      critical_lane_review=lane_review,
                       native_drc=json.loads(run_physical_drc(result_board).to_json()))
+        via_arrays = via_in_pad_array_report(result_board)
+        if via_arrays:
+            report["via_in_pad_arrays"] = via_arrays
         checkpoint("package_access_complete" if args.package_access else "critical_complete")
         if args.output:
             manifest = KiCadPcbBackend().generate(result_board)
@@ -236,8 +243,12 @@ def main(argv: list[str] | None = None) -> int:
                   f"(limit {bundle.repair_limit})")
             for crossing in bundle.crossings:
                 print(crossing_line(bundle, crossing))
+            for item in bundle.nested_exits:
+                print(nested_exit_line(bundle, item))
         for tuning in critical.match_tuning:
             print(match_tuning_line(tuning))
+        if lane_review["nets"]:
+            print(lane_review_line(lane_review))
         if access is not None:
             return 0 if access.ready else 1
         return 0 if report["global_route_certified"] and critical.status is not CriticalRoutingStatus.FAILED else 1

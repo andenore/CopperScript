@@ -167,6 +167,19 @@ def test_no_common_pad_layer_does_not_invent_a_surface_connection():
     assert not tuple(local_surface_candidates(board, board.net_routing_rules[0]))
 
 
+def test_a_shorter_exact_tree_replaces_a_multi_terminal_guide_tree(monkeypatch):
+    board, guides = fixture()
+    monkeypatch.setattr("pcbir.critical.local_surface_candidates", lambda *args: iter(()))
+    guide, _, _ = _route_single(board, board.net_routing_rules[0], guides.routes[0])
+    result = route_critical_nets(board, guides)
+    (net,) = result.nets
+    assert len(next(item for item in board.nets if item.name == "MATCH").pads) >= 3
+    assert net.connected and net.strategy == "exact_single_net"
+    assert net.lengths_nm[0] < guide.lengths_nm[0] and net.via_count == 0
+    assert net.guide_length_nm == guide.lengths_nm[0]
+    assert not hard_findings(result.board)
+
+
 def test_native_rejection_preserves_incumbent_even_if_builder_proposes_shorter_copper(monkeypatch):
     board, guides = fixture()
     # Deliberately omit the C branch, emulating a defective proposal builder.
@@ -174,6 +187,9 @@ def test_native_rejection_preserves_incumbent_even_if_builder_proposes_shorter_c
                                    nm_from_mm(.2), CopperLayer.FRONT),)
     monkeypatch.setattr("pcbir.critical.local_surface_candidates", lambda *args: iter((missing_branch,)))
     original, tracks, _ = _route_single(board, board.net_routing_rules[0], guides.routes[0])
+    # Isolate the local-candidate gate from the exact-tree comparison.
+    monkeypatch.setattr("pcbir.critical._route_single_exact",
+                        lambda *args: (replace(original, connected=False), (), ()))
     result = route_critical_nets(board, guides)
     assert result.nets[0].connected and result.nets[0].strategy == "global_guide"
     assert result.locked_tracks == tracks

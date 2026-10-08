@@ -76,11 +76,20 @@ class FanoutResult:
     created_tracks: tuple[TrackSegment, ...] = ()
     assignment: EscapeAssignmentReport | None = None
     boundary_accesses: Mapping[PadReference, RoutingAccess] | None = None
+    # Pins whose net may not change layer: owned surface paths to the package
+    # collar from the pad itself, never a via (plan R13).
+    surface_accesses: Mapping[PadReference, RoutingAccess] | None = None
 
     @property
     def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
         """Detailed-router anchors; ordinary preflight retains via identities."""
-        return MappingProxyType({**self.accesses, **(self.boundary_accesses or {})})
+        return MappingProxyType({**self.accesses, **(self.surface_accesses or {}),
+                                 **(self.boundary_accesses or {})})
+
+    @property
+    def escaped_pads(self) -> frozenset[PadReference]:
+        """Pins with an owned via launch or surface escape."""
+        return frozenset((*self.accesses, *(self.surface_accesses or {})))
 
 
 def route_fanout(
@@ -91,6 +100,8 @@ def route_fanout(
 
     if board.hard_macros and not board.materialized_macros:
         raise ValueError("materialize hard macros before package escape")
+    from .pad_via_arrays import require_via_in_pad_arrays
+    require_via_in_pad_arrays(board, "package escape")
     options = options or FanoutOptions()
     if only_nets is not None:
         unknown = only_nets - {net.name for net in board.nets}
@@ -156,6 +167,25 @@ def route_fanout(
     for item in pads:
         pin_by_ref.setdefault(item[1], []).append(item)
     outline = _OutlineSites(board.outline.vertices)
+    # A pin whose net may not change layer gets no dogbone: it escapes on its
+    # own layer beyond the package collar, as a boundary witness does (R13).
+    surface = {reference: layer for reference, items in pin_by_ref.items()
+               if (layer := _surface_layer(board, net_by_pad[reference],
+                                           rules.get(net_by_pad[reference]), items[0][3])) is not None}
+    collars = {}
+    def surface_choices(reference, index, *, refined=False):
+        # Collar and port bounds are the boundary stage defaults.
+        from .boundary_access import BoundaryAccessOptions, package_collar, surface_escapes
+        settings = BoundaryAccessOptions()
+        choices = []
+        for _, _, position, placement, _ in pin_by_ref[reference]:
+            if placement.reference not in collars:
+                collars[placement.reference] = package_collar(
+                    board, placement.reference, settings.collar_margin_nm).bounds
+            choices.extend((path, None) for path in surface_escapes(
+                board, index, net_by_pad[reference], position, surface[reference],
+                collars[placement.reference], settings, refined=refined))
+        return tuple(dict.fromkeys(choices))
     def choices_for(reference, index, candidate_options, *, elbows=False, multiple_orders=False):
         choices = []
         for _, _, position, placement, pad in pin_by_ref[reference]:
@@ -178,6 +208,13 @@ def route_fanout(
         refinement_cache[reference] = tuple(dict.fromkeys((*radial, *elbows)))
         return refinement_cache[reference]
     for reference in pin_by_ref:
+        if reference in surface:
+            choices = surface_choices(reference, clearance)
+            if not choices:
+                choices = surface_choices(reference, clearance, refined=True)
+                refined_counts[reference] = len(choices)
+            domains[reference] = choices
+            continue
         choices = choices_for(reference, clearance, options)
         if options.two_leg_escapes and not choices:
             choices = choices_for(reference, clearance, options, elbows=True)
@@ -206,6 +243,11 @@ def route_fanout(
     assignment = None
     if options.joint_escapes:
         def expand(reference):
+            if reference in surface:
+                index = RoutingClearanceIndex(board)
+                fine = surface_choices(reference, index, refined=True)
+                refined_counts[reference] = len(fine)
+                return tuple(dict.fromkeys((*surface_choices(reference, index), *fine)))
             if not options.two_leg_escapes:
                 return refine(reference)
             coarse = choices_for(reference, RoutingClearanceIndex(board), options,
@@ -260,8 +302,25 @@ def route_fanout(
                                 replace(item, selected_candidate_index=None,
                                         diagnostic="whole fanout proposal rejected by native DRC")
                                 for item in analysis), assignment=assignment)
-    return FanoutResult(routed, MappingProxyType(accesses), tuple(pending),
-                        len(tracks), len(vias), tuple(vias), tuple(analysis), tuple(tracks), assignment)
+    escapes = {reference: RoutingAccess(path[-1].end, surface[reference], path[0].start, path)
+               for reference in accesses if reference in surface
+               for path in (domains[reference][selected[reference]][0],)}
+    return FanoutResult(routed, MappingProxyType({reference: anchor for reference, anchor in accesses.items()
+                                                  if reference not in surface}), tuple(pending),
+                        len(tracks), len(vias), tuple(vias), tuple(analysis), tuple(tracks), assignment,
+                        surface_accesses=MappingProxyType(escapes) if surface else None)
+
+
+def _surface_layer(board, net, rule, placement) -> CopperLayer | None:
+    """The pad's own layer when its net may not leave it, else None.
+
+    One allowed layer, or ``max_vias = 0``: no via means no layer change.
+    """
+    side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+    allowed = routing_layers(board, net, rule)
+    if side in allowed and (len(allowed) == 1 or rule is not None and rule.max_vias == 0):
+        return side
+    return None
 
 
 def _maze_choices(board, clearance, net, pins, options) -> tuple[EscapeCandidate, ...]:

@@ -60,6 +60,7 @@ from .physical import (
     ReturnViaPolicy,
     Size,
     Stackup,
+    TuningStyle,
     ZoneConnection,
     nm_from_mm,
 )
@@ -461,7 +462,7 @@ def _physicalize(
         assembly_access=mechanical.assembly_access if mechanical else (),
         mechanical_slots=mechanical.slots if mechanical else (),
         mechanical_references=mechanical.references if mechanical else (),
-        match_groups=_lower_match_groups(flat),
+        match_groups=_check_tuning_groups(flat, _lower_match_groups(flat)),
         component_hole_clearances=_lower_hole_clearances(flat, footprints, placements, rules, metadata),
     )
 
@@ -555,11 +556,23 @@ def _lower_physical_constraints(
             lowered = targets(constraint.targets)
             if lowered is None or lowered[0].pad is None:
                 raise ValueError("via_in_pad target must resolve to a physical pad")
-            if set(constraint.parameters) - {"process"}:
+            parameters = constraint.parameters
+            if set(parameters) - {"process", "rows", "columns", "pitch"}:
                 raise ValueError("unknown via_in_pad parameter")
+            # rows/columns request a required array; without them this stays
+            # a permission for the single last-resort plane contact.
+            if ("rows" in parameters) != ("columns" in parameters):
+                raise ValueError("via_in_pad rows and columns must be given together")
+            if "pitch" in parameters and "rows" not in parameters:
+                raise ValueError("via_in_pad pitch requires rows and columns")
+            if any(type(parameters[name]) is not int or parameters[name] <= 0
+                   for name in ("rows", "columns") if name in parameters):
+                raise ValueError("via_in_pad rows and columns must be positive integers")
             via_in_pad_rules.append(PadViaInPadRule(
                 PadReference(lowered[0].reference, lowered[0].pad),
-                str(constraint.parameters.get("process", "filled-capped")),
+                str(parameters.get("process", "filled-capped")),
+                parameters.get("rows"), parameters.get("columns"),
+                _optional_constraint_length(parameters, "pitch"),
             ))
             continue
         if constraint.kind is ConstraintKind.COPPER_ZONE:
@@ -637,6 +650,9 @@ def _lower_physical_constraints(
                     breakout_width_nm=_optional_constraint_length(parameters, "breakout_width"),
                     breakout_gap_nm=_optional_constraint_length(parameters, "breakout_gap"),
                     breakout_clearance_nm=_optional_constraint_length(parameters, "breakout_clearance"),
+                    tuning_style=TuningStyle(str(parameters.get("tuning_style", "bumps"))),
+                    tuning_spacing_nm=_optional_constraint_length(parameters, "tuning_spacing"),
+                    tuning_group=_optional_string(parameters, "tuning_group"),
                 )
             )
             continue
@@ -844,6 +860,45 @@ def _lower_match_groups(flat: FlatElectricalView) -> tuple[NetMatchGroup, ...]:
         except ValueError as exc:
             raise ValueError(f"{origin}: {exc}") from exc
     return tuple(groups)
+
+
+def _check_tuning_groups(flat: FlatElectricalView,
+                         groups: tuple[NetMatchGroup, ...]) -> tuple[NetMatchGroup, ...]:
+    """Check each routing ``tuning_group`` against the lowered match groups (plan R14).
+
+    A net with a tuning group must belong to a ``length_match`` group, every
+    net of one tuning group to the same one, and both members of a pair to
+    the same tuning group. Errors carry the routing constraint's location.
+    """
+
+    owner = {net: group.id for group in groups for net in group.nets}
+    declared: dict[str, tuple[str | None, str]] = {}
+    for constraint in flat.constraints:
+        if constraint.kind is ConstraintKind.ROUTING and len(constraint.targets) == 1:
+            name = constraint.parameters.get("tuning_group")
+            declared[constraint.targets[0]] = (None if name is None else str(name),
+                                               constraint.origins[0] if constraint.origins else "routing")
+    match_of: dict[str, tuple[str, str]] = {}
+    for constraint in flat.constraints:
+        if constraint.kind is not ConstraintKind.ROUTING or len(constraint.targets) != 1:
+            continue
+        net = constraint.targets[0]
+        name, origin = declared[net]
+        partner = constraint.parameters.get("partner")
+        if isinstance(partner, str) and partner in declared and declared[partner][0] != name:
+            raise ValueError(f"{origin}: CMP117: routing rules for {net!r} and {partner!r} "
+                             "must agree on tuning_group")
+        if name is None:
+            continue
+        if net not in owner:
+            raise ValueError(f"{origin}: CMP117: tuning_group {name!r} requires {net!r} to belong to "
+                             "a length_match group")
+        first = match_of.setdefault(name, (owner[net], net))
+        if first[0] != owner[net]:
+            raise ValueError(f"{origin}: CMP117: tuning_group {name!r} joins {net!r} of length_match "
+                             f"group {owner[net]!r} and {first[1]!r} of {first[0]!r}; a tuning group "
+                             "must stay within one length_match group")
+    return groups
 
 
 def _lower_hole_clearances(

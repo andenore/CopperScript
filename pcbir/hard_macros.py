@@ -482,14 +482,18 @@ def _validate_macro_via_permissions(board, macro, vias):
 
 
 def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
-    """Commit the entire set, or reject without changing any input geometry."""
+    """Commit the entire set, or reject without changing any input geometry.
+
+    Required via-in-pad arrays join this immutable prefix after macro copper.
+    """
+    from .pad_via_arrays import materialize_via_in_pad_arrays
     if board.materialized_macros:
         validate_hard_macros(board)
         if set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
             raise ValueError("partial hard-macro materialization is unsupported")
-        return board  # idempotent; no duplicate owner copper
+        return materialize_via_in_pad_arrays(board)  # idempotent; no duplicate owner copper
     if not board.hard_macros:
-        return board
+        return materialize_via_in_pad_arrays(board)
     if board.tracks or board.vias or board.polygons or board.zone_fills:
         raise ValueError("macro materialization must precede all routing and fill")
     poses = {p.reference: p for p in board.placements}
@@ -591,7 +595,7 @@ def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
                 raise ValueError("macro port has no owner copper contact")
             if len(root_ids) != 1 or any(not graph.pad_nodes.get(pad) or any(graph.roots[n] not in root_ids for n in graph.pad_nodes[pad]) for pad in port.pads):
                 raise ValueError("macro port is not connected to its declared private pads")
-    return result
+    return materialize_via_in_pad_arrays(result)
 
 
 def macro_routing_pads(board, net):
@@ -657,6 +661,11 @@ def macro_source(board):
             t, v, _, _ = resolved_macro_geometry(board, macro)
             tracks.update(t)
             vias.update(v)
+    # A committed via-in-pad array is part of the same rebuildable prefix.
+    from .pad_via_arrays import via_in_pad_array_vias
+    arrays = Counter(via_in_pad_array_vias(board))
+    if not arrays - Counter(board.vias):
+        vias.update(arrays)
     if Counter(board.tracks) != tracks or Counter(board.vias) != vias:
         raise ValueError("routing planning requires no copper except immutable hard macros")
     owned_zone_ids = {zone.id for macro in board.hard_macros for zone in resolved_macro_zones(board, macro)}

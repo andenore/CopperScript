@@ -23,6 +23,7 @@ from .physical import (
     CopperPolygon,
     PolygonWithHoles,
     TrackSegment,
+    TuningStyle,
     Via,
 )
 from .placement import resolved_copper_keepouts, transformed_local_point, transformed_pad_position
@@ -478,6 +479,10 @@ def physical_board_digest(board: PhysicalBoard) -> str:
                 (rule.reference, rule.clearance_nm, rule.reason)
                 for rule in sorted(board.component_hole_clearances, key=lambda item: item.reference)]}
                if board.component_hole_clearances else {}),
+            # Required via-in-pad arrays, likewise only when declared.
+            **({"via_in_pad_arrays": [repr(rule) for rule in sorted(
+                board.via_in_pad_rules, key=lambda item: item.pad) if rule.rows is not None]}
+               if any(rule.rows is not None for rule in board.via_in_pad_rules) else {}),
             "regions": [repr(item) for item in sorted(board.regions, key=lambda item: item.name)],
             "keepouts": [repr(item) for item in sorted(board.keepouts, key=lambda item: item.name)],
             "placement_rules": [repr(item) for item in sorted(board.placement_rules, key=lambda item: item.reference)],
@@ -1562,7 +1567,14 @@ def _routing_rule_document(item: NetRoutingRule) -> tuple[object, ...]:
         None if item.impedance_tolerance_percent is None else str(item.impedance_tolerance_percent),
         item.layer_group, item.breakout_length_nm, item.breakout_width_nm,
         item.breakout_gap_nm, item.breakout_clearance_nm)
-    return (*document, signal_intent) if any(value is not None for value in signal_intent) else document
+    if any(value is not None for value in signal_intent):
+        document = (*document, signal_intent)
+    # Tuning geometry (plan R10) likewise, only when it differs from the default.
+    if item.tuning_style is not TuningStyle.BUMPS or item.tuning_spacing_nm is not None:
+        document = (*document, ("tuning", item.tuning_style.value, item.tuning_spacing_nm))
+    if item.tuning_group is not None:
+        document = (*document, ("tuning_group", item.tuning_group))
+    return document
 
 
 def _footprint_document(name: str, footprint: object) -> tuple[object, ...]:

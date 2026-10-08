@@ -90,6 +90,13 @@ class ReturnViaPolicy(str, Enum):
     REFERENCE_CHANGE = "reference_change"
 
 
+class TuningStyle(str, Enum):
+    """Length-match tuning geometry (D-PHY plan R10)."""
+
+    BUMPS = "bumps"            # one-sided bumps (R3)
+    SERPENTINE = "serpentine"  # two-sided S-shaped legs, bumps where one side is blocked
+
+
 class PadKind(str, Enum):
     SMD = "smd"
     APERTURE = "aperture"
@@ -1144,6 +1151,14 @@ class NetRoutingRule:
     breakout_width_nm: Nanometres | None = None
     breakout_gap_nm: Nanometres | None = None
     breakout_clearance_nm: Nanometres | None = None
+    # Length-match tuning geometry (plan R10). ``tuning_spacing_nm`` is the
+    # least edge gap between adjacent serpentine legs; None means the default
+    # (the larger of 3 x width and the clearance).
+    tuning_style: TuningStyle = TuningStyle.BUMPS
+    tuning_spacing_nm: Nanometres | None = None
+    # Adjacent units of one length_match group with the same name are tuned
+    # together, all lanes bending as one bundle (plan R14).
+    tuning_group: str | None = None
 
     @property
     def effective_impedance_tolerance_percent(self) -> Decimal:
@@ -1152,6 +1167,7 @@ class NetRoutingRule:
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_layers", tuple(self.allowed_layers))
         object.__setattr__(self, "return_via_policy", ReturnViaPolicy(self.return_via_policy))
+        object.__setattr__(self, "tuning_style", TuningStyle(self.tuning_style))
         if self.shared_reference_layer is not None:
             object.__setattr__(self, "shared_reference_layer", CopperLayer(self.shared_reference_layer))
         if self.return_via_policy is ReturnViaPolicy.REFERENCE_CHANGE:
@@ -1172,12 +1188,15 @@ class NetRoutingRule:
             ("maximum uncoupled length", self.maximum_uncoupled_length_nm),
             ("maximum stub length", self.maximum_stub_length_nm),
             ("tuning amplitude limit", self.tuning_amplitude_limit_nm),
+            ("tuning spacing", self.tuning_spacing_nm),
             ("maximum return via distance", self.maximum_return_via_distance_nm),
         ):
             if value is not None and value <= 0:
                 raise ValueError(f"routing {name} must be positive")
         if self.max_vias is not None and self.max_vias < 0:
             raise ValueError("routing maximum via count cannot be negative")
+        if self.tuning_spacing_nm is not None and self.tuning_style is not TuningStyle.SERPENTINE:
+            raise ValueError('routing tuning spacing requires tuning_style "serpentine"')
         if self.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
             if self.differential_partner is None or self.pair_gap_nm is None:
                 raise ValueError(
@@ -1220,6 +1239,11 @@ class NetRoutingRule:
                 raise ValueError("impedance tolerance requires target_impedance_ohms or target_single_ended_ohms")
         if self.layer_group is not None and (not isinstance(self.layer_group, str) or not self.layer_group.strip()):
             raise ValueError("routing layer group must be a nonempty name")
+        if self.tuning_group is not None:
+            if not isinstance(self.tuning_group, str) or not self.tuning_group.strip():
+                raise ValueError("routing tuning group must be a nonempty name")
+            if self.kind is RouteKind.GENERAL:
+                raise ValueError("routing tuning group requires a critical routing kind")
         breakout = {
             "breakout width": self.breakout_width_nm,
             "breakout gap": self.breakout_gap_nm,
@@ -1297,14 +1321,36 @@ class ComponentHoleClearance:
 
 @dataclass(frozen=True, slots=True)
 class PadViaInPadRule:
-    """Explicit pad-scoped permission, not a global pad-overlap exemption."""
+    """Explicit pad-scoped permission, not a global pad-overlap exemption.
+
+    ``rows`` and ``columns`` turn the permission into a required centred
+    array of filled-capped vias (see ``pad_via_arrays``); ``pitch_nm``
+    overrides its default even spread.
+    """
 
     pad: PadReference
     process: str = "filled-capped"
+    rows: int | None = None
+    columns: int | None = None
+    pitch_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         if self.process != "filled-capped":
             raise ValueError("via-in-pad supports only the filled-capped process")
+        if (self.rows is None) != (self.columns is None):
+            raise ValueError("via-in-pad array rows and columns must be given together")
+        if self.rows is not None and any(
+                type(count) is not int or count <= 0 for count in (self.rows, self.columns)):
+            raise ValueError("via-in-pad array rows and columns must be positive integers")
+        if self.pitch_nm is not None and (self.rows is None or self.pitch_nm <= 0):
+            raise ValueError("via-in-pad array pitch must be positive and requires rows and columns")
+
+    def __repr__(self) -> str:
+        # A permission-only rule keeps its historical repr, and with it the
+        # placement fingerprints of boards that declare one.
+        array = ("" if self.rows is None else
+                 f", rows={self.rows!r}, columns={self.columns!r}, pitch_nm={self.pitch_nm!r}")
+        return f"PadViaInPadRule(pad={self.pad!r}, process={self.process!r}{array})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1672,6 +1718,9 @@ class PhysicalBoard:
             if not any(z.net == "GND" and any(l not in (CopperLayer.FRONT, CopperLayer.BACK)
                                              for l in z.layers) for z in self.zones):
                 raise ValueError("via-in-pad permission requires a declared inner GND zone")
+            if rule.rows is not None:
+                from .pad_via_arrays import validate_array_fit
+                validate_array_fit(self, rule, lands)
         layers = set(self.stackup.copper_layers)
         for track in self.tracks:
             if track.net not in known_nets:
@@ -1761,6 +1810,7 @@ class PhysicalBoard:
         validate_hard_macros(self)
 
         routed_rule_nets: set[str] = set()
+        partners = {rule.net: rule for rule in self.net_routing_rules}
         for rule in self.net_routing_rules:
             if rule.net not in known_nets:
                 raise ValueError(f"routing rule references unknown net {rule.net!r}")
@@ -1787,6 +1837,11 @@ class PhysicalBoard:
                 )
             if rule.return_via_net is not None and rule.return_via_net not in known_nets:
                 raise ValueError(f"routing rule for {rule.net!r} references unknown return net {rule.return_via_net!r}")
+            partner = partners.get(rule.differential_partner or "")
+            if partner is not None and partner.tuning_style is not rule.tuning_style:
+                raise ValueError(f"routing rules for {rule.net!r} and {partner.net!r} must agree on tuning_style")
+            if partner is not None and partner.tuning_group != rule.tuning_group:
+                raise ValueError(f"routing rules for {rule.net!r} and {partner.net!r} must agree on tuning_group")
             # Breakout relaxations are checked against the effective profile,
             # including board defaults when the rule leaves a value implicit.
             if rule.breakout_width_nm is not None:
@@ -1815,6 +1870,16 @@ class PhysicalBoard:
                     raise ValueError(f"net {net!r} belongs to length-match groups "
                                      f"{grouped[net]!r} and {group.id!r}")
                 grouped[net] = group.id
+        # Membership itself is checked where constraints lower (CMP117):
+        # derived boards (for example escape checks) keep the rules only.
+        tuning_groups: dict[str, str] = {}
+        for rule in self.net_routing_rules:
+            if rule.tuning_group is None or rule.net not in grouped:
+                continue
+            owner = tuning_groups.setdefault(rule.tuning_group, grouped[rule.net])
+            if owner != grouped[rule.net]:
+                raise ValueError(f"tuning group {rule.tuning_group!r} spans length-match groups "
+                                 f"{owner!r} and {grouped[rule.net]!r}")
         scoped: set[str] = set()
         for rule in self.component_hole_clearances:
             if rule.reference in scoped:

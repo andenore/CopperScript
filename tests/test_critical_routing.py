@@ -30,6 +30,7 @@ from pcbir import (
 )
 from pcbir.critical import (_route_pair, _track_length, _tune_pair, _validate_candidate,
                             _coupled_length)
+from pcbir.critical_tuning import bump_chamfers, bump_gain
 
 
 def _pair_board() -> PhysicalBoard:
@@ -265,11 +266,37 @@ def test_pre_existing_footprint_finding_does_not_reject_an_unrelated_pair() -> N
     assert "DRC-HOLE-CLEARANCE" in {f.code for f in run_physical_drc(result.board).findings}
 
 
-def _bumps(tracks: list[TrackSegment], baseline_y: int) -> list[tuple[int, int, int]]:
-    """(x_start, x_end, height) of each raised run off a horizontal baseline."""
-    return sorted((min(t.start.x_nm, t.end.x_nm), max(t.start.x_nm, t.end.x_nm),
-                   abs(t.start.y_nm - baseline_y))
-                  for t in tracks if t.start.y_nm == t.end.y_nm != baseline_y)
+def _bumps(tracks: list[TrackSegment], baseline_y: int) -> list[tuple[int, int, int, int]]:
+    """(x of the first leg, x of the second leg, height, chamfer) of each bump off a horizontal baseline.
+
+    In path order a bump is a chamfer, a leg, a chamfer, the top, a chamfer, a
+    leg and a chamfer; its four 45-degree chamfers share one leg length.
+    """
+    legs = [index for index, t in enumerate(tracks)
+            if t.start.x_nm == t.end.x_nm and baseline_y not in (t.start.y_nm, t.end.y_nm)]
+    bumps = []
+    for first, second in zip(legs[::2], legs[1::2]):
+        pieces = tracks[first - 1:second + 2]
+        chamfers = {(abs(t.end.x_nm - t.start.x_nm), abs(t.end.y_nm - t.start.y_nm))
+                    for t in (pieces[0], pieces[2], pieces[-3], pieces[-1])}
+        assert len(chamfers) == 1
+        (dx, dy), = chamfers
+        assert dx == dy
+        xs = sorted((tracks[first].start.x_nm, tracks[second].start.x_nm))
+        bumps.append((*xs, max(abs(p.y_nm - baseline_y) for t in pieces for p in (t.start, t.end)), dx))
+    return sorted(bumps)
+
+
+def _assert_45_degree_path(tracks: list[TrackSegment]) -> None:
+    """Every piece is axis-aligned or exactly 45 degrees and no bend turns more than 45 degrees."""
+    def heading(track: TrackSegment) -> tuple[float, float]:
+        dx, dy = track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm
+        assert (dx == 0) != (dy == 0) or abs(dx) == abs(dy) != 0
+        return dx / (dx * dx + dy * dy) ** 0.5, dy / (dx * dx + dy * dy) ** 0.5
+
+    assert all(a.end == b.start for a, b in zip(tracks, tracks[1:]))
+    assert all(heading(a)[0] * heading(b)[0] + heading(a)[1] * heading(b)[1] > 0.7
+               for a, b in zip(tracks, tracks[1:]))
 
 
 def test_tuning_is_bounded_but_requires_candidate_geometry_validation() -> None:
@@ -281,17 +308,26 @@ def test_tuning_is_bounded_but_requires_candidate_geometry_validation() -> None:
     second = [TrackSegment("B", Point.mm(5, 8), Point.mm(17, 8), width, CopperLayer.FRONT)]
     added = _tune_pair(first, second, nm_from_mm("0.1"), nm_from_mm("0.4"))
     excess = nm_from_mm("1.9")
-    assert excess <= added < excess + 6
+    bumps = _bumps(first, nm_from_mm(5))
+    assert excess <= added < excess + 2 * len(bumps)
     assert _track_length(tuple(first)) == nm_from_mm(10) + added
     assert nm_from_mm(12) - _track_length(tuple(first)) <= nm_from_mm("0.1")
-    bumps = _bumps(first, nm_from_mm(5))
-    assert len(bumps) == 3
-    assert all(height <= nm_from_mm("0.4") and end - start == 3 * width for start, end, height in bumps)
+    # Four bumps, since a full-height one adds 2 x 0.4 mm less its chamfers.
+    assert 3 * bump_gain(nm_from_mm("0.4"), *bump_chamfers(nm_from_mm("0.4"), width)) < excess
+    assert len(bumps) == 4
+    assert all(height <= nm_from_mm("0.4") and end - start == 3 * width for start, end, height, _ in bumps)
     assert all(b[0] - a[1] >= 3 * width for a, b in zip(bumps, bumps[1:]))
+    # 45-degree corners whose leg is a quarter of the height (less than the width).
+    _assert_45_degree_path(first)
+    assert all(chamfer == height // 4 for _, _, height, chamfer in bumps)
+    assert added == len(bumps) * bump_gain(bumps[0][2], *bump_chamfers(bumps[0][2], width))
+    # With breakout regions the caller keeps a margin inside max_skew.
+    margined = [TrackSegment("A", Point.mm(5, 5), Point.mm(15, 5), width, CopperLayer.FRONT)]
+    assert excess + 32 <= _tune_pair(margined, second, nm_from_mm("0.1"), nm_from_mm("0.4"), 32) < excess + 40
     # Bumps sit next to the mismatching terminal, at least 3 x width from it,
     # and bulge away from the partner (which is above, at y = 8 mm).
     assert bumps[-1][1] == nm_from_mm(15) - 3 * width
-    assert bumps[0][0] > nm_from_mm(10)
+    assert bumps[0][0] == nm_from_mm(9)
     assert max(max(t.start.y_nm, t.end.y_nm) for t in first) == nm_from_mm(5)
     # Compensation beyond the bounded bump count leaves geometry unchanged
     # for the skew gate to report.
@@ -312,7 +348,8 @@ def test_tuning_compensates_next_to_the_bend_where_the_mismatch_arises() -> None
     assert added >= nm_from_mm("0.8")
     bumps = _bumps(inner, 0)
     assert len(bumps) == 2
-    assert all(height <= nm_from_mm("0.3") for _, _, height in bumps)
+    assert all(height <= nm_from_mm("0.3") for _, _, height, _ in bumps)
+    _assert_45_degree_path(inner[:-1])
     # Next to the bend at x = 20 mm, at least 3 x width from it, on the side
     # away from the outer partner lane.
     assert bumps[-1][1] == nm_from_mm(20) - 3 * width

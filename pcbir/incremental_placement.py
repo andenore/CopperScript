@@ -72,13 +72,16 @@ def repair_placement_trial(
                                    or pose.footprint != poses[pose.reference].footprint
                                    for pose in trial.placements):
         return fallback("rigid macro, footprint or side change")
+    if moved & {rule.pad.component for rule in source.via_in_pad_rules if rule.rows is not None}:
+        # Locked array copper stays at the old land; rebuild it from the source.
+        return fallback("via-in-pad array component moved")
     incident = {net.name for net in trial.nets if any(pad.component in moved for pad in net.pads)}
     protected = {rule.net for rule in source.net_routing_rules if rule.kind is not RouteKind.GENERAL}
     protected.update(net for group in initial.critical.nets for net in group.nets)
     if incident & protected:
         return fallback("critical endpoint moved")
     if initial.fanout is not None:
-        if initial.fanout.boundary_accesses:
+        if initial.fanout.boundary_accesses or initial.fanout.surface_accesses:
             # Moving even an unrelated pad/keepout can invalidate the owned
             # collar path. Full preflight rebuilds paths and source evidence;
             # never let the old incremental prefix relabel/prune reservations.

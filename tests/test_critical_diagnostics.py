@@ -124,7 +124,8 @@ def test_rejected_exact_pair_candidates_are_counted_in_report_and_progress() -> 
 
 
 def test_drc_rejections_are_recorded_even_when_a_later_candidate_is_accepted() -> None:
-    board = _bent_pair_board(max_skew_nm=nm_from_mm("0.1"), tuning_amplitude_limit_nm=nm_from_mm("0.4"))
+    # One 45-degree-cornered bump of at most 0.5 mm compensates the bend.
+    board = _bent_pair_board(max_skew_nm=nm_from_mm("0.1"), tuning_amplitude_limit_nm=nm_from_mm("0.5"))
     guides = route_global(board)
     # A keep-out exactly where the surface candidates place their skew bump.
     site = CopperKeepout("bump-site", (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
