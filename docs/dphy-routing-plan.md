@@ -545,7 +545,7 @@ Shared rules for every item:
     `max_skew` with native DRC clean; identity without match groups;
     determinism.
 
-- [ ] **R13 Surface-only package escapes.** Package access gives each
+- [x] **R13 Surface-only package escapes.** Package access gives each
   fine-pitch pin of an ordinary net a via dogbone (`pcbir/fanout.py`) or a
   boundary witness port. A net restricted to one outer layer
   (`allowed_layers` with one layer, or `max_vias = 0`) gets no dogbone
@@ -556,6 +556,24 @@ Shared rules for every item:
   - Nets with two or more allowed layers keep today's choices.
   - **Tests:** a QFN pin on a one-layer net is escaped without a via, and the
     board is ready; nets with more layers are unchanged.
+
+  Done (CS-172): `fanout._surface_layer` selects the pins whose net has one
+  routing layer, or `max_vias = 0`, and whose pad layer is allowed. Their
+  choices come from `boundary_access.surface_escapes`: from the pad centre on
+  the pad layer to beyond the collar, through the witness ports and both 45°
+  path orders, then the fine ports and the octilinear maze. They join the joint
+  assignment and the native DRC gate with the dogbones. The selected path is
+  owned fanout copper and `FanoutResult.surface_accesses` (a `RoutingAccess`
+  launched from the pad), merged into `routing_accesses`; `accesses` stay via
+  anchors. A `max_vias = 0` net with several layers got via dogbones before;
+  it now escapes on the surface too. With the crystal constraint on its four
+  crystal nets, the test board's preflight is ready with no pending pads (four
+  were pending): each crystal pin has a 1.32 mm straight F.Cu escape. In its
+  full route both X1 nets route on F.Cu without vias (15.0 and 13.6 mm), but
+  both X2 nets stay unrouted: a crystal ground land and its plane-contact via
+  sit between each X1 pin and its crystal land, so X1 loops around the
+  crystal's X2 land. That needs a crystal placement or orientation change, not
+  a different escape. Tests: `tests/test_surface_package_escape.py`.
 
 ## Order
 

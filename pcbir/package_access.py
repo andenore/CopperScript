@@ -150,7 +150,9 @@ def preflight_package_access(
     fanout = route_fanout(owner_board, fanout_options)
     emit(on_progress, "ordinary_package_exits", "finished",
          escaped=len(fanout.accesses), pending=len(fanout.pending_pads),
-         pending_pads=[f"{p.component}.{p.pad}" for p in fanout.pending_pads])
+         pending_pads=[f"{p.component}.{p.pad}" for p in fanout.pending_pads],
+         **({"surface_escaped_pads": [f"{p.component}.{p.pad}" for p in fanout.surface_accesses]}
+            if fanout.surface_accesses else {}))
     staged = (options.initial_pair_state_limit > 0 and options.maximum_pattern_trials > 0
               and any(rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}
                       for rule in board.net_routing_rules))
@@ -233,7 +235,7 @@ def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccess
     # Counts alone cannot hide a lost pin or exchange one failed interface for
     # another. The same identity-preserving gate is used for placement trials.
     if not (required <= tested
-            and set(baseline.fanout.accesses) <= set(candidate.fanout.accesses)
+            and baseline.fanout.escaped_pads <= candidate.fanout.escaped_pads
             and candidate.failed_critical_nets <= baseline.failed_critical_nets
             and candidate.pending_pads <= baseline.pending_pads
             and (allow_equal or candidate.pending_pads < baseline.pending_pads
@@ -315,7 +317,7 @@ def _negotiate_patterns(
         candidate = None
         if signature in seen:
             outcome = "unchanged_pattern"
-        elif not set(accepted.fanout.accesses) <= set(proposed.accesses):
+        elif not accepted.fanout.escaped_pads <= proposed.escaped_pads:
             outcome = "lost_ordinary_access"
         else:
             seen.add(signature)

@@ -920,6 +920,11 @@ initial step; equal steps disable the finer pass. Candidate counts and both
 steps are reported. This remains a bounded search, not proof that an empty
 domain is physically unroutable.
 
+A pin of an ordinary net that may not change layer (`allowed_layers` with one
+layer, or `max_vias = 0`) gets no via. It escapes on its own pad layer to
+beyond the package collar, and the router continues from there on that layer
+(CS-172); the route report lists it under `fanout.surface_escaped_pads`.
+
 ### Critical routing and qualification
 
 `routing` profiles, not net-name heuristics, select critical geometry. The

@@ -78,7 +78,7 @@ def repair_placement_trial(
     if incident & protected:
         return fallback("critical endpoint moved")
     if initial.fanout is not None:
-        if initial.fanout.boundary_accesses:
+        if initial.fanout.boundary_accesses or initial.fanout.surface_accesses:
             # Moving even an unrelated pad/keepout can invalidate the owned
             # collar path. Full preflight rebuilds paths and source evidence;
             # never let the old incremental prefix relabel/prune reservations.

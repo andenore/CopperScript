@@ -179,8 +179,9 @@ def test_detailed_failure_trials_respect_fixed_parts_and_existing_copper() -> No
 
 
 def test_fanout_reports_unavailable_layer_without_mutating_board() -> None:
+    # A front land on a back-only net. A front-only net escapes on its surface (R13).
     board = replace(_dense_board(), net_routing_rules=(
-        NetRoutingRule("SIGNAL", allowed_layers=(CopperLayer.FRONT,)),
+        NetRoutingRule("SIGNAL", allowed_layers=(CopperLayer.BACK,)),
     ))
     result = route_fanout(board, FanoutOptions())
     assert result.board is board

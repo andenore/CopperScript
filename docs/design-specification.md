@@ -798,7 +798,7 @@ An open question MUST NOT be treated as an implicit decision by a backend.
 | CS-082 | Accepted | Non-plated footprint drills are mechanical obstacles across every copper layer, including when their pad number is empty. Routing and native DRC enforce the board's explicit minimum copper-to-hole clearance, which is exported to KiCad project rules and bound to the physical signoff digest. The only exception is a `hole_clearance(COMPONENT)` constraint: it applies a smaller, reasoned value between that component's own copper pads and its own non-plated holes, and nothing else. Native DRC records every pair that passes only because of it, the value enters the signoff digest, and the export writes a matching same-stem `.kicad_dru` rule so KiCad's DRC agrees. |
 | CS-083 | Accepted | Detailed-route repair distinguishes an exhausted search budget from an exhaustive no-path result. A coarse-grid no-path failure receives one bounded half-pitch retry (not finer than 0.25 mm); budget exhaustion does not inflate the search graph. All retries retain exact copper and hole-clearance checks. |
 | CS-084 | Accepted | Multi-pass detailed routing retains two baseline admissible-heuristic passes, then varies weighted-A* guidance deterministically across later passes. Every proposed route still passes exact geometric clearance, and the merge stage accepts only compatible complete alternatives; search-weight diversity never weakens the physical-rule gate. |
-| CS-085 | Accepted | Dense SMD fanout is an explicit physical package-access stage before ordinary detailed routing. With fanout enabled, CS-131 moves ordinary local reservations ahead of critical long routes. It uses legal, non-via-in-pad track/via pairs, preserves exact clearance, records unresolved pads, and exposes only verifiable locked-copper via anchors to the downstream router. Fanout is not electrical connectivity intent or a proof of overall route completion. With CS-163 a reserved escape is one terminal of its pad, not its replacement. |
+| CS-085 | Accepted | Dense SMD fanout is an explicit physical package-access stage before ordinary detailed routing. With fanout enabled, CS-131 moves ordinary local reservations ahead of critical long routes. It uses legal, non-via-in-pad track/via pairs, preserves exact clearance, records unresolved pads, and exposes only verifiable locked-copper via anchors to the downstream router. Fanout is not electrical connectivity intent or a proof of overall route completion. With CS-163 a reserved escape is one terminal of its pad, not its replacement. With CS-172 a pin whose net may not change layer escapes on its own surface instead of to a via. |
 | CS-086 | Accepted | Placement feedback may use exact detailed-routing failures after global routing. It moves only legal, movable components on a bounded trial set, reruns every routing and DRC stage from an unrouted placement, and accepts only a strictly improved completion/DRC score. Existing copper is never dragged implicitly with a component. |
 | CS-087 | Accepted | Detailed repair may transactionally rip up a bounded group of ordinary nets, but cannot displace locked critical/fanout copper. It tries deterministic displaced-net orders, rebuilds the clearance state for each trial, and commits only when the candidate and every displaced net reconnect. A failed trial leaves the original route unchanged. Within one routing run, a search repeated with identical inputs (board and checkpoint identity, ordered clearance insertions, net, rule, guide, anchors, congestion, mode and options) may return the earlier attempt from a bounded memo; any changed blocking geometry is a new search, and reuse never changes selected copper. |
 | CS-088 | Accepted | Filled-plane connectivity requires version-qualified, same-stem KiCad PCB/project refill and DRC evidence bound to the exact source, exported, filled-board, and report bytes. Any open connection, isolated island, missing report field, tool error, or other DRC violation fails the gate. Provisional zone outlines and pad stitching never count as this evidence. |
@@ -1616,3 +1616,24 @@ as before. The bundle record lists each nested exit with its column, planned
 and routed run and diagonal, and whether it routed or fell back. Bundles
 without a corner wrap MUST route byte-identically. See R7 in the [D-PHY
 routing plan](dphy-routing-plan.md).
+
+## CS-172 — Surface-only package escapes (Accepted)
+
+A crowded package pin of an ordinary net that may not change layer, because
+the net has one permitted routing layer or `max_vias = 0`, MUST escape on its
+own pad layer and never through a via. Package fanout gives such a pin no
+dogbone choices. Its choices are checked paths from the pad centre to beyond
+the package collar, built from the boundary witness ports, path orders and
+octilinear maze (CS-152) with their default bounds; maze legs are re-cut as
+routed pieces (CS-164) and checked again. The choices join the joint escape
+assignment and the native DRC gate together with the dogbones of other pins,
+so neighbouring dogbones leave the lane open. The selected path is owned fanout
+copper, so critical and plane owners route around it as around a dogbone. It is
+also the pin's routing access: the collar port on the pad layer, launched from
+the pad itself (`FanoutResult.surface_accesses`). The boundary stage witnesses
+only via launches and does not witness it again. Escape terminals and release
+(CS-163) apply unchanged, and incremental placement falls back to a full
+preflight as for boundary reservations. A pin without a legal surface path
+stays pending, so package access is not ready; a land on a layer its net may
+not use stays pending as before. Nets that may change layer MUST route
+byte-identically. See R13 in the [D-PHY routing plan](dphy-routing-plan.md).

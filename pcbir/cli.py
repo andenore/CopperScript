@@ -1213,6 +1213,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_via_count": result.fanout.added_via_count,
                     "escaped_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.accesses],
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
+                    **({"surface_escaped_pads": [f"{pad.component}.{pad.pad}"
+                                                 for pad in result.fanout.surface_accesses]}
+                       if result.fanout.surface_accesses else {}),
                     "pin_access_analysis": [{
                         "pad": f"{item.pad.component}.{item.pad.pad}",
                         "legal_candidate_count": item.legal_candidate_count,

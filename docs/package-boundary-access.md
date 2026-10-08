@@ -73,6 +73,9 @@ Critical, hard-macro and selected-plane copper remains owned by its original sta
 `FanoutResult.accesses` retains the dogbone positions for pattern negotiation.
 `boundary_accesses` contains `RoutingAccess(position, layer, launch_position,
 path)` descriptors; `routing_accesses` merges these over ordinary via anchors.
+`surface_accesses` (CS-172) holds the fanout's own collar paths of pins whose
+net may not change layer, launched from the pad; they are merged as well but
+not witnessed again.
 The detailed router validates existing explicit geometry before using a port and
 offers exactly **one selected-layer node**, not every layer of the launch via.
 It rejects a missing/wrong-net path, disconnected terminal, prohibited layer or
