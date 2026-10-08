@@ -39,6 +39,14 @@ count complete local proposals, including proposals not cheaper than the
 incumbent. Selected geometry is marked `local_surface_tree`; metrics are
 recomputed from emitted tracks, never inferred from close component placement.
 
+A coarse-guide tree that joins three or more lands and survives the local
+comparison is also compared with the bounded single-net maze
+(`exact_single_net`, the fallback above). The maze tree replaces it only when
+it is valid, strictly shorter and uses no more vias. Clock and RF-feed nets
+keep the guide. On a crystal net joining an IC pin, the crystal and its load
+capacitor, the guide had placed its junction 2 mm past the crystal; the maze
+tree joins the lands directly.
+
 ## Progress checkpoints
 
 `route_critical_nets(..., on_progress=callback)` emits `started`/`finished`

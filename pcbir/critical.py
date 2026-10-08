@@ -548,6 +548,20 @@ def route_critical_nets(
                 )
                 result = replace(repaired_single, local_candidate_attempts=result.local_candidate_attempts,
                                  guide_length_nm=result.guide_length_nm)
+            elif (result.connected and result.strategy == "global_guide"
+                    and len(net_by_name[rule.net].pads) >= 3
+                    and rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}):
+                # A coarse-guide tree joining three or more terminals can be
+                # far from the shortest; keep the exact search's tree when it
+                # is shorter with no more vias.
+                exact, exact_tracks, exact_vias = _route_single_exact(
+                    board, rule, global_route, tracks, vias,
+                )
+                if (exact.connected and len(exact_vias) <= len(net_vias)
+                        and exact.lengths_nm[0] < result.lengths_nm[0]):
+                    result, net_tracks, net_vias = replace(
+                        exact, local_candidate_attempts=result.local_candidate_attempts,
+                        guide_length_nm=result.guide_length_nm), exact_tracks, exact_vias
         result_index[group] = len(results)
         results.append(result)
         committed.append((group, tuple(net_tracks), tuple(net_vias)))
