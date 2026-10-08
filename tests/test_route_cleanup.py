@@ -10,7 +10,8 @@ from pcbir import (
     route_detailed, route_global, run_physical_drc,
 )
 from pcbir.detailed import DetailedNode, _erase_path_loops, _prune_fanout_copper
-from pcbir.route_cleanup import EscapeChain, prune_track_stubs, release_unused_escapes
+from pcbir.route_cleanup import (EscapeChain, prune_track_stubs, release_unused_escapes,
+                                 trim_dangling_overhangs)
 
 
 def board():
@@ -257,3 +258,35 @@ def test_installed_kicad_confirms_retrace_stub_is_removed():
     result = prune_track_stubs(board(), copper)
     after = verify_filled_planes(replace(board(), tracks=result), kicad_cli=cli)
     assert after.passed, after.findings
+
+
+def _overhang_board(**rule):
+    from collections import Counter
+    from dataclasses import replace
+    from pcbir.physical import (BoardOutline, CopperLayer, FootprintPad, NetRoutingRule, PadReference,
+                                PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, Size,
+                                TrackSegment)
+    package = PhysicalFootprint("package", (FootprintPad("1", Point(0, 0), Size.mm(.3, .3)),), Size.mm(4, 4))
+    one = PhysicalFootprint("one", (FootprintPad("1", Point(0, 0), Size.mm(.6, .6)),), Size.mm(1, 1))
+    board = PhysicalBoard("overhang", BoardOutline.rectangle(20, 16), {"package": package, "one": one},
+        (Placement("U", "package", Point.mm(10, 8)), Placement("J1", "one", Point.mm(11, 8))),
+        (PhysicalNet("A", (PadReference("U", "1"), PadReference("J1", "1"))),),
+        net_routing_rules=(NetRoutingRule("A", **rule),) if rule else ())
+    # A dogbone from U.1 through J1's land whose launch via is gone.
+    stub = TrackSegment("A", Point.mm(10, 8), Point.mm(12, 8), board.rules.default_track_width_nm,
+                        CopperLayer.FRONT)
+    return replace(board, tracks=(stub,)), stub
+
+
+def test_final_sweep_cuts_an_open_dogbone_back_to_the_land_it_crosses():
+    from collections import Counter
+    from dataclasses import replace
+    from pcbir.physical import Point
+    board, stub = _overhang_board()
+    swept = trim_dangling_overhangs(board, Counter())
+    assert swept.tracks == (replace(stub, end=Point.mm(11, 8)),)
+    # Protected (input or macro) copper and critical nets never change.
+    assert trim_dangling_overhangs(board, Counter((stub,))) is board
+    from pcbir.physical import RouteKind
+    critical, _ = _overhang_board(kind=RouteKind.CRITICAL)
+    assert trim_dangling_overhangs(critical, Counter()) is critical

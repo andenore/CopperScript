@@ -1032,10 +1032,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_board = stitch.board if stitch_enabled else result.board
             duplicate_stitch = stitch_duplicate_pads(output_board)
             output_board = duplicate_stitch.board
+            from collections import Counter
+            from .hard_macros import resolved_macro_geometry
+            from .route_cleanup import trim_dangling_overhangs
+            fixed = Counter(physical_board.tracks)
+            for macro in output_board.hard_macros:
+                if macro.cluster in output_board.materialized_macros:
+                    fixed.update(resolved_macro_geometry(output_board, macro)[0])
+            swept = trim_dangling_overhangs(output_board, fixed)
+            trimmed_overhangs = swept is not output_board
+            output_board = swept
             output_drc = (
                 run_physical_drc(output_board)
                 if stitch_enabled
                 or duplicate_stitch.added_track_count
+                or trimmed_overhangs
                 else result.drc
             )
             emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)

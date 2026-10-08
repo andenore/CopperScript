@@ -387,6 +387,50 @@ def _prune_open_ends(settle: "_Settler", current, score, *, rounds: int = 8,
     return current, score
 
 
+def trim_dangling_overhangs(board: PhysicalBoard, protected: Counter) -> PhysicalBoard:
+    """Cut routed tracks back to the land they cross when their far end is open.
+
+    A final sweep over ordinary nets: a track with an open end that crosses a
+    land of its net (for example a fanout dogbone whose launch via a later
+    stage deleted because the route already reached that land) keeps only its
+    piece up to that land's centre (``_prune_open_ends``). A net changes only
+    if it stays connected and loses open ends. ``protected`` occurrences
+    (input and hard-macro copper) and critical, zone and incomplete nets
+    never change.
+    """
+    from .physical import RouteKind
+
+    skip = {zone.net for zone in board.zones} | {
+        rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
+    nets = {net.name: net for net in board.nets}
+    order = {layer: index for index, layer in enumerate(board.stackup.copper_layers)}
+    by_net: dict[str, list[TrackSegment]] = defaultdict(list)
+    for track in board.tracks:
+        by_net[track.net].append(track)
+    clearance = None
+    replaced: dict[str, list[TrackSegment]] = {}
+    for name in sorted(by_net):
+        owned = Counter(by_net[name]) - protected
+        if name in skip or name not in nets or not owned:
+            continue
+        clearance = clearance or RoutingClearanceIndex(board)
+        settle = _Settler(board, name, nets[name], _net_pad_shapes(board, name), order, clearance,
+                          Counter(), Counter())
+        current = (list(by_net[name]), [via for via in board.vias if via.net == name])
+        score = settle.score(*current)
+        if score is None or not score[1]:
+            continue
+        trimmed, trimmed_score = _prune_open_ends(settle, current, score, trimmable=owned)
+        if trimmed_score[1] < score[1]:
+            replaced[name] = list(trimmed[0])
+    if not replaced:
+        return board
+    tracks = [track for track in board.tracks if track.net not in replaced]
+    for name in sorted(replaced):
+        tracks.extend(replaced[name])
+    return replace(board, tracks=tuple(tracks))
+
+
 def _trimmed_to_land(settle: "_Settler", track: TrackSegment) -> list[TrackSegment]:
     """``track`` cut back to the centre of each same-net land it crosses.
 
