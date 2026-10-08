@@ -33,6 +33,8 @@ from .physical import (
     CopperKeepout,
     CopperLayer,
     Nanometres,
+    PadKind,
+    PadReference,
     PhysicalBoard,
     Placement,
     PlacementGroup,
@@ -43,6 +45,8 @@ from .physical import (
     PolygonWithHoles,
     RelativePlacementKind,
     RelativePlacementRule,
+    TrackSegment,
+    Via,
     nm_from_mm,
 )
 
@@ -1811,6 +1815,59 @@ def _candidate_positions(
     )
 
 
+def _lands_meet_macro_copper(
+    board: PhysicalBoard, pose: Placement,
+    tracks: tuple[TrackSegment, ...], vias: tuple[Via, ...],
+) -> bool:
+    """Whether a non-member's lands violate a hard macro's copper.
+
+    Foreign-net copper keeps the larger of the board minimum and either net's
+    routing clearance; every foreign via drill also keeps the board hole
+    clearance. Same-net copper may touch, as in physical DRC.
+    """
+    from .drc import placed_pad_shape
+    from .geometry import RoundedConvexShape, shapes_clear
+
+    lands = [pad for pad in board.footprints[pose.footprint].pads
+             if pad.kind is not PadKind.APERTURE]
+    if not lands or (not tracks and not vias):
+        return False
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    reach = max(board.rules.minimum_clearance_nm, board.rules.minimum_hole_clearance_nm,
+                *(rule.clearance_nm or 0 for rule in rules.values()))
+    shapes = [(pad, placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose))
+              for pad in lands]
+    copper = [*(RoundedConvexShape((track.start, track.end), track.width_nm // 2) for track in tracks),
+              *(RoundedConvexShape((via.position,), via.size_nm // 2) for via in vias)]
+    if not any(shape.bounds.intersects_expanded(item.bounds, reach)
+               for _, shape in shapes for item in copper):
+        return False
+    owners = {pad: net.name for net in board.nets for pad in net.pads}
+    stack = board.stackup.copper_layers
+    side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
+
+    def required(first: str | None, second: str) -> int:
+        return max((board.rules.minimum_clearance_nm,
+                    *(rules[net].clearance_nm or 0 for net in (first, second) if net in rules)))
+
+    for pad, shape in shapes:
+        net = owners.get(PadReference(pose.reference, pad.number))
+        layers = {side} if pad.kind is PadKind.SMD else set(stack)
+        for track, item in zip(tracks, copper):
+            if (track.layer in layers and track.net != net
+                    and not shapes_clear(shape, item, required(net, track.net))):
+                return True
+        for via, item in zip(vias, copper[len(tracks):]):
+            low, high = sorted((stack.index(via.from_layer), stack.index(via.to_layer)))
+            if via.net == net or not layers & set(stack[low:high + 1]):
+                continue
+            if (not shapes_clear(shape, item, required(net, via.net))
+                    or not shapes_clear(shape, RoundedConvexShape((via.position,), via.drill_nm // 2),
+                                        board.rules.minimum_hole_clearance_nm)):
+                return True
+    return False
+
+
 def _legal(
     candidate: Placement,
     placed: Mapping[str, Placement],
@@ -1877,13 +1934,17 @@ def _legal(
         members = {m.reference for m in cluster.members}
         outsiders = ([p for ref,p in placed.items() if ref not in members]
                      if candidate.reference in members else [candidate])
-        for region in resolved_macro_geometry(board, macro, macro_poses)[3]:
+        tracks, vias, _, regions = resolved_macro_geometry(board, macro, macro_poses)
+        for region in regions:
             for outsider in outsiders:
                 layer = CopperLayer.FRONT if outsider.side is BoardSide.FRONT else CopperLayer.BACK
                 if layer in region.layers and _polygons_too_close(
                     _placement_polygon(board, outsider), region.outline.outer.vertices, 0
                 ):
                     return False
+        # Port vias and lead-in tracks may lie outside the protected regions.
+        if any(_lands_meet_macro_copper(board, outsider, tracks, vias) for outsider in outsiders):
+            return False
     for keepout in board.keepouts:
         if _keepout_blocks(board, keepout, candidate, polygon):
             return False
