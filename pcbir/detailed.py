@@ -889,9 +889,12 @@ def _prune_fanout_copper(
             if track.net == net and point_on_segment(point, track.start, track.end):
                 used_layers[key].add(track.layer)
     prunable = (anchors & (created_vias or frozenset())) - released
-    vias = tuple(via for via in vias
-                 if (via.net, via.position) not in prunable
-                 or len(used_layers[(via.net, via.position)]) >= 2)
+    dropped = {via for via in vias if (via.net, via.position) in prunable
+               and len(used_layers[(via.net, via.position)]) < 2}
+    vias = tuple(via for via in vias if via not in dropped)
+    # A route that reached a land along its own dogbone leaves the dogbone
+    # running on to the deleted via: those nets' overhangs are trimmed below.
+    orphaned = {via.net for via in dropped}
     # A successful area path can meet a lead-in before its old anchor, leaving
     # an overlapping out-and-back tail. Cleanup owns new copper and explicitly
     # supplied fanout occurrences only; identical locked occurrences survive.
@@ -916,9 +919,12 @@ def _prune_fanout_copper(
             mutable.append(track)
         else:
             immutable.append(track)
-    mutable = prune_track_stubs(
-        replace(board, tracks=tuple(immutable), vias=vias), tuple(mutable),
-    )
+    context = replace(board, tracks=tuple(immutable), vias=vias)
+    mutable = prune_track_stubs(context, tuple(mutable))
+    if orphaned and any(track.net in orphaned for track in mutable):
+        trimmed = iter(prune_track_stubs(
+            context, tuple(t for t in mutable if t.net in orphaned), trim_overhangs=True))
+        mutable = (*(t for t in mutable if t.net not in orphaned), *trimmed)
     if reserved:
         originals = tuple(reserved)
         routed = []

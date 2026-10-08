@@ -121,6 +121,28 @@ def test_fanout_reuses_existing_matching_via() -> None:
     assert seeded.vias[0] in routed.board.vias
 
 
+def test_dogbone_that_reaches_a_land_is_trimmed_when_its_via_is_pruned() -> None:
+    # U.1's dogbone runs straight through J1's land to its launch via, so the
+    # net is complete on the surface and the via is pruned as unused. The
+    # stub must not keep running past J1 to where the via was.
+    from pcbir.physical import TrackSegment
+    package = PhysicalFootprint("package", (FootprintPad("1", Point(0, 0), Size.mm(.3, .3)),), Size.mm(4, 4))
+    one = PhysicalFootprint("one", (FootprintPad("1", Point(0, 0), Size.mm(.6, .6)),), Size.mm(1, 1))
+    board = PhysicalBoard("overhang", BoardOutline.rectangle(20, 16), {"package": package, "one": one},
+        (Placement("U", "package", Point.mm(10, 8)), Placement("J1", "one", Point.mm(11, 8))),
+        (PhysicalNet("A", (PadReference("U", "1"), PadReference("J1", "1"))),))
+    width = board.rules.default_track_width_nm
+    stub = TrackSegment("A", Point.mm(10, 8), Point.mm(12, 8), width, CopperLayer.FRONT)
+    via = Via("A", Point.mm(12, 8), board.rules.default_via_size_nm, board.rules.default_via_drill_nm)
+    routed = route_detailed(
+        replace(board, tracks=(stub,), vias=(via,)), route_global(board),
+        DetailedRouterOptions(pitch_nm=nm_from_mm("0.5")),
+        fanout_accesses={PadReference("U", "1"): via.position}, fanout_created_tracks=(stub,),
+        fanout_created_vias=frozenset({(via.net, via.position)}))
+    assert routed.board.vias == ()
+    assert routed.board.tracks == (replace(stub, end=Point.mm(11, 8)),)
+
+
 def test_same_net_drill_collision_is_rejected_by_router_and_native_drc() -> None:
     board = _dense_board()
     via = Via("SIGNAL", Point.mm(4, 4), nm_from_mm("0.8"), nm_from_mm("0.4"),
