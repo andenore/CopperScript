@@ -499,6 +499,39 @@ Shared rules for every item:
     - determinism;
     - boards without `tuning_style` route byte-identically.
 
+- [ ] **R12 Tune bundle pairs as they route.** R3 tunes a `length_match`
+  group only after every critical group is accepted. By then each bundle
+  pair sits at the clearance limit next to its neighbours, so a pair hemmed
+  in on both sides has no room for even one bump. On a test bundle, a 7 mm
+  lane short by 0.12 mm could not be tuned, and three adjacent straight pairs
+  short by about 5.8 mm each had one usable slot between them.
+  - Right after a bundle pair of a `length_match` group is accepted, tune it
+    toward the longest accepted member of its group, to within `max_skew`,
+    before the next bundle pair routes. Use the same tuner (R3, R9, and R10
+    where declared) and the same atomic validation.
+  - Its bumps or serpentine then claim room, and later pairs route around
+    them. Outermost-first order often routes the longest pairs (those
+    wrapping a package corner) first.
+  - If a later pair turns out longer, the final R3 pass tops up the earlier
+    pairs as today.
+  - Groups already within `max_skew`, and bundles without a `length_match`
+    group, route exactly as before.
+  - **Tests:** a hemmed-in bundle that R3 cannot tune and R12 tunes within
+    `max_skew` with native DRC clean; identity without match groups;
+    determinism.
+
+- [ ] **R13 Surface-only package escapes.** Package access gives each
+  fine-pitch pin of an ordinary net a via dogbone (`pcbir/fanout.py`) or a
+  boundary witness port. A net restricted to one outer layer
+  (`allowed_layers` with one layer, or `max_vias = 0`) gets no dogbone
+  choices, because `_legal_choices` and `_maze_choices` need two allowed
+  layers. Its pins stay pending, and package access fails.
+  - Give such pins a checked surface escape on their own layer to the package
+    collar, as boundary witness ports do, and never a via.
+  - Nets with two or more allowed layers keep today's choices.
+  - **Tests:** a QFN pin on a one-layer net is escaped without a via, and the
+    board is ready; nets with more layers are unchanged.
+
 ## Order
 
 1. In parallel: W1 (D1–D5), W2 (L1–L7), R4, and the CopperLib work below.
@@ -506,6 +539,8 @@ Shared rules for every item:
 3. Then R5 and R6 (both done; a pad-ordered pinout still avoids crossings).
 4. R7 when corner-wrap skew matters. R9, then R10 (which uses R9's corners),
    when tuned lanes must avoid 90° corners or more length must fit a short run.
+   R12 with R10, when bundle pairs must match tightly. R13 when a pin-field net
+   must stay on one layer.
 5. Finally the test board adopts each feature and its critical preflight is re-run.
 
 ## CopperLib (separate repository)
