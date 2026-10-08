@@ -19,7 +19,7 @@ def main():
                         default=Path(__file__).resolve().parents[2] / "build/tps62130a-macro")
     parser.add_argument("--footprint-root", type=Path, default=Path("/usr/share/kicad/footprints"))
     parser.add_argument("--enabled", action="store_true")
-    parser.add_argument("--rotation", type=int, choices=(0, 90, 180, 270), default=0)
+    parser.add_argument("--rotation", type=int, choices=(0, 90, 180, 270), default=180)
     args = parser.parse_args()
 
     trial_path = args.copperlib / "packages/circuits/ti/tps62130a-buck/layout_trial.py"
