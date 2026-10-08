@@ -1479,6 +1479,8 @@ def _routing_rule_document(item: NetRoutingRule) -> tuple[object, ...]:
     # Tuning geometry (plan R10) likewise, only when it differs from the default.
     if item.tuning_style is not TuningStyle.BUMPS or item.tuning_spacing_nm is not None:
         document = (*document, ("tuning", item.tuning_style.value, item.tuning_spacing_nm))
+    if item.tuning_group is not None:
+        document = (*document, ("tuning_group", item.tuning_group))
     return document
 
 

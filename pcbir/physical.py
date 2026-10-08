@@ -1156,6 +1156,9 @@ class NetRoutingRule:
     # (the larger of 3 x width and the clearance).
     tuning_style: TuningStyle = TuningStyle.BUMPS
     tuning_spacing_nm: Nanometres | None = None
+    # Adjacent units of one length_match group with the same name are tuned
+    # together, all lanes bending as one bundle (plan R14).
+    tuning_group: str | None = None
 
     @property
     def effective_impedance_tolerance_percent(self) -> Decimal:
@@ -1236,6 +1239,11 @@ class NetRoutingRule:
                 raise ValueError("impedance tolerance requires target_impedance_ohms or target_single_ended_ohms")
         if self.layer_group is not None and (not isinstance(self.layer_group, str) or not self.layer_group.strip()):
             raise ValueError("routing layer group must be a nonempty name")
+        if self.tuning_group is not None:
+            if not isinstance(self.tuning_group, str) or not self.tuning_group.strip():
+                raise ValueError("routing tuning group must be a nonempty name")
+            if self.kind is RouteKind.GENERAL:
+                raise ValueError("routing tuning group requires a critical routing kind")
         breakout = {
             "breakout width": self.breakout_width_nm,
             "breakout gap": self.breakout_gap_nm,
@@ -1785,6 +1793,8 @@ class PhysicalBoard:
             partner = partners.get(rule.differential_partner or "")
             if partner is not None and partner.tuning_style is not rule.tuning_style:
                 raise ValueError(f"routing rules for {rule.net!r} and {partner.net!r} must agree on tuning_style")
+            if partner is not None and partner.tuning_group != rule.tuning_group:
+                raise ValueError(f"routing rules for {rule.net!r} and {partner.net!r} must agree on tuning_group")
             # Breakout relaxations are checked against the effective profile,
             # including board defaults when the rule leaves a value implicit.
             if rule.breakout_width_nm is not None:
@@ -1813,6 +1823,16 @@ class PhysicalBoard:
                     raise ValueError(f"net {net!r} belongs to length-match groups "
                                      f"{grouped[net]!r} and {group.id!r}")
                 grouped[net] = group.id
+        # Membership itself is checked where constraints lower (CMP117):
+        # derived boards (for example escape checks) keep the rules only.
+        tuning_groups: dict[str, str] = {}
+        for rule in self.net_routing_rules:
+            if rule.tuning_group is None or rule.net not in grouped:
+                continue
+            owner = tuning_groups.setdefault(rule.tuning_group, grouped[rule.net])
+            if owner != grouped[rule.net]:
+                raise ValueError(f"tuning group {rule.tuning_group!r} spans length-match groups "
+                                 f"{owner!r} and {grouped[rule.net]!r}")
         scoped: set[str] = set()
         for rule in self.component_hole_clearances:
             if rule.reference in scoped:

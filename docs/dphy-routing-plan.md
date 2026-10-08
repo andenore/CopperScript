@@ -649,6 +649,62 @@ Shared rules for every item:
   crystal's X2 land. That needs a crystal placement or orientation change, not
   a different escape. Tests: `tests/test_surface_package_escape.py`.
 
+- [x] **R14 Group serpentines.** Adjacent units of one `length_match` group
+  that each need about the same length hem each other in: R3/R10/R12 tune a
+  unit alone, which needs free room on its own sides. On the test board three
+  straight sink pairs at the connector's 1.2 mm pitch each need about 5 mm.
+  Bend them together instead, as in DDR byte-lane tuning: every lane follows
+  the same bumps or serpentine, keeps its spacing to the next lane, and the
+  group uses the room beside it.
+  - *Language.* Routing property `tuning_group = "<name>"` on every member
+    (both members of a pair); all units of one name belong to one
+    `length_match` group. Located errors.
+  - *Geometry.* Group bumps, and a two-sided group serpentine where both sides
+    have room. R9's 45° corners with offsets for N lanes; every lane is inside
+    and outside a turn equally, so all gain the same length and pairs keep
+    their skew. A one-sided bump's outer lane interval is the inner lane's
+    plus 2 × the lateral distance between them.
+  - *Room, lengths, timing, gates.* Room on the group's outermost swept area as
+    in R3, within the members' `tuning_amplitude_limit`. The group adds the
+    least its members need, per-unit tuning tops up. Tuned once all members
+    are accepted (R12) and again in the final pass, with the same atomic
+    validation; a group that does not fit leaves the copper and says why.
+  - **Tests:** a hemmed three-pair bundle; a run too short; one- versus
+    two-sided room; identity; determinism; validation errors.
+
+  Done (CS-173): `pcbir/critical_group_tuning.py` (`GroupTuner`,
+  `lane_corners`, `group_path`) and `critical._tune_group`, called by
+  `_tune_bundle_pairs` (R12) and `_tune_match_group` (R3); IR
+  `NetRoutingRule.tuning_group` (`CMP110` value checks, `CMP117` lowering
+  checks, digest-bound only when declared). Refinements: (1) every leg gives
+  each lane one corner with lane N inside and one with lane 1 inside, so
+  bumps and serpentine tops share one corner pattern per run; offsets are
+  lowered by at most 8 nm (`lane_corners`) so that rounded lengths agree
+  exactly. (2) A group top is at least D + 2 nm high, D ≈ 0.59 × the lane
+  span, so a group bump adds at least about 0.83 × D; smaller remainders go
+  to per-unit tuning. (3) Group bumps also lie on grids shifted along the run,
+  since the room beside a long run often ends before the run does. (4) Pairs
+  of an incomplete group wait in R12; a group that fails lets its pairs be
+  tuned one by one; re-routing a unit of a tuned group restores the others as
+  routed (`_drop_group_steps`). Report: group steps in `match_tuning` `units`
+  with `group` and `lanes`, `tuning_groups` per group (status and reason), and
+  the preflight line. On the test board (sink `max_skew` 0.127 mm,
+  `tuning_group` on CK/D0/D1, amplitude 4 mm) the group never fits at the
+  current placement: the longest straight run of all six lanes is 3.455 mm
+  (D1 jogs to the connector pitch last), and a group bump needs 6.860 mm.
+  Moving the sink chip alone does not legalize placement (its placement
+  regions are absolute). Moved with those regions and the corner-wrap
+  keep-out, the run is 3.917 mm at 3 mm and 5.917 mm at 5 mm; at 6 mm the only
+  bump position meets the connector's lands (and D2 fails to route, with or
+  without R14). At 7 mm one group bump of 3.633 mm adds 5.017 mm to all six
+  lanes while routing, D1 is topped up by 0.166 mm, and CK, D0 and D1 end
+  within 0.082 mm of D2; the length-match group still fails on D3 (3.2 mm
+  short, hemmed in between D2 and D0). On breakout boards a re-cut 45° piece
+  may still round a nanometre differently (D0 pair skew 2 nm there).
+  Limitations: axis-aligned runs only; a group tuned while routing is topped
+  up by another group step, not re-planned, when a longer member is accepted
+  later. Tests: `tests/test_group_tuning.py`.
+
 ## Order
 
 1. In parallel: W1 (D1–D5), W2 (L1–L7), R4, and the CopperLib work below.
@@ -657,7 +713,8 @@ Shared rules for every item:
 4. R7 when corner-wrap skew matters. R9, then R10 (which uses R9's corners),
    when tuned lanes must avoid 90° corners or more length must fit a short run.
    R12 with R10, when bundle pairs must match tightly. R13 when a pin-field net
-   must stay on one layer.
+   must stay on one layer. R14 when adjacent bundle lanes need about the same
+   length and hem each other in.
 5. Finally the test board adopts each feature and its critical preflight is re-run.
 
 ## CopperLib (separate repository)

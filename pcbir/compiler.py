@@ -1662,7 +1662,7 @@ def _positive_length(parameters: Mapping[str, object], name: str, label: str,
 
 def _validate_routing_signal_intent(declaration: ConstraintDecl,
                                     parameters: Mapping[str, object]) -> None:
-    """Located checks for the signal-integrity and tuning routing properties (plan L2/L5/L6/R10)."""
+    """Located checks for the signal-integrity and tuning routing properties (plan L2/L5/L6/R10/R14)."""
     location = declaration.location
     target = parameters.get("target_single_ended_ohms")
     if target is not None and (isinstance(target, bool) or not isinstance(target, int) or target <= 0):
@@ -1699,6 +1699,12 @@ def _validate_routing_signal_intent(declaration: ConstraintDecl,
         _error("CMP110", "routing parameter 'tuning_style' must be \"bumps\" or \"serpentine\"", location)
     if _positive_length(parameters, "tuning_spacing", "routing", location) is not None and style != "serpentine":
         _error("CMP110", "'tuning_spacing' requires tuning_style = \"serpentine\"", location)
+    tuning_group = parameters.get("tuning_group")
+    if tuning_group is not None:
+        if not isinstance(tuning_group, str) or not tuning_group.strip():
+            _error("CMP110", "routing parameter 'tuning_group' must be a nonempty name", location)
+        if parameters.get("kind", "general") == "general":
+            _error("CMP110", "'tuning_group' requires a critical routing kind", location)
 
 
 def _validate_length_match(declaration: ConstraintDecl, parameters: Mapping[str, object]) -> None:

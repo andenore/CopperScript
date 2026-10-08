@@ -655,8 +655,8 @@ placement/routing defaults when neither is stated. Routing parameters lower to
 `maximum_return_via_distance`, `return_via_policy`, `shared_reference_layer`,
 `impedance_evidence_digest`, `target_single_ended_ohms`,
 `impedance_tolerance_percent`, `layer_group`, `breakout_length`,
-`breakout_width`, `breakout_gap`, `breakout_clearance`, `tuning_style` and
-`tuning_spacing` (see
+`breakout_width`, `breakout_gap`, `breakout_clearance`, `tuning_style`,
+`tuning_spacing` and `tuning_group` (see
 [signal-integrity routing intent](#signal-integrity-routing-intent)).
 
 USB/differential profiles need not be top-layer-only. For example,
@@ -1172,6 +1172,49 @@ serpentine or ran while routing, the `match_tuning` entry also has `legs` and
 `amplitudes_nm`, and its lengths and skew before tuning are those of the
 copper as routed. The preflight line then lists each step and its style.
 
+Units whose rules name the same `tuning_group` (plan R14) are bent together,
+like a DDR byte lane, where each alone is hemmed in by its neighbours. Their
+collinear pieces are joined into lines; a *run* is a stretch along one axis
+and layer where every net of the group has one straight line, each unit's
+lanes are adjacent (a pair's at its lane spacing), and the lanes span W across
+it. Every lane rises the same height off its own line through every bump or
+serpentine top, so every lane gains the same length; on each leg the lanes
+turn one after another, each keeping its distance to the next, so for a
+one-sided bump the outermost lane's interval along the run is the innermost
+lane's plus 2 × W. Corners are R9's 45° chamfers for N lanes: at each end of a
+leg the lane inside the turn takes chamfer leg c and each lane further out c
+plus ⌊(2 − √2) × gap⌋ per gap crossed, lowered by a few nanometres where
+needed so that every lane's rounded length gain is exactly equal (a pair's
+skew is unchanged; a piece re-cut at a breakout-region boundary may still
+round a nanometre differently). A leg must hold both corners, so a group top
+is at least D + 2 nm high (D the sum of those offsets across the span; about
+0.59 × W), and each leg costs every lane the same length. Room is measured
+like a unit's, on the outline of the outermost lane's chamfered top together
+with the innermost lane's feet, against all other copper; bumps keep the
+innermost lane 3 × width wide and 3 × width from each other and from the run's
+ends, on the densest grid, centred in the run or shifted along it in steps of
+at least 3 × width (most room first, then farthest from the terminals). Where
+every member declares `tuning_style = "serpentine"`, tops lie at a pitch of W
++ width + `tuning_spacing` and alternate sides where both sides have room,
+else the group takes one-sided bumps. Heights are levelled, no taller than the
+smallest `tuning_amplitude_limit` of the members. The group adds what the unit
+nearest the group's longest member needs to match it, so no unit overshoots,
+else the least that brings one unit within `max_skew`; each unit's remainder
+is then topped up on its own as above. A group is tuned as soon as all its
+units are accepted in one bundle (until then its pairs wait) and again in the
+final pass, each step with the profile gates of every unit and one atomic
+native-DRC validation; later pairs route around it. When a unit of a group
+tuned while routing is re-routed, the others return to their copper as routed
+and the group is tuned again. A group that does not fit leaves the copper
+unchanged, and its units are tuned one by one instead. Each group step is a
+`units` entry with `group` and `lanes` (the nets across the run, in order),
+and the `match_tuning` entry gains `tuning_groups`: per group its `name`,
+`nets`, `status` (`tuned`, `failed`, `within_limit` or `incomplete`) and
+`reason`, which for a group that does not fit gives the longest run against
+the run a group bump needs, the amplitude against the least group height, or
+the room on each side. The preflight line names each group step and every
+group that was not tuned.
+
 The critical report also has a `lanes` table with one row per critical net:
 `routed_length_nm`, `layer_lengths_nm`, `layers` in stack-up order and the net's
 own `via_count` (return vias count for their reference net). When the board
@@ -1278,6 +1321,12 @@ constraint length_match(CSI_SRC_CKP, CSI_SRC_CKN, CSI_SRC_DA0P, CSI_SRC_DA0N) {
   `clearance`. `tuning_amplitude_limit` stays the largest excursion on each
   side of the original line. Intra-pair skew compensation keeps one-sided
   bumps either way.
+- `tuning_group` (nonempty name, critical kinds only) tunes adjacent units of
+  one `length_match` group together: every lane bends through the same bumps
+  or serpentine (see [critical routing](#critical-routing-and-qualification)).
+  Every net with the property must belong to a `length_match` group, all nets
+  of one tuning group to the same one, and both members of a pair must name
+  the same tuning group.
 - `length_match(NET, NET, ...)` lowers to `NetMatchGroup(id, nets,
   max_skew_nm)` on the physical board. It needs at least two distinct nets
   (not pins), each existing net may belong to only one group, and
@@ -1293,7 +1342,9 @@ constraint length_match(CSI_SRC_CKP, CSI_SRC_CKN, CSI_SRC_DA0P, CSI_SRC_DA0N) {
 Invalid values fail with source locations (`CMP110` for routing properties,
 `CMP111` for `length_match`); semantic errors found while lowering (unknown
 nets, a net in two groups, duplicate group ids) carry the constraint's
-location.
+location, and `CMP117` with the routing constraint's location marks a
+`tuning_group` outside any `length_match` group, one spanning two of them,
+or pair members that disagree.
 
 ### Breakout regions
 

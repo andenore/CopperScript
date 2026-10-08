@@ -105,7 +105,9 @@ class MatchTuningUnit:
     accepted (R12) and ``final`` for the pass after every group (R3).
     ``style`` is ``serpentine`` when the step used S-shaped legs, else
     ``bumps``; ``amplitudes_nm`` lists every top's and bump's height in
-    placement order.
+    placement order. A step of a tuning group (plan R14) names the ``group``,
+    has every unit's nets in ``nets`` and its ``lanes`` across the run where it
+    bent them, in order.
     """
 
     nets: tuple[str, ...]
@@ -115,6 +117,23 @@ class MatchTuningUnit:
     bumps: int
     legs: int
     amplitudes_nm: tuple[int, ...]
+    group: str = ""
+    lanes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TuningGroupOutcome:
+    """Outcome of one tuning group of a ``length_match`` group (plan R14).
+
+    ``status`` is ``tuned`` (a group step's copper was kept), ``failed`` (no
+    group step was kept; ``reason`` says why), ``within_limit`` (no unit of
+    the group needed length) or ``incomplete`` (a unit is not connected).
+    """
+
+    name: str
+    nets: tuple[str, ...]
+    status: str
+    reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +146,8 @@ class MatchTuningResult:
     here). With tuning while routing (R12), lengths and skew *before* are
     those of the copper as routed, before any tuning, and a failed group keeps
     the copper tuned while routing. ``units`` lists every tuning step; it is
-    reported only when a step used a serpentine or ran while routing.
+    reported only when a step used a serpentine, ran while routing or tuned a
+    tuning group. ``tuning_groups`` gives each declared tuning group's outcome.
     """
 
     id: str
@@ -139,6 +159,7 @@ class MatchTuningResult:
     bumps: int = 0
     reason: str = ""
     units: tuple[MatchTuningUnit, ...] = ()
+    tuning_groups: tuple[TuningGroupOutcome, ...] = ()
 
     @property
     def legs(self) -> int:
@@ -146,7 +167,7 @@ class MatchTuningResult:
 
     @property
     def reported_units(self) -> bool:
-        return any(unit.stage == "routing" or unit.legs for unit in self.units)
+        return any(unit.stage == "routing" or unit.legs or unit.group for unit in self.units)
 
 
 def match_tuning_document(item: MatchTuningResult) -> dict[str, object]:
@@ -170,8 +191,14 @@ def match_tuning_document(item: MatchTuningResult) -> dict[str, object]:
         document["units"] = [
             {"nets": list(unit.nets), "stage": unit.stage, "style": unit.style,
              "added_length_nm": unit.added_length_nm, "bumps": unit.bumps, "legs": unit.legs,
-             "amplitudes_nm": list(unit.amplitudes_nm)}
+             "amplitudes_nm": list(unit.amplitudes_nm),
+             **({"group": unit.group, "lanes": list(unit.lanes)} if unit.group else {})}
             for unit in item.units
+        ]
+    if item.tuning_groups:
+        document["tuning_groups"] = [
+            {"name": group.name, "nets": list(group.nets), "status": group.status, "reason": group.reason}
+            for group in item.tuning_groups
         ]
     return document
 
@@ -186,16 +213,19 @@ def match_tuning_line(item: MatchTuningResult) -> str:
     steps = ""
     if item.reported_units:
         steps = "; " + ", ".join(
-            f"{'/'.join(unit.nets)} {unit.style}"
+            (f"group {unit.group} {'/'.join(unit.lanes)}" if unit.group else "/".join(unit.nets))
+            + f" {unit.style}"
             + (f" {unit.legs} legs" if unit.legs else "") + (f" {unit.bumps} bumps" if unit.bumps else "")
             + f" up to {mm(max(unit.amplitudes_nm, default=0))} mm"
             + (" while routing" if unit.stage == "routing" else "")
             for unit in item.units)
+    groups = "".join(f"; tuning group {group.name} {group.status}" + (f" ({group.reason})" if group.reason else "")
+                     for group in item.tuning_groups if group.status != "tuned")
     return (f"match group {item.id}: {item.status}, skew {mm(item.skew_before_nm)} -> "
             f"{mm(item.skew_after_nm)} mm (max {mm(item.max_skew_nm)} mm)"
             + (f"; added {added} mm" if added else "")
             + (f"; {item.bumps} bumps" if item.bumps and not steps else "")
-            + steps
+            + steps + groups
             + (f": {item.reason}" if item.reason else ""))
 
 
@@ -228,6 +258,8 @@ class UnitTuning:
     legs: int = 0
     amplitudes_nm: tuple[int, ...] = ()
     reason: str = ""
+    # A tuning group's lanes across its run, in order (plan R14).
+    lanes: tuple[str, ...] = ()
 
     @property
     def style(self) -> str:

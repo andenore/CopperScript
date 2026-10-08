@@ -1712,3 +1712,39 @@ preflight as for boundary reservations. A pin without a legal surface path
 stays pending, so package access is not ready; a land on a layer its net may
 not use stays pending as before. Nets that may change layer MUST route
 byte-identically. See R13 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-173 — Group serpentines for adjacent lanes (Accepted)
+
+Units of one `length_match` group whose routing rules name the same
+`tuning_group` MUST be tuned together where their lanes run side by side:
+every lane of the group follows the same bumps or serpentine tops, rising the
+same height off its own line, so every lane gains the same length and keeps
+its spacing to the next lane through every leg. A run is a stretch where each
+net of the group has one straight line on one axis and layer, each unit's
+lanes adjacent (a pair at its lane spacing). On a leg the lanes turn one
+after another; for a one-sided bump the outermost lane's interval is the
+innermost lane's plus twice the lane span. Corners keep CS-167's 45°
+chamfers generalised to N lanes: at each end of a leg the lane inside the
+turn takes chamfer leg c and every other lane c plus ⌊(2 − √2) × gap⌋ for
+each gap between it and that lane, so parallel pieces never come closer than
+their spacing; every lane takes one corner at each end of every leg, and
+offsets are lowered by at most 8 nm where needed so that the rounded per-piece
+length gain of all lanes is exactly equal and pair skew is unchanged (up to
+CS-167's breakout re-cut rounding). Room is
+measured on the outermost lane's chamfered outline with the innermost lane's
+feet, against all other copper, lands, keep-outs, holes and the board edge,
+up to the smallest `tuning_amplitude_limit` of the members. Bumps follow R3's
+spacing on grids centred in the run or shifted along it; serpentine tops
+(every member `"serpentine"`) follow CS-169 at a pitch of the lane span plus
+width plus leg gap, with bumps where one side has no room. One chamfer leg
+serves a step and heights are levelled, so the added length is exact. The
+group adds the least length its units need, never past the group's longest
+member; each unit's remainder is then tuned on its own. A group is tuned once
+all its units are accepted in one bundle (CS-170; its pairs wait for it) and
+again in the final pass, with every unit's profile gates and one atomic
+native-DRC validation. Re-routing a unit of a group tuned while routing
+returns the others to their copper as routed. A group that does not fit
+leaves the copper unchanged, reports the longest run against the run a group
+bump needs, the amplitude against the least group height, or the room on each
+side, and its units are tuned one by one. Boards without the property MUST
+route byte-identically. See R14 in the [D-PHY routing plan](dphy-routing-plan.md).

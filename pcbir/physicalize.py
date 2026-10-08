@@ -462,7 +462,7 @@ def _physicalize(
         assembly_access=mechanical.assembly_access if mechanical else (),
         mechanical_slots=mechanical.slots if mechanical else (),
         mechanical_references=mechanical.references if mechanical else (),
-        match_groups=_lower_match_groups(flat),
+        match_groups=_check_tuning_groups(flat, _lower_match_groups(flat)),
         component_hole_clearances=_lower_hole_clearances(flat, footprints, placements, rules, metadata),
     )
 
@@ -652,6 +652,7 @@ def _lower_physical_constraints(
                     breakout_clearance_nm=_optional_constraint_length(parameters, "breakout_clearance"),
                     tuning_style=TuningStyle(str(parameters.get("tuning_style", "bumps"))),
                     tuning_spacing_nm=_optional_constraint_length(parameters, "tuning_spacing"),
+                    tuning_group=_optional_string(parameters, "tuning_group"),
                 )
             )
             continue
@@ -859,6 +860,45 @@ def _lower_match_groups(flat: FlatElectricalView) -> tuple[NetMatchGroup, ...]:
         except ValueError as exc:
             raise ValueError(f"{origin}: {exc}") from exc
     return tuple(groups)
+
+
+def _check_tuning_groups(flat: FlatElectricalView,
+                         groups: tuple[NetMatchGroup, ...]) -> tuple[NetMatchGroup, ...]:
+    """Check each routing ``tuning_group`` against the lowered match groups (plan R14).
+
+    A net with a tuning group must belong to a ``length_match`` group, every
+    net of one tuning group to the same one, and both members of a pair to
+    the same tuning group. Errors carry the routing constraint's location.
+    """
+
+    owner = {net: group.id for group in groups for net in group.nets}
+    declared: dict[str, tuple[str | None, str]] = {}
+    for constraint in flat.constraints:
+        if constraint.kind is ConstraintKind.ROUTING and len(constraint.targets) == 1:
+            name = constraint.parameters.get("tuning_group")
+            declared[constraint.targets[0]] = (None if name is None else str(name),
+                                               constraint.origins[0] if constraint.origins else "routing")
+    match_of: dict[str, tuple[str, str]] = {}
+    for constraint in flat.constraints:
+        if constraint.kind is not ConstraintKind.ROUTING or len(constraint.targets) != 1:
+            continue
+        net = constraint.targets[0]
+        name, origin = declared[net]
+        partner = constraint.parameters.get("partner")
+        if isinstance(partner, str) and partner in declared and declared[partner][0] != name:
+            raise ValueError(f"{origin}: CMP117: routing rules for {net!r} and {partner!r} "
+                             "must agree on tuning_group")
+        if name is None:
+            continue
+        if net not in owner:
+            raise ValueError(f"{origin}: CMP117: tuning_group {name!r} requires {net!r} to belong to "
+                             "a length_match group")
+        first = match_of.setdefault(name, (owner[net], net))
+        if first[0] != owner[net]:
+            raise ValueError(f"{origin}: CMP117: tuning_group {name!r} joins {net!r} of length_match "
+                             f"group {owner[net]!r} and {first[1]!r} of {first[0]!r}; a tuning group "
+                             "must stay within one length_match group")
+    return groups
 
 
 def _lower_hole_clearances(
