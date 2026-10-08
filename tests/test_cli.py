@@ -27,8 +27,12 @@ def test_early_plane_contacts_default_and_explicit_opt_out():
 
 def test_route_board_accepts_board_wide_local_ground_preference():
     from pcbir.cli import _parser
+    assert _parser().parse_args(["route-board", "board.copper"]).prefer_local_ground
     args = _parser().parse_args(["route-board", "board.copper", "--prefer-local-ground"])
     assert args.prefer_local_ground
+    assert not _parser().parse_args([
+        "route-board", "board.copper", "--no-prefer-local-ground",
+    ]).prefer_local_ground
 
 
 def run_cli(example: str) -> subprocess.CompletedProcess[str]:
@@ -367,7 +371,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
             "examples/valid_board/board.copper", "--allow-proxy-footprints",
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
             "--fanout",
-            "--stitch-zone-pads", "--prefer-local-ground", "--plane-stitch-step-mm", "0.25",
+            "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
             "--plane-stitch-radius-mm", "5",
             "--critical-feedback-trials", "1",
             "--report", str(report), "-o", str(pcb),

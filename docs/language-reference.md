@@ -810,8 +810,9 @@ before ordinary area routing by default. Critical routes and plane contacts
 are revalidated together with ordinary escape-pattern alternatives. Use
 `--no-early-plane-stitch` for an explicit late-contact comparison, or
 `--early-plane-pad` to select contacts. These options never certify zone fill.
-Use `--prefer-local-ground` to apply the local-contact preference to every GND
-pad, or repeat `--prefer-local-ground-pad REF.PAD` to select individual pads.
+Local-contact preference is on by default for every GND pad. Use
+`--no-prefer-local-ground` to restore reuse-first behavior, optionally with
+`--prefer-local-ground-pad REF.PAD` to select individual exceptions.
 The preference applies to eligible SMD pads outside protected hard macros;
 through-hole pads already provide a plated contact. It compares a nearby legal
 GND via with reuse of an existing contact, using surface escape length and a

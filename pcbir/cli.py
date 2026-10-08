@@ -495,8 +495,8 @@ def _parser() -> argparse.ArgumentParser:
         help="optional link to a previously escaped same-net pad (default: disabled)",
     )
     board_route_parser.add_argument(
-        "--prefer-local-ground", action="store_true",
-        help="prefer a nearby plane via for every eligible GND pad",
+        "--prefer-local-ground", action=argparse.BooleanOptionalAction, default=True,
+        help="prefer a nearby plane via for every eligible GND pad (default: on)",
     )
     board_route_parser.add_argument(
         "--prefer-local-ground-pad", action="append", default=[], metavar="REF.PAD",

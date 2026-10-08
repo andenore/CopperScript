@@ -59,7 +59,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="also verify ordinary package exits and plane contacts before area routing")
     parser.add_argument("--stitch-surface-zones", action="store_true")
     parser.add_argument("--plane-contact-radius-mm", default="0")
-    parser.add_argument("--prefer-local-ground", action="store_true")
+    parser.add_argument("--prefer-local-ground", action=argparse.BooleanOptionalAction,
+                        default=True)
     parser.add_argument("--prefer-local-ground-pad", action="append", default=[], metavar="REF.PAD")
     parser.add_argument("--router-iterations", type=int, default=5)
     parser.add_argument("--tile-size-mm", default="5")

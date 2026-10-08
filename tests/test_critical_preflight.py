@@ -37,7 +37,6 @@ def test_package_access_gate_reports_pending_identities_and_exports_contacts(tmp
     assert main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
         "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
         "--package-access", "--stitch-surface-zones", "--plane-contact-radius-mm", "5",
-        "--prefer-local-ground",
         "--report", str(report), "-o", str(output)]) == 1
     data = json.loads(report.read_text())
     assert data["stage"] == "package_access_complete" and data["complete"]

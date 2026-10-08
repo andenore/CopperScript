@@ -91,7 +91,7 @@ def test_existing_same_net_via_is_reused_not_drilled_twice() -> None:
     board = _plane_board()
     first = stitch_zone_pads(board)
     seeded = replace(board, vias=(first.board.vias[0],))
-    result = stitch_zone_pads(seeded)
+    result = stitch_zone_pads(seeded, PlaneStitchOptions(preferred_ground_pads=frozenset()))
     assert result.complete
     assert result.added_track_count == 2
     assert result.added_via_count == 1
@@ -104,13 +104,16 @@ def test_preferred_ground_pad_chooses_short_local_via_over_long_reuse() -> None:
                    nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK)
     board = replace(board, vias=(existing,))
     pad = PadReference("J1", "1")
-    baseline = stitch_zone_pads(board, PlaneStitchOptions(only_pads={pad}))
+    baseline = stitch_zone_pads(board, PlaneStitchOptions(
+        only_pads={pad}, preferred_ground_pads=frozenset(),
+    ))
     preferred = stitch_zone_pads(board, PlaneStitchOptions(
         only_pads={pad}, preferred_ground_pads={pad},
     ))
 
     assert baseline.added_via_count == 0
     assert preferred.complete and preferred.added_via_count == 1
+    assert stitch_zone_pads(board, PlaneStitchOptions(only_pads={pad})).board == preferred.board
     assert preferred.board.vias[-1].position in {Point.mm(2, 6), Point.mm(4, 6)}
     assert preferred.board == stitch_zone_pads(board, PlaneStitchOptions(
         only_pads={pad}, preferred_ground_pads={pad},
@@ -197,7 +200,7 @@ def test_reuses_off_grid_same_net_via_before_adding_drill() -> None:
         nm_from_mm("0.4"), CopperLayer.FRONT, CopperLayer.BACK,
     )
     board = replace(base, vias=(existing,))
-    result = stitch_zone_pads(board)
+    result = stitch_zone_pads(board, PlaneStitchOptions(preferred_ground_pads=frozenset()))
 
     assert result.complete
     assert any(track.start == Point.mm(3, 6) for track in result.board.tracks)
@@ -235,7 +238,7 @@ def test_existing_via_can_be_reached_with_legal_two_segment_escape() -> None:
         vias=(existing,),
     )
 
-    result = stitch_zone_pads(board)
+    result = stitch_zone_pads(board, PlaneStitchOptions(preferred_ground_pads=frozenset()))
 
     assert result.complete
     assert sum(existing.position in (track.start, track.end)
@@ -281,6 +284,7 @@ def test_blocked_elbows_can_use_bounded_three_segment_escape() -> None:
 
     result = stitch_zone_pads(board, PlaneStitchOptions(
         maximum_detour_nm=nm_from_mm("1.5"),
+        preferred_ground_pads=frozenset(),
     ))
 
     first_escape = [track for track in result.board.tracks

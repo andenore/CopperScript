@@ -45,7 +45,8 @@ class PlaneStitchOptions:
     candidate_bias: str | None = None
     escape_width_nm: int | None = None
     only_pads: frozenset[PadReference] | None = None
-    preferred_ground_pads: frozenset[PadReference] = frozenset()
+    # None prefers every GND pad; an empty set restores reuse-first behavior.
+    preferred_ground_pads: frozenset[PadReference] | None = None
     ground_via_in_pad: bool = False
     # Opt-in opposite-side surface zones, e.g. a two-layer rear ground pour.
     # Same-side-only zones are refill intent, not a reason to invent a via.
@@ -54,7 +55,8 @@ class PlaneStitchOptions:
     def __post_init__(self) -> None:
         if self.only_pads is not None:
             object.__setattr__(self, "only_pads", frozenset(self.only_pads))
-        object.__setattr__(self, "preferred_ground_pads", frozenset(self.preferred_ground_pads))
+        if self.preferred_ground_pads is not None:
+            object.__setattr__(self, "preferred_ground_pads", frozenset(self.preferred_ground_pads))
         if self.candidate_bias not in {None, "east", "south", "west", "north"}:
             raise ValueError("plane-stitch candidate bias must be a cardinal direction")
         if (self.step_nm <= 0 or self.maximum_radius_nm < self.step_nm
@@ -102,6 +104,10 @@ def stitch_zone_pads(
     board = materialize_via_in_pad_arrays(board)
     array_pads = {rule.pad for rule in array_rules(board)}
     options = options or PlaneStitchOptions()
+    if options.preferred_ground_pads is None:
+        options = replace(options, preferred_ground_pads=frozenset(
+            pad for net in board.nets if net.name == "GND" for pad in net.pads
+        ))
     if options.ground_via_in_pad and board.metadata.get("fabrication_profile") != "jlcpcb-six-layer":
         raise ValueError("filled/capped ground via-in-pad requires the JLCPCB six-layer profile")
     if (options.escape_width_nm is not None
