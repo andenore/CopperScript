@@ -135,7 +135,8 @@ def improve_zone_escapes(
     if initial.plane_stitch is not None:
         _reserved_pads = _reserved_pads | frozenset(initial.plane_stitch.stitched_pads)
     package_targets = _package_zone_targets(initial.board, targets)
-    zone_nets = {zone.net for zone in initial.board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(initial.board)
     baseline_signal_failures = frozenset(_failed_signals(initial, zone_nets))
     baseline_hard = _hard_drc_findings(baseline_stitch.board)
     accepted_pending = len(baseline_stitch.pending_pads)
@@ -294,7 +295,8 @@ def _package_zone_targets(
     indiscriminately reserved. Reservation precedes fanout/ordinary routing;
     final native and filled-zone checks still decide whether the trial passes.
     """
-    zone_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
     groups = {(net.name, pad.component) for net in board.nets if net.name in zone_nets
               for pad in net.pads if pad in pending}
     return pending | frozenset(pad for net in board.nets for pad in net.pads
@@ -338,7 +340,8 @@ def _repair_with_local_ripup(
             locked_vias[via] -= 1
         else:
             movable_vias.append(via)
-    zone_nets = {zone.net for zone in initial.board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(initial.board)
     completed_signals = {
         item.net for item in initial.detailed.nets
         if item.connected and item.net not in zone_nets
@@ -565,7 +568,8 @@ def _merge_local_detail(
     locked = (original.fanout.board if original.fanout else
               original.plane_stitch.board if original.plane_stitch else
               original.critical.board)
-    zone_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
     tracks = Counter(track for track in board.tracks if track.net not in zone_nets)
     tracks -= Counter(locked.tracks)
     vias = Counter(via for via in board.vias if via.net not in zone_nets)

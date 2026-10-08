@@ -59,6 +59,65 @@ def test_materialization_is_transactional_and_rotates_all_geometry(tmp_path,rota
     assert macro_routing_pads(result,result.nets[0]) == (PadReference("U1","1"),)
 
 
+def test_owned_local_zone_is_immutable_and_does_not_defer_external_routing(tmp_path):
+    from pcbir.hard_macros import macro_source
+    from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles
+    from pcbir.zone_geometry import distribution_zone_nets
+    _, asset, bind = fixture(tmp_path)
+    asset["schema"] = "copperlib-physical-hard-macro/v0.2"
+    asset["keepouts"] = []
+    asset["plane_returns"] = []
+    asset["zones"] = [dict(id="local",net="signal",layers=["F.Cu"],
+        vertices=[[1600000,-250000],[2400000,-250000],[2400000,250000],[1600000,250000]],
+        priority=2,clearance_nm=200000,minimum_width_nm=200000,pad_connection="solid")]
+    board = materialize_hard_macros(bind())
+    assert len(board.zones) == 1 and board.zones[0].id == "unit/local"
+    assert distribution_zone_nets(board) == set()
+    assert not macro_source(board).zones
+    rotated = bind()
+    poses = {p.reference: p for p in rotated.placements}
+    poses.update(cluster_placements(rotated, rotated.rigid_clusters[0],
+                                    replace(poses["U1"], rotation_degrees=45)))
+    turned = materialize_hard_macros(replace(rotated, placements=tuple(poses.values())))
+    assert turned.zones[0].outline != board.zones[0].outline
+    with pytest.raises(ValueError, match="immutable hard-macro zone"):
+        replace(board, zones=())
+    host = CopperZone("host", "N", (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+        Point.mm(11.5, 9.7), Point.mm(12.5, 9.7),
+        Point.mm(12.5, 10.3), Point.mm(11.5, 10.3)))))
+    with pytest.raises(ValueError, match="host zone overlaps"):
+        replace(board, zones=(*board.zones, host))
+    asset["zones"][0]["vertices"][1:3] = [[4000000,-250000],[4000000,250000]]
+    with pytest.raises(ValueError, match="inside its protected region"):
+        bind()
+
+
+def test_plane_return_requires_real_via_and_declared_plane(tmp_path):
+    from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles
+    _, asset, bind = fixture(tmp_path)
+    asset["schema"] = "copperlib-physical-hard-macro/v0.2"
+    asset["zones"] = []
+    asset["keepouts"] = []
+    asset["ports"] = []
+    asset["plane_returns"] = [dict(net="signal",layers=["B.Cu"],
+        pads=[["chip","1"],["passive","1"]],
+        dedicated_contacts=[dict(pad=["chip","1"],via_position_nm=[600000,0]),
+                            dict(pad=["passive","1"],via_position_nm=[1400000,0])])]
+    asset["vias"] = [dict(net="signal",position_nm=xy,size_nm=600000,drill_nm=300000,
+                          from_layer="F.Cu",to_layer="B.Cu",technology=None)
+                     for xy in ([600000,0],[1400000,0])]
+    with pytest.raises(ValueError, match="no declared plane"):
+        materialize_hard_macros(bind())
+    original, _, _ = fixture(tmp_path)
+    plane = CopperZone("return", "N", (CopperLayer.BACK,), PolygonWithHoles(PolygonRing((
+        Point.mm(1, 1), Point.mm(29, 1), Point.mm(29, 29), Point.mm(1, 29)))))
+    source = replace(original, zones=(plane,))
+    assert materialize_hard_macros(bind(input_board=source)).vias
+    asset["vias"] = []
+    with pytest.raises(ValueError, match="lacks a local via"):
+        materialize_hard_macros(bind(input_board=source))
+
+
 @pytest.mark.parametrize("change,message",[
     ("hash","identity"),("footprint","footprint identity"),("layer","layer contract"),
     ("coordinate","integer"),("unknown","unsupported"),("pad","pad/net"),

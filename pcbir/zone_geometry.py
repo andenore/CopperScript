@@ -11,6 +11,12 @@ from .physical import BoardOutline, CopperZone, PhysicalBoard, Point, PolygonRin
 from .quantities import Length
 
 
+def distribution_zone_nets(board: PhysicalBoard) -> set[str]:
+    """Local macro pours do not replace routing to a net's external terminals."""
+    local_ids = {zone.id for macro in board.hard_macros for zone in macro.zones}
+    return {zone.net for zone in board.zones if zone.id not in local_ids}
+
+
 def _length(parameters, name, default=None):
     value = parameters.get(name, default)
     if value is None:

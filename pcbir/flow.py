@@ -134,7 +134,8 @@ def run_routing_pipeline(
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
     if access:
         emit(on_progress, "package_boundary_reservation", "started")
-    deferred_zones = (frozenset(zone.net for zone in pre_fanout.zones)
+    from .zone_geometry import distribution_zone_nets
+    deferred_zones = (frozenset(distribution_zone_nets(pre_fanout))
                       if detailed_options.defer_zone_nets else frozenset())
     fanout = reserve_boundary_access(pre_fanout, access.fanout, access.boundary,
                                      deferred_nets=deferred_zones) if access else None
@@ -199,7 +200,7 @@ def run_routing_pipeline(
             if trial_access:
                 emit(on_progress, "package_boundary_reservation", "started", trial=trials_run)
             trial_fanout = reserve_boundary_access(trial_pre_fanout, trial_access.fanout,
-                trial_access.boundary, deferred_nets=frozenset(zone.net for zone in trial_pre_fanout.zones)
+                trial_access.boundary, deferred_nets=frozenset(distribution_zone_nets(trial_pre_fanout))
                 if detailed_options.defer_zone_nets else frozenset()) if trial_access else None
             if trial_access:
                 emit(on_progress, "package_boundary_reservation", "finished", trial=trials_run,
@@ -257,7 +258,8 @@ def _detailed_score(
 ) -> tuple[int, ...]:
     hard = sum(item.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
                and item.severity.value == "error" for item in drc.findings)
-    zone_nets = {zone.net for zone in detailed.board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(detailed.board)
     actual_opens = {net for item in drc.findings if item.code == "DRC-OPEN-NET"
                     for net in item.nets if net not in zone_nets}
     return (hard, len(actual_opens), detailed.metrics.unrouted_net_count,

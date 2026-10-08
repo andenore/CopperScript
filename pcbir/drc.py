@@ -478,6 +478,10 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "placement_groups": [repr(item) for item in sorted(board.placement_groups, key=lambda item: item.name)],
             "rigid_clusters": [repr(item) for item in sorted(board.rigid_clusters, key=lambda item: item.name)],
             "hard_macros": [repr(item) for item in sorted(board.hard_macros, key=lambda item: item.cluster)],
+            **({"hard_macro_local_copper": [
+                (item.cluster, tuple(map(repr, item.zones)), tuple(map(repr, item.plane_returns)))
+                for item in sorted(board.hard_macros, key=lambda item: item.cluster)]}
+               if any(item.zones or item.plane_returns for item in board.hard_macros) else {}),
             "materialized_macros": board.materialized_macros,
             "zones": [repr(item) for item in sorted(board.zones, key=lambda item: item.id)],
             **({"zone_routing_reservations": sorted(zone.id for zone in board.zones if zone.reserve_routing)}

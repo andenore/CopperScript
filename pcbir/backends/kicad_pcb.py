@@ -280,11 +280,13 @@ def _render_rules(board: PhysicalBoard) -> str:
 
 
 def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
-    from ..hard_macros import resolved_macro_geometry
+    from ..hard_macros import resolved_macro_geometry, resolved_macro_zones
     owner_geometry = [resolved_macro_geometry(board, m) for m in board.hard_macros
                       if m.cluster in board.materialized_macros]
     macro_tracks = {t for geometry in owner_geometry for t in geometry[0]}
     macro_vias = {v for geometry in owner_geometry for v in geometry[1]}
+    macro_zone_ids = {z.id for m in board.hard_macros if m.cluster in board.materialized_macros
+                      for z in resolved_macro_zones(board, m)}
     net_codes = {
         net.name: index
         for index, net in enumerate(sorted(board.nets, key=lambda item: item.name), 1)
@@ -374,7 +376,7 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
 
     for zone in sorted(board.zones, key=lambda item: (-item.priority, item.id)):
         for layer in sorted(zone.layers, key=lambda item: item.value):
-            lines.extend(_zone_lines(board, zone, layer, net_codes))
+            lines.extend(_zone_lines(board, zone, layer, net_codes, locked=zone.id in macro_zone_ids))
 
     cluster_keepouts = resolved_cluster_keepouts(board, {item.reference: item for item in board.placements})
     for keepout in sorted((*board.copper_keepouts, *cluster_keepouts), key=lambda item: item.id):
@@ -511,6 +513,8 @@ def _zone_lines(
     zone: CopperZone,
     layer: CopperLayer,
     net_codes: dict[str, int],
+    *,
+    locked: bool = False,
 ) -> list[str]:
     if zone.outline.holes:
         raise ValueError(
@@ -544,6 +548,7 @@ def _zone_lines(
     fill += ")"
     result = [
         "  (zone",
+        *( ["    (locked yes)"] if locked else [] ),
         f"    (net {net_codes[zone.net]})",
         f"    (net_name {_quote(zone.net)})",
         f"    (layer {_quote(layer.value)})",

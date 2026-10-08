@@ -1367,6 +1367,23 @@ class MacroPadBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class MacroPlaneReturn:
+    """Private pad roots that must contact a declared, independently filled plane."""
+
+    net: str
+    layers: tuple[CopperLayer, ...]
+    pads: tuple[PadReference, ...]
+    dedicated_contacts: tuple[tuple[PadReference, Point], ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "layers", tuple(self.layers))
+        object.__setattr__(self, "pads", tuple(self.pads))
+        object.__setattr__(self, "dedicated_contacts", tuple(self.dedicated_contacts))
+        if not self.net or not self.layers or not self.pads:
+            raise ValueError("macro plane return needs a net, layers and pads")
+
+
+@dataclass(frozen=True, slots=True)
 class PhysicalHardMacro:
     """Local immutable copper attached to an identity-bound rigid cluster.
 
@@ -1374,7 +1391,7 @@ class PhysicalHardMacro:
     *all* new track/via access, including same-net shortcuts. Ports therefore
     sit outside those regions; owner copper alone may cross the boundary.
     Zone exclusion is separate, explicit CopperKeepout intent on the cluster.
-    This experimental subset does not yet import local pours or mirrored poses.
+    This experimental subset does not yet import mirrored poses.
     """
 
     cluster: str
@@ -1386,9 +1403,11 @@ class PhysicalHardMacro:
     required_layers: tuple[CopperLayer, ...] = ()
     pad_bindings: tuple[MacroPadBinding, ...] = ()
     isolated_pads: tuple[PadReference, ...] = ()
+    zones: tuple[CopperZone, ...] = field(default=(), repr=False)
+    plane_returns: tuple[MacroPlaneReturn, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
-        for name in ("tracks", "vias", "ports", "protected_regions", "required_layers", "pad_bindings", "isolated_pads"):
+        for name in ("tracks", "vias", "ports", "protected_regions", "required_layers", "pad_bindings", "isolated_pads", "zones", "plane_returns"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         if not self.cluster or len(self.asset_sha256) != 64 or any(
             c not in "0123456789abcdef" for c in self.asset_sha256
@@ -1400,6 +1419,8 @@ class PhysicalHardMacro:
             raise ValueError("hard macro port names must be unique")
         if len({r.id for r in self.protected_regions}) != len(self.protected_regions):
             raise ValueError("hard macro protected region IDs must be unique")
+        if len({z.id for z in self.zones}) != len(self.zones):
+            raise ValueError("hard macro zone IDs must be unique")
         if any(r.outline.holes or not r.block_tracks or not r.block_vias
                for r in self.protected_regions):
             raise ValueError("macro access reservations require solid track/via-blocking polygons")

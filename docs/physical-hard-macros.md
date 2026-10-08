@@ -29,8 +29,9 @@ syntax or automatic component-name inference.
   fingerprints, export and signoff evidence. Layer names alone do not qualify a
   stackup. Failed materialization cannot partially mutate the board.
 - Qualification also covers impedance/reference planes, mounting edge/corner,
-  assembly and RF behavior. Unsupported local pours, arcs, mirrored instances
-  and arbitrary vendor CAD import fail closed in this first asset format.
+  assembly and RF behavior. The v0.1 format rejects local pours. The v0.2
+  format described below admits bounded owned zones and pending plane returns;
+  arcs, mirrored instances and arbitrary vendor CAD import remain unsupported.
 
 ## Implemented lifecycle
 
@@ -76,6 +77,30 @@ detailed stages retain the immutable prefix; feedback rebuilds the entire macro
 at the accepted unit pose. Source recovery rejects arbitrary non-owner copper
 and filled input boards, rather than discarding it. Fingerprints identify the
 same pose/net topology before and after materialization.
+
+## v0.2 local copper and plane-backed returns
+
+The v0.2 asset may declare local `zones` with explicit net, layer, polygon,
+priority, clearance, minimum width and solid/thermal pad connection. Binding
+pins them to the asset digest; materialization rigidly rotates them with the
+tracks and vias. A later change or deletion fails owner validation. KiCad
+exports them as locked zones, and source recovery removes only those exact
+owner zones. Each local polygon must stay inside its protected region. Host
+zones overlapping that region on an owned zone layer, or keepouts blocking an
+owned zone, fail before export. A local VIN/VOUT pour does not make that rail a
+deferred distribution-plane net:
+external terminals still need ordinary routing.
+
+An optional `plane_returns` group declares every private pad on one net and
+the inner plane layers it must reach. The pre-fill proof requires each pad's
+explicit copper root to contain a via inside a same-net plane zone; dedicated
+contacts additionally identify distinct owner vias for named pads. It does
+not join separate roots or claim filled-plane continuity. Independent native
+KiCad refill and zero unconnected items are required to close that pending
+claim. Removing a pad via, changing its net, losing the plane, or adding a
+host zone on an owned layer into the private region fails. The TPS62130A
+single-regulator probe at `examples/tps62130a_macro/` checks the filled local
+polygons and native DRC without a larger board placement run.
 
 Plane stitching reuses exact private-pad-to-existing-via graph continuity; it
 never creates shortcuts through protected ground returns. Without a usable

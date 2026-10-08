@@ -335,7 +335,8 @@ def route_global(
     graph = _build_graph(board, options)
     rules = {rule.net: rule for rule in board.net_routing_rules}
     clearance = RoutingClearanceIndex(board)
-    zone_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
     owner_connected = {net.name for net in board.nets if owner_graph is not None and owner_graph.net_connected(net)}
@@ -438,14 +439,16 @@ def _route_iteration(
         key=lambda net: _net_order(net.name, rules.get(net.name)),
     )
     from .hard_macros import macro_routing_pads
+    from .zone_geometry import distribution_zone_nets
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
+    zone_nets = distribution_zone_nets(board)
     for net in ordered_nets:
         if owner_graph is not None and owner_graph.net_connected(net):
             routes.append(GlobalNetRoute(net.name, True, (), (), (), 0,
                           ("connected by immutable hard-macro copper",)))
             continue
-        if any(zone.net == net.name for zone in board.zones):
+        if net.name in zone_nets:
             routes.append(GlobalNetRoute(
                 net.name, False, (), (), (), 0,
                 ("deferred to declared copper zone and verified fill",), True,

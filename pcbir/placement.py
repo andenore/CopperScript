@@ -880,7 +880,8 @@ def _analytical_place(
     velocity = {reference: [0.0, 0.0] for reference in source}
     gamma = max(1.0, options.congestion_bin_nm / 1_000_000)
     bounds = _outline_bounds(board.outline)
-    plane_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    plane_nets = distribution_zone_nets(board)
 
     for _ in range(options.analytical_iterations):
         gradient = {reference: [0.0, 0.0] for reference in source}
@@ -2156,7 +2157,8 @@ def _nearest_grid(value: int, step: int) -> int:
 
 def _adjacency(board: PhysicalBoard) -> dict[str, dict[str, int]]:
     result = {placement.reference: {} for placement in board.placements}
-    plane_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    plane_nets = distribution_zone_nets(board)
     for net in board.nets:
         references = sorted({pad.component for pad in net.pads if pad.component in result})
         if len(references) < 2:
@@ -2235,7 +2237,8 @@ def _hpwl(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:
 
 def _planning_wirelength(board: PhysicalBoard, placements: Mapping[str, Placement]) -> int:
     """Plane rails need terminal access, not a shortest full distribution tree."""
-    planes = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    planes = distribution_zone_nets(board)
     total = 0
     for index, net in enumerate(board.nets):
         points = tuple(_net_points(board, placements, index).values())

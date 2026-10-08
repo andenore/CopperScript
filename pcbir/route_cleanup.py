@@ -39,7 +39,8 @@ def prune_track_stubs(
     """
     if not tracks:
         return tracks
-    zone_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
     groups = defaultdict(list)
     for track in tracks:
         groups[track.net, track.layer].append(track)

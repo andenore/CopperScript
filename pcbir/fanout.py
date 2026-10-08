@@ -106,7 +106,8 @@ def route_fanout(
     rules = {item.net: item for item in board.net_routing_rules}
     # Reserved regional pours still need dense package exits before stitching.
     regional_nets = {zone.net for zone in board.zones if zone.reserve_routing}
-    zone_nets = {zone.net for zone in board.zones} - regional_nets
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board) - regional_nets
     from .hard_macros import macro_owned_pads
     owned = macro_owned_pads(board)
     pads: list[tuple[int, PadReference, Point, object, object]] = []

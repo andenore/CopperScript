@@ -90,7 +90,8 @@ def repair_placement_trial(
         if moved & owned or any(len(trial.footprints[pose.footprint].pads) >= minimum
                                 for pose in trial.placements if pose.reference in moved):
             return fallback("crowded package access must be rebuilt")
-    zone_nets = {zone.net for zone in trial.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(trial)
     reserved = early_options.only_pads or frozenset()
     rebuilt_zones = zone_nets & (incident | {net.name for net in trial.nets if any(pad in reserved for pad in net.pads)})
     eligible = frozenset(item.net for item in initial.detailed.nets if item.connected and item.net not in zone_nets)
@@ -171,7 +172,7 @@ def repair_placement_trial(
             return fallback("placement closes package boundary access")
         access = replace(access, boundary=boundary)
         access_fanout = reserve_boundary_access(early.board, access_fanout, boundary,
-            deferred_nets=frozenset(zone.net for zone in early.board.zones)
+            deferred_nets=frozenset(distribution_zone_nets(early.board))
             if detailed_options.defer_zone_nets else frozenset())
         early = replace(early, board=access_fanout.board)
     boot = replace(initial,

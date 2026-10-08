@@ -79,7 +79,8 @@ def reconcile_zone_lands(
     """
     if evidence is None or not evidence.zone_connectivity_verified(board):
         return pending, ()
-    zone_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
     zone_pads = {pad for net in board.nets if net.name in zone_nets for pad in net.pads}
     return (tuple(pad for pad in pending if pad not in zone_pads),
             tuple(pad for pad in pending if pad in zone_pads))
@@ -99,7 +100,8 @@ def close_detailed_lands(
     drc = run_physical_drc(board, policy=policy)
     opens = {net for finding in drc.findings if finding.code == "DRC-OPEN-NET"
              for net in finding.nets}
-    zone_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
     added = board.tracks[len(detailed.board.tracks):]
     nets = tuple(replace(
         item, connected=item.connected and item.net not in opens,

@@ -388,7 +388,8 @@ def reserve_boundary_access(
         raise ValueError("boundary reservation requires complete, fresh capacity evidence")
     if fanout.boundary_accesses:
         raise ValueError("boundary reservations are already materialized")
-    if not deferred_nets <= {zone.net for zone in board.zones}:
+    from .zone_geometry import distribution_zone_nets
+    if not deferred_nets <= distribution_zone_nets(board):
         raise ValueError("boundary reservation can defer only declared zone nets")
     if (len({p.pad for p in boundary.ports}) != len(boundary.ports)
             or {p.pad for p in boundary.ports} != set(fanout.accesses)):

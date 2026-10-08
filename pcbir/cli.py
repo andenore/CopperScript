@@ -1150,7 +1150,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         for attempt in escape_feedback.attempts
                     ],
                 }
-            zone_nets = {zone.net for zone in output_board.zones}
+            from .zone_geometry import distribution_zone_nets
+            zone_nets = distribution_zone_nets(output_board)
             ordinary_results = [item for item in result.detailed.nets if item.net not in zone_nets]
             connectivity = {
                 "routed_ordinary_net_count": sum(item.connected for item in ordinary_results),

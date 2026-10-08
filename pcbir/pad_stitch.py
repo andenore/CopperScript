@@ -39,7 +39,8 @@ def stitch_duplicate_pads(board: PhysicalBoard) -> DuplicatePadStitchResult:
     net_by_pad = {
         reference: net.name for net in board.nets for reference in net.pads
     }
-    zone_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
     rules = {rule.net: rule for rule in board.net_routing_rules}
     clearance = RoutingClearanceIndex(board)
     added: list[TrackSegment] = []

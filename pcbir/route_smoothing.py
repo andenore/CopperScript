@@ -48,7 +48,8 @@ def smooth_owned_tracks(
     """
     if not tracks:
         return tracks
-    zone_nets = {zone.net for zone in board.zones}
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
     by_net: dict[str, list[TrackSegment]] = defaultdict(list)
     for track in tracks:
         by_net[track.net].append(track)

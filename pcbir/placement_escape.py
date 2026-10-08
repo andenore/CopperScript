@@ -95,7 +95,8 @@ class EscapeSpacingModel:
         self.transit_lanes = transit_lanes
         self.units = placement_units(board)
         self.rules = {r.net: r for r in board.net_routing_rules}
-        zone_nets = {z.net for z in board.zones}
+        from .zone_geometry import distribution_zone_nets
+        zone_nets = distribution_zone_nets(board)
         self.net_by_pad = {(p.component, p.pad): n.name for n in board.nets
                            if len(n.pads) >= 2 or n.name in zone_nets for p in n.pads}
         self.layers = {n.name: routing_layers(board, n.name, self.rules.get(n.name))
