@@ -529,7 +529,18 @@ class RoutingClearanceIndex:
     def _overlapping_objects(
         self, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...]
     ) -> Iterable[_CopperObject]:
-        area = shape.bounds.expanded(self._max_clearance_nm)
+        return self.nearby_copper(shape, layers, self._max_clearance_nm)
+
+    def nearby_copper(
+        self, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...], distance_nm: int,
+    ) -> Iterator[_CopperObject]:
+        """Indexed copper on ``layers`` in the bins within ``distance_nm`` of ``shape``.
+
+        The broad phase of every clearance query, also used by distance
+        reports: pads, tracks, vias, via drills and non-plated holes, each
+        once, in a deterministic order.
+        """
+        area = shape.bounds.expanded(distance_nm)
         seen: set[int] = set()
         for layer in layers:
             for x in range(area.min_x // self.bin_size_nm, area.max_x // self.bin_size_nm + 1):

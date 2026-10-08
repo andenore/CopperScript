@@ -13,6 +13,7 @@ from typing import Sequence
 
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .backends.kicad_project import write_kicad_project
+from .critical_review import critical_lane_review, lane_review_line
 from .erc import check, has_errors
 from .footprints import FootprintResolver, FootprintResolutionError, prepare_footprint_dependencies
 from .importers import KiCadModImportError, load_kicad_mod
@@ -1188,6 +1189,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 "zone_nets_deferred": sorted(zone_nets),
             }
+            # Report-only review of the exported critical copper (plan D6).
+            lane_review = critical_lane_review(output_board, result.critical.nets,
+                                               result.critical.match_tuning)
+            report["critical_lane_review"] = lane_review
             filled_vias = tuple(
                 via for via in output_board.vias if via.finish == "filled-capped"
             )
@@ -1328,6 +1333,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"explicit-copper DRC={output_drc.decision.value}; "
                 f"native filled-board DRC={'pass' if plane_verification and plane_verification.passed else 'not passed'}"
             )
+            if lane_review["nets"]:
+                print(lane_review_line(lane_review))
             print(f"Report -> {report_path}")
             if args.output:
                 print(f"KiCad PCB draft -> {args.output}")

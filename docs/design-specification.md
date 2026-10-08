@@ -1565,3 +1565,27 @@ round differently. The R3 room check uses the convex outline of the chamfered
 bump; native DRC still validates every tuned candidate atomically. Boards
 without tuning MUST route byte-identically. A chamfer is not a qualification of
 the bend's impedance. See R9 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-168 — Routed critical-lane review (Accepted)
+
+The route report MUST review the exported copper of every net with a critical
+(non-general) routing rule, and the critical preflight report the critical
+stage's copper, so lanes can be checked against layout guidance from the
+report alone. Per net: the lane-table length (tracks only, via barrels
+excluded, as length matching), layers and own vias; per pair, skew against the
+smaller member `max_skew`; per `length_match` group, the verified skew against
+`max_skew` with its tuning outcome. Spacing is the least edge-to-edge distance
+from the net's tracks and vias to another net's tracks, vias and pads on a
+shared layer, split by the net's own copper inside or outside its breakout
+regions (`BreakoutRegions`) and by critical or other signal neighbours, with
+neighbour, object, layer and location. The pair partner, pads without a net
+and nets that own a copper zone are ignored rather than reported as a third
+class: planes and pours are reference copper, not aggressors. Coupled length
+is a pair member's track length outside its breakout regions that lies closer
+than 2 × `pair_gap` to copper of another critical pair. Bends are measured
+where exactly two of the net's tracks meet on one layer; those over 45° are
+listed. Neighbours come from the `RoutingClearanceIndex` bins within 1 mm,
+never all pairs of objects; farther copper is not reported. The review is
+report-only: routing, boards and every other report section MUST be
+byte-identical. It is geometric screening, not crosstalk or impedance
+qualification. See D6 in the [D-PHY routing plan](dphy-routing-plan.md).

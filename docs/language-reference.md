@@ -1099,6 +1099,35 @@ permittivity of both adjacent dielectrics. Via barrels are excluded. Without a
 stack-up the delay is `null` with `delay_reason: "no stack-up declared"`.
 `python -m pcbir.critical_preflight` also prints one line per lane.
 
+The `route-board` report's `critical_lane_review` section reviews the exported
+copper of the critical nets against common layout guidance; the critical
+preflight report has the same section for its critical copper. It changes no
+copper. `nets` has one entry per critical net: its `lanes` row, `partner`,
+`breakout` (the rule declares breakout properties), `spacing`, coupling and
+`bends`. `spacing` is the least edge-to-edge distance from the net's tracks and
+vias to another net's tracks, vias and pads on a shared layer, for its copper
+`inside_breakout` (in one of its own breakout regions) and `outside_breakout`,
+each against `critical` neighbours (a non-general rule) and `signal`
+neighbours (all other nets). A minimum names the `neighbour`, `object`
+(`track`, `via` or `pad`, with the `pad`), `layer` and `at_nm`, the nearest
+point of the net's centreline; `null` means nothing within `search_radius_nm`
+(1 mm). The pair partner, pads without a net and nets that own a `copper_zone`
+(`ignored_zone_nets`) are ignored. For pair members, `coupled_length_nm` is the
+track length outside the net's breakout regions that lies closer than
+`coupling_threshold_nm` (2 × `pair_gap`), edge to edge, to copper of another
+critical pair (`coupled_nets`). `bends` gives the `sharpest_degrees` direction
+change where exactly two of the net's tracks meet on one layer, and each bend
+over 45° (`sharp`). `pairs` gives each pair's `lengths_nm`, `skew_nm`,
+`max_skew_nm` (the smaller member value) and `status` (`pass`, `fail`,
+`no_limit` or `incomplete`); `match_groups` gives each `length_match` group's
+member lengths, `skew_nm`, `max_skew_nm`, `status` and `tuning_status`. With
+critical nets, both commands print one line with the outside-breakout minima
+and the total coupled length:
+
+```text
+CRITICAL LANES: 5 nets; pairs=2, worst skew=0.800 mm, over max_skew=1; match groups=1, over max_skew=0; min spacing outside breakout: critical=0.300 mm (A_N to B_P), signal=0.507 mm (A_P to S); coupled length=20.763 mm; bends>45deg=2 (sharpest 90.0 deg)
+```
+
 `route-board --debug` and `python -m pcbir.critical_preflight --debug` print the
 full traceback of an error before the usual one-line message. Without the flag,
 output is unchanged.

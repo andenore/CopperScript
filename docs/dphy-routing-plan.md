@@ -75,6 +75,22 @@ Shared rules for every item:
   bump on the longest segment anywhere.
   Tests: `test_tuning_*` in `tests/test_critical_routing.py` and
   `test_drc_rejections_are_recorded_even_when_a_later_candidate_is_accepted`.
+- [x] **D6 Routed critical-lane review.** Review the routed copper of every
+  critical net in the route and preflight reports, so lanes can be checked
+  against layout guidance without ad-hoc scripts: per net the track length,
+  layers and signal vias; per pair the skew and per `length_match` group the
+  spread against `max_skew`; the least edge-to-edge spacing to other copper,
+  inside and outside the net's breakout regions, against critical and other
+  signal nets, with location and neighbour; the length closer than
+  2 × `pair_gap` to another critical pair; and the sharpest bend and the bends
+  over 45°.
+  Done (CS-168): `pcbir/critical_review.py` (`critical_lane_review`,
+  `lane_review_line`), on the exported board in `route-board` and on the
+  critical board in the preflight (`critical_lane_review` in both reports, one
+  `CRITICAL LANES:` console line). It reuses `critical_lane_table`,
+  `verify_match_groups`, `BreakoutRegions` and `RoutingClearanceIndex`
+  (`nearby_copper`, a 1 mm search radius). Zone nets are ignored. Report-only:
+  routing and boards are unchanged. Tests: `tests/test_critical_lane_review.py`.
 
 ## W2 — Language and IR
 

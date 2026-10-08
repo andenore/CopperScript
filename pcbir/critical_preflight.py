@@ -21,6 +21,7 @@ from .critical import (CriticalRoutingStatus, critical_lane_table, critical_net_
                        route_critical_nets)
 from .critical_bundles import crossing_line
 from .critical_feedback import improve_critical_placement
+from .critical_review import critical_lane_review, lane_review_line
 from .critical_tuning import match_tuning_line
 from .drc import run_physical_drc
 from .erc import check, has_errors
@@ -214,7 +215,9 @@ def main(argv: list[str] | None = None) -> int:
                           global_route_certified=repaired.global_route.status.value == "success")
         timings["package_access" if args.package_access else "critical"] = perf_counter() - started
         result_board = access.board if access is not None else critical.board
+        lane_review = critical_lane_review(critical.board, critical.nets, critical.match_tuning)
         report.update(complete=True, critical=json.loads(critical.to_json()),
+                      critical_lane_review=lane_review,
                       native_drc=json.loads(run_physical_drc(result_board).to_json()))
         checkpoint("package_access_complete" if args.package_access else "critical_complete")
         if args.output:
@@ -238,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(crossing_line(bundle, crossing))
         for tuning in critical.match_tuning:
             print(match_tuning_line(tuning))
+        if lane_review["nets"]:
+            print(lane_review_line(lane_review))
         if access is not None:
             return 0 if access.ready else 1
         return 0 if report["global_route_certified"] and critical.status is not CriticalRoutingStatus.FAILED else 1
