@@ -61,20 +61,22 @@ def test_materialization_is_transactional_and_rotates_all_geometry(tmp_path,rota
 
 def test_owned_local_zone_is_immutable_and_does_not_defer_external_routing(tmp_path):
     from pcbir.hard_macros import macro_source
-    from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles
+    from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles, Stackup
     from pcbir.zone_geometry import distribution_zone_nets
-    _, asset, bind = fixture(tmp_path)
+    original, asset, bind = fixture(tmp_path)
+    source = replace(original, stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+        CopperLayer.INTERNAL_2, CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4, CopperLayer.BACK)))
     asset["schema"] = "copperlib-physical-hard-macro/v0.2"
     asset["keepouts"] = []
     asset["plane_returns"] = []
     asset["zones"] = [dict(id="local",net="signal",layers=["F.Cu"],
         vertices=[[1600000,-250000],[2400000,-250000],[2400000,250000],[1600000,250000]],
         priority=2,clearance_nm=200000,minimum_width_nm=200000,pad_connection="solid")]
-    board = materialize_hard_macros(bind())
+    board = materialize_hard_macros(bind(input_board=source))
     assert len(board.zones) == 1 and board.zones[0].id == "unit/local"
     assert distribution_zone_nets(board) == set()
     assert not macro_source(board).zones
-    rotated = bind()
+    rotated = bind(input_board=source)
     poses = {p.reference: p for p in rotated.placements}
     poses.update(cluster_placements(rotated, rotated.rigid_clusters[0],
                                     replace(poses["U1"], rotation_degrees=45)))
@@ -87,6 +89,9 @@ def test_owned_local_zone_is_immutable_and_does_not_defer_external_routing(tmp_p
         Point.mm(12.5, 10.3), Point.mm(11.5, 10.3)))))
     with pytest.raises(ValueError, match="host zone overlaps"):
         replace(board, zones=(*board.zones, host))
+    for layer in (CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_4):
+        underneath = replace(host, id=f"under-{layer.value}", layers=(layer,))
+        assert replace(board, zones=(*board.zones, underneath)).zones[-1] == underneath
     asset["zones"][0]["vertices"][1:3] = [[4000000,-250000],[4000000,250000]]
     with pytest.raises(ValueError, match="inside its protected region"):
         bind()
@@ -426,6 +431,31 @@ def test_plane_stitch_reuses_macro_return_without_shortcutting_private_pads(tmp_
     assert result.complete and result.added_track_count == result.added_via_count == 0
     assert result.board.tracks == board.tracks and result.board.vias == board.vias
     assert not result.board.zone_fills  # A real contact is NOT filled-plane proof.
+
+
+def test_macro_reservation_leaves_undeclared_inner_layers_routable(tmp_path):
+    from pcbir.physical import Stackup
+    from pcbir.routing_clearance import RoutingClearanceIndex
+
+    original, asset, bind = fixture(tmp_path)
+    layers = (CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
+              CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4, CopperLayer.BACK)
+    asset["required_layers"] = [layer.value for layer in layers]
+    asset["protected_regions"][0]["layers"] = ["F.Cu", "In2.Cu", "B.Cu"]
+    asset["keepouts"][0].update(layers=["In2.Cu", "In3.Cu", "B.Cu"],
+                                 block_tracks=False, block_vias=False)
+    board = materialize_hard_macros(bind(input_board=replace(original, stackup=Stackup(layers))))
+    clearance = RoutingClearanceIndex(board)
+    start, end = Point.mm(11.4, 10.4), Point.mm(11.8, 10.4)
+    free = {CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4}
+    for layer in layers:
+        assert clearance.can_track("N", start, end, 100000, layer) is (layer in free)
+        extra = TrackSegment("N", start, end, 100000, layer)
+        if layer in free:
+            replace(board, tracks=(*board.tracks, extra))
+        else:
+            with pytest.raises(ValueError, match="protected hard-macro region"):
+                replace(board, tracks=(*board.tracks, extra))
 
 
 def test_planning_never_discards_arbitrary_existing_copper(tmp_path):
