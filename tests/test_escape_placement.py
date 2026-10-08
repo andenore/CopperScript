@@ -461,6 +461,35 @@ def test_joint_packing_reserves_the_only_slot_for_the_smallest_feasible_domain(m
     assert plan == plan_placement(board, opts)
 
 
+def test_exhausted_large_anchor_pack_retries_independent_close_pair(monkeypatch):
+    import pcbir.placement as engine
+    board = local_companion_board()
+    extras = tuple(Placement(f"C{i}", "capacitor", Point.mm(17+i, 20)) for i in range(3, 8))
+    board = replace(board, placements=(*board.placements, *extras),
+        relative_rules=(
+            *(RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+                (PlacementTarget(ref, "1"), PlacementTarget("U", "1")),
+                distance_nm=nm_from_mm(2 if ref in {"C1", "C2"} else 20))
+              for ref in ("C1", "C2", *(p.reference for p in extras))),
+            RelativePlacementRule(RelativePlacementKind.MAX_DISTANCE,
+                (PlacementTarget("C1", "1"), PlacementTarget("C2", "1")),
+                distance_nm=nm_from_mm(3))),
+        placement_rules=(*board.placement_rules,
+            ComponentPlacementRule("C2", region="only-slot", fixed_rotation_degrees=0)),
+        regions=(PlacementRegion("only-slot", BoardOutline((Point.mm(11.5, 9.15), Point.mm(12.5, 9.15),
+            Point.mm(12.5, 9.65), Point.mm(11.5, 9.65)))),))
+    pack = engine._pack_local_components
+    attempted = []
+    def bounded(*args, **kwargs):
+        attempted.append(tuple(args[1]))
+        return None if len(args[1]) > 6 else pack(*args, **kwargs)
+    monkeypatch.setattr(engine, "_pack_local_components", bounded)
+    plan = plan_placement(board, options())
+    assert any(len(group) > 6 for group in attempted)
+    assert any(set(group) == {"C1", "C2"} for group in attempted)
+    assert placement_solution_is_legal(plan.board, poses(plan.board), options())
+
+
 def test_impossible_local_placement_bounds_illegal_probes(monkeypatch):
     import pcbir.placement as engine
     from itertools import repeat

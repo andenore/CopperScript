@@ -1076,6 +1076,11 @@ def _legalize(
               for target in rule.targets if target.reference not in fixed and target.reference not in rigid_members}
     units = placement_units(board)
     groups = {units[ref] & direct for ref in direct}
+    # A fixed IC can join dozens of independent support parts into one unit.
+    # If that joint search is exhausted, retry its independent local groups.
+    local_units = placement_units(replace(board, relative_rules=tuple(
+        rule for rule in candidate_rules
+        if len({target.reference for target in rule.targets} & direct) > 1)))
     order = {ref: i for i, ref in enumerate(movable)}
     for group in sorted(groups, key=lambda refs: min(order[ref] for ref in refs)):
         if len(group) < 2:
@@ -1086,6 +1091,17 @@ def _legalize(
             placed = packed
             placed_order.extend(references)
             repair_count += 1
+        elif len(group) > options.exact_repair_limit:
+            packs = {local_units[ref] & group for ref in group}
+            for pack in sorted(packs, key=lambda refs: min(order[ref] for ref in refs)):
+                if len(pack) < 2:
+                    continue
+                members = sorted(pack, key=order.get)
+                packed = _pack_local_components(board, members, placed, targets, options, allow_general=False)
+                if packed is not None:
+                    placed = packed
+                    placed_order.extend(members)
+                    repair_count += 1
     for reference in movable:
         if reference in placed:
             continue
