@@ -19,7 +19,7 @@ from .backends.kicad_pcb import KiCadPcbBackend
 from .backends.kicad_project import write_kicad_project
 from .critical import (CriticalRoutingStatus, critical_lane_table, critical_net_document,
                        route_critical_nets)
-from .critical_bundles import crossing_line
+from .critical_bundles import crossing_line, nested_exit_line
 from .critical_feedback import improve_critical_placement
 from .critical_review import critical_lane_review, lane_review_line
 from .critical_tuning import match_tuning_line
@@ -239,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"(limit {bundle.repair_limit})")
             for crossing in bundle.crossings:
                 print(crossing_line(bundle, crossing))
+            for item in bundle.nested_exits:
+                print(nested_exit_line(bundle, item))
         for tuning in critical.match_tuning:
             print(match_tuning_line(tuning))
         if lane_review["nets"]:

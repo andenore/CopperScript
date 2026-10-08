@@ -12,7 +12,7 @@ from fractions import Fraction
 from heapq import heappop, heappush
 from itertools import product
 from math import ceil, hypot, sqrt
-from typing import Iterator, NamedTuple
+from typing import Iterable, Iterator, NamedTuple
 
 from .breakout import BreakoutRegions
 from .geometry import RoundedConvexShape, shapes_clear
@@ -24,6 +24,8 @@ from .surface_path import _track_inside_board
 
 
 _HEADS = ((1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1))
+# Port lengths tried from a pair's land midpoint, shortest first (mm).
+_PORT_LENGTHS = (.5, .75, 1, 1.5, 2, 3)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +162,7 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
         normal = _normal(heading, offset)
         sign = 1 if ((first.x_nm - second.x_nm) * normal.x_nm
                      + (first.y_nm - second.y_nm) * normal.y_nm) > 0 else -1
-        for length in (.5, .75, 1, 1.5, 2, 3):
+        for length in _PORT_LENGTHS:
             step = nm_from_mm(length)
             dx, dy = _HEADS[heading]
             center = Point(middle.x_nm + dx * step, middle.y_nm + dy * step)
@@ -206,6 +208,39 @@ def _lane_paths(points: tuple[Point, ...], incoming: int, outgoing: int,
     return tuple(first), tuple(second)
 
 
+def _pair_profile(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule: NetRoutingRule,
+                  first_guide: GlobalNetRoute, second_guide: GlobalNetRoute,
+                  ) -> tuple[int, int, int, CopperLayer, dict] | None:
+    """Width, lane offset, clearance, surface layer and partner accesses; None when unsupported."""
+    width = first_rule.width_nm or board.rules.default_track_width_nm
+    if (second_rule.width_nm or board.rules.default_track_width_nm) != width:
+        return None
+    gap = first_rule.pair_gap_nm
+    if gap is None or second_rule.pair_gap_nm != gap:
+        return None
+    if len(first_guide.accesses) != 2 or len(second_guide.accesses) != 2:
+        return None
+    partners = {access.pad.component: access for access in second_guide.accesses}
+    if len(partners) != 2 or set(partners) != {access.pad.component for access in first_guide.accesses}:
+        return None
+    # A guide's access layer can be reached only through its tentative via.
+    # Surface-only alternatives start on actual pad-side copper, not an inner
+    # grid layer mistaken for a physical terminal contact.
+    placements = {p.reference:p for p in board.placements}
+    layers = {CopperLayer.FRONT if placements[access.pad.component].side is BoardSide.FRONT
+              else CopperLayer.BACK for access in first_guide.accesses}
+    if len(layers) != 1:
+        return None
+    layer = next(iter(layers))
+    if layer not in set(routing_layers(board, first_rule.net, first_rule)).intersection(
+        routing_layers(board, second_rule.net, second_rule)):
+        return None
+    offset = (width + gap + 1) // 2
+    clearance = max(board.rules.minimum_clearance_nm, first_rule.clearance_nm or 0,
+                    second_rule.clearance_nm or 0)
+    return width, offset, clearance, layer, partners
+
+
 def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule: NetRoutingRule,
                       first_guide: GlobalNetRoute, second_guide: GlobalNetRoute, *,
                       maximum_searches: int = 8, maximum_states: int = 30_000,
@@ -220,32 +255,10 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
     stats = stats if stats is not None else PairSearchStats()
     if maximum_total_states is not None and stats.expanded_states >= maximum_total_states:
         return
-    width = first_rule.width_nm or board.rules.default_track_width_nm
-    if (second_rule.width_nm or board.rules.default_track_width_nm) != width:
+    profile = _pair_profile(board, first_rule, second_rule, first_guide, second_guide)
+    if profile is None:
         return
-    gap = first_rule.pair_gap_nm
-    if gap is None or second_rule.pair_gap_nm != gap:
-        return
-    if len(first_guide.accesses) != 2 or len(second_guide.accesses) != 2:
-        return
-    partners = {access.pad.component: access for access in second_guide.accesses}
-    if len(partners) != 2 or set(partners) != {access.pad.component for access in first_guide.accesses}:
-        return
-    # A guide's access layer can be reached only through its tentative via.
-    # Surface-only alternatives start on actual pad-side copper, not an inner
-    # grid layer mistaken for a physical terminal contact.
-    placements = {p.reference:p for p in board.placements}
-    layers = {CopperLayer.FRONT if placements[access.pad.component].side is BoardSide.FRONT
-              else CopperLayer.BACK for access in first_guide.accesses}
-    if len(layers) != 1:
-        return
-    layer = next(iter(layers))
-    if layer not in set(routing_layers(board, first_rule.net, first_rule)).intersection(
-        routing_layers(board, second_rule.net, second_rule)):
-        return
-    offset = (width + gap + 1) // 2
-    clearance = max(board.rules.minimum_clearance_nm, first_rule.clearance_nm or 0,
-                    second_rule.clearance_nm or 0)
+    width, offset, clearance, layer, partners = profile
     index = RoutingClearanceIndex(board)
     accesses = sorted(first_guide.accesses, key=lambda access: access.pad.component)
     groups = [_ports(board, index, first_rule.net, second_rule.net, access.pad_position,
@@ -278,6 +291,103 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                 (*start.second, *b, *tuple(
                 TrackSegment(t.net, t.end, t.start, t.width_nm, t.layer) for t in reversed(end.second))),
                 expanded, search_index, spine, start, end)
+
+
+def nested_turn_chamfer(width: int, gap: int) -> int:
+    """Least axial leg of a nested exit's 45-degree turn: one pair pitch (plan R7)."""
+    return width + gap
+
+
+def nested_turn_minimum(width: int, gap: int) -> int:
+    """Least turn distance of a nested exit from its land midpoint (plan R7).
+
+    The shortest port, the least chamfer and one lane offset, so the inner
+    lane's run between port and turn survives its miter.
+    """
+    return nm_from_mm(_PORT_LENGTHS[0]) + nested_turn_chamfer(width, gap) + (width + gap + 1) // 2
+
+
+def nested_exit_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule: NetRoutingRule,
+                           first_guide: GlobalNetRoute, second_guide: GlobalNetRoute, component: str,
+                           direction: tuple[int, int], travel: tuple[int, int], turns: Iterable[int],
+                           chamfer_step: int) -> Iterator[tuple[int, int, PairSearchCandidate]]:
+    """Coupled L-shaped candidates for a pair that wraps a package corner (plan R7).
+
+    The pair leaves its lands at ``component`` along the axis ``direction``
+    through its shortest legal port and turns 90 degrees onto its run along
+    ``travel`` at each distance in ``turns`` from its land midpoint (the
+    run's centre line). The turn is one 45-degree diagonal, longest first:
+    from just after the port (the shortest route) down in ``chamfer_step``
+    steps to one pair pitch (``nested_turn_chamfer``), so the first legal one
+    hugs the copper inside the turn. The pair enters the far lands through
+    their shortest legal port; a run beyond their column jogs back at 45
+    degrees just before it. Only candidates whose lanes clear the board's
+    copper are yielded, as (turn, chamfer, candidate); input copper is never
+    modified.
+    """
+    if chamfer_step <= 0:
+        raise ValueError("nested exit chamfer step must be positive")
+    profile = _pair_profile(board, first_rule, second_rule, first_guide, second_guide)
+    if profile is None or direction not in _HEADS[::2] or travel not in _HEADS[::2]:
+        return
+    width, offset, clearance, layer, partners = profile
+    outward, inward = _HEADS.index(direction), _HEADS.index(travel)
+    if _turn(outward, inward) != 2 or component not in partners:
+        return
+    index = RoutingClearanceIndex(board)
+    ports = {access.pad.component: _ports(
+        board, index, first_rule.net, second_rule.net, access.pad_position,
+        partners[access.pad.component].pad_position, access.pad.component,
+        width, offset, clearance, layer) for access in first_guide.accesses}
+    start = next((port for port in ports[component] if port.heading == outward), None)
+    end = next((port for name, items in ports.items() if name != component for port in items
+                if start is not None and port.heading == (inward + 4) % 8 and port.sign == -start.sign),
+               None)
+    if start is None or end is None or not _legal(
+            board, index, (*start.first, *end.first), (*start.second, *end.second), clearance):
+        return
+    escaped_board = replace(board, tracks=(*board.tracks, *start.first, *start.second,
+                                           *end.first, *end.second))
+    index = RoutingClearanceIndex(escaped_board)
+    first_land = next(access.pad_position for access in first_guide.accesses
+                      if access.pad.component == component)
+    second_land = partners[component].pad_position
+    middle = Point((first_land.x_nm + second_land.x_nm) // 2, (first_land.y_nm + second_land.y_nm) // 2)
+
+    def at(across: int, along: int) -> Point:
+        return Point(middle.x_nm + direction[0] * across + travel[0] * along,
+                     middle.y_nm + direction[1] * across + travel[1] * along)
+
+    def project(point: Point, axis: tuple[int, int]) -> int:
+        return (point.x_nm - middle.x_nm) * axis[0] + (point.y_nm - middle.y_nm) * axis[1]
+
+    port, column, reach = project(start.center, direction), project(end.center, direction), project(end.center, travel)
+    least = nested_turn_chamfer(width, first_rule.pair_gap_nm)
+    for turn in turns:
+        jog = turn - column
+        # The diagonal may start one lane offset after the port, where the
+        # inner lane's miter still leaves it a straight piece.
+        longest = min(turn - port - offset, (reach - jog - least if jog else reach) - least)
+        if jog < 0 or longest < least:
+            continue
+        for chamfer in (*range(longest, least, -chamfer_step), least):
+            points = [start.center, at(turn - chamfer, 0), at(turn, chamfer)]
+            if jog:
+                points += [at(turn, reach - jog - least), at(column, reach - least)]
+            points.append(end.center)
+            lanes = _lane_paths(tuple(points), outward, inward, offset, start.sign)
+            if lanes is None:
+                continue
+            a = _tracks(first_rule.net, lanes[0], width, layer, index.breakout)
+            b = _tracks(second_rule.net, lanes[1], width, layer, index.breakout)
+            if not _legal(escaped_board, index, a, b, clearance):
+                continue
+            yield turn, chamfer, PairSearchCandidate(
+                (*start.first, *a, *(TrackSegment(t.net, t.end, t.start, t.width_nm, t.layer)
+                                     for t in reversed(end.first))),
+                (*start.second, *b, *(TrackSegment(t.net, t.end, t.start, t.width_nm, t.layer)
+                                      for t in reversed(end.second))),
+                0, 0, tuple(points), start, end)
 
 
 def _remaining_states(stats: PairSearchStats, maximum_states: int,

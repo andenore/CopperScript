@@ -1589,3 +1589,30 @@ never all pairs of objects; farther copper is not reported. The review is
 report-only: routing, boards and every other report section MUST be
 byte-identical. It is geometric screening, not crosstalk or impedance
 qualification. See D6 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-171 — Nested exits at package corners (Accepted)
+
+When a critical bundle leaves a package across a corner, its side-edge pairs
+MUST NOT run past their far end's column and back. A pair's edge at a
+component is the outward side of its two lands (one row along x or y, outward
+away from the component origin). A side pair exits perpendicular to the
+direction in which it enters the far component, with the far lands ahead in
+both; the bundle wraps a corner when another of its surface pairs leaves along
+that direction. Side pairs with one exit and travel direction form a nest,
+innermost (nearest the corner) first; a nest whose far columns are out of
+order (its pairs cross, CS-165) is not planned. Each pair plans its run on its
+far column, or, when that is nearer, just outside the pair inside it (both
+half-bands plus the larger clearance), and never nearer than the shortest
+port, a one-pitch diagonal and a lane offset. The nest takes its slots in the
+bundle order innermost first, so each outer pair routes around the inner
+pair's actual copper. The router tries the nested exit before any other
+candidate: the shortest legal port, one 45° diagonal onto the run (the longest
+that clears committed copper, down to one pair pitch), the run, and a 45° jog
+back just before the far port when the run lies beyond the column. A run that
+does not clear, or whose skew-tuning bumps do not, steps outward by 50 µm, at
+most 2 mm, within 256 tuned candidates; at most three take the unchanged
+profile, plane and atomic native-DRC gates. Otherwise the pair routes exactly
+as before. The bundle record lists each nested exit with its column, planned
+and routed run and diagonal, and whether it routed or fell back. Bundles
+without a corner wrap MUST route byte-identically. See R7 in the [D-PHY
+routing plan](dphy-routing-plan.md).

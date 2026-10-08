@@ -384,7 +384,7 @@ Shared rules for every item:
     vias or the shared reference layer. The preflight prints one line per
     crossing. Bundles without crossings, and their reports, are unchanged.
 
-- [ ] **R7 Nested exits at package corners.** When a bundle leaves a package
+- [x] **R7 Nested exits at package corners.** When a bundle leaves a package
   across a corner (some pairs on one edge, the rest on the next), each
   side-edge pair runs past the column of its far-end terminal before turning
   and then comes back (an S-bend). On a 0.5 mm QFN this added about 1–2 mm to
@@ -393,6 +393,31 @@ Shared rules for every item:
   Plan nested exits instead: each outer pair turns as soon as it clears the
   inner pair's actual exit copper. Shorter corner wraps reduce the structural
   bundle skew that R3 would otherwise have to tune out.
+  Done (CS-171): the overshoot came from the joint pair search, whose fixed
+  port lengths and 1 mm lattice step make a side pair run straight on before
+  it may turn. `critical_bundles._plan_nested_exits` plans a `NestedExit` per
+  side-edge surface pair of a corner wrap (`_pair_edge`): innermost first,
+  each on its far column or just outside the inner pair's band, and
+  `_nest_order` gives each nest its bundle slots innermost first.
+  `critical._route_nested_exit` tries `pair_search.nested_exit_candidates`
+  before every other candidate: shortest legal port, one 45° diagonal onto the
+  run (longest legal first, so an outer pair hugs the inner pair's copper),
+  the run, and a 45° jog back before the far port when the run lies beyond
+  the column. A run that does not clear, or whose D5 bumps do not, steps out
+  by `NESTED_TURN_STEP_NM` (at most `NESTED_TURN_RANGE_NM`); at most
+  `NESTED_VALIDATION_LIMIT` candidates take the unchanged gates, otherwise the
+  pair routes as before. `route_critical_nets(nested_exits=False)` restores
+  the previous behaviour. Report: `nested_exits` in the bundle record (only
+  when present) and one preflight line per nested exit. On a synthetic QFN
+  corner the outer pair drops from 14.46 to 12.28 mm and the inner from 11.38
+  to 9.79 mm; with a 0.3 mm clearance and a tight connector, the inner pair
+  failed before and now routes. On the test board's sink bundle, D2 drops from
+  13.91/14.03 to 12.40/12.53 mm and D3 from 9.66/9.79 to 9.23/9.36 mm (CK, D0
+  and D1 unchanged), the bundle spread from 6.626 to 5.124 mm; all ten pairs
+  connect and package access stays ready. Limitation: a bundle with every
+  pair on the side edge (no facing pair) is not a corner wrap and routes as
+  before; a far end that also needs a turn is not planned. Tests:
+  `tests/test_nested_exits.py`.
 
 - [ ] **R8 Bundle corridors for corner wraps.** `reserve_corridor` keeps
   components out of the band between each pair's own terminals. When a

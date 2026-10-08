@@ -12,6 +12,7 @@ from decimal import Decimal
 from enum import Enum
 from functools import partial
 from hashlib import sha256
+from itertools import islice
 import json
 from math import hypot, sqrt
 from types import MappingProxyType
@@ -39,13 +40,13 @@ from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
 from .surface_path import via_inside_board
 from .drc import DrcSeverity, run_physical_drc
-from .pair_search import PairSearchCandidate, PairSearchStats, paired_candidates
+from .pair_search import PairSearchCandidate, PairSearchStats, _legal, nested_exit_candidates, paired_candidates
 from .pair_vias import paired_via_candidates, transition_spacing
 from .pair_refine import PairRefinementStats, paired_shortcuts
 from .local_critical import local_surface_candidates
 from .return_paths import (shared_reference_plane, transition_contact_layers,
                            pair_reference_intent_covers)
-from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle, PlannedCrossing,
+from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle, NestedExit, PlannedCrossing,
                                bundle_document, bundle_job_order, crossing_outcome, plan_bundles)
 from .critical_tuning import (MatchTuningMember, MatchTuningResult, UnitTuner, bump_chamfers, bump_gain,
                               bump_path, match_tuning_document)
@@ -308,6 +309,7 @@ def route_critical_nets(
     pair_state_limit: int | None = None,
     bundle_repair_limit: int = BUNDLE_REPAIR_LIMIT,
     plan_crossings: bool = True,
+    nested_exits: bool = True,
 ) -> CriticalRoutingResult:
     """Route critical groups around explicit, immutable ordinary package access.
 
@@ -328,6 +330,11 @@ def route_critical_nets(
     (their order is inverted at the two ends) are routed first, each with one
     planned paired layer swap and nothing else (``_route_pair_group``, plan
     R5). Bundles without crossings route exactly as without it.
+
+    With ``nested_exits``, the side-edge pairs of a bundle that leaves a
+    package across a corner first try their planned nested exit
+    (``_route_nested_exit``, plan R7), then route as before. Bundles without
+    a corner wrap route exactly as without it.
 
     After every group is accepted, each ``length_match`` group over its
     ``max_skew`` is tuned (``_tune_match_groups``); a group that cannot be
@@ -391,10 +398,14 @@ def route_critical_nets(
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
     net_by_name = {n.name: n for n in board.nets}
     jobs = _critical_jobs(board)
-    bundles = plan_bundles(board, jobs, rules, bundle_repair_limit, plan_crossings=plan_crossings)
+    bundles = plan_bundles(board, jobs, rules, bundle_repair_limit, plan_crossings=plan_crossings,
+                           plan_nested_exits=nested_exits)
     jobs = bundle_job_order(jobs, bundles)
     bundle_of = {group: index for index, bundle in enumerate(bundles) for group in bundle.order}
     crossings = {item.group: item for bundle in bundles for item in bundle.crossings}
+    nested = {item.group: item for bundle in bundles for item in bundle.nested_exits}
+    # Turn and chamfer of each group's accepted nested exit, for the report.
+    turns: dict[tuple[str, ...], tuple[int, int]] = {}
     repairs: list[list[BundleRepair]] = [[] for _ in bundles]
     # Copper accepted by this stage, per group in acceptance order. ``tracks``
     # and ``vias`` are always the base copper followed by these entries.
@@ -449,7 +460,7 @@ def route_critical_nets(
             blockers: set[str] = set()
             result, pair_tracks, pair_vias = _route_pair_group(
                 board, rule, partner_rule, routes, rules, tracks, vias, pair_state_limit, blockers,
-                crossings.get(group),
+                crossings.get(group), nested.get(group), turns,
             )
             if not result.connected and group in bundle_of:
                 index = bundle_of[group]
@@ -466,7 +477,7 @@ def route_critical_nets(
                         break
                     record, repaired = _bundle_repair(
                         board, routes, rules, pair_state_limit, base_tracks, base_vias, committed,
-                        (rule, partner_rule), group, blocker, crossings,
+                        (rule, partner_rule), group, blocker, crossings, nested, turns,
                     )
                     repairs[index].append(record)
                     if repaired is not None:
@@ -574,7 +585,8 @@ def route_critical_nets(
         len(reserved_accesses.created_tracks) if reserved_accesses else 0,
         len(reserved_accesses.created_vias) if reserved_accesses else 0,
         tuple(replace(bundle, repairs=tuple(records), crossings=_crossing_outcomes(
-                  board, bundle, rules, results, result_index, committed))
+                  board, bundle, rules, results, result_index, committed),
+                  nested_exits=_nested_outcomes(bundle, results, result_index, turns))
               for bundle, records in zip(bundles, repairs)),
         match_tuning,
     )
@@ -592,6 +604,22 @@ def _crossing_outcomes(
         reason = result.diagnostics[-1] if result.diagnostics else "no accepted candidate"
         outcomes.append(crossing_outcome(board, bundle.components, crossing, rules, result.connected,
                                          reason, copper.get(crossing.group, ())))
+    return tuple(outcomes)
+
+
+def _nested_outcomes(
+    bundle: CriticalBundle, results: list[CriticalNetResult], result_index: dict[tuple[str, ...], int],
+    turns: dict[tuple[str, ...], tuple[int, int]],
+) -> tuple[NestedExit, ...]:
+    """Each nested exit of ``bundle``: routed with its turn and chamfer, or a fallback."""
+    outcomes = []
+    for item in bundle.nested_exits:
+        result = results[result_index[item.group]]
+        if result.connected and result.strategy == "nested_exit":
+            turn, chamfer = turns[item.group]
+            outcomes.append(replace(item, status="routed", routed_turn_nm=turn, routed_chamfer_nm=chamfer))
+        else:
+            outcomes.append(replace(item, status="fallback"))
     return tuple(outcomes)
 
 
@@ -810,12 +838,17 @@ def _route_pair_group(
     routes: dict[str, GlobalNetRoute], rules: dict[str, NetRoutingRule],
     tracks: list[TrackSegment], vias: list[Via], pair_state_limit: int | None,
     blockers: set[str] | None = None, crossing: PlannedCrossing | None = None,
+    nested: NestedExit | None = None, turns: dict[tuple[str, ...], tuple[int, int]] | None = None,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     """Route one symmetric pair against the committed ``tracks``/``vias``.
 
     The coarse candidate is tried first, then the bounded joint searches.
     ``blockers`` collects the other nets named by spacing findings of every
     rejected candidate whose first-failing gate is a spacing gate.
+
+    A pair with a planned nested exit (plan R7) tries it before anything else
+    (``_route_nested_exit``); an accepted one records its turn and chamfer
+    in ``turns``.
 
     A planned crossing (plan R5) tries neither the coarse candidate nor the
     surface search: only paired-via candidates on its planned layer, whose
@@ -831,6 +864,12 @@ def _route_pair_group(
     partner_name = partner_rule.net
     first, second = sorted((rule, partner_rule), key=lambda item: item.net)
     found: set[str] = set()
+    if nested is not None:
+        accepted = _route_nested_exit(board, first, second, routes, rules, tracks, vias, nested)
+        if accepted is not None:
+            if turns is not None:
+                turns[nested.group] = accepted[0]
+            return accepted[1:]
     if crossing is None:
         result, pair_tracks, pair_vias = _route_pair(
             board, rule, partner_rule, routes
@@ -940,6 +979,68 @@ def _route_pair_group(
     return result, pair_tracks, pair_vias
 
 
+# Plan R7: a nested exit that does not clear committed copper at its planned
+# turn steps outward in these increments, at most this far, and shortens its
+# turn's diagonal in chamfer steps. At most this many legal candidates are
+# tuned, and at most this many of them go through the gates.
+NESTED_TURN_STEP_NM = 50_000
+NESTED_TURN_RANGE_NM = 2_000_000
+NESTED_CHAMFER_STEP_NM = 50_000
+NESTED_CANDIDATE_LIMIT = 256
+NESTED_VALIDATION_LIMIT = 3
+
+
+def _route_nested_exit(
+    board: PhysicalBoard, first: NetRoutingRule, second: NetRoutingRule,
+    routes: dict[str, GlobalNetRoute], rules: dict[str, NetRoutingRule],
+    tracks: list[TrackSegment], vias: list[Via], nested: NestedExit,
+) -> tuple[tuple[int, int], CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]] | None:
+    """Route a corner-wrapping bundle pair along its nested exit (plan R7).
+
+    Candidates (``nested_exit_candidates``) turn at the planned distance, or
+    as little further out as clears the committed copper, in steps of
+    ``NESTED_TURN_STEP_NM`` up to ``NESTED_TURN_RANGE_NM``, each with the
+    longest diagonal that clears it (``NESTED_CHAMFER_STEP_NM``): an outer
+    pair turns as soon as it clears the inner pair's copper. A candidate whose
+    skew-tuning bumps (``_route_pair``, D5) do not clear that copper moves on
+    (at most ``NESTED_CANDIDATE_LIMIT`` candidates in all). The rest pass the
+    ``_route_pair`` profile gates, the plane reservation and
+    ``_validate_candidate``, at most ``NESTED_VALIDATION_LIMIT`` of them. The
+    accepted turn and chamfer and the result, or None: the caller then routes
+    as before.
+    """
+    if any(routes.get(rule.net) is None or not routes[rule.net].connected for rule in (first, second)):
+        return None
+    search_board = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+    index = RoutingClearanceIndex(search_board)
+    clearance = max(board.rules.minimum_clearance_nm, first.clearance_nm or 0, second.clearance_nm or 0)
+    turns = range(nested.turn_nm, nested.turn_nm + NESTED_TURN_RANGE_NM + 1, NESTED_TURN_STEP_NM)
+    validated = 0
+    candidates = nested_exit_candidates(
+        search_board, first, second, routes[first.net], routes[second.net],
+        nested.component, nested.direction, nested.travel, turns, NESTED_CHAMFER_STEP_NM)
+    for turn, chamfer, candidate in islice(candidates, NESTED_CANDIDATE_LIMIT):
+        attempt, pair_tracks, pair_vias = _route_pair(
+            board, first, second, routes, exact_tracks=(candidate.first, candidate.second))
+        if attempt.connected and attempt.tuned_length_nm and not _legal(
+                search_board, index, tuple(t for t in pair_tracks if t.net == first.net),
+                tuple(t for t in pair_tracks if t.net != first.net), clearance):
+            continue
+        if attempt.connected:
+            attempt, pair_tracks, pair_vias = _reject_reserved_plane_tracks(
+                board, attempt, pair_tracks, pair_vias, rules)
+        if attempt.connected:
+            attempt, pair_tracks, pair_vias = _validate_candidate(
+                board, attempt, pair_tracks, pair_vias, tracks, vias)
+        validated += 1
+        if attempt.connected:
+            return ((turn, chamfer), replace(attempt, strategy="nested_exit", candidate_attempts=validated),
+                    pair_tracks, pair_vias)
+        if validated >= NESTED_VALIDATION_LIMIT:
+            break
+    return None
+
+
 def _crossing_site_rank(
     board: PhysicalBoard, group: tuple[str, ...],
 ) -> Callable[[tuple[Via, ...]], int | None]:
@@ -995,29 +1096,33 @@ def _bundle_repair(
     committed: list[tuple[tuple[str, ...], tuple[TrackSegment, ...], tuple[Via, ...]]],
     failed_rules: tuple[NetRoutingRule, NetRoutingRule], failed: tuple[str, ...],
     blocker: tuple[str, ...], crossings: dict[tuple[str, ...], PlannedCrossing] | None = None,
+    nested: dict[tuple[str, ...], NestedExit] | None = None,
+    turns: dict[tuple[str, ...], tuple[int, int]] | None = None,
 ) -> tuple[BundleRepair, tuple[tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]],
                                tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]] | None]:
     """Rip up ``blocker``, route ``failed`` first, then route ``blocker`` again.
 
     Both routes use the same coarse/exact candidates and atomic validation as
     the main pass, against all other committed copper; a group with a planned
-    crossing in ``crossings`` keeps its plan. Nothing is changed here: the
-    caller commits both results only when both are accepted, and otherwise
-    keeps its state exactly as it was.
+    crossing in ``crossings`` or nested exit in ``nested`` keeps its plan.
+    Nothing is changed here: the caller commits both results only when both
+    are accepted, and otherwise keeps its state exactly as it was.
     """
     crossings = crossings or {}
+    nested = nested or {}
     others = [entry for entry in committed if entry[0] != blocker]
     reduced_tracks = [*base_tracks, *(t for _, items, _ in others for t in items)]
     reduced_vias = [*base_vias, *(v for _, _, items in others for v in items)]
     first = _route_pair_group(board, *failed_rules, routes, rules,
                               reduced_tracks, reduced_vias, pair_state_limit,
-                              crossing=crossings.get(failed))
+                              crossing=crossings.get(failed), nested=nested.get(failed), turns=turns)
     if not first[0].connected:
         return BundleRepair(failed, blocker, False,
                             "failed group still has no accepted candidate without the ripped-up copper"), None
     second = _route_pair_group(board, rules[blocker[0]], rules[blocker[1]], routes, rules,
                                [*reduced_tracks, *first[1]], [*reduced_vias, *first[2]],
-                               pair_state_limit, crossing=crossings.get(blocker))
+                               pair_state_limit, crossing=crossings.get(blocker),
+                               nested=nested.get(blocker), turns=turns)
     if not second[0].connected:
         return BundleRepair(failed, blocker, False,
                             "ripped-up group has no accepted candidate after the failed group"), None

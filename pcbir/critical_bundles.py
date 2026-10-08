@@ -13,9 +13,16 @@ cross others (plan R5). The fewest pairs move off the surface, each with one
 planned paired layer swap; they are routed first, then the surface pairs in
 physical order (``_plan_crossings``).
 
-This module only plans the order and the crossings and holds the per-bundle
-report. The critical router owns routing, validation and the bounded repair
-(``critical.py``).
+When a bundle leaves a package across a corner, the pairs on the side edge
+turn 90 degrees toward the far component. Their exits are planned nested
+(plan R7, ``_plan_nested_exits``): the pair nearest the corner routes first
+and turns on its far end's column, and each pair outside it turns on its own
+column or as soon as it clears the inner pair's copper, so no pair runs past
+its column and back.
+
+This module only plans the order, the crossings and the nested exits and holds
+the per-bundle report. The critical router owns routing, validation and the
+bounded repair (``critical.py``).
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from functools import cmp_to_key
 from math import hypot
 from typing import Mapping, Sequence
 
+from .pair_search import nested_turn_minimum
 from .physical import (BoardSide, CopperLayer, NetRoutingRule, PhysicalBoard, Point, RouteKind,
                        Via)
 from .routing_layers import routing_layers, signal_layer_preferences
@@ -80,6 +88,32 @@ class PlannedCrossing:
 
 
 @dataclass(frozen=True, slots=True)
+class NestedExit:
+    """A bundle pair that leaves ``component`` across a package corner (plan R7).
+
+    The pair exits its edge along ``direction``, turns 90 degrees and runs
+    along ``travel`` to the far component. Distances are measured along
+    ``direction`` from the pair's land midpoint: ``column_nm`` to the far
+    lands' midpoint, ``turn_nm`` to the planned run along ``travel``.
+    ``inner`` is the pair it nests around (None for the innermost).
+    ``status`` is "planned" until routed, then "routed" with the turn and the
+    axial leg of the turn's 45-degree diagonal used, or "fallback" when no
+    nested candidate was accepted and the pair routed (or failed) as before.
+    """
+
+    group: tuple[str, ...]
+    component: str
+    direction: tuple[int, int]
+    travel: tuple[int, int]
+    column_nm: int
+    turn_nm: int
+    inner: tuple[str, ...] | None = None
+    status: str = "planned"
+    routed_turn_nm: int | None = None
+    routed_chamfer_nm: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CriticalBundle:
     """Routing order and repair record of one bundle of critical groups."""
 
@@ -92,6 +126,8 @@ class CriticalBundle:
     repairs: tuple[BundleRepair, ...] = ()
     # Pairs that must cross others, moved off the surface (plan R5).
     crossings: tuple[PlannedCrossing, ...] = ()
+    # Side-edge pairs of a package-corner wrap, innermost first (plan R7).
+    nested_exits: tuple[NestedExit, ...] = ()
 
     @property
     def repairs_attempted(self) -> int:
@@ -105,8 +141,9 @@ class CriticalBundle:
 def bundle_document(bundle: CriticalBundle) -> dict[str, object]:
     """JSON-ready form of one bundle for the critical report.
 
-    ``crossings`` is present only for a bundle with planned crossings, so the
-    reports of other bundles are unchanged.
+    ``crossings`` and ``nested_exits`` are present only for a bundle with
+    planned crossings or nested exits, so the reports of other bundles are
+    unchanged.
     """
     document: dict[str, object] = {
         "components": list(bundle.components),
@@ -125,6 +162,16 @@ def bundle_document(bundle: CriticalBundle) -> dict[str, object]:
     }
     if bundle.crossings:
         document["crossings"] = [_crossing_document(item) for item in bundle.crossings]
+    if bundle.nested_exits:
+        document["nested_exits"] = [
+            {"group": list(item.group), "component": item.component,
+             "direction": list(item.direction), "travel": list(item.travel),
+             "column_nm": item.column_nm, "turn_nm": item.turn_nm,
+             "inner": list(item.inner) if item.inner is not None else None,
+             "status": item.status, "routed_turn_nm": item.routed_turn_nm,
+             "routed_chamfer_nm": item.routed_chamfer_nm}
+            for item in bundle.nested_exits
+        ]
     return document
 
 
@@ -171,12 +218,22 @@ def crossing_line(bundle: CriticalBundle, crossing: PlannedCrossing) -> str:
     return line
 
 
+def nested_exit_line(bundle: CriticalBundle, item: NestedExit) -> str:
+    """One console line for a nested corner exit (the critical preflight)."""
+    around = f"around {'/'.join(item.inner)}" if item.inner is not None else "innermost"
+    routed = (f", turn {item.routed_turn_nm / 1e6:.3f} mm, diagonal {item.routed_chamfer_nm / 1e6:.3f} mm"
+              if item.routed_turn_nm is not None and item.routed_chamfer_nm is not None else "")
+    return (f"bundle {'-'.join(bundle.components)} nested exit {'/'.join(item.group)} at "
+            f"{item.component}: {item.status}{routed} (planned turn {item.turn_nm / 1e6:.3f} mm, "
+            f"column {item.column_nm / 1e6:.3f} mm), {around}")
+
+
 def plan_bundles(
     board: PhysicalBoard,
     jobs: Sequence[tuple[NetRoutingRule, tuple[str, ...]]],
     rules: Mapping[str, NetRoutingRule],
     repair_limit: int,
-    *, plan_crossings: bool = True,
+    *, plan_crossings: bool = True, plan_nested_exits: bool = True,
 ) -> tuple[CriticalBundle, ...]:
     """Find the bundles among ``jobs`` (in default order) and their physical order.
 
@@ -185,7 +242,10 @@ def plan_bundles(
     components. Groups that share components, kind and priority form a bundle
     when there are at least two of them. With ``plan_crossings``, a bundle
     whose pairs must cross gets its planned crossings, and its moving pairs
-    come first in its order (plan R5).
+    come first in its order (plan R5). With ``plan_nested_exits``, a bundle
+    that leaves a package across a corner gets the nested exits of its
+    side-edge surface pairs, and each nest takes its slots in the order
+    innermost first (plan R7).
     """
     nets = {item.name: item for item in board.nets}
     placements = {item.reference: item for item in board.placements}
@@ -215,10 +275,16 @@ def plan_bundles(
             moving = {item.group for item in crossings}
             order = (*(group for group in order if group in moving),
                      *(group for group in order if group not in moving))
+        nested = (_plan_nested_exits(board, [entry for entry in entries
+                                             if entry[0] not in {item.group for item in crossings}],
+                                     (first, second), rules)
+                  if plan_nested_exits else ())
+        if nested:
+            order = _nest_order(order, nested)
         bundles.append(CriticalBundle(
             (first, second), kind, priority, order,
             tuple(group for group, _ in entries),
-            repair_limit, crossings=crossings,
+            repair_limit, crossings=crossings, nested_exits=nested,
         ))
     # Report bundles in the order their first group would have been routed.
     position = {group: index for index, (_, group) in enumerate(jobs)}
@@ -536,3 +602,134 @@ def _reference_planes(board: PhysicalBoard, layer: CopperLayer) -> tuple[CopperL
     zoned = {item for zone in board.zones for item in zone.layers}
     index = copper.index(layer)
     return tuple(copper[i] for i in (index - 1, index + 1) if 0 <= i < len(copper) and copper[i] in zoned)
+
+
+def _plan_nested_exits(
+    board: PhysicalBoard, entries: list[tuple[tuple[str, ...], dict[str, Point]]],
+    components: tuple[str, str], rules: Mapping[str, NetRoutingRule],
+) -> tuple[NestedExit, ...]:
+    """The nested corner exits of one bundle (plan R7), innermost first; empty without any.
+
+    A pair's edge at a component is the outward side of its two lands
+    (``_pair_edge``). A *side* pair leaves along ``direction`` and enters the
+    far component along a perpendicular ``travel``, with the far lands ahead in
+    both. The bundle wraps a corner when another of its pairs leaves along that
+    ``travel`` (the facing edge). Side pairs with one direction and travel nest
+    around the corner, innermost (furthest along ``travel``) first. Each turns
+    on its far lands' column, or just clear of the pair inside it (both
+    half-bands plus the larger clearance) when the column is nearer, and never
+    nearer than ``nested_turn_minimum``. A nest whose columns are out of order
+    (its pairs would cross) is not planned.
+    """
+    nets = {item.name: item for item in board.nets}
+    placements = {item.reference: item for item in board.placements}
+    planned: list[NestedExit] = []
+    for reference, other in (components, components[::-1]):
+        edges = {}
+        for group, _ in entries:
+            here = _pair_edge(board, nets, placements, group, reference)
+            there = _pair_edge(board, nets, placements, group, other)
+            if here is not None and there is not None:
+                edges[group] = here, there
+        facing = {here[1] for here, there in edges.values() if here[1] == _reverse(there[1])}
+        nests: dict[tuple[tuple[int, int], tuple[int, int]], list[tuple[tuple[str, ...], Point, Point]]] = {}
+        for group, ((middle, direction), (far, outward)) in edges.items():
+            travel = _reverse(outward)
+            if (travel in facing and travel not in (direction, _reverse(direction))
+                    and _along(middle, far, direction) > 0 and _along(middle, far, travel) > 0
+                    and all(item.group != group for item in planned)):
+                nests.setdefault((direction, travel), []).append((group, middle, far))
+        for (direction, travel), members in sorted(nests.items()):
+            members.sort(key=lambda member: (-_project(member[1], travel), member[0]))
+            columns = [_project(far, direction) for _, _, far in members]
+            if any(a > b for a, b in zip(columns, columns[1:])):
+                continue
+            inner: tuple[tuple[str, ...], int, int, int] | None = None
+            for (group, middle, far), column in zip(members, columns):
+                width, gap, clearance = _pair_band(board, rules, group)
+                half = (width + gap + 1) // 2 + width // 2
+                edge = _project(middle, direction)
+                position = max(column, edge + nested_turn_minimum(width, gap))
+                if inner is not None:
+                    position = max(position, inner[1] + inner[2] + max(clearance, inner[3]) + half)
+                planned.append(NestedExit(group, reference, direction, travel, column - edge,
+                                          position - edge, inner[0] if inner is not None else None))
+                inner = group, position, half, clearance
+    return tuple(planned)
+
+
+def _nest_order(
+    order: tuple[tuple[str, ...], ...], nested: tuple[NestedExit, ...],
+) -> tuple[tuple[str, ...], ...]:
+    """``order`` with each nest's slots refilled innermost first.
+
+    An outer pair then turns around the inner pair's routed copper, tuning
+    bumps included, instead of guessing it.
+    """
+    nests: list[list[tuple[str, ...]]] = []
+    for item in nested:
+        if item.inner is None:
+            nests.append([])
+        nests[-1].append(item.group)
+    replacement: dict[tuple[str, ...], tuple[str, ...]] = {}
+    for nest in nests:
+        slots = [group for group in order if group in nest]
+        replacement.update(zip(slots, nest))
+    return tuple(replacement.get(group, group) for group in order)
+
+
+def _pair_edge(
+    board: PhysicalBoard, nets: Mapping[str, object], placements: Mapping[str, object],
+    group: tuple[str, ...], reference: str,
+) -> tuple[Point, tuple[int, int]] | None:
+    """Midpoint of a pair's two lands at ``reference`` and their outward axis.
+
+    The lands must sit in one row along x or y; outward is the perpendicular
+    axis direction pointing away from the component's origin. None otherwise.
+    """
+    from .placement import PlacementAlgorithmError, transformed_pad_position
+
+    lands = []
+    for name in group:
+        pads = [pad for pad in nets[name].pads if pad.component == reference]
+        if len(pads) != 1:
+            return None
+        try:
+            lands.append(transformed_pad_position(board, placements[reference], pads[0].pad))
+        except PlacementAlgorithmError:
+            return None
+    first, second = lands
+    middle = Point((first.x_nm + second.x_nm) // 2, (first.y_nm + second.y_nm) // 2)
+    origin = placements[reference].position
+    if first.x_nm == second.x_nm and first.y_nm != second.y_nm:
+        offset = middle.x_nm - origin.x_nm
+        direction = ((offset > 0) - (offset < 0), 0)
+    elif first.y_nm == second.y_nm and first.x_nm != second.x_nm:
+        offset = middle.y_nm - origin.y_nm
+        direction = (0, (offset > 0) - (offset < 0))
+    else:
+        return None
+    return (middle, direction) if direction != (0, 0) else None
+
+
+def _pair_band(
+    board: PhysicalBoard, rules: Mapping[str, NetRoutingRule], group: tuple[str, ...],
+) -> tuple[int, int, int]:
+    """Track width, pair gap and clearance of a pair's profile."""
+    members = [rules[net] for net in group]
+    width = members[0].width_nm or board.rules.default_track_width_nm
+    gap = members[0].pair_gap_nm or 0
+    clearance = max(board.rules.minimum_clearance_nm, *(rule.clearance_nm or 0 for rule in members))
+    return width, gap, clearance
+
+
+def _reverse(axis: tuple[int, int]) -> tuple[int, int]:
+    return -axis[0], -axis[1]
+
+
+def _project(point: Point, axis: tuple[int, int]) -> int:
+    return point.x_nm * axis[0] + point.y_nm * axis[1]
+
+
+def _along(start: Point, end: Point, axis: tuple[int, int]) -> int:
+    return _project(end, axis) - _project(start, axis)
