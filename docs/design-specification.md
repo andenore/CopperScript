@@ -1490,7 +1490,9 @@ layer) and is kept only if, judged on copper shrunk by 1 µm, the net stays
 connected and gains no island, open track end or single-layer via. Only owned
 occurrences of that net change; critical, macro, plane, input and other-net
 copper never do. Retained escape copper may lose dead-end tails but is never
-smoothed (CS-162). The CS-131/CS-152/CS-153 readiness gates, exact clearance,
+smoothed (CS-162). An owned escape track left with an open end past a land of
+its net that it crosses (its via deleted because the route reached that land)
+is cut back to the land's centre, kept only under the same test. The CS-131/CS-152/CS-153 readiness gates, exact clearance,
 ownership and rollback are unchanged. A released escape is not a stale
 reservation: later subset reroutes treat that pin as an ordinary surface
 terminal. Only nets with a reserved escape are affected.

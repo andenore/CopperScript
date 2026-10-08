@@ -176,6 +176,29 @@ def test_release_keeps_copper_whose_removal_would_open_the_net():
     assert Counter(tracks) == Counter(final.tracks) and Counter(vias) == Counter(final.vias)
 
 
+def test_released_dogbone_that_crosses_a_land_is_trimmed_to_it():
+    # The route reached J1 along the dogbone itself: U.1's stub crosses J1's
+    # land on its way to the launch via. Releasing the via and witness must
+    # not leave the stub running on past J1 with an open end.
+    package = PhysicalFootprint("package", (FootprintPad("1", Point(0, 0), Size.mm(.3, .3)),), Size.mm(4, 4))
+    one = PhysicalFootprint("one", (FootprintPad("1", Point(0, 0), Size.mm(.6, .6)),), Size.mm(1, 1))
+    board = PhysicalBoard("trim", BoardOutline.rectangle(20, 16), {"package": package, "one": one},
+        (Placement("U", "package", Point.mm(10, 8)), Placement("J1", "one", Point.mm(11, 8))),
+        (PhysicalNet("A", (PAD, PadReference("J1", "1"))),))
+    width = board.rules.default_track_width_nm
+    stub = TrackSegment("A", Point.mm(10, 8), Point.mm(12, 8), width, CopperLayer.FRONT)
+    witness = TrackSegment("A", Point.mm(12, 8), Point.mm(14, 8), width, CopperLayer.BACK)
+    via = Via("A", Point.mm(12, 8), board.rules.default_via_size_nm, board.rules.default_via_drill_nm)
+    board = replace(board, tracks=(stub, witness), vias=(via,))
+    chain = EscapeChain("A", (stub,), (witness,), via)
+    tracks, vias = release_unused_escapes(
+        board, board.tracks, board.vias, (chain,), Counter((stub, witness)),
+        mutable_tracks=Counter(), removable_vias=Counter((via,)))
+    assert not vias
+    assert tracks == (TrackSegment("A", Point.mm(10, 8), Point.mm(11, 8), width, CopperLayer.FRONT),)
+    assert connected(replace(board, tracks=tracks, vias=vias))
+
+
 def test_unowned_escape_copper_is_never_released():
     board, accesses, created, via, port_via, route = loop_copper()
     final = replace(board, tracks=(*board.tracks, *route), vias=(*board.vias, port_via))
