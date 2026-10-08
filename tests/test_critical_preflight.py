@@ -17,6 +17,9 @@ def test_package_access_gate_reports_pending_identities_and_exports_contacts(tmp
     def inspect(board, guides, fanout_options, plane_options, **kwargs):
         assert plane_options.include_surface_zones
         assert plane_options.maximum_contact_radius_nm == nm_from_mm("5")
+        assert plane_options.preferred_ground_pads == frozenset(next(
+            net.pads for net in board.nets if net.name == "GND"
+        ))
         result = original(board, guides, fanout_options, plane_options, **kwargs)
         # A failed contact must fail the gate even when the critical set is empty.
         result = replace(result, plane_stitch=replace(result.plane_stitch,
@@ -34,6 +37,7 @@ def test_package_access_gate_reports_pending_identities_and_exports_contacts(tmp
     assert main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
         "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
         "--package-access", "--stitch-surface-zones", "--plane-contact-radius-mm", "5",
+        "--prefer-local-ground",
         "--report", str(report), "-o", str(output)]) == 1
     data = json.loads(report.read_text())
     assert data["stage"] == "package_access_complete" and data["complete"]

@@ -810,11 +810,14 @@ before ordinary area routing by default. Critical routes and plane contacts
 are revalidated together with ordinary escape-pattern alternatives. Use
 `--no-early-plane-stitch` for an explicit late-contact comparison, or
 `--early-plane-pad` to select contacts. These options never certify zone fill.
-For selected bypass capacitors, repeat `--prefer-local-ground-pad REF.PAD` to
-compare a nearby legal GND via with reuse of an existing contact. The choice
-uses the routed surface escape length and a small penalty for another drill or
-shared primary contact. Ordinary pads keep the existing reuse-first policy;
-native refill still has to prove the GND plane connection.
+Use `--prefer-local-ground` to apply the local-contact preference to every GND
+pad, or repeat `--prefer-local-ground-pad REF.PAD` to select individual pads.
+The preference applies to eligible SMD pads outside protected hard macros;
+through-hole pads already provide a plated contact. It compares a nearby legal
+GND via with reuse of an existing contact, using surface escape length and a
+small penalty for another drill or shared primary contact. A local via is not
+guaranteed when no legal site exists. Native refill still has to prove the GND
+plane connection.
 
 A pad-scoped fabrication permission is separate from connectivity:
 

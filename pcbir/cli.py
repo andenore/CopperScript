@@ -495,6 +495,10 @@ def _parser() -> argparse.ArgumentParser:
         help="optional link to a previously escaped same-net pad (default: disabled)",
     )
     board_route_parser.add_argument(
+        "--prefer-local-ground", action="store_true",
+        help="prefer a nearby plane via for every eligible GND pad",
+    )
+    board_route_parser.add_argument(
         "--prefer-local-ground-pad", action="append", default=[], metavar="REF.PAD",
         help="prefer a short dedicated plane via for this GND pad; repeat as needed",
     )
@@ -887,7 +891,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     pad for net in physical_board.nets if net.name == "GND"
                     for pad in net.pads
                 }
-                preferred_ground_pads: set[PadReference] = set()
+                preferred_ground_pads: set[PadReference] = (
+                    set(ground_pads) if args.prefer_local_ground else set()
+                )
                 for value in args.prefer_local_ground_pad:
                     reference, separator, number = value.rpartition(".")
                     pad = PadReference(reference, number)

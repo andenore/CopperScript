@@ -25,6 +25,12 @@ def test_early_plane_contacts_default_and_explicit_opt_out():
     assert not _parser().parse_args(["route-board", "board.copper", "--no-early-plane-stitch"]).early_plane_stitch
 
 
+def test_route_board_accepts_board_wide_local_ground_preference():
+    from pcbir.cli import _parser
+    args = _parser().parse_args(["route-board", "board.copper", "--prefer-local-ground"])
+    assert args.prefer_local_ground
+
+
 def run_cli(example: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "copperscript", "check", f"examples/{example}"],
@@ -361,7 +367,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
             "examples/valid_board/board.copper", "--allow-proxy-footprints",
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
             "--fanout",
-            "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
+            "--stitch-zone-pads", "--prefer-local-ground", "--plane-stitch-step-mm", "0.25",
             "--plane-stitch-radius-mm", "5",
             "--critical-feedback-trials", "1",
             "--report", str(report), "-o", str(pcb),
@@ -372,6 +378,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert result.returncode in {0, 1}, result.stdout + result.stderr
     document = json.loads(report.read_text(encoding="utf-8"))
     assert document["schema"] == "copperscript-route-board/v0.1"
+    assert "C1.2" in document["plane_stitch"]["preferred_ground_pads"]
     assert document["erc_pass"]
     assert isinstance(document["fanout"]["pin_access_analysis"], list)
     assert set(document["fanout"]["assignment"]) == {"pair_checks", "pair_queries", "broad_phase_accepts", "native_accepted", "expanded_pads", "trials"}

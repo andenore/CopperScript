@@ -59,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="also verify ordinary package exits and plane contacts before area routing")
     parser.add_argument("--stitch-surface-zones", action="store_true")
     parser.add_argument("--plane-contact-radius-mm", default="0")
+    parser.add_argument("--prefer-local-ground", action="store_true")
     parser.add_argument("--prefer-local-ground-pad", action="append", default=[], metavar="REF.PAD")
     parser.add_argument("--router-iterations", type=int, default=5)
     parser.add_argument("--tile-size-mm", default="5")
@@ -111,7 +112,9 @@ def main(argv: list[str] | None = None) -> int:
         ground_pads = {
             pad for net in board.nets if net.name == "GND" for pad in net.pads
         }
-        preferred_ground_pads: set[PadReference] = set()
+        preferred_ground_pads: set[PadReference] = (
+            set(ground_pads) if args.prefer_local_ground else set()
+        )
         for value in args.prefer_local_ground_pad:
             reference, separator, number = value.rpartition(".")
             pad = PadReference(reference, number)
