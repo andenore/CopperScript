@@ -90,6 +90,13 @@ class ReturnViaPolicy(str, Enum):
     REFERENCE_CHANGE = "reference_change"
 
 
+class TuningStyle(str, Enum):
+    """Length-match tuning geometry (D-PHY plan R10)."""
+
+    BUMPS = "bumps"            # one-sided bumps (R3)
+    SERPENTINE = "serpentine"  # two-sided S-shaped legs, bumps where one side is blocked
+
+
 class PadKind(str, Enum):
     SMD = "smd"
     APERTURE = "aperture"
@@ -1144,6 +1151,11 @@ class NetRoutingRule:
     breakout_width_nm: Nanometres | None = None
     breakout_gap_nm: Nanometres | None = None
     breakout_clearance_nm: Nanometres | None = None
+    # Length-match tuning geometry (plan R10). ``tuning_spacing_nm`` is the
+    # least edge gap between adjacent serpentine legs; None means the default
+    # (the larger of 3 x width and the clearance).
+    tuning_style: TuningStyle = TuningStyle.BUMPS
+    tuning_spacing_nm: Nanometres | None = None
 
     @property
     def effective_impedance_tolerance_percent(self) -> Decimal:
@@ -1152,6 +1164,7 @@ class NetRoutingRule:
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_layers", tuple(self.allowed_layers))
         object.__setattr__(self, "return_via_policy", ReturnViaPolicy(self.return_via_policy))
+        object.__setattr__(self, "tuning_style", TuningStyle(self.tuning_style))
         if self.shared_reference_layer is not None:
             object.__setattr__(self, "shared_reference_layer", CopperLayer(self.shared_reference_layer))
         if self.return_via_policy is ReturnViaPolicy.REFERENCE_CHANGE:
@@ -1172,12 +1185,15 @@ class NetRoutingRule:
             ("maximum uncoupled length", self.maximum_uncoupled_length_nm),
             ("maximum stub length", self.maximum_stub_length_nm),
             ("tuning amplitude limit", self.tuning_amplitude_limit_nm),
+            ("tuning spacing", self.tuning_spacing_nm),
             ("maximum return via distance", self.maximum_return_via_distance_nm),
         ):
             if value is not None and value <= 0:
                 raise ValueError(f"routing {name} must be positive")
         if self.max_vias is not None and self.max_vias < 0:
             raise ValueError("routing maximum via count cannot be negative")
+        if self.tuning_spacing_nm is not None and self.tuning_style is not TuningStyle.SERPENTINE:
+            raise ValueError('routing tuning spacing requires tuning_style "serpentine"')
         if self.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
             if self.differential_partner is None or self.pair_gap_nm is None:
                 raise ValueError(
@@ -1714,6 +1730,7 @@ class PhysicalBoard:
         validate_hard_macros(self)
 
         routed_rule_nets: set[str] = set()
+        partners = {rule.net: rule for rule in self.net_routing_rules}
         for rule in self.net_routing_rules:
             if rule.net not in known_nets:
                 raise ValueError(f"routing rule references unknown net {rule.net!r}")
@@ -1740,6 +1757,9 @@ class PhysicalBoard:
                 )
             if rule.return_via_net is not None and rule.return_via_net not in known_nets:
                 raise ValueError(f"routing rule for {rule.net!r} references unknown return net {rule.return_via_net!r}")
+            partner = partners.get(rule.differential_partner or "")
+            if partner is not None and partner.tuning_style is not rule.tuning_style:
+                raise ValueError(f"routing rules for {rule.net!r} and {partner.net!r} must agree on tuning_style")
             # Breakout relaxations are checked against the effective profile,
             # including board defaults when the rule leaves a value implicit.
             if rule.breakout_width_nm is not None:

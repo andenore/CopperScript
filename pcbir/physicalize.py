@@ -60,6 +60,7 @@ from .physical import (
     ReturnViaPolicy,
     Size,
     Stackup,
+    TuningStyle,
     ZoneConnection,
     nm_from_mm,
 )
@@ -637,6 +638,8 @@ def _lower_physical_constraints(
                     breakout_width_nm=_optional_constraint_length(parameters, "breakout_width"),
                     breakout_gap_nm=_optional_constraint_length(parameters, "breakout_gap"),
                     breakout_clearance_nm=_optional_constraint_length(parameters, "breakout_clearance"),
+                    tuning_style=TuningStyle(str(parameters.get("tuning_style", "bumps"))),
+                    tuning_spacing_nm=_optional_constraint_length(parameters, "tuning_spacing"),
                 )
             )
             continue

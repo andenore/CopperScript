@@ -655,7 +655,8 @@ placement/routing defaults when neither is stated. Routing parameters lower to
 `maximum_return_via_distance`, `return_via_policy`, `shared_reference_layer`,
 `impedance_evidence_digest`, `target_single_ended_ohms`,
 `impedance_tolerance_percent`, `layer_group`, `breakout_length`,
-`breakout_width`, `breakout_gap`, and `breakout_clearance` (see
+`breakout_width`, `breakout_gap`, `breakout_clearance`, `tuning_style` and
+`tuning_spacing` (see
 [signal-integrity routing intent](#signal-integrity-routing-intent)).
 
 USB/differential profiles need not be top-layer-only. For example,
@@ -1096,6 +1097,58 @@ group, `id`, `max_skew_nm`, `status` (`within_limit`, `tuned`, `failed` or
 `bumps` and the `reason`. The `nets` entries and `lanes` table report the
 tuned copper. `python -m pcbir.critical_preflight` prints one line per group.
 
+A unit whose rules declare `tuning_style = "serpentine"` (D-PHY plan R10)
+snakes about its original line instead of bumping off it. Its pieces are first
+joined into straight lines where collinear pieces of equal width meet end to
+end with nothing else of the net at the joint (for example where a line was
+cut at a breakout-region boundary). On a straight line, legs cross the line
+perpendicular to it at a pitch of the lane width (both members and their gap)
+plus the leg gap (`tuning_spacing`), on a grid centred in the run
+3 × width from its ends; the *tops* between adjacent legs alternate sides,
+each no higher than `tuning_amplitude_limit` off the line and at least
+d + 2 nm (4 nm for a single net), so every corner has a 45° chamfer. A top of
+height a adds 2a. Each leg has one corner at each end, and every member is
+inside one and outside the other, so with one chamfer leg c for the whole
+unit (R9's rule on every leg, and small enough to leave a straight piece on
+every top) both members of a pair gain exactly 2 × (sum of heights) −
+(n + 1)(f(c) + f(c + d)) from n tops, where f(k) = 2k − round(k√2), and the
+pair's skew is unchanged. A top's room on its side is measured like a bump's
+over its two legs, with the outline taken at the least top and largest foot
+chamfer. Each line takes at most one serpentine: a window of two or more
+consecutive tops with room on their sides; windows with the most capacity
+come first, and the last one is trimmed to the fewest tops that add the
+length. Lines without a serpentine keep one-sided bumps, and a unit whose
+serpentines cannot provide the length falls back to bumps alone (also when the
+length is too small for tops of that height). At most 32 legs are used per
+unit (`MATCH_TUNING_LEG_LIMIT`, a bump counting two); heights are levelled
+across tops and bumps, and c is lowered until it suits every leg and makes the
+added length exact. Adjacent legs couple, so a serpentine's delay is slightly
+shorter than its length suggests; reports keep the geometric length. Units
+without the property tune exactly as described above.
+
+Bundle pairs (same two components, kind and priority) of a `length_match`
+group are also tuned while the bundle routes (plan R12). Each time one of
+them is accepted, every accepted pair of the bundle that is short of the
+group's longest accepted member by more than `max_skew` is tuned toward it,
+in acceptance order, with the same targets, geometry, gates and atomic
+validation as above. A pair is thus tuned while its inner neighbours are
+still unrouted, and later pairs route around its copper; the pairs routed
+before the longest one are topped up as soon as it is accepted. A pair that
+cannot be tuned keeps its copper and is retried only after it is re-routed or
+the target grows. When a later bundle pair then finds no candidate, the
+tuning added while routing is removed from the bundle and that pair is
+searched once more, before any rip-up repair. The pass after all groups then
+tops up what is left. The tuning target is always a measured, accepted
+length: global guides are too coarse and land-to-land distances too
+optimistic to predict a group's longest member, and a pair tuned past it
+cannot be shortened. Groups within their limit, and bundles without a
+`length_match` group, route exactly as before. When any step used a
+serpentine or ran while routing, the `match_tuning` entry also has `legs` and
+`units`: every step's `nets`, `stage` (`routing` or `final`), `style`
+(`bumps` or `serpentine`), `added_length_nm`, `bumps`, `legs` and
+`amplitudes_nm`, and its lengths and skew before tuning are those of the
+copper as routed. The preflight line then lists each step and its style.
+
 The critical report also has a `lanes` table with one row per critical net:
 `routed_length_nm`, `layer_lengths_nm`, `layers` in stack-up order and the net's
 own `via_count` (return vias count for their reference net). When the board
@@ -1194,6 +1247,14 @@ constraint length_match(CSI_SRC_CKP, CSI_SRC_CKN, CSI_SRC_DA0P, CSI_SRC_DA0N) {
   other breakout value and is meaningless alone. The router, its clearance
   checks and physical DRC apply them as described under
   [breakout regions](#breakout-regions).
+- `tuning_style` is `"bumps"` (the default: one-sided bumps) or
+  `"serpentine"` (S-shaped legs on both sides of the line, where both sides
+  have room) for `length_match` tuning; both members of a pair must agree.
+  `tuning_spacing` (a positive length, only with `"serpentine"`) is the least
+  edge gap between adjacent legs, by default the larger of 3 × `width` and
+  `clearance`. `tuning_amplitude_limit` stays the largest excursion on each
+  side of the original line. Intra-pair skew compensation keeps one-sided
+  bumps either way.
 - `length_match(NET, NET, ...)` lowers to `NetMatchGroup(id, nets,
   max_skew_nm)` on the physical board. It needs at least two distinct nets
   (not pins), each existing net may belong to only one group, and

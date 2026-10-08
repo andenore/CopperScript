@@ -1590,6 +1590,51 @@ report-only: routing, boards and every other report section MUST be
 byte-identical. It is geometric screening, not crosstalk or impedance
 qualification. See D6 in the [D-PHY routing plan](dphy-routing-plan.md).
 
+## CS-169 — S-shaped serpentines for length-match tuning (Accepted)
+
+A tuning unit (plan R3) whose rules declare `tuning_style = "serpentine"` MUST
+tune toward its `length_match` group with S-shaped legs where both sides of a
+straight run have room. Collinear pieces of one net, layer and width that meet
+end to end with nothing else of the net at the joint are surveyed as one line.
+Legs cross the line perpendicular to it at a pitch of the lane width plus
+`tuning_spacing` (default: the larger of 3 × width and the clearance); the
+tops between them alternate sides, each at most `tuning_amplitude_limit` off
+the line and at least d + 2 nm, so every corner keeps the coupled 45° chamfers
+of CS-167. One chamfer leg c, R9's rule applied to every leg, serves the whole
+unit; each leg has one inside and one outside corner per member, so both
+members gain exactly 2 × (sum of heights) − (n + 1)(f(c) + f(c + d)) for n
+tops, f(k) = 2k − round(k√2), and the pair's skew is unchanged. A top's room
+is that of a bump over its two legs, outlined at the least top and largest
+foot chamfer. A line takes at most one serpentine (two or more consecutive
+tops with room); most capacity first, the last trimmed to the fewest tops, at
+most 32 legs per unit (a bump counts two). Lines without one keep one-sided
+bumps, and a unit falls back to bumps alone when its serpentines cannot
+provide the length. Heights are levelled across tops and bumps, and c is
+lowered until it suits every leg and the length is exact. Intra-pair skew
+compensation (D5) keeps one-sided bumps. Units without the property MUST tune
+byte-identically. Reports keep geometric length; serpentine self-coupling is
+not qualified. See R10 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-170 — Tuning bundle pairs as they route (Accepted)
+
+Each time a bundle pair (same two components, kind and priority; plan R6) of
+a `length_match` group is accepted, every accepted pair of that bundle short
+of the group's longest accepted member by more than `max_skew` MUST be tuned
+toward it, in acceptance order, before the next pair routes: with the R3
+targets, the unit's tuning style (CS-169) and the unchanged gates and atomic
+validation. Later pairs route around that copper, and pairs routed before the
+longest are topped up as soon as it is accepted, not only by the final pass. A
+pair that cannot be tuned keeps its copper and is retried only after it is
+re-routed or the target grows. When a later bundle pair finds no candidate,
+the tuning added while routing is removed from the bundle and that pair is
+searched once more before any rip-up repair. Targets are measured lengths
+only: no prediction of the group's longest member is used, because a pair
+tuned past it cannot be shortened. The final pass tops up what is left.
+Reports list each tuning step with its stage and style, and the lengths as
+routed as the lengths before tuning. Groups within their limit, and bundles
+without a `length_match` group, MUST route byte-identically. See R12 in the
+[D-PHY routing plan](dphy-routing-plan.md).
+
 ## CS-171 — Nested exits at package corners (Accepted)
 
 When a critical bundle leaves a package across a corner, its side-edge pairs

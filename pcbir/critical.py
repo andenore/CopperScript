@@ -23,6 +23,7 @@ from .fanout import FanoutResult
 from .engineering import EvidenceGrade, propagation_delay
 from .physical import (
     CopperLayer,
+    NetMatchGroup,
     NetRoutingRule,
     PadKind,
     PhysicalBoard,
@@ -48,8 +49,8 @@ from .return_paths import (shared_reference_plane, transition_contact_layers,
                            pair_reference_intent_covers)
 from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle, NestedExit, PlannedCrossing,
                                bundle_document, bundle_job_order, crossing_outcome, plan_bundles)
-from .critical_tuning import (MatchTuningMember, MatchTuningResult, UnitTuner, bump_chamfers, bump_gain,
-                              bump_path, match_tuning_document)
+from .critical_tuning import (MatchTuningMember, MatchTuningResult, MatchTuningUnit, UnitTuner, UnitTuning,
+                              bump_chamfers, bump_gain, bump_path, match_tuning_document)
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -336,9 +337,12 @@ def route_critical_nets(
     (``_route_nested_exit``, plan R7), then route as before. Bundles without
     a corner wrap route exactly as without it.
 
-    After every group is accepted, each ``length_match`` group over its
-    ``max_skew`` is tuned (``_tune_match_groups``); a group that cannot be
-    brought within the limit keeps its copper and fails the stage.
+    Bundle pairs of a ``length_match`` group are tuned as they are accepted
+    (``_tune_bundle_pairs``, plan R12); when a later bundle pair finds no
+    candidate, that tuning is removed and the pair searched once more before
+    any rip-up. After every group is accepted, each ``length_match`` group
+    over its ``max_skew`` is tuned (``_tune_match_groups``); a group that
+    cannot be brought within the limit keeps its copper and fails the stage.
     """
 
     if pair_state_limit is not None and pair_state_limit <= 0:
@@ -412,6 +416,14 @@ def route_critical_nets(
     base_tracks, base_vias = tuple(tracks), tuple(vias)
     committed: list[tuple[tuple[str, ...], tuple[TrackSegment, ...], tuple[Via, ...]]] = []
     result_index: dict[tuple[str, ...], int] = {}
+    # Bundle pairs of a length_match group are tuned as they are accepted
+    # (plan R12): the steps, the members' lengths as routed, and the target
+    # at which a unit last failed (more copper never makes room).
+    match_of = {net: item for item in board.match_groups for net in item.nets}
+    early: list[MatchTuningUnit] = []
+    routed: dict[str, int] = {}
+    failed_targets: dict[tuple[str, ...], int] = {}
+    as_routed: dict[tuple[str, ...], tuple[tuple[TrackSegment, ...], CriticalNetResult]] = {}
     for rule, group in jobs:
         if on_progress:
             on_progress("started", group, None)
@@ -465,6 +477,28 @@ def route_critical_nets(
             if not result.connected and group in bundle_of:
                 index = bundle_of[group]
                 bundle_groups = set(bundles[index].order)
+                tuned_here = [position for position, (entry, _, _) in enumerate(committed)
+                              if entry in bundle_groups and entry in as_routed]
+                if tuned_here:
+                    # Tuning while routing may block this pair (plan R12):
+                    # route it again with that tuning removed, before any rip-up.
+                    for position in tuned_here:
+                        entry, _, entry_vias = committed[position]
+                        entry_tracks, entry_result = as_routed.pop(entry)
+                        committed[position] = (entry, entry_tracks, entry_vias)
+                        results[result_index[entry]] = entry_result
+                        early[:] = [step for step in early if step.nets != entry]
+                        failed_targets.pop(entry, None)
+                        for net in entry:
+                            routed.pop(net, None)
+                    tracks = [*base_tracks, *(t for _, items, _ in committed for t in items)]
+                    vias = [*base_vias, *(v for _, _, items in committed for v in items)]
+                    blockers = set()
+                    result, pair_tracks, pair_vias = _route_pair_group(
+                        board, rule, partner_rule, routes, rules, tracks, vias, pair_state_limit, blockers,
+                        crossings.get(group),
+                    )
+            if not result.connected and group in bundle_of:
                 suspects = [entry for entry, entry_tracks, entry_vias in committed
                             if entry in bundle_groups and (entry_tracks or entry_vias)
                             and blockers.intersection(entry)]
@@ -529,8 +563,23 @@ def route_critical_nets(
             if on_progress:
                 on_progress("started", blocker, None)
                 on_progress("finished", blocker, blocker_result)
+        match_group = next((match_of[net] for net in group if net in match_of), None)
+        if match_group is not None and group in bundle_of and result.connected:
+            for entry in (group,) if rerouted is None else (group, rerouted[0]):
+                # Re-routed copper: its earlier tuning is gone.
+                early[:] = [step for step in early if step.nets != entry]
+                failed_targets.pop(entry, None)
+                as_routed.pop(entry, None)
+                for net in entry:
+                    routed.pop(net, None)
+            if _tune_bundle_pairs(board, rules, base_tracks, base_vias, committed, results, result_index,
+                                  set(bundles[bundle_of[group]].order), match_group, early, routed,
+                                  failed_targets, as_routed):
+                tracks = [*base_tracks, *(t for _, items, _ in committed for t in items)]
+                vias = [*base_vias, *(v for _, _, items in committed for v in items)]
 
-    match_tuning = _tune_match_groups(board, rules, base_tracks, base_vias, committed, results, result_index)
+    match_tuning = _tune_match_groups(board, rules, base_tracks, base_vias, committed, results, result_index,
+                                      early, routed)
     if any(item.status == "tuned" for item in match_tuning):
         tracks = [*base_tracks, *(t for _, items, _ in committed for t in items)]
         vias = [*base_vias, *(v for _, _, items in committed for v in items)]
@@ -652,6 +701,7 @@ def _tune_match_groups(
     base_tracks: tuple[TrackSegment, ...], base_vias: tuple[Via, ...],
     committed: _Committed, results: list[CriticalNetResult],
     result_index: dict[tuple[str, ...], int],
+    early: list[MatchTuningUnit] | None = None, routed: dict[str, int] | None = None,
 ) -> tuple[MatchTuningResult, ...]:
     """Tune each ``length_match`` group over its ``max_skew`` (plan R3).
 
@@ -660,48 +710,113 @@ def _tune_match_groups(
     not connected yet are reported ``incomplete`` and judged by final
     verification. A tuned group's copper and results replace the entries in
     ``committed`` and ``results`` only when the whole group ends within its
-    limit; otherwise nothing changes.
+    limit; otherwise nothing changes. ``early`` lists the steps that tuned
+    bundle pairs while routing (plan R12) and ``routed`` the lengths their
+    members had as routed; a group with such steps reports them, and those
+    lengths as its lengths before tuning.
     """
     if not board.match_groups:
         return ()
     from .signal_integrity import verify_match_groups
 
+    early, routed = early or [], routed or {}
     current = replace(board, tracks=(*base_tracks, *(t for _, items, _ in committed for t in items)),
                       vias=(*base_vias, *(v for _, _, items in committed for v in items)))
     outcomes: list[MatchTuningResult] = []
     for check, group in zip(verify_match_groups(current), board.match_groups):
-        before = {member.net: member.length_nm for member in check.members}
+        lengths = {member.net: member.length_nm for member in check.members}
+        before = {net: routed.get(net, lengths[net]) for net in group.nets}
+        steps = tuple(step for step in early if set(step.nets).intersection(group.nets))
+        skew = (check.skew_nm if not steps or check.skew_nm is None
+                else max(before.values()) - min(before.values()))
+        bumps = sum(step.bumps for step in steps)
         if check.status != "fail":
+            status = "within_limit" if check.status == "pass" else "incomplete"
             outcomes.append(MatchTuningResult(
-                group.id, group.max_skew_nm, "within_limit" if check.status == "pass" else "incomplete",
-                check.skew_nm, check.skew_nm,
-                tuple(MatchTuningMember(net, before[net], before[net]) for net in group.nets)))
+                group.id, group.max_skew_nm, "tuned" if steps and status == "within_limit" else status,
+                skew, check.skew_nm, tuple(MatchTuningMember(net, before[net], lengths[net]) for net in group.nets),
+                bumps, units=steps))
             continue
-        trial, tuned, bumps, reason = _tune_match_group(
+        trial, tuned, final, reason = _tune_match_group(
             board, rules, base_tracks, base_vias, committed, results, result_index, group.nets,
-            group.max_skew_nm, before)
-        after = dict(before)
+            group.max_skew_nm, lengths)
+        after = dict(lengths)
         if trial is not None:
             copper = (*base_tracks, *(t for _, items, _ in trial for t in items))
             for net in group.nets:
                 after[net] = _track_length(tuple(t for t in copper if t.net == net))
-            skew = max(after.values()) - min(after.values())
-            if skew > group.max_skew_nm:
-                trial, after, reason = None, dict(before), f"skew is still {skew} nm after tuning"
+            spread = max(after.values()) - min(after.values())
+            if spread > group.max_skew_nm:
+                trial, after, reason = None, dict(lengths), f"skew is still {spread} nm after tuning"
         if trial is None:
             outcomes.append(MatchTuningResult(
-                group.id, group.max_skew_nm, "failed", check.skew_nm, check.skew_nm,
-                tuple(MatchTuningMember(net, before[net], before[net]) for net in group.nets),
-                reason=reason))
+                group.id, group.max_skew_nm, "failed", skew, check.skew_nm,
+                tuple(MatchTuningMember(net, before[net], lengths[net]) for net in group.nets),
+                bumps, reason=reason, units=steps))
             continue
         committed[:] = trial
         for unit, result in tuned.items():
             results[result_index[unit]] = result
         outcomes.append(MatchTuningResult(
-            group.id, group.max_skew_nm, "tuned", check.skew_nm,
-            max(after.values()) - min(after.values()),
-            tuple(MatchTuningMember(net, before[net], after[net]) for net in group.nets), bumps))
+            group.id, group.max_skew_nm, "tuned", skew, max(after.values()) - min(after.values()),
+            tuple(MatchTuningMember(net, before[net], after[net]) for net in group.nets),
+            bumps + sum(step.bumps for step in final), units=(*steps, *final)))
     return tuple(outcomes)
+
+
+def _tune_bundle_pairs(
+    board: PhysicalBoard, rules: dict[str, NetRoutingRule],
+    base_tracks: tuple[TrackSegment, ...], base_vias: tuple[Via, ...],
+    committed: _Committed, results: list[CriticalNetResult], result_index: dict[tuple[str, ...], int],
+    bundle: set[tuple[str, ...]], group: NetMatchGroup, early: list[MatchTuningUnit],
+    routed: dict[str, int], failed_targets: dict[tuple[str, ...], int],
+    as_routed: dict[tuple[str, ...], tuple[tuple[TrackSegment, ...], CriticalNetResult]],
+) -> bool:
+    """Tune a bundle's accepted pairs toward their group's longest accepted member (plan R12).
+
+    Runs each time a bundle pair of a ``length_match`` group is accepted,
+    before the next pair routes, so tuning claims room while the inner
+    neighbours are unrouted and later pairs route around it. Every accepted
+    pair of the bundle that is short of the longest accepted member (any
+    unit) by more than ``max_skew`` is tuned, in acceptance order: the pair
+    just accepted, or the earlier ones when it is the longest. Each step is
+    ``_tune_unit`` (R3 targets, R9/R10 geometry, the same gates and atomic
+    validation) and changes only that pair's copper. A pair that cannot be
+    tuned keeps its copper and is not tried again at the same or a longer
+    target until it is re-routed, since more copper never makes room. The
+    final pass tops up what is left. ``early`` and ``routed`` receive the
+    steps and each tuned member's length as routed. Returns whether copper
+    changed.
+    """
+    members = set(group.nets)
+    copper = (*base_tracks, *(t for _, items, _ in committed for t in items))
+    lengths = {net: _track_length(tuple(t for t in copper if t.net == net))
+               for net in group.nets if any(t.net == net for t in copper)}
+    longest = max(lengths.values())
+    breakout = BreakoutRegions(board)
+    changed = False
+    for index, (unit, items, _) in enumerate(committed):
+        if (unit not in bundle or not items or not members.issuperset(unit)
+                or failed_targets.get(unit, longest + 1) <= longest):
+            continue
+        tuning, reason = _tune_unit(board, rules, base_tracks, base_vias, committed, index,
+                                    results[result_index[unit]], lengths, members, longest,
+                                    group.max_skew_nm, breakout)
+        if tuning is None:
+            if reason:
+                failed_targets[unit] = longest
+            continue
+        proposed, candidate, plan, added = tuning
+        for net in unit:
+            routed.setdefault(net, lengths[net])
+        as_routed.setdefault(unit, (items, results[result_index[unit]]))
+        committed[index] = (unit, proposed, committed[index][2])
+        results[result_index[unit]] = candidate
+        lengths.update(zip(candidate.nets, candidate.lengths_nm))
+        early.append(MatchTuningUnit(unit, "routing", plan.style, added, plan.bumps, plan.legs,
+                                     plan.amplitudes_nm))
+        changed = True
+    return changed
 
 
 def _tune_match_group(
@@ -710,7 +825,7 @@ def _tune_match_group(
     committed: _Committed, results: list[CriticalNetResult],
     result_index: dict[tuple[str, ...], int], nets: tuple[str, ...], max_skew_nm: int,
     lengths: dict[str, int],
-) -> tuple[_Committed | None, dict[tuple[str, ...], CriticalNetResult], int, str]:
+) -> tuple[_Committed | None, dict[tuple[str, ...], CriticalNetResult], tuple[MatchTuningUnit, ...], str]:
     """Lengthen every unit of one group toward its longest member.
 
     A unit is one accepted critical group touching the group: a pair is tuned
@@ -718,10 +833,11 @@ def _tune_match_group(
     kept; a single-ended net is tuned alone. Each unit is first tuned to match
     its longest group member to the group's longest member, then, if that does
     not fit or validate, by the minimum that brings its shortest member within
-    ``max_skew``. Each step passes the profile gates and the atomic native-DRC
-    validation against all other copper, including units already tuned in
-    this group. Returns the trial copper, the tuned results, the bump count
-    and, on failure, ``None`` and the reason. Nothing is changed here.
+    ``max_skew`` (``_tune_unit``). Each step passes the profile gates and the
+    atomic native-DRC validation against all other copper, including units
+    already tuned in this group. Returns the trial copper, the tuned results,
+    the tuning steps and, on failure, ``None`` and the reason. Nothing is
+    changed here.
     """
     members = set(nets)
     longest = max(lengths.values())
@@ -730,69 +846,97 @@ def _tune_match_group(
     covered = {net for index in units for net in committed[index][0]}
     fixed = [net for net in nets if net not in covered and lengths[net] < longest - max_skew_nm]
     if fixed:
-        return None, {}, 0, f"{fixed[0]} has no accepted critical copper to tune"
+        return None, {}, (), f"{fixed[0]} has no accepted critical copper to tune"
     trial = list(committed)
     tuned: dict[tuple[str, ...], CriticalNetResult] = {}
-    bumps = 0
+    steps: list[MatchTuningUnit] = []
     breakout = BreakoutRegions(board)
     for index in units:
-        unit, unit_tracks, unit_vias = trial[index]
-        label = "/".join(unit)
-        own = [lengths[net] for net in unit if net in members]
-        need, aim = longest - max_skew_nm - min(own), longest - max(own)
-        if need <= 0:
+        unit = trial[index][0]
+        tuning, reason = _tune_unit(board, rules, base_tracks, base_vias, trial, index,
+                                    results[result_index[unit]], lengths, members, longest, max_skew_nm,
+                                    breakout)
+        if reason:
+            return None, {}, (), reason
+        if tuning is None:
             continue
-        if aim < need:
-            return None, {}, 0, (f"{label}: members differ by {max(own) - min(own)} nm, more than "
-                                 f"max_skew; a pair is tuned as one unit")
-        amplitudes = [rules[net].tuning_amplitude_limit_nm for net in unit
-                      if rules[net].tuning_amplitude_limit_nm is not None]
-        if not amplitudes:
-            return None, {}, 0, f"{label}: no tuning_amplitude_limit is declared"
-        spacing = 0
-        if len(unit) == 2:
-            first, second = rules[unit[0]], rules[unit[1]]
-            spacing = ((first.width_nm or board.rules.default_track_width_nm)
-                       + (first.pair_gap_nm or second.pair_gap_nm or 0))
-        clearance = max(board.rules.minimum_clearance_nm, *(rules[net].clearance_nm or 0 for net in unit))
-        other_tracks = [*base_tracks, *(t for position, (_, items, _) in enumerate(trial)
-                                        if position != index for t in items)]
-        other_vias = [*base_vias, *(v for position, (_, _, items) in enumerate(trial)
-                                    if position != index for v in items)]
-        tuner = UnitTuner(board, RoutingClearanceIndex(replace(board, tracks=tuple(other_tracks),
-                                                               vias=(*other_vias, *unit_vias))),
-                          unit_tracks, unit, spacing, min(amplitudes), clearance)
-        # Bumps add an even length: match the longest member (one nanometre
-        # over it only when an odd exact target leaves no choice), else add
-        # the least that brings the unit within max_skew (with breakout
-        # regions, the margin inside it).
-        full = aim - aim % 2 if aim - aim % 2 >= need else aim + 1
-        least = need + (min(_BREAKOUT_TUNING_MARGIN_NM, max_skew_nm) if breakout else 0)
-        least = min(full, least + least % 2)
-        reason = ""
-        for target in dict.fromkeys((full, least)):
-            proposed, count, reason = tuner.tune(target)
-            if proposed is None:
-                continue
-            if breakout:
-                # Guard: copper keeps the breakout width only inside a terminal
-                # land's region, and the net's own width outside it (plan R1),
-                # even if a bump crosses a region boundary.
-                proposed = tuple(piece for track in proposed for piece in breakout.split_tracks(
-                    (track,), rules[track.net].width_nm or board.rules.default_track_width_nm))
-            candidate = _retuned_result(board, rules, results[result_index[unit]], proposed, unit_vias)
-            if not candidate.diagnostics:
-                candidate, proposed, _ = _validate_candidate(
-                    board, candidate, proposed, unit_vias, other_tracks, other_vias)
-            if candidate.connected and not candidate.diagnostics:
-                trial[index] = (unit, proposed, unit_vias)
-                tuned[unit] = candidate
-                bumps += count
-                break
-            reason = _rejection_gate(candidate.diagnostics)[1]
-        else:
-            return None, {}, 0, f"{label}: {reason}"
-    return trial, tuned, bumps, ""
+        proposed, candidate, plan, added = tuning
+        trial[index] = (unit, proposed, trial[index][2])
+        tuned[unit] = candidate
+        steps.append(MatchTuningUnit(unit, "final", plan.style, added, plan.bumps, plan.legs, plan.amplitudes_nm))
+    return trial, tuned, tuple(steps), ""
+
+
+def _tune_unit(
+    board: PhysicalBoard, rules: dict[str, NetRoutingRule],
+    base_tracks: tuple[TrackSegment, ...], base_vias: tuple[Via, ...],
+    committed: _Committed, index: int, result: CriticalNetResult, lengths: dict[str, int],
+    members: set[str], longest: int, max_skew_nm: int, breakout: BreakoutRegions,
+) -> tuple[tuple[tuple[TrackSegment, ...], CriticalNetResult, UnitTuning, int] | None, str]:
+    """Tune the unit ``committed[index]`` toward ``longest``, against all other copper.
+
+    The unit's group members are first matched to ``longest``, else lengthened
+    by the least that brings them within ``max_skew``. Bumps or serpentines
+    follow the unit's ``tuning_style`` (plan R10). Returns the tuned copper,
+    its result, the plan and the added length; ``None`` when the unit is
+    already within the limit; or ``None`` and the reason it cannot be tuned.
+    """
+    unit, unit_tracks, unit_vias = committed[index]
+    label = "/".join(unit)
+    own = [lengths[net] for net in unit if net in members]
+    need, aim = longest - max_skew_nm - min(own), longest - max(own)
+    if need <= 0:
+        return None, ""
+    if aim < need:
+        return None, (f"{label}: members differ by {max(own) - min(own)} nm, more than "
+                      f"max_skew; a pair is tuned as one unit")
+    amplitudes = [rules[net].tuning_amplitude_limit_nm for net in unit
+                  if rules[net].tuning_amplitude_limit_nm is not None]
+    if not amplitudes:
+        return None, f"{label}: no tuning_amplitude_limit is declared"
+    spacing = 0
+    if len(unit) == 2:
+        first, second = rules[unit[0]], rules[unit[1]]
+        spacing = ((first.width_nm or board.rules.default_track_width_nm)
+                   + (first.pair_gap_nm or second.pair_gap_nm or 0))
+    clearance = max(board.rules.minimum_clearance_nm, *(rules[net].clearance_nm or 0 for net in unit))
+    gaps = [rules[net].tuning_spacing_nm for net in unit if rules[net].tuning_spacing_nm is not None]
+    other_tracks = [*base_tracks, *(t for position, (_, items, _) in enumerate(committed)
+                                    if position != index for t in items)]
+    other_vias = [*base_vias, *(v for position, (_, _, items) in enumerate(committed)
+                                if position != index for v in items)]
+    tuner = UnitTuner(board, RoutingClearanceIndex(replace(board, tracks=tuple(other_tracks),
+                                                           vias=(*other_vias, *unit_vias))),
+                      unit_tracks, unit, spacing, min(amplitudes), clearance,
+                      style=rules[unit[0]].tuning_style, leg_gap_nm=max(gaps) if gaps else None,
+                      vias=unit_vias)
+    # Bumps add an even length: match the longest member (one nanometre
+    # over it only when an odd exact target leaves no choice), else add
+    # the least that brings the unit within max_skew (with breakout
+    # regions, the margin inside it).
+    full = aim - aim % 2 if aim - aim % 2 >= need else aim + 1
+    least = need + (min(_BREAKOUT_TUNING_MARGIN_NM, max_skew_nm) if breakout else 0)
+    least = min(full, least + least % 2)
+    reason = ""
+    for target in dict.fromkeys((full, least)):
+        plan = tuner.plan(target)
+        proposed, reason = plan.tracks, plan.reason
+        if proposed is None:
+            continue
+        if breakout:
+            # Guard: copper keeps the breakout width only inside a terminal
+            # land's region, and the net's own width outside it (plan R1),
+            # even if a bump crosses a region boundary.
+            proposed = tuple(piece for track in proposed for piece in breakout.split_tracks(
+                (track,), rules[track.net].width_nm or board.rules.default_track_width_nm))
+        candidate = _retuned_result(board, rules, result, proposed, unit_vias)
+        if not candidate.diagnostics:
+            candidate, proposed, _ = _validate_candidate(
+                board, candidate, proposed, unit_vias, other_tracks, other_vias)
+        if candidate.connected and not candidate.diagnostics:
+            return (proposed, candidate, plan, target), ""
+        reason = _rejection_gate(candidate.diagnostics)[1]
+    return None, f"{label}: {reason}"
 
 
 def _retuned_result(

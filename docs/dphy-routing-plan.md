@@ -465,7 +465,7 @@ Shared rules for every item:
   (`test_pair_bumps_have_coupled_45_degree_corners_and_add_exact_lengths`)
   and the `test_tuning_*` D5 tests in `tests/test_critical_routing.py`.
 
-- [ ] **R10 S-shaped (two-sided) serpentines.** Today every tuning bump
+- [x] **R10 S-shaped (two-sided) serpentines.** Today every tuning bump
   leaves its run on one side, returns to the same line, and needs 3 × width
   of straight track before the next bump. An S-shaped serpentine alternates
   sides instead: the trace crosses the original line between legs and snakes
@@ -524,7 +524,31 @@ Shared rules for every item:
     - determinism;
     - boards without `tuning_style` route byte-identically.
 
-- [ ] **R12 Tune bundle pairs as they route.** R3 tunes a `length_match`
+  Done (CS-169): `TuningStyle` and `NetRoutingRule.tuning_style` /
+  `tuning_spacing_nm` (lowered, `CMP110`-checked, pair members must agree,
+  digest-bound only when not the default). `critical_tuning.UnitTuner(style=
+  SERPENTINE)` surveys `_windows`: tops on a grid of pitch lane width + leg
+  gap, each top's room measured like a bump over its two legs
+  (`_room` with the least top and largest foot chamfer), windows of two or
+  more tops with room on alternating sides. Refinements: legs on one line
+  share one chamfer leg c, R9's rule on every leg (`_window_chamfer`), so each
+  leg costs both members exactly `_leg_loss(c)` whatever the heights; tops
+  are levelled with any remaining bumps by R3's `_levelled`, and c is lowered
+  until it suits every leg and makes the length exact. Tops lower than d + 2
+  nm cannot have coupled corners, so small additions (on a 0.14/0.26 mm pair
+  below about 0.53 mm) fall back to bumps. Serpentine units also join collinear
+  pieces (`_straight_lines`): breakout-region cuts had split the test board's
+  source lanes into runs under 2 mm, too short for any bump slot; bump-style
+  units keep per-piece runs, so they tune byte-identically. One serpentine per
+  line, most capacity first, the last trimmed (`_trimmed`); other lines keep
+  bumps; at most `MATCH_TUNING_LEG_LIMIT` = 32 legs; a unit whose serpentines
+  fall short gets R3's bumps alone. Report: `UnitTuning` per step and
+  `MatchTuningUnit` (`units`, with style, legs and amplitudes, and `legs` in
+  the group entry, only when a step used a serpentine or ran while routing);
+  the preflight line then lists each step. Tests:
+  `tests/test_serpentine_tuning.py`.
+
+- [x] **R12 Tune bundle pairs as they route.** R3 tunes a `length_match`
   group only after every critical group is accepted. By then each bundle
   pair sits at the clearance limit next to its neighbours, so a pair hemmed
   in on both sides has no room for even one bump. On a test bundle, a 7 mm
@@ -544,6 +568,37 @@ Shared rules for every item:
   - **Tests:** a hemmed-in bundle that R3 cannot tune and R12 tunes within
     `max_skew` with native DRC clean; identity without match groups;
     determinism.
+
+  Done (CS-170): `critical._tune_bundle_pairs` runs after each accepted
+  bundle pair of a `length_match` group and tunes every accepted pair of the
+  bundle that is short of the longest accepted member (`_tune_unit`, shared
+  with R3). Refinements: (1) not only the pair just accepted: pairs routed
+  before the longest are topped up as soon as it is accepted, while their
+  inner neighbours are still unrouted. On the test board the source bundle
+  routes DA2 and DA1 first and the longest lane DA3 third, so the plan as
+  written would have left them to the final pass. (2) No prediction of the
+  longest member: guide lengths were 8.0–13.5 mm against routed 7.2–14.0 mm
+  there, land-to-land distances miss corner wraps by several millimetres,
+  and a pair tuned past the true longest cannot be shortened. (3) No room is
+  reserved for a pair's own later serpentine or for its neighbours: tuning
+  claims room as copper. A trial that kept the unrouted pairs' land hulls
+  clear left R12 unable to tune any hemmed pair, while tuning into a later
+  pair's way once left that pair with no candidate. So when a later bundle
+  pair finds no candidate, the bundle's tuning from routing is removed and
+  the pair searched once more before any rip-up repair. A pair that fails is
+  retried only after re-routing or when the target grows (`failed_targets`).
+  The final pass tops up the rest. Report: `match_tuning` `units` with
+  `stage` `routing`, lengths before tuning as routed; preflight lines name
+  each step. On the test board (both groups at 0.127 mm, CSI rules
+  `tuning_style = "serpentine"`, amplitudes 0.3/0.35 mm), the source group
+  goes from 0.249 to 0.083 mm (DA2 and DA1 +0.249 mm, CK +0.166 mm, one bump
+  each, tuned while routing), all ten pairs connect, the lane review keeps
+  0.521 mm outside the breakouts and no bend over 45°. The sink group fails:
+  it needs 3.2 mm (D3) to 5.1 mm (CK, D0, D1) per pair, but its open straight
+  runs are 1.4–4.9 mm and neighbouring pairs at the connector's 1.2 mm pitch
+  leave 0.14 mm on each side, below the 0.234 mm a 0.14/0.26 mm pair's
+  coupled corners need, so no serpentine fits and bumps reach 0.34–1.0 mm per
+  pair. Tests: `tests/test_bundle_tuning.py`.
 
 - [x] **R13 Surface-only package escapes.** Package access gives each
   fine-pitch pin of an ordinary net a via dogbone (`pcbir/fanout.py`) or a
