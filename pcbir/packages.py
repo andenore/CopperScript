@@ -424,7 +424,7 @@ def resolve_module_root(source: Path, module_path: str, *, locked: bool = True,
 _LOCKED_SUFFIXES = frozenset({
     ".copper", ".kicad_mod", ".step", ".stp", ".wrl", ".json", ".csv"
 })
-_IGNORED_PARTS = frozenset({".git", ".copper-cache", "__pycache__", ".pytest_cache"})
+_IGNORED_PARTS = frozenset({".git", ".copper-cache", "cache", "__pycache__", ".pytest_cache"})
 
 
 def _module_inventory(root: Path) -> tuple[LockedFile, ...]:

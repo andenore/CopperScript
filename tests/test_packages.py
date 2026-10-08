@@ -151,6 +151,31 @@ def test_locked_mode_rejects_missing_lock_and_tracks_assets(tmp_path: Path) -> N
     assert captured.value.code == "PKG008"
 
 
+def test_ignored_download_cache_does_not_change_local_module_lock(tmp_path: Path) -> None:
+    package = tmp_path / "deps" / "parts"
+    package.mkdir(parents=True)
+    (package / "part.copper").write_text(
+        'part R { pin A { number = "1"; domains = "analog"; directions = "passive"; } }',
+        encoding="utf-8",
+    )
+    (tmp_path / "copper.mod").write_text(
+        "module test/board\nrequire github.com/vendor/lib v1\n"
+        "replace github.com/vendor/lib => ./deps\n",
+        encoding="utf-8",
+    )
+    board_path = tmp_path / "board.copper"
+    board_path.write_text(
+        'board B { import p "github.com/vendor/lib/parts"; component R1: p.R; net N { R1.A; } }',
+        encoding="utf-8",
+    )
+    compile_file(board_path, offline=True)
+    cache = tmp_path / "deps" / "cache" / "parts"
+    cache.mkdir(parents=True)
+    (cache / "downloaded.json").write_text('{"downloaded": true}\n', encoding="utf-8")
+    compile_file(board_path, locked=True, offline=True)
+    assert 'cache/parts/downloaded.json' not in (tmp_path / "copper.lock").read_text(encoding="utf-8")
+
+
 def test_manifest_rejects_replacement_without_requirement(tmp_path: Path) -> None:
     manifest_path = tmp_path / "copper.mod"
     manifest_path.write_text(

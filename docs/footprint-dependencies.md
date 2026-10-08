@@ -101,6 +101,8 @@ resolution downloads a complete module; subsequent builds reuse it.
 A lockfile alone does not contain the geometry. Prepare the cache before using
 both flags. The editor already uses both flags, so prepare the project with
 `copper lock` before opening an uncached managed-footprint design there.
+For a local module replacement, the module's `cache/` directory is excluded
+from the inventory so downloaded evidence cannot change a reproducible lock.
 
 `copper check`/`compile` resolve imported source dependencies but do not download
 geometry merely because a part declares a footprint. `copper lock` prepares only
