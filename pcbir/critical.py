@@ -318,7 +318,11 @@ def route_critical_nets(
     bundle (same two components, kind and priority) are routed outermost
     first along their terminal row. A bundle pair that fails on spacing
     against an earlier pair of its bundle may rip that pair up once per
-    attempt, at most ``bundle_repair_limit`` attempts per bundle.
+    attempt, at most ``bundle_repair_limit`` attempts per bundle. A bundle
+    pair that fails without any spacing finding (its search found no
+    candidate at all) tries its two physically nearest routed bundle pairs
+    instead (``_bundle_neighbours``): a pair squeezed between earlier pairs
+    then routes first and its neighbours route around it.
 
     With ``plan_crossings``, the pairs of a bundle that must cross others
     (their order is inverted at the two ends) are routed first, each with one
@@ -453,6 +457,10 @@ def route_critical_nets(
                 suspects = [entry for entry, entry_tracks, entry_vias in committed
                             if entry in bundle_groups and (entry_tracks or entry_vias)
                             and blockers.intersection(entry)]
+                if not suspects and not blockers:
+                    suspects = _bundle_neighbours(board, group, [
+                        entry for entry, entry_tracks, entry_vias in committed
+                        if entry in bundle_groups and (entry_tracks or entry_vias)])
                 for blocker in suspects:
                     if len(repairs[index]) >= bundle_repair_limit:
                         break
@@ -954,6 +962,31 @@ def _crossing_site_rank(
             return 0
         return 0 if all(point_in_polygon(via.position, corridor) for via in vias) else 1
     return rank
+
+
+def _bundle_neighbours(
+    board: PhysicalBoard, group: tuple[str, ...], routed: list[tuple[str, ...]],
+) -> list[tuple[str, ...]]:
+    """The two routed bundle pairs whose lands lie nearest ``group``'s.
+
+    Distance is the sum, over both terminal components, of the distance
+    between the two pairs' mean land positions; ties keep ``routed`` order.
+    """
+    from .critical_bundles import _group_lands
+
+    nets = {item.name: item for item in board.nets}
+    placements = {item.reference: item for item in board.placements}
+    own = _group_lands(board, nets, placements, group)
+    if own is None:
+        return []
+    ranked = []
+    for position, entry in enumerate(routed):
+        lands = _group_lands(board, nets, placements, entry)
+        if lands is None or set(lands) != set(own):
+            continue
+        ranked.append((sum(hypot(own[ref].x_nm - lands[ref].x_nm, own[ref].y_nm - lands[ref].y_nm)
+                           for ref in own), position, entry))
+    return [entry for _, _, entry in sorted(ranked)[:2]]
 
 
 def _bundle_repair(

@@ -297,6 +297,10 @@ Shared rules for every item:
   routes them in the bundle's slots and runs `_bundle_repair` (at most
   `BUNDLE_REPAIR_LIMIT` = 4 attempts per bundle, `bundle_repair_limit`
   argument). The critical report lists `bundles` with order and repairs.
+  A pair that fails with no candidate at all (no spacing finding names a
+  blocker) tries its two physically nearest routed bundle pairs instead
+  (`_bundle_neighbours`): a middle pair squeezed by a pair-to-pair clearance
+  larger than the package pitch allows routes first, its neighbour after.
   Tests: `tests/test_critical_bundles.py`.
 - [x] **R5 Planned crossings.** When the pair order at the two ends of a
   bundle is inverted, as on a symmetric CSI pinout, plan one paired layer swap

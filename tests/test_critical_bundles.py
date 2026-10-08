@@ -197,6 +197,28 @@ def test_bundle_repair_rips_up_a_blocking_pair_and_reroutes_both() -> None:
                                     "accepted": True, "reason": "both groups accepted"}]
 
 
+def test_a_squeezed_pair_without_spacing_findings_rips_up_its_nearest_neighbour() -> None:
+    # Package pairs at 1.0 mm pitch fan out to 1.2 mm at the connector; with
+    # 0.52 mm clearance outside 2 mm breakouts the outer pairs, routed first,
+    # leave the middle pair no candidate at all, so no spacing finding names a
+    # blocker. Its physically nearest routed pair is ripped up instead.
+    board = _bundle_board(_rows(("-1.0", "0", "1.0"), "0.5"), _rows(("-1.2", "0", "1.2"), "0.4"))
+    board = replace(board, net_routing_rules=tuple(replace(
+        rule, width_nm=nm_from_mm("0.14"), pair_gap_nm=nm_from_mm("0.26"), clearance_nm=nm_from_mm("0.52"),
+        breakout_length_nm=nm_from_mm("2"), breakout_clearance_nm=nm_from_mm("0.1"),
+        breakout_gap_nm=nm_from_mm("0.2")) for rule in board.net_routing_rules))
+    guides = route_global(board)
+    without = route_critical_nets(board, guides, pair_state_limit=20000, bundle_repair_limit=0)
+    middle = next(item for item in without.nets if item.nets == _group("LANE_A"))
+    assert not middle.connected and middle.candidate_attempts == 0
+    result = route_critical_nets(board, guides, pair_state_limit=20000)
+    (bundle,) = result.bundles
+    assert all(item.connected for item in result.nets)
+    assert [(item.failed, item.ripped_up, item.accepted) for item in bundle.repairs] == [
+        (_group("LANE_A"), _group("LANE_B"), True)]
+    assert not {f.code for f in run_physical_drc(result.board).findings} & {"DRC-SHORT", "DRC-CLEARANCE"}
+
+
 def test_rejected_bundle_repair_restores_the_previous_state_exactly() -> None:
     board = _repair_board(*UNREPAIRABLE)
     guides = route_global(board)

@@ -969,8 +969,11 @@ state is restored exactly. Candidates are the blocking groups in acceptance
 order, one per attempt, at most 4 attempts per bundle (the
 `bundle_repair_limit` argument of `route_critical_nets`; `BUNDLE_REPAIR_LIMIT`
 in `pcbir.critical_bundles`). Spacing findings come from the coarse candidate
-and from exact candidates; an exact search that finds no candidate at all is
-not evidence of a blocking group and triggers no repair. A repaired group keeps
+and from exact candidates. When the failed group has no spacing finding at all
+(its exact searches found no candidate, as for a middle pair squeezed between
+pairs routed before it), the candidates are instead its two physically nearest
+accepted groups of the bundle, by the distance between the pairs' mean land
+positions at both components. A repaired group keeps
 its place in the report and is committed after the failed group; progress
 reports it again as `started`/`finished`. The critical report's `bundles` list
 gives, per bundle, the `components`, `kind`, `priority`, the `order` used,
