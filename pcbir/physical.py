@@ -1323,6 +1323,22 @@ class TrackSegment:
 
 
 @dataclass(frozen=True, slots=True)
+class CopperPolygon:
+    """Fixed, netted single-layer copper; unlike a zone it needs no refill."""
+
+    id: str
+    net: str
+    layer: CopperLayer
+    outline: PolygonRing
+
+    def __post_init__(self) -> None:
+        if not self.id or not self.net:
+            raise ValueError("fixed copper polygon requires an id and net")
+        from .mechanical import validated_ring
+        object.__setattr__(self, "outline", PolygonRing(validated_ring(self.outline.vertices)))
+
+
+@dataclass(frozen=True, slots=True)
 class Via:
     net: str
     position: Point
@@ -1405,15 +1421,16 @@ class PhysicalHardMacro:
     isolated_pads: tuple[PadReference, ...] = ()
     zones: tuple[CopperZone, ...] = field(default=(), repr=False)
     plane_returns: tuple[MacroPlaneReturn, ...] = field(default=(), repr=False)
+    polygons: tuple[CopperPolygon, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
-        for name in ("tracks", "vias", "ports", "protected_regions", "required_layers", "pad_bindings", "isolated_pads", "zones", "plane_returns"):
+        for name in ("tracks", "vias", "ports", "protected_regions", "required_layers", "pad_bindings", "isolated_pads", "zones", "plane_returns", "polygons"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         if not self.cluster or len(self.asset_sha256) != 64 or any(
             c not in "0123456789abcdef" for c in self.asset_sha256
         ):
             raise ValueError("hard macro requires a cluster and SHA-256 asset identity")
-        if not self.tracks and not self.vias:
+        if not self.tracks and not self.vias and not self.polygons:
             raise ValueError("hard macro requires explicit copper")
         if len({p.name for p in self.ports}) != len(self.ports):
             raise ValueError("hard macro port names must be unique")
@@ -1421,6 +1438,8 @@ class PhysicalHardMacro:
             raise ValueError("hard macro protected region IDs must be unique")
         if len({z.id for z in self.zones}) != len(self.zones):
             raise ValueError("hard macro zone IDs must be unique")
+        if len({p.id for p in self.polygons}) != len(self.polygons):
+            raise ValueError("hard macro polygon IDs must be unique")
         if any(r.outline.holes or not r.block_tracks or not r.block_vias
                for r in self.protected_regions):
             raise ValueError("macro access reservations require solid track/via-blocking polygons")
@@ -1448,6 +1467,7 @@ class PhysicalBoard:
     power_domains: tuple[PhysicalPowerDomain, ...] = ()
     net_routing_rules: tuple[NetRoutingRule, ...] = ()
     zones: tuple[CopperZone, ...] = ()
+    polygons: tuple[CopperPolygon, ...] = ()
     copper_keepouts: tuple[CopperKeepout, ...] = ()
     zone_fills: tuple[ZoneFillResult, ...] = ()
     rigid_clusters: tuple[RigidPlacementCluster, ...] = ()
@@ -1484,6 +1504,7 @@ class PhysicalBoard:
         object.__setattr__(self, "power_domains", tuple(self.power_domains))
         object.__setattr__(self, "net_routing_rules", tuple(self.net_routing_rules))
         object.__setattr__(self, "zones", tuple(self.zones))
+        object.__setattr__(self, "polygons", tuple(self.polygons))
         object.__setattr__(self, "copper_keepouts", tuple(self.copper_keepouts))
         object.__setattr__(self, "zone_fills", tuple(self.zone_fills))
         object.__setattr__(self, "rigid_clusters", tuple(self.rigid_clusters))
@@ -1552,6 +1573,8 @@ class PhysicalBoard:
         zone_ids = [zone.id for zone in self.zones]
         if len(zone_ids) != len(set(zone_ids)):
             raise ValueError("copper zone ids must be unique")
+        if len({polygon.id for polygon in self.polygons}) != len(self.polygons):
+            raise ValueError("fixed copper polygon ids must be unique")
         keepout_ids = [keepout.id for keepout in self.copper_keepouts]
         if len(keepout_ids) != len(set(keepout_ids)):
             raise ValueError("copper keepout ids must be unique")
@@ -1561,6 +1584,9 @@ class PhysicalBoard:
                 raise ValueError(f"copper zone {zone.id!r} references unknown net {zone.net!r}")
             if not set(zone.layers).issubset(stackup_layers):
                 raise ValueError(f"copper zone {zone.id!r} references a layer outside the stackup")
+        for polygon in self.polygons:
+            if polygon.net not in net_names or polygon.layer not in stackup_layers:
+                raise ValueError(f"fixed copper polygon {polygon.id!r} has an unknown net or layer")
         from .zone_geometry import validate_routing_reservations
         validate_routing_reservations(self.zones)
         for keepout in self.copper_keepouts:

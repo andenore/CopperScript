@@ -359,3 +359,35 @@ def _spine_edges(spine: tuple[Point, ...]) -> tuple[tuple[Point, Point], ...]:
     if len(spine) == 2:
         return ((spine[0], spine[1]),)
     return tuple(zip(spine, (*spine[1:], spine[0])))
+
+
+def polygon_triangles(vertices: tuple[Point, ...]) -> tuple[tuple[Point, Point, Point], ...]:
+    """Partition a validated simple ring into convex contacts without fill claims."""
+    # ponytail: cubic ear clipping is sufficient for small authored macro rings;
+    # use a sweep triangulator only if large imported polygons are supported.
+    points = list(vertices)
+    area = sum(a.x_nm * b.y_nm - b.x_nm * a.y_nm
+               for a, b in zip(points, (*points[1:], points[0])))
+    sign = 1 if area > 0 else -1
+
+    def cross(a: Point, b: Point, c: Point) -> int:
+        return (b.x_nm-a.x_nm)*(c.y_nm-a.y_nm)-(b.y_nm-a.y_nm)*(c.x_nm-a.x_nm)
+
+    triangles = []
+    while len(points) > 3:
+        for index, middle in enumerate(points):
+            first, last = points[index-1], points[(index+1) % len(points)]
+            if sign * cross(first, middle, last) <= 0:
+                continue
+            if any(point not in (first, middle, last) and all(
+                    sign * cross(a, b, point) >= 0
+                    for a, b in ((first, middle), (middle, last), (last, first)))
+                    for point in points):
+                continue
+            triangles.append((first, middle, last))
+            points.pop(index)
+            break
+        else:
+            raise ValueError("fixed copper polygon cannot be triangulated")
+    triangles.append(tuple(points))
+    return tuple(triangles)

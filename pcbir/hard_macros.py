@@ -15,11 +15,11 @@ from pathlib import Path
 
 from .clusters import (cluster_placement_matches, footprint_geometry_digest,
                        legacy_footprint_geometry_digest)
-from .geometry import RoundedConvexShape, circle_inside_shape, point_in_polygon, segment_in_polygon, segments_intersect, shapes_clear
+from .geometry import RoundedConvexShape, circle_inside_shape, point_in_polygon, polygon_triangles, segment_in_polygon, segments_intersect, shapes_clear
 from .placement import transformed_local_point
 from .syntax import CopperScriptError
 from .physical import (
-    BoardSide, ComponentPlacementRule, CopperKeepout, CopperLayer, CopperZone, MacroPadBinding, MacroPlaneReturn, MacroPort, PadReference,
+    BoardSide, ComponentPlacementRule, CopperKeepout, CopperLayer, CopperPolygon, CopperZone, MacroPadBinding, MacroPlaneReturn, MacroPort, PadReference,
     PhysicalBoard, PhysicalHardMacro, PhysicalNet, PlacementTarget,
     PadKind, Point, PolygonRing, PolygonWithHoles, RigidPlacementCluster, ZoneConnection,
     RigidPlacementMember, TrackSegment, Via,
@@ -75,7 +75,7 @@ def _macro_footprint_digest(footprint, reference, asset):
 def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
                     name: str, bindings: dict[str, str], net_bindings: dict[str, str]) -> PhysicalBoard:
     """Bind pinned data only. Never execute, fetch, rewire or move components."""
-    if board.tracks or board.vias or board.zone_fills or board.materialized_macros:
+    if board.tracks or board.vias or board.polygons or board.zone_fills or board.materialized_macros:
         raise ValueError("hard-macro binding requires an unrouted, unfilled board")
     raw = Path(asset).read_bytes()
     if sha256(raw).hexdigest() != expected_sha256:
@@ -84,10 +84,12 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
         data = json.loads(raw)
         version = data["schema"]
         fields = "schema source production_publishable anchor members pad_nets isolated_pads tracks vias ports protected_regions keepouts required_layers allowed_rotations internal_clearance_nm unresolved"
-        if version == "copperlib-physical-hard-macro/v0.2":
+        if version in {"copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3"}:
             fields += " zones plane_returns"
+        if version == "copperlib-physical-hard-macro/v0.3":
+            fields += " polygons"
         _keys(data, fields)
-        if version not in {"copperlib-physical-hard-macro/v0.1", "copperlib-physical-hard-macro/v0.2"} or data["production_publishable"] is not False:
+        if version not in {"copperlib-physical-hard-macro/v0.1", "copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3"} or data["production_publishable"] is not False:
             raise ValueError("unsupported macro qualification/schema")
         sources = {m["reference"] for m in data["members"]}
         if len(sources) != len(data["members"]) or set(bindings) != sources or len(set(bindings.values())) != len(sources):
@@ -191,6 +193,12 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
                 PolygonWithHoles(PolygonRing(vertices)),
                 priority=row["priority"], clearance_nm=row["clearance_nm"],
                 minimum_width_nm=row["minimum_width_nm"], pad_connection=ZoneConnection(row["pad_connection"])))
+        polygons = []
+        for row in data.get("polygons", ()):
+            _keys(row, "id net layer vertices")
+            from .mechanical import validated_ring
+            polygons.append(CopperPolygon(f"{name}/{row['id']}", net_bindings[row["net"]],
+                CopperLayer(row["layer"]), PolygonRing(validated_ring(tuple(_point(p) for p in row["vertices"])))))
         plane_returns = []
         for row in data.get("plane_returns", ()):
             _keys(row, "net layers pads dedicated_contacts")
@@ -209,7 +217,7 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
             tuple(region(r) for r in data["protected_regions"]), tuple(CopperLayer(x) for x in data["required_layers"]),
             tuple(MacroPadBinding(pads[ref,pad],net_bindings[role]) for ref,pad,role in data["pad_nets"]),
             tuple(PadReference(bindings[ref],pad) for ref,pad in data["isolated_pads"]),
-            tuple(zones), tuple(plane_returns))
+            tuple(zones), tuple(plane_returns), tuple(polygons))
         return replace(board, rigid_clusters=(*board.rigid_clusters, cluster), hard_macros=(*board.hard_macros, macro),
             placement_rules=tuple(rules.values()),
             metadata={**board.metadata, "physical_hard_macros": "experimental-unqualified", "fabrication_ready": "false"})
@@ -239,6 +247,17 @@ def resolved_macro_zones(board, macro, placements=None):
         transformed_local_point(frame, p) for p in zone.outline.outer.vertices)))) for zone in macro.zones)
 
 
+def resolved_macro_polygons(board, macro, placements=None):
+    """Resolve exact owner copper at the same rigid pose as tracks and zones."""
+    cluster = next(c for c in board.rigid_clusters if c.name == macro.cluster)
+    poses = placements if placements is not None else {p.reference: p for p in board.placements}
+    anchor = poses[cluster.anchor.reference]
+    local_anchor = next(m for m in cluster.members if m.reference == anchor.reference)
+    frame = replace(anchor, position=transformed_local_point(anchor, Point(-local_anchor.position.x_nm, -local_anchor.position.y_nm)))
+    return tuple(replace(polygon, outline=PolygonRing(tuple(
+        transformed_local_point(frame, p) for p in polygon.outline.vertices))) for polygon in macro.polygons)
+
+
 def _zone_outlines_overlap(first, second):
     """Conservative closed-polygon collision check; v0.2 zones have no holes."""
     if not set(first.layers).intersection(second.layers):
@@ -251,7 +270,8 @@ def _zone_outlines_overlap(first, second):
 
 
 def _host_zone_overlaps_macro(board, macro, hosts):
-    layers = {layer for zone in macro.zones for layer in zone.layers}
+    layers = ({layer for zone in macro.zones for layer in zone.layers}
+              | {polygon.layer for polygon in macro.polygons})
     if not layers:
         return False
     return any(_zone_outlines_overlap(host, replace(region, layers=tuple(layers.intersection(region.layers))))
@@ -295,6 +315,7 @@ def validate_hard_macros(board):
         layers.update(p.layer for p in macro.ports)
         layers.update(l for r in macro.protected_regions for l in r.layers)
         layers.update(l for z in macro.zones for l in z.layers)
+        layers.update(p.layer for p in macro.polygons)
         layers.update(l for r in macro.plane_returns for l in r.layers)
         if not layers <= set(board.stackup.copper_layers):
             raise ValueError("hard-macro layer contract does not match the stackup")
@@ -304,6 +325,13 @@ def validate_hard_macros(board):
             if not all(any(layer in region.layers and all(segment_in_polygon(a, b, region.outline.outer.vertices)
                        for a, b in edges) for region in macro.protected_regions) for layer in zone.layers):
                 raise ValueError("hard-macro zone must stay inside its protected region")
+        for polygon in macro.polygons:
+            points = polygon.outline.vertices
+            edges = tuple(zip(points, (*points[1:], points[0])))
+            if not any(polygon.layer in region.layers and all(
+                    segment_in_polygon(a, b, region.outline.outer.vertices) for a, b in edges)
+                    for region in macro.protected_regions):
+                raise ValueError("hard-macro polygon must stay inside its protected region")
         members = {m.reference for m in clusters[macro.cluster].members}
         if len({b.pad for b in macro.pad_bindings}) != len(macro.pad_bindings):
             raise ValueError("duplicate hard-macro pad/net bindings")
@@ -316,7 +344,7 @@ def validate_hard_macros(board):
             if pad.component not in members or pad in assigned or not any(
                 p.number == pad.pad for p in board.footprints[poses[pad.component].footprint].pads):
                 raise ValueError("hard-macro isolated pad must remain physically present and unassigned")
-        for item in (*macro.tracks, *macro.vias, *macro.ports, *macro.zones):
+        for item in (*macro.tracks, *macro.vias, *macro.ports, *macro.zones, *macro.polygons):
             if item.net not in nets:
                 raise ValueError("hard macro references an unknown net")
         for port in macro.ports:
@@ -339,6 +367,8 @@ def validate_hard_macros(board):
                     or len({xy for _, xy in plane.dedicated_contacts}) != len(plane.dedicated_contacts)):
                 raise ValueError("macro plane contacts require distinct pads and vias")
     if not board.materialized_macros:
+        if board.polygons:
+            raise ValueError("fixed copper polygons require a materialized hard-macro owner")
         return
     poses = {p.reference: p for p in board.placements}
     if not cluster_placement_matches(board, poses):
@@ -346,6 +376,7 @@ def validate_hard_macros(board):
     owned_tracks = Counter()
     owned_vias = Counter()
     owned_zones = {}
+    owned_polygons = {}
     for m in board.hard_macros:
         if m.cluster in board.materialized_macros:
             t, v, _, _ = resolved_macro_geometry(board, m)
@@ -356,11 +387,20 @@ def validate_hard_macros(board):
                 if zone.id in owned_zones:
                     raise ValueError("duplicate hard-macro zone owner")
                 owned_zones[zone.id] = zone
+            for polygon in resolved_macro_polygons(board, m):
+                if polygon.id in owned_polygons:
+                    raise ValueError("duplicate hard-macro polygon owner")
+                owned_polygons[polygon.id] = polygon
     if owned_tracks - Counter(board.tracks) or owned_vias - Counter(board.vias):
         raise ValueError("immutable hard-macro copper was changed or removed")
     board_zones = {z.id: z for z in board.zones}
     if any(board_zones.get(zone_id) != zone for zone_id, zone in owned_zones.items()):
         raise ValueError("immutable hard-macro zone was changed or removed")
+    board_polygons = {p.id: p for p in board.polygons}
+    if any(board_polygons.get(polygon_id) != polygon for polygon_id, polygon in owned_polygons.items()):
+        raise ValueError("immutable hard-macro polygon was changed or removed")
+    if set(board_polygons) != set(owned_polygons):
+        raise ValueError("new fixed copper polygon intrudes into a protected hard macro")
     host_zones = tuple(zone for zone in board.zones if zone.id not in owned_zones)
     if any(_host_zone_overlaps_macro(board, macro, host_zones) for macro in board.hard_macros
            if macro.cluster in board.materialized_macros):
@@ -392,6 +432,12 @@ def validate_hard_macros(board):
             if any(span.intersection(r.layers) and not shapes_clear(shape,RoundedConvexShape(r.outline.outer.vertices),1)
                    for r in other_regions):
                 raise ValueError("hard-macro via intrudes into another macro reservation")
+        for polygon in resolved_macro_polygons(board, owner):
+            if any(polygon.layer in region.layers and any(not shapes_clear(
+                    RoundedConvexShape(triangle), RoundedConvexShape(region.outline.outer.vertices), 1)
+                    for triangle in polygon_triangles(polygon.outline.vertices))
+                    for region in other_regions):
+                raise ValueError("hard-macro polygon intrudes into another macro reservation")
     for track in (Counter(board.tracks) - owned_tracks).elements():
         shape = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
         if any(track.layer in r.layers and not shapes_clear(shape, RoundedConvexShape(r.outline.outer.vertices), 1) for r in regions):
@@ -444,23 +490,24 @@ def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
         return board  # idempotent; no duplicate owner copper
     if not board.hard_macros:
         return board
-    if board.tracks or board.vias or board.zone_fills:
+    if board.tracks or board.vias or board.polygons or board.zone_fills:
         raise ValueError("macro materialization must precede all routing and fill")
     poses = {p.reference: p for p in board.placements}
     if not cluster_placement_matches(board, poses):
         raise ValueError("place the complete rigid macro before materializing copper")
-    tracks, vias, zones = [], [], []
+    tracks, vias, zones, polygons = [], [], [], []
     for macro in board.hard_macros:
         t, v, _, _ = resolved_macro_geometry(board, macro)
         tracks.extend(t)
         vias.extend(v)
         zones.extend(resolved_macro_zones(board, macro))
+        polygons.extend(resolved_macro_polygons(board, macro))
     if any(_host_zone_overlaps_macro(board, macro, board.zones) for macro in board.hard_macros):
         raise ValueError("host zone overlaps a private hard-macro region")
     if any(_zone_outlines_overlap(zone, other) for index, zone in enumerate(zones)
            for other in zones[:index]):
         raise ValueError("private hard-macro zones overlap")
-    result = replace(board, tracks=tuple(tracks), vias=tuple(vias), zones=(*board.zones, *zones),
+    result = replace(board, tracks=tuple(tracks), vias=tuple(vias), zones=(*board.zones, *zones), polygons=tuple(polygons),
         materialized_macros=tuple(m.cluster for m in board.hard_macros),
         metadata={**board.metadata, "fabrication_ready": "false"})
     from .drc import DrcSeverity, PhysicalDrcPolicy, run_physical_drc, explicit_copper_connectivity
@@ -479,7 +526,7 @@ def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
             {p.footprint:result.footprints[p.footprint] for p in poses}, poses,
             tuple(PhysicalNet(n.name,tuple(p for p in n.pads if p.component in members)) for n in result.nets),
             stackup=result.stackup, rules=result.rules, tracks=t, vias=v)
-        graph = explicit_copper_connectivity(owner)
+        graph = explicit_copper_connectivity(owner, polygons=resolved_macro_polygons(result, macro))
         # A wholly private net has no boundary port that could prove it later.
         # Check all its physical lands now; never borrow another owner's copper.
         port_nets = {port.net for port in ports}
@@ -601,7 +648,7 @@ def macro_source(board):
     """Recover an unrouted source; NEVER discard ordinary or critical copper."""
     if board.zone_fills:
         raise ValueError("routing planning requires an unfilled source")
-    if not board.tracks and not board.vias and not board.materialized_macros:
+    if not board.tracks and not board.vias and not board.polygons and not board.materialized_macros:
         return board
     validate_hard_macros(board)
     tracks, vias = Counter(), Counter()
@@ -613,7 +660,11 @@ def macro_source(board):
     if Counter(board.tracks) != tracks or Counter(board.vias) != vias:
         raise ValueError("routing planning requires no copper except immutable hard macros")
     owned_zone_ids = {zone.id for macro in board.hard_macros for zone in resolved_macro_zones(board, macro)}
+    owned_polygon_ids = {polygon.id for macro in board.hard_macros for polygon in resolved_macro_polygons(board, macro)}
+    if {p.id for p in board.polygons} != owned_polygon_ids:
+        raise ValueError("routing planning requires no copper except immutable hard macros")
     return replace(board, tracks=(), vias=(), zones=tuple(z for z in board.zones if z.id not in owned_zone_ids),
+                   polygons=(),
                    materialized_macros=())
 
 

@@ -92,6 +92,40 @@ def test_owned_local_zone_is_immutable_and_does_not_defer_external_routing(tmp_p
         bind()
 
 
+@pytest.mark.parametrize("rotation", [45, 90])
+def test_fixed_polygon_is_netted_explicit_copper_and_immutable(tmp_path, rotation):
+    from pcbir.drc import explicit_copper_connectivity
+    from pcbir.hard_macros import macro_source
+    from pcbir.backends.kicad_pcb import KiCadPcbBackend
+    _, asset, bind = fixture(tmp_path)
+    asset["schema"] = "copperlib-physical-hard-macro/v0.3"
+    asset["zones"] = []
+    asset["plane_returns"] = []
+    asset["polygons"] = [dict(id="bridge", net="signal", layer="F.Cu", vertices=[
+        [1400000,-200000],[2200000,-200000],[2200000,200000],
+        [1900000,200000],[1900000,100000],[1400000,100000]])]
+    asset["tracks"][0]["points"] = [{"pad":["chip","1"]},[1500000,0]]
+    board = materialize_hard_macros(bind())
+    assert explicit_copper_connectivity(board).net_connected(board.nets[0])
+    assert board.polygons[0].id == "unit/bridge"
+    assert not macro_source(board).polygons
+    manifest = KiCadPcbBackend().generate(board)
+    assert manifest.target_version == "10.0"
+    copper = manifest.artifacts[0].content.split("(gr_poly", 1)[1].split("\n  )", 1)[0]
+    assert "(fill yes)" in copper and "(locked yes)" in copper and "(net 1)" in copper
+    with pytest.raises(ValueError, match="immutable hard-macro polygon"):
+        replace(board, polygons=())
+    rotated = bind()
+    poses = {p.reference:p for p in rotated.placements}
+    poses.update(cluster_placements(rotated, rotated.rigid_clusters[0],
+                                    replace(poses["U1"], rotation_degrees=rotation)))
+    turned = materialize_hard_macros(replace(rotated, placements=tuple(poses.values())))
+    assert turned.polygons[0].outline != board.polygons[0].outline
+    asset["polygons"][0]["vertices"][1] = [4000000,-200000]
+    with pytest.raises(ValueError, match="inside its protected region"):
+        bind()
+
+
 def test_plane_return_requires_real_via_and_declared_plane(tmp_path):
     from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles
     _, asset, bind = fixture(tmp_path)

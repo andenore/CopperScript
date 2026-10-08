@@ -15,6 +15,7 @@ KiCad footprints installed:
 
 Use `--copperlib PATH`, `--output-dir PATH`, `--footprint-root PATH`,
 `--enabled`, or `--rotation 90` to vary the isolated probe. The script runs
-KiCad refill and DRC when `kicad-cli` is installed, and requires each owned
-area to have actual filled copper. This is a geometry probe,
+KiCad 10 refill and DRC when `kicad-cli` is installed, and requires each owned
+zone to have actual filled copper and the fixed SW polygon to remain netted.
+This is a geometry probe,
 not a production regulator qualification.

@@ -106,6 +106,24 @@ Plane stitching reuses exact private-pad-to-existing-via graph continuity; it
 never creates shortcuts through protected ground returns. Without a usable
 existing macro via, private ground pads remain pending. A prospective contact
 does not prove filled-plane connectivity: independent KiCad refill is required.
+
+## v0.3 fixed copper polygons
+
+The v0.3 asset adds `polygons`: each entry has an `id`, net role, one copper
+`layer`, and `vertices` for a simple closed ring. It represents an exact,
+single-layer conductor rather than refill intent. Binding validates the ring
+and protected-region containment. Materialization rigidly transforms it,
+fingerprints it, preserves it as immutable owner copper, and includes its
+positive-area contacts with pads, tracks and vias in the explicit connectivity
+proof. Source recovery removes only exact owner polygons.
+
+KiCad 10 export emits locked, filled, netted `gr_poly` items. CopperScript checks
+polygon clearance and board-edge spacing; independent KiCad DRC remains
+required, particularly for polygon-to-zone fill interactions. Use fixed
+polygons for short prescribed copper shapes and zones for broad pours. Holes,
+arcs, auto-generated polygon routing and mirrored instances remain unsupported.
+The one-regulator probe exercises the SW island without the former wide SW
+track trunk.
 Single-ended pre-routed critical owner nets retain length/via budgets. Entirely
 pre-routed differential macros fail closed until paired geometry/return-path
 certificates are supported. Multiple alternative ports for one private group,

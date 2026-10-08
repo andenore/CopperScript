@@ -51,6 +51,11 @@ def main():
             if not any(f'(name "{zone.id}")' in block and "(filled_polygon" in block
                        for block in blocks):
                 raise SystemExit(f"native refill did not retain a filled {zone.id} area")
+        copper = target.read_text().split("(gr_poly")
+        for polygon in board.polygons:
+            if not any(f'(net "{polygon.net}")' in block and "(fill yes)" in block
+                       for block in copper[1:]):
+                raise SystemExit(f"native KiCad lost fixed copper polygon {polygon.id}")
     print(target)
 
 

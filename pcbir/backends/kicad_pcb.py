@@ -122,7 +122,7 @@ class KiCadPcbBackend:
             )
         return ArtifactManifest(
             backend=self.name,
-            target_version="10.0" if _uses_internal_connections(board) else self.target_version,
+            target_version="10.0" if _uses_internal_connections(board) or board.polygons else self.target_version,
             artifacts=(
                 Artifact(
                     f"{_safe_name(board.name)}.kicad_pcb",
@@ -298,7 +298,7 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
     }
     lines = [
         "(kicad_pcb",
-        f"  (version {'20260206' if _uses_internal_connections(board) else KICAD_PCB_FORMAT})",
+        f"  (version {'20260206' if _uses_internal_connections(board) or board.polygons else KICAD_PCB_FORMAT})",
         '  (generator "copperscript")',
         '  (generator_version "0.1.0")',
         "  (general",
@@ -373,6 +373,20 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
                 "  )",
             ]
         )
+
+    for polygon in sorted(board.polygons, key=lambda item: item.id):
+        points = " ".join(f"(xy {_point(point)})" for point in polygon.outline.vertices)
+        lines.extend([
+            "  (gr_poly",
+            f"    (pts {points})",
+            "    (stroke (width 0) (type default))",
+            "    (fill yes)",
+            f"    (layer {_quote(polygon.layer.value)})",
+            f"    (net {net_codes[polygon.net]})",
+            "    (locked yes)",
+            f'    (uuid "{_stable_uuid(board.name, "polygon", polygon.id)}")',
+            "  )",
+        ])
 
     for zone in sorted(board.zones, key=lambda item: (-item.priority, item.id)):
         for layer in sorted(zone.layers, key=lambda item: item.value):

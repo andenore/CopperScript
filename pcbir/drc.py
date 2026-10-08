@@ -20,6 +20,8 @@ from .physical import (
     PadShape,
     PhysicalBoard,
     Point,
+    CopperPolygon,
+    PolygonWithHoles,
     TrackSegment,
     Via,
 )
@@ -29,6 +31,7 @@ from .geometry import (
     SpatialIndex,
     SpatialItem,
     point_in_polygon,
+    polygon_triangles,
     point_segment_distance_at_least,
     point_segment_distance_squared,
     segment_distance_at_least,
@@ -224,6 +227,7 @@ def placement_copper_findings(board: PhysicalBoard) -> tuple[DrcFinding, ...]:
     findings: list[DrcFinding] = []
     _check_board_edge(board, findings)
     _check_copper_spacing(board, findings)
+    _check_fixed_polygons(board, findings)
     _check_non_plated_hole_clearance(board, findings)
     _check_via_hole_clearance(board, findings)
     _check_drill_spacing(board, findings)
@@ -279,6 +283,7 @@ def run_physical_drc(
     _check_board_edge(board, findings)
     coverage.append(DrcCoverage("copper_to_board_edge", DrcCoverageStatus.EXECUTED, True))
     _check_copper_spacing(board, findings, relaxations)
+    _check_fixed_polygons(board, findings)
     coverage.append(DrcCoverage("shorts_and_clearance", DrcCoverageStatus.EXECUTED, True))
     if any(rule.breakout_length_nm is not None for rule in board.net_routing_rules):
         coverage.append(DrcCoverage(
@@ -462,6 +467,8 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             ],
             "tracks": [_track_identity(track) for track in sorted(board.tracks, key=_track_identity)],
             "vias": [_via_identity(via) for via in sorted(board.vias, key=_via_identity)],
+            **({"polygons": [repr(p) for p in sorted(board.polygons, key=lambda p: p.id)]}
+               if board.polygons else {}),
             "routing_rules": [_routing_rule_document(rule) for rule in sorted(board.net_routing_rules, key=lambda item: item.net)],
             **({"match_groups": [(group.id, group.nets, group.max_skew_nm)
                                  for group in sorted(board.match_groups, key=lambda item: item.id)]}
@@ -479,9 +486,11 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "rigid_clusters": [repr(item) for item in sorted(board.rigid_clusters, key=lambda item: item.name)],
             "hard_macros": [repr(item) for item in sorted(board.hard_macros, key=lambda item: item.cluster)],
             **({"hard_macro_local_copper": [
-                (item.cluster, tuple(map(repr, item.zones)), tuple(map(repr, item.plane_returns)))
+                ((item.cluster, tuple(map(repr, item.zones)), tuple(map(repr, item.plane_returns)),
+                  tuple(map(repr, item.polygons))) if item.polygons else
+                 (item.cluster, tuple(map(repr, item.zones)), tuple(map(repr, item.plane_returns))))
                 for item in sorted(board.hard_macros, key=lambda item: item.cluster)]}
-               if any(item.zones or item.plane_returns for item in board.hard_macros) else {}),
+               if any(item.zones or item.plane_returns or item.polygons for item in board.hard_macros) else {}),
             "materialized_macros": board.materialized_macros,
             "zones": [repr(item) for item in sorted(board.zones, key=lambda item: item.id)],
             **({"zone_routing_reservations": sorted(zone.id for zone in board.zones if zone.reserve_routing)}
@@ -497,6 +506,7 @@ def explicit_copper_connectivity(
     board: PhysicalBoard, *, only_nets: frozenset[str] | None = None,
     include_internal_connections: bool = True,
     tracks: tuple[TrackSegment, ...] | None = None, vias: tuple[Via, ...] | None = None,
+    polygons: tuple[CopperPolygon, ...] | None = None,
 ) -> PhysicalCopperConnectivity:
     """Build the shared exact graph used by native DRC and land closure.
 
@@ -509,6 +519,7 @@ def explicit_copper_connectivity(
     """
     tracks = board.tracks if tracks is None else tracks
     vias = board.vias if vias is None else vias
+    polygons = board.polygons if polygons is None else polygons
     objects: list[CopperContact] = []
     pad_nodes: dict[PadReference, list[str]] = {}
     internal_connections = []
@@ -548,6 +559,16 @@ def explicit_copper_connectivity(
         if only_nets is not None and via.net not in only_nets:
             continue
         objects.append(via_copper_contact(via, board.stackup.copper_layers, identity=f"via:{index}"))
+    for polygon in polygons:
+        if only_nets is not None and polygon.net not in only_nets:
+            continue
+        nodes = []
+        for index, triangle in enumerate(polygon_triangles(polygon.outline.vertices)):
+            identity = f"polygon:{polygon.id}:{index}"
+            objects.append(CopperContact(identity, polygon.net, (polygon.layer,), RoundedConvexShape(triangle)))
+            nodes.append(identity)
+        if len(nodes) > 1:
+            internal_connections.append(tuple(nodes))
     groups = tuple(internal_connections)
     return PhysicalCopperConnectivity(copper_contact_roots(tuple(objects), groups),
                                       {pad: tuple(nodes) for pad, nodes in pad_nodes.items()}, groups)
@@ -1047,6 +1068,15 @@ def _check_non_plated_hole_clearance(
                     f"via {index} violates {identity} drill clearance",
                     objects=(f"via:{index}", identity), nets=(via.net,),
                 ))
+        for polygon in board.polygons:
+            if any(not shapes_clear(RoundedConvexShape(triangle), hole, clearance)
+                   for triangle in polygon_triangles(polygon.outline.vertices)):
+                findings.append(_finding(
+                    "DRC-HOLE-CLEARANCE", DrcSeverity.ERROR,
+                    f"polygon {polygon.id} violates {identity} drill clearance",
+                    objects=(f"polygon:{polygon.id}", identity), nets=(polygon.net,),
+                    layers=(polygon.layer.value,),
+                ))
 
 
 def _check_scoped_pad_hole(
@@ -1233,6 +1263,62 @@ def _check_zone_fill_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                                    (fill.layer.value,), normal, clearance, None)
 
 
+def _check_fixed_polygons(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+    if not board.polygons:
+        return
+    from .mechanical import shape_in_outline
+    pads = _copper_pads(board)
+    clearance = board.rules.minimum_clearance_nm
+    net_clearances = {rule.net: rule.clearance_nm or 0 for rule in board.net_routing_rules}
+    def between(first: str, second: str) -> int:
+        return max(clearance, net_clearances.get(first, 0), net_clearances.get(second, 0))
+    zone_nets = {zone.id: zone.net for zone in board.zones}
+    for polygon in board.polygons:
+        region = PolygonWithHoles(polygon.outline)
+        triangles = tuple(RoundedConvexShape(points) for points in polygon_triangles(polygon.outline.vertices))
+        if any(not shape_in_outline(shape, board.outline, clearance) for shape in triangles):
+            findings.append(_finding("DRC-BOARD-EDGE", DrcSeverity.ERROR,
+                                     f"polygon {polygon.id} violates copper-to-board-edge clearance",
+                                     objects=(f"polygon:{polygon.id}",), nets=(polygon.net,),
+                                     layers=(polygon.layer.value,)))
+        for index, track in enumerate(board.tracks):
+            if track.net != polygon.net and track.layer is polygon.layer and not _shape_clear_of_region(
+                    RoundedConvexShape((track.start, track.end), track.width_nm // 2), region,
+                    between(polygon.net, track.net)):
+                findings.append(_finding("DRC-CLEARANCE", DrcSeverity.ERROR,
+                                         f"polygon {polygon.id} violates track {index} clearance",
+                                         objects=(f"polygon:{polygon.id}", f"track:{index}")))
+        for index, via in enumerate(board.vias):
+            if via.net != polygon.net and _via_covers_layer(board, via, polygon.layer) and not _shape_clear_of_region(
+                    RoundedConvexShape((via.position,), via.size_nm // 2), region,
+                    between(polygon.net, via.net)):
+                findings.append(_finding("DRC-CLEARANCE", DrcSeverity.ERROR,
+                                         f"polygon {polygon.id} violates via {index} clearance",
+                                         objects=(f"polygon:{polygon.id}", f"via:{index}")))
+        for pad in pads:
+            if pad.net != polygon.net and polygon.layer in pad.layers and not _shape_clear_of_region(
+                    pad.shape, region, max(between(polygon.net, pad.net), pad.clearance_nm)):
+                findings.append(_finding("DRC-CLEARANCE", DrcSeverity.ERROR,
+                                         f"polygon {polygon.id} violates {pad.identity} clearance",
+                                         objects=(f"polygon:{polygon.id}", pad.identity)))
+        for other in board.polygons:
+            if other.id >= polygon.id or other.net == polygon.net or other.layer is not polygon.layer:
+                continue
+            if any(not _shape_clear_of_region(shape, PolygonWithHoles(other.outline),
+                                              between(polygon.net, other.net))
+                   for shape in triangles):
+                findings.append(_finding("DRC-CLEARANCE", DrcSeverity.ERROR,
+                                         f"polygons {polygon.id} and {other.id} violate clearance",
+                                         objects=(f"polygon:{polygon.id}", f"polygon:{other.id}")))
+        for fill in board.zone_fills:
+            if fill.layer is polygon.layer and zone_nets[fill.zone_id] != polygon.net and any(
+                    not _shape_clear_of_region(shape, area, between(polygon.net, zone_nets[fill.zone_id]))
+                    for shape in triangles for area in fill.polygons):
+                findings.append(_finding("DRC-ZONE-CLEARANCE", DrcSeverity.ERROR,
+                                         f"polygon {polygon.id} violates filled zone {fill.zone_id}",
+                                         objects=(f"polygon:{polygon.id}", f"zone-fill:{fill.zone_id}")))
+
+
 def _shape_clear_of_region(shape: RoundedConvexShape, region: object,
                            clearance_nm: int) -> bool:
     outer = getattr(region, "outer").vertices
@@ -1240,6 +1326,9 @@ def _shape_clear_of_region(shape: RoundedConvexShape, region: object,
     def in_material(point: Point) -> bool:
         return point_in_polygon(point, outer) and not any(point_in_polygon(point, hole) for hole in holes)
     if any(in_material(point) for point in shape.spine):
+        return False
+    if any(not shapes_clear(shape, RoundedConvexShape((point,)), 1)
+           for point in outer):
         return False
     shape_edges = ((shape.spine[0], shape.spine[0]),) if len(shape.spine) == 1 else (
         ((shape.spine[0], shape.spine[1]),) if len(shape.spine) == 2 else
