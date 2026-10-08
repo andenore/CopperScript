@@ -382,7 +382,7 @@ Shared rules for every item:
   candidate. Reserve one corridor for the whole bundle, sized by the
   nesting width of the inner pairs, instead of per-pair bands.
 
-- [ ] **R9 45° tuning corners.** R3 bumps and D5 skew bumps are rectangles,
+- [x] **R9 45° tuning corners.** R3 bumps and D5 skew bumps are rectangles,
   so every bump adds four 90° corners. D-PHY and other high-speed guides ask
   for no 90° corners on these lanes. Chamfer each corner at 45° and keep the
   perpendicular legs.
@@ -395,6 +395,30 @@ Shared rules for every item:
   - Room checks and the swept area use the chamfered outline.
   - **Tests:** exact added length per bump; pair skew unchanged; no bend
     sharper than 45°; native DRC clean.
+
+  Done (CS-167): `critical_tuning.bump_chamfers`, `bump_path` and `bump_gain`
+  build both tuners' bumps. Rule: for height h and width w the member inside a
+  turn gets leg c = min(w, ⌊h/4⌋, ⌊(h − d)/2⌋) and its partner c + d, with
+  d = ⌊(2 − √2) × spacing⌋ (0 for a single net). Flooring d keeps parallel
+  pieces never closer than the spacing (at most 2 nm farther); a bump too low
+  for c ≥ 1 has one 45° ramp per side. The bulge-side member is inside the
+  turn at both run corners, its partner at both top corners, so both gain
+  exactly `bump_gain` in the rounded-per-piece length measure. R3:
+  `UnitTuner.tune` counts each slot's capacity and levels heights by that gain
+  (`_levelled`: one nanometre of height changes it by −2, 0 or +2, so the
+  excess is removed exactly), and `_swept` is the convex outline of the
+  chamfered bump (the rectangle no longer covered the run chamfers). D5:
+  `_tune_pair` takes c from the member's narrowest width and uses the fewest
+  bumps at the least common height that reach the excess. On boards with
+  breakout regions both tuners aim 32 nm inside `max_skew`
+  (`_BREAKOUT_TUNING_MARGIN_NM`): re-cutting a 45° piece at a region boundary
+  may round a nanometre differently. Measured: for pairs, the outside offset d
+  costs about 0.69 × spacing per bump and member, so a 0.2/0.2 mm pair at
+  1 mm height gains about 63% of 2h (single nets lose only 2.34 × c) and
+  needs more or taller bumps; a pair bump adds up to about 3.3 spacings of
+  uncoupled length per member. Tests: `tests/test_length_match_tuning.py`
+  (`test_pair_bumps_have_coupled_45_degree_corners_and_add_exact_lengths`)
+  and the `test_tuning_*` D5 tests in `tests/test_critical_routing.py`.
 
 - [ ] **R10 S-shaped (two-sided) serpentines.** Today every tuning bump
   leaves its run on one side, returns to the same line, and needs 3 × width

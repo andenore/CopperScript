@@ -3,9 +3,22 @@
 After every critical group is accepted, ``route_critical_nets`` lengthens the
 shorter members of each ``length_match`` group whose skew exceeds its
 ``max_skew``. Tuning works on *units*: one accepted critical group each. A
-differential pair is one unit and both members receive the same rectangular
-bumps, bent together at the pair's own spacing, so the pair's own skew does not
-change. A single-ended critical net is a unit of its own.
+differential pair is one unit and both members receive the same bumps, bent
+together at the pair's own spacing, so the pair's own skew does not change. A
+single-ended critical net is a unit of its own.
+
+Corner rule (plan R9). A bump keeps its perpendicular legs, but each corner is
+a 45-degree chamfer (``bump_chamfers``). For a bump of height h the member
+inside a turn takes leg c = min(width, h // 4, (h - d) // 2) and the other
+member c + d, with d = floor((2 - sqrt 2) x spacing) for a pair and 0 for a
+single net: the offset chamfers of a coupled 45-degree bend, so parallel pieces
+of the lanes stay at least the pair spacing apart (at most 2 nm more). The
+member on the bulge side is inside the turn at both run corners and outside it
+at both top corners, the other member the reverse, so each gains exactly
+``bump_gain``: 2h - 4(2c + d) plus four rounded 45-degree pieces, about
+2h - 2(2 - sqrt 2)(2c + d) (2h - 4(2 - sqrt 2)c for a single net). A bump too
+low for c >= 1 has one 45-degree ramp per side instead and gains
+2(round(h sqrt 2) - h).
 
 Placement rule. Candidate slots lie on straight axis-aligned runs: a coupled
 run where both pair members are parallel at the pair spacing, or any
@@ -13,11 +26,13 @@ axis-aligned segment of a single net. Slots keep 3 x width from both run ends,
 and bumps are 3 x width wide (plus twice the lane spacing for the outer member
 of a pair) and 3 x width apart, on a grid centred in the run, bulging to either
 side. The *room* of a slot is the tallest bump, at most the amplitude limit,
-whose swept area (every member's bump copper) clears foreign copper, lands,
-keep-outs, holes and the board edge by the applicable clearance. Slots are used
-in order of most room first, then farthest from the unit's terminals, then by
-position; the fewest bumps that provide the length are taken and their heights
-are levelled. Native DRC still validates the result atomically.
+whose swept area clears foreign copper, lands, keep-outs, holes and the board
+edge by the applicable clearance. The swept area is the convex outline of the
+bulge-side member's chamfered bump, which holds every member's bump copper
+outside the pair's own lanes. Slots are used in order of most room first, then
+farthest from the unit's terminals, then by position; the fewest bumps that
+provide the length are taken and their heights are levelled. Native DRC still
+validates the result atomically.
 
 This module holds the per-group report and the bump geometry. The critical
 router owns the order, the length targets and the atomic validation
@@ -27,6 +42,8 @@ router owns the order, the length targets and the atomic validation
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import hypot, isqrt
+from typing import Callable
 
 from .geometry import Bounds, RoundedConvexShape
 from .mechanical import shape_in_board
@@ -154,43 +171,103 @@ class UnitTuner:
     def tune(self, added_nm: int) -> tuple[tuple[TrackSegment, ...] | None, int, str]:
         """Add ``added_nm`` (even) to every net of the unit.
 
-        A bump of height h adds exactly 2h to each member. Returns the tuned
+        A bump adds exactly ``bump_gain`` to each member. Returns the tuned
         copper in the original track order (each bumped segment is replaced
         in place), the bump count, and the reason with ``None`` copper when
         the length does not fit.
         """
-        half = added_nm // 2
-        if half <= 0:
+        if added_nm <= 0:
             return None, 0, "no length to add"
         chosen: list[_Slot] = []
         capacity = 0
         for slot in self.ordered:
-            if capacity >= half or len(chosen) >= self.bump_limit:
+            if capacity >= added_nm or len(chosen) >= self.bump_limit:
                 break
             if any(_conflict(slot, other, self.rooms[slot], self.rooms[other], self.clearance_nm)
                    for other in chosen):
                 continue
             chosen.append(slot)
-            capacity += self.rooms[slot]
-        if capacity < half:
+            capacity += _slot_gain(slot, self.rooms[slot])
+        if capacity < added_nm:
             limit = f", the limit of {self.bump_limit} bumps" if len(chosen) >= self.bump_limit else ""
-            return None, 0, (f"insufficient tuning room: {2 * capacity} of {added_nm} nm "
+            return None, 0, (f"insufficient tuning room: {capacity} of {added_nm} nm "
                              f"in {len(chosen)} bump(s){limit}")
-        heights = _levelled([self.rooms[slot] for slot in chosen], half)
-        bumps: dict[int, list[tuple[int, int, int, int]]] = {}
+        heights = _levelled([self.rooms[slot] for slot in chosen], added_nm,
+                            [lambda height, slot=slot: _slot_gain(slot, height) for slot in chosen])
+        bumps: dict[int, list[tuple[int, int, int, int, int, int]]] = {}
         count = 0
         for slot, height in zip(chosen, heights):
-            if height <= 0:
+            if not _slot_gain(slot, height):
                 continue
             count += 1
-            bumps.setdefault(slot.outer, []).append((slot.start, slot.end, slot.side, height))
+            # The bulge-side member is inside the turn at the run corners, the
+            # other member at the top corners.
+            inside, outside = bump_chamfers(height, slot.width, slot.spacing)
+            bumps.setdefault(slot.outer, []).append((slot.start, slot.end, slot.side, height, inside, outside))
             if slot.inner is not None:
                 bumps.setdefault(slot.inner, []).append(
-                    (slot.start + slot.spacing, slot.end - slot.spacing, slot.side, height))
+                    (slot.start + slot.spacing, slot.end - slot.spacing, slot.side, height, outside, inside))
         tuned: list[TrackSegment] = []
         for index, track in enumerate(self.tracks):
             tuned.extend(_bumped(track, bumps[index]) if index in bumps else (track,))
         return tuple(tuned), count, ""
+
+
+def bump_chamfers(height: int, width: int, spacing: int = 0) -> tuple[int, int]:
+    """Chamfer legs ``(inside, outside)`` of a bump's corners (plan R9).
+
+    At each corner the member inside the turn takes ``inside`` and its pair
+    partner ``outside``, ``inside + d`` with d = floor((2 - sqrt 2) x
+    ``spacing``) (0 for a single net), so the 45-degree pieces of both lanes
+    are at least ``spacing`` apart. ``inside`` is the track ``width``, at most
+    a quarter of ``height``, and small enough to leave ``height - inside -
+    outside >= 0`` of straight leg. A bump too low for ``inside >= 1``
+    (``height < 4`` or ``height < d + 2``) has one 45-degree ramp per side:
+    ``inside + outside == height`` and a leg below 1 moves the ramp's foot
+    into the bump.
+    """
+    offset = 2 * spacing - isqrt(2 * spacing * spacing) - 1 if spacing > 0 else 0
+    inside = min(width, height // 4, (height - offset) // 2)
+    if inside < 1:
+        inside = -((offset - height) // 2)
+        return inside, height - inside
+    return inside, inside + offset
+
+
+def bump_gain(height: int, base: int, top: int) -> int:
+    """Length a member gains from a bump, as critical lengths measure it.
+
+    ``base``/``top`` are the member's chamfer legs at the run and top corners
+    (``bump_chamfers``). Every piece of ``bump_path`` is axis-aligned or exactly
+    45 degrees and its length is rounded on its own.
+    """
+    def diagonal(leg: int) -> int:
+        return round(hypot(leg, leg))
+
+    if min(base, top) < 1:
+        return 2 * (diagonal(height) - height)
+    return 2 * height + 2 * (diagonal(base) + diagonal(top)) - 4 * (base + top)
+
+
+def bump_path(entry: int, leave: int, height: int, base: int, top: int) -> tuple[tuple[int, int], ...]:
+    """Centre-line corners ``(axial, rise)`` of one member's bump, in travel order.
+
+    ``entry``/``leave`` are the axial positions of the legs; ``base``/``top``
+    are the chamfer legs at the run and top corners (``bump_chamfers``). A leg
+    below 1 makes each side one ramp; otherwise the two chamfers of a leg stay
+    separate pieces even when no straight leg is left between them.
+    """
+    sign = 1 if leave > entry else -1
+    if min(base, top) < 1:
+        return ((entry - sign * base, 0), (entry + sign * top, height),
+                (leave - sign * top, height), (leave + sign * base, 0))
+    return ((entry - sign * base, 0), (entry, base), (entry, height - top), (entry + sign * top, height),
+            (leave - sign * top, height), (leave, height - top), (leave, base), (leave + sign * base, 0))
+
+
+def _slot_gain(slot: _Slot, height: int) -> int:
+    """Length each member of the unit gains from a bump of ``height`` in ``slot``."""
+    return bump_gain(height, *bump_chamfers(height, slot.width, slot.spacing))
 
 
 def _horizontal(track: TrackSegment) -> bool | None:
@@ -251,14 +328,22 @@ def _slots(tracks: tuple[TrackSegment, ...], nets: tuple[str, ...], spacing_nm: 
 
 
 def _swept(slot: _Slot, height: int) -> RoundedConvexShape:
-    """Area covered by a bump's copper (every member) of ``height``."""
-    top = slot.base + slot.side * height
+    """Area covered by a bump's copper (every member) of ``height``.
 
-    def point(axial: int, normal: int) -> Point:
+    It is the convex outline of the bulge-side member's chamfered bump: its
+    run chamfers are bridged by the straight edge from the foot to the leg's
+    top end. The other member of a pair lies inside it, except where its run
+    chamfers dip between the two lanes.
+    """
+    corners = bump_path(slot.start, slot.end, height, *bump_chamfers(height, slot.width, slot.spacing))
+    if len(corners) == 8:
+        corners = corners[:1] + corners[2:6] + corners[7:]
+
+    def point(axial: int, rise: int) -> Point:
+        normal = slot.base + slot.side * rise
         return Point(axial, normal) if slot.horizontal else Point(normal, axial)
 
-    return RoundedConvexShape((point(slot.start, slot.base), point(slot.end, slot.base),
-                               point(slot.end, top), point(slot.start, top)), slot.width // 2)
+    return RoundedConvexShape(tuple(point(*corner) for corner in corners), slot.width // 2)
 
 
 def _room(board: PhysicalBoard, obstacles: RoutingClearanceIndex, nets: tuple[str, ...],
@@ -310,34 +395,42 @@ def _terminal_ends(tracks: tuple[TrackSegment, ...]) -> tuple[Point, ...]:
                         key=lambda point: (point.x_nm, point.y_nm)))
 
 
-def _levelled(rooms: list[int], total: int) -> list[int]:
-    """Heights within each room summing to ``total``, as level as possible.
+def _levelled(rooms: list[int], total: int, gains: list[Callable[[int], int]]) -> list[int]:
+    """Heights within each room whose gains sum to ``total``, as level as possible.
 
-    The lowest common level ``L`` with ``sum(min(room, L)) >= total`` is
-    used; the excess is taken from the last slots at that level.
+    ``gains[i]`` maps a height to the length bump ``i`` adds; one nanometre
+    more height changes it by -2, 0 or +2 (a larger chamfer can cost more than
+    the leg adds). The lowest common level ``L`` whose gains reach ``total`` is
+    used; the excess is taken from the last slots at that level whose gain
+    drops by 2 one nanometre lower. Since the gains at ``L - 1`` fall short,
+    those slots suffice.
     """
+    def reached(level: int) -> int:
+        return sum(gain(min(room, level)) for room, gain in zip(rooms, gains))
+
     low, high = 0, max(rooms)   # below the total at ``low``, reaching it at ``high``
     while high - low > 1:
         middle = (low + high) // 2
-        low, high = (middle, high) if sum(min(room, middle) for room in rooms) < total else (low, middle)
+        low, high = (middle, high) if reached(middle) < total else (low, middle)
     level = high
     heights = [min(room, level) for room in rooms]
-    excess = sum(heights) - total
+    excess = reached(level) - total
     for index in reversed(range(len(heights))):
-        if not excess:
+        if excess < 2:
             break
-        if heights[index] == level:
+        if heights[index] == level and gains[index](level) - gains[index](level - 1) == 2:
             heights[index] -= 1
-            excess -= 1
+            excess -= 2
     return heights
 
 
-def _bumped(track: TrackSegment, bumps: list[tuple[int, int, int, int]]) -> list[TrackSegment]:
-    """Replace one axis-aligned segment with rectangular bumps.
+def _bumped(track: TrackSegment, bumps: list[tuple[int, int, int, int, int, int]]) -> list[TrackSegment]:
+    """Replace one axis-aligned segment with chamfered bumps.
 
-    Each bump is ``(start, end, side, height)`` with ``start``/``end`` along
-    the segment's axis; it rises ``height`` toward ``side`` of the segment's
-    own line, so the inner member of a pair bends at its own lane.
+    Each bump is ``(start, end, side, height, base, top)`` with ``start``/
+    ``end`` the legs along the segment's axis and ``base``/``top`` the chamfer
+    legs at the run and top corners; it rises ``height`` toward ``side`` of the
+    segment's own line, so the inner member of a pair bends at its own lane.
     """
     horizontal = _horizontal(track)
     assert horizontal is not None
@@ -349,10 +442,9 @@ def _bumped(track: TrackSegment, bumps: list[tuple[int, int, int, int]]) -> list
         return Point(along, normal + offset) if horizontal else Point(normal + offset, along)
 
     points = [track.start]
-    for start, end, side, height in sorted(bumps, key=lambda bump: sign * bump[0]):
+    for start, end, side, height, base, top in sorted(bumps, key=lambda bump: sign * bump[0]):
         entry, leave = (start, end) if sign > 0 else (end, start)
-        points.extend((point(entry, 0), point(entry, side * height),
-                       point(leave, side * height), point(leave, 0)))
+        points.extend(point(along, side * rise) for along, rise in bump_path(entry, leave, height, base, top))
     points.append(track.end)
     return [TrackSegment(track.net, start, end, track.width_nm, track.layer)
             for start, end in zip(points, points[1:]) if start != end]

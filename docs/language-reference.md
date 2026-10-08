@@ -1023,38 +1023,56 @@ transition (both signal vias and any return via) must clear all lands, drilled
 holes, via keep-outs and the board edge, or the coarse candidate is rejected
 without copper and the exact paired searches decide. When `max_skew` and
 `tuning_amplitude_limit` are both set, skew beyond the limit is compensated on
-the shorter member: rectangular bumps no taller than the amplitude limit,
-3 × width wide and 3 × width from each other and from the segment ends, on the
-axis-aligned segments nearest the terminal or bend where the length difference
-arises, bulging away from the partner. At most eight bumps are used; when they
-do not fit, the geometry is unchanged and the skew gate reports it. Tuned
+the shorter member: bumps no taller than the amplitude limit, 3 × width wide
+and 3 × width from each other and from the segment ends, on the axis-aligned
+segments nearest the terminal or bend where the length difference arises,
+bulging away from the partner, with 45° corners (below; the chamfer leg is at
+most the member's narrowest width). At most eight bumps are used; when they do
+not fit, the geometry is unchanged and the skew gate reports it. On a board
+with breakout regions the compensation aims 32 nm inside `max_skew`, because a
+45° piece re-cut at a region boundary may round a nanometre differently. Tuned
 candidates pass the same atomic budget and native DRC gates.
+
+Tuning bumps have no 90° corners (D-PHY plan R9): each keeps its perpendicular
+legs, and every corner is a 45° chamfer. For a bump of height h on track width
+w, the member inside a turn gets chamfer leg c = min(w, ⌊h/4⌋, ⌊(h − d)/2⌋)
+and the other member of a pair c + d, where d = ⌊(2 − √2) × lane spacing⌋ (0
+for a single net). These are the offset chamfers of a coupled 45° bend, so
+parallel pieces of the two lanes are never closer than the lane spacing and at
+most 2 nm farther apart. Each member of a pair is inside the turn at two
+corners of a bump and outside at the other two, so both gain exactly the same
+length, 2h − 4(2c + d) plus four rounded 45° pieces: about
+2h − 2(2 − √2)(2c + d), or 2h − 4(2 − √2)c for a single net. A bump too low
+for c ≥ 1 has one 45° ramp per side. The tuners count this loss when choosing
+bump counts and heights, so a pair needs more or taller bumps than with square
+corners (a 0.2/0.2 mm pair gains about 63% of 2h at 1 mm height).
 
 Once every critical group is accepted, each `length_match` group whose skew
 exceeds its `max_skew` is tuned, group by group in declaration order. Tuning
 works on accepted critical groups (*units*). A differential pair is one unit:
-both members get the same rectangular bumps, bent together at the pair's
-lane spacing, so each gains exactly the same length and the pair's own skew
-and `max_skew` are unaffected. A single-ended critical net is tuned alone.
+both members get the same bumps, bent together at the pair's lane spacing, so
+each gains exactly the same length and the pair's own skew and `max_skew` are
+unaffected. A single-ended critical net is tuned alone.
 Each unit is first lengthened so that its longest group member matches the
 group's longest member; when that does not fit or does not validate, by the
-least length that brings its shortest member within `max_skew`. Bumps are no
-taller than the unit's `tuning_amplitude_limit` (the smaller of a pair); a
-unit without one is not tuned. They sit on straight axis-aligned runs (for a
+least length that brings its shortest member within `max_skew` (32 nm inside
+it on a board with breakout regions). Bumps are no taller than the unit's
+`tuning_amplitude_limit` (the smaller of a pair); a unit without one is not
+tuned. They sit on straight axis-aligned runs (for a
 pair, where both members are parallel at the pair spacing), at least
 3 × width from either end of the run and 3 × width apart, and are 3 × width
 wide (the outer member of a pair 3 × width + 2 × spacing), on either side of
 the run. Placement rule: the room of each slot is the tallest bump, up to the
-amplitude limit, whose swept area clears all other copper, lands, holes,
-keep-outs and the board edge by the applicable clearance; slots with the most
-room are used first, then those farthest from the unit's terminals, then by
-position. The fewest bumps that provide the length are used, at most 16 per
-unit (`MATCH_TUNING_BUMP_LIMIT` in `pcbir.critical_tuning`), with levelled
-heights. Each tuned unit passes the same profile gates (length and via
+amplitude limit, whose swept area (the convex outline of the chamfered bump)
+clears all other copper, lands, holes, keep-outs and the board edge by the
+applicable clearance; slots with the most room are used first, then those
+farthest from the unit's terminals, then by position. The fewest bumps that
+provide the length are used, at most 16 per unit (`MATCH_TUNING_BUMP_LIMIT` in
+`pcbir.critical_tuning`), with levelled heights. Each tuned unit passes the same profile gates (length and via
 budgets, pair skew and `maximum_uncoupled_length`) and atomic native-DRC
 validation against all other copper as a routed candidate. In the coupled-length
-measure, a rectangular pair bump adds about four lane spacings of uncoupled
-length per member, so a tight `maximum_uncoupled_length` can rule tuning out.
+measure, a pair bump adds up to about 3.3 lane spacings of uncoupled length per
+member, so a tight `maximum_uncoupled_length` can rule tuning out.
 A group's copper changes only when every unit is accepted and the group ends
 within `max_skew`. Otherwise its copper and results are kept exactly as
 routed, the group is reported `failed` with the reason, the critical stage

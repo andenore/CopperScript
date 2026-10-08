@@ -47,7 +47,8 @@ from .return_paths import (shared_reference_plane, transition_contact_layers,
                            pair_reference_intent_covers)
 from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle, PlannedCrossing,
                                bundle_document, bundle_job_order, crossing_outcome, plan_bundles)
-from .critical_tuning import MatchTuningMember, MatchTuningResult, UnitTuner, match_tuning_document
+from .critical_tuning import (MatchTuningMember, MatchTuningResult, UnitTuner, bump_chamfers, bump_gain,
+                              bump_path, match_tuning_document)
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -727,10 +728,13 @@ def _tune_match_group(
                           unit_tracks, unit, spacing, min(amplitudes), clearance)
         # Bumps add an even length: match the longest member (one nanometre
         # over it only when an odd exact target leaves no choice), else add
-        # the least that brings the unit within max_skew.
+        # the least that brings the unit within max_skew (with breakout
+        # regions, the margin inside it).
         full = aim - aim % 2 if aim - aim % 2 >= need else aim + 1
+        least = need + (min(_BREAKOUT_TUNING_MARGIN_NM, max_skew_nm) if breakout else 0)
+        least = min(full, least + least % 2)
         reason = ""
-        for target in dict.fromkeys((full, need + need % 2)):
+        for target in dict.fromkeys((full, least)):
             proposed, count, reason = tuner.tune(target)
             if proposed is None:
                 continue
@@ -1397,10 +1401,11 @@ def _route_pair(
                                                           second.tuning_amplitude_limit_nm)
                                       if value is not None)
                                   if first.tuning_amplitude_limit_nm is not None or second.tuning_amplitude_limit_nm is not None
-                                  else 0)
+                                  else 0, _BREAKOUT_TUNING_MARGIN_NM if breakout else 0)
     if tuned_length and breakout:
-        # Cut the new serpentine bumps too; they are axis-aligned, so their
-        # lengths do not change.
+        # Cut the new serpentine bumps too; a 45-degree corner piece cut at a
+        # region boundary may round a nanometre differently, which the margin
+        # inside max_skew absorbs.
         first_tracks = list(breakout.split_tracks(first_tracks, first_width))
         second_tracks = list(breakout.split_tracks(second_tracks, second_width))
     pair_vias: list[Via] = [v for pair in exact_via_pairs for v in pair]
@@ -1642,31 +1647,50 @@ def _aligned_pair_paths(
 
 _MAX_TUNING_BUMPS = 8
 
+# Tuning targets of a board with breakout regions stay this far inside
+# ``max_skew``: bump copper is re-cut at region boundaries (plan R1), and each
+# 45-degree corner piece cut there may round a nanometre differently (plan R9).
+_BREAKOUT_TUNING_MARGIN_NM = 32
+
 
 def _tune_pair(first: list[TrackSegment], second: list[TrackSegment],
-               max_skew_nm: int, amplitude_limit_nm: int) -> int:
+               max_skew_nm: int, amplitude_limit_nm: int, margin_nm: int = 0) -> int:
     """Compensate excess intra-pair skew next to where the mismatch arises.
 
-    The shorter member receives rectangular serpentine bumps on its
-    axis-aligned segments nearest the terminal or bend where the length
-    difference accumulates, starting at the segment end nearest that point
-    and bulging away from the partner. Every bump is at most
-    ``amplitude_limit_nm`` tall and 3 x width wide, and stays 3 x width from
-    the next bump and from both segment ends. The fewest bumps (at most
-    eight) that bring the skew within ``max_skew_nm`` are used; if they do not
-    fit, the geometry is unchanged and the skew gate reports the mismatch.
-    The caller validates the tuned pair atomically (budgets and native DRC).
-    Returns the added length in nanometres.
+    The shorter member receives serpentine bumps on its axis-aligned segments
+    nearest the terminal or bend where the length difference accumulates,
+    starting at the segment end nearest that point and bulging away from the
+    partner. Every bump is at most ``amplitude_limit_nm`` tall and 3 x width
+    wide, and stays 3 x width from the next bump and from both segment ends.
+    Its corners are 45-degree chamfers (plan R9, ``bump_chamfers``) whose leg
+    is at most the member's narrowest width, so a bump adds ``bump_gain``.
+    The fewest bumps (at most eight) that bring the skew within
+    ``max_skew_nm``, less ``margin_nm`` (at most the limit), are used, all of
+    the least height that does; if they do not fit, the geometry is unchanged
+    and the skew gate reports the mismatch. The caller validates the tuned
+    pair atomically (budgets and native DRC). Returns the added length in
+    nanometres.
     """
     first_length, second_length = _track_length(tuple(first)), _track_length(tuple(second))
-    excess = abs(first_length - second_length) - max_skew_nm
-    if excess <= 0 or amplitude_limit_nm <= 0:
+    skew = abs(first_length - second_length)
+    if skew <= max_skew_nm or amplitude_limit_nm <= 0:
         return 0
+    excess = skew - max_skew_nm + min(margin_nm, max_skew_nm)
     target, partner = (first, second) if first_length < second_length else (second, first)
-    count = -(-excess // (2 * amplitude_limit_nm))
+    width = min(track.width_nm for track in target)
+
+    def gain(height: int) -> int:
+        return bump_gain(height, *bump_chamfers(height, width))
+
+    if gain(amplitude_limit_nm) <= 0:
+        return 0
+    count = -(-excess // gain(amplitude_limit_nm))
     if count > _MAX_TUNING_BUMPS:
         return 0
-    height = -(-excess // (2 * count))
+    low, height = 0, amplitude_limit_nm   # short of the excess at ``low``, enough at ``height``
+    while height - low > 1:
+        middle = (low + height) // 2
+        low, height = (middle, height) if count * gain(middle) < excess else (low, middle)
     placements: dict[int, tuple[bool, int]] = {}
     remaining = count
     for index, from_start in _tuning_sites(target, partner):
@@ -1684,8 +1708,8 @@ def _tune_pair(first: list[TrackSegment], second: list[TrackSegment],
         return 0
     for index in sorted(placements, reverse=True):
         from_start, bumps = placements[index]
-        target[index:index + 1] = _serpentine(target[index], bumps, height, from_start, partner)
-    return 2 * height * count
+        target[index:index + 1] = _serpentine(target[index], bumps, height, width, from_start, partner)
+    return count * gain(height)
 
 
 def _tuning_sites(
@@ -1790,9 +1814,12 @@ def _arc_projection(path: list[tuple[Point, Point]], point: tuple[float, float])
     return best[1] if best is not None else 0.0
 
 
-def _serpentine(track: TrackSegment, bumps: int, height: int, from_start: bool,
+def _serpentine(track: TrackSegment, bumps: int, height: int, chamfer_width: int, from_start: bool,
                 partner: list[TrackSegment]) -> list[TrackSegment]:
-    """Replace one axis-aligned segment with ``bumps`` rectangular bumps."""
+    """Replace one axis-aligned segment with ``bumps`` chamfered bumps.
+
+    The chamfer leg is at most ``chamfer_width`` (``bump_chamfers``).
+    """
     dx, dy = track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm
     length = abs(dx) + abs(dy)
     ux, uy = (dx > 0) - (dx < 0), (dy > 0) - (dy < 0)
@@ -1801,14 +1828,15 @@ def _serpentine(track: TrackSegment, bumps: int, height: int, from_start: bool,
     if not from_start:
         offsets = sorted(length - pitch - offset for offset in offsets)
     nx, ny = _away_from_partner(track, partner)
+    chamfers = bump_chamfers(height, chamfer_width)
 
-    def at(distance: int, raised: bool = False) -> Point:
-        return Point(track.start.x_nm + ux * distance + (nx * height if raised else 0),
-                     track.start.y_nm + uy * distance + (ny * height if raised else 0))
+    def at(distance: int, rise: int) -> Point:
+        return Point(track.start.x_nm + ux * distance + nx * rise,
+                     track.start.y_nm + uy * distance + ny * rise)
 
     points = [track.start]
     for offset in offsets:
-        points.extend((at(offset), at(offset, True), at(offset + pitch, True), at(offset + pitch)))
+        points.extend(at(*corner) for corner in bump_path(offset, offset + pitch, height, *chamfers))
     points.append(track.end)
     return [TrackSegment(track.net, start, end, track.width_nm, track.layer)
             for start, end in zip(points, points[1:]) if start != end]

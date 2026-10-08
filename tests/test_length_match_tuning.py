@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from fractions import Fraction
 import json
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from pcbir import (
     route_global, run_physical_drc, verify_match_groups,
 )
 from pcbir.critical import _track_length, _validate_candidate, critical_lane_table
-from pcbir.critical_tuning import UnitTuner
+from pcbir.critical_tuning import UnitTuner, bump_chamfers, bump_gain
 from pcbir.geometry import segment_distance_squared
 from pcbir.physical import DesignRules
 from pcbir.routing_clearance import RoutingClearanceIndex
@@ -82,6 +83,37 @@ def _length(tracks, net: str) -> int:
     return _track_length(tuple(track for track in tracks if track.net == net))
 
 
+_COMPASS = ((1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1))
+
+
+def _heading(track: TrackSegment) -> int:
+    """Compass index of an axis-aligned or exactly 45-degree track."""
+    dx, dy = track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm
+    assert (dx == 0) != (dy == 0) or abs(dx) == abs(dy) != 0, track
+    return _COMPASS.index(((dx > 0) - (dx < 0), (dy > 0) - (dy < 0)))
+
+
+def _sharp_bends(path, keep=()) -> list[Point]:
+    """Vertices of a continuous path that turn by more than 45 degrees, except ``keep``."""
+    return [a.end for a, b in zip(path, path[1:])
+            if a.end not in keep and min((_heading(b) - _heading(a)) % 8, (_heading(a) - _heading(b)) % 8) > 1]
+
+
+def _lane_offsets(first, second) -> set[Fraction]:
+    """Squared distance between the lines of each track of ``first`` and its nearest parallel track of ``second``."""
+    def line_distance_squared(track: TrackSegment, point: Point) -> Fraction:
+        dx, dy = track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm
+        cross = dx * (point.y_nm - track.start.y_nm) - dy * (point.x_nm - track.start.x_nm)
+        return Fraction(cross * cross, dx * dx + dy * dy)
+
+    offsets = set()
+    for a in first:
+        nearest = min((b for b in second if _heading(b) % 4 == _heading(a) % 4),
+                      key=lambda b: segment_distance_squared(a.start, a.end, b.start, b.end))
+        offsets.add(line_distance_squared(a, nearest.start))
+    return offsets
+
+
 def test_pairs_of_a_match_group_are_tuned_as_pairs_into_the_group_skew() -> None:
     board = _lanes_board()
     result = route_critical_nets(board, route_global(board))
@@ -142,16 +174,18 @@ def test_a_single_ended_member_is_tuned_alone() -> None:
 
 
 def test_bumps_respect_the_amplitude_limit_and_prefer_the_free_side() -> None:
-    # A wall 0.5 mm above LANE_B leaves the side below free: both bumps go
-    # below, at the full amplitude limit.
+    # A wall 0.5 mm above LANE_B leaves the side below free: all bumps go
+    # below, no taller than the amplitude limit. A full-height bump adds
+    # 2 x 1 mm less its chamfers, so 4 mm takes four levelled bumps.
     board = _lanes_board(TWO_LANES, keepouts=(_keepout("wall-above", 6, "14.8", 28, 17),))
     result = route_critical_nets(board, route_global(board))
     (tuning,) = result.match_tuning
-    assert (tuning.status, tuning.bumps) == ("tuned", 2)
+    assert (tuning.status, tuning.bumps) == ("tuned", 4)
+    assert 3 * bump_gain(AMPLITUDE, *bump_chamfers(AMPLITUDE, WIDTH, SPACING)) < nm_from_mm(4)
     lane = _lane(result.board.tracks, "LANE_B")
     ys = {p.y_nm for t in lane for p in (t.start, t.end)}
     assert max(ys) == nm_from_mm("14.2")
-    assert min(ys) == nm_from_mm("13.8") - AMPLITUDE
+    assert nm_from_mm("13.8") - AMPLITUDE <= min(ys) < nm_from_mm("13.8") - nm_from_mm("0.8")
     assert not _hard(result.board)
 
     # Walls on both sides leave 0.5 mm: more, lower bumps within that room.
@@ -159,7 +193,7 @@ def test_bumps_respect_the_amplitude_limit_and_prefer_the_free_side() -> None:
                                                _keepout("wall-below", 6, 11, 28, "13.2")))
     result = route_critical_nets(narrow, route_global(narrow))
     (tuning,) = result.match_tuning
-    assert (tuning.status, tuning.bumps) == ("tuned", 4)
+    assert (tuning.status, tuning.bumps) == ("tuned", 10)
     lane = _lane(result.board.tracks, "LANE_B")
     assert all(nm_from_mm("13.3") <= p.y_nm <= nm_from_mm("14.7") for t in lane for p in (t.start, t.end))
     assert not _hard(result.board)
@@ -167,16 +201,26 @@ def test_bumps_respect_the_amplitude_limit_and_prefer_the_free_side() -> None:
 
 def test_a_unit_that_cannot_match_the_longest_member_adds_the_minimum_within_the_limit() -> None:
     # A loose 6 mm group limit: matching the 7.2 mm pair to the 14.15 mm one
-    # needs 6.95 mm, more than three 0.3 mm bumps on its short run can add.
+    # needs 6.95 mm, more than three 0.6 mm bumps on its short run can add.
     # The least length that reaches the limit (0.95 mm) still fits.
-    board = _lanes_board((("LANE_A", 6, 5, "19.15"), ("LANE_B", 14, 5, "12.2")), max_skew="6",
-                         amplitude=nm_from_mm("0.3"))
+    lanes = (("LANE_A", 6, 5, "19.15"), ("LANE_B", 14, 5, "12.2"))
+    board = _lanes_board(lanes, max_skew="6", amplitude=nm_from_mm("0.6"))
     result = route_critical_nets(board, route_global(board))
     (tuning,) = result.match_tuning
     assert (tuning.status, tuning.skew_before_nm, tuning.skew_after_nm, tuning.bumps) == (
         "tuned", nm_from_mm("6.95"), nm_from_mm(6), 2)
     assert {member.net: member.added_length_nm for member in tuning.members if member.added_length_nm} == {
         "LANE_B_N": nm_from_mm("0.95"), "LANE_B_P": nm_from_mm("0.95")}
+    assert not _hard(result.board)
+
+    # With breakout regions the least length keeps a margin inside the limit:
+    # a 45-degree piece re-cut at a region boundary may round differently.
+    board = replace(board, net_routing_rules=tuple(
+        replace(rule, breakout_length_nm=nm_from_mm("1"), breakout_width_nm=nm_from_mm("0.15"))
+        for rule in board.net_routing_rules))
+    result = route_critical_nets(board, route_global(board))
+    (tuning,) = result.match_tuning
+    assert (tuning.status, tuning.skew_after_nm) == ("tuned", nm_from_mm(6) - 32)
     assert not _hard(result.board)
 
 
@@ -190,7 +234,8 @@ def test_tuning_lands_where_there_is_room_along_the_member() -> None:
     raised = [t for t in _lane(result.board.tracks, "LANE_B")
               if max(t.start.y_nm, t.end.y_nm) > nm_from_mm("14.2")]
     assert raised
-    assert all(min(t.start.x_nm, t.end.x_nm) > nm_from_mm(21) for t in raised)
+    assert all(max(t.start.x_nm, t.end.x_nm) < nm_from_mm(9) or min(t.start.x_nm, t.end.x_nm) > nm_from_mm(21)
+               for t in raised)
     assert min(p.y_nm for t in _lane(result.board.tracks, "LANE_B") for p in (t.start, t.end)) == nm_from_mm("13.8")
     assert not _hard(result.board)
 
@@ -296,16 +341,19 @@ def test_pair_bumps_keep_the_lane_spacing_in_any_direction() -> None:
         "reversed": (TrackSegment("A", Point.mm(30, 50), Point.mm(30, 10), WIDTH, layer),
                      TrackSegment("B", Point.mm("30.4", 10), Point.mm("30.4", 50), WIDTH, layer)),
     }
+    # Fifteen full-height bumps.
+    added = 15 * bump_gain(AMPLITUDE, *bump_chamfers(AMPLITUDE, WIDTH, SPACING))
     for tracks in shapes.values():
         tuner = UnitTuner(board, obstacles, tracks, ("A", "B"), SPACING, AMPLITUDE, nm_from_mm("0.1"))
-        tuned, bumps, reason = tuner.tune(nm_from_mm(30))
+        tuned, bumps, reason = tuner.tune(added)
         assert reason == "" and bumps == 15
         for net in ("A", "B"):
             # Each member gains the same length, its path stays continuous and
             # no bump rises more than the amplitude limit off its own lane.
-            assert _length(tuned, net) == _length(tracks, net) + nm_from_mm(30)
+            assert _length(tuned, net) == _length(tracks, net) + added
             path = [t for t in tuned if t.net == net]
             assert all(a.end == b.start for a, b in zip(path, path[1:]))
+            assert _sharp_bends(path, keep={p for t in tracks for p in (t.start, t.end)}) == []
             lane = [t for t in tracks if t.net == net]
             assert max(min(segment_distance_squared(p, p, t.start, t.end) for t in lane)
                        for track in path for p in (track.start, track.end)) == AMPLITUDE ** 2
@@ -315,8 +363,45 @@ def test_pair_bumps_keep_the_lane_spacing_in_any_direction() -> None:
                    for a in first for b in second) == SPACING ** 2
         # The bump count is bounded.
         bounded, _, reason = UnitTuner(board, obstacles, tracks, ("A", "B"), SPACING, AMPLITUDE,
-                                       nm_from_mm("0.1"), bump_limit=4).tune(nm_from_mm(30))
+                                       nm_from_mm("0.1"), bump_limit=4).tune(added)
         assert bounded is None and "the limit of 4 bumps" in reason
+
+
+def test_pair_bumps_have_coupled_45_degree_corners_and_add_exact_lengths() -> None:
+    board = PhysicalBoard("Empty", BoardOutline.rectangle(60, 60), {}, (), ())
+    layer = CopperLayer.FRONT
+    tracks = (TrackSegment("A", Point.mm(5, 10), Point.mm(45, 10), WIDTH, layer),
+              TrackSegment("B", Point.mm(5, "9.6"), Point.mm(45, "9.6"), WIDTH, layer))
+    tuner = UnitTuner(board, RoutingClearanceIndex(board), tracks, ("A", "B"), SPACING, AMPLITUDE,
+                      nm_from_mm("0.1"))
+    # The outside chamfer of a coupled 45-degree bend is longer by
+    # floor((2 - sqrt 2) x spacing).
+    offset = 234314
+    assert bump_chamfers(AMPLITUDE, WIDTH, SPACING) == (WIDTH, WIDTH + offset)
+    # Targets from a few nanometres (single 45-degree ramps) to full-height
+    # chamfered bumps.
+    for added in (4, 20_000, nm_from_mm("0.3"), nm_from_mm("1.5"), nm_from_mm(7)):
+        tuned, bumps, reason = tuner.tune(added)
+        assert reason == "" and bumps
+        paths = {net: [t for t in tuned if t.net == net] for net in ("A", "B")}
+        for path in paths.values():
+            assert all(a.end == b.start for a, b in zip(path, path[1:]))
+            assert _sharp_bends(path) == []
+            assert _track_length(tuple(path)) == nm_from_mm(40) + added
+        # The lanes stay the pair spacing apart through every bump, nowhere
+        # closer and at most two nanometres farther (integer 45-degree corners).
+        assert min(segment_distance_squared(a.start, a.end, b.start, b.end)
+                   for a in paths["A"] for b in paths["B"]) == SPACING ** 2
+        for first, second in (("A", "B"), ("B", "A")):
+            assert all(SPACING ** 2 <= offset_squared < (SPACING + 2) ** 2
+                       for offset_squared in _lane_offsets(paths[first], paths[second]))
+        if added == nm_from_mm(7):
+            # Full chamfers: each member is inside the turn at two corners of a
+            # bump (leg = width) and outside it at the other two.
+            for path in paths.values():
+                legs = sorted(abs(t.end.x_nm - t.start.x_nm) for t in path
+                              if t.start.x_nm != t.end.x_nm and t.start.y_nm != t.end.y_nm)
+                assert legs == [WIDTH] * 2 * bumps + [WIDTH + offset] * 2 * bumps
 
 
 def test_preflight_prints_one_line_per_match_group(tmp_path, monkeypatch, capsys) -> None:

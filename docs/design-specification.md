@@ -1544,3 +1544,24 @@ fallback. The bundle record lists each crossing, its layer, transitions and
 return-via or shared-reference decision. Bundles without crossings MUST route
 byte-identically. A planned layer is not impedance or via-stub qualification.
 See R5 in the [D-PHY routing plan](dphy-routing-plan.md).
+
+## CS-167 — 45-degree corners on tuning bumps (Accepted)
+
+Length-match bumps (R3) and intra-pair skew bumps (D5) MUST NOT have 90°
+corners. A bump keeps its perpendicular legs and chamfers every corner at 45°:
+for height h, track width w and d = ⌊(2 − √2) × lane spacing⌋ for a pair (0
+for a single net), the member inside a turn takes chamfer leg
+c = min(w, ⌊h/4⌋, ⌊(h − d)/2⌋) and the other member c + d, the offset chamfers
+of a coupled 45° bend. Every 45° piece has equal integer dx and dy, and
+parallel pieces of the two lanes are never closer than the lane spacing (at
+most 2 nm farther). A bump too low for c ≥ 1 has one 45° ramp per side. Each
+pair member is inside the turn at two corners of a bump and outside at the
+other two, so both gain exactly the same length and the pair's skew is
+unchanged. Tuners MUST count the chamfered gain as critical lengths measure it
+(each piece rounded on its own) when choosing bump counts and levelled
+heights, within the amplitude and bump limits; on boards with breakout regions
+their targets stay 32 nm inside `max_skew`, because re-cut 45° pieces may
+round differently. The R3 room check uses the convex outline of the chamfered
+bump; native DRC still validates every tuned candidate atomically. Boards
+without tuning MUST route byte-identically. A chamfer is not a qualification of
+the bend's impedance. See R9 in the [D-PHY routing plan](dphy-routing-plan.md).
