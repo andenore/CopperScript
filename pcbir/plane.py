@@ -192,7 +192,7 @@ def stitch_zone_pads(
                     span = set(board.stackup.copper_layers[a:b+1])
                     if via.net == net and any(span.intersection(zone.layers)
                             and _point_in_zone(via.position, zone.outline)
-                            and not any(k.block_zones and span.intersection(k.layers)
+                            and not any(k.block_zones and span.intersection(zone.layers, k.layers)
                                         and _point_in_zone(via.position, k.outline)
                                         for k in keepouts)
                             for zone in reference_zones):
@@ -214,13 +214,12 @@ def stitch_zone_pads(
                         and (via.position.x_nm - position.x_nm) ** 2
                             + (via.position.y_nm - position.y_nm) ** 2
                             <= options.maximum_radius_nm ** 2
-                        and any(_point_in_zone(via.position, zone.outline)
-                                for zone in reference_zones)
-                        and not any(
-                            k.block_zones
-                            and set(board.stackup.copper_layers).intersection(k.layers)
-                            and _point_in_zone(via.position, k.outline)
-                            for k in keepouts
+                        and any(
+                            _point_in_zone(via.position, zone.outline)
+                            and not any(k.block_zones and set(zone.layers).intersection(k.layers)
+                                        and _point_in_zone(via.position, k.outline)
+                                        for k in keepouts)
+                            for zone in reference_zones
                         )
                         for i, via in enumerate(board.vias)
                     ):

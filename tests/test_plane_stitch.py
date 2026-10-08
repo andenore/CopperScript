@@ -182,6 +182,10 @@ def test_preferred_ground_pad_keeps_its_existing_local_plane_contact() -> None:
             Via("GND", Point.mm("3.75", "5.25"), nm_from_mm("0.6"),
                 nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),
         ),
+        copper_keepouts=(CopperKeepout(
+            "back-fill-only", (CopperLayer.BACK,), board.zones[0].outline,
+            block_tracks=False, block_vias=False,
+        ),),
     )
     result = stitch_zone_pads(board, PlaneStitchOptions(
         preferred_ground_pads={first, second},

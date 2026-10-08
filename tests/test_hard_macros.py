@@ -416,6 +416,11 @@ def test_plane_stitch_reuses_macro_return_without_shortcutting_private_pads(tmp_
     asset["vias"] = [dict(net="signal",position_nm=[-1000000,0],size_nm=600000,
         drill_nm=300000,from_layer="F.Cu",to_layer="B.Cu",technology=None)]
     asset["ports"][0].update(point=[-1000000,0],layer="B.Cu")
+    # The via crosses B.Cu, but that layer's fill keepout cannot block its
+    # contact to the declared In1.Cu plane.
+    asset["keepouts"].append(dict(id="back-fill-exclusion", layers=["B.Cu"],
+        vertices=[[-1500000,-500000],[-500000,-500000],[-500000,500000],[-1500000,500000]],
+        block_tracks=False, block_vias=False, block_zones=True))
     board = materialize_hard_macros(bind(input_board=source))
     result = stitch_zone_pads(board)
     assert result.complete and result.added_track_count == result.added_via_count == 0
