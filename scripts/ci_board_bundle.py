@@ -83,14 +83,16 @@ def prepare(output: Path) -> None:
     # The resolver fetches only the pinned revision and verifies every lock byte.
     # Nothing here canonicalizes, refreshes or modifies the authoritative lock.
     library = library_module(offline=False)
-    # CM4 is a standalone example project with its own copper.mod/copper.lock.
-    # Warm that local cache explicitly so the Make smoke can run every example
-    # with --offline, just as the release route does after preparation.
-    cm4_source = ROOT / "examples/cm4_baseboard/board.copper"
-    compile_file(cm4_source, locked=True, offline=False)
-    compile_file(cm4_source, locked=True, offline=True)
+    # CM4, nRF52 and the nRF antenna macro are standalone example projects,
+    # each with its own copper.mod/copper.lock and package cache. Warm every
+    # one explicitly so the Make smoke and the nRF52 route (which loads the
+    # antenna macro scene) can run with --offline, just as the release route
+    # does after preparation.
+    for example in ("cm4_baseboard", "nrf52_coin_cell", "nrf_antenna_macro"):
+        source = ROOT / "examples" / example / "board.copper"
+        compile_file(source, locked=True, offline=False)
+        compile_file(source, locked=True, offline=True)
     compile_file(ROOT / "examples/full_vertical/board.copper", locked=True, offline=True)
-    compile_file(ROOT / "examples/nrf52_coin_cell/board.copper", locked=True, offline=True)
     if lock_path.read_bytes() != original:
         raise ValueError("locked preparation unexpectedly changed copper.lock")
     save(output / "provenance.json", {
