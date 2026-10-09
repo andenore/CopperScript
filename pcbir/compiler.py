@@ -404,6 +404,12 @@ def _load_package(
                 else:
                     qualified = f"{namespace}.{raw}"
                 item = replace(item, profile=qualified)
+            elif isinstance(getattr(item, "parameters", {}).get("footprint"), str):
+                # A profile's connector footprint is module-relative, like a
+                # part's: qualify it so the binding names the same asset the
+                # component's own selection does, from the package cache too.
+                item = replace(item, parameters={**item.parameters, "footprint":
+                    resolver.qualify_footprint(item.parameters["footprint"], item.location)})
             items.append(item)
         definition = MechanicalProfileDefinition(f"{namespace}.{name}", document.location, tuple(items))
         _merge_profiles(profiles, {definition.name: definition}, document.location)

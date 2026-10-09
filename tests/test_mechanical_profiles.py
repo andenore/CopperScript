@@ -346,3 +346,31 @@ def test_imported_copper_keepouts_block_tracks_and_vias(tmp_path):
         assert not index.can_track('N', Point.mm(40.5,5.5), Point.mm(44.5,5.5), 200000, layer)
         assert index.can_track('N', Point.mm(30,5.5), Point.mm(31.5,5.5), 200000, layer)
     assert not index.can_via('N', Point.mm(42,7), 600000, CopperLayer.FRONT, CopperLayer.BACK)
+
+def test_package_profile_connector_footprint_is_module_qualified(tmp_path):
+    # A package's profile names its connector footprint the same way its part
+    # names its own: relative to the module. Both must qualify to one asset,
+    # or the role check rejects a component that selected the right footprint.
+    package = tmp_path / "deps" / "parts"
+    package.mkdir(parents=True)
+    (package / "part.copper").write_text(
+        'part R { footprint = "R.kicad_mod";'
+        ' pin A { number = "1"; domains = "analog"; directions = "passive"; } }',
+        encoding="utf-8")
+    (package / "R.kicad_mod").write_text('(footprint "R")', encoding="utf-8")
+    (package / "carrier.copper").write_text(
+        'board_profile Carrier { outline rectangle { width = 20mm; height = 20mm; }'
+        ' connector port { anchor_pad = "1"; position = (5mm,5mm); rotation = 0;'
+        ' side = front; footprint = "R.kicad_mod"; } }', encoding="utf-8")
+    (tmp_path / "copper.mod").write_text(
+        "module test/board\nrequire github.com/vendor/lib v1\n"
+        "replace github.com/vendor/lib => ./deps\n", encoding="utf-8")
+    path = tmp_path / "board.copper"
+    path.write_text(
+        'board B { import p "github.com/vendor/lib/parts";'
+        ' component R1: p.R; net N { R1.A; }'
+        ' mechanical { use p.Carrier as host { port = R1; } } }', encoding="utf-8")
+    design = compile_design_file(path, offline=True)
+    qualified = "github.com/vendor/lib/parts/R.kicad_mod"
+    assert design.mechanical.connectors[0].footprint == qualified
+    assert design.electrical.library["p.R"].footprints == (qualified,)
