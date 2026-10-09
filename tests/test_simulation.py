@@ -388,8 +388,9 @@ def test_commit_ci_requires_simulator_and_keeps_release_only_routing():
     workflow = (ROOT / ".github/workflows/board-routing.yml").read_text()
     test_job = workflow.split("  test:\n", 1)[1].split("  route:\n", 1)[0]
     route_job = workflow.split("  route:\n", 1)[1].split("  publish:\n", 1)[0]
-    assert "COPPER_SIM_REQUIRED" in test_job and "Install pinned ngspice" in test_job
+    assert "COPPER_SIM_REQUIRED" in test_job and "id: ngspice" in test_job
     assert "matplotlib==3.10.6" in test_job and "plotly==6.3.0" in test_job
-    assert "Simulation reports" in test_job and "if: always()" in test_job
+    assert "Simulation reports" in test_job
+    assert test_job.count("if: ${{ always() && steps.ngspice.outcome == 'success' }}") == 2
     assert "run: python -m pytest" in test_job
     assert "startsWith(github.ref, 'refs/tags/v')" in route_job

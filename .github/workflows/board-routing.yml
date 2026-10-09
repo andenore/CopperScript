@@ -72,6 +72,7 @@ jobs:
             echo "::endgroup::"
           done
       - name: Install pinned ngspice
+        id: ngspice
         run: |
           sudo apt-get install --yes build-essential bison flex
           python scripts/ci_simulation.py install --prefix "$RUNNER_TEMP/copper-ngspice"
@@ -91,10 +92,10 @@ jobs:
           path: CopperScript/build/editor-dist
           if-no-files-found: error
       - name: Generate bounded simulation examples
-        if: always()
+        if: ${{ always() && steps.ngspice.outcome == 'success' }}
         run: python scripts/ci_simulation.py examples
       - name: Simulation reports
-        if: always()
+        if: ${{ always() && steps.ngspice.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: simulation-reports

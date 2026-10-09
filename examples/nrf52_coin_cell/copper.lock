@@ -60372,7 +60372,7 @@
       "version": "1c1699881d7cc1e63ce64312f09e5a266375b8e0"
     },
     {
-      "checksum": "sha256:1ceff53a878c032632fcd305090fff45680dfabc8e3f2778bf1afbea9f374dca",
+      "checksum": "sha256:9014f5a77a0be41fb428a5efd8c6c685dd8f829bf8750a25f8b67156568b614f",
       "files": [
         {
           "path": "compatibility/ad4134_device.copper",
@@ -60471,8 +60471,8 @@
         },
         {
           "path": "vertical_support/power_tree.copper",
-          "sha256": "be3506387d2785d9bd5b73d2f59f50e46afe0da517d7b4d7ca8e069f36b6a89b",
-          "size": 2964
+          "sha256": "dd0515107572ff19b87de48f09fde18d51b213eac3877f44db526103c2f5b600",
+          "size": 3084
         },
         {
           "path": "vertical_support/uart_level_shifter.copper",
