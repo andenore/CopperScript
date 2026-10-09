@@ -343,10 +343,13 @@ class PackageResolver:
             # Exact commit requirements are immutable and cannot be passed to
             # clone --branch. Disable host checkout conversions: the lock pins
             # repository bytes, not a platform-specific CRLF representation.
+            # core.eol is needed beside core.autocrlf because a dependency's
+            # own .gitattributes (`text=auto`) still converts on checkout, and
+            # its default, native, is CRLF on Windows.
             completed = subprocess.run(
                 [
                     "git",
-                    "-c", "core.autocrlf=false", "-c", "core.longpaths=true",
+                    "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.longpaths=true",
                     "clone",
                     "--quiet",
                     "--depth",
@@ -365,7 +368,8 @@ class PackageResolver:
             if re.fullmatch(r"[0-9a-fA-F]{40}", version):
                 for arguments in (("fetch", "--quiet", "--depth", "1", "origin", version),
                                   ("checkout", "--quiet", "--detach", version)):
-                    completed = subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.longpaths=true",
+                    completed = subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+                        "-c", "core.longpaths=true",
                         "-C", str(temporary), *arguments], capture_output=True, text=True)
                     if completed.returncode:
                         raise CopperScriptError("PKG006", completed.stderr.strip(), location)
