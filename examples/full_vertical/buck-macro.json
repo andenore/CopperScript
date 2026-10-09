@@ -1,0 +1,25 @@
+{
+  "asset": "assets/tps62130a-managed-footprints.json",
+  "asset_sha256": "a2bb1dc7084dbdd17d72ab0bfc1da5270db1ae090683619f7dc57c563f036969",
+  "bindings": {
+    "C_AVIN": "PWR/C_MODEM_AVIN",
+    "C_OUT1": "PWR/C_3V8",
+    "C_OUT2": "PWR/C_3V8_2",
+    "C_PVIN": "PWR/C_5V",
+    "C_SS": "PWR/C_MODEM_SS",
+    "L": "PWR/L_MODEM",
+    "R_FB_BOT": "PWR/R_MODEM_FB_BOT",
+    "R_FB_TOP": "PWR/R_MODEM_FB_TOP",
+    "U": "PWR/U_MODEM"
+  },
+  "name": "modem-buck",
+  "net_bindings": {
+    "EN": "MODEM_EN",
+    "FB": "PWR/MODEM_FB",
+    "GND": "GND",
+    "SS": "PWR/MODEM_SS",
+    "SW": "PWR/MODEM_SW",
+    "VIN": "V5",
+    "VOUT": "V3V8"
+  }
+}

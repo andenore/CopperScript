@@ -18,7 +18,9 @@ KICAD_FOOTPRINTS ?= $(KICAD10_FOOTPRINT_DIR)
 PHYSICAL_ARGS ?=
 PLACEMENT_TEMPLATES ?=
 HARD_MACRO ?=
-ROUTE_ARGS ?= --candidates 1 --feedback-iterations 1 \
+HARD_MACROS ?=
+ROUTE_CANDIDATES ?= 1
+ROUTE_ARGS ?= --candidates $(ROUTE_CANDIDATES) --feedback-iterations 1 \
  --router-iterations 5 --pitch-mm 1 --passes 2 --search-budget 20000 --progress \
  --soft-ripup --fanout --constrained-pins-first --progressive-guides \
  --repair-budget-multiplier 10 --plane-contact-radius-mm 5
@@ -30,7 +32,8 @@ KICAD_PYTHON ?= /usr/bin/python3
 _paths = $(if $(strip $(KICAD_CLI)),--kicad-cli "$(KICAD_CLI)") $(if $(strip $(KICAD_FOOTPRINTS)),--kicad-footprints "$(KICAD_FOOTPRINTS)")
 _physical_common = --layers $(LAYERS) --fab-profile $(FAB_PROFILE) \
  $(if $(strip $(PLACEMENT_TEMPLATES)),--placement-templates "$(PLACEMENT_TEMPLATES)") \
- $(if $(strip $(HARD_MACRO)),--hard-macro "$(HARD_MACRO)")
+ $(if $(strip $(HARD_MACRO)),--hard-macro "$(HARD_MACRO)") \
+ $(foreach macro,$(HARD_MACROS),--hard-macro "$(macro)")
 _physical = $(_physical_common) $(PHYSICAL_ARGS)
 _editor_physical = $(_physical_common)
 

@@ -128,7 +128,10 @@ Single-ended pre-routed critical owner nets retain length/via budgets. Entirely
 pre-routed differential macros fail closed until paired geometry/return-path
 certificates are supported. Multiple alternative ports for one private group,
 automatic boundary allocation and RF/stackup qualification remain out of scope.
-This does not automatically replace the full-vertical board's electrical circuit.
+The full-vertical board now opts into board-specific, digest-bound adaptations
+of the TPS62130A and Nordic/Johanson assets. The assets retain their original
+local copper; the board supplies the matching electrical nets and added parts.
+See [the integration plan](full-vertical-macro-ground-plan.md).
 
 ## Nordic/Johanson trial
 
@@ -150,8 +153,8 @@ The antenna runs along the upper-right edge of a 50 x 40 mm probe, with an
 adapted tee/feed and 6.5 x 6.5 mm corner fill/via exclusion. This is **not** a
 digitized Johanson reference PCB. Ground shape, via fence, feed width/impedance,
 tee values and enclosure/radiation behavior remain unqualified. Copying
-evaluation values does not tune the combined system. The normal full-vertical
-board remains unchanged pending qualification and pipeline integration.
+evaluation values does not tune the combined system. Full-vertical now includes
+this physical trial as a prototype; its antenna tuning remains unqualified.
 
 From CopperScript with the pinned Git footprint providers (CopperLib is
 URL-resolved):

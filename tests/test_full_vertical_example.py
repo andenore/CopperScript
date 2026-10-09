@@ -19,14 +19,15 @@ FIXED_FLOORPLAN = {
     "U_MODEM": ("20", "20", 90),
     "J_CELL": ("13.4", "6", 90),
     "J_SIM": ("10", "44", 270),
-    "U_NRF": ("86", "12", 0),
-    "ANT_BT": ("95.7", "12.508", 0),
+    "U_NRF": ("84", "12", 0),
+    "PWR/U_MODEM": ("54", "48", 0),
     "U_GNSS": ("86", "67", 0),
 }
 
 
 def test_full_vertical_mechanical_intent_lowers_to_hard_physical_rules() -> None:
-    physical = prototype_physicalize(compile_file(EXAMPLE), PrototypePhysicalOptions(copper_layers=6))
+    physical = prototype_physicalize(compile_file(EXAMPLE), PrototypePhysicalOptions(
+        copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     fixed = {rule.reference: rule for rule in physical.placement_rules
              if rule.fixed_position is not None}
     assert fixed.keys() == FIXED_FLOORPLAN.keys()
@@ -39,30 +40,40 @@ def test_full_vertical_mechanical_intent_lowers_to_hard_physical_rules() -> None
                and rule.targets[1].pad == "11"
                and rule.distance_nm == nm_from_mm(5)
                for rule in physical.relative_rules)
+    usb_reach = {rule.targets[1].reference for rule in physical.relative_rules
+                 if rule.targets[0].reference == "FL_USB"
+                 and rule.distance_nm == nm_from_mm(30)}
+    assert usb_reach == {"U_MCU", "U_MODEM"}
+    assert any(rule.reference == "U_MCU" and rule.region == "mcu-usb-lane"
+               for rule in physical.placement_rules)
 
 
-def test_fixed_floorplan_is_legal_on_installed_footprints_and_preserves_rf_macro() -> None:
+def test_fixed_floorplan_is_legal_with_both_hard_macros() -> None:
     from pcbir import FootprintResolver, PhysicalBoard, resolved_physicalize
     from pcbir.clusters import cluster_placements
     from pcbir.placement import placement_solution_is_legal, transformed_footprint_polygon, transformed_pad_position
-    from pcbir.placement_templates import apply_placement_templates
+    from pcbir.hard_macros import apply_hard_macro_scene
 
     physical = resolved_physicalize(compile_file(EXAMPLE, locked=True, offline=True),
         FootprintResolver(EXAMPLE.parent, (), locked=True, offline=True),
         PrototypePhysicalOptions(copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
-    physical = apply_placement_templates(physical, EXAMPLE.parent / "placement_templates.json")
-    refs = set(FIXED_FLOORPLAN) | {"C_BT_MATCH", "L_BT_MATCH"}
+    for name in ("buck-macro.json", "nrf-antenna-macro.json"):
+        physical = apply_hard_macro_scene(physical, EXAMPLE.parent / name, locked=True, offline=True)
+    refs = set(FIXED_FLOORPLAN) | {member.reference for cluster in physical.rigid_clusters
+                                  for member in cluster.members}
     poses = {pose.reference: pose for pose in physical.placements if pose.reference in refs}
     for rule in physical.placement_rules:
         if rule.fixed_position is not None:
             poses[rule.reference] = replace(poses[rule.reference], position=rule.fixed_position,
                 rotation_degrees=rule.fixed_rotation_degrees, side=rule.side)
-    poses.update(cluster_placements(physical, physical.rigid_clusters[0], poses["U_NRF"]))
-    # This bounded mechanical fixture checks the locked parts plus the RF macro;
+    for cluster in physical.rigid_clusters:
+        poses.update(cluster_placements(physical, cluster, poses[cluster.anchor.reference]))
+    # This bounded mechanical fixture checks the locked parts plus both macros;
     # complete-board placement is checked separately through plan-layout.
     fixture = PhysicalBoard("FixedFloorplan", physical.outline, physical.footprints,
         tuple(poses.values()), (), placement_rules=tuple(rule for rule in physical.placement_rules
-            if rule.reference in refs), rigid_clusters=physical.rigid_clusters)
+            if rule.reference in refs), rigid_clusters=physical.rigid_clusters,
+        stackup=physical.stackup)
     assert placement_solution_is_legal(fixture, poses)
     modem_rf = transformed_pad_position(fixture, poses["U_MODEM"], "35")
     modem = transformed_footprint_polygon(fixture, poses["U_MODEM"])
@@ -71,9 +82,9 @@ def test_fixed_floorplan_is_legal_on_installed_footprints_and_preserves_rf_macro
     assert max(point.y_nm for point in cellular) < min(point.y_nm for point in modem)
     assert transformed_pad_position(fixture, poses["J_CELL"], "1").y_nm > poses["J_CELL"].position.y_nm
     antenna_feed = transformed_pad_position(fixture, poses["ANT_BT"], "1")
-    assert poses["L_BT_MATCH"].position.x_nm < antenna_feed.x_nm < poses["ANT_BT"].position.x_nm
+    assert poses["L_BT_MATCH"].position.x_nm < antenna_feed.x_nm
     antenna = transformed_footprint_polygon(fixture, poses["ANT_BT"])
-    assert max(point.x_nm for point in antenna) == nm_from_mm(98)
+    assert max(point.x_nm for point in antenna) <= nm_from_mm(100)
     # Hard locks cannot be violated by later optimization/feedback.
     for ref in FIXED_FLOORPLAN:
         changed = {**poses, ref: replace(poses[ref], position=Point(
@@ -81,9 +92,37 @@ def test_fixed_floorplan_is_legal_on_installed_footprints_and_preserves_rf_macro
         assert not placement_solution_is_legal(fixture, changed)
 
 
+def test_full_vertical_footprint_adaptations_preserve_copperlib_macro_copper() -> None:
+    import hashlib
+    import json
+    from pcbir.packages import resolve_module_asset
+
+    base = "github.com/andenore/CopperLib/packages/circuits/"
+    for scene_name, source in (
+        ("buck-macro.json", base + "ti/tps62130a-buck/assets/tps62130a-six-layer-enabled.json"),
+        ("nrf-antenna-macro.json", base + "nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json"),
+    ):
+        scene = json.loads((EXAMPLE.parent / scene_name).read_text())
+        adapted_bytes = (EXAMPLE.parent / scene["asset"]).read_bytes()
+        assert hashlib.sha256(adapted_bytes).hexdigest() == scene["asset_sha256"]
+        adapted = json.loads(adapted_bytes)
+        source_bytes = resolve_module_asset(EXAMPLE, source, locked=True, offline=True).read_bytes()
+        assert hashlib.sha256(source_bytes).hexdigest() == adapted["source"]["base_asset_sha256"]
+        original = json.loads(source_bytes)
+        for key in original.keys() - {"members", "source"}:
+            assert adapted[key] == original[key]
+        assert len(adapted["members"]) == len(original["members"])
+        for member, prior in zip(adapted["members"], original["members"]):
+            assert {key: value for key, value in member.items()
+                    if key not in {"footprint", "footprint_digest"}} == {
+                        key: value for key, value in prior.items()
+                        if key not in {"footprint", "footprint_digest"}}
+
+
 def test_full_vertical_explicit_critical_profiles_lower_without_claiming_qualification() -> None:
     board = compile_file(EXAMPLE)
-    physical = prototype_physicalize(board, PrototypePhysicalOptions(copper_layers=6))
+    physical = prototype_physicalize(board, PrototypePhysicalOptions(
+        copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     profiles = {rule.net: rule for rule in physical.net_routing_rules}
     assert set(profiles) == {
         "USB_DP_MCU", "USB_DM_MCU", "USB_DP_MODEM", "USB_DM_MODEM",
@@ -131,12 +170,16 @@ def test_full_vertical_example_compiles_and_passes_erc() -> None:
     assert not any(path.endswith("/packages/full_vertical") for path in dependencies)
 
 
-def test_full_vertical_declares_unfilled_inner_ground_plane() -> None:
+def test_full_vertical_declares_inner_and_top_ground_fill() -> None:
     board = compile_file(EXAMPLE)
-    physical = prototype_physicalize(board, PrototypePhysicalOptions(copper_layers=4))
-    assert len(physical.zones) == 1
-    assert physical.zones[0].net == "GND"
-    assert tuple(layer.value for layer in physical.zones[0].layers) == ("In1.Cu",)
+    physical = prototype_physicalize(board, PrototypePhysicalOptions(
+        copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
+    assert len(physical.zones) == 6
+    ground = [zone for zone in physical.zones if zone.net == "GND"]
+    assert len(ground) == 5
+    assert any(tuple(layer.value for layer in zone.layers) == ("In1.Cu", "In4.Cu")
+               for zone in ground)
+    assert {zone.priority for zone in ground if zone.layers == (CopperLayer.FRONT,)} == {1, 2, 3, 4}
     assert physical.zone_fills == ()
 
 
@@ -204,11 +247,15 @@ def test_bluetooth_antenna_keeps_nc_anchor_isolated() -> None:
                    for net in board.nets for endpoint in net.endpoints)
 
 
-def test_nordic_matching_shunt_is_on_chip_side_of_series_inductor() -> None:
+def test_nordic_matching_and_antenna_tee_follow_macro_network() -> None:
     board = compile_file(EXAMPLE)
     nets = {net.name: {(ep.component, ep.pin) for ep in net.endpoints} for net in board.nets}
     assert nets["NRF_RF_RAW"] == {("U_NRF", "ANT"), ("C_BT_MATCH", "2"), ("L_BT_MATCH", "1")}
-    assert nets["NRF_RF_ANT"] == {("L_BT_MATCH", "2"), ("ANT_BT", "FEED")}
+    assert nets["NRF_RF_ANT"] == {("L_BT_MATCH", "2"), ("C_ANT_SERIES", "1")}
+    assert nets["ANT_TEE"] == {("C_ANT_SERIES", "2"), ("L_ANT_SHUNT", "2"),
+                                ("L_ANT_SERIES", "1")}
+    assert nets["ANT_FEED"] == {("L_ANT_SERIES", "2"), ("ANT_BT", "FEED")}
+    assert ("L_ANT_SHUNT", "1") in nets["GND"]
     assert ("C_BT_MATCH", "1") in nets["GND"]
 
 
@@ -251,7 +298,8 @@ def test_usb_choke_uses_coilcraft_winding_pairs_and_land_pattern() -> None:
     windings = {frozenset({"1", "2"}), frozenset({"4", "3"})}
     assert {frozenset({part.pins[f"{lane}_IN"].number,
                       part.pins[f"{lane}_OUT"].number}) for lane in ("DP", "DM")} == windings
-    physical = prototype_physicalize(board, PrototypePhysicalOptions(copper_layers=6))
+    physical = prototype_physicalize(board, PrototypePhysicalOptions(
+        copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
     choke_pads = {
         net.name: {pad.pad for pad in net.pads if pad.component == "FL_USB"}
         for net in physical.nets if any(pad.component == "FL_USB" for pad in net.pads)

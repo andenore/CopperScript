@@ -1,0 +1,21 @@
+{
+  "asset": "assets/nrf52832-johanson-managed-footprints.json",
+  "asset_sha256": "a37e7f5ab008a8786d88c3a3634e6547bbcd9016ccbef4106196240ae7e2c94b",
+  "bindings": {
+    "ANT": "ANT_BT",
+    "C3": "C_BT_MATCH",
+    "CA": "C_ANT_SERIES",
+    "L1": "L_BT_MATCH",
+    "LA": "L_ANT_SHUNT",
+    "LB": "L_ANT_SERIES",
+    "U1": "U_NRF"
+  },
+  "name": "nordic-antenna",
+  "net_bindings": {
+    "antenna": "ANT_FEED",
+    "feed": "NRF_RF_ANT",
+    "ground": "GND",
+    "raw": "NRF_RF_RAW",
+    "tee": "ANT_TEE"
+  }
+}

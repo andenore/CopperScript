@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_shared_route_defaults_auto_select_placement_without_make():
     recipe = (ROOT / "make/board.mk").read_text(encoding="utf-8")
     defaults = recipe.split("ROUTE_ARGS ?=", 1)[1].split("\nEXTRA_ROUTE_ARGS", 1)[0]
-    options = shlex.split(defaults.replace("\\\n", " "))
+    options = shlex.split(defaults.replace("\\\n", " ").replace("$(ROUTE_CANDIDATES)", "1"))
     args = _parser().parse_args(["route-board", "example.copper", *options])
     assert args.placement_candidate is None
     assert args.fanout and args.package_pattern_trials == 2
@@ -216,11 +216,16 @@ def test_shared_make_routes_use_generic_runner_and_exact_settings(make, example,
     options = command[command.index("--") + 1:]
     args = _parser().parse_args(["route-board", "example.copper", *options])
     assert args.layers == layers and not args.ground_via_in_pad and not args.allow_proxy_footprints
-    assert args.placement_candidate is None  # Choose among actual legal candidates, not a stale fixed ID.
+    if example != "full-vertical":
+        assert args.placement_candidate is None
     if example == "cm4":
         assert args.fanout_maze and args.fab_profile == "jlcpcb-four-layer"
     if example == "full-vertical":
-        assert args.placement_templates == ROOT / "examples/full_vertical/placement_templates.json"
+        assert args.placement_templates is None
+        assert args.hard_macro == [ROOT / "examples/full_vertical/buck-macro.json",
+                                   ROOT / "examples/full_vertical/nrf-antenna-macro.json"]
+        assert args.candidates == 3
+        assert args.placement_candidate == "candidate-00"
         assert args.zone_dependency_expansions == 2 and args.critical_feedback_trials == 0
     if example == "nrf52":
         assert args.hard_macro == [ROOT / "examples/nrf_antenna_macro/hard_macro.json"]

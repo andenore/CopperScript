@@ -61,12 +61,12 @@ the front side; positive rotation follows KiCad's counterclockwise convention.
 | U_MODEM | (20, 20) | 90° | Modem at top left, ANT_MAIN pad 35 facing north |
 | J_CELL | (13.4, 6) | 90° | Cellular U.FL above modem, signal land toward modem |
 | J_SIM | (10, 44) | 270° | SIM holder on left, insertion toward left |
-| U_NRF | (86, 12) | 0° | Nordic at top right, ANT pad facing right |
-| ANT_BT | (95.7, 12.508) | 0° | Bluetooth antenna at right edge, feed facing inward |
+| U_NRF | (84, 12) | 0° | Nordic RF macro anchor at top right |
+| PWR/U_MODEM | (54, 48) | 0° | Enabled TPS62130A macro anchor; private top copper |
 | U_GNSS | (86, 67) | 0° | GNSS at bottom right |
 
-The antenna courtyard stops at x = 98 mm, retaining the planner's current
-2 mm edge clearance. These are legal inset prototype positions, not a claim
+The Nordic hard macro places ANT_BT and its matching network along the
+upper-right corner. These are legal prototype positions, not a claim
 that connector bodies are flush with an enclosure or that RF keepouts are
 qualified. Antenna ground clearance, feed geometry, enclosure access and
 mechanical tolerances still need review. Changing the outline requires
@@ -74,10 +74,11 @@ reviewing these coordinates.
 
 `J_GNSS` remains automatic but must be within 5 mm of the GNSS RF input.
 Other components remain automatic and retain their existing proximity rules.
-Use `examples/full_vertical/placement_templates.json` when planning or routing:
-it preserves the source-backed Nordic matching components as a rigid unit
-with the fixed U_NRF anchor. Placement/routing feedback cannot move a hard
-lock; incompatible constraints must fail rather than silently relax it.
+The default Make workflow binds both the TPS62130A buck and Nordic/Johanson
+antenna hard macros. Their footprint-adapted assets live under
+`examples/full_vertical/assets/`; their copper and member poses are immutable.
+Placement/routing feedback cannot move a hard lock; incompatible constraints
+must fail rather than silently relax it.
 
 To generate an **unrouted** placement preview with installed footprints, after
 the README setup:
@@ -86,8 +87,9 @@ the README setup:
 New-Item -ItemType Directory -Force build/constrained-placement | Out-Null
 uv run --no-sync python -m copperscript plan-layout examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --placement-templates examples/full_vertical/placement_templates.json `
-  --candidates 1 `
+  --hard-macro examples/full_vertical/buck-macro.json `
+  --hard-macro examples/full_vertical/nrf-antenna-macro.json `
+  --candidates 3 --placement-candidate candidate-00 `
   --report build/constrained-placement/layout-report.json `
   -o build/constrained-placement/placed.kicad_pcb
 ```
@@ -217,7 +219,9 @@ placement/global/critical stages in isolation (after the README setup):
 ```powershell
 uv run --no-sync python -m pcbir.critical_preflight examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --candidates 1 --placement-candidate candidate-01 `
+  --hard-macro examples/full_vertical/buck-macro.json `
+  --hard-macro examples/full_vertical/nrf-antenna-macro.json `
+  --candidates 3 --placement-candidate candidate-00 `
   --feedback-iterations 1 --router-iterations 5 `
   --report outputs/critical-preflight.json -o outputs/critical-board.kicad_pcb
 ```
@@ -391,8 +395,9 @@ this does not qualify impedance or production readiness.
 
 ## Running the example
 
-The current six-layer source reserves `In1.Cu` for the GND reference and adds
-a board-wide `V3V3` distribution region on `In3.Cu`, each inset 0.5 mm from
+The current six-layer source uses `In1.Cu` and `In4.Cu` for GND reference,
+four F.Cu GND fill regions around the buck's private copper, and a board-wide
+`V3V3` distribution region on `In3.Cu`, each inset 0.5 mm from
 the outline. The V3V3 net has 32 pads and is connected by native zone fill
 instead of ordinary track-tree routing. Pads above their own distribution
 region favor short local via escapes. On the same placement, this reduced
@@ -411,6 +416,14 @@ ordinary nets routed, and native filled-board KiCad DRC found zero violations
 and zero unconnected items. The modem-side USB pair now uses two vias per
 member and In2.Cu; the signal geometry and return path still need electrical
 review. See [the placement plan and results](critical-inline-placement-plan.md).
+
+With both hard macros and the F.Cu GND fill, the verified `candidate-00`
+route at `build/full-vertical/runs/20261009T092725319855Z` connects all 50
+ordinary nets. Native filled-board KiCad DRC reports zero violations and
+zero unconnected items. The four USB tracks total 60.80 mm; the default
+automatic choice of `candidate-02` stretched them to 83.25 mm, so the Make
+workflow explicitly selects the verified candidate. These are geometric
+results, not electrical qualification of the modem supply or 2.4 GHz path.
 
 USB profiles now permit matched terminal vias to `In2.Cu`, adjacent to the
 declared `In1.Cu` GND plane, instead of requiring zero-via top-only routing.

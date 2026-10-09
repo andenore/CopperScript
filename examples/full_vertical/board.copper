@@ -60,6 +60,9 @@ board FullVerticalTracker {
     component R_CAN_TERM: RESISTOR { value = 120ohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
     component L_BT_MATCH: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
     component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_ANT_SERIES: CAPACITOR { value = 1pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component L_ANT_SHUNT: INDUCTOR { value = 2.7nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
+    component L_ANT_SERIES: INDUCTOR { value = 3.9nH; footprint = "Inductor_SMD:L_0402_1005Metric"; }
     component C_MCU: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
     component C_CC: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
     component C_NRF: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
@@ -215,6 +218,7 @@ board FullVerticalTracker {
         LED_1.K;
         LED_2.K;
         C_BT_MATCH.1;
+        L_ANT_SHUNT.1;
         C_MCU.2;
         C_NRF.2;
         C_ACCEL.2;
@@ -252,7 +256,10 @@ board FullVerticalTracker {
     // Nordic QFAA reference v1.1: C3 is shunt on the chip side of L1.
     // Follow vendor physical C3 numbering: upper pad 1 GND, lower pad 2 ANT.
     net NRF_RF_RAW { U_NRF.ANT; C_BT_MATCH.2; L_BT_MATCH.1; }
-    net NRF_RF_ANT { L_BT_MATCH.2; ANT_BT.FEED; }
+    // Johanson evaluation-style tee is provisional; tune on this stackup.
+    net NRF_RF_ANT { L_BT_MATCH.2; C_ANT_SERIES.1; }
+    net ANT_TEE { C_ANT_SERIES.2; L_ANT_SHUNT.2; L_ANT_SERIES.1; }
+    net ANT_FEED { L_ANT_SERIES.2; ANT_BT.FEED; }
 
     net GNSS_TX { U_GNSS.TXD; U_MCU.PA3; }
     net GNSS_RX { U_GNSS.RXD; U_MCU.PA2; }
@@ -330,20 +337,29 @@ board FullVerticalTracker {
     constraint fixed_placement(J_SIM) {
         x = 10mm; y = 44mm; rotation = 270; side = front;
     }
-    // The RF scene moves C_BT_MATCH/L_BT_MATCH as a rigid unit with U_NRF.
-    // ANT faces right; antenna feed pad 1 faces inward toward the network.
+    // The full RF macro places all five matching parts and ANT_BT with U_NRF.
+    // Its antenna clearance reaches the upper-right board corner.
     constraint fixed_placement(U_NRF) {
-        x = 86mm; y = 12mm; rotation = 0; side = front;
+        x = 84mm; y = 12mm; rotation = 0; side = front;
     }
-    constraint fixed_placement(ANT_BT) {
-        x = 95.7mm; y = 12.508mm; rotation = 0; side = front;
+    // The enabled TPS62130A macro fixes the hot loop and return contacts.
+    constraint fixed_placement(PWR/U_MODEM) {
+        x = 54mm; y = 48mm; rotation = 0; side = front;
     }
+    constraint via_in_pad(PWR/U_MODEM.EP) { process = "filled-capped"; }
     constraint fixed_placement(U_GNSS) {
         x = 86mm; y = 67mm; rotation = 0; side = front;
     }
     constraint max_distance(J_GNSS, U_GNSS.RF_IN) { distance = 5mm; }
 
     constraint max_distance(C_MCU, U_MCU.VDD) { distance = 3mm; }
+    // Keep the four-line USB filter in a usable corridor between both chips.
+    constraint max_distance(FL_USB.DP_IN, U_MCU.PA12) { distance = 30mm; }
+    constraint max_distance(FL_USB.DP_OUT, U_MODEM.USB_DP) { distance = 30mm; }
+    // Leave the MCU room to move while keeping its USB pins in the upper lane.
+    constraint placement_region(U_MCU) {
+        name = "mcu-usb-lane"; x = 38mm; y = 14mm; width = 20mm; height = 20mm;
+    }
     constraint max_distance(C_CC, U_CC.VDD) { distance = 3mm; }
     constraint max_distance(C_NRF, U_NRF.VDD_1) { distance = 3mm; }
     constraint max_distance(C_ACCEL, U_ACCEL.VDD) { distance = 3mm; }
@@ -413,13 +429,14 @@ board FullVerticalTracker {
         target_impedance_ohms = 50; allowed_layers = "F.Cu"; max_vias = 0;
     }
 
-    // Inner GND reference and 3.3 V distribution planes. In2.Cu remains the
-    // adjacent signal layer for USB; In3.Cu gives the 32-pad supply net a
-    // board-wide connection without a long ordinary-net routing tree.
+    // Inner GND references and 3.3 V distribution. In2.Cu remains the
+    // adjacent signal layer for USB; In3.Cu supplies V3V3. The top GND zones
+    // leave the buck's private F.Cu region clear. RF keepouts exclude fill
+    // around chip matching, the feed and antenna corner.
     // Both zones require native refill and connected-copper signoff.
     constraint copper_zone(GND) {
         id = "ground-return-plane";
-        layers = "In1.Cu";
+        layers = "In1.Cu,In4.Cu";
         inset = 0.5mm;
         pad_connection = solid;
     }
@@ -429,5 +446,25 @@ board FullVerticalTracker {
         inset = 0.5mm;
         pad_connection = solid;
         island_policy = "remove_all";
+    }
+    constraint copper_zone(GND) {
+        id = "top-ground-north"; layers = "F.Cu";
+        polygon_mm = "0.5,0.5;99.5,0.5;99.5,41.6;0.5,41.6";
+        priority = 1; pad_connection = solid; island_policy = "remove_all";
+    }
+    constraint copper_zone(GND) {
+        id = "top-ground-west"; layers = "F.Cu";
+        polygon_mm = "0.5,41.0;43,41.0;43,54.0;0.5,54.0";
+        priority = 2; pad_connection = solid; island_policy = "remove_all";
+    }
+    constraint copper_zone(GND) {
+        id = "top-ground-east"; layers = "F.Cu";
+        polygon_mm = "61,41.0;99.5,41.0;99.5,54.0;61,54.0";
+        priority = 3; pad_connection = solid; island_policy = "remove_all";
+    }
+    constraint copper_zone(GND) {
+        id = "top-ground-south"; layers = "F.Cu";
+        polygon_mm = "0.5,53.6;99.5,53.6;99.5,79.5;0.5,79.5";
+        priority = 4; pad_connection = solid; island_policy = "remove_all";
     }
 }

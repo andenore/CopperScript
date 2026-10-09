@@ -482,8 +482,9 @@ New-Item -ItemType Directory -Force "build/full-vertical" | Out-Null
 
 uv run --no-sync python -m copperscript route-board examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
-  --placement-templates examples/full_vertical/placement_templates.json `
-  --candidates 1 --placement-candidate candidate-01 `
+  --hard-macro examples/full_vertical/buck-macro.json `
+  --hard-macro examples/full_vertical/nrf-antenna-macro.json `
+  --candidates 3 --placement-candidate candidate-00 `
   --feedback-iterations 1 --router-iterations 5 --critical-feedback-trials 0 `
   --pitch-mm 1 --passes 2 --search-budget 20000 `
   --soft-ripup --fanout --constrained-pins-first --progressive-guides `
@@ -763,15 +764,11 @@ constraints also produce soft semantic placement groups.
 
 The physical Python API also supports [rigid reference-layout clusters](docs/rigid-placement-clusters.md).
 Unlike soft groups, these retain identity-bound local footprint poses and
-keepouts during whole-cluster placement/refinement and routing feedback,
-including explicitly permitted 45-degree rotations. Vendor RF templates and
-their qualification are separate work; the example does not yet use a qualified
-Nordic/Johanson cluster. An opt-in
-`--placement-templates examples/full_vertical/placement_templates.json` scene
-now binds the source-extracted Nordic matching macro to pinned KiCad footprints.
-It is a provisional adaptation, not the complete vendor support/ground layout;
-use the [template preflight command](docs/rigid-placement-clusters.md#source-backed-cli-scene)
-before attempting the complete routing workflow with that option.
+keepouts during whole-cluster placement/refinement and routing feedback.
+Full-vertical now binds the experimental TPS62130A and Nordic/Johanson
+[hard macros](docs/physical-hard-macros.md) by default. Their local copper is
+locked, but regulator current/thermal performance and RF/antenna tuning remain
+unqualified. See the [integration plan](docs/full-vertical-macro-ground-plan.md).
 
 ## Exact assembly-selection prototype
 

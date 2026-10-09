@@ -35,7 +35,10 @@ def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
     (tmp_path / ".github/board-toolchain.json").write_text('{}')
     original = b'{"modules": []}\n'
     (tmp_path / "copper.lock").write_bytes(original)
-    for name in ("full_vertical/board.copper", "full_vertical/placement_templates.json",
+    for name in ("full_vertical/board.copper", "full_vertical/buck-macro.json",
+                 "full_vertical/nrf-antenna-macro.json",
+                 "full_vertical/assets/tps62130a-managed-footprints.json",
+                 "full_vertical/assets/nrf52832-johanson-managed-footprints.json",
                  "nrf52_coin_cell/board.copper", "nrf_antenna_macro/hard_macro.json",
                  "cm4_baseboard/board.copper"):
         path = tmp_path / "examples" / name

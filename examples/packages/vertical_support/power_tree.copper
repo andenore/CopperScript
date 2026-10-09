@@ -19,10 +19,11 @@ module FullVerticalPowerTree {
     component R_MODEM_FB_TOP: RESISTOR { value = 750kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component R_MODEM_FB_BOT: RESISTOR { value = 200kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
     component C_5V: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
-    component C_MODEM_AVIN: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_MODEM_AVIN: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
     component C_MODEM_SS: CAPACITOR { value = 3.3nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
     component C_3V3: CAPACITOR { value = 22uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
     component C_3V8: CAPACITOR { value = 22uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
+    component C_3V8_2: CAPACITOR { value = 22uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
 
     net VIN5 { port.VIN5; U_LOGIC.IN; U_MODEM.AVIN; U_MODEM.PVIN_1; U_MODEM.PVIN_2; C_5V.1; C_MODEM_AVIN.1; }
     net MODEM_EN { port.MODEM_EN; U_MODEM.EN; R_MODEM_EN_PD.1; }
@@ -34,10 +35,10 @@ module FullVerticalPowerTree {
         U_MODEM.AGND; U_MODEM.PGND_1; U_MODEM.PGND_2; U_MODEM.EP;
         U_MODEM.FSW; U_MODEM.DEF;
         R_MODEM_EN_PD.2; R_MODEM_FB_BOT.2;
-        C_5V.2; C_MODEM_AVIN.2; C_MODEM_SS.2; C_3V3.2; C_3V8.2;
+        C_5V.2; C_MODEM_AVIN.2; C_MODEM_SS.2; C_3V3.2; C_3V8.2; C_3V8_2.2;
     }
     net V3V3 { port.V3V3; U_LOGIC.OUT; C_3V3.1; }
-    net V3V8 { port.V3V8; L_MODEM.B; U_MODEM.VOS; R_MODEM_FB_TOP.1; C_3V8.1; }
+    net V3V8 { port.V3V8; L_MODEM.B; U_MODEM.VOS; R_MODEM_FB_TOP.1; C_3V8.1; C_3V8_2.1; }
 
     supply INPUT { voltage = 5V; net = VIN5; external = true; }
     supply LOGIC { voltage = 3.3V; net = V3V3; source = U_LOGIC.OUT; }

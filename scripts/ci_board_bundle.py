@@ -131,7 +131,11 @@ def prepare(output: Path) -> None:
         "github": {key: os.environ.get(key) for key in (
             "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")},
         "inputs": {name: sha(ROOT / name) for name in (
-            "examples/full_vertical/board.copper", "examples/full_vertical/placement_templates.json",
+            "examples/full_vertical/board.copper",
+            "examples/full_vertical/buck-macro.json",
+            "examples/full_vertical/nrf-antenna-macro.json",
+            "examples/full_vertical/assets/tps62130a-managed-footprints.json",
+            "examples/full_vertical/assets/nrf52832-johanson-managed-footprints.json",
             "examples/nrf52_coin_cell/board.copper", "examples/nrf_antenna_macro/hard_macro.json")}})
 
 

@@ -1,0 +1,1565 @@
+{
+  "allowed_rotations": [
+    0,
+    90,
+    180,
+    270
+  ],
+  "anchor": "U",
+  "internal_clearance_nm": 0,
+  "isolated_pads": [
+    [
+      "U",
+      "4"
+    ]
+  ],
+  "keepouts": [
+    {
+      "block_tracks": false,
+      "block_vias": false,
+      "block_zones": true,
+      "id": "regulator-fill-exclusion",
+      "layers": [
+        "In2.Cu",
+        "In3.Cu",
+        "B.Cu"
+      ],
+      "vertices": [
+        [
+          -10600000,
+          -6000000
+        ],
+        [
+          6600000,
+          -6000000
+        ],
+        [
+          6600000,
+          5100000
+        ],
+        [
+          -10600000,
+          5100000
+        ]
+      ]
+    }
+  ],
+  "members": [
+    {
+      "center_nm": [
+        3400000,
+        900000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "footprint_digest": "86575c98c1bd84414ad1626d2f1a649749c0fb10743c56ba8f2c3fdee795a0ff",
+      "reference": "C_AVIN",
+      "rotation_degrees": "0"
+    },
+    {
+      "center_nm": [
+        -4200000,
+        -2700000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "footprint_digest": "10029d0eef91812b8b2cbffa7695a033370cbca3ee988ba1426b632cf6609662",
+      "reference": "C_OUT1",
+      "rotation_degrees": "0"
+    },
+    {
+      "center_nm": [
+        -8000000,
+        -2700000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "footprint_digest": "10029d0eef91812b8b2cbffa7695a033370cbca3ee988ba1426b632cf6609662",
+      "reference": "C_OUT2",
+      "rotation_degrees": "180"
+    },
+    {
+      "center_nm": [
+        3200000,
+        -1900000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "footprint_digest": "10029d0eef91812b8b2cbffa7695a033370cbca3ee988ba1426b632cf6609662",
+      "reference": "C_PVIN",
+      "rotation_degrees": "90"
+    },
+    {
+      "center_nm": [
+        2900000,
+        2600000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "footprint_digest": "86575c98c1bd84414ad1626d2f1a649749c0fb10743c56ba8f2c3fdee795a0ff",
+      "reference": "C_SS",
+      "rotation_degrees": "180"
+    },
+    {
+      "center_nm": [
+        -5100000,
+        1050000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "github.com/andenore/CopperLib/packages/parts/coilcraft/xal4020/footprints/Inductor_SMD.pretty/L_Coilcraft_XAL4020-XXX.kicad_mod",
+      "footprint_digest": "69c1d0889340560bdf2cc29e464993505ab5be838f004e58c3b61e6085c9f3ef",
+      "reference": "L",
+      "rotation_degrees": "90"
+    },
+    {
+      "center_nm": [
+        300000,
+        3000000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Resistor_SMD:R_0402_1005Metric",
+      "footprint_digest": "e907cca3732f063d1d109c709b5962d31caeb59bfff68284fb04effdb7351e12",
+      "reference": "R_FB_BOT",
+      "rotation_degrees": "0"
+    },
+    {
+      "center_nm": [
+        -1600000,
+        3000000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Resistor_SMD:R_0402_1005Metric",
+      "footprint_digest": "e907cca3732f063d1d109c709b5962d31caeb59bfff68284fb04effdb7351e12",
+      "reference": "R_FB_TOP",
+      "rotation_degrees": "0"
+    },
+    {
+      "center_nm": [
+        0,
+        0
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
+      "footprint_digest": "158b4c9ab9dd164e7b2fae276d18ac9ef974f00bf89f9eb6df0a2ed9dd0053fd",
+      "reference": "U",
+      "rotation_degrees": "0"
+    }
+  ],
+  "pad_nets": [
+    [
+      "U",
+      "1",
+      "SW"
+    ],
+    [
+      "U",
+      "2",
+      "SW"
+    ],
+    [
+      "U",
+      "3",
+      "SW"
+    ],
+    [
+      "U",
+      "5",
+      "FB"
+    ],
+    [
+      "U",
+      "6",
+      "GND"
+    ],
+    [
+      "U",
+      "7",
+      "GND"
+    ],
+    [
+      "U",
+      "8",
+      "GND"
+    ],
+    [
+      "U",
+      "15",
+      "GND"
+    ],
+    [
+      "U",
+      "16",
+      "GND"
+    ],
+    [
+      "U",
+      "17",
+      "GND"
+    ],
+    [
+      "U",
+      "9",
+      "SS"
+    ],
+    [
+      "U",
+      "10",
+      "VIN"
+    ],
+    [
+      "U",
+      "11",
+      "VIN"
+    ],
+    [
+      "U",
+      "12",
+      "VIN"
+    ],
+    [
+      "U",
+      "13",
+      "EN"
+    ],
+    [
+      "U",
+      "14",
+      "VOUT"
+    ],
+    [
+      "L",
+      "1",
+      "SW"
+    ],
+    [
+      "L",
+      "2",
+      "VOUT"
+    ],
+    [
+      "C_PVIN",
+      "1",
+      "VIN"
+    ],
+    [
+      "C_PVIN",
+      "2",
+      "GND"
+    ],
+    [
+      "C_AVIN",
+      "1",
+      "VIN"
+    ],
+    [
+      "C_AVIN",
+      "2",
+      "GND"
+    ],
+    [
+      "C_SS",
+      "1",
+      "SS"
+    ],
+    [
+      "C_SS",
+      "2",
+      "GND"
+    ],
+    [
+      "C_OUT1",
+      "1",
+      "VOUT"
+    ],
+    [
+      "C_OUT1",
+      "2",
+      "GND"
+    ],
+    [
+      "C_OUT2",
+      "1",
+      "VOUT"
+    ],
+    [
+      "C_OUT2",
+      "2",
+      "GND"
+    ],
+    [
+      "R_FB_TOP",
+      "1",
+      "VOUT"
+    ],
+    [
+      "R_FB_TOP",
+      "2",
+      "FB"
+    ],
+    [
+      "R_FB_BOT",
+      "1",
+      "FB"
+    ],
+    [
+      "R_FB_BOT",
+      "2",
+      "GND"
+    ]
+  ],
+  "plane_returns": [
+    {
+      "dedicated_contacts": [
+        {
+          "pad": [
+            "C_PVIN",
+            "2"
+          ],
+          "via_position_nm": [
+            2100000,
+            -2850000
+          ]
+        },
+        {
+          "pad": [
+            "C_AVIN",
+            "2"
+          ],
+          "via_position_nm": [
+            4800000,
+            900000
+          ]
+        },
+        {
+          "pad": [
+            "C_SS",
+            "2"
+          ],
+          "via_position_nm": [
+            1400000,
+            2600000
+          ]
+        },
+        {
+          "pad": [
+            "C_OUT1",
+            "2"
+          ],
+          "via_position_nm": [
+            -2200000,
+            -2700000
+          ]
+        },
+        {
+          "pad": [
+            "C_OUT2",
+            "2"
+          ],
+          "via_position_nm": [
+            -9850000,
+            -2700000
+          ]
+        },
+        {
+          "pad": [
+            "R_FB_BOT",
+            "2"
+          ],
+          "via_position_nm": [
+            810000,
+            4000000
+          ]
+        }
+      ],
+      "layers": [
+        "In1.Cu",
+        "In4.Cu"
+      ],
+      "net": "GND",
+      "pads": [
+        [
+          "U",
+          "6"
+        ],
+        [
+          "U",
+          "7"
+        ],
+        [
+          "U",
+          "8"
+        ],
+        [
+          "U",
+          "15"
+        ],
+        [
+          "U",
+          "16"
+        ],
+        [
+          "U",
+          "17"
+        ],
+        [
+          "C_PVIN",
+          "2"
+        ],
+        [
+          "C_AVIN",
+          "2"
+        ],
+        [
+          "C_SS",
+          "2"
+        ],
+        [
+          "C_OUT1",
+          "2"
+        ],
+        [
+          "C_OUT2",
+          "2"
+        ],
+        [
+          "R_FB_BOT",
+          "2"
+        ]
+      ]
+    }
+  ],
+  "polygons": [
+    {
+      "id": "switch-island",
+      "layer": "F.Cu",
+      "net": "SW",
+      "vertices": [
+        [
+          -3100000,
+          -1100000
+        ],
+        [
+          -1900000,
+          -1100000
+        ],
+        [
+          -1900000,
+          350000
+        ],
+        [
+          -2300000,
+          350000
+        ],
+        [
+          -2300000,
+          2400000
+        ],
+        [
+          -5300000,
+          2400000
+        ],
+        [
+          -5300000,
+          1800000
+        ],
+        [
+          -3100000,
+          1800000
+        ]
+      ]
+    },
+    {
+      "id": "input-lobe",
+      "layer": "F.Cu",
+      "net": "VIN",
+      "vertices": [
+        [
+          1800000,
+          -1000000
+        ],
+        [
+          2300000,
+          -1000000
+        ],
+        [
+          2300000,
+          -1550000
+        ],
+        [
+          6300000,
+          -1550000
+        ],
+        [
+          6300000,
+          -350000
+        ],
+        [
+          2300000,
+          -350000
+        ],
+        [
+          2300000,
+          -50000
+        ],
+        [
+          1800000,
+          -50000
+        ]
+      ]
+    },
+    {
+      "id": "output-lobe",
+      "layer": "F.Cu",
+      "net": "VOUT",
+      "vertices": [
+        [
+          -9200000,
+          800000
+        ],
+        [
+          -7400000,
+          800000
+        ],
+        [
+          -7400000,
+          500000
+        ],
+        [
+          -5750000,
+          500000
+        ],
+        [
+          -5750000,
+          -1900000
+        ],
+        [
+          -3900000,
+          -1900000
+        ],
+        [
+          -3900000,
+          -3300000
+        ],
+        [
+          -7400000,
+          -3300000
+        ],
+        [
+          -7400000,
+          -1600000
+        ],
+        [
+          -9200000,
+          -1600000
+        ]
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "layer": "F.Cu",
+      "name": "VIN",
+      "net": "VIN",
+      "pads": [
+        [
+          "U",
+          "10"
+        ],
+        [
+          "U",
+          "11"
+        ],
+        [
+          "U",
+          "12"
+        ],
+        [
+          "C_PVIN",
+          "1"
+        ],
+        [
+          "C_AVIN",
+          "1"
+        ]
+      ],
+      "point": [
+        7200000,
+        -950000
+      ]
+    },
+    {
+      "layer": "F.Cu",
+      "name": "VOUT",
+      "net": "VOUT",
+      "pads": [
+        [
+          "U",
+          "14"
+        ],
+        [
+          "L",
+          "2"
+        ],
+        [
+          "C_OUT1",
+          "1"
+        ],
+        [
+          "C_OUT2",
+          "1"
+        ],
+        [
+          "R_FB_TOP",
+          "1"
+        ]
+      ],
+      "point": [
+        -11200000,
+        0
+      ]
+    },
+    {
+      "layer": "F.Cu",
+      "name": "EN",
+      "net": "EN",
+      "pads": [
+        [
+          "U",
+          "13"
+        ]
+      ],
+      "point": [
+        2000000,
+        -6500000
+      ]
+    }
+  ],
+  "production_publishable": false,
+  "protected_regions": [
+    {
+      "block_tracks": true,
+      "block_vias": true,
+      "block_zones": false,
+      "id": "regulator-private",
+      "layers": [
+        "F.Cu",
+        "In2.Cu",
+        "B.Cu"
+      ],
+      "vertices": [
+        [
+          -10600000,
+          -6000000
+        ],
+        [
+          6600000,
+          -6000000
+        ],
+        [
+          6600000,
+          5100000
+        ],
+        [
+          -10600000,
+          5100000
+        ]
+      ]
+    }
+  ],
+  "required_layers": [
+    "F.Cu",
+    "In1.Cu",
+    "In2.Cu",
+    "In3.Cu",
+    "In4.Cu",
+    "B.Cu"
+  ],
+  "schema": "copperlib-physical-hard-macro/v0.3",
+  "source": {
+    "base_asset_sha256": "3a2f429bda9f85d7b1563fb46d2dde24ec63101cb7229510b22b5d84b784fe66",
+    "datasheet_locator": "SLVSAG7F Rev F, Table 6-1, sections 11.1\u201311.3, Figure 11-1, pages 3 and 28\u201329",
+    "datasheet_sha256": "f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f",
+    "datasheet_url": "https://www.ti.com/lit/ds/symlink/tps62130a.pdf",
+    "evm_locator": "SLVU437B Rev B, sections 4\u20135, pages 16\u201320",
+    "evm_sha256": "b8e09708c6e866ee1c7f99993dd430967e1b3d1055678873452f3af0d8402237",
+    "evm_url": "https://www.ti.com/lit/pdf/SLVU437",
+    "footprint_adaptation": "CopperScript full-vertical pinned KiCad footprints 7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd; copper pads match installed KiCad 10.0.6; courtyard/body and EP thermal metadata rebound",
+    "geometry_status": "authored adaptation; different inductor, two output capacitors and six-layer stack; not extracted TI CAD",
+    "gerber_status": "SLVC394 public URLs returned HTTP 401 on 2026-10-06; archive not consumed"
+  },
+  "tracks": [
+    {
+      "layer": "F.Cu",
+      "net": "SW",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "1"
+          ]
+        },
+        [
+          -2250000,
+          -750000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "SW",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "2"
+          ]
+        },
+        [
+          -2250000,
+          -250000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "SW",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "3"
+          ]
+        },
+        [
+          -2250000,
+          250000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VIN",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "11"
+          ]
+        },
+        [
+          2250000,
+          -250000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VIN",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "12"
+          ]
+        },
+        [
+          2250000,
+          -750000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VIN",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "10"
+          ]
+        },
+        [
+          2100000,
+          250000
+        ],
+        [
+          2750000,
+          900000
+        ],
+        {
+          "pad": [
+            "C_AVIN",
+            "1"
+          ]
+        }
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VIN",
+      "points": [
+        {
+          "pad": [
+            "C_AVIN",
+            "1"
+          ]
+        },
+        [
+          2920000,
+          -950000
+        ],
+        {
+          "pad": [
+            "C_PVIN",
+            "1"
+          ]
+        }
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VIN",
+      "points": [
+        {
+          "pad": [
+            "C_PVIN",
+            "1"
+          ]
+        },
+        [
+          7200000,
+          -950000
+        ]
+      ],
+      "width_nm": 800000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VIN",
+      "points": [
+        [
+          7200000,
+          -950000
+        ],
+        [
+          7200000,
+          -150000
+        ]
+      ],
+      "width_nm": 800000
+    },
+    {
+      "layer": "B.Cu",
+      "net": "VIN",
+      "points": [
+        [
+          7200000,
+          -950000
+        ],
+        [
+          7200000,
+          -150000
+        ]
+      ],
+      "width_nm": 800000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VOUT",
+      "points": [
+        [
+          -8300000,
+          0
+        ],
+        [
+          -11200000,
+          0
+        ]
+      ],
+      "width_nm": 800000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VOUT",
+      "points": [
+        [
+          -11200000,
+          0
+        ],
+        [
+          -11200000,
+          800000
+        ]
+      ],
+      "width_nm": 800000
+    },
+    {
+      "layer": "B.Cu",
+      "net": "VOUT",
+      "points": [
+        [
+          -11200000,
+          0
+        ],
+        [
+          -11200000,
+          800000
+        ]
+      ],
+      "width_nm": 800000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VOUT",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "14"
+          ]
+        },
+        [
+          250000,
+          -2600000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VOUT",
+      "points": [
+        {
+          "pad": [
+            "C_OUT1",
+            "1"
+          ]
+        },
+        [
+          -5200000,
+          -1550000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "VOUT",
+      "points": [
+        {
+          "pad": [
+            "R_FB_TOP",
+            "1"
+          ]
+        },
+        [
+          -2110000,
+          4250000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "In2.Cu",
+      "net": "VOUT",
+      "points": [
+        [
+          250000,
+          -2600000
+        ],
+        [
+          250000,
+          -1850000
+        ],
+        [
+          -5200000,
+          -1550000
+        ],
+        [
+          -5200000,
+          5000000
+        ],
+        [
+          -2110000,
+          5000000
+        ],
+        [
+          -2110000,
+          4250000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "FB",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "5"
+          ]
+        },
+        [
+          -750000,
+          2300000
+        ],
+        [
+          -1090000,
+          2640000
+        ],
+        {
+          "pad": [
+            "R_FB_TOP",
+            "2"
+          ]
+        },
+        {
+          "pad": [
+            "R_FB_BOT",
+            "1"
+          ]
+        }
+      ],
+      "width_nm": 200000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "SS",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "9"
+          ]
+        },
+        [
+          2000000,
+          750000
+        ],
+        [
+          2000000,
+          1600000
+        ],
+        {
+          "pad": [
+            "C_SS",
+            "1"
+          ]
+        }
+      ],
+      "width_nm": 200000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "6"
+          ]
+        },
+        [
+          -250000,
+          650000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "7"
+          ]
+        },
+        [
+          250000,
+          650000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "8"
+          ]
+        },
+        [
+          750000,
+          650000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "15"
+          ]
+        },
+        [
+          -250000,
+          -650000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "16"
+          ]
+        },
+        [
+          -750000,
+          -650000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "C_PVIN",
+            "2"
+          ]
+        },
+        [
+          2100000,
+          -2850000
+        ]
+      ],
+      "width_nm": 500000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "C_AVIN",
+            "2"
+          ]
+        },
+        [
+          4800000,
+          900000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "C_SS",
+            "2"
+          ]
+        },
+        [
+          1400000,
+          2600000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "C_OUT1",
+            "2"
+          ]
+        },
+        [
+          -2200000,
+          -2700000
+        ]
+      ],
+      "width_nm": 500000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "C_OUT2",
+            "2"
+          ]
+        },
+        [
+          -9850000,
+          -2700000
+        ]
+      ],
+      "width_nm": 500000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "GND",
+      "points": [
+        {
+          "pad": [
+            "R_FB_BOT",
+            "2"
+          ]
+        },
+        [
+          810000,
+          4000000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "EN",
+      "points": [
+        {
+          "pad": [
+            "U",
+            "13"
+          ]
+        },
+        [
+          1000000,
+          -1712500
+        ],
+        [
+          1000000,
+          -6500000
+        ],
+        [
+          2000000,
+          -6500000
+        ]
+      ],
+      "width_nm": 200000
+    }
+  ],
+  "unresolved": [
+    "rail current and thermal qualification including access-neck and via-bank capacity",
+    "assembly review of filled-capped thermal vias and solder paste",
+    "six-layer laminate and control-loop/EMI bench validation",
+    "TI Gerber archive unavailable without authentication; authored adaptation rather than CAD reproduction"
+  ],
+  "vias": [
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "VIN",
+      "position_nm": [
+        7200000,
+        -950000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "VIN",
+      "position_nm": [
+        7200000,
+        -150000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "VOUT",
+      "position_nm": [
+        -11200000,
+        0
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "VOUT",
+      "position_nm": [
+        -11200000,
+        800000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "VOUT",
+      "position_nm": [
+        250000,
+        -2600000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "VOUT",
+      "position_nm": [
+        -5200000,
+        -1550000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "VOUT",
+      "position_nm": [
+        -2110000,
+        4250000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 200000,
+      "finish": "filled-capped",
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        -350000,
+        -350000
+      ],
+      "size_nm": 450000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 200000,
+      "finish": "filled-capped",
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        350000,
+        -350000
+      ],
+      "size_nm": 450000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 200000,
+      "finish": "filled-capped",
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        -350000,
+        350000
+      ],
+      "size_nm": 450000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 200000,
+      "finish": "filled-capped",
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        350000,
+        350000
+      ],
+      "size_nm": 450000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        2100000,
+        -2850000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        4800000,
+        900000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        1400000,
+        2600000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        -2200000,
+        -2700000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        -9850000,
+        -2700000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "GND",
+      "position_nm": [
+        810000,
+        4000000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    }
+  ],
+  "zones": [
+    {
+      "clearance_nm": 200000,
+      "id": "lower-return",
+      "layers": [
+        "F.Cu"
+      ],
+      "minimum_width_nm": 200000,
+      "net": "GND",
+      "pad_connection": "solid",
+      "priority": 2,
+      "vertices": [
+        [
+          -10300000,
+          -5700000
+        ],
+        [
+          5900000,
+          -5700000
+        ],
+        [
+          5900000,
+          -1800000
+        ],
+        [
+          1300000,
+          -1800000
+        ],
+        [
+          1300000,
+          -700000
+        ],
+        [
+          -3300000,
+          -700000
+        ],
+        [
+          -3300000,
+          -1800000
+        ],
+        [
+          -10300000,
+          -1800000
+        ]
+      ]
+    },
+    {
+      "clearance_nm": 200000,
+      "id": "exposed-pad",
+      "layers": [
+        "F.Cu"
+      ],
+      "minimum_width_nm": 200000,
+      "net": "GND",
+      "pad_connection": "solid",
+      "priority": 2,
+      "vertices": [
+        [
+          -600000,
+          -600000
+        ],
+        [
+          600000,
+          -600000
+        ],
+        [
+          600000,
+          600000
+        ],
+        [
+          -600000,
+          600000
+        ]
+      ]
+    }
+  ]
+}

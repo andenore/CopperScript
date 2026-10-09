@@ -1,0 +1,714 @@
+{
+  "allowed_rotations": [
+    0,
+    45,
+    90,
+    135,
+    180,
+    225,
+    270,
+    315
+  ],
+  "anchor": "U1",
+  "internal_clearance_nm": 0,
+  "isolated_pads": [
+    [
+      "ANT",
+      "2"
+    ]
+  ],
+  "keepouts": [
+    {
+      "block_tracks": false,
+      "block_vias": true,
+      "block_zones": true,
+      "id": "nordic-no-pour",
+      "layers": [
+        "F.Cu"
+      ],
+      "vertices": [
+        [
+          3300000,
+          -1000000
+        ],
+        [
+          6200000,
+          -1000000
+        ],
+        [
+          6200000,
+          1200000
+        ],
+        [
+          3300000,
+          1200000
+        ]
+      ]
+    },
+    {
+      "block_tracks": true,
+      "block_vias": true,
+      "block_zones": true,
+      "id": "nordic-inner-clear",
+      "layers": [
+        "In1.Cu",
+        "In2.Cu",
+        "In3.Cu",
+        "In4.Cu",
+        "B.Cu"
+      ],
+      "vertices": [
+        [
+          3300000,
+          -1000000
+        ],
+        [
+          6200000,
+          -1000000
+        ],
+        [
+          6200000,
+          1200000
+        ],
+        [
+          3300000,
+          1200000
+        ]
+      ]
+    },
+    {
+      "block_tracks": false,
+      "block_vias": true,
+      "block_zones": true,
+      "id": "antenna-corner",
+      "layers": [
+        "F.Cu",
+        "In1.Cu",
+        "In2.Cu",
+        "In3.Cu",
+        "In4.Cu",
+        "B.Cu"
+      ],
+      "vertices": [
+        [
+          9500000,
+          -12000000
+        ],
+        [
+          16000000,
+          -12000000
+        ],
+        [
+          16000000,
+          -5500000
+        ],
+        [
+          9500000,
+          -5500000
+        ]
+      ]
+    },
+    {
+      "block_tracks": false,
+      "block_vias": true,
+      "block_zones": true,
+      "id": "tee-no-pour",
+      "layers": [
+        "F.Cu",
+        "In1.Cu",
+        "In2.Cu",
+        "In3.Cu",
+        "In4.Cu",
+        "B.Cu"
+      ],
+      "vertices": [
+        [
+          12000000,
+          -5500000
+        ],
+        [
+          15500000,
+          -5500000
+        ],
+        [
+          15500000,
+          100000
+        ],
+        [
+          12000000,
+          100000
+        ]
+      ]
+    }
+  ],
+  "members": [
+    {
+      "center_nm": [
+        14500000,
+        -8750000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "RF_Antenna:Johanson_2450AT18x100",
+      "footprint_digest": "e6cdc2c38925707147c256fb0e6da9aaf56adfe968f621f9d9aff803994f70a5",
+      "reference": "ANT",
+      "rotation_degrees": "90"
+    },
+    {
+      "center_nm": [
+        4191000,
+        0
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "footprint_digest": "86575c98c1bd84414ad1626d2f1a649749c0fb10743c56ba8f2c3fdee795a0ff",
+      "reference": "C3",
+      "rotation_degrees": "270.00"
+    },
+    {
+      "center_nm": [
+        14500000,
+        -1500000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "footprint_digest": "86575c98c1bd84414ad1626d2f1a649749c0fb10743c56ba8f2c3fdee795a0ff",
+      "reference": "CA",
+      "rotation_degrees": "90"
+    },
+    {
+      "center_nm": [
+        5613400,
+        508000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Inductor_SMD:L_0402_1005Metric",
+      "footprint_digest": "7d54e54f704c49c0007f15f104e5df6d6dc2433678585e2881f99f518ea2aba8",
+      "reference": "L1",
+      "rotation_degrees": "0.00"
+    },
+    {
+      "center_nm": [
+        13300000,
+        -3000000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Inductor_SMD:L_0402_1005Metric",
+      "footprint_digest": "7d54e54f704c49c0007f15f104e5df6d6dc2433678585e2881f99f518ea2aba8",
+      "reference": "LA",
+      "rotation_degrees": "0"
+    },
+    {
+      "center_nm": [
+        14500000,
+        -4500000
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Inductor_SMD:L_0402_1005Metric",
+      "footprint_digest": "7d54e54f704c49c0007f15f104e5df6d6dc2433678585e2881f99f518ea2aba8",
+      "reference": "LB",
+      "rotation_degrees": "90"
+    },
+    {
+      "center_nm": [
+        0,
+        0
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "Package_DFN_QFN:QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm",
+      "footprint_digest": "e1fd5a2f0b4520493a004ac461276796f4dbc6660de97596abd1696f709ea5a5",
+      "reference": "U1",
+      "rotation_degrees": "0.00"
+    }
+  ],
+  "pad_nets": [
+    [
+      "U1",
+      "30",
+      "raw"
+    ],
+    [
+      "U1",
+      "31",
+      "ground"
+    ],
+    [
+      "U1",
+      "45",
+      "ground"
+    ],
+    [
+      "U1",
+      "49",
+      "ground"
+    ],
+    [
+      "C3",
+      "1",
+      "ground"
+    ],
+    [
+      "C3",
+      "2",
+      "raw"
+    ],
+    [
+      "L1",
+      "1",
+      "raw"
+    ],
+    [
+      "L1",
+      "2",
+      "feed"
+    ],
+    [
+      "CA",
+      "1",
+      "feed"
+    ],
+    [
+      "CA",
+      "2",
+      "tee"
+    ],
+    [
+      "LA",
+      "1",
+      "ground"
+    ],
+    [
+      "LA",
+      "2",
+      "tee"
+    ],
+    [
+      "LB",
+      "1",
+      "tee"
+    ],
+    [
+      "LB",
+      "2",
+      "antenna"
+    ],
+    [
+      "ANT",
+      "1",
+      "antenna"
+    ]
+  ],
+  "ports": [
+    {
+      "layer": "B.Cu",
+      "name": "ground",
+      "net": "ground",
+      "pads": [
+        [
+          "U1",
+          "49"
+        ],
+        [
+          "U1",
+          "31"
+        ],
+        [
+          "U1",
+          "45"
+        ],
+        [
+          "C3",
+          "1"
+        ],
+        [
+          "LA",
+          "1"
+        ]
+      ],
+      "point": [
+        -1000000,
+        -4300000
+      ]
+    }
+  ],
+  "production_publishable": false,
+  "protected_regions": [
+    {
+      "block_tracks": true,
+      "block_vias": true,
+      "block_zones": false,
+      "id": "nordic-private",
+      "layers": [
+        "F.Cu"
+      ],
+      "vertices": [
+        [
+          3300000,
+          -600000
+        ],
+        [
+          6200000,
+          -600000
+        ],
+        [
+          6200000,
+          1200000
+        ],
+        [
+          3300000,
+          1200000
+        ]
+      ]
+    },
+    {
+      "block_tracks": true,
+      "block_vias": true,
+      "block_zones": false,
+      "id": "antenna-private",
+      "layers": [
+        "F.Cu"
+      ],
+      "vertices": [
+        [
+          12000000,
+          -11700000
+        ],
+        [
+          15500000,
+          -11700000
+        ],
+        [
+          15500000,
+          100000
+        ],
+        [
+          12000000,
+          100000
+        ]
+      ]
+    }
+  ],
+  "required_layers": [
+    "F.Cu",
+    "In1.Cu",
+    "In2.Cu",
+    "In3.Cu",
+    "In4.Cu",
+    "B.Cu"
+  ],
+  "schema": "copperlib-physical-hard-macro/v0.1",
+  "source": {
+    "antenna_revision": "36S0021A Revision 4.0 (2024), page 3",
+    "antenna_sha256": "c11a1866c9fd04bad6dcbbd40cfdfbec067c731e47ba83f4e58b56c0e4c9dfa0",
+    "antenna_url": "https://www.johansontechnology.com/docs/3827/Antenna-2450AT18A0100001E-Rev4.0.pdf",
+    "archive_sha256": "21e37dcdd8e63d80825bb9e06462efdebe55b642f4e19c5f25c2d9a131e6e334",
+    "base_asset_sha256": "3e435afba3184b175533782e9354d0c228615c44a153d081bf90103926aa0348",
+    "footprint_adaptation": "CopperScript full-vertical pinned KiCad footprints 7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd; copper pads match installed KiCad 10.0.6; courtyard/body and EP thermal metadata rebound",
+    "geometry_status": "Nordic matching strokes extracted; Johanson tee/corner and ground exits adapted, not vendor CAD",
+    "gerber_entry": "nRF52832-QFAx Reference Layout 1_1/Production files/nRF52832-QFAA/nrf52832_qfaa.GTL",
+    "gerber_sha256": "5b553fba85d64dc9c0a6e74597e7ac99526ae5ff6dd7373d40feb4d58ec3e4ae",
+    "nordic_url": "https://nsscprodmedia.blob.core.windows.net/prod/software-and-other-downloads/reference-layouts/nrf52832qfaxreflayoutv11.zip"
+  },
+  "tracks": [
+    {
+      "layer": "F.Cu",
+      "net": "raw",
+      "points": [
+        [
+          3025140,
+          200660
+        ],
+        [
+          3500120,
+          200660
+        ]
+      ],
+      "width_nm": 228600
+    },
+    {
+      "layer": "F.Cu",
+      "net": "raw",
+      "points": [
+        [
+          3500120,
+          200660
+        ],
+        [
+          3810000,
+          510540
+        ]
+      ],
+      "width_nm": 228600
+    },
+    {
+      "layer": "F.Cu",
+      "net": "raw",
+      "points": [
+        [
+          3810000,
+          510540
+        ],
+        [
+          4198620,
+          510540
+        ]
+      ],
+      "width_nm": 228600
+    },
+    {
+      "layer": "F.Cu",
+      "net": "ground",
+      "points": [
+        [
+          617220,
+          -203200
+        ],
+        [
+          3500120,
+          -203200
+        ]
+      ],
+      "width_nm": 228600
+    },
+    {
+      "layer": "F.Cu",
+      "net": "ground",
+      "points": [
+        [
+          3500120,
+          -203200
+        ],
+        [
+          3787140,
+          -490220
+        ]
+      ],
+      "width_nm": 228600
+    },
+    {
+      "layer": "F.Cu",
+      "net": "ground",
+      "points": [
+        [
+          3787140,
+          -490220
+        ],
+        [
+          4198620,
+          -490220
+        ]
+      ],
+      "width_nm": 228600
+    },
+    {
+      "layer": "F.Cu",
+      "net": "raw",
+      "points": [
+        [
+          4191000,
+          505460
+        ],
+        [
+          5087620,
+          505460
+        ]
+      ],
+      "width_nm": 508000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "ground",
+      "points": [
+        {
+          "pad": [
+            "U1",
+            "49"
+          ]
+        },
+        [
+          617220,
+          -203200
+        ]
+      ],
+      "width_nm": 228600
+    },
+    {
+      "layer": "F.Cu",
+      "net": "ground",
+      "points": [
+        {
+          "pad": [
+            "U1",
+            "49"
+          ]
+        },
+        [
+          -1000000,
+          -1000000
+        ],
+        {
+          "pad": [
+            "U1",
+            "45"
+          ]
+        },
+        [
+          -1000000,
+          -4300000
+        ]
+      ],
+      "width_nm": 228600
+    },
+    {
+      "layer": "F.Cu",
+      "net": "feed",
+      "points": [
+        {
+          "pad": [
+            "L1",
+            "2"
+          ]
+        },
+        [
+          12972000,
+          508000
+        ],
+        {
+          "pad": [
+            "CA",
+            "1"
+          ]
+        }
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "tee",
+      "points": [
+        {
+          "pad": [
+            "CA",
+            "2"
+          ]
+        },
+        [
+          14500000,
+          -3000000
+        ],
+        {
+          "pad": [
+            "LB",
+            "1"
+          ]
+        }
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "tee",
+      "points": [
+        {
+          "pad": [
+            "LA",
+            "2"
+          ]
+        },
+        [
+          14500000,
+          -3000000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "antenna",
+      "points": [
+        {
+          "pad": [
+            "LB",
+            "2"
+          ]
+        },
+        {
+          "pad": [
+            "ANT",
+            "1"
+          ]
+        }
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "ground",
+      "points": [
+        {
+          "pad": [
+            "LA",
+            "1"
+          ]
+        },
+        [
+          11500000,
+          -3000000
+        ]
+      ],
+      "width_nm": 250000
+    },
+    {
+      "layer": "B.Cu",
+      "net": "ground",
+      "points": [
+        [
+          -1000000,
+          -4300000
+        ],
+        [
+          10200000,
+          -4300000
+        ],
+        [
+          11500000,
+          -3000000
+        ]
+      ],
+      "width_nm": 250000
+    }
+  ],
+  "unresolved": [
+    "complete powered MCU/crystal/decoupling circuit",
+    "antenna tee values are evaluation-board values, not tuning",
+    "actual six-layer laminate and RF feed impedance",
+    "reference ground/corner copper and via-fence qualification",
+    "whole-board macro boundary port allocation and placement feedback",
+    "enclosure/antenna radiation verification"
+  ],
+  "vias": [
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "ground",
+      "position_nm": [
+        -1000000,
+        -4300000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    },
+    {
+      "drill_nm": 300000,
+      "from_layer": "F.Cu",
+      "net": "ground",
+      "position_nm": [
+        11500000,
+        -3000000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    }
+  ]
+}
