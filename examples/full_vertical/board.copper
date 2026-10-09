@@ -413,12 +413,21 @@ board FullVerticalTracker {
         target_impedance_ohms = 50; allowed_layers = "F.Cu"; max_vias = 0;
     }
 
-    // A provisional inner-layer return plane. The exported zone is intent only;
-    // KiCad refill and connected-copper signoff are still required.
+    // Inner GND reference and 3.3 V distribution planes. In2.Cu remains the
+    // adjacent signal layer for USB; In3.Cu gives the 32-pad supply net a
+    // board-wide connection without a long ordinary-net routing tree.
+    // Both zones require native refill and connected-copper signoff.
     constraint copper_zone(GND) {
         id = "ground-return-plane";
         layers = "In1.Cu";
         inset = 0.5mm;
         pad_connection = solid;
+    }
+    constraint copper_zone(V3V3) {
+        id = "logic-power-plane";
+        layers = "In3.Cu";
+        inset = 0.5mm;
+        pad_connection = solid;
+        island_policy = "remove_all";
     }
 }

@@ -7,7 +7,8 @@ parses KiCad's independent connectivity/DRC report.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -18,7 +19,7 @@ from .backends import KiCadPcbBackend
 from .backends.kicad_project import kicad_export_digest, write_kicad_project
 from .drc import physical_board_digest
 from .manufacturing import CommandRunner, _subprocess_runner
-from .physical import PhysicalBoard
+from .physical import PhysicalBoard, RouteKind, TrackSegment
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,7 @@ class PlaneVerification:
     island_count: int
     other_violation_count: int
     findings: tuple[str, ...]
+    dangling_track_uuids: tuple[str, ...] = ()
 
     def matches(self, board: PhysicalBoard) -> bool:
         """Reject evidence reused after any source-board geometry change."""
@@ -68,6 +70,7 @@ class PlaneVerification:
             "island_count": self.island_count,
             "other_violation_count": self.other_violation_count,
             "findings": list(self.findings),
+            "dangling_track_uuids": list(self.dangling_track_uuids),
         }, indent=2, sort_keys=True) + "\n"
 
 
@@ -127,13 +130,43 @@ def verify_filled_planes(
             f"{_violation_type(item)}: {item.get('description', '')}"
             for item in (*unconnected, *islands, *others)
         )
+        dangling = tuple(sorted({entry.get("uuid") for item in others
+            if _violation_type(item) == "track_dangling"
+            for entry in item.get("items", ()) if isinstance(entry, dict)
+            and isinstance(entry.get("uuid"), str)}))
         return PlaneVerification(
             not findings,
             physical_board_digest(board), export_digest,
             sha256(pcb_path.read_bytes()).hexdigest(),
             sha256(report_bytes).hexdigest(), version,
-            len(unconnected), len(islands), len(others), findings,
+            len(unconnected), len(islands), len(others), findings, dangling,
         )
+
+
+def remove_native_dangling_tracks(
+    board: PhysicalBoard, evidence: PlaneVerification, protected: Counter[TrackSegment],
+    *, kicad_cli: Path,
+) -> tuple[PhysicalBoard, PlaneVerification]:
+    """Drop only KiCad-identified ordinary dead ends when fresh refill proves safe."""
+    if (not evidence.matches(board) or evidence.unconnected_count or evidence.island_count
+            or not evidence.dangling_track_uuids
+            or len(evidence.findings) != len(evidence.dangling_track_uuids)
+            or any(not item.startswith("track_dangling:") for item in evidence.findings)):
+        return board, evidence
+    from .backends.kicad_pcb import _stable_uuid
+    blocked = {zone.net for zone in board.zones} | {
+        rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
+    uuids = set(evidence.dangling_track_uuids)
+    selected = {index for index, track in enumerate(board.tracks)
+                if _stable_uuid(board.name, "segment", str(index)) in uuids}
+    if (len(selected) != len(uuids) or any(
+            board.tracks[index].net in blocked or protected[board.tracks[index]]
+            for index in selected)):
+        return board, evidence
+    candidate = replace(board, tracks=tuple(track for index, track in enumerate(board.tracks)
+                                             if index not in selected))
+    checked = verify_filled_planes(candidate, kicad_cli=kicad_cli)
+    return (candidate, checked) if checked.passed else (board, evidence)
 
 
 def _violation_type(item: object) -> str:

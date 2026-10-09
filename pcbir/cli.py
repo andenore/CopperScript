@@ -1063,6 +1063,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_board, kicad_cli=args.verify_plane_fill,
                 ) if args.verify_plane_fill else None)
                 if plane_verification is not None:
+                    from .plane_verify import remove_native_dangling_tracks
+                    output_board, plane_verification = remove_native_dangling_tracks(
+                        output_board, plane_verification, fixed,
+                        kicad_cli=args.verify_plane_fill)
+                    if not plane_verification.matches(output_board):
+                        raise RuntimeError("native cleanup verification is stale")
+                    if output_board is not swept:
+                        output_drc = run_physical_drc(output_board)
                     emit(progress, "independent_kicad", "finished", passed=plane_verification.passed,
                          unconnected=plane_verification.unconnected_count,
                          other_violations=plane_verification.other_violation_count)

@@ -391,6 +391,15 @@ this does not qualify impedance or production readiness.
 
 ## Running the example
 
+The current six-layer source reserves `In1.Cu` for the GND reference and adds
+a board-wide `V3V3` distribution region on `In3.Cu`, each inset 0.5 mm from
+the outline. The V3V3 net has 32 pads and is connected by native zone fill
+instead of ordinary track-tree routing. The 2026-10-09 trial in
+`build/full-vertical/runs/20261009T061351192736Z` routed all 48 ordinary
+nets; KiCad 10.0.6 reported zero unconnected items and zero DRC violations
+after zone fill. This confirms geometric connectivity, not rail voltage drop
+or thermal performance at the target load.
+
 USB profiles now permit matched terminal vias to `In2.Cu`, adjacent to the
 declared `In1.Cu` GND plane, instead of requiring zero-via top-only routing.
 The limit is two signal vias per member. Required GND return vias remain the

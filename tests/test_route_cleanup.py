@@ -241,7 +241,7 @@ def test_router_commit_removes_retrace_and_physical_search_loop(monkeypatch, exc
 def test_installed_kicad_confirms_retrace_stub_is_removed():
     from pathlib import Path
     import shutil
-    from pcbir.plane_verify import verify_filled_planes
+    from pcbir.plane_verify import remove_native_dangling_tracks, verify_filled_planes
 
     cli = Path(shutil.which("kicad-cli") or "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe")
     if not cli.is_file():
@@ -255,6 +255,12 @@ def test_installed_kicad_confirms_retrace_stub_is_removed():
     unique = (track((3, 6), (4, 6)), track((4, 6), (5, 6)), *copper[2:])
     dangling = verify_filled_planes(replace(board(), tracks=unique), kicad_cli=cli)
     assert any(f.startswith("track_dangling:") for f in dangling.findings), dangling.findings
+    cleaned, checked = remove_native_dangling_tracks(
+        replace(board(), tracks=unique), dangling, Counter(), kicad_cli=cli)
+    assert checked.passed and len(cleaned.tracks) < len(unique)
+    guarded, _ = remove_native_dangling_tracks(
+        replace(board(), tracks=unique), dangling, Counter(unique), kicad_cli=cli)
+    assert guarded.tracks == unique
     result = prune_track_stubs(board(), copper)
     after = verify_filled_planes(replace(board(), tracks=result), kicad_cli=cli)
     assert after.passed, after.findings
