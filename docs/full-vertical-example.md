@@ -403,6 +403,15 @@ nets; KiCad 10.0.6 reported zero unconnected items and zero DRC violations
 after zone fill. This confirms geometric connectivity, not rail voltage drop
 or thermal performance at the target load.
 
+The inline differential-pair placement refinement moves FL_USB to
+`(34, 15) mm, 270°` between U_MODEM and U_MCU. In the subsequent complete
+route at `build/full-vertical/runs/20261009T081529667065Z`, the four USB
+tracks total 54.82 mm versus 113.26 mm in the preceding route. All 48
+ordinary nets routed, and native filled-board KiCad DRC found zero violations
+and zero unconnected items. The modem-side USB pair now uses two vias per
+member and In2.Cu; the signal geometry and return path still need electrical
+review. See [the placement plan and results](critical-inline-placement-plan.md).
+
 USB profiles now permit matched terminal vias to `In2.Cu`, adjacent to the
 declared `In1.Cu` GND plane, instead of requiring zero-via top-only routing.
 The limit is two signal vias per member. Required GND return vias remain the

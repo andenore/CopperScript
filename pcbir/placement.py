@@ -45,6 +45,7 @@ from .physical import (
     PolygonWithHoles,
     RelativePlacementKind,
     RelativePlacementRule,
+    RouteKind,
     TrackSegment,
     Via,
     nm_from_mm,
@@ -1613,7 +1614,8 @@ def _detailed_refine(
             local_candidates = (_relative_candidates(board, reference, current, without, options)
                 if any(r.kind is RelativePlacementKind.MAX_DISTANCE and all(t.pad is not None for t in r.targets)
                        and any(t.reference == reference for t in r.targets) for r in board.relative_rules) else ())
-            candidates = dict.fromkeys((*local_candidates,
+            inline_candidates = _inline_pair_candidates(board, placements, reference, options)
+            candidates = dict.fromkeys((*inline_candidates, *local_candidates,
                 *(replace(current, position=point, rotation_degrees=angle)
                   for point in positions for angle in _allowed_orientations(board, reference))))
             evaluated = 0
@@ -1782,6 +1784,64 @@ def _nearby_positions(center: Point, options: PlacementPlannerOptions) -> tuple[
         )
         for dx, dy in offsets
     )
+
+
+def _inline_pair_candidates(
+    board: PhysicalBoard, placements: Mapping[str, Placement], reference: str,
+    options: PlacementPlannerOptions,
+) -> tuple[Placement, ...]:
+    """Try long-range corridors for a part joining two differential pairs."""
+    nets = {net.name: net for net in board.nets}
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    groups: list[tuple[PadReference, PadReference]] = []
+    for rule in board.net_routing_rules:
+        partner = rule.differential_partner
+        if (rule.kind is not RouteKind.DIFFERENTIAL or partner is None
+                or rule.net >= partner or partner not in rules
+                or rules[partner].kind is not RouteKind.DIFFERENTIAL
+                or rules[partner].differential_partner != rule.net):
+            continue
+        external = []
+        own = []
+        for name in (rule.net, partner):
+            net = nets.get(name)
+            if net is None or len(net.pads) != 2:
+                break
+            own_pads = [pad for pad in net.pads if pad.component == reference]
+            other_pads = [pad for pad in net.pads if pad.component != reference]
+            if len(own_pads) != 1 or len(other_pads) != 1:
+                break
+            own.extend(own_pads)
+            external.extend(other_pads)
+        if (len(external) == 2 and len({pad.component for pad in external}) == 1
+                and len(set(own)) == 2):
+            groups.append((external[0], external[1]))
+    if len(groups) != 2 or groups[0][0].component == groups[1][0].component:
+        return ()
+    current = placements[reference]
+    if any(placements[group[0].component].side is not current.side for group in groups):
+        return ()
+
+    def center(group: tuple[PadReference, PadReference]) -> Point:
+        a, b = (transformed_pad_position(board, placements[pad.component], pad.pad)
+                for pad in group)
+        return Point((a.x_nm + b.x_nm) // 2, (a.y_nm + b.y_nm) // 2)
+
+    a, b = (center(group) for group in groups)
+    dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
+    distance = hypot(dx, dy)
+    if distance < 4 * options.grid_step_nm:
+        return ()
+    step = options.grid_step_nm
+    positions = dict.fromkeys(
+        Point(round((a.x_nm + dx * fraction - dy / distance * lateral * step) / step) * step,
+              round((a.y_nm + dy * fraction + dx / distance * lateral * step) / step) * step)
+        for fraction in (0.5, 0.25, 0.75)
+        for lateral in (0, -2, 2, -4, 4, -6, 6, -8, 8)
+    )
+    return tuple(replace(current, position=position, rotation_degrees=angle)
+                 for position in positions
+                 for angle in _allowed_orientations(board, reference))
 
 
 def _candidate_positions(
