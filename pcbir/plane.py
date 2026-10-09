@@ -362,8 +362,10 @@ def _stitch_land(
 ) -> tuple[tuple[TrackSegment, ...], Via | None] | None:
     """Find one physical land's provisional contact to an inner zone."""
 
-    preferred = (net == "GND" and PadReference(placement.reference, pad.number)
-                 in options.preferred_ground_pads)
+    preferred = ((net == "GND" and PadReference(placement.reference, pad.number)
+                  in options.preferred_ground_pads)
+                 or (net != "GND" and any(
+                     _point_in_zone(position, zone.outline) for zone in zones)))
     choices: list[tuple[float, Point, tuple[TrackSegment, ...], Via | None]] = []
 
     def consider(path: tuple[TrackSegment, ...], target: Point, via: Via | None) -> None:

@@ -394,8 +394,11 @@ this does not qualify impedance or production readiness.
 The current six-layer source reserves `In1.Cu` for the GND reference and adds
 a board-wide `V3V3` distribution region on `In3.Cu`, each inset 0.5 mm from
 the outline. The V3V3 net has 32 pads and is connected by native zone fill
-instead of ordinary track-tree routing. The 2026-10-09 trial in
-`build/full-vertical/runs/20261009T061351192736Z` routed all 48 ordinary
+instead of ordinary track-tree routing. Pads above their own distribution
+region favor short local via escapes. On the same placement, this reduced
+V3V3 F.Cu track length from 41.32 mm to 35.12 mm while increasing V3V3 vias
+from 23 to 30. The 2026-10-09 trial in
+`build/full-vertical/runs/20261009T065506239127Z` routed all 48 ordinary
 nets; KiCad 10.0.6 reported zero unconnected items and zero DRC violations
 after zone fill. This confirms geometric connectivity, not rail voltage drop
 or thermal performance at the target load.

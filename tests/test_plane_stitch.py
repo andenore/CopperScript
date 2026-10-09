@@ -137,6 +137,50 @@ def test_preferred_ground_pad_reuses_short_existing_via() -> None:
                for track in result.board.tracks)
 
 
+@pytest.mark.parametrize("existing_x, new_vias", [(4, 0), (5, 1)])
+def test_distribution_zone_prefers_short_pad_to_via(existing_x: int, new_vias: int) -> None:
+    base = _plane_board()
+    existing = Via("V3V3", Point.mm(existing_x, 6), nm_from_mm("0.6"),
+                   nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK)
+    board = replace(base, nets=(replace(base.nets[0], name="V3V3"),),
+                    zones=(replace(base.zones[0], net="V3V3"),), vias=(existing,))
+    pad = PadReference("J1", "1")
+    result = stitch_zone_pads(board, PlaneStitchOptions(only_pads={pad}))
+
+    assert result.complete and result.added_via_count == new_vias
+    assert result.board.vias[-1].position in {Point.mm(2, 6), Point.mm(4, 6)}
+    repeated = stitch_zone_pads(result.board, PlaneStitchOptions(only_pads={pad}))
+    assert repeated.added_track_count == repeated.added_via_count == 0
+    assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
+        "DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-HOLE-CLEARANCE",
+    }
+
+
+def test_distribution_zone_keeps_each_existing_local_contact() -> None:
+    base = _plane_board()
+    board = replace(base,
+                    placements=(base.placements[0], replace(base.placements[1],
+                                position=Point.mm(5, 6))),
+                    nets=(replace(base.nets[0], name="V3V3"),),
+                    zones=(replace(base.zones[0], net="V3V3"),),
+                    tracks=(
+                        TrackSegment("V3V3", Point.mm(3, 6), Point.mm(4, 6),
+                                     nm_from_mm("0.2"), CopperLayer.FRONT),
+                        TrackSegment("V3V3", Point.mm(5, 6), Point.mm(6, 6),
+                                     nm_from_mm("0.2"), CopperLayer.FRONT),
+                    ),
+                    vias=(
+                        Via("V3V3", Point.mm(4, 6), nm_from_mm("0.6"),
+                            nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),
+                        Via("V3V3", Point.mm(6, 6), nm_from_mm("0.6"),
+                            nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),
+                    ))
+    result = stitch_zone_pads(board)
+
+    assert result.complete
+    assert result.added_track_count == result.added_via_count == 0
+
+
 def test_preferred_ground_pads_do_not_share_a_via_when_local_site_is_free() -> None:
     board = _plane_board()
     first = PadReference("J1", "1")

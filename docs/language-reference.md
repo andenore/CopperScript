@@ -813,12 +813,14 @@ are revalidated together with ordinary escape-pattern alternatives. Use
 Local-contact preference is on by default for every GND pad. Use
 `--no-prefer-local-ground` to restore reuse-first behavior, optionally with
 `--prefer-local-ground-pad REF.PAD` to select individual exceptions.
+Pads over their own non-GND distribution zone, such as an inner `V3V3` fill,
+also prefer a nearby via over a longer surface route to a reusable contact.
 The preference applies to eligible SMD pads outside protected hard macros;
 through-hole pads already provide a plated contact. It compares a nearby legal
-GND via with reuse of an existing contact, using surface escape length and a
+via with reuse of an existing contact, using surface escape length and a
 small penalty for another drill or shared primary contact. A local via is not
-guaranteed when no legal site exists. Native refill still has to prove the GND
-plane connection.
+guaranteed when no legal site exists. Native refill still has to prove the
+zone connection.
 
 A pad-scoped fabrication permission is separate from connectivity:
 
