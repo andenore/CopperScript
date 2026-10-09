@@ -204,13 +204,23 @@ def _access_result(
     boundary_options: BoundaryAccessOptions | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> PackageAccessResult:
-    plane = stitch_zone_pads(critical.board, plane_options) if plane_options else None
+    plane = None
+    if plane_options:
+        emit(on_progress, "package_plane_stitch", "started", purpose="contact_validation")
+        plane = stitch_zone_pads(critical.board, plane_options)
+        emit(on_progress, "package_plane_stitch", "finished", purpose="contact_validation",
+             pending=len(plane.pending_pads))
+    emit(on_progress, "package_critical_drc", "started")
     failed, hard = _failures(board, critical)
+    emit(on_progress, "package_critical_drc", "finished", hard_findings=hard,
+         failed_critical_nets=sorted(failed))
     if plane is not None:
         from .drc import run_physical_drc
+        emit(on_progress, "package_contact_drc", "started")
         hard = sum(finding.severity.value == "error"
                    and finding.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
                    for finding in run_physical_drc(plane.board).findings)
+        emit(on_progress, "package_contact_drc", "finished", hard_findings=hard)
     emit(on_progress, "package_boundary_access", "started")
     boundary = analyze_boundary_access(plane.board if plane else critical.board, fanout, boundary_options)
     emit(on_progress, "package_boundary_access", "finished", allocated=len(boundary.ports),
@@ -288,7 +298,10 @@ def _negotiate_patterns(
     else:
         probe = _critical_search(baseline.source, baseline.global_route, None,
                                  on_progress, pair_state_limit, search_work)
+    emit(on_progress, "package_probe_drc", "started")
     probe_failed, probe_hard = _failures(baseline.source, probe)
+    emit(on_progress, "package_probe_drc", "finished", hard_findings=probe_hard,
+         failed_critical_nets=sorted(probe_failed))
     emit(on_progress, "package_pattern_probe", "finished",
          failed_critical_nets=sorted(probe_failed), hard_findings=probe_hard, reused_critical=reuse,
          search_tier=search_tier)
@@ -305,9 +318,18 @@ def _negotiate_patterns(
     for strategy in strategies[:options.maximum_pattern_trials]:
         emit(on_progress, "package_pattern_trial", "started", index=len(records) + 1, strategy=strategy,
              search_tier=search_tier)
-        obstacles = (stitch_zone_pads(probe.board, plane_options).board
-                     if strategy == "critical_and_plane_first" else probe.board)
+        if strategy == "critical_and_plane_first":
+            emit(on_progress, "package_plane_stitch", "started", purpose="proposal_obstacles")
+            stitched = stitch_zone_pads(probe.board, plane_options)
+            emit(on_progress, "package_plane_stitch", "finished", purpose="proposal_obstacles",
+                 pending=len(stitched.pending_pads))
+            obstacles = stitched.board
+        else:
+            obstacles = probe.board
+        emit(on_progress, "package_pattern_fanout", "started", strategy=strategy)
         proposed = route_fanout(obstacles, fanout_options)
+        emit(on_progress, "package_pattern_fanout", "finished", strategy=strategy,
+             escaped=len(proposed.accesses), pending=len(proposed.pending_pads))
         # Do not leak critical metadata/copper into ordinary ownership. Existing
         # macro copper belongs to the source, not to the proposed fanout pattern.
         proposed = replace(proposed, board=replace(owner_board,
@@ -344,6 +366,8 @@ def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
                      fanout: FanoutResult | None, on_progress: ProgressCallback | None,
                      pair_state_limit: int | None,
                      search_work: _SearchWork | None) -> CriticalRoutingResult:
+    emit(on_progress, "package_critical_search", "started", reserved_accesses=fanout is not None,
+         pair_state_limit=pair_state_limit)
     kwargs = {"on_progress": critical_progress(on_progress)}
     if fanout is not None:
         kwargs["reserved_accesses"] = fanout
@@ -352,6 +376,9 @@ def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
     result = route_critical_nets(board, guides, **kwargs)
     if search_work is not None:
         search_work.observe(result)
+    emit(on_progress, "package_critical_search", "finished", reserved_accesses=fanout is not None,
+         pair_state_limit=pair_state_limit, pair_searches=sum(net.pair_searches for net in result.nets),
+         expanded_states=sum(net.search_states for net in result.nets))
     return result
 
 

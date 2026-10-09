@@ -311,6 +311,11 @@ def test_pattern_negotiation_replaces_blocking_dogbone_without_moving_components
     assert result == access.preflight_package_access(board, guides, settings)
     assert any(phase == "package_pattern_trial" and event == "finished"
                and details["outcome"] == "accepted" for phase, event, details in events)
+    for phase in ("package_critical_search", "package_critical_drc", "package_probe_drc",
+                  "package_pattern_fanout"):
+        assert sum(event == "started" for name, event, _ in events if name == phase) == sum(
+            event == "finished" for name, event, _ in events if name == phase)
+        assert any(name == phase for name, _, _ in events)
 
 
 @pytest.mark.parametrize("defect", ["lost_exit", "lost_eligibility", "hard_drc", "new_failure", "no_improvement"])

@@ -58,6 +58,7 @@ def test_package_access_interruption_keeps_checkpoint(tmp_path, monkeypatch):
     data = json.loads(report.read_text())
     assert data["stage"] == "ordinary_package_exits_started" and not data["complete"]
     assert not data["fabrication_ready"]
+    assert data["package_access_progress"][0]["elapsed_seconds"] >= 0
 
 
 def test_preflight_binds_scenes_before_placement_and_preserves_owner_copper(tmp_path, monkeypatch):

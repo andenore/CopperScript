@@ -13,6 +13,12 @@ local ground repairs, incremental/full ground-feedback trials, final native chec
 independent KiCad refill/DRC, and export. Trial decisions expose failures rather
 than reporting a candidate as the selected completed board.
 
+Package-access events split critical search, plane stitching, critical-board DRC,
+post-contact DRC, proposal fanout, and probe DRC. Plane-stitch events identify
+contact validation versus proposal obstacles. The standalone critical-preflight
+report records the same events with seconds since package access began; nested
+spans overlap and must not be added to their enclosing tier or trial durations.
+
 Full ground trials rebuild routing from a clean placement and can each take
 minutes. An accepted trial with fewer pending ground contacts can cause another
 trial; the configured trial limit still applies. A start event without a finish

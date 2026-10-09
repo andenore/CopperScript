@@ -1,5 +1,22 @@
 # Routing performance and optimization assessment
 
+## Package-access via search
+
+The preferred plane-contact search stops considering farther via rings once
+their minimum possible pad-to-via distance exceeds the best legal choice already
+found. The existing 2 mm search cap and exact copper clearance checks remain.
+This preserves candidate selection because a route cannot be shorter than its
+pad-to-via displacement.
+
+On the full-vertical `candidate-00` package-access preflight with both hard
+macros, the same inputs and unprofiled process took 248.3 s with the previous
+search and 121.7 s with this pruning. The three plane-stitch passes changed from
+67.5/69.2/69.9 s to 21.4/21.3/33.8 s. Both results were ready with 113 plane
+contacts, the same critical-route fingerprint, and the same native board and
+report digests. These are single-run measurements, not a full-route timing or
+manufacturing signoff claim. Ignored diagnostic reports are in
+`build/package-access-timing-{unpruned,pruned}-20261009.json`.
+
 ## Profiling future runs
 
 Package preflight now negotiates ordinary escape patterns after a bounded

@@ -361,8 +361,10 @@ def _stitch_land(
                  or (net != "GND" and any(
                      _point_in_zone(position, zone.outline) for zone in zones)))
     choices: list[tuple[float, Point, tuple[TrackSegment, ...], Via | None]] = []
+    best_cost = float("inf")
 
     def consider(path: tuple[TrackSegment, ...], target: Point, via: Via | None) -> None:
+        nonlocal best_cost
         length = max(
             _surface_route_length(net, side, width, position, target,
                                   (*committed_tracks, *path)),
@@ -373,6 +375,7 @@ def _stitch_land(
         cost = length + (nm_from_mm("0.2") if via else 0)
         cost += preferred_via_uses.get(target, 0) * nm_from_mm("0.4")
         choices.append((cost, target, path, via))
+        best_cost = min(best_cost, cost)
 
     # Existing fanout and routed vias need not lie on the half-mm grid.
     reusable = sorted(
@@ -415,7 +418,10 @@ def _stitch_land(
     for candidate in _candidate_points(position, options):
         distance_x = abs(candidate.x_nm - position.x_nm)
         distance_y = abs(candidate.y_nm - position.y_nm)
-        if preferred and choices and max(distance_x, distance_y) > nm_from_mm("2"):
+        # Every possible route costs at least its pad-to-via distance. Once a
+        # ring is farther than an existing choice, no later ring can win.
+        if preferred and choices and max(distance_x, distance_y) > min(
+                nm_from_mm("2"), best_cost):
             break
         if not _point_in_outline(candidate, board.outline.vertices):
             continue

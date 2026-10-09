@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import pytest
 
+import pcbir.plane as plane
 from pcbir import (
     BoardOutline,
     CopperKeepout,
@@ -135,6 +136,24 @@ def test_preferred_ground_pad_reuses_short_existing_via() -> None:
     assert result.complete and result.added_via_count == 0
     assert any(existing.position in (track.start, track.end)
                for track in result.board.tracks)
+
+
+def test_preferred_ground_search_stops_when_later_vias_cannot_win(monkeypatch) -> None:
+    board = _plane_board()
+    pad = PadReference("J1", "1")
+    candidates = []
+    original = plane._candidate_points
+
+    def counted(position, options):
+        for candidate in original(position, options):
+            candidates.append(candidate)
+            yield candidate
+
+    monkeypatch.setattr(plane, "_candidate_points", counted)
+    result = stitch_zone_pads(board, PlaneStitchOptions(only_pads={pad}, preferred_ground_pads={pad}))
+    assert result.complete and result.added_via_count == 1
+    assert len(candidates) <= 25  # Only the first two distance rings are evaluated.
+    assert result.board.vias[-1].position in {Point.mm(2, 6), Point.mm(4, 6)}
 
 
 @pytest.mark.parametrize("existing_x, new_vias", [(4, 0), (5, 1)])

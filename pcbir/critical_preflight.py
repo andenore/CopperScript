@@ -167,7 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         access = None
         if args.package_access:
             def access_progress(phase, event, details):
-                progress.append({"phase": phase, "event": event, **details})
+                progress.append({"phase": phase, "event": event,
+                                 "elapsed_seconds": round(perf_counter() - started, 3), **details})
                 report["package_access_progress"] = progress
                 checkpoint(f"{phase}_{event}")
             access = preflight_package_access(
