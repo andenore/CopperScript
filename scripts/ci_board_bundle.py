@@ -73,6 +73,29 @@ def library_module(*, offline: bool):
     return result
 
 
+def warm_requirements(source: Path) -> None:
+    """Fetch every module the example's copper.mod requires.
+
+    Compiling resolves only the modules its imports name. Footprint libraries
+    are resolved later, by the backend, so a footprint-only requirement such as
+    the KiCad library stays unfetched and the offline layout misses its cache.
+
+    A requirement the lock does not record (PKG010) is skipped: a locked stage
+    could not use it either, so there is nothing to warm.
+    """
+    from pcbir.packages import PackageResolver
+    from pcbir.syntax import CopperScriptError, SourceLocation
+
+    location = SourceLocation(str(source), 0, 1, 1)
+    resolver = PackageResolver.for_source(source, location, locked=True, offline=False)
+    for module_path in sorted(resolver.manifest.requirements):
+        try:
+            resolver.resolve(module_path, location)
+        except CopperScriptError as error:
+            if error.code != "PKG010":
+                raise
+
+
 def prepare(output: Path) -> None:
     from pcbir.compiler import compile_file
     pins = json.loads((ROOT / ".github/board-toolchain.json").read_text())
@@ -83,6 +106,9 @@ def prepare(output: Path) -> None:
     # The resolver fetches only the pinned revision and verifies every lock byte.
     # Nothing here canonicalizes, refreshes or modifies the authoritative lock.
     library = library_module(offline=False)
+    # The repository's own module backs every example without its own
+    # copper.mod, so its footprint-only requirements need warming too.
+    warm_requirements(ROOT / "examples/full_vertical/board.copper")
     # CM4, nRF52 and the nRF antenna macro are standalone example projects,
     # each with its own copper.mod/copper.lock and package cache. Warm every
     # one explicitly so the Make smoke and the nRF52 route (which loads the
@@ -90,6 +116,7 @@ def prepare(output: Path) -> None:
     # does after preparation.
     for example in ("cm4_baseboard", "nrf52_coin_cell", "nrf_antenna_macro"):
         source = ROOT / "examples" / example / "board.copper"
+        warm_requirements(source)
         compile_file(source, locked=True, offline=False)
         compile_file(source, locked=True, offline=True)
     compile_file(ROOT / "examples/full_vertical/board.copper", locked=True, offline=True)

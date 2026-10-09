@@ -51,9 +51,14 @@ def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
     CI.prepare(tmp_path / "build/run")
     assert (tmp_path / "copper.lock").read_bytes() == original
     assert all(kwargs["locked"] is True for _, kwargs in calls)
-    assert sum(kwargs["offline"] is False for _, kwargs in calls) == 1
-    assert sum(path.name == "board.copper" and "cm4_baseboard" in path.parts
-               for path, _ in calls) == 2
+    # Each standalone example project warms its own cache online, then proves
+    # it offline; the repository's own board is only compiled offline.
+    standalone = {"cm4_baseboard", "nrf52_coin_cell", "nrf_antenna_macro"}
+    assert {path.parts[-2] for path, kwargs in calls if not kwargs["offline"]} == standalone
+    for example in standalone:
+        assert sum(example in path.parts for path, _ in calls) == 2
+    assert all(kwargs["offline"] is True
+               for path, kwargs in calls if "full_vertical" in path.parts)
     provenance = json.loads((tmp_path / "build/run/provenance.json").read_text())
     assert provenance["library_source"] == "https://github.com/andenore/CopperLib.git"
     assert not provenance["lock_modified"]
