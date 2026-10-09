@@ -207,6 +207,8 @@ def test_preferred_ground_pads_do_not_share_a_via_when_local_site_is_free() -> N
 
 def test_preferred_ground_pad_keeps_its_existing_local_plane_contact() -> None:
     board = _plane_board()
+    board = replace(board, zones=(replace(board.zones[0],
+        layers=(CopperLayer.INTERNAL_1, CopperLayer.BACK)),))
     first = PadReference("J1", "1")
     second = PadReference("J2", "1")
     board = replace(

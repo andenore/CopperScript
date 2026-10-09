@@ -155,9 +155,9 @@ def materialize_via_in_pad_arrays(board: PhysicalBoard) -> PhysicalBoard:
                 if not via_inside_board(board, site, ARRAY_VIA_SIZE_NM)
                 else "lies outside the inner GND zone" if not any(
                     _in_outline(site, zone.outline) and not any(
-                        k.block_zones and set(k.layers) & set(zone.layers)
+                        k.block_zones and layer in k.layers
                         and _in_outline(site, k.outline) for k in keepouts)
-                    for zone in planes)
+                    for zone in planes for layer in zone.layers if layer not in outer)
                 else "coincides with an existing via" if site in occupied
                 else "touches another land"
                 if not clearance.pad_copper_clear(shape, layers, allowed_pad=rule.pad)

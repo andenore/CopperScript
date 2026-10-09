@@ -408,7 +408,7 @@ def test_plane_stitch_reuses_macro_return_without_shortcutting_private_pads(tmp_
     original, asset, bind = fixture(tmp_path)
     from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles, Stackup
     from pcbir.plane import stitch_zone_pads
-    zone = CopperZone("plane","N",(CopperLayer.INTERNAL_1,), PolygonWithHoles(PolygonRing(
+    zone = CopperZone("plane","N",(CopperLayer.INTERNAL_1, CopperLayer.BACK), PolygonWithHoles(PolygonRing(
         (Point.mm(1,1),Point.mm(29,1),Point.mm(29,29),Point.mm(1,29)))))
     source = replace(original,stackup=Stackup((CopperLayer.FRONT,CopperLayer.INTERNAL_1,
         CopperLayer.INTERNAL_2,CopperLayer.BACK)),zones=(zone,))

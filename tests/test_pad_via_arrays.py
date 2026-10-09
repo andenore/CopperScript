@@ -293,6 +293,19 @@ def test_hard_macro_pad_array_is_committed_with_owner_copper(tmp_path):
         materialize_hard_macros(bind("R1", rows=1, columns=1))
 
 
+def test_back_fill_keepout_does_not_block_inner_plane_via_array() -> None:
+    board = _array_board(rows=1, columns=1)
+    board = replace(board,
+        zones=(replace(board.zones[0],
+                       layers=(CopperLayer.INTERNAL_1, CopperLayer.BACK)),),
+        copper_keepouts=(CopperKeepout(
+            "back-fill-only", (CopperLayer.BACK,), board.zones[0].outline,
+            block_tracks=False, block_vias=False,
+        ),),
+    )
+    assert len(materialize_via_in_pad_arrays(board).vias) == 1
+
+
 _EXPOSED_LAND = """(footprint "EP_Test"
   (version 20240108)
   (generator "CopperScript-test")

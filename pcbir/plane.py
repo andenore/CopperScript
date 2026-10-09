@@ -16,6 +16,7 @@ from typing import Iterator
 from .drc import placed_pad_shape
 from .physical import (
     BoardSide,
+    CopperKeepout,
     CopperLayer,
     CopperZone,
     FootprintPad,
@@ -190,11 +191,8 @@ def stitch_zone_pads(
                     a, b = sorted((board.stackup.copper_layers.index(via.from_layer),
                                    board.stackup.copper_layers.index(via.to_layer)))
                     span = set(board.stackup.copper_layers[a:b+1])
-                    if via.net == net and any(span.intersection(zone.layers)
-                            and _point_in_zone(via.position, zone.outline)
-                            and not any(k.block_zones and span.intersection(zone.layers, k.layers)
-                                        and _point_in_zone(via.position, k.outline)
-                                        for k in keepouts)
+                    if via.net == net and any(
+                            _via_contacts_zone(via.position, zone, span, keepouts)
                             for zone in reference_zones):
                         contacts.add(owner_graph.roots[f"via:{i}"])
                 if not roots or not roots.issubset(contacts):
@@ -214,13 +212,9 @@ def stitch_zone_pads(
                         and (via.position.x_nm - position.x_nm) ** 2
                             + (via.position.y_nm - position.y_nm) ** 2
                             <= options.maximum_radius_nm ** 2
-                        and any(
-                            _point_in_zone(via.position, zone.outline)
-                            and not any(k.block_zones and set(zone.layers).intersection(k.layers)
-                                        and _point_in_zone(via.position, k.outline)
-                                        for k in keepouts)
-                            for zone in reference_zones
-                        )
+                        and any(_via_contacts_zone(
+                            via.position, zone, board.stackup.copper_layers, keepouts)
+                            for zone in reference_zones)
                         for i, via in enumerate(board.vias)
                     ):
                         # The earlier pass already made an independent local
@@ -627,6 +621,19 @@ def _point_in_zone(point: Point, outline: PolygonWithHoles) -> bool:
     return (
         _point_in_outline(point, outline.outer.vertices)
         and not any(_point_in_outline(point, hole.vertices) for hole in outline.holes)
+    )
+
+
+def _via_contacts_zone(
+    point: Point, zone: CopperZone, span: set[CopperLayer] | tuple[CopperLayer, ...],
+    keepouts: tuple[CopperKeepout, ...],
+) -> bool:
+    return _point_in_zone(point, zone.outline) and any(
+        layer in span and not any(
+            keepout.block_zones and layer in keepout.layers
+            and _point_in_zone(point, keepout.outline)
+            for keepout in keepouts)
+        for layer in zone.layers
     )
 
 
