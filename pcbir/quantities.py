@@ -19,6 +19,14 @@ def _decimal(value: Number) -> Decimal:
     return value if isinstance(value, Decimal) else Decimal(str(value))
 
 
+def decimal_text(value: Decimal) -> str:
+    """Exact fixed-point text, with no exponent or unnecessary decimal zeros."""
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text == "-0" else text
+
+
 @dataclass(frozen=True, slots=True)
 class Quantity:
     """A normalized, dimension-specific quantity.
@@ -68,7 +76,7 @@ class Quantity:
         return self.base_value <= self._require_same_type(other).base_value
 
     def __str__(self) -> str:
-        return f"{self.value.normalize()} {self.display_unit}"
+        return f"{decimal_text(self.value)} {self.display_unit}"
 
 
 @dataclass(frozen=True, slots=True)

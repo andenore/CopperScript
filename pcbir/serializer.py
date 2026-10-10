@@ -23,7 +23,7 @@ from .model import (
     SourceReference,
     Supply,
 )
-from .quantities import Quantity
+from .quantities import Quantity, decimal_text
 from .design import Design
 from .mechanical_profiles import mechanical_provenance
 
@@ -426,8 +426,8 @@ def _value(value: object) -> object:
         }
     if isinstance(value, Quantity):
         return {
-            "value": str(value.value.normalize()),
+            "value": decimal_text(value.value),
             "unit": value.display_unit,
-            "base_value": str(value.base_value.normalize()),
+            "base_value": decimal_text(value.base_value),
         }
     return value

@@ -47,6 +47,7 @@ def test_prototype_physicalizer_keeps_electrical_ir_separate() -> None:
         net.pads for net in physical.nets if net.name == "V3V3"
     )
     assert not hasattr(electrical.components[0], "position")
+    assert next(p.value for p in physical.placements if p.reference == "C1") == "100 nF"
 
 
 def test_four_layer_fabrication_profile_is_explicit() -> None:

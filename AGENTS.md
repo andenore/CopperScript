@@ -1,5 +1,14 @@
 # Agent guidance
 
+## Human-readable numeric output
+
+Use ordinary fixed-point numbers and explicit engineering units in diagnostics,
+IR examples, component labels and BOMs: `100 nF`, not `1E+2 nF`. Use the shared
+quantity formatter, preserving the declared unit and exact fractional values;
+never round a real fraction to an integer merely for display. SI `base_value`
+fields remain exact fixed-point decimal strings. Simulator-specific numeric
+syntax is a separate machine interface, not a template for human-facing output.
+
 ## Decoupling and package escape quality
 
 Use capacitor `role = decoupling` with an explicit `decouples = "U.PIN"`

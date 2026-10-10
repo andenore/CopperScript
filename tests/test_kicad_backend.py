@@ -28,6 +28,8 @@ def test_kicad_backend_generates_self_contained_deterministic_schematic() -> Non
     assert '(lib_id "CopperScript:' in schematic
     assert '(property "Reference" "U2"' in schematic
     assert '(property "Value" "4.7 kohm"' in schematic
+    assert '(property "Value" "100 nF"' in schematic
+    assert '(property "Value" "1E+2 nF"' not in schematic
     assert '(property "Footprint" "LQFP-48"' in schematic
     assert '(label "I2C_SDA"' in schematic
     assert '(label "V3V3"' in schematic
