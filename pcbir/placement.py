@@ -259,6 +259,9 @@ def generate_placement_candidates(
         moves += cluster_moves
         refined, spacing_moves = _spread_escape_components(board, refined, options, spacing)
         moves += spacing_moves
+        from .decoupling import improve_decoupling_placement
+        refined, bypass_moves = improve_decoupling_placement(board, refined, phase_options)
+        moves += bypass_moves
         metrics = placement_metrics(board, refined, options, spacing_model=spacing)
         if metrics.constraint_penalty_nm or not placement_solution_is_legal(board, refined, options):
             if closest_rejected is None or metrics.constraint_penalty_nm < closest_rejected[0]:

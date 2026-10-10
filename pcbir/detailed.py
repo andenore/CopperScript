@@ -678,16 +678,15 @@ def route_detailed(
         all_tracks = (*board.tracks, *_smooth_owned(board, board.tracks, new_tracks, all_vias))
     if fanout_accesses:
         # Deferred zone contacts remain required even without an area route.
+        # Failed ordinary nets also keep their checked package reservations:
+        # later plane stitching must not occupy an exit needed by a repair.
+        # This does not claim connectivity; only successful nets are cleaned.
         deferred_pads = {pad for net in deferred for pad in net.pads}
+        successful_pads = {pad for net in board.nets
+                           if any(item.result.net == net.name and item.result.connected
+                                  for item in best.nets) for pad in net.pads}
         cleanup_accesses = {pad: anchor for pad, anchor in fanout_accesses.items()
-                            if pad not in deferred_pads}
-        if only_nets is not None:
-            # A failed repair must not remove the input net's locked escape.
-            successful_pads = {pad for net in board.nets
-                               if any(item.result.net == net.name and item.result.connected
-                                      for item in best.nets) for pad in net.pads}
-            cleanup_accesses = {pad: anchor for pad, anchor in cleanup_accesses.items()
-                                if pad in successful_pads}
+                            if pad not in deferred_pads and pad in successful_pads}
         all_tracks, all_vias = _prune_fanout_copper(
             board, all_tracks, all_vias, cleanup_accesses,
             frozenset(item.result.net for item in best.nets if item.result.connected),
@@ -1241,6 +1240,8 @@ def _route_repair_net(
     Refining only the final strict search cannot repair narrow channels blocked
     by movable copper. Soft proposals and each evicted net must have the same
     opportunity, while immutable copper and commit-time clearance remain exact.
+    A complete path rejected by its length budget also merits refinement: a
+    coarse mesh detour is not proof that the original length limit is infeasible.
     Budget exhaustion never triggers refinement; at most four halvings occur.
     """
     attempt = _route_net(board, grid, name, pads, rule, guide, usage, history,
@@ -1249,7 +1250,9 @@ def _route_repair_net(
     checkpoint = attempt.checkpoint
     for _ in range(4):
         if (attempt.result.connected
-                or not any("cannot reach" in message for message in attempt.result.diagnostics)
+                or not any("cannot reach" in message
+                           or (message.startswith("route length ") and " exceeds " in message)
+                           for message in attempt.result.diagnostics)
                 or options.pitch_nm <= options.minimum_repair_pitch_nm):
             break
         options = replace(options,
@@ -1596,12 +1599,20 @@ def _route_net(
         # Pruning and chamfers can leave part of a wide piece inside a region;
         # it necks down too. Every contact here is on a centre line.
         tracks = list(clearance.breakout.neck_down(tracks))
-    resources = _emitted_edge_resources(grid, route_edges, tuple(tracks),
-        tuple(v for v in (*board.vias, *vias) if v.net == name))
     length = sum(
         round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm))
         for item in tracks
     )
+    if (options.route_smoothing and not allow_movable_conflicts and not fanout_accesses
+            and rule and rule.max_length_nm is not None and length > rule.max_length_nm):
+        # Judge the emitted path, not removable maze-grid jogs. Use a private
+        # index including all previously committed pass copper: failed
+        # candidates must never reserve their smoothing proposals.
+        tracks = list(_smooth_length_candidate(board, clearance, tuple(tracks), tuple(vias)))
+        length = sum(round(hypot(t.end.x_nm-t.start.x_nm, t.end.y_nm-t.start.y_nm))
+                     for t in tracks)
+    resources = _emitted_edge_resources(grid, route_edges, tuple(tracks),
+        tuple(v for v in (*board.vias, *vias) if v.net == name))
     conflict = clearance.candidate_via_conflict(
         vias, allow_movable_conflicts=allow_movable_conflicts,
     )
@@ -1639,6 +1650,29 @@ def _route_net(
         tuple(vias),
         frozenset(resources),
     )
+
+
+def _smooth_length_candidate(
+    board: PhysicalBoard, clearance: RoutingClearanceIndex,
+    tracks: tuple[TrackSegment, ...], vias: tuple[Via, ...],
+) -> tuple[TrackSegment, ...]:
+    # The index records its initial board copper as insertions too. Replay
+    # only subsequent reservations, using the index's complete base (repair
+    # indexes may already contain other accepted ordinary nets).
+    base = clearance.board
+    additions = clearance.additions()[len(base.tracks) + len(base.vias):]
+    immutable = (*base.tracks, *(t for t, _ in additions if isinstance(t, TrackSegment)))
+    all_vias = (*base.vias, *(v for v, _ in additions if isinstance(v, Via)), *vias)
+    try:
+        return _smooth_owned(board, immutable, tracks, all_vias)
+    except ValueError as error:
+        # A provisional over-length path may itself fail immutable-macro
+        # validation. Do not smooth or accept an unbindable candidate; the
+        # original length rejection remains authoritative.
+        if str(error) not in {"new copper intrudes into a protected hard-macro region",
+                              "new via intrudes into a protected hard-macro region"}:
+            raise
+        return tracks
 
 
 def _search(

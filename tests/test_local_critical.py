@@ -9,7 +9,7 @@ from pcbir import (
     Placement, Point, PolygonRing, PolygonWithHoles, RouteKind, Size, TrackSegment,
     route_global, route_critical_nets, run_physical_drc, nm_from_mm,
 )
-from pcbir.critical import _improve_single_surface, _route_single, _validate_candidate
+from pcbir.critical import _improve_single_surface, _route_single, _route_single_exact, _validate_candidate
 from pcbir.local_critical import local_surface_candidates
 from pcbir.routing import GlobalRouteSegment
 
@@ -38,6 +38,41 @@ def fixture(tree=True):
 
 def hard_findings(board):
     return [f for f in run_physical_drc(board).findings if f.code != "DRC-ROUTE-INCOMPLETE"]
+
+
+def test_length_bounded_surface_repair_uses_fine_geometric_search(monkeypatch):
+    import pcbir.detailed as detailed
+    board, guides = fixture(False)
+    rule = replace(board.net_routing_rules[0], max_length_nm=nm_from_mm(6))
+    board = replace(board, net_routing_rules=(rule,))
+    original = detailed.route_detailed
+    seen = []
+
+    def capture(search_board, global_route, options, **kwargs):
+        seen.append(options)
+        assert global_route.routes[0].connected == guides.routes[0].connected
+        assert not global_route.routes[0].segments
+        assert guides.routes[0].segments
+        assert search_board.net_routing_rules[0].max_length_nm == nm_from_mm(6)
+        assert search_board.net_routing_rules[0].max_vias == 0
+        return original(search_board, global_route, options, **kwargs)
+
+    monkeypatch.setattr(detailed, "route_detailed", capture)
+    result, tracks, vias = _route_single_exact(board, rule, guides, [], [])
+    assert result.connected and tracks and not vias
+    assert seen[0].pitch_nm == seen[0].minimum_repair_pitch_nm
+    assert seen[0].layer_preference_cost == seen[0].direction_preference_cost == 0
+    assert result.lengths_nm[0] <= rule.max_length_nm
+
+
+def test_fine_surface_repair_does_not_invent_a_connected_global_guide():
+    board, guides = fixture(False)
+    rule = replace(board.net_routing_rules[0], max_length_nm=nm_from_mm(6))
+    board = replace(board, net_routing_rules=(rule,))
+    guides = replace(guides, routes=(replace(guides.routes[0], connected=False),))
+    result, tracks, vias = _route_single_exact(board, rule, guides, [], [])
+    assert not result.connected
+    assert not tracks and not vias
 
 
 def test_short_tree_replaces_legal_detour_and_preserves_every_branch():

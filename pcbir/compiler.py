@@ -705,7 +705,7 @@ def _validate_instances(
 
 def _component(declaration: ComponentDecl, part_name: str | None = None) -> ComponentInstance:
     _reject_unknown_attributes(
-        declaration.attributes, {"value", "footprint", "modes"}, declaration.location
+        declaration.attributes, {"value", "footprint", "modes", "role", "decouples"}, declaration.location
     )
     value = declaration.attributes.get("value")
     if isinstance(value, RawQuantity):
@@ -719,12 +719,22 @@ def _component(declaration: ComponentDecl, part_name: str | None = None) -> Comp
     if footprint is not None and not isinstance(footprint, str):
         _error("CMP005", "component footprint must be a string", declaration.location)
     modes = _key_values(declaration.attributes.get("modes", ""), "component modes", declaration.location)
+    role = declaration.attributes.get("role")
+    target = declaration.attributes.get("decouples")
+    if role is not None or target is not None:
+        if role != "decoupling" or not isinstance(target, str):
+            _error("CMP005", "decoupling requires role = decoupling and decouples = COMPONENT.PIN", declaration.location)
+        try:
+            ep(target)
+        except ValueError as exc:
+            _error("CMP005", str(exc), declaration.location)
     return ComponentInstance(
         ref=declaration.ref,
         part=part_name or declaration.part,
         value=compiled_value,
         footprint=footprint,
         modes=modes,
+        properties={"role": role, "decouples": target} if role else {},
     )
 
 

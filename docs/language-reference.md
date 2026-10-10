@@ -1,5 +1,39 @@
 # CopperScript v0.1 language reference
 
+## Decoupling role and pin association
+
+```copper
+component C_BYPASS: CAPACITOR {
+    value = 100nF;
+    footprint = "Capacitor_SMD:C_0402_1005Metric";
+    role = decoupling;
+    decouples = "U.VDD";
+}
+```
+
+This is semantic component intent, not a numeric placement constraint. The
+association must name a real connected pin on the capacitor's feed net, with
+its other terminal on a declared zero-volt return. Reusable circuits can declare
+it once in CopperLib; module expansion qualifies the protected component path.
+Do not mark RF matching, crystal load or bulk reservoir capacitors indiscriminately.
+
+Placement prefers same-side proximity using the actual feed land, respecting
+fixed poses, allowed orientations, mechanical constraints and hard macros.
+Ordinary routing reserves a direct surface path before package via escapes and
+plane access. Ground return vias and remote power-feed transitions remain legal.
+Explicit critical/RF profiles keep their specialized routing policies; no
+universal distance, capacitance, return-loop or power qualification is inferred.
+Placement checks actual direct pin access as well as pad distance. Routing tries
+short direct candidates, then a bounded octilinear surface search with exact
+terminal attachment and clearance/width checks. Computational search bounds are
+not electrical length limits. Existing verified surface chains are reused;
+neither ground-return vias nor remote power-distribution vias are banned.
+
+Blocked surface paths are exposed in `fanout.decoupling_pending`, rather than
+silently reported as direct bypasses. Placement never moves existing routed copper.
+
+See [routing-quality progress and remaining work](routing-quality-todo.md).
+
 ## Mechanical geometry status
 
 A board may declare a separate `mechanical` section containing a circular,
@@ -751,6 +785,12 @@ A zone may instead have an explicit regional boundary. Choose exactly one:
 coordinates in millimeters. Named regions may be declared after the zone.
 `priority` is an optional nonnegative integer for overlapping zone intent.
 
+Set `allow_same_net_hard_macro_overlap = true` to opt this host zone into
+overlapping a hard macro's local zone on the same net and layer. The macro must
+allow zones on that layer, and its own copper keepouts still apply; foreign-net
+overlap is never permitted. This permits connected native fill but does not
+combine the source zone objects or replace native refill/DRC verification.
+
 ```copper
 constraint copper_zone(V3V3) {
     id = "logic-power";
@@ -821,6 +861,14 @@ via with reuse of an existing contact, using surface escape length and a
 small penalty for another drill or shared primary contact. A local via is not
 guaranteed when no legal site exists. Native refill still has to prove the
 zone connection.
+
+`--plane-maze-step-mm` (default 0.1 mm) and `--plane-maze-budget` (default
+12,000 states) bound the local surface-path fallback when cheap contact
+candidates fail. A finer mesh, such as 0.025 mm, can resolve an escape missed
+by the coarser search. It never reduces trace width, clearance, drill size or
+source routing limits, and a successful contact still requires native refill
+and DRC. The report records both controls; early and late stitching use the
+same configured bounds.
 
 A pad-scoped fabrication permission is separate from connectivity:
 

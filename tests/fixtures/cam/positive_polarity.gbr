@@ -1,0 +1,14 @@
+G04 authored CAM regression: clear centre remains a hole*
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+%TF.FilePolarity,Positive*%
+%ADD10C,4.0*%
+%ADD11C,2.0*%
+D10*
+X0005000000Y0005000000D03*
+%LPC*%
+D11*
+X0005000000Y0005000000D03*
+%LPD*%
+M02*

@@ -25,6 +25,20 @@ def test_early_plane_contacts_default_and_explicit_opt_out():
     assert not _parser().parse_args(["route-board", "board.copper", "--no-early-plane-stitch"]).early_plane_stitch
 
 
+def test_plane_maze_controls_preserve_defaults_and_reject_zero_pitch():
+    import pytest
+    from pcbir.cli import _parser
+    defaults = _parser().parse_args(["route-board", "board.copper"])
+    assert defaults.plane_maze_step_mm == "0.1"
+    assert defaults.plane_maze_budget == 12000
+    args = _parser().parse_args(["route-board", "board.copper",
+        "--plane-maze-step-mm", "0.025", "--plane-maze-budget", "50000"])
+    assert args.plane_maze_step_mm == "0.025"
+    assert args.plane_maze_budget == 50000
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["route-board", "board.copper", "--plane-maze-step-mm", "0"])
+
+
 def test_route_board_accepts_board_wide_local_ground_preference():
     from pcbir.cli import _parser
     assert _parser().parse_args(["route-board", "board.copper"]).prefer_local_ground
@@ -363,7 +377,8 @@ def test_cli_writes_global_routing_guides(tmp_path: Path) -> None:
 
 
 def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_path: Path) -> None:
-    report = tmp_path / "route-report.json"
+    # The report may live in a fresh directory independently of the PCB.
+    report = tmp_path / "new-review" / "reports" / "route-report.json"
     pcb = tmp_path / "route-draft.kicad_pcb"
     result = subprocess.run(
         [
@@ -373,6 +388,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
             "--fanout",
             "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
             "--plane-stitch-radius-mm", "5",
+            "--plane-maze-step-mm", "0.025", "--plane-maze-budget", "50000",
             "--critical-feedback-trials", "1",
             "--report", str(report), "-o", str(pcb),
         ],
@@ -421,6 +437,8 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert set(document["connectivity"]["deferred_zone_nets"]) <= zones
     assert document["plane_stitch"]["zone_fill_verified"] is False
     assert document["plane_stitch"]["step_nm"] == 250_000
+    assert document["plane_stitch"]["maze_step_nm"] == 25_000
+    assert document["plane_stitch"]["maze_state_budget"] == 50_000
     assert document["plane_stitch"]["maximum_radius_nm"] == 5_000_000
     assert document["plane_stitch"]["maximum_contact_radius_nm"] == 0
     assert "trials" in document["zone_escape_feedback"]

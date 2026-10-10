@@ -82,6 +82,14 @@ def _template_for(
     return template
 
 
+def _qualified_component_properties(component, instance_ref):
+    properties = dict(component.properties)
+    if "decouples" in properties:
+        target = Endpoint.parse(properties["decouples"])
+        properties["decouples"] = str(Endpoint(_qualify(instance_ref, target.component), target.pin))
+    return properties
+
+
 def _expand_one(
     parent: FlatElectricalView, instance_ref: str, template: _Template
 ) -> FlatElectricalView:
@@ -132,7 +140,8 @@ def _expand_one(
 
     components = list(parent.components)
     components.extend(
-        replace(component, ref=_qualify(instance_ref, component.ref))
+        replace(component, ref=_qualify(instance_ref, component.ref),
+                properties=_qualified_component_properties(component, instance_ref))
         for component in template.body.components
     )
 

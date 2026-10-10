@@ -3,3 +3,5 @@
 copper.mod text eol=lf
 # Checksum-pinned reference assets must retain exact bytes on every platform.
 *.dxf -text
+# Hard-macro/reference JSON is bound by raw SHA-256 in example scenes.
+*.json text eol=lf

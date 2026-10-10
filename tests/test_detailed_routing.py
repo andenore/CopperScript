@@ -93,6 +93,71 @@ def test_detailed_router_materializes_deterministic_exact_copper() -> None:
     assert json.loads(first.to_json())["schema"] == "copperscript-detailed-route/v0.1"
 
 
+def test_length_candidate_smoothing_preserves_pass_obstacles_and_index():
+    board = _board()
+    board = replace(board, nets=(*board.nets, PhysicalNet("OTHER", ())))
+    layer = CopperLayer.FRONT
+    points = (Point.mm(3, 6), Point.mm(3, 8), Point.mm(17, 8), Point.mm(17, 6))
+    tracks = tuple(TrackSegment("SIGNAL", a, b, nm_from_mm(.25), layer)
+                   for a, b in zip(points, points[1:]))
+    clear = RoutingClearanceIndex(board)
+    shortcut = detailed_module._smooth_length_candidate(board, clear, tracks, ())
+    assert sum(round(((t.end.x_nm-t.start.x_nm)**2 + (t.end.y_nm-t.start.y_nm)**2)**.5)
+               for t in shortcut) == nm_from_mm(14)
+    blocker = TrackSegment("OTHER", Point.mm(10, 5), Point.mm(10, 7), nm_from_mm(.25), layer)
+    clear.add_track(blocker)
+    before = clear.additions()
+    blocked = detailed_module._smooth_length_candidate(board, clear, tracks, ())
+    assert clear.additions() == before
+    assert blocked != shortcut
+    assert all(clear.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in blocked)
+
+
+def test_unbindable_length_candidate_keeps_original_rejection_geometry(monkeypatch):
+    board = _board()
+    clear = RoutingClearanceIndex(board)
+    tracks = (TrackSegment("SIGNAL", Point.mm(3, 6), Point.mm(17, 6),
+                           nm_from_mm(.25), CopperLayer.FRONT),)
+
+    def reject(*args):
+        raise ValueError("new copper intrudes into a protected hard-macro region")
+
+    monkeypatch.setattr(detailed_module, "_smooth_owned", reject)
+    assert detailed_module._smooth_length_candidate(board, clear, tracks, ()) == tracks
+    assert not clear.additions()
+
+
+def test_length_smoothing_snapshot_does_not_duplicate_locked_prefix(monkeypatch):
+    board = _board()
+    fixed = TrackSegment("SIGNAL", Point.mm(1, 1), Point.mm(2, 1),
+                         nm_from_mm(.25), CopperLayer.FRONT)
+    via = Via("SIGNAL", Point.mm(2, 1), nm_from_mm(.6), nm_from_mm(.3))
+    board = replace(board, tracks=(fixed,), vias=(via,))
+    clear = RoutingClearanceIndex(board)
+    owned = (replace(fixed, start=Point.mm(3, 6), end=Point.mm(17, 6)),)
+
+    def snapshot(bb, immutable, candidate, all_vias):
+        assert immutable == (fixed,)
+        assert all_vias == (via,)
+        assert candidate == owned
+        return candidate
+
+    monkeypatch.setattr(detailed_module, "_smooth_owned", snapshot)
+    assert detailed_module._smooth_length_candidate(board, clear, owned, ()) == owned
+
+
+def test_length_smoothing_does_not_hide_other_model_errors(monkeypatch):
+    import pytest
+    board = _board()
+
+    def reject(*args):
+        raise ValueError("invalid source model")
+
+    monkeypatch.setattr(detailed_module, "_smooth_owned", reject)
+    with pytest.raises(ValueError, match="invalid source model"):
+        detailed_module._smooth_length_candidate(board, RoutingClearanceIndex(board), (), ())
+
+
 def test_open_board_prefers_long_45_degree_and_straight_segments() -> None:
     base = _board()
     board = replace(base, placements=(
@@ -759,6 +824,29 @@ def test_refinement_is_bounded_and_never_triggered_by_budget_exhaustion(monkeypa
     disconnected = route_detailed(board, guide, options)
     assert not disconnected.nets[0].connected
     assert pitches == [nm_from_mm(pitch) for pitch in (8, 8, 8, 4, 2, 1, .5)]
+
+
+def test_length_budget_failure_refines_without_weakening_rule(monkeypatch) -> None:
+    board = _board()
+    rule = NetRoutingRule("SIGNAL", max_length_nm=nm_from_mm(8))
+    board = replace(board, net_routing_rules=(rule,))
+    guide = route_global(board)
+    options = DetailedRouterOptions(maximum_passes=1)
+    pitches = []
+
+    def attempt(*args, **kwargs):
+        pitches.append(args[9].pitch_nm)
+        assert args[4].max_length_nm == nm_from_mm(8)
+        return detailed_module._failed(args[2], "route length 9000000 nm exceeds 8000000 nm")
+
+    monkeypatch.setattr(detailed_module, "_route_net", attempt)
+    grid = detailed_module._build_grid(board, options, board.nets[0].pads)
+    from pcbir.routing_clearance import RoutingClearanceIndex
+    result = detailed_module._route_repair_net(board, grid, "SIGNAL", board.nets[0].pads,
+        rule, guide.routes[0], {}, {}, RoutingClearanceIndex(board), options)
+    assert pitches == [nm_from_mm(p) for p in (.5, .25, .125, .1)]
+    assert not result.result.connected
+    assert board.net_routing_rules == (rule,)
 
 
 def test_detailed_router_repair_subset_preserves_other_copper() -> None:

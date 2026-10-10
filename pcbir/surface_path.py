@@ -236,6 +236,85 @@ def surface_path_to_via(
     return None
 
 
+def surface_path_between(
+    board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
+    start: Point, end: Point, width_nm: int, layer: CopperLayer, *,
+    step_nm: int = nm_from_mm("0.1"),
+    maximum_detour_nm: int = nm_from_mm("1"), state_budget: int = 4000,
+) -> tuple[TrackSegment, ...] | None:
+    """Bounded local octilinear A* with exact, possibly off-grid terminals.
+
+    These are computational bounds, not electrical length/clearance limits.
+    Every emitted piece honors the existing width and breakout contract. No
+    vias, movable-obstacle exemptions or arbitrary-angle shortcuts are used.
+    """
+    from .pin_escape import checked_access_paths
+    if step_nm <= 0 or maximum_detour_nm < 0 or state_budget <= 0:
+        raise ValueError("surface terminal-search bounds are invalid")
+    directions = ((1, 0), (1, -1), (0, -1), (-1, -1),
+                  (-1, 0), (-1, 1), (0, 1), (1, 1))
+    left, right = sorted((start.x_nm, end.x_nm))
+    top, bottom = sorted((start.y_nm, end.y_nm))
+
+    def heuristic(point):
+        dx, dy = abs(point.x_nm-end.x_nm), abs(point.y_nm-end.y_nm)
+        return 10 * max(dx, dy) + 4 * min(dx, dy)
+
+    initial = (0, 0, -1)
+    queue = [(heuristic(start), 0, *initial)]
+    best, parent = {initial: 0}, {initial: None}
+    expanded = 0
+    while queue and expanded < state_budget:
+        _, cost, x, y, heading = heappop(queue)
+        state = (x, y, heading)
+        if best.get(state) != cost:
+            continue
+        expanded += 1
+        point = Point(start.x_nm+x*step_nm, start.y_nm+y*step_nm)
+        # Attach the exact terminal, not a rounded grid approximation.
+        if max(abs(point.x_nm-end.x_nm), abs(point.y_nm-end.y_nm)) <= 2*step_nm:
+            tail = next(checked_access_paths(board, clearance, net, point, end, width_nm, layer), None)
+            if tail is not None:
+                nodes, cursor = [], state
+                while cursor is not None:
+                    nodes.append(Point(start.x_nm+cursor[0]*step_nm, start.y_nm+cursor[1]*step_nm))
+                    cursor = parent[cursor]
+                nodes.reverse()
+                turns = [nodes[0]]
+                for i in range(1, len(nodes)-1):
+                    a, b, c = nodes[i-1:i+2]
+                    if ((b.x_nm-a.x_nm)*(c.y_nm-b.y_nm)
+                            != (b.y_nm-a.y_nm)*(c.x_nm-b.x_nm)):
+                        turns.append(b)
+                if nodes[-1] != turns[-1]:
+                    turns.append(nodes[-1])
+                pieces = tuple(t for a, b in zip(turns, turns[1:])
+                               for t in clearance.route_pieces(net, a, b, width_nm, layer))
+                # Recheck the compressed pieces, not only their tiny edges.
+                if all(_track_inside_board(board, t.start, t.end, t.width_nm)
+                       and clearance.can_track(net, t.start, t.end, t.width_nm, layer)
+                       for t in pieces):
+                    return (*pieces, *tail)
+        for next_heading, (dx, dy) in enumerate(directions):
+            nx, ny = x+dx, y+dy
+            neighbor = Point(start.x_nm+nx*step_nm, start.y_nm+ny*step_nm)
+            if not (left-maximum_detour_nm <= neighbor.x_nm <= right+maximum_detour_nm
+                    and top-maximum_detour_nm <= neighbor.y_nm <= bottom+maximum_detour_nm):
+                continue
+            if (not _track_inside_board(board, point, neighbor, width_nm)
+                    or not clearance.can_route(net, point, neighbor, width_nm, layer)):
+                continue
+            difference = abs(next_heading-heading) if heading >= 0 else 0
+            turn = min(difference, 8-difference)
+            candidate = cost + ((14 if dx and dy else 10) + 7*turn)*step_nm
+            next_state = (nx, ny, next_heading)
+            if candidate >= best.get(next_state, 1 << 62):
+                continue
+            best[next_state], parent[next_state] = candidate, state
+            heappush(queue, (candidate+heuristic(neighbor), candidate, *next_state))
+    return None
+
+
 def via_inside_board(board: PhysicalBoard, position: Point, size_nm: int) -> bool:
     if board.outline.circular_boundary or board.outline.boundary_path or board.outline.cutouts or board.mechanical_holes or board.mechanical_slots:
         from .mechanical import shape_in_board

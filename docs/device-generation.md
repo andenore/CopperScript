@@ -1,5 +1,11 @@
 # Device and part generation workflow
 
+Before adding or replacing a component, follow the
+[component integration guidelines](component-integration-guidelines.md): always
+check RF matching/reference layouts, and prefer hard macros or strong placement
+and trace-width constraints for switched power. Generated electrical definitions
+must document physical support obligations; generation does not qualify layout.
+
 ## Internal contact review
 
 Optional `part.json` field `"internal_pad_groups": [["1"], ["2"]]` generates

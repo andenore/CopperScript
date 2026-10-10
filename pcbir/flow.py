@@ -127,6 +127,9 @@ def run_routing_pipeline(
                                 status=FeedbackStatus.PASS,
                                 full_route_certified=True,
                                 placement_candidate=placement.placement_candidate + "-critical")
+    if access is None and critical.board.decoupling_links:
+        from .decoupling import route_decouplers
+        critical = replace(critical, board=route_decouplers(critical.board).board)
     plane_stitch = access.plane_stitch if access else (
         stitch_zone_pads(critical.board, plane_stitch_options)
         if plane_stitch_options else None

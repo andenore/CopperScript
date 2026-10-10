@@ -15,6 +15,7 @@ dependencies = []
 [project.optional-dependencies]
 test = ["pytest>=8"]
 cam = ["pygerber==2.4.3"]
+qualification = ["pygerber==2.4.3", "shapely==2.1.2"]
 simulation = ["matplotlib>=3.10,<4", "plotly>=6.3,<7"]
 
 [project.scripts]

@@ -1347,6 +1347,7 @@ def _point_in_polygon(point: Point, polygon: tuple[Point, ...]) -> bool:
 def _placement_fingerprint(board: PhysicalBoard) -> str:
     document = {
         "board": board.name,
+        **({"decoupling_links": [repr(link) for link in board.decoupling_links]} if board.decoupling_links else {}),
         **({"zone_routing_reservations": [repr(zone) for zone in sorted(board.zones, key=lambda z: z.id)
                                          if zone.reserve_routing]}
            if any(zone.reserve_routing for zone in board.zones) else {}),

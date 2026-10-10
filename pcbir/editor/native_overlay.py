@@ -23,7 +23,8 @@ def extract(filename):
     for t in board.GetTracks():
         if isinstance(t, pcbnew.PCB_VIA):
             vias.append({"net": t.GetNetname(), "position": point(t.GetPosition()),
-                         "size_nm": t.GetWidth(), "drill_nm": t.GetDrillValue(),
+                         "size_nm": t.GetWidth(t.TopLayer()), "drill_nm": t.GetDrillValue(),
+                         "via_type": "through" if t.GetViaType() == pcbnew.VIATYPE_THROUGH else "non-through",
                          "from_layer": layer(t.TopLayer()), "to_layer": layer(t.BottomLayer())})
         elif isinstance(t, pcbnew.PCB_ARC):
             raise ValueError("arc tracks are not supported by the routed overlay yet")

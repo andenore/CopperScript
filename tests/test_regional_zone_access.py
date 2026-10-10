@@ -145,7 +145,7 @@ def test_detailed_cleanup_preserves_deferred_region_exits(reserve_boundary):
     assert closed.board.vias==input_board.vias
 
 
-def test_defer_false_still_cleans_failed_reserved_region_exits():
+def test_defer_false_preserves_failed_reserved_region_exits_for_repair():
     from pcbir.detailed import route_detailed,DetailedRouterOptions
     from pcbir import nm_from_mm
     board=_regional_board(True)
@@ -157,10 +157,13 @@ def test_defer_false_still_cleans_failed_reserved_region_exits():
         fanout_created_vias=frozenset((v.net,v.position) for v in exits.created_vias),
         fanout_created_tracks=exits.created_tracks)
     # The default global guide deferred this net. An explicit area attempt
-    # without a connected guide fails and still releases its owned escape.
+    # without a connected guide fails. Preserve its legal owned escape so
+    # subsequent stitching cannot occupy the pad's only repair corridor.
     assert result.metrics.unrouted_net_count==1
     assert result.nets[0].diagnostics==('missing connected global guide',)
-    assert not result.board.tracks and not result.board.vias
+    assert result.board.tracks == exits.board.tracks
+    assert result.board.vias == exits.board.vias
+    assert result.board.metadata['detailed_routing'] == 'partial'
 
 
 @pytest.mark.parametrize('defer', [False, True])

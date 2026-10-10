@@ -1,0 +1,10 @@
+G04 authored CAM regression: parameterized circular aperture macro*
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+%TF.FilePolarity,Positive*%
+%AMDISC*1,1,$1,0,0,0*%
+%ADD10DISC,1.0*%
+D10*
+X0005000000Y0005000000D03*
+M02*

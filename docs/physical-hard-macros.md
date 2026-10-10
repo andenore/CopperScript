@@ -86,10 +86,23 @@ pins them to the asset digest; materialization rigidly rotates them with the
 tracks and vias. A later change or deletion fails owner validation. KiCad
 exports them as locked zones, and source recovery removes only those exact
 owner zones. Each local polygon must stay inside its protected region. Host
-zones overlapping that region on an owned zone layer, or keepouts blocking an
-owned zone, fail before export. A local VIN/VOUT pour does not make that rail a
+zones overlapping that region on an owned zone layer fail before export unless
+the host zone explicitly opts into an exact same-net overlap; keepouts blocking
+an owned zone always fail. A local VIN/VOUT pour does not make that rail a
 deferred distribution-plane net:
 external terminals still need ordinary routing.
+
+A board host zone may set
+`allow_same_net_hard_macro_overlap = true` in its `copper_zone` constraint to
+share a macro-owned zone on the same net and layer. This is opt-in per host
+zone, remains subject to the macro's zone permissions and copper keepouts, and
+does not allow a foreign-net zone into the protected region.
+Blocking keepouts are scoped to that macro region when checking the overlap
+permission. A remote antenna/matching exclusion on a whole-board host pour must
+not reject an otherwise compatible regulator GND overlap; the native filler still
+clips that pour at the remote keepout. Separate zone objects can abut as continuous
+copper rather than have positive area overlap. Verify actual filled polygons:
+the overlap option or zero unconnected items alone does not prove top continuity.
 
 An optional `plane_returns` group declares every private pad on one net and
 the inner plane layers it must reach. The pre-fill proof requires each pad's
@@ -132,6 +145,41 @@ The full-vertical board now opts into board-specific, digest-bound adaptations
 of the TPS62130A and Nordic/Johanson assets. The assets retain their original
 local copper; the board supplies the matching electrical nets and added parts.
 See [the integration plan](full-vertical-macro-ground-plan.md).
+
+## v0.4 scoped track-width contracts
+
+The v0.4 asset retains the v0.3 fields and requires `width_contracts` (possibly
+empty). Each entry names one zero-based **asset track-row** index and contains
+`minimum_width_nm`, `purpose` and nonempty `evidence`. The binder expands that
+row's polyline into typed segment contracts. Indices must be unique/in range;
+dimensions are positive integer nanometres; the fixed track must meet its
+declared minimum. Purposes are `pin_entry`, `control_supply`, `output_sense`,
+`enable` or `main_power`. Duplicate contracted geometry fails closed.
+
+```json
+{"track_index": 12, "minimum_width_nm": 200000,
+ "purpose": "output_sense",
+ "evidence": "Authored low-current feedback sense; cite package evidence and unresolved adaptations."}
+```
+
+After materialization and immutable-owner validation only, a matching exact
+owner segment uses the greater of its local minimum and the board fabrication
+minimum instead of the host net-wide width rule. All undeclared owner tracks
+and ordinary host copper retain the net profile, including breakout rules.
+This is not a net-, layer-, region- or same-net waiver. Additional matching
+host occurrences gain no extra permission. Clearance, layers, route length,
+via limits, ownership and connectivity checks are unchanged. Each application
+is an informational `DRC-MACRO-WIDTH-CONTRACT` finding recording the segment,
+owner, asset digest, purpose, evidence, host minimum and applied/actual widths;
+typed contracts are included in physical geometry fingerprints/signoff evidence.
+Legacy v0.1–v0.3 behavior is unchanged and rejects the additional field.
+
+The contract states authored geometry, not an established current capacity.
+It must identify why a branch or pad entry has different geometry from host
+distribution, retain unresolved current/thermal evidence and stay unqualified.
+KiCad exports preserve locked owner copper; independent native DRC is still
+mandatory. Manual edits to an exported PCB do not preserve CopperScript's
+owner-bound contracts and need authoritative IR revalidation.
 
 ## Nordic/Johanson trial
 

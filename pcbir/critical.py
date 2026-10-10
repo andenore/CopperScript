@@ -373,8 +373,14 @@ def route_critical_nets(
         regional_nets = {zone.net for zone in board.zones if zone.reserve_routing}
         from .zone_geometry import distribution_zone_nets
         protected.update(distribution_zone_nets(board) - regional_nets)
+        # Ordinary local bypass paths may belong to a deferred distribution
+        # rail. Accept only the source-associated, exactly regenerated surface
+        # prefix; this never grants arbitrary zone/critical copper ownership.
+        from .decoupling import route_decouplers
+        bypass_tracks = route_decouplers(board).created_tracks if board.decoupling_links else ()
         if any(item.net in protected for item in (*reserved_accesses.created_tracks,
-                                                  *reserved_accesses.created_vias)):
+                                                  *reserved_accesses.created_vias)
+               if item not in bypass_tracks):
             raise ValueError("ordinary package-access reservations cannot contain critical or zone copper")
         def hard(checked: PhysicalBoard) -> tuple:
             return tuple(finding for finding in run_physical_drc(checked).findings
@@ -1682,6 +1688,27 @@ def _route_single_exact(
     """Bounded single-net repair against immutable earlier critical copper."""
     from .detailed import DetailedRouterOptions, route_detailed
 
+    options = DetailedRouterOptions(
+        maximum_passes=2, maximum_search_states=20_000,
+        progressive_guides=True, constrained_pins_first=True,
+    )
+    if rule.max_length_nm is not None and rule.max_vias == 0:
+        # A bounded surface route has no layer-assignment tradeoff. Coarse
+        # maze detours and preferred-heading penalties can consume its entire
+        # length allowance, so search at the existing minimum repair pitch
+        # with geometric costs. Keep every electrical and clearance rule.
+        options = replace(options, pitch_nm=options.minimum_repair_pitch_nm,
+                          layer_preference_cost=0, direction_preference_cost=0,
+                          route_smoothing=True)
+        # Guides are capacity proposals, not mandatory local geometry. Their
+        # strong deviation penalty otherwise chooses a legal but over-budget
+        # detour even on the fine grid. Preserve the real guide's availability
+        # and leave the caller's report untouched; only this exact repair
+        # searches without the selected net's coarse corridor preference.
+        global_route = replace(global_route, routes=tuple(
+            replace(item, accesses=(), segments=(), vias=(), length_nm=0)
+            if item.net == rule.net else item for item in global_route.routes))
+
     search_board = replace(
         board, tracks=tuple(committed_tracks), vias=tuple(committed_vias),
         net_routing_rules=tuple(
@@ -1691,10 +1718,7 @@ def _route_single_exact(
     )
     detailed = route_detailed(
         search_board, global_route,
-        DetailedRouterOptions(
-            maximum_passes=2, maximum_search_states=20_000,
-            progressive_guides=True, constrained_pins_first=True,
-        ), only_nets=frozenset({rule.net}),
+        options, only_nets=frozenset({rule.net}),
     )
     tracks = detailed.board.tracks[len(committed_tracks):]
     vias = detailed.board.vias[len(committed_vias):]

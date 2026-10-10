@@ -23,6 +23,7 @@ from .routing_vias import physical_via_span
 from .pin_escape import RoutingAccess, checked_access_path, checked_access_paths
 from .escape_assignment import (EscapeAssignmentOptions, EscapeAssignmentReport,
                                 EscapeCandidate, improve_escape_assignment)
+from .route_quality import escape_paths_cross
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,7 @@ class FanoutResult:
     # Pins whose net may not change layer: owned surface paths to the package
     # collar from the pad itself, never a via (plan R13).
     surface_accesses: Mapping[PadReference, RoutingAccess] | None = None
+    decoupling_pending: tuple[tuple[PadReference, str], ...] = ()
 
     @property
     def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
@@ -111,6 +113,9 @@ def route_fanout(
             return FanoutResult(board, MappingProxyType({}), (), 0, 0)
     if len(board.stackup.copper_layers) < 2:
         return FanoutResult(board, MappingProxyType({}), (), 0, 0)
+    from .decoupling import route_decouplers
+    bypass = route_decouplers(board, only_nets=only_nets)
+    board = bypass.board
     clearance = RoutingClearanceIndex(board)
     net_by_pad = {pad: net.name for net in board.nets for pad in net.pads
                   if len(net.pads) >= 2}
@@ -143,7 +148,7 @@ def route_fanout(
                     continue
                 reference = next((member for member in members if member in net_by_pad), reference)
             net = net_by_pad.get(reference)
-            if (reference in owned or net is None or net in zone_nets
+            if (reference in owned or reference in bypass.connected_pads or net is None or net in zone_nets
                     or only_nets is not None and net not in only_nets):
                 continue
             rule = rules.get(net)
@@ -189,7 +194,10 @@ def route_fanout(
     def choices_for(reference, index, candidate_options, *, elbows=False, multiple_orders=False):
         choices = []
         for _, _, position, placement, pad in pin_by_ref[reference]:
-            sites = (_two_leg_candidates if elbows else _candidates)(position, placement.position, candidate_options)
+            sites = (_two_leg_candidates(position, placement.position, candidate_options) if elbows else
+                     _candidates(position, placement.position, candidate_options, diagonal_normal=True)
+                     if placement.rotation_degrees % 90 == 45 else
+                     _candidates(position, placement.position, candidate_options))
             choices.extend(_legal_choices(board, index, net_by_pad[reference], position,
                 placement, pad, sites, multiple_orders=multiple_orders, outline=outline))
         return tuple(dict.fromkeys(choices))
@@ -298,7 +306,8 @@ def route_fanout(
         refined_counts.get(reference, 0)) for reference in ordered_refs)
     if failed_gate(after.findings):
         return FanoutResult(board, MappingProxyType({}),
-                            tuple(item[1] for item in pads), 0, 0, pin_analysis=tuple(
+                            tuple(item[1] for item in pads), len(bypass.created_tracks), 0,
+                            created_tracks=bypass.created_tracks, pin_analysis=tuple(
                                 replace(item, selected_candidate_index=None,
                                         diagnostic="whole fanout proposal rejected by native DRC")
                                 for item in analysis), assignment=assignment)
@@ -307,8 +316,10 @@ def route_fanout(
                for path in (domains[reference][selected[reference]][0],)}
     return FanoutResult(routed, MappingProxyType({reference: anchor for reference, anchor in accesses.items()
                                                   if reference not in surface}), tuple(pending),
-                        len(tracks), len(vias), tuple(vias), tuple(analysis), tuple(tracks), assignment,
-                        surface_accesses=MappingProxyType(escapes) if surface else None)
+                        len(tracks) + len(bypass.created_tracks), len(vias), tuple(vias), tuple(analysis),
+                        (*bypass.created_tracks, *tracks), assignment,
+                        surface_accesses=MappingProxyType(escapes) if surface else None,
+                        decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending))
 
 
 def _surface_layer(board, net, rule, placement) -> CopperLayer | None:
@@ -401,6 +412,11 @@ def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: 
 
 def _reserve(board, clearance, tracks, vias, candidate: EscapeCandidate) -> bool:
     path, via = candidate
+    # Same-net X crossings pass electrical DRC, but independent package exits
+    # should retain ordered lanes. Only selected escapes are negotiable here;
+    # existing owner copper and deliberate shared trunks remain unchanged.
+    if escape_paths_cross(path, tracks):
+        return False
     if via is not None and any(v.net == via.net and v.position == via.position
                               and (v.from_layer, v.to_layer) == (via.from_layer, via.to_layer)
                               for v in (*board.vias, *vias)):
@@ -419,17 +435,24 @@ def _reserve(board, clearance, tracks, vias, candidate: EscapeCandidate) -> bool
     return True
 
 
-def _candidates(position: Point, center: Point, options: FanoutOptions):
+def _candidates(position: Point, center: Point, options: FanoutOptions, *, diagonal_normal=False):
     directions = ((1, 0), (-1, 0), (0, 1), (0, -1),
                   (1, 1), (1, -1), (-1, 1), (-1, -1))
-    directions = sorted(directions, key=lambda pair: (
-        -(pair[0] * (position.x_nm - center.x_nm)
-          + pair[1] * (position.y_nm - center.y_nm)), pair,
-    ))
-    for step in range(1, options.maximum_radius_nm // options.step_nm + 1):
-        for dx, dy in directions:
-            yield Point(position.x_nm + dx * step * options.step_nm,
-                        position.y_nm + dy * step * options.step_nm)
+    def rank(pair):
+        outward = pair[0]*(position.x_nm-center.x_nm) + pair[1]*(position.y_nm-center.y_nm)
+        diagonal = bool(pair[0] and pair[1])
+        return (outward <= 0, diagonal != diagonal_normal, -outward, pair)
+    directions = sorted(directions, key=rank)
+    # Exhaust the bounded outward normal rays before diagonal fallback. The
+    # former dot-product-only order made diagonals win by their longer vector,
+    # even when a slightly farther straight landing was clear. Rotated 45-degree
+    # packages have diagonal normals; do not turn those into artificial elbows.
+    groups = sorted({rank(pair)[:2] for pair in directions})
+    for group in groups:
+        for step in range(1, options.maximum_radius_nm // options.step_nm + 1):
+            for dx, dy in (pair for pair in directions if rank(pair)[:2] == group):
+                yield Point(position.x_nm + dx * step * options.step_nm,
+                            position.y_nm + dy * step * options.step_nm)
 
 
 class _OutlineSites:

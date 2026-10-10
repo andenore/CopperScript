@@ -116,6 +116,25 @@ def _parser() -> argparse.ArgumentParser:
     manufacturing.add_argument("--bom", type=Path, help="reviewed JLCPCB BOM; also generates a matching CPL")
     manufacturing.add_argument("--replace", action="store_true", help="replace generated output after success, retaining a sibling backup")
     manufacturing.add_argument("-o", "--output", type=Path, required=True, help="new manufacturing directory (never overwritten)")
+    cam_audit = subparsers.add_parser("audit-cam", help="read-only, fail-closed audit of final-native manufacturing files")
+    cam_audit.add_argument("directory", type=Path)
+    cam_audit.add_argument("--profile", type=Path, help="hash-pinned independent parser/corpus profile")
+    cam_audit.add_argument("--evidence-index", type=Path, help="reviewed, byte-bound external vector CAM/DFM evidence")
+    cam_audit.add_argument("--gerbv", type=Path, help="explicit second parser executable")
+    cam_audit.add_argument("--gerbv-version", help="pinned second parser version")
+    cam_audit.add_argument("--kicad-python", type=Path, help="explicit native interpreter for drill/contact reconciliation")
+    cam_audit.add_argument("--report", type=Path, required=True)
+    engineering = subparsers.add_parser("assess-engineering", help="check reusable RF/power contracts against a final native PCB")
+    engineering.add_argument("pcb", type=Path)
+    engineering.add_argument("--plan", type=Path, required=True, help="board-specific contract bindings and operating inputs")
+    engineering.add_argument("--kicad-python", type=Path)
+    engineering.add_argument("--report", type=Path, required=True)
+    qualification = subparsers.add_parser("qualification-gate", help="require complete, current CAM/RF/power evidence; not production or BOM approval")
+    qualification.add_argument("directory", type=Path)
+    qualification.add_argument("--plan", type=Path, required=True)
+    qualification.add_argument("--cam-report", type=Path, required=True)
+    qualification.add_argument("--engineering-report", type=Path, required=True)
+    qualification.add_argument("--report", type=Path, required=True)
     assembly_parser = subparsers.add_parser("assembly", help="pin and check explicit assembly selections offline")
     assembly_commands = assembly_parser.add_subparsers(dest="assembly_command", required=True)
     for action in ("snapshot", "check", "bom"):
@@ -491,6 +510,14 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum provisional pad-to-plane-via search radius (default: 3 mm)",
     )
     board_route_parser.add_argument(
+        "--plane-maze-step-mm", default="0.1", type=_positive_mm,
+        help="local plane-contact fallback mesh spacing; does not change widths or clearance",
+    )
+    board_route_parser.add_argument(
+        "--plane-maze-budget", default=12000, type=int,
+        help="bounded local plane-contact fallback search states (default: 12000)",
+    )
+    board_route_parser.add_argument(
         "--plane-contact-radius-mm", default="0", type=_nonnegative_mm,
         help="optional link to a previously escaped same-net pad (default: disabled)",
     )
@@ -644,6 +671,41 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         except (BoardLoadError, ValueError, OSError) as exc:
             print(f"MECHANICAL EDITOR ERROR: {exc}")
+            return 2
+    if args.command in {"audit-cam", "assess-engineering", "qualification-gate"}:
+        from .cam_audit import audit_cam, available_adapters, load_cam_profile, probe_native, load_cam_evidence_index
+        from .engineering_qualification import assess_engineering
+        try:
+            native = None
+            if args.command == "qualification-gate":
+                from .qualification_gate import qualification_gate
+                if args.report.resolve().is_relative_to(args.directory.resolve()) or args.report.resolve() in {
+                    args.plan.resolve(), args.cam_report.resolve(), args.engineering_report.resolve()}:
+                    raise ValueError("gate report must not overwrite inputs or modify the package")
+                result = qualification_gate(args.directory, args.plan, args.cam_report, args.engineering_report)
+            elif args.command == "audit-cam":
+                if args.report.resolve().is_relative_to(args.directory.resolve()):
+                    raise ValueError("audit report must be outside the immutable package")
+                pcbs = tuple(args.directory.glob("*.kicad_pcb"))
+                if args.kicad_python and len(pcbs) == 1:
+                    native = probe_native(pcbs[0], args.kicad_python)
+                profile, cases = load_cam_profile(args.profile) if args.profile else (None, ())
+                result = audit_cam(args.directory, profile=profile, cases=cases, native=native,
+                                   external=load_cam_evidence_index(args.evidence_index) if args.evidence_index else None,
+                                   adapters=available_adapters(gerbv=args.gerbv, gerbv_version=args.gerbv_version))
+            else:
+                if args.report.resolve() in {args.pcb.resolve(), args.plan.resolve()}:
+                    raise ValueError("report cannot overwrite PCB or plan")
+                if args.kicad_python:
+                    native = probe_native(args.pcb, args.kicad_python)
+                result = assess_engineering(args.pcb, args.plan, native=native)
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            with args.report.open("x", encoding="utf-8") as stream:
+                stream.write(json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n")
+            print(f"{result['kind']}: {result['status']}; qualified_release=false -> {args.report}")
+            return 0 if result["status"] == "pass" else 1
+        except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
+            print(f"QUALIFICATION ERROR: {exc}")
             return 2
     if args.command == "export-manufacturing":
         from .manufacturing_files import export_manufacturing_files
@@ -910,6 +972,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     early_pads.add(pad)
                 plane_options = PlaneStitchOptions(
                     step_nm=nm_from_mm(args.plane_stitch_step_mm),
+                    maze_step_nm=nm_from_mm(args.plane_maze_step_mm),
+                    maze_state_budget=args.plane_maze_budget,
                     maximum_radius_nm=nm_from_mm(args.plane_stitch_radius_mm),
                     maximum_contact_radius_nm=nm_from_mm(args.plane_contact_radius_mm),
                     maximum_detour_nm=nm_from_mm(args.plane_stitch_detour_mm),
@@ -927,6 +991,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 early_options = (
                     PlaneStitchOptions(
                         step_nm=plane_options.step_nm,
+                        maze_step_nm=plane_options.maze_step_nm,
+                        maze_state_budget=plane_options.maze_state_budget,
                         maximum_radius_nm=plane_options.maximum_radius_nm,
                         maximum_contact_radius_nm=plane_options.maximum_contact_radius_nm,
                         maximum_detour_nm=plane_options.maximum_detour_nm,
@@ -1243,6 +1309,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_via_count": result.fanout.added_via_count,
                     "escaped_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.accesses],
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
+                    "decoupling_pending": [{"capacitor": f"{pad.component}.{pad.pad}", "reason": reason}
+                                            for pad, reason in result.fanout.decoupling_pending],
                     **({"surface_escaped_pads": [f"{pad.component}.{pad.pad}"
                                                  for pad in result.fanout.surface_accesses]}
                        if result.fanout.surface_accesses else {}),
@@ -1285,6 +1353,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_track_count": stitch.added_track_count,
                     "added_via_count": stitch.added_via_count,
                     "step_nm": plane_options.step_nm,
+                    "maze_step_nm": plane_options.maze_step_nm,
+                    "maze_state_budget": plane_options.maze_state_budget,
                     "maximum_radius_nm": plane_options.maximum_radius_nm,
                     "maximum_contact_radius_nm": plane_options.maximum_contact_radius_nm,
                     "maximum_detour_nm": plane_options.maximum_detour_nm,
@@ -1345,6 +1415,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         plane_verification.zone_connectivity_verified(output_board))
             try:
                 emit(progress, "export", "started")
+                report_path.parent.mkdir(parents=True, exist_ok=True)
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 if args.output:
                     pcb_manifest = KiCadPcbBackend().generate(output_board)

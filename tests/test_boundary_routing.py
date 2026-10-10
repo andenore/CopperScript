@@ -8,7 +8,7 @@ import pytest
 
 import pcbir.detailed as detail
 from pcbir.boundary_access import analyze_boundary_access, reserve_boundary_access
-from pcbir.drc import explicit_copper_connectivity, physical_board_digest
+from pcbir.drc import explicit_copper_connectivity, physical_board_digest, run_physical_drc
 from pcbir.physical import CopperLayer, NetRoutingRule, PadReference, PhysicalNet, Point, Stackup, TrackSegment, nm_from_mm
 from pcbir.pin_escape import RoutingAccess, verified_routing_access
 from pcbir.routing import route_global
@@ -135,7 +135,12 @@ def test_cleanup_preserves_duplicate_input_occurrences_and_boundary_ownership(mo
     owned = reserve_boundary_access(board, fan, proof)
     monkeypatch.setattr(detail, "_route_net", lambda *args, **kwargs: detail._failed("A", "bounded failure"))
     result = run(owned)
-    assert Counter(result.board.tracks) == Counter((protected, protected))
+    # A failed area route must retain its verified launch for a later repair,
+    # including the two pre-existing occurrences that it never owned.
+    assert not result.nets[0].connected
+    assert Counter(result.board.tracks) == Counter(owned.board.tracks)
+    assert Counter(result.board.tracks)[protected] == 2
+    assert result.board.vias == owned.board.vias
 
 
 @pytest.mark.parametrize("defect", ["missing_path", "claimed_layer", "wrong_end", "reversed", "missing_via"])
@@ -172,14 +177,17 @@ def test_surface_port_survives_cleanup_of_unnecessary_via_and_subset_repair():
     assert repaired.nets[0].connected and not hard_errors(repaired.board)
 
 
-def test_failed_full_route_prunes_only_owned_boundary_and_dogbone_occurrences(monkeypatch):
+def test_failed_full_route_preserves_owned_boundary_and_dogbone_for_repair(monkeypatch):
     fan, _, owned = reserve(back=True)
     protected = TrackSegment("A", Point.mm(14,2), Point.mm(15,2), nm_from_mm(.25), CopperLayer.FRONT)
     owned = replace(owned,board=replace(owned.board,tracks=(*owned.board.tracks,protected)))
     monkeypatch.setattr(detail,"_route_net",lambda *args,**kwargs: detail._failed("A","bounded failure"))
     result = run(owned)
     assert not result.nets[0].connected
-    assert result.board.tracks == (protected,) and not result.board.vias
+    assert Counter(result.board.tracks) == Counter(owned.board.tracks)
+    assert result.board.vias == owned.board.vias
+    assert protected in result.board.tracks
+    assert any(f.code == "DRC-OPEN-NET" for f in run_physical_drc(result.board).findings)
 
 
 def test_failed_subset_keeps_immutable_boundary_prefix_without_cleanup_ownership(monkeypatch):

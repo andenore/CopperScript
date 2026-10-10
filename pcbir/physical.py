@@ -517,6 +517,10 @@ class CopperZone:
     fill_mode: ZoneFillMode = ZoneFillMode.SOLID
     # Explicitly fingerprinted when enabled; preserve legacy zone repr/digests.
     reserve_routing: bool = field(default=False, repr=False)
+    # Permit this host zone to overlap an explicitly shareable same-net
+    # hard-macro region. The macro's own keepouts and foreign-net clearances
+    # still apply.
+    allow_same_net_hard_macro_overlap: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "layers", tuple(self.layers))
@@ -524,6 +528,8 @@ class CopperZone:
             raise ValueError("a copper zone requires an id, net, and layer")
         if type(self.reserve_routing) is not bool:
             raise ValueError("copper zone reserve_routing must be boolean")
+        if type(self.allow_same_net_hard_macro_overlap) is not bool:
+            raise ValueError("copper zone allow_same_net_hard_macro_overlap must be boolean")
         if len(set(self.layers)) != len(self.layers):
             raise ValueError("copper zone layers must be unique")
         if self.priority < 0 or self.minimum_width_nm <= 0:
@@ -1446,6 +1452,30 @@ class MacroPlaneReturn:
 
 
 @dataclass(frozen=True, slots=True)
+class MacroTrackWidthContract:
+    """Evidence-bearing minimum for one immutable local track segment.
+
+    This never authorizes thinner host copper or bypasses fabrication rules.
+    The index addresses the expanded local segment tuple, before pose transform.
+    """
+
+    track_index: int
+    minimum_width_nm: Nanometres
+    purpose: str
+    evidence: str
+
+    def __post_init__(self) -> None:
+        if type(self.track_index) is not int or self.track_index < 0:
+            raise ValueError("macro width contract requires a nonnegative integer track index")
+        if type(self.minimum_width_nm) is not int or self.minimum_width_nm <= 0:
+            raise ValueError("macro width contract requires a positive integer minimum")
+        if self.purpose not in {"pin_entry", "control_supply", "output_sense", "enable", "main_power"}:
+            raise ValueError("unsupported macro width contract purpose")
+        if not isinstance(self.evidence, str) or not self.evidence.strip():
+            raise ValueError("macro width contract requires evidence")
+
+
+@dataclass(frozen=True, slots=True)
 class PhysicalHardMacro:
     """Local immutable copper attached to an identity-bound rigid cluster.
 
@@ -1468,9 +1498,10 @@ class PhysicalHardMacro:
     zones: tuple[CopperZone, ...] = field(default=(), repr=False)
     plane_returns: tuple[MacroPlaneReturn, ...] = field(default=(), repr=False)
     polygons: tuple[CopperPolygon, ...] = field(default=(), repr=False)
+    width_contracts: tuple[MacroTrackWidthContract, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ("tracks", "vias", "ports", "protected_regions", "required_layers", "pad_bindings", "isolated_pads", "zones", "plane_returns", "polygons"):
+        for name in ("tracks", "vias", "ports", "protected_regions", "required_layers", "pad_bindings", "isolated_pads", "zones", "plane_returns", "polygons", "width_contracts"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         if not self.cluster or len(self.asset_sha256) != 64 or any(
             c not in "0123456789abcdef" for c in self.asset_sha256
@@ -1489,6 +1520,33 @@ class PhysicalHardMacro:
         if any(r.outline.holes or not r.block_tracks or not r.block_vias
                for r in self.protected_regions):
             raise ValueError("macro access reservations require solid track/via-blocking polygons")
+        if len({c.track_index for c in self.width_contracts}) != len(self.width_contracts):
+            raise ValueError("duplicate macro width contract track index")
+        for contract in self.width_contracts:
+            if contract.track_index >= len(self.tracks):
+                raise ValueError("macro width contract track index is out of range")
+            track = self.tracks[contract.track_index]
+            if track.width_nm < contract.minimum_width_nm:
+                raise ValueError("macro track is narrower than its width contract")
+            if self.tracks.count(track) != 1:
+                raise ValueError("ambiguous duplicate macro width contract geometry")
+
+
+@dataclass(frozen=True, slots=True)
+class DecouplingLink:
+    """Semantic bypass association; not a guessed distance or ampacity limit."""
+
+    capacitor: PadReference
+    target: PadReference
+    return_pad: PadReference
+    net: str
+    return_net: str
+
+    def __post_init__(self):
+        if (self.capacitor.component != self.return_pad.component
+                or self.capacitor == self.return_pad or self.capacitor.component == self.target.component
+                or not self.net or not self.return_net or self.net == self.return_net):
+            raise ValueError("invalid decoupling association")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1532,8 +1590,12 @@ class PhysicalBoard:
     mechanical_references: tuple["MechanicalReference",...] = ()
     match_groups: tuple[NetMatchGroup, ...] = ()
     component_hole_clearances: tuple[ComponentHoleClearance, ...] = ()
+    decoupling_links: tuple[DecouplingLink, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "decoupling_links", tuple(self.decoupling_links))
+        if len({link.capacitor.component for link in self.decoupling_links}) != len(self.decoupling_links):
+            raise ValueError("a decoupler requires one explicit protected pin association")
         object.__setattr__(self, "match_groups", tuple(self.match_groups))
         object.__setattr__(self, "component_hole_clearances", tuple(self.component_hole_clearances))
         object.__setattr__(self, "footprints", MappingProxyType(dict(self.footprints)))
@@ -1693,6 +1755,10 @@ class PhysicalBoard:
                 assigned_pads[pad_ref] = net.name
 
         known_nets = set(net_names)
+        for link in self.decoupling_links:
+            if (assigned_pads.get(link.capacitor) != link.net or assigned_pads.get(link.target) != link.net
+                    or assigned_pads.get(link.return_pad) != link.return_net):
+                raise ValueError("decoupling association must match actual pad nets")
         for placement in self.placements:
             footprint = self.footprints[placement.footprint]
             for group in footprint.internal_pad_groups:

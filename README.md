@@ -3,6 +3,12 @@
 CopperScript is a semantic, strongly typed language for describing PCB
 connectivity, electrical intent, and design constraints.
 
+Contributors and LLM agents adding components should read
+[AGENTS.md](AGENTS.md) and the
+[component integration guidelines](docs/component-integration-guidelines.md),
+including RF matching/reference-layout checks and switched-power hard macros
+or strong placement/trace-width constraints.
+
 The v0.1 compiler parses `.copper` source into a typed intermediate
 representation and runs electrical-rules checks (ERC). It deliberately does not
 claim fabrication readiness from routing guidance. Its prototype physical
@@ -818,6 +824,13 @@ be sent for fabrication. Generic proxy geometry is available only with
 `plan-layout` replaces the inspection grid with a deterministic, clearance-legal
 placement and emits coarse routability metrics. It still creates no tracks and
 explicitly blocks fabrication sign-off.
+
+## CAM and RF/power qualification
+
+Final-native CAM audits and RF/power contract assessments are documented in
+[engineering qualification](docs/engineering-qualification.md). The
+[implementation checklist](docs/qualification-todo.md) separates tested algorithms
+from missing qualified geometry adapters, supplier inputs and prototype evidence.
 
 ## KiCad footprint importer
 

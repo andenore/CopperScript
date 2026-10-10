@@ -32,7 +32,9 @@ class ToolIdentity:
     executable_sha256: str
 
     def __post_init__(self) -> None:
-        if not self.name or not self.version or len(self.executable_sha256) != 64:
+        if not isinstance(self.name, str) or not self.name or not isinstance(self.version, str) or not self.version or \
+                not isinstance(self.executable_sha256, str) or len(self.executable_sha256) != 64 or \
+                any(c not in "0123456789abcdef" for c in self.executable_sha256):
             raise ValueError("CAM tools require an exact name, version, and SHA-256")
 
 
@@ -43,6 +45,15 @@ class CamQualificationProfile:
     xnc_spec_revision: str
     required_tool_identities: tuple[ToolIdentity, ...]
     maximum_file_bytes: int = 100_000_000
+
+    def __post_init__(self) -> None:
+        if not all(isinstance(value, str) and value.strip() for value in
+                   (self.id, self.gerber_spec_revision, self.xnc_spec_revision)):
+            raise ValueError("CAM profile ID and source revisions are required")
+        if type(self.maximum_file_bytes) is not int or self.maximum_file_bytes <= 0:
+            raise ValueError("CAM file size limit must be a positive integer")
+        if len(set(self.required_tool_identities)) != len(self.required_tool_identities):
+            raise ValueError("CAM tool identities must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -454,7 +465,10 @@ def parse_ipcd356(path: Path) -> NormalizedTestNet:
     text = path.read_text(encoding="ascii", errors="strict")
     if not text.rstrip().endswith("999"):
         raise ValueError("IPC-D-356 has no 999 end record")
-    scale_nm = 2_540 if "P  UNITS CUST 0" in text else 10_000
+    units = re.findall(r"^P\s+UNITS CUST ([01])\s*$", text, re.MULTILINE)
+    if len(units) != 1:
+        raise ValueError("IPC-D-356 requires one supported explicit unit declaration")
+    scale_nm = 2_540 if units[0] == "0" else 10_000
     points: list[TestPoint] = []
     vias: list[TestVia] = []
     pad_pattern = re.compile(
@@ -475,6 +489,16 @@ def parse_ipcd356(path: Path) -> NormalizedTestNet:
                 int(via_match.group("y")) * scale_nm,
                 int(via_match.group("drill")) * scale_nm,
             ))
+            continue
+        # Component field is exactly columns 21-26; a full six-character
+        # reference touches the separator. Whitespace splitting loses it.
+        fixed_point = re.search(r"X([+-]\d+)Y([+-]\d+)", line[31:])
+        if len(line) > 31 and line[26] == "-" and fixed_point:
+            net, component, pad = line[3:17].strip(), line[20:26].strip(), line[27:31].strip()
+            if not net or not component or not pad:
+                raise ValueError("unsupported IPC-D-356 empty contact identity")
+            points.append(TestPoint(net, component, pad, int(fixed_point[1]) * scale_nm,
+                                    int(fixed_point[2]) * scale_nm))
             continue
         pad_match = pad_pattern.match(line)
         if pad_match:

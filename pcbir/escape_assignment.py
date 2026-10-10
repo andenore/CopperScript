@@ -10,6 +10,7 @@ from typing import Callable, Mapping
 
 from .physical import PadReference, PhysicalBoard, PhysicalNet, TrackSegment, Via
 from .routing_clearance import RoutingClearanceIndex
+from .route_quality import escape_paths_cross
 
 
 EscapeCandidate = tuple[tuple[TrackSegment, ...], Via | None]
@@ -123,7 +124,8 @@ class EscapeConflicts:
             self._indices[a] = index
         index = self._indices[a]
         tracks, via = second
-        answer = (all(index.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in tracks)
+        answer = (not escape_paths_cross(first[0], tracks)
+                  and all(index.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in tracks)
                   and (via is None or index.can_via(via.net, via.position, via.size_nm,
                        via.from_layer, via.to_layer, drill_nm=via.drill_nm)))
         self._cache[key] = answer

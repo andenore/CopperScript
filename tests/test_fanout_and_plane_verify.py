@@ -89,8 +89,11 @@ def test_same_net_fanout_drills_respect_hole_spacing() -> None:
         PadReference("U1", "1"), PadReference("U1", "2"),
         PadReference("J1", "1"),
     )),))
-    result = route_fanout(board)
+    # Bound the launch radius so this fixture retains two distinct drills.
+    # Unrestricted straight outward launches can legitimately share one via.
+    result = route_fanout(board, FanoutOptions(maximum_radius_nm=nm_from_mm(1)))
     assert len(result.board.vias) == 2
+    assert not result.pending_pads
     for first in result.board.vias:
         for second in result.board.vias:
             if first is second:
@@ -100,6 +103,21 @@ def test_same_net_fanout_drills_respect_hole_spacing() -> None:
             required = (first.drill_nm // 2 + second.drill_nm // 2
                         + board.rules.minimum_hole_clearance_nm)
             assert distance_sq >= required * required
+
+
+def test_adjacent_same_net_pads_share_a_verified_straight_launch() -> None:
+    from pcbir.pin_escape import verified_fanout_path
+    from pcbir.route_quality import proper_same_net_crossing
+    board = _dense_board()
+    pads = (PadReference("U1", "1"), PadReference("U1", "2"))
+    board = replace(board, nets=(PhysicalNet("SIGNAL", (*pads, PadReference("J1", "1"))),))
+    result = route_fanout(board)
+    assert not result.pending_pads and len(result.board.vias) == 1
+    assert set(result.accesses) == set(pads)
+    index = RoutingClearanceIndex(result.board)
+    for pad in pads:
+        assert verified_fanout_path(result.board, pad, "SIGNAL", result.accesses[pad], index)
+    assert not any(proper_same_net_crossing(a, b) for a in result.created_tracks for b in result.created_tracks)
 
 
 def test_fanout_reuses_existing_matching_via() -> None:

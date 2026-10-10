@@ -190,7 +190,7 @@ def test_failed_subset_preserves_even_explicitly_owned_input_paths():
     assert result.board.tracks == fanout.board.tracks and result.board.vias == fanout.board.vias
 
 
-def test_failed_full_route_prunes_only_explicitly_owned_two_leg_input():
+def test_failed_full_route_preserves_checked_two_leg_exit_for_later_repair():
     base = base_board()
     fanout = route_fanout(base, opts())
     guide = replace(route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2))),routes=())
@@ -198,7 +198,10 @@ def test_failed_full_route_prunes_only_explicitly_owned_two_leg_input():
         fanout_created_tracks=fanout.created_tracks,
         fanout_created_vias=frozenset((v.net,v.position) for v in fanout.created_vias))
     assert not result.nets[0].connected
-    assert not result.board.tracks and not result.board.vias
+    assert result.board.tracks == fanout.board.tracks
+    assert result.board.vias == fanout.board.vias
+    assert result.board.metadata['detailed_routing'] == 'partial'
+    assert any(f.code == 'DRC-OPEN-NET' for f in run_physical_drc(result.board).findings)
     unknown = route_detailed(fanout.board, guide, fanout_accesses=fanout.accesses)
     assert unknown.board.tracks == fanout.board.tracks and unknown.board.vias == fanout.board.vias
 

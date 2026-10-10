@@ -1,0 +1,12 @@
+G04 authored CAM regression: counter-clockwise quarter arc*
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+%TF.FilePolarity,Positive*%
+%ADD10C,0.5*%
+D10*
+G75*
+X0010000000Y0000000000D02*
+G03X0000000000Y0010000000I-0010000000J0000000000D01*
+G01*
+M02*

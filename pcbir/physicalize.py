@@ -442,6 +442,7 @@ def _physicalize(
         placements=tuple(placements),
         nets=tuple(nets),
         power_domains=lower_power_domains(flat, nets, _physical_pin_number),
+        decoupling_links=_lower_decoupling(flat, nets),
         metadata=metadata,
         regions=regions,
         keepouts=keepouts,
@@ -465,6 +466,35 @@ def _physicalize(
         match_groups=_check_tuning_groups(flat, _lower_match_groups(flat)),
         component_hole_clearances=_lower_hole_clearances(flat, footprints, placements, rules, metadata),
     )
+
+
+def _lower_decoupling(flat, nets):
+    from .model import Endpoint
+    from .physical import DecouplingLink
+    components = {c.ref: c for c in flat.components}
+    assigned = {p: n.name for n in nets for p in n.pads}
+    ground = {s.net for s in flat.supplies if s.voltage.base_value == 0}
+    links = []
+    for component in flat.components:
+        if component.properties.get("role") != "decoupling":
+            continue
+        part = flat.library[component.part]
+        if part.category != "passive.capacitor":
+            raise ValueError("decoupling role requires a capacitor part")
+        endpoint = Endpoint.parse(component.properties["decouples"])
+        if endpoint.component not in components:
+            raise ValueError(f"unknown decoupling target {endpoint}")
+        target_component = components[endpoint.component]
+        target_number = _physical_pin_number(target_component, flat.library[target_component.part], flat.devices, endpoint.pin)
+        target = PadReference(endpoint.component, target_number) if target_number else None
+        net = assigned.get(target)
+        pads = [p for p in assigned if p.component == component.ref]
+        feed = [p for p in pads if assigned[p] == net]
+        returns = [p for p in pads if assigned[p] in ground]
+        if net is None or len(pads) != 2 or len(feed) != 1 or len(returns) != 1 or feed == returns:
+            raise ValueError(f"{component.ref}: decoupling requires two connected lands, target net and declared zero-volt return")
+        links.append(DecouplingLink(feed[0], target, returns[0], net, assigned[returns[0]]))
+    return tuple(links)
 
 
 def _bind_profile_connectors(mechanical, flat, footprints, placements, rules):
@@ -583,7 +613,8 @@ def _lower_physical_constraints(
                 raise ValueError(f"copper_zone references unknown net {net!r}")
             parameters = constraint.parameters
             unknown = set(parameters) - {"layers", "inset", "pad_connection", "clearance", "minimum_width", "island_policy",
-                                          "region", "polygon_mm", "x", "y", "width", "height", "priority", "reserve_routing"}
+                                          "region", "polygon_mm", "x", "y", "width", "height", "priority", "reserve_routing",
+                                          "allow_same_net_hard_macro_overlap"}
             if unknown:
                 raise ValueError(f"unknown copper_zone parameter {sorted(unknown)[0]!r}")
             layers = _constraint_layers(parameters.get("layers"))
@@ -607,6 +638,8 @@ def _lower_physical_constraints(
                 island_policy=island_policy,
                 minimum_island_area_nm2=(10_000_000_000_000
                     if island_policy is IslandPolicy.REMOVE_BELOW_AREA else None),
+                allow_same_net_hard_macro_overlap=_constraint_bool(
+                    parameters, "allow_same_net_hard_macro_overlap", False),
             )
             zones.append(zone)
             continue

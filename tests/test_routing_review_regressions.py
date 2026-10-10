@@ -73,6 +73,24 @@ def test_failed_subset_preserves_input_fanout():
     assert result.board.vias == board.vias
 
 
+def test_full_route_cleans_successful_net_without_abandoning_failed_net_exit():
+    board, accesses = fanout_board()
+    # A has legal owned lead-ins but no trunk and no connected global guide.
+    trial = replace(board, tracks=tuple(t for t in board.tracks
+                    if not (t.net == 'A' and t.layer is CopperLayer.BACK)))
+    guide = route_global(replace(board, tracks=(), vias=()))
+    guide = replace(guide, routes=tuple(r for r in guide.routes if r.net != 'A'))
+    result = route_detailed(trial, guide, DetailedRouterOptions(maximum_passes=1),
+        fanout_accesses=accesses, fanout_created_tracks=trial.tracks,
+        fanout_created_vias=frozenset((v.net, v.position) for v in trial.vias))
+    assert {n.net: n.connected for n in result.nets} == {'A': False, 'B': True}
+    assert tuple(t for t in result.board.tracks if t.net == 'A') == tuple(
+        t for t in trial.tracks if t.net == 'A')
+    assert tuple(v for v in result.board.vias if v.net == 'A') == tuple(
+        v for v in trial.vias if v.net == 'A')
+    assert any(f.code == 'DRC-OPEN-NET' for f in run_physical_drc(result.board).findings)
+
+
 def test_subset_does_not_prune_vias_without_ownership_evidence():
     board, accesses = fanout_board()
     guide = route_global(replace(board, tracks=(), vias=()))

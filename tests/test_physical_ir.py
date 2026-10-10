@@ -203,6 +203,40 @@ def test_source_ground_plane_lowers_to_unfilled_physical_zone() -> None:
     assert normalized.verifier == "KICAD-ZONE-FILL"
 
 
+def test_source_ground_plane_can_opt_into_same_net_hard_macro_overlap() -> None:
+    electrical = compile_source(
+        '''
+        board GroundPlane {
+            use library "tiny";
+            component R1: RESISTOR { footprint = "0402"; }
+            net GND { R1.1; }
+            constraint copper_zone(GND) {
+                layers = "F.Cu";
+                allow_same_net_hard_macro_overlap = true;
+            }
+        }
+        '''
+    )
+    zone = prototype_physicalize(electrical).zones[0]
+    assert zone.allow_same_net_hard_macro_overlap
+
+
+def test_source_ground_plane_rejects_non_boolean_hard_macro_overlap_flag() -> None:
+    electrical = compile_source('''
+        board Ground {
+            use library "tiny";
+            component R1: RESISTOR { footprint = "0402"; }
+            net GND { R1.1; }
+            constraint copper_zone(GND) {
+                layers = "F.Cu";
+                allow_same_net_hard_macro_overlap = "true";
+            }
+        }
+    ''')
+    with pytest.raises(ValueError, match="must be boolean"):
+        prototype_physicalize(electrical)
+
+
 def test_source_ground_plane_rejects_unknown_net_and_invalid_layer() -> None:
     electrical = compile_source(
         '''

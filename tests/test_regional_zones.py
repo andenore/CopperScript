@@ -5,6 +5,7 @@ import pytest
 
 from pcbir import (BoardOutline, CopperLayer, KiCadPcbBackend, Point,
                    compile_source, prototype_physicalize)
+from pcbir.serializer import board_to_dict
 from pcbir.quantities import millimeters
 from pcbir.zone_geometry import lower_zone_outline
 
@@ -95,6 +96,19 @@ def test_source_reservation_is_opt_in_boolean_and_preserved_in_intent():
         constraint copper_zone(POWER) { layers = "B.Cu"; reserve_routing = true; }
     }''')
     assert board_to_dict(source)["constraints"][0]["parameters"]["reserve_routing"] is True
+
+
+def test_same_net_hard_macro_overlap_is_opt_in_and_preserved_in_intent():
+    source = compile_source('''board Intent { use library "tiny";
+        component R1: RESISTOR { footprint = "0402"; }
+        net GND { R1.1; }
+        constraint copper_zone(GND) {
+            layers = "F.Cu";
+            allow_same_net_hard_macro_overlap = true;
+        }
+    }''')
+    assert board_to_dict(source)["constraints"][0]["parameters"][
+        "allow_same_net_hard_macro_overlap"] is True
 
 
 @pytest.mark.parametrize("layer", [CopperLayer.FRONT, CopperLayer.INTERNAL_2, CopperLayer.BACK])

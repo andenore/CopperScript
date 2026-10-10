@@ -20,7 +20,7 @@ from .placement import transformed_local_point
 from .syntax import CopperScriptError
 from .physical import (
     BoardSide, ComponentPlacementRule, CopperKeepout, CopperLayer, CopperPolygon, CopperZone, MacroPadBinding, MacroPlaneReturn, MacroPort, PadReference,
-    PhysicalBoard, PhysicalHardMacro, PhysicalNet, PlacementTarget,
+    PhysicalBoard, PhysicalHardMacro, PhysicalNet, PlacementTarget, MacroTrackWidthContract,
     PadKind, Point, PolygonRing, PolygonWithHoles, RigidPlacementCluster, ZoneConnection,
     RigidPlacementMember, TrackSegment, Via,
 )
@@ -84,12 +84,14 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
         data = json.loads(raw)
         version = data["schema"]
         fields = "schema source production_publishable anchor members pad_nets isolated_pads tracks vias ports protected_regions keepouts required_layers allowed_rotations internal_clearance_nm unresolved"
-        if version in {"copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3"}:
+        if version in {"copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4"}:
             fields += " zones plane_returns"
-        if version == "copperlib-physical-hard-macro/v0.3":
+        if version in {"copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4"}:
             fields += " polygons"
+        if version == "copperlib-physical-hard-macro/v0.4":
+            fields += " width_contracts"
         _keys(data, fields)
-        if version not in {"copperlib-physical-hard-macro/v0.1", "copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3"} or data["production_publishable"] is not False:
+        if version not in {"copperlib-physical-hard-macro/v0.1", "copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4"} or data["production_publishable"] is not False:
             raise ValueError("unsupported macro qualification/schema")
         sources = {m["reference"] for m in data["members"]}
         if len(sources) != len(data["members"]) or set(bindings) != sources or len(set(bindings.values())) != len(sources):
@@ -153,6 +155,7 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
                 block_tracks=row["block_tracks"], block_vias=row["block_vias"], block_zones=row["block_zones"])
 
         tracks = []
+        track_ranges = []
         for row in data["tracks"]:
             _keys(row, "net width_nm layer points")
             if type(row["width_nm"]) is not int:
@@ -164,8 +167,20 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
             for value in row["points"]:
                 if isinstance(value, dict) and assignment[pads[tuple(value["pad"])]] != net_bindings[row["net"]]:
                     raise ValueError("macro track endpoint net mismatch")
+            track_ranges.append(range(len(tracks), len(tracks) + len(points) - 1))
             tracks.extend(TrackSegment(net_bindings[row["net"]], a, b, row["width_nm"], CopperLayer(row["layer"]))
                           for a, b in zip(points, points[1:]))
+        width_contracts, contracted_rows = [], set()
+        for row in data.get("width_contracts", ()):
+            _keys(row, "track_index minimum_width_nm purpose evidence")
+            index = row["track_index"]
+            if type(index) is not int or not 0 <= index < len(track_ranges):
+                raise ValueError("macro width contract track index is out of range")
+            if index in contracted_rows:
+                raise ValueError("duplicate macro width contract track index")
+            contracted_rows.add(index)
+            width_contracts.extend(MacroTrackWidthContract(i, row["minimum_width_nm"], row["purpose"], row["evidence"])
+                                   for i in track_ranges[index])
         vias = []
         for row in data["vias"]:
             row = {"finish": "standard", **row}
@@ -217,7 +232,7 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
             tuple(region(r) for r in data["protected_regions"]), tuple(CopperLayer(x) for x in data["required_layers"]),
             tuple(MacroPadBinding(pads[ref,pad],net_bindings[role]) for ref,pad,role in data["pad_nets"]),
             tuple(PadReference(bindings[ref],pad) for ref,pad in data["isolated_pads"]),
-            tuple(zones), tuple(plane_returns), tuple(polygons))
+            tuple(zones), tuple(plane_returns), tuple(polygons), tuple(width_contracts))
         return replace(board, rigid_clusters=(*board.rigid_clusters, cluster), hard_macros=(*board.hard_macros, macro),
             placement_rules=tuple(rules.values()),
             metadata={**board.metadata, "physical_hard_macros": "experimental-unqualified", "fabrication_ready": "false"})
@@ -270,13 +285,40 @@ def _zone_outlines_overlap(first, second):
 
 
 def _host_zone_overlaps_macro(board, macro, hosts):
-    layers = ({layer for zone in macro.zones for layer in zone.layers}
-              | {polygon.layer for polygon in macro.polygons})
-    if not layers:
+    macro_zones = resolved_macro_zones(board, macro)
+    owned_layers = ({layer for zone in macro_zones for layer in zone.layers}
+                    | {polygon.layer for polygon in resolved_macro_polygons(board, macro)})
+    if not owned_layers:
         return False
-    return any(_zone_outlines_overlap(host, replace(region, layers=tuple(layers.intersection(region.layers))))
-               for host in hosts for region in resolved_macro_geometry(board, macro)[3]
-               if layers.intersection(region.layers))
+    shareable_nets = {
+        layer: {zone.net for zone in macro_zones if layer in zone.layers}
+        for layer in {layer for zone in macro_zones for layer in zone.layers}
+    }
+    from .placement import resolved_copper_keepouts
+    keepouts = resolved_copper_keepouts(board)
+    regions = resolved_macro_geometry(board, macro)[3]
+    for host in hosts:
+        for region in regions:
+            for layer in set(host.layers).intersection(region.layers, owned_layers):
+                scoped_host = replace(host, layers=(layer,))
+                scoped_region = replace(region, layers=(layer,))
+                if not _zone_outlines_overlap(scoped_host, scoped_region):
+                    continue
+                allowed = (
+                    host.allow_same_net_hard_macro_overlap
+                    and host.net in shareable_nets.get(layer, set())
+                    and not region.block_zones
+                    and not any(
+                        layer in keepout.layers
+                        and keepout.block_zones
+                        and _zone_outlines_overlap(scoped_region, replace(keepout, layers=(layer,)))
+                        and _zone_outlines_overlap(scoped_host, replace(keepout, layers=(layer,)))
+                        for keepout in keepouts
+                    )
+                )
+                if not allowed:
+                    return True
+    return False
 
 
 @lru_cache(maxsize=256)
@@ -448,6 +490,36 @@ def validate_hard_macros(board):
         shape = RoundedConvexShape((via.position,), via.size_nm // 2)
         if any(span.intersection(r.layers) and not shapes_clear(shape, RoundedConvexShape(r.outline.outer.vertices), 1) for r in regions):
             raise ValueError("new via intrudes into a protected hard-macro region")
+
+
+def materialized_track_width_contracts(board):
+    """Map exact board-track occurrences to owner contracts; never net-wide.
+
+    Only fully validated materialized owner copper receives the contract.
+    A matching additional host segment consumes no additional permission.
+    """
+    active = [m for m in board.hard_macros
+              if m.cluster in board.materialized_macros and m.width_contracts]
+    if not active:
+        return {}
+    validate_hard_macros(board)
+    owned = Counter(t for m in board.hard_macros if m.cluster in board.materialized_macros
+                    for t in resolved_macro_geometry(board, m)[0])
+    pending = {}
+    for macro in active:
+        tracks = resolved_macro_geometry(board, macro)[0]
+        for contract in macro.width_contracts:
+            track = tracks[contract.track_index]
+            if owned[track] != 1:
+                raise ValueError("ambiguous duplicate macro width contract geometry")
+            pending[track] = (macro, contract)
+    result = {}
+    for index, track in enumerate(board.tracks):
+        if track in pending:
+            result[index] = pending.pop(track)
+    if pending:
+        raise ValueError("immutable hard-macro width contract copper was removed")
+    return result
 
 
 def _validate_macro_via_permissions(board, macro, vias):

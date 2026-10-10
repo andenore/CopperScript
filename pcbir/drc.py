@@ -471,6 +471,7 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             **({"polygons": [repr(p) for p in sorted(board.polygons, key=lambda p: p.id)]}
                if board.polygons else {}),
             "routing_rules": [_routing_rule_document(rule) for rule in sorted(board.net_routing_rules, key=lambda item: item.net)],
+            **({"decoupling_links": [repr(link) for link in board.decoupling_links]} if board.decoupling_links else {}),
             **({"match_groups": [(group.id, group.nets, group.max_skew_nm)
                                  for group in sorted(board.match_groups, key=lambda item: item.id)]}
                if board.match_groups else {}),
@@ -500,6 +501,9 @@ def physical_board_digest(board: PhysicalBoard) -> str:
             "zones": [repr(item) for item in sorted(board.zones, key=lambda item: item.id)],
             **({"zone_routing_reservations": sorted(zone.id for zone in board.zones if zone.reserve_routing)}
                if any(zone.reserve_routing for zone in board.zones) else {}),
+            **({"same_net_hard_macro_overlaps": sorted(
+                    zone.id for zone in board.zones if zone.allow_same_net_hard_macro_overlap)}
+               if any(zone.allow_same_net_hard_macro_overlap for zone in board.zones) else {}),
             "copper_keepouts": [repr(item) for item in sorted(board.copper_keepouts, key=lambda item: item.id)],
             "zone_fills": [repr(item) for item in sorted(board.zone_fills, key=lambda item: (item.zone_id, item.layer.value))],
             "metadata": tuple(sorted(board.metadata.items())),
@@ -599,6 +603,8 @@ def _check_track_rules(board: PhysicalBoard, findings: list[DrcFinding],
     rules = {item.net: item for item in board.net_routing_rules}
     spacing = (_BreakoutSpacing(board, relaxations)
                if any(rule.breakout_width_nm is not None for rule in rules.values()) else None)
+    from .hard_macros import materialized_track_width_contracts
+    contracts = materialized_track_width_contracts(board)
     for index, track in enumerate(board.tracks):
         rule = rules.get(track.net)
         required = max(
@@ -607,13 +613,21 @@ def _check_track_rules(board: PhysicalBoard, findings: list[DrcFinding],
         )
         # Inside a breakout region the breakout width replaces the profile width.
         relaxed, land = required, None
-        if spacing is not None and rule is not None and rule.breakout_width_nm is not None:
+        if index in contracts:
+            macro, contract = contracts[index]
+            relaxed = max(board.rules.minimum_track_width_nm, contract.minimum_width_nm)
+            findings.append(_finding("DRC-MACRO-WIDTH-CONTRACT", DrcSeverity.INFO,
+                f"track {index}: immutable macro {macro.cluster!r}, asset {macro.asset_sha256}, "
+                f"purpose {contract.purpose!r}; host minimum {required} nm; {contract.evidence}",
+                objects=(f"track:{index}",), nets=(track.net,), layers=(track.layer.value,),
+                required_nm=relaxed, measured_nm=track.width_nm))
+        elif spacing is not None and rule is not None and rule.breakout_width_nm is not None:
             land = spacing.land(track.net, (track.start, track.end))
             if land is not None:
                 relaxed = min(required, max(board.rules.minimum_track_width_nm, rule.breakout_width_nm))
         if track.width_nm < relaxed:
             findings.append(_finding("DRC-TRACK-WIDTH", DrcSeverity.ERROR, f"track {index} on {track.net!r} is below its minimum or routing profile width", objects=(f"track:{index}",), nets=(track.net,), layers=(track.layer.value,), required_nm=relaxed, measured_nm=track.width_nm))
-        elif track.width_nm < required and spacing is not None:
+        elif track.width_nm < required and spacing is not None and index not in contracts:
             spacing.record("track_width", (f"track:{index}",), ((track.net, land),),
                            (track.layer.value,), required, relaxed, track.width_nm)
     for net, rule in sorted(rules.items()):

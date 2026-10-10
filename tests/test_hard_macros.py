@@ -59,6 +59,124 @@ def test_materialization_is_transactional_and_rotates_all_geometry(tmp_path,rota
     assert macro_routing_pads(result,result.nets[0]) == (PadReference("U1","1"),)
 
 
+def width_fixture(tmp_path):
+    from pcbir.physical import NetRoutingRule
+    source, asset, bind = fixture(tmp_path)
+    source = replace(source, net_routing_rules=(NetRoutingRule("N", width_nm=800000),))
+    asset.update(schema="copperlib-physical-hard-macro/v0.4", zones=[], plane_returns=[], polygons=[],
+        width_contracts=[dict(track_index=0, minimum_width_nm=200000, purpose="control_supply",
+                              evidence="Synthetic low-current branch; not a current rating.")])
+    return source, asset, bind
+
+
+@pytest.mark.parametrize("rotation", [0, 45, 90])
+def test_scoped_width_contract_rotates_and_leaves_host_width_intact(tmp_path, rotation):
+    from pcbir.drc import run_physical_drc, PhysicalDrcPolicy
+    from pcbir.hard_macros import materialized_track_width_contracts, macro_source
+    source, asset, bind = width_fixture(tmp_path)
+    board = bind(input_board=source)
+    assert not materialized_track_width_contracts(board)
+    poses = {p.reference:p for p in board.placements}
+    poses.update(cluster_placements(board, board.rigid_clusters[0], replace(poses["U1"], rotation_degrees=rotation)))
+    board = materialize_hard_macros(replace(board, placements=tuple(poses.values())))
+    report = run_physical_drc(board, policy=PhysicalDrcPolicy(False))
+    assert not [f for f in report.findings if f.code == "DRC-TRACK-WIDTH"]
+    audit = [f for f in report.findings if f.code == "DRC-MACRO-WIDTH-CONTRACT"]
+    assert len(audit) == 1 and "control_supply" in audit[0].message
+    assert board.hard_macros[0].asset_sha256 in audit[0].message
+    assert board.net_routing_rules[0].width_nm == 800000
+    assert materialize_hard_macros(macro_source(board)).tracks == board.tracks
+    host = TrackSegment("N", poses["U1"].position, Point.mm(9, 10), 200000, CopperLayer.FRONT)
+    host_board = replace(board, tracks=(*board.tracks, host))
+    report = run_physical_drc(host_board, policy=PhysicalDrcPolicy(False))
+    errors = [f for f in report.findings if f.code == "DRC-TRACK-WIDTH"]
+    assert len(errors) == 1 and errors[0].required_nm == 800000
+    assert errors[0].objects == ("track:1",)
+
+
+def test_width_contract_cannot_bypass_fabrication_minimum(tmp_path):
+    source, _, bind = width_fixture(tmp_path)
+    source = replace(source, rules=replace(source.rules, minimum_track_width_nm=250000))
+    with pytest.raises(ValueError, match="DRC-TRACK-WIDTH"):
+        materialize_hard_macros(bind(input_board=source))
+    assert not source.tracks
+
+
+def test_contract_polyline_expansion_and_fingerprint(tmp_path):
+    from pcbir.drc import physical_board_digest
+    source, asset, bind = width_fixture(tmp_path)
+    asset["tracks"][0]["points"].insert(1, [500000, 0])
+    board = materialize_hard_macros(bind(input_board=source))
+    assert [c.track_index for c in board.hard_macros[0].width_contracts] == [0, 1]
+    macro = board.hard_macros[0]
+    changed = replace(board, hard_macros=(replace(macro, width_contracts=(
+        replace(macro.width_contracts[0], evidence="Different synthetic evidence"), *macro.width_contracts[1:])),))
+    assert physical_board_digest(changed) != physical_board_digest(board)
+    with pytest.raises(ValueError, match="immutable hard-macro"):
+        replace(board, tracks=board.tracks[1:])
+
+
+@pytest.mark.parametrize("change,message", [
+    ("legacy", "unsupported"), ("duplicate", "duplicate"), ("range", "out of range"),
+    ("bool", "out of range"), ("minimum", "positive integer"),
+    ("evidence", "requires evidence"), ("purpose", "unsupported"),
+    ("too_wide", "narrower"), ("duplicate_geometry", "ambiguous"),
+])
+def test_width_contracts_fail_closed(tmp_path, change, message):
+    source, asset, bind = width_fixture(tmp_path)
+    row = asset["width_contracts"][0]
+    if change == "legacy": asset["schema"] = "copperlib-physical-hard-macro/v0.3"
+    elif change == "duplicate": asset["width_contracts"].append(dict(row))
+    elif change == "range": row["track_index"] = 999
+    elif change == "bool": row["track_index"] = True
+    elif change == "minimum": row["minimum_width_nm"] = True
+    elif change == "evidence": row["evidence"] = " "
+    elif change == "purpose": row["purpose"] = "any thinner host copper"
+    elif change == "too_wide": row["minimum_width_nm"] = 300000
+    elif change == "duplicate_geometry": asset["tracks"].append(dict(asset["tracks"][0]))
+    with pytest.raises(ValueError, match=message): bind(input_board=source)
+
+
+def test_undeclared_macro_track_keeps_host_profile(tmp_path):
+    source, asset, bind = width_fixture(tmp_path)
+    asset["width_contracts"] = []
+    with pytest.raises(ValueError, match="DRC-TRACK-WIDTH"):
+        materialize_hard_macros(bind(input_board=source))
+
+
+def test_matching_extra_host_occurrence_gets_no_contract(tmp_path):
+    from pcbir.drc import run_physical_drc, PhysicalDrcPolicy
+    source, asset, bind = width_fixture(tmp_path)
+    # Keep the synthetic access reservation away from this exposed lead-in.
+    asset["protected_regions"][0]["vertices"] = [[4000000,-500000], [5000000,-500000],
+                                                [5000000,500000], [4000000,500000]]
+    board = materialize_hard_macros(bind(input_board=source))
+    board = replace(board, tracks=(*board.tracks, board.tracks[0]))
+    report = run_physical_drc(board, policy=PhysicalDrcPolicy(False))
+    assert len([f for f in report.findings if f.code == "DRC-MACRO-WIDTH-CONTRACT"]) == 1
+    errors = [f for f in report.findings if f.code == "DRC-TRACK-WIDTH"]
+    assert len(errors) == 1 and errors[0].required_nm == 800000
+
+
+def test_contract_does_not_cover_other_owner_segments(tmp_path):
+    source, asset, bind = width_fixture(tmp_path)
+    asset["tracks"].append(dict(net="signal", width_nm=200000, layer="F.Cu",
+                                points=[[2000000,0], [2500000,0]]))
+    with pytest.raises(ValueError, match="DRC-TRACK-WIDTH"):
+        materialize_hard_macros(bind(input_board=source))
+
+
+@pytest.mark.parametrize("constraint,code", [("length", "DRC-MAX-LENGTH"), ("layer", "DRC-LAYER")])
+def test_width_contract_does_not_relax_other_routing_limits(tmp_path, constraint, code):
+    source, _, bind = width_fixture(tmp_path)
+    rule = source.net_routing_rules[0]
+    rule = (replace(rule, max_length_nm=1000000) if constraint == "length" else
+            replace(rule, allowed_layers=(CopperLayer.BACK,)))
+    source = replace(source, net_routing_rules=(rule,))
+    with pytest.raises(ValueError, match=code):
+        materialize_hard_macros(bind(input_board=source))
+
+
 def test_owned_local_zone_is_immutable_and_does_not_defer_external_routing(tmp_path):
     from pcbir.hard_macros import macro_source
     from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles, Stackup
@@ -89,6 +207,26 @@ def test_owned_local_zone_is_immutable_and_does_not_defer_external_routing(tmp_p
         Point.mm(12.5, 10.3), Point.mm(11.5, 10.3)))))
     with pytest.raises(ValueError, match="host zone overlaps"):
         replace(board, zones=(*board.zones, host))
+    shared = replace(host, allow_same_net_hard_macro_overlap=True)
+    shared_result = materialize_hard_macros(replace(board, zones=(*board.zones, shared)))
+    assert shared_result.zones[-1] == shared
+    # A whole-board compatible pour still respects an unrelated RF keepout.
+    # That exclusion must not prohibit sharing this distant owner's zone.
+    from pcbir.physical import CopperKeepout
+    whole = replace(shared, id="whole-host", outline=PolygonWithHoles(PolygonRing((
+        Point.mm(1, 1), Point.mm(29, 1), Point.mm(29, 29), Point.mm(1, 29)))))
+    far = CopperKeepout("rf-exclusion", (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+        Point.mm(20, 20), Point.mm(25, 20), Point.mm(25, 25), Point.mm(20, 25)))),
+        block_tracks=False, block_vias=False, block_zones=True)
+    remote = replace(board, zones=(*board.zones, whole), copper_keepouts=(far,))
+    assert remote.copper_keepouts == (far,)
+    assert whole in remote.zones
+    local = replace(far, id="blocked-owner", outline=host.outline)
+    with pytest.raises(ValueError, match="overlaps|blocked by a copper keepout"):
+        replace(remote, copper_keepouts=(far, local))
+    with pytest.raises(ValueError, match="host zone overlaps"):
+        replace(shared_result, nets=(*shared_result.nets, PhysicalNet("OTHER", ())),
+                zones=(*shared_result.zones, replace(shared, id="foreign-host", net="OTHER")))
     for layer in (CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_4):
         underneath = replace(host, id=f"under-{layer.value}", layers=(layer,))
         assert replace(board, zones=(*board.zones, underneath)).zones[-1] == underneath

@@ -80,6 +80,9 @@ class KiCadPcbBackend:
             if set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
                 raise ValueError("cannot export a hard macro without its immutable copper")
             warnings.append("Experimental physical hard macros are not RF or manufacturing qualification.")
+            if any(m.width_contracts for m in board.hard_macros):
+                warnings.append("Scoped macro widths require authoritative CopperScript owner validation; "
+                                "native KiCad edits do not preserve these contracts or qualify current capacity.")
         if board.metadata.get("prototype_footprints") == "true":
             warnings.append(
                 "The board uses generated proxy footprints and is for inspection only; "
