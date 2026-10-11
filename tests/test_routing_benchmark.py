@@ -60,6 +60,46 @@ def test_comparison_records_speed_ratio_without_claiming_signoff(tmp_path):
     assert "Not signoff" in result["note"]
 
 
+@pytest.mark.parametrize("change", ["vias", "length", "surface", "reference", "requirement", "missing"])
+def test_final_geometry_and_declared_evidence_cannot_disappear_in_a_speedup(tmp_path, change):
+    from copy import deepcopy
+    before = report()
+    before["routing_quality"] = {"schema": "copperscript-routing-quality/v0.1",
+        "track_length_nm": 100, "via_count": 1, "track_count": 2, "nets": {"A": {}},
+        "decoupling": [{"capacitor": "C.1", "target": "U.VDD", "surface_connected": True}],
+        "reference_coverage": [{"net": "A", "status": "pass"}]}
+    before["requirements"] = {"requirements": [{"id": "width", "required": True, "status": "pass"}]}
+    after = deepcopy(before)
+    if change == "vias":
+        after["routing_quality"]["via_count"] += 1
+    elif change == "length":
+        after["routing_quality"]["track_length_nm"] += 1
+    elif change == "surface":
+        after["routing_quality"]["decoupling"][0]["surface_connected"] = False
+    elif change == "reference":
+        after["routing_quality"]["reference_coverage"][0]["status"] = "incomplete"
+    elif change == "requirement":
+        after["requirements"]["requirements"][0]["status"] = "blocked"
+    else:
+        after.pop("routing_quality")
+    result = compare(tmp_path, before=before, after=after)
+    assert not result["eligible_for_timing_review"]
+    assert result["candidate_over_baseline_time"] is None
+
+
+def test_final_geometry_deltas_are_measured_without_inventing_electrical_limits(tmp_path):
+    from copy import deepcopy
+    before = report()
+    before["routing_quality"] = {"schema": "copperscript-routing-quality/v0.1",
+        "track_length_nm": 100, "via_count": 2, "track_count": 3, "nets": {},
+        "decoupling": [], "reference_coverage": []}
+    after = deepcopy(before)
+    after["routing_quality"]["track_length_nm"] = 80
+    result = compare(tmp_path, before=before, after=after)
+    assert result["final_copper_deltas"]["track_length_nm"] == -20
+    assert result["eligible_for_timing_review"]
+
+
 @pytest.mark.parametrize("change", ["signal", "critical", "native-open", "hard", "ground",
                                     "duplicate", "fanout", "access", "overflow", "independent", "coverage"])
 def test_faster_regressed_run_never_gets_timing_ratio(tmp_path, change):

@@ -1,12 +1,17 @@
 # Agent guidance
 
+Run `copper agent-guide` for the compact workflow bootstrap; retrieve individual
+topics as needed. The guidance is bundled with the active CLI, including when a
+consumer does not have this repository checked out. The rules below govern work
+on CopperScript itself.
+
 ## Shared placement and routing
 
 Use the standard `route-board` pipeline and bounded routing profiles for new
 solver work. Board projects may wrap commands and supply electrical/mechanical
 intent, macro assets and qualification data; do not add selected-net/pad repair
 algorithms there. Algorithms belong in CopperScript and reusable component
-contracts in CopperLib. Follow [the autonomous routing plan](docs/autonomous-routing-plan.md)
+contracts in library repositories (CopperLib is one instance). Follow [the autonomous routing plan](docs/autonomous-routing-plan.md)
 and [native-feedback limits](docs/filled-copper-feedback.md).
 
 Reproduce failures as small real-geometry cases with renamed nets/components.
@@ -44,7 +49,7 @@ status. Package-escape preferences do not yet eliminate all area-route crosses.
 
 Use [engineering qualification](docs/engineering-qualification.md) and keep the
 [implementation checklist](docs/qualification-todo.md) accurate. Algorithms belong
-here, reusable component contracts in CopperLib, board-specific bindings/evidence
+here, reusable component contracts in library repositories, board-specific bindings/evidence
 in the consumer. Run the final-native audit/engineering/checkpoint commands;
 missing tools, source facts, solver or bench evidence are incomplete. Never infer
 production approval from generated files, raster agreement, ERC or native DRC.
@@ -56,9 +61,12 @@ when adding or replacing parts, reusable circuits, or example-board components.
 These rules also apply to generated definitions and imported CopperLib parts.
 
 - Generic components and reusable circuit modules, including reusable
-  footprints and hard macros, belong in CopperLib, not project-local libraries
-  or CopperScript examples. Check for an existing package first and import the
-  shared definition. Keep board-specific composition, placement, mechanics and
+  footprints and hard macros, belong in an appropriate reusable library
+  repository; CopperLib is one instance, not a required central catalogue.
+  For the LLM workflow improvement work, do not add components to CopperLib;
+  additions in other library repositories are permitted. Check the consuming
+  project's library dependencies first and reuse existing definitions where available.
+  Keep board-specific composition, placement, mechanics and
   configuration in the consuming project.
 - Always check RF-capable components for required matching/support networks and
   inspect the exact manufacturer's reference schematic and layout. Document
@@ -71,3 +79,12 @@ These rules also apply to generated definitions and imported CopperLib parts.
 - Record reference evidence and adaptations, verify the resulting geometry,
   and flag requirements the tool cannot enforce. ERC, legal placement and native
   DRC alone do not qualify RF performance, power integrity or thermal behavior.
+
+## Compact library retrieval
+
+Use `copper library search` against a consuming project's declared dependencies
+before reading whole libraries. Inspect selected `package/path::Symbol` contracts
+by section; use `--expect-digest` to bind inspection to a search result. Follow
+pagination and retrieve requirements, source notes and necessary imported/device
+contracts before integration. Search defaults to locked/offline; source-derived
+metadata is not electrical verification. See [compact library context](docs/library-context.md).

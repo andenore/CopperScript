@@ -182,6 +182,8 @@ def summarize_run(directory: Path) -> dict:
             "finding_types": dict(sorted(Counter(str(f).split(":", 1)[0] for f in plane.get("findings", [])).items()))}
             if plane is not None else None),
         "route_geometry": report.get("route_geometry", {}),
+        "final_copper": report.get("routing_quality"),
+        "requirements": report.get("requirements"),
         "fingerprints": {"global": report.get("global", {}).get("routing_fingerprint"),
                          "critical": critical.get("routing_fingerprint"),
                          "detailed": detailed.get("routing_fingerprint"),
@@ -198,14 +200,60 @@ def summarize_run(directory: Path) -> dict:
     return result
 
 
+def _compare_declared_quality(old, new, regressions, blockers):
+    deltas = {}
+    before, after = old.get("final_copper"), new.get("final_copper")
+    if before is not None or after is not None:
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            blockers.append("both runs need final-copper quality measurements")
+        elif any(q.get("schema") != "copperscript-routing-quality/v0.1" for q in (before, after)):
+            blockers.append("recognized final-copper quality schemas required")
+        else:
+            for name in ("track_length_nm", "via_count", "track_count"):
+                a, b = before.get(name), after.get(name)
+                if any(type(value) is not int or value < 0 for value in (a, b)):
+                    blockers.append(f"valid final-copper metric required: {name}")
+                else:
+                    deltas[name] = b-a
+                    if name in {"track_length_nm", "via_count"} and b > a:
+                        # Costs can be justified engineering tradeoffs; they are
+                        # not automatic electrical defects or a neutral speedup.
+                        blockers.append(f"final-copper {name} increased; review layout tradeoff")
+            if set(before.get("nets", {})) != set(after.get("nets", {})):
+                regressions.append("final-copper net inventory changed")
+            old_bypasses = {(r["capacitor"], r["target"]): r for r in before.get("decoupling", [])}
+            new_bypasses = {(r["capacitor"], r["target"]): r for r in after.get("decoupling", [])}
+            for key, row in old_bypasses.items():
+                if key not in new_bypasses or row["surface_connected"] and not new_bypasses[key]["surface_connected"]:
+                    regressions.append(f"surface bypass evidence lost: {key}")
+            old_refs = {r["net"]: r for r in before.get("reference_coverage", [])}
+            new_refs = {r["net"]: r for r in after.get("reference_coverage", [])}
+            for net, row in old_refs.items():
+                if net not in new_refs or row.get("status") == "pass" and new_refs[net].get("status") != "pass":
+                    regressions.append(f"reference coverage evidence lost: {net}")
+    before, after = old.get("requirements"), new.get("requirements")
+    if before is not None:
+        if not isinstance(after, dict):
+            blockers.append("candidate lacks per-requirement verification")
+        else:
+            new_rows = {r["id"]: r for r in after.get("requirements", [])}
+            for row in before.get("requirements", []):
+                candidate_row = new_rows.get(row["id"])
+                if row.get("required") and (candidate_row is None or
+                    row.get("status") == "pass" and candidate_row.get("status") != "pass"):
+                    regressions.append(f"required declaration evidence lost: {row['id']}")
+    return deltas
+
+
 def compare_runs(baseline: dict, candidate: dict) -> dict:
-    regressions, blockers = [], []
+    regressions, blockers, copper_deltas = [], [], {}
     if not baseline["completed"] or not candidate["completed"]:
         blockers.append("both runs must finish routing and have final reports")
     if baseline["quality_missing_fields"] or candidate["quality_missing_fields"]:
         blockers.append("required final quality data missing or unrecognized schema")
     old, new = baseline["quality"], candidate["quality"]
     if old is not None and new is not None:
+        copper_deltas = _compare_declared_quality(old, new, regressions, blockers)
         if old["signal_names"] != new["signal_names"]:
             blockers.append("signal sets differ")
         for name in ("failed_signals", "failed_critical", "pending_ground", "pending_duplicate_lands", "pending_fanout"):
@@ -263,6 +311,7 @@ def compare_runs(baseline: dict, candidate: dict) -> dict:
         blockers.append("positive completed elapsed times required")
     eligible = not blockers and not regressions
     return {"baseline": baseline, "candidate": candidate, "quality_regressions": regressions,
+        "final_copper_deltas": copper_deltas,
         "comparison_blockers": blockers, "eligible_for_timing_review": eligible,
         "candidate_over_baseline_time": times[1] / times[0] if eligible else None,
         "note": "Not signoff or automatic acceptance. Recorded provenance does not hash all footprint files; "

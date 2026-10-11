@@ -261,3 +261,17 @@ roadmap does not change the current board, routing run, or manufacturing gate.
       nets, unwaived required DRC findings, or incomplete required coverage.
 - [ ] A version-pinned independent CAM flow accepts the final manufacturing
       package and its evidence is recorded in the release manifest.
+
+## LLM workflow priorities (2026-10-11)
+
+See [the detailed improvement plan](docs/llm-workflow-improvements.md).
+
+- Future: measure total LLM tokens/interventions on a frozen design-task corpus.
+- Implemented: [compact library context](docs/library-context.md), with portable
+  source-derived indexes, bounded search and paginated contract inspection across
+  declared library repositories. Future: reviewed contract bundles, persistent
+  aggregate caching and explicit transitive version policy. Component additions
+  in other libraries are permitted; do not expand CopperLib for this work.
+- Immediate: compact standard-command reports, artifact-bound per-requirement
+  verification, and diverse bounded routing acceptance with final-copper metrics.
+- Deferred: fabrication and prototype measurements; wait for a later request.

@@ -6,12 +6,16 @@ CopperLib. A correct pin map and electrical connectivity are only part of the
 integration; preserve the manufacturer's layout-dependent requirements too.
 This is contributor guidance, not a claim that the compiler enforces every item.
 
-## Repository ownership: reusable components belong in CopperLib
+## Repository ownership: reusable components belong in library repositories
 
 Generic component definitions and circuit modules that can be reused by other
-projects belong in CopperLib, together with their reusable footprints, evidence,
-tests and physical hard macros. Check the existing catalogue before creating a
-duplicate; consuming projects should import the shared package rather than copy
+projects belong in an appropriate library repository, together with their reusable
+footprints, evidence, tests and physical hard macros. CopperLib is one instance;
+parts may also come from other independently versioned library repositories.
+For the LLM workflow improvement work, do not add components to CopperLib;
+component additions in other library repositories are permitted. Check the
+project's library dependencies before creating a duplicate; consuming projects
+should import the shared package rather than copy
 or maintain a project-local version. This applies even when the first use is a
 single example or board.
 

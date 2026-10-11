@@ -94,6 +94,42 @@ def _nonnegative_int(value: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    from .agent_guide import TOPICS
+    agent_parser = subparsers.add_parser("agent-guide", help="read compact, versioned agent guidance; start here")
+    agent_parser.add_argument("topic", nargs="?", choices=TOPICS, default="start")
+    agent_parser.add_argument("--json", action="store_true", help="emit compact structured guidance")
+    library_parser = subparsers.add_parser("library", help="compact discovery and inspection across declared part libraries")
+    library_commands = library_parser.add_subparsers(dest="library_action", required=True)
+    library_index = library_commands.add_parser("index", help="export a portable source-derived library index")
+    library_index.add_argument("root", type=Path, help="library root containing copper.mod")
+    library_index.add_argument("-o", "--output", type=Path, required=True, help="new JSON outside the library root")
+    from .library_context import KINDS, SECTIONS
+    for action in ("search", "inspect", "diagnostics"):
+        command = library_commands.add_parser(action)
+        command.add_argument("--project", type=Path, default=Path.cwd(), help="project directory or source; finds nearest copper.mod")
+        command.add_argument("--fetch", action="store_true", help="allow fetching uncached declared dependencies")
+        command.add_argument("--update-lock", action="store_true", help="explicitly allow creating/updating copper.lock")
+        command.add_argument("--limit", type=int, default=5 if action == "search" else 20, help="maximum records, 1..100")
+        command.add_argument("--offset", type=int, default=0)
+        command.add_argument("--max-chars", type=int, default=8000, help="compact JSON character budget, 2048..65536")
+        command.add_argument("--json", action="store_true", help="compact JSON (also the default format)")
+        if action == "search":
+            command.add_argument("query", nargs="?", default="", help="space-separated terms; all must match")
+            command.add_argument("--provider", action="append", default=[], help="declared module to search; repeatable")
+            command.add_argument("--kind", choices=KINDS)
+        elif action == "inspect":
+            command.add_argument("selector", help="package/path::ExportedSymbol")
+            command.add_argument("--kind", choices=KINDS)
+            command.add_argument("--section", choices=SECTIONS, default="overview")
+            command.add_argument("--expect-digest", help="reject changed content since search")
+            command.add_argument("--member", action="append", default=[], help="exact declared name/ref/kind/target; repeatable")
+    summary_parser = subparsers.add_parser("summarize", help="read a compact engineering summary of a retained route/layout report")
+    summary_parser.add_argument("report", type=Path)
+    summary_parser.add_argument("--json", action="store_true")
+    summary_parser.add_argument("--issues", type=int, choices=range(101), default=8)
+    acceptance_parser = subparsers.add_parser("benchmark-routing", help="run bounded routing acceptance cases and measure final copper")
+    acceptance_parser.add_argument("-o", "--output", type=Path, required=True, help="fresh directory; never overwritten")
+    acceptance_parser.add_argument("--kicad-cli", type=Path, help="independent native verification; absent means incomplete evidence")
     overlay = subparsers.add_parser("editor-overlay", help="extract source-bound routed copper and actual native fills from a build run")
     overlay.add_argument("run", type=Path, help="generic build run.json")
     overlay.add_argument("--kicad-python", type=Path, required=True, help="explicit Python interpreter with pcbnew")
@@ -377,6 +413,8 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument(
         "--placement-candidate", help="select a named legal candidate, e.g. candidate-01",
     )
+    board_route_parser.add_argument("--require-verified-intent", action="store_true",
+        help="also fail if any hard semantic declaration is failed or blocked")
     board_route_parser.add_argument("--tile-size-mm", default="5")
     board_route_parser.add_argument("--router-iterations", type=int, default=5)
     board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
@@ -633,6 +671,65 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(argv)
     _apply_routing_profile(args, argv)
+    if args.command == "agent-guide":
+        from .agent_guide import get_guide, render_guide
+        print(render_guide(get_guide(args.topic), as_json=args.json))
+        return 0
+    if args.command == "library":
+        from .library_context import diagnostics, index_library, inspect, project_catalog, render_page, search, write_index
+        from .packages import find_manifest, read_manifest
+        from .syntax import CopperScriptError
+        try:
+            if args.library_action == "index":
+                if args.output.resolve().is_relative_to(args.root.resolve()):
+                    raise ValueError("index output must stay outside the indexed library root")
+                catalog = index_library(args.root)
+                write_index(catalog, args.output)
+                print(f"Library index: {len(catalog.index['entries'])} definitions; {len(catalog.index['diagnostics'])} diagnostics -> {args.output}")
+                return 0 if catalog.index["complete"] else 1
+            providers = tuple(getattr(args, "provider", []))
+            if args.library_action == "inspect":
+                manifest_path = find_manifest(args.project.resolve())
+                if manifest_path is None:
+                    raise ValueError("library discovery requires a project copper.mod")
+                manifest = read_manifest(manifest_path)
+                package = args.selector.split("::", 1)[0]
+                matches = [m for m in manifest.requirements if package == m or package.startswith(m + "/")]
+                if not matches:
+                    raise ValueError("selected package has no requirement in the project copper.mod")
+                providers = (max(matches, key=len),)
+            catalog = project_catalog(args.project, locked=not args.update_lock, offline=not args.fetch, providers=providers)
+            options = {"offset": args.offset, "limit": args.limit, "max_chars": args.max_chars}
+            if args.library_action == "search":
+                page = search(catalog, args.query, kind=args.kind, **options)
+            elif args.library_action == "inspect":
+                page = inspect(catalog, args.selector, kind=args.kind, section=args.section,
+                               expected_digest=args.expect_digest, members=tuple(args.member), **options)
+            else:
+                page = diagnostics(catalog, **options)
+            print(render_page(page))
+            return 0 if catalog.index["complete"] else 1
+        except (OSError, ValueError, CopperScriptError) as exc:
+            print(f"LIBRARY ERROR: {str(exc)[:800]}")
+            return 2
+    if args.command == "summarize":
+        from .engineering_report import read_summary, summary_lines
+        try:
+            summary = read_summary(args.report, issue_limit=args.issues)
+            print(json.dumps(summary, indent=2, sort_keys=True) if args.json else "\n".join(summary_lines(summary)))
+            return 0
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            print(f"SUMMARY ERROR: {exc}")
+            return 2
+    if args.command == "benchmark-routing":
+        from .routing_acceptance import run_acceptance
+        try:
+            report = run_acceptance(args.output, kicad_cli=args.kicad_cli)
+            print(f"Routing acceptance: {report['status']}; {len(report['cases'])} cases -> {args.output}")
+            return 0 if report["status"] == "pass" else 1
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"ROUTING ACCEPTANCE ERROR: {exc}")
+            return 2
     if args.command == "editor-overlay":
         from .editor.overlay import export_overlay
         try:
@@ -1486,10 +1583,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                         plane_verification.zone_connectivity_verified(output_board))
             if filled_feedback is not None:
                 report["filled_copper_feedback"] = json.loads(filled_feedback.to_json())
+            from .requirement_verification import verify_requirements
+            from .routing_metrics import routing_quality
+            from .engineering_report import write_summary, summary_lines
+            report["requirements"] = verify_requirements(board, output_board,
+                drc=output_drc, native=plane_verification)
+            report["requirements_complete"] = report["requirements"]["complete"]
+            report["routing_quality"] = routing_quality(output_board, plane_verification)
             try:
                 emit(progress, "export", "started")
                 report_path.parent.mkdir(parents=True, exist_ok=True)
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                summary_path, compact_summary = write_summary(report_path)
                 if args.output:
                     pcb_manifest = KiCadPcbBackend().generate(output_board)
                     write_kicad_project(pcb_manifest, args.output)
@@ -1513,10 +1618,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if lane_review["nets"]:
                 print(lane_review_line(lane_review))
             print(f"Report -> {report_path}")
+            print("\n".join(summary_lines(compact_summary)))
+            print(f"Summary -> {summary_path}")
             if args.output:
                 print(f"KiCad PCB draft -> {args.output}")
             return 0 if (closure_status is PhysicalFlowStatus.PASS
                          and not has_errors(diagnostics)
+                         and (not args.require_verified_intent or report["requirements_complete"])
                          and (plane_verification is None or plane_verification.passed)) else 1
 
         if args.command == "route-global":
@@ -1646,7 +1754,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else:
                     output.write_text(artifact.content, encoding="utf-8")
                 if args.command == "plan-layout" and args.report:
-                    args.report.write_text(layout_report.to_json(), encoding="utf-8")
+                    from .requirement_verification import verify_requirements
+                    from .engineering_report import write_summary, summary_lines
+                    document = json.loads(layout_report.to_json())
+                    document["requirements"] = verify_requirements(board, physical_board, stage="placement")
+                    args.report.parent.mkdir(parents=True, exist_ok=True)
+                    args.report.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                    summary_path, compact_summary = write_summary(args.report)
+                    print("\n".join(summary_lines(compact_summary)))
+                    print(f"Summary -> {summary_path}")
             except (OSError, ValueError) as exc:
                 print(f"OUTPUT ERROR: {exc}")
                 return 2

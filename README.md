@@ -3,6 +3,30 @@
 CopperScript is a semantic, strongly typed language for describing PCB
 connectivity, electrical intent, and design constraints.
 
+The [LLM workflow improvement plan](docs/llm-workflow-improvements.md) records
+future token-efficiency evaluation and reviewed library assemblies, immediate
+reporting/requirement/routing acceptance work, and deferred prototype testing.
+`route-board` now writes a compact same-stem `.summary.json` alongside its full
+report. It includes per-declaration requirement verification and final-copper
+quality measurements; routing closure and verified engineering intent remain
+separate results. Use `--require-verified-intent` to require every hard semantic
+declaration to pass as well as the existing routing gates.
+
+```console
+copper summarize build/route-report.json
+copper summarize build/route-report.json --json --issues 4
+copper benchmark-routing -o build/new-acceptance --kicad-cli /path/to/kicad-cli
+```
+
+The read-only summary accepts routing and layout reports. Saved `plan-layout`
+reports also gain requirement coverage and a summary sidecar. The acceptance
+runner exercises eight bounded two/four-layer cases, including renamed/rotated
+variants and expected failures, without board-specific repairs. Its authored
+test lands are not manufacturer-qualified components. Missing native tools yield
+incomplete evidence; output directories are fresh and never overwritten.
+Track lengths, vias, surface bypass connectivity and supported reference-coverage
+screens are geometric measurements, not impedance or production approval.
+
 Contributors and LLM agents adding components should read
 [AGENTS.md](AGENTS.md) and the
 [component integration guidelines](docs/component-integration-guidelines.md),
@@ -636,6 +660,19 @@ reusable [5 V to 3.3 V buck supply](examples/packages/power/buck_5v_to_3v3.coppe
 and imports the sensor part from a separate package.
 
 ## Packages
+
+LLM agents can start with `copper agent-guide`, then request a single topic:
+`syntax`, `libraries`, `verification` or `recovery`. The versioned guide ships
+with the CLI and works outside a project. See [agent bootstrap](docs/agent-guide.md)
+for the small pointer to put in consuming projects' `AGENTS.md` files.
+
+For bounded LLM retrieval across project dependencies, use
+`copper library search "query" --project path/to/project`, then
+`copper library inspect "package/path::Symbol" --project path/to/project`.
+Results preserve provider/version/content identity and expose paginated sections
+for interfaces, requirements, composition and source. See
+[compact library context](docs/library-context.md) for budgets, offline defaults,
+portable indexes and the distinction between source declarations and verification.
 
 Imports use stable URL-like package paths and an explicit local alias:
 
