@@ -120,6 +120,36 @@ metric keys with `minimum`/`maximum`. Null inputs are incomplete, not assumed.
   control-loop, EMI or battery-safety certification is implied. Do not feed an
   entire branched net into a series-path model or nominal MLCC values into droop.
 
+### Battery-temperature and charger-programming screens
+
+`calculation = ratiometric_ntc_divider` screens VIN--upper--(NTC || shunt)--GND,
+with a separate isolation resistor between that node and the charger sense pin.
+Supply explicit ohm values/tolerances, NTC minimum/maximum resistance at the
+temperature being checked, input voltage bounds, and signed leakage magnitude
+in amperes. Independent corners produce minimum/maximum sense-to-input ratios
+and ideal NTC open/short ratios. Positive leakage means current injected out of
+the sense pin. Negative ideal short ratios are mathematical screening values,
+not a physical clamp model. Consumers compare them with applicable charger
+threshold bounds; the algorithm contains no vendor-specific assumptions.
+
+`resistor_programming_window` evaluates bounded K/R (inverse=true) or K*R
+(inverse=false) against resistor tolerance. Factors use explicit SI units: a
+timer specified in seconds per kohm must be converted to seconds per ohm by the
+consumer, with any fast-charge multiplier applied explicitly. Results are
+`programmed_minimum` and `programmed_maximum`; actual current under limiting and
+timer slowdown are not inferred.
+
+Keep manufacturer facts in CopperLib and board-specific bindings in the
+consumer. Human-facing source data should use integers with named units (for
+example 100 nA, 43 kohm, 40 degC); convert to SI only at the algorithm boundary.
+An assumed thermistor curve envelope or TS leakage bound must be labelled as
+an assumption with a separate unresolved evidence requirement. R25/B tolerances
+alone do not certify a full R/T curve. These screens do not establish thermal
+coupling/lag, hysteresis, self-heating, input clamps, every harness fault,
+charging completion, cell protection, transient limits or battery safety.
+Mandatory design/simulation/bench requirements remain independent and incomplete
+without applicable evidence. Missing bounds stay null, never implicit zero.
+
 ## External evidence adapters
 
 ### Reusable supplier stackup selection and width screening

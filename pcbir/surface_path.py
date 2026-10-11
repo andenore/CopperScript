@@ -32,7 +32,8 @@ def surface_path(
     # recreate the old elbow on subsequent stitching calls.
     adjacency = defaultdict(list)
     for track in committed:
-        if track.net == net and track.layer is layer and track.width_nm >= width_nm:
+        if (track.net == net and track.layer is layer
+                and track.width_nm >= clearance.breakout.required_width_nm(track, width_nm)):
             adjacency[track.start].append((track.end, track))
             adjacency[track.end].append((track.start, track))
     reached = {start}
@@ -99,17 +100,20 @@ def surface_path(
         for first, second in zip(points, points[1:]):
             if first == second:
                 continue
-            if any(
-                track.net == net and track.layer is layer
-                and {track.start, track.end} == {first, second}
-                for track in committed
-            ):
-                continue
-            if not _track_inside_board(board, first, second, width_nm):
+            # Plane contacts obey the same declared pad-neckdown contract as
+            # area routing. Never substitute a narrow width outside its region.
+            pieces = clearance.route_pieces(net, first, second, width_nm, layer)
+            if not all(_track_inside_board(board, t.start, t.end, t.width_nm)
+                       and clearance.can_track(net, t.start, t.end, t.width_nm, layer)
+                       for t in pieces):
                 break
-            if not clearance.can_track(net, first, second, width_nm, layer):
-                break
-            additions.append(TrackSegment(net, first, second, width_nm, layer))
+            additions.extend(t for t in pieces if not any(
+                old.net == net and old.layer is layer
+                and {old.start, old.end} == {t.start, t.end}
+                and old.width_nm >= t.width_nm
+                and _track_inside_board(board, old.start, old.end, old.width_nm)
+                and clearance.can_track(net, old.start, old.end, old.width_nm, layer)
+                for old in committed))
         else:
             # Import lazily: route_style shares this module's board-edge test.
             # Include committed branches when deciding whether a corner is
@@ -206,10 +210,13 @@ def surface_path_to_via(
                         * (after.x_nm - current.x_nm)):
                     turns.append(current)
             turns.append(nodes[-1])
-            return (tuple(
-                TrackSegment(net, first, second, width_nm, layer)
-                for first, second in zip(turns, turns[1:])
-            ), point)
+            pieces = tuple(t for first, second in zip(turns, turns[1:])
+                           for t in clearance.route_pieces(net, first, second, width_nm, layer))
+            # Compression must preserve the exact checked neckdown pieces.
+            if all(_track_inside_board(board, t.start, t.end, t.width_nm)
+                   and clearance.can_track(net, t.start, t.end, t.width_nm, layer)
+                   for t in pieces):
+                return pieces, point
         for next_heading, (dx, dy) in enumerate(directions):
             nx, ny = x + dx, y + dy
             if (nx * step_nm) ** 2 + (ny * step_nm) ** 2 > radius_squared:
@@ -218,7 +225,7 @@ def surface_path_to_via(
                              start.y_nm + ny * step_nm)
             if not _track_inside_board(board, point, neighbor, width_nm):
                 continue
-            if not clearance.can_track(net, point, neighbor, width_nm, layer):
+            if not clearance.can_route(net, point, neighbor, width_nm, layer):
                 continue
             difference = abs(next_heading - heading) if heading >= 0 else 0
             turn_steps = min(difference, 8 - difference) if heading >= 0 else 0

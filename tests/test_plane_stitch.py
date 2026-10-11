@@ -11,6 +11,7 @@ from pcbir import (
     CopperZone,
     DesignRules,
     FootprintPad,
+    NetRoutingRule,
     PadReference,
     PlaneStitchOptions,
     PhysicalBoard,
@@ -182,6 +183,10 @@ def test_distribution_zone_keeps_each_existing_local_contact() -> None:
                                 position=Point.mm(5, 6))),
                     nets=(replace(base.nets[0], name="V3V3"),),
                     zones=(replace(base.zones[0], net="V3V3"),),
+                    # Existing 200 um contacts must meet the declared profile;
+                    # they are not an implicit exemption from a wider one.
+                    rules=replace(base.rules, default_track_width_nm=nm_from_mm("0.2")),
+                    net_routing_rules=(NetRoutingRule("V3V3", width_nm=nm_from_mm("0.2")),),
                     tracks=(
                         TrackSegment("V3V3", Point.mm(3, 6), Point.mm(4, 6),
                                      nm_from_mm("0.2"), CopperLayer.FRONT),

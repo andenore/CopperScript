@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from math import isfinite, pi
 from decimal import Decimal
+from itertools import product
 
 
 def number(value, name: str, *, minimum=0.0, allow_zero=False) -> float:
@@ -149,7 +150,69 @@ def divider_voltage_window(*, reference_min_v, reference_max_v, upper_resistors_
             "remaining_positive_margin_v": maximum - high_output}
 
 
+def ratiometric_ntc_divider(*, upper_ohms, upper_tolerance, shunt_ohms, shunt_tolerance,
+                           isolation_ohms, isolation_tolerance, ntc_min_ohms, ntc_max_ohms,
+                           input_min_v, input_max_v, maximum_input_leakage_a):
+    """Bound VIN--upper--(NTC || shunt)--GND, with isolation to a sense input.
+
+    Independent endpoints include signed sense-input leakage and resistor
+    tolerance. NTC bounds MUST be supplied for the temperature being screened;
+    R25/B tolerances alone do not establish a guaranteed full R/T curve. Positive
+    leakage here means current injected out of the sense pin. Zero NTC resistance
+    models a short. Does not model clamps, hysteresis, dynamics, self-heating or
+    cell-to-sensor thermal error. Unknown leakage/curve bounds remain unresolved
+    in the qualification binding, not implicit zeroes.
+    """
+    def corners(value, tolerance, name, zero=False):
+        nominal = number(value, name, allow_zero=zero)
+        tolerance = number(tolerance, name + "_tolerance", allow_zero=True)
+        if tolerance >= 1:
+            raise ValueError("resistor tolerance must be in [0,1)")
+        return nominal * (1 - tolerance), nominal * (1 + tolerance)
+
+    upper = corners(upper_ohms, upper_tolerance, "upper_ohms")
+    shunt = corners(shunt_ohms, shunt_tolerance, "shunt_ohms")
+    isolation = corners(isolation_ohms, isolation_tolerance, "isolation_ohms", True)
+    ntc = (number(ntc_min_ohms, "ntc_min_ohms", allow_zero=True),
+           number(ntc_max_ohms, "ntc_max_ohms", allow_zero=True))
+    vin = (number(input_min_v, "input_min_v"), number(input_max_v, "input_max_v"))
+    if ntc[0] > ntc[1] or vin[0] > vin[1]:
+        raise ValueError("inverted NTC or input range")
+    leakage = number(maximum_input_leakage_a, "maximum_input_leakage_a", allow_zero=True)
+    ratios, open_ratios, short_ratios = [], [], []
+    for top, bottom, series, resistance, supply, current in product(
+            upper, shunt, isolation, ntc, vin, (-leakage, leakage)):
+        parallel = resistance * bottom / (resistance + bottom)
+        # KCL: node sees signed sense current; isolation adds I*R at the pin.
+        ratios.append(parallel / (top + parallel) +
+                      current * (top * parallel / (top + parallel) + series) / supply)
+        open_ratios.append(bottom / (top + bottom) +
+                           current * (top * bottom / (top + bottom) + series) / supply)
+        short_ratios.append(current * series / supply)
+    return {"minimum_ratio": min(ratios), "maximum_ratio": max(ratios),
+            "open_minimum_ratio": min(open_ratios), "open_maximum_ratio": max(open_ratios),
+            "short_minimum_ratio": min(short_ratios), "short_maximum_ratio": max(short_ratios)}
+
+
+def resistor_programming_window(*, factor_min, factor_max, resistor_ohms, tolerance, inverse):
+    """Independent scalar K/R or K*R corners; units are caller-supplied SI.
+
+    No inference of actual current under input/thermal limiting or of timer
+    slowdown. Use sourced factor bounds, not typical coefficients as guarantees.
+    """
+    lo, hi = number(factor_min, "factor_min"), number(factor_max, "factor_max")
+    resistor = number(resistor_ohms, "resistor_ohms")
+    tolerance = number(tolerance, "tolerance", allow_zero=True)
+    if lo > hi or tolerance >= 1 or not isinstance(inverse, bool):
+        raise ValueError("invalid programming range, tolerance or inverse mode")
+    low_r, high_r = resistor * (1 - tolerance), resistor * (1 + tolerance)
+    return {"programmed_minimum": lo / high_r if inverse else lo * low_r,
+            "programmed_maximum": hi / low_r if inverse else hi * high_r}
+
+
 CALCULATIONS = {"trace_resistance": trace_resistance, "via_resistance": via_resistance,
                 "series_path": series_path, "reservoir_droop": reservoir_droop,
                 "converter_demand": converter_demand, "thermal_estimate": thermal_estimate,
-                "divider_voltage_window": divider_voltage_window}
+                "divider_voltage_window": divider_voltage_window,
+                "ratiometric_ntc_divider": ratiometric_ntc_divider,
+                "resistor_programming_window": resistor_programming_window}

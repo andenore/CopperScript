@@ -16,6 +16,81 @@ from .physical import BoardSide, CopperLayer, PadKind, PhysicalBoard, Point, Tra
 from .routing_clearance import RoutingClearanceIndex
 
 
+def ripup_mutable_nets(board: PhysicalBoard, names: frozenset[str], *,
+                       mutable_tracks: Counter, mutable_vias: Counter) -> PhysicalBoard:
+    """Remove explicitly owned ordinary routes for a subsequent repair stage.
+
+    This is an incomplete routing transaction, not connectivity evidence.
+    Unknown, critical, plane and immutable copper must never be evicted here.
+    """
+    from .physical import RouteKind
+    from .zone_geometry import distribution_zone_nets
+    if not names or not names <= {n.name for n in board.nets}:
+        raise ValueError('ripup requires known net names')
+    rules = {r.net: r for r in board.net_routing_rules}
+    if names & distribution_zone_nets(board) or any(
+            name in rules and rules[name].kind is not RouteKind.GENERAL for name in names):
+        raise ValueError('ripup supports ordinary non-plane nets only')
+    tracks = tuple(t for t in board.tracks if t.net in names)
+    vias = tuple(v for v in board.vias if v.net in names)
+    if Counter(tracks) - mutable_tracks or Counter(vias) - mutable_vias:
+        raise ValueError('ripup cannot remove immutable input copper')
+    result = replace(board, tracks=tuple(t for t in board.tracks if t.net not in names),
+                     vias=tuple(v for v in board.vias if v.net not in names),
+                     metadata={**board.metadata, 'detailed_routing': 'partial',
+                               'fabrication_ready': 'false'})
+    from .hard_macros import validate_hard_macros
+    from .pad_via_arrays import require_via_in_pad_arrays
+    validate_hard_macros(result)
+    require_via_in_pad_arrays(result, 'ordinary net ripup')
+    return result
+
+
+def remove_redundant_ordinary_copper(board: PhysicalBoard, tracks: tuple[TrackSegment, ...],
+                                     vias: tuple[Via, ...] = (), *,
+                                     mutable_tracks: Counter, mutable_vias: Counter) -> PhysicalBoard | None:
+    """Trial-delete identified ordinary copper only with exact pad connectivity.
+
+    Unlike leaf pruning, this can prove an entire obsolete overlapping escape
+    redundant. None means the proof failed; the input is always preserved.
+    Filled-plane contacts, critical routes, macros and required arrays stay out.
+    """
+    from .physical import RouteKind
+    from .zone_geometry import distribution_zone_nets
+    from .drc import explicit_copper_connectivity
+    from .hard_macros import validate_hard_macros
+    from .pad_via_arrays import require_via_in_pad_arrays
+    names = frozenset(t.net for t in (*tracks, *vias))
+    rules = {r.net: r for r in board.net_routing_rules}
+    if not names or names & distribution_zone_nets(board) or any(
+            name in rules and rules[name].kind is not RouteKind.GENERAL for name in names):
+        raise ValueError('redundant cleanup supports ordinary non-plane copper only')
+    if (Counter(tracks) - Counter(board.tracks) or Counter(vias) - Counter(board.vias)
+            or Counter(tracks) - mutable_tracks or Counter(vias) - mutable_vias):
+        raise ValueError('redundant cleanup requires exact mutable input copper')
+    nets = tuple(n for n in board.nets if n.name in names)
+    if len(nets) != len(names):
+        raise ValueError('redundant cleanup requires known nets')
+    before = explicit_copper_connectivity(board, only_nets=names)
+    if not all(before.net_connected(n) for n in nets):
+        return None
+    remaining_tracks, remaining_vias = Counter(tracks), Counter(vias)
+    def retained(objects, remaining):
+        result = []
+        for item in objects:
+            if remaining[item]:
+                remaining[item] -= 1
+            else:
+                result.append(item)
+        return tuple(result)
+    candidate = replace(board, tracks=retained(board.tracks, remaining_tracks),
+                        vias=retained(board.vias, remaining_vias))
+    validate_hard_macros(candidate)
+    require_via_in_pad_arrays(candidate, 'redundant ordinary copper cleanup')
+    after = explicit_copper_connectivity(candidate, only_nets=names)
+    return candidate if all(after.net_connected(n) for n in nets) else None
+
+
 def prune_track_stubs(
     board: PhysicalBoard, tracks: tuple[TrackSegment, ...],
     vias: tuple[Via, ...] = (), *, clearance: RoutingClearanceIndex | None = None,

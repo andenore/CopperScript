@@ -174,3 +174,36 @@ RF/power: 7 pass/36 incomplete; checkpoint: 19 pass/3 incomplete. Independent
 vector CAM, reviewed stackup/operating inputs, RF/power evidence and all 83
 assembly approvals remain outstanding. New review archives have
 `qualified_release=false`; older fabrication packages are unchanged.
+
+### Local plane-access repair follow-up
+
+Local surface searches now emit and reuse the same region-bounded neckdown
+pieces as detailed routing. Both cheap paths and the via-search fallback check
+the actual widths; compressed maze paths are rechecked. An existing narrow
+trunk outside its declared region cannot silently count as a valid wider path.
+The default plane-contact fixture explicitly declares its intended 200 um
+profile instead of relying on the former unchecked exact-segment shortcut.
+
+`ripup_mutable_nets` supports a guarded ordinary-net repair transaction. The
+caller supplies exact mutable-track/via multisets; unknown, critical, plane,
+macro-owned or required via-array copper cannot be evicted. The result is an
+incomplete intermediate, not connectivity evidence. A caller must reroute the
+evicted nets and run independent native refill/DRC on the saved candidate.
+
+The combined tracker revision exposed a separate package-ordering problem:
+its default-width accelerometer supply escape was boxed in by neighboring
+I2C clock copper. Reserving its plane contact first and then rerouting that
+ordinary clock uses the shared algorithms; no pin, clearance or via-in-pad
+permission is changed. Plane outlines and prospective contacts still cannot
+prove the actual filled rail joins, especially where different supplies overlap.
+
+`remove_redundant_ordinary_copper` adds a separate exact-connectivity transaction
+for identified overlapping stubs that conservative leaf pruning retains. It
+requires exact mutable input multisets, excludes critical/plane copper, retains
+macro/array guards and checks every affected net's actual pad connectivity
+before and after deletion. Failed proof returns no candidate; no native finding
+is waived. Tracker native refill exposed obsolete vias after first-pass track
+pruning, then two overlapping GNSS escapes; this transaction removed the latter.
+The final 91-part candidate has zero native violations and zero opens, with four
+verified via-free modem bypass feeds. Hardware/current/RF qualification remains
+incomplete. The final focused compiler routing suite has 106 passing tests.
