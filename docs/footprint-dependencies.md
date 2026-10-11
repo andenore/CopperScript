@@ -126,6 +126,6 @@ overrides are labeled `local_override`. Files outside required modules are
 local inputs and are not pinned by the package lock. No system KiCad installation
 is discovered implicitly.
 
-See the [runnable project](../examples/managed_footprints/README.md),
+See the [runnable project](../examples/managed_footprints/README.md) and
 [specification decision CS-150](design-specification.md#cs-150--footprints-as-resolvable-package-dependencies-accepted)
-and [implementation plan](footprint-dependencies-plan.md).
+when investigating the language contract.

@@ -1,5 +1,9 @@
 # Routing review pass 12: octilinear access and forward paired miters
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 This follows the source-backed USB winding correction in pass 11. The netlist,
 library lock, original critical profiles, actual footprints and pinned Nordic
 scene are retained. It is a critical preflight, not ordinary routing or a
@@ -13,7 +17,7 @@ axis/45-degree path, checking each leg with original width/layer, board-edge,
 foreign-copper and keepout predicates. There is no oblique fallback or endpoint
 snapping. Blocker-aware tentative routing can cross removable tracks only;
 existing transactional checks remain required. See
-[the access contract](octilinear-pin-access.md) and CS-124.
+[the access contract](../octilinear-pin-access.md) and CS-124.
 
 R15: adjacent offset miters can consume a short spine segment and reverse
 an inner lane. The construction now requires both lane edges to retain
@@ -21,7 +25,7 @@ the corresponding spine edge's forward heading. A collapsed/reversed edge
 rejects the whole joint candidate, letting the bounded search/refinement owner
 try another topology. Original package escapes and paired profile/native
 acceptance remain intact; no one-lane cleanup is used. See
-[the paired contract](paired-route-refinement.md) and CS-125.
+[the paired contract](../paired-route-refinement.md) and CS-125.
 
 The initial forward-miter guard alone exposes a real goal-connector gap:
 the old terminal bridge menu produces no replacement for the modem pair at

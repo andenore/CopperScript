@@ -1,5 +1,9 @@
 # Routing review pass 9: critical placement feedback
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Electrical evidence superseded: the USB choke mapping used here was incorrect.
 Zero critical copper opens did not validate the internal winding connections.
 See [pass 11](routing-review-pass11.md); do not replay this rotation as a solution
@@ -10,7 +14,7 @@ without manual example coordinates, independent member routing, extra vias or
 larger search budgets. Its first legal candidate rotates FL_USB from 90 to 270
 degrees at the unchanged (45, 30) mm center. Every other component pose remains
 unchanged. Global guides and all six critical groups are rebuilt before acceptance.
-See the [controller contract](critical-placement-feedback.md) and decision CS-121.
+See the [controller contract](../critical-placement-feedback.md) and decision CS-121.
 
 ## Control and trial
 

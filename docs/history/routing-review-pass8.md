@@ -1,11 +1,15 @@
 # Pass 8: shorten critical matching-tree guides
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Electrical evidence superseded: the USB choke mapping used here was incorrect.
 The RF geometry comparison is historical, not full-board electrical approval.
 See [pass 11](routing-review-pass11.md).
 
 The bounded local single-ended improvement is integrated before critical copper
-is locked. See [algorithm/acceptance contract](local-critical-routing.md). Every
+is locked. See [algorithm/acceptance contract](../local-critical-routing.md). Every
 physical terminal remains represented. Failed/equal-length proposals preserve
 a connected incumbent; original profile budgets, exact clearance and fresh
 native connectivity remain mandatory. Paired nets retain joint search.

@@ -108,4 +108,4 @@ budgets/layers, blocked transitions, 45-degree terminal rows, own-land drill
 exclusion and atomic rejection of corrupted proposals.
 
 The matched saved-checkpoint result is recorded in
-[routing-review-pass19](routing-review-pass19.md).
+[routing-review-pass19](history/routing-review-pass19.md).

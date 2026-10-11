@@ -164,9 +164,9 @@ Those two probes connect the raw matching tree with no vias and less than 5 mm
 of copper, without critical opens or hard native findings. They are not complete
 operational MCU circuits. The suite retains 459 upstream CAM-library warnings.
 
-The source-backed placement run is recorded in [pass 7](routing-review-pass7.md).
+The source-backed placement run is recorded in [pass 7](history/routing-review-pass7.md).
 Its 17.19 mm raw matching-tree detour motivates the bounded local alternative
-implemented in [pass 8](routing-review-pass8.md): 2.31 mm with unchanged poses,
+implemented in [pass 8](history/routing-review-pass8.md): 2.31 mm with unchanged poses,
 complete terminal coverage and independent KiCad checking. The modem USB pair
 still fails bounded search. Template placement alone does not imply local
 route quality, and this is not a complete ordinary-net reroute or production

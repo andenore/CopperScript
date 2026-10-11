@@ -230,7 +230,7 @@ The report checkpoints resolved inputs and global results, then records critical
 strategies, assumptions, rejection reasons and phase timings. Exit 1 means
 global/critical acceptance failed; exit 0 only means that early gate passed,
 **not** full-board signoff. Unrouted ordinary nets, unfilled planes and native
-route-incomplete findings remain expected. The [pass-4 review](routing-review-pass4.md)
+route-incomplete findings remain expected. The [pass-4 review](history/routing-review-pass4.md)
 records the first real-footprint run: four connected RF nets, two rejected USB
 pairs, no committed unsafe pair copper. The earlier completely connected
 ordinary-routing draft remains a separate historical artifact.
@@ -247,7 +247,7 @@ board routing. It cannot be combined with critical-only placement feedback.
 Both modes accept repeatable `--hard-macro path/to/scene.json` arguments, bound
 before placement and included in the input provenance.
 
-The [pass-5 review](routing-review-pass5.md) adds joint paired package escape
+The [pass-5 review](history/routing-review-pass5.md) adds joint paired package escape
 and heading-aware channel search with bounded 1/0.5/0.25 mm refinement. Both
 USB pairs connected with zero vias and unchanged placement in that run. Independent
 KiCad finds no critical-net opens, shorts, clearance or dangling-track findings;
@@ -258,11 +258,11 @@ or a completed full-board rerun. Subsequent RF topology corrections require a
 new rerun: at the old placement the modem pair is pending again, as recorded
 in the RF audit. RF reference-layout clusters are next.
 
-With the provisional source-backed RF scene, [pass 9](routing-review-pass9.md)
+With the provisional source-backed RF scene, [pass 9](history/routing-review-pass9.md)
 uses `--critical-feedback-trials 1` to rotate the choke algorithmically and rebuild
 all critical groups. Independent KiCad verifies zero critical copper opens, but
 the library's USB choke winding mapping was incorrect. Those boards must not be
-fabricated: [pass 11](routing-review-pass11.md) corrects the source-backed model
+fabricated: [pass 11](history/routing-review-pass11.md) corrects the source-backed model
 and reruns from fresh placement rather than replaying that rotation. The USB
 detours, remaining RF support/keepouts and complete ordinary rerun are still open;
 this does not qualify impedance or production readiness.

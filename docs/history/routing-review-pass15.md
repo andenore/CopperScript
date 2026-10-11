@@ -1,5 +1,9 @@
 # Pass 15: escape-pressure ordering
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 This is an R6a/package-escape increment after `df75f6a`, not a completed-board
 rerun. R16's matched replay identifies blocked MCU exits; increasing the maze
 budget or shifting layer preference cannot repair a missing terminal exit.
@@ -81,7 +85,7 @@ owners described in [OpenROAD's detailed-router documentation](https://openroad.
 Our low-slack radial heuristic is a bounded PCB implementation choice, **not**
 a claim to reproduce TritonRoute's pattern optimizer or best-known PCB routing.
 Joint conflict-graph/matching and negotiated replacement remain tracked in the
-[package-escape work list](global-routing-and-escape-todo.md).
+[package-escape work list](../global-routing-and-escape-todo.md).
 
 Evidence: task outputs `routing-review-pass15-fanout-pressure/compare.py`,
 `comparison.json`, matched `global.json`, old/new native reports and KiCad

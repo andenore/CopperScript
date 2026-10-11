@@ -1,5 +1,9 @@
 # Pass 5: joint paired package escape and channel search
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Electrical evidence superseded: this run used an incorrect USB choke winding
 mapping. Its geometry measurements remain historical; USB wiring acceptance
 does not. See [the source correction and fresh run](routing-review-pass11.md).

@@ -15,7 +15,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
   regressions and CopperScript physical-net tests, refresh the dependency lock,
   and explicitly invalidate historical USB electrical acceptance. Copper DRC
   cannot detect a part model's incorrect internal conduction. See
-  [pass 11](routing-review-pass11.md).
+  [pass 11](history/routing-review-pass11.md).
 - [x] R13b: Rerun critical and then ordinary routing using that corrected library;
   obtain fresh independent KiCad evidence. Old USB placements/copper are not a
   valid baseline for electrical acceptance or route-quality optimization.
@@ -23,7 +23,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
     repair trial, zero vias; independent KiCad confirms zero critical opens and
     no hard copper/dangling findings. Eight library findings remain.
   - [x] Full ordinary rerun and independent filled-zone/layer review in
-    [pass 13](routing-review-pass13.md): unchanged critical copper/51 poses,
+    [pass 13](history/routing-review-pass13.md): unchanged critical copper/51 poses,
     zero GND/critical opens and no hard copper findings. Three ordinary nets
     remain open (34 KiCad items); this completes the rerun, not routing closure.
 - [x] R14 (pass-11 shape finding): Replace oblique exact single-ended RF
@@ -41,7 +41,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
   terminal collars. Fresh search closes both USB pairs at the unchanged
   placement with zero reversals, original profiles and unchanged maze budgets.
   Modem paths grow slightly; this is not completion of R5 route optimization.
-  See [the matched shape review](routing-review-pass12.md).
+  See [the matched shape review](history/routing-review-pass12.md).
 
 - [x] R1: Scope fanout cleanup to attempted nets; preserve unrelated copper,
   empty subsets, failed-subset rollback, and pre-existing/shared vias.
@@ -73,7 +73,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
   failures with existing critical/ground copper before forcing layer balance.
   - [x] Analyze immutable legal fanout candidate domains and prioritize low-slack
     pins before easy neighbors, with exact incremental/final clearance and
-    per-pin diagnostics. [Pass 15](routing-review-pass15.md) improves 68 to 69
+    per-pin diagnostics. [Pass 15](history/routing-review-pass15.md) improves 68 to 69
     escapes on the same critical/GND-only checkpoint. MCU.62/.64 have zero
     radial candidates even before ordinary fanout; R6a remains open.
 - [ ] R6b: Localize neutral-cost fallback and report effective policy rather
@@ -90,7 +90,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
   Add split/pitch-invariance regressions and matched layer/route comparisons,
   preserving explicit layer rules, reference-plane reservation and acceptance.
   Implemented analytic uncovered-length union and separate via guide-exit
-  events. [Pass 14](routing-review-pass14.md) tests split/pitch/search costs and
+  events. [Pass 14](history/routing-review-pass14.md) tests split/pitch/search costs and
   replays all three failed nets with identical saved copper/global guides.
   No complete net closes; KiCad retains 34 open items/eight library findings.
   Local package-escape blockage, not guide-cost normalization alone, is now
@@ -106,7 +106,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
   - [x] Implement bounded off-ray two-leg alternatives, shared exact access
     checking, verified existing multi-segment anchors and explicit track/via
     ownership through cleanup and pipeline/repair callers. Installed-KiCad
-    regression accepts the routed two-leg fixture. [Pass 16](routing-review-pass16.md)
+    regression accepts the routed two-leg fixture. [Pass 16](history/routing-review-pass16.md)
     improves matched partial fanout from 69 to 72 exits without changing prior
     critical/GND copper or any pose. MCU.62/.64 now have ten/three legal initial
     alternatives, but selected neighboring escapes consume them.
@@ -114,7 +114,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
     expansion of competing pins with already legal radial choices. Exact replay
     identifies MCU_NRF_RX / MCU_MODEM_TX blocking the MCU UART/enable exits;
     increasing the area-search budget is not the next experiment.
-    [Pass 17](routing-review-pass17.md) implements exact lazy conflicts, affected
+    [Pass 17](history/routing-review-pass17.md) implements exact lazy conflicts, affected
     domain expansion, MRV/forward-checking and bounded conflict-driven group
     growth with incumbent rollback. Matched escapes improve 72 to 74 without
     losing any prior identity. MCU.62/.64 still lack a compatible generated
@@ -239,13 +239,13 @@ Completion means tested implementation, not automatic manufacturing signoff.
     against native geometry/connectivity; protect pair copper through subset
     repairs and duplicate-land closure. Real-footprint preflight connects four
     RF nets with no vias and rejects both unsafe USB pairs. See
-    [pass 4](routing-review-pass4.md); this does not complete R8.
+    [pass 4](history/routing-review-pass4.md); this does not complete R8.
   - [x] R8b: Joint same-layer paired package-access search. Enumerate legal
     paired exits, preserve terminal order, search a heading-aware common spine,
     and materialize clearance-checked straight/45-degree corners/tapers.
     Bounded pitch refinement connects both real-footprint USB pairs without
     vias or placement changes. Independent KiCad confirms no critical opens
-    or hard copper findings. See [pass 5](routing-review-pass5.md).
+    or hard copper findings. See [pass 5](history/routing-review-pass5.md).
     Non-octilinear/multi-terminal pairs remain unsupported by this search,
     not silently approximated. Paired terminal transitions now have a bounded
     owning search; see R8d. Package-placement feedback remains available if
@@ -287,7 +287,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
       Protect terminals/branches, bound the search and retain atomic native/profile
       acceptance; do not confuse close placement with short committed copper.
       This is the critical-cluster application of R5, not a second cleanup mechanism.
-      [Pass 8](routing-review-pass8.md) reduces the raw tree to 2.31 mm without
+      [Pass 8](history/routing-review-pass8.md) reduces the raw tree to 2.31 mm without
       placement changes or hard independent copper findings. RF qualification
       and the wider R5 scope remain open.
     - [x] Reevaluate paired package access/placement for the pass-7 modem USB
@@ -297,7 +297,7 @@ Completion means tested implementation, not automatic manufacturing signoff.
         rebuild all critical reservations and require strictly fewer failed net
         identities with no fresh hard native DRC. Fixed/rigid/45-degree and
         rollback/integration tests are in place. See
-        [controller contract](critical-placement-feedback.md). [Pass 9](routing-review-pass9.md)
+        [controller contract](critical-placement-feedback.md). [Pass 9](history/routing-review-pass9.md)
         accepts an algorithmic FL_USB rotation, rebuilding all groups; KiCad finds
         zero critical opens and no hard copper errors. Ordinary routing remains open.
       - [ ] Improve the connected paired geometry without weakening profile or
@@ -436,7 +436,7 @@ dependency; the Windows Store Python launcher also cannot supply the readable
 executable-byte identity required by the CAM adapter. No CAM check or
 executable-identity requirement was weakened to work around that environment.
 
-The repeated review is in [routing-review-pass1.md](routing-review-pass1.md).
+The repeated review is in [routing-review-pass1.md](history/routing-review-pass1.md).
 Independent KiCad finds three GND unconnected items, zero dangling tracks,
 and eight library findings, versus 74/68/eight on the damaged baseline. All
 57 ordinary nets are connected under KiCad. The earlier best board still has
@@ -459,7 +459,7 @@ since pass 1 and five optional installed-KiCad differential connectivity cases.
 Replaying the previous board's copper clears all four false ordinary-net opens;
 only GND remains open under native explicit-copper checking. No DRC check was
 waived and no geometry/fabrication limit was relaxed. Implementation commit:
-`4839b90`. The [second repeated review](routing-review-pass2.md) records the
+`4839b90`. The [second repeated review](history/routing-review-pass2.md) records the
 matched rerun: zero KiCad unconnected items, zero dangling/short/clearance
 findings, eight unchanged footprint-library findings. The accepted joint-package
 trial retains every component position and rotation. R5–R9 and R12 remain open;
@@ -485,7 +485,7 @@ installed-KiCad verification of a single-logical-pin duplicate-land open and its
 closure. A read-only replay of the saved pass-2 board adds zero tracks, recognizes
 four already-connected references, and resolves J_POWER.SH/J_SIM.SH through a
 fresh independent refill while retaining all eight library findings.
-Implementation commit: `c1d5e52`. The [third repeated review](routing-review-pass3.md)
+Implementation commit: `c1d5e52`. The [third repeated review](history/routing-review-pass3.md)
 records the completed matched rerun: zero KiCad unconnected items, no hard copper
 findings, identical physical track/via/pad/placement geometry to pass 2, and
 zero reported signal failures in the accepted feedback trial. Sixteen bridges

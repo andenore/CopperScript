@@ -1,7 +1,11 @@
 # Routing review after the first implementation pass
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Reviewed 2026-10-01. Implementation commit: `8b8c896` (R1–R4).
-Work list: [routing-review-todo.md](routing-review-todo.md).
+Work list: [routing-review-todo.md](../routing-review-todo.md).
 
 ## Outcome
 

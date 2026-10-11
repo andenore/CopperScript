@@ -1,5 +1,9 @@
 # Footprint dependency implementation plan
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Decision CS-150 extends the existing package/asset resolver. Footprint references
 remain strings in electrical IR; geometry is resolved only for physical flows.
 

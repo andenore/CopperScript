@@ -1,5 +1,9 @@
 # Autonomous placement and routing
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Objective: the standard CopperScript pipeline routes and verifies a board, or
 reports actionable unresolved failures, without board-local repair code or
 hard-coded component/net selectors. CopperLib owns reusable electrical/layout
@@ -55,7 +59,7 @@ contracts; consuming projects own design intent, mechanics and operating inputs.
 
 ### 5. Filled-copper feedback
 
-Investigation detail: [R5 fragmented-fill repair and guide coordination](routing-research-tasks.md#r5-automatic-fragmented-fill-repair-and-routing-guide-coordination).
+Investigation detail: [R5 fragmented-fill repair and guide coordination](../routing-research-tasks.md#r5-automatic-fragmented-fill-repair-and-routing-guide-coordination).
 
 - [x] Integrate the existing generic native refill/DRC adapter into the repair
   feedback loop, retaining version/input/output hashes,
@@ -112,7 +116,7 @@ reader, it never reinserts absent native copper. Both exported and filled
 Tracker PCBs pass its guard without byte changes. Every explicit decoupling
 association has top-copper connectivity with vias, fills and internal joins
 excluded; endpoint-only chain extraction's T-junction false negative remains
-[R8 research](routing-research-tasks.md#r8-endpoint-only-surface-chain-readback).
+[R8 research](../routing-research-tasks.md#r8-endpoint-only-surface-chain-readback).
 
 Retained evidence is in the chat workspace's `autonomous-routing-20261011/`;
 Tracker documents exact input/output hashes in `docs/autonomous-routing-review.md`.
@@ -270,7 +274,7 @@ production revision or CAM, electrical, assembly and prototype approval gates.
   regions and permitted orientation domains; reports cap sampled explanations.
   Area blocker reports include exact geometry identities, locks, reasons and
   work counts. This selects small bounded sets, not a proof of globally minimal
-  disruption. See [implementation and limits](filled-copper-feedback.md).
+  disruption. See [implementation and limits](../filled-copper-feedback.md).
 - Consumer review: locked/offline checks passed for both boards using the current
   local compiler. CopperLedRing's balanced shared command connected all 31
   ordinary nets and passed actual KiCad 10.0.6 refill/DRC with zero opens and
@@ -409,7 +413,7 @@ production revision or CAM, electrical, assembly and prototype approval gates.
   The shared final retry now diversifies only after an actual budget exception,
   with structured failure/retry-weight reports and no additional attempt or rule
   waiver. Affected regressions and a fresh unchanged-source Tracker replay are
-  running. [R7](routing-research-tasks.md#r7-budget-exhausted-ordinary-final-retries)
+  running. [R7](../routing-research-tasks.md#r7-budget-exhausted-ordinary-final-retries)
   tracks this verification separately; the completed frozen full suite predates
   this latest algorithm change.
 - Retry-increment verification completed: 94 detailed/report/benchmark tests,

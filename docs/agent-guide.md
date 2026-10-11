@@ -1,59 +1,26 @@
 # Agent bootstrap through the CLI
 
-Run `copper agent-guide` or `python -m copperscript agent-guide` in the selected
-CopperScript environment. It returns a compact starting workflow without a
-project manifest, network access or file writes. The guide ships as Python data
-with the compiler, so an installed CLI can teach its workflow without a compiler
-checkout or the full documentation.
+Run `copper agent-guide` (or `python -m copperscript agent-guide`) in the active
+CopperScript environment. Guidance ships with the CLI and needs no manifest,
+network or repository checkout. Retrieve one topic only when needed:
+`syntax`, `libraries`, `verification` or `recovery`; use `--json` for the versioned
+`copperscript.agent-guide/v1` response with package version and topic digest.
+The digest identifies guidance, not a Git revision or qualification certificate.
 
-Retrieve a topic only when needed:
+For report behavior, use [LLM workflow](llm-workflow.md); for dependency discovery,
+use [library context](library-context.md). The CLI topics supply workflow templates,
+which must be bound to the actual project configuration and selected identities.
 
-```console
-copper agent-guide syntax
-copper agent-guide libraries
-copper agent-guide verification
-copper agent-guide recovery
-copper agent-guide --json
-```
+## Project pointer
 
-The default `start` topic introduces project configuration, provider-independent
-library retrieval, composition and the verification loop. `syntax` includes an
-offline-compilable electrical example. `libraries` explains selective sections,
-member filters, source identity and omissions. `verification` distinguishes
-routing, requirement coverage and hardware qualification. `recovery` covers
-older compiler pins, cache/lock errors, stale selections and engineering blockers.
-Command templates require the actual project configuration and selected identities.
+Put this small hint in a consuming project's `AGENTS.md`, or in its host's startup
+instructions if that host does not load the file:
 
-JSON uses `copperscript.agent-guide/v1` and includes `guide_version`, the installed
-package version, selected topic, available topics and a content digest. The
-digest binds that topic's text/templates; the package version alone is not a Git
-revision or qualification certificate. Both text and JSON default to one topic.
+> Start with `copper agent-guide` in the active CopperScript environment. Retrieve
+> individual topics and selected library contracts as needed. Follow this project's
+> README and build targets. If the pinned compiler lacks the guide, explicitly
+> select a current compiler for guidance/review while retaining project build pins.
 
-## Small project pointer
-
-Put this in a consuming project's `AGENTS.md`, or provide it through the agent's
-startup instructions when its host does not load that file:
-
-> Start with `copper agent-guide` (or `python -m copperscript agent-guide`) in the
-> active CopperScript environment. Retrieve individual topics and selected library
-> contracts as needed. Follow this project's README and build targets for its
-> configuration. If its pinned compiler lacks the guide, explicitly select a
-> current compiler for guidance/review while retaining project build pins.
-
-CopperAssetTracker and CopperLedRing now carry this pointer, with the latter's
-template guidance asking new projects to retain it. CopperLib and CopperScript
-also point to the guide from their existing contributor instructions. These are
-documentation changes only in the consumer/provider projects; no components,
-dependency revisions or build artifacts were changed.
-
-The bundled guide is the common workflow entry point. Project pointers carry
-local configuration ownership without copying the whole guide into each repo.
-Agent hosts must supply or load the pointer; the CLI cannot make an unfamiliar
-LLM discover itself automatically.
-
-Validation: **66 tests passed**, with one Windows symlink-fixture skip, across
-the guide, library-context and existing CLI suites. The guide runs from an empty
-directory without creating files; every command template is accepted by the
-current parser, and the bundled syntax example compiles and passes ERC offline.
-The default text guide is about 1,500 characters; detailed topics are retrieved
-separately. These character counts are not measured model-token savings.
+The host must supply/load the hint; the CLI cannot discover itself for an
+unfamiliar agent. Keep shared workflow instructions in the CLI rather than
+copying them into each project.

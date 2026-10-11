@@ -1094,7 +1094,7 @@ guide, not routing or filled-zone proof. Local UI operations use revision-bound,
 validated transactions. Source saves require comment-preserving targeted edits
 and conflict detection; until implemented, preview edits are explicitly unsaved.
 Electrical connectivity and schematic IR remain unchanged. See the
-[editor specification](mechanical-editor.md) and [delivery plan](mechanical-editor-plan.md).
+[editor specification](mechanical-editor.md) for supported behavior and limits.
 
 ## CS-149 — Importable mechanical board profiles (Accepted)
 
@@ -1191,8 +1191,8 @@ updates it; downloads remain allowed when matching content is missing from cache
 alone may create/update a lock. Explicit local files outside required modules
 are not covered by the package inventory. Provenance identifies which route was
 used, the selected file digest and managed module/revision/inventory when present.
-See [footprint dependency syntax](footprint-dependencies.md) and
-[implementation plan](footprint-dependencies-plan.md).
+See [footprint dependency syntax](footprint-dependencies.md) for the current
+resolution and locking contract.
 
 ## CS-151 — Transactional cross-owner escape-pattern negotiation (Accepted)
 

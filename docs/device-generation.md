@@ -108,7 +108,7 @@ For multi-terminal passives, explicitly review internal signal paths and
 polarity as well as pin/land coverage. A common-mode choke must pass each
 signal through a separate winding with matching dot polarity; simply listing
 four passive pins cannot establish this. The source-backed
-[USB choke correction](routing-review-pass11.md) includes topology-specific
+[USB choke correction](history/routing-review-pass11.md) includes topology-specific
 CopperLib regressions and a physical-net integration test. Copper DRC cannot
 detect an incorrect internal winding mapping; such corrections invalidate old
 electrical acceptance and require regenerated routing. Visually inspect source

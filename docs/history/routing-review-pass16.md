@@ -1,5 +1,9 @@
 # Pass 16: bounded two-leg package exits
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 This implements the escape-representation and ownership portion of R17 after
 `1af13f2`. It is a matched partial-fanout experiment, not a replacement finished
 board or a complete ordinary-routing rerun.

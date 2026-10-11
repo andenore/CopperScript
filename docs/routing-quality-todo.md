@@ -177,8 +177,8 @@ assembly approvals remain outstanding. New review archives have
 
 ### Local plane-access repair follow-up
 
-The next shared-placement/routing work is tracked in
-[the autonomous routing checklist](autonomous-routing-plan.md). Board-local
+The current shared-placement/routing backlog is tracked in
+[TODO.md](../TODO.md). Board-local
 repair selectors are a regression source, not the target user workflow.
 
 Local surface searches now emit and reuse the same region-bounded neckdown

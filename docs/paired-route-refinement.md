@@ -69,6 +69,6 @@ Tests exercise actual detour shortening, exact escape/endpoint preservation,
 reversal/collinearity, keepout/reserved-route rejection, deterministic bounds,
 missing provenance, original profile/native rejection, and malformed width/net/
 layer proposals. Real-board results and unresolved topology limitations are in
-[pass 10](routing-review-pass10.md).
+[pass 10](history/routing-review-pass10.md).
 The corrected-part rerun and short-miter/access fixes are reviewed in
-[pass 12](routing-review-pass12.md).
+[pass 12](history/routing-review-pass12.md).

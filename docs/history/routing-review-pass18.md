@@ -1,5 +1,9 @@
 # Pass 18: escape-first pipeline and package-access gate
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 This is a partial-stage experiment, not a completed routing run. Source
 connectivity, CopperLib, physical rules, stackup, footprints and all 51 saved
 pass-13 placements are unchanged. Unlike pass 17, long critical routes and GND
@@ -7,7 +11,7 @@ contacts are deliberately **not** imported before ordinary fanout.
 
 ## Implementation
 
-See [package-access-first](package-access-first.md) for primary research,
+See [package-access-first](../package-access-first.md) for primary research,
 contracts, options and remaining steps. `--fanout` now reserves compatible
 ordinary crowded-pin exits first. Critical routing honors their exact tracks
 and all-layer vias. Explicit early plane contacts follow. A native access /

@@ -65,7 +65,7 @@ incumbent preservation, mixed-side and over-limit rejection, malformed shorter
 proposals rejected by native connectivity, deterministic routing and observational
 progress. The full suite passes 386 tests with 459 upstream CAM-library warnings.
 
-Full-vertical RF/USB results are recorded in [pass 8](routing-review-pass8.md).
+Full-vertical RF/USB results are recorded in [pass 8](history/routing-review-pass8.md).
 General-net wider/projected guides, larger-tree/Steiner improvement and branch-safe
 cleanup remain R5/R7 work. Reference matching-ground copper/support, antenna
 keepouts, actual stackup/return-path qualification and a complete ordinary-net

@@ -1,7 +1,7 @@
 # Mechanical and floorplan editor specification
 
-Status: accepted contract; incremental implementation in CopperScript. See the
-[implementation checklist](mechanical-editor-plan.md) for actual delivery status.
+Status: implemented contract in CopperScript; this guide describes supported
+behavior and current limitations. Historical delivery checkpoints are opt-in.
 This is a physical-intent editor, not a schematic editor or another PCB router.
 
 ## Ownership and user workflow

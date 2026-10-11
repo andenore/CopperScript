@@ -1,5 +1,9 @@
 # Pass 4: explicit critical profiles and safe early acceptance
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 This is an R8 integration/preflight pass, **not** a complete board reroute.
 The pass-3 ordinary-routing board and its zero KiCad opens remain untouched.
 Input intent deliberately changes: eight explicit USB/RF routing profiles are

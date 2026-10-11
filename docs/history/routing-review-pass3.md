@@ -1,8 +1,12 @@
 # Routing review after physical-land closure integration
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Reviewed 2026-10-01. Implementation: `c1d5e52` (R12).
 Previous: [routing-review-pass2.md](routing-review-pass2.md).
-Work list: [routing-review-todo.md](routing-review-todo.md).
+Work list: [routing-review-todo.md](../routing-review-todo.md).
 
 ## Outcome
 

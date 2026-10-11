@@ -1,5 +1,9 @@
 # Pass 17: compatible ordinary package-escape assignment
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 This extends pass 16's two-leg representation with a bounded assignment owner.
 It changes newly proposed ordinary fanout only: no source connectivity, pose,
 critical/GND reservation, routing layer rule or fabrication limit is changed.

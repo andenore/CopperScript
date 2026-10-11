@@ -2,11 +2,14 @@
 
 This is a staged implementation checklist, not a claim that the full board is
 routed. The original baseline was 51/58 detailed nets, with one global
-via-resource overflow and seven pending fanouts. The latest full-route outcome
-is [pass 13](routing-review-pass13.md), with three ordinary nets open.
-[Pass 18](routing-review-pass18.md) is a partial escape-first experiment: all
+via-resource overflow and seven pending fanouts. A historical full-route outcome
+was recorded in [pass 13](history/routing-review-pass13.md), with three ordinary nets open.
+[Pass 18](history/routing-review-pass18.md) is a partial escape-first experiment: all
 76 ordinary exits allocate, but the modem USB pair fails compatibility. Each stage must
 retain deterministic output and must not weaken exact native or KiCad DRC.
+These are historical checkpoints, not current closure status. Consult the
+[current backlog](../TODO.md) and [routing contract](filled-copper-feedback.md)
+before treating an old finding as unfinished implementation.
 
 The new [package-access-first sequence](package-access-first.md#remaining-implementation-sequence)
 tracks preflight gating, bounded legal placement repair, joint critical/power/GND

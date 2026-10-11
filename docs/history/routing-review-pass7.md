@@ -1,5 +1,9 @@
 # Pass 7: source-backed Nordic matching placement scene
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Electrical evidence superseded: the USB choke mapping used here was incorrect.
 Do not reuse this PCB as valid USB wiring. See [pass 11](routing-review-pass11.md).
 
@@ -25,7 +29,7 @@ Unlike passes 5/6, placement is recomputed with the explicit scene, not replayed
 Settings: locked/offline full-vertical source, actual KiCad/CopperLib footprints,
 100 x 80 mm, JLCPCB six-layer prototype, candidate-01, one placement-feedback
 iteration, five global iterations, 5 mm tiles. Reproduce the scene invocation in
-[rigid-placement-clusters.md](rigid-placement-clusters.md).
+[rigid-placement-clusters.md](../rigid-placement-clusters.md).
 
 | Group | Committed length | Result |
 | --- | --- | --- |

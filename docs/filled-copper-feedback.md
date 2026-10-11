@@ -220,8 +220,31 @@ real displaced-signal rerouting, immutable critical routes/macros/required array
 native-rejected candidates, repeated states and tool/schema limitations.
 These are algorithm fixtures, not reusable production component definitions.
 
-See the [checked implementation plan](autonomous-routing-plan.md) and
-[R5 investigation](routing-research-tasks.md#r5-automatic-fragmented-fill-repair-and-routing-guide-coordination).
-The [fresh-source native closure checklist](native-closure-plan.md) records the
-91-component source-only closure and unchanged 83-component regression, exact
-frozen inputs, protected-exit regressions and retained native/test evidence.
+For unresolved work, use the [current backlog](../TODO.md). Dated board closure
+and test evidence are retained in `history/`; they apply to their recorded inputs.
+
+## Contributor invariants
+
+Generic repairs use the standard bounded pipeline, never board-specific net/pad
+selectors or historical pose seeds. Reproduce failures as small real-geometry
+cases with renamed nets/components. Preserve electrical topology, declared
+widths/clearances/keepouts, fixed/rigid placements, immutable macro copper and
+required via-array multiplicity; native warnings cannot be waived for closure.
+
+Keep verified package exits reserved while ordinary routes remain partial.
+Only remove disposable unused escapes after the net connects. Distinguish
+ordinary mutable escape copper from source, macro, semantic-feed, required-array,
+critical and accepted bridge/contact ownership. Mutability is explicit and
+occurrence-counted. Dependency eviction, rerouting, ownership-checked cleanup
+and fresh native refill form one transaction with complete rollback.
+
+Follow actual explicit copper components from native findings to retained plated
+transition anchors; source-zone outlines and installed-component internal joins
+are not repair witnesses. Regenerate a trimmed owned boundary witness only with
+its retained launch via and fresh exact land/clearance checks. Deduplicate
+equivalent proposals across opens within the shared search budget. Cleanup needs
+exact native object mapping and fresh connectivity, not inferred object identity.
+
+Missing tools and exhausted budgets remain unresolved evidence, not proof of
+impossibility. A closing benchmark establishes routing only; CAM, electrical,
+RF/power, assembly and prototype approval retain their separate gates.

@@ -1,6 +1,10 @@
 # Mechanical editor implementation checklist
 
-The [specification](mechanical-editor.md) defines the contract. Check boxes mean
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
+The [specification](../mechanical-editor.md) defines the contract. Check boxes mean
 implemented and tested, not merely planned. Commit major completed increments.
 No board-specific data or algorithms belong in `pcbir`.
 

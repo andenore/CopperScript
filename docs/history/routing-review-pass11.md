@@ -1,5 +1,9 @@
 # Routing review pass 11: USB choke winding correction
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 ## Source finding
 
 The official [Coilcraft 0603USB datasheet](https://www.coilcraft.com/getmedia/4e4ea8c1-6d24-4c0b-815c-9af87a76485b/0603usb.pdf),

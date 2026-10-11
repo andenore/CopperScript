@@ -8,7 +8,7 @@ not the empty holder, supplies energy.
 The positive tabs are explicitly internally connected (`internal_pad_groups =
 "1"`); solder both for mechanical retention, but no PCB bridge is required.
 The negative contact still needs an external connection. See the repository's
-[internal-contact generation checklist](../../internal-pad-connectivity.md).
+[internal-contact generation checklist](internal-pad-connectivity.md).
 
 The crystal and LED are explicit **reference placeholders**, not orderable
 parts. Crystal oscillator terminals follow KiCad's Crystal_GND24 convention

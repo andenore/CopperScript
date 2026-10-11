@@ -1,5 +1,9 @@
 # Pass 19: modem USB through paired terminal vias
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 ## Scope and method
 
 This is a **partial critical-pair experiment**, not a full ordinary-board rerun.

@@ -1,5 +1,9 @@
 # Pass 14: physical guide costs and failed-terminal replay
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Baseline: committed `38c69a0`, corrected pass-13 six-layer board. This pass
 implements R16; it is not a full pipeline rerun or route-completion claim.
 

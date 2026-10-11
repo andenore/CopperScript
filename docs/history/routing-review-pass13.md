@@ -1,5 +1,9 @@
 # Routing review pass 13: corrected-library full routing and layers
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Source: `f85e36b`; CopperLib: `5bcbaa4`. This run follows the critical-only
 [pass 12](routing-review-pass12.md). Historical pass-3 zero-open USB copper
 used an incorrect choke winding map and is not an electrical acceptance or
@@ -64,7 +68,7 @@ interior T-junction topology. Connectivity is reviewed separately using KiCad.
 
 These are observations of current code, not claims that every mechanism was
 activated by this run. No routing algorithm changes are made during the measured
-rerun. A report-only follow-up now adds [per-net policy telemetry](routing-search-policy.md),
+rerun. A report-only follow-up now adds [per-net policy telemetry](../routing-search-policy.md),
 including mixed-policy subset repairs. The running process loaded `f85e36b`
 before this addition; its report is explicitly treated as lacking policy evidence.
 No requested-versus-effective value is reconstructed from layer balance.

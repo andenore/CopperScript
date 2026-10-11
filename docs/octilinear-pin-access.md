@@ -36,4 +36,4 @@ members remain owned by the joint paired engine, never independent access repair
 Tests cover all directional octants, exact endpoint continuity, alternate
 leg order, locked/removable copper, keepouts, board edges, no oblique fallback,
 off-grid exact critical routing and shared-node physical connectivity. See
-CS-124 and [the matched review](routing-review-pass12.md).
+CS-124 and [the matched review](history/routing-review-pass12.md).

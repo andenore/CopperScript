@@ -131,14 +131,14 @@ The installed KiCad land patterns differ from the source; no claim of an exact
 vendor transplant or stackup qualification is made. See
 [rigid-cluster integration](rigid-placement-clusters.md).
 
-[Pass 7](routing-review-pass7.md) runs fresh placement with this scene, rather
+[Pass 7](history/routing-review-pass7.md) runs fresh placement with this scene, rather
 than replaying the old board. Its RF nets and MCU USB pair connect, but the modem
 pair fails within the bounded joint search. Native and independent KiCad checks
 find no hard copper violations in accepted geometry. The raw matching tree still
 takes a 17.19 mm coarse-guide detour, while the isolated 0/45-degree matching
 fixtures route below 5 mm. This exposes route-quality work independent of macro
 placement: compare local branch-safe paths before accepting expensive guides.
-That comparison is now implemented in [pass 8](routing-review-pass8.md): the
+That comparison is now implemented in [pass 8](history/routing-review-pass8.md): the
 raw tree is 2.31 mm with unchanged poses, complete terminal coverage and no
 independent hard copper findings. Antenna/reference-ground qualification and
 the modem pair failure remain open; this does not complete the RF circuit.

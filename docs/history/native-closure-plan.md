@@ -1,5 +1,9 @@
 # Native closure of fresh source-only boards
 
+> Historical record, archived 2026-10-11. Claims and commands below apply to
+> their recorded revisions, not current usage or approval. Read only when
+> investigating that history; use the current reference guides for new work.
+
 Success means the latest 91-component CopperAssetTracker revision closes using
 the standard source-only CLI, with zero native opens, violations and islands,
 while the existing 83-component benchmark still closes. This is routing

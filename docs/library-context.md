@@ -108,19 +108,8 @@ tampering, local replacement updates, nested-module shadowing, output budgets,
 pagination and oversized records. Fixture components are not orderable catalogue
 additions. No CopperLib definitions or consumer dependency pins were changed.
 
-Validation: the library/package/CLI/report regression passed **72 tests**, with
-one host-limited symlink skip. After adding member selection and compacting the
-inspection identity, the final library/package/report check passed **49 tests**,
-with the same skip. Counts overlap; these are not full-repository test claims.
+## Remaining work
 
-A read-only replay against CopperLedRing's existing locked dependencies found
-37 definitions containing 81,676 source characters. A single `nrf` part search
-and five-pin interface page exposed fewer than 4,000 characters together, with the
-remaining interfaces explicitly paginated. This illustrates selective exposure;
-it does not measure model tokens, success rate or total task effort. Item 1's
-controlled evaluation is still needed for those claims.
-
-Future extensions include author-reviewed contract bundles, persistent indexes
-bound to resolved content, and explicit transitive graph/version compatibility
-policy. The current source-derived interface works across the existing resolver's
-providers without expanding CopperLib's catalogue.
+See [the future improvement plan](llm-workflow-improvements.md) for reviewed
+contract bundles, persistent caching and transitive version policy. The current
+source-derived interface works across the existing resolver's providers.

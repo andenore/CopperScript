@@ -125,8 +125,8 @@ without targeted pad/net selectors; constrained/unrepairable variants remain
 truthfully unresolved with their original copper intact. Stale evidence cannot
 approve a candidate. Native routing closure is not CAM/RF/power or release approval.
 
-See [autonomous routing plan](autonomous-routing-plan.md), especially its filled-
-copper feedback and CLI integration milestones. Initial evidence: 14 new quality
+See [bounded native feedback](filled-copper-feedback.md) for the implemented
+contract. Historical initial evidence: 14 new quality
 cases passed; the wider focused run was 210 passed, one optional skip, with both
 new fragmented-fill cases executed using installed KiCad.
 
