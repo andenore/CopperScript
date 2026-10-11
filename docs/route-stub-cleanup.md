@@ -1,20 +1,12 @@
 # Ordinary-route stub cleanup
 
-## Finding
+## Why normalization is required
 
 The detailed search does not draw every explored edge. Failed net attempts are
 atomic and do not commit tentative tracks. Nevertheless, an accepted route can
 contain a repeated physical node with a different heading state, or double
 back along a selected pin-access lead-in. Turning that walk into an undirected
 edge set and merging straight runs does not remove the resulting dead-end tail.
-
-A regression forces a launch at (5, 6), a return to (4, 6), and an onward route
-to the other terminal. Its pad-to-launch lead-in starts at (3, 6). The copper
-between (4, 6) and (5, 6) is redundant. These coordinates belong exclusively to
-test fixtures; no component-specific rules or example coordinates are used in
-the router. An existing shared-grid access regression also retained an unused
-third segment; its corrected route has two octilinear segments and intact
-electrical connectivity.
 
 Overlapping reversed segments can mask this shape from KiCad's dangling-track
 check: each free endpoint appears to touch another track. The equivalent split,
@@ -72,13 +64,3 @@ input, occurrence ownership, plane deferral, reusable boundary proofs and report
 counts. Installed KiCad independently checks the equivalent dangling fixture
 before cleanup and accepts the cleaned fixture with zero findings. Normal native
 connectivity, clearance and independent fill/signoff gates remain enabled.
-
-Verification: 256 focused tests pass across detailed routing, route cleanup,
-boundary access, fanout, subset repair, hard macros, critical routes, planes,
-reporting and physical DRC. One pre-existing expensive all-layer-blocked search
-case was deselected in this focused run; this is not a full-suite claim.
-
-The full-vertical timing run started at revision `0919f0b` predates this fix. Its
-result is not validation of the new cleanup and its saved artifacts are not
-silently rewritten. A fresh full-board routing/layer review is still needed to
-measure the impact on that example.

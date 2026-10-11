@@ -1,7 +1,7 @@
 # Importable mechanical board profiles
 
-Status: implemented initial vertical, unreleased v0.1. See the
-[implementation checklist](mechanical-profiles-plan.md) and CS-149.
+Status: implemented. Supported source forms are in [mechanical language](mechanical-language.md);
+remaining contributor work is in [the backlog](contributor-backlog.md).
 
 Profiles describe reusable physical contracts, not electrical modules or textual
 inclusion. A board owns its components/nets and explicitly binds components to
@@ -104,9 +104,9 @@ overlay; footprint-local copper keepouts are not displayed by this viewer yet.
 ## Limits and next increments
 
 Profiles share the board coordinate frame; no use-site translation, scaling or
-parameter substitution yet. Rounded outlines/arcs, connector mating-face/axis
-constraints, required assembly height and exact 3D host interference need their
-own supported geometry/contracts. Unsupported declarations fail, not approximate.
+parameter substitution yet. Bounded rounded/arc outlines, declared mating faces and height limits are
+supported by [advanced mechanical intent](advanced-mechanical-intent.md). Exact
+3D host interference remains a separate qualification requirement. Unsupported declarations fail, not approximate.
 No Raspberry Pi standard is encoded in the compiler or certified by this feature.
 A real HAT/HAT+ profile must use official revision-specific geometry/requirements;
 mechanical fit alone does not establish electrical/HAT compliance. Production

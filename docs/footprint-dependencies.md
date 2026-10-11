@@ -127,5 +127,5 @@ local inputs and are not pinned by the package lock. No system KiCad installatio
 is discovered implicitly.
 
 See the [runnable project](../examples/managed_footprints/README.md) and
-[specification decision CS-150](design-specification.md#cs-150--footprints-as-resolvable-package-dependencies-accepted)
+[specification decision CS-150](design-decisions.md#cs-150--footprints-as-resolvable-package-dependencies-accepted)
 when investigating the language contract.

@@ -106,6 +106,3 @@ Regression tests cover a top-layer wall crossed on In2, required return vias,
 determinism, through-span emission, exact native connectivity, constrained
 budgets/layers, blocked transitions, 45-degree terminal rows, own-land drill
 exclusion and atomic rejection of corrupted proposals.
-
-The matched saved-checkpoint result is recorded in
-[routing-review-pass19](history/routing-review-pass19.md).

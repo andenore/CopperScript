@@ -58,24 +58,21 @@ uv run python -m examples.nrf52_coin_cell.nrf52_example --route `
 The run preserves immutable RF copper, uses the actual off-pad ground via
 as a macro boundary terminal and retains an In1.Cu ground-fill intent. Reports
 and profiles are saved on partial completion; exit 1 means failed gates.
-The initial routed attempt was **not complete**: U_NRF.26 (SWDIO) and U_NRF.33
-(DEC3) have no compatible package exits, and BT1.2 lacks a plane escape.
-Ordinary area routing is correctly blocked rather than bypassing the protected
-macro. Independent KiCad reports the resulting opens/dangling reservations.
-The access repair now adds finer bounded sampling, a narrower top RF ownership
-envelope (not relaxed RF keepouts), and the explicit
-`constraint via_in_pad(BT1.NEG) { process = "filled-capped"; }` permission.
-Global planning and signal/ground package access pass on the actual board.
-Only BT1.2 receives a 0.30/0.20 mm filled/capped via; no broad via-in-pad flag
-is enabled. The fabrication order must specify that process. Complete area
-routing and independent native signoff are separate gates; no manufacturing
-signoff or Gerbers are claimed by these access checks.
-The fresh profiled rerun in ignored `build/nrf52-access-fixed/` advances through
-area routing. KiCad 10.0.6 refill/DRC reports zero geometry violations and two
-remaining unconnected items on BUTTON1 and VBAT, not DEC3, SWDIO or battery
-ground. The saved layer audit confirms that the sole via/pad overlap is BT1.2.
-This is still an incomplete board, not a production artifact.
-See [the hard-macro contract](physical-hard-macros.md).
+
+## Latest documented status
+
+The checkpoint under `build/nrf52-internal-contacts/` passes all 15 ordinary
+package exits and independent KiCad 10.0.6 refill/DRC with zero unconnected items,
+isolated islands or other violations. It preserves RF ownership and one explicit
+BT1.NEG 0.30/0.20 mm filled-capped contact. Specify that process in fabrication;
+it does not permit via-in-pad elsewhere.
+
+The recorded CLI result remains failed/incomplete because its physical IR does
+not import filled-plane polygons and retains deferred GND/open-route findings.
+The native result is external connectivity evidence, not a fabricated IR signoff.
+No qualified manufacturing release is claimed. New inputs require a new run.
+
+See [hard-macro contract](physical-hard-macros.md) and [internal connectivity](internal-pad-connectivity.md).
 
 ## Circuit and firmware assumptions
 

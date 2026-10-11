@@ -78,13 +78,11 @@ Existing importer warnings about omitted user text, 3D models and unsupported
 presentation items remain visible. A generated library that matches the board
 is not proof of equivalence to every feature of the upstream original.
 
-## Coordinate corrections discovered during this work
+## Coordinate transforms
 
 Footprint-owned keepouts remain nested under their owner, but their polygon
 coordinates in a KiCad **board file** must be board coordinates. Export now
 applies the same translation/rotation/side transform as native physical DRC.
-Previously exported board keepouts could be misplaced; regenerate those boards
-and rerun independent DRC rather than reusing their old signoff evidence.
 
 Back-side instances also explicitly mirror pads, graphics and text. KiCad's
 canonical back-side convention reflects local Y and adds 180 degrees to the

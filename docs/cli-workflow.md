@@ -86,7 +86,7 @@ poses and rigid/proximity units remain authoritative; unresolved corridors
 appear as `ESCAPE_CHANNEL_DEFICIT` warnings in the layout report. Optional
 `--escape-margin-mm 0.5` and `--escape-transit-lanes 1` control this soft
 estimate on `plan-layout`, `route-global` and `route-board`, not DRC clearance.
-See the [escape-aware placement plan](escape-aware-placement-plan.md).
+See the [escape-aware placement plan](placement-internals.md).
 The physical planner also uses soft supply-domain distribution objectives:
 `--power-domain-weight 0.25` is the default; `0` disables domain attraction.
 Multi-supply parts participate in each rail group without a hard boundary or
@@ -94,7 +94,7 @@ midpoint rule. Declared plane nets have reduced generic wirelength attraction.
 Package preflight reserves plane contacts by default with fanout enabled;
 `--no-early-plane-stitch` opts out for comparisons. Regional power pours are
 explicit `copper_zone` constraints, not automatically inferred planes. See the
-[power-domain and routing plan](power-domain-routing-plan.md) and
+[power-domain and routing plan](placement-internals.md) and
 [language reference](language-reference.md).
 The [detailed-routing research](detailed-routing-research.md) explains
 the geometry checks, fabrication-rule profile, and current full-board limits.
@@ -137,7 +137,7 @@ either preference); they do not override explicit layer restrictions or DRC.
 Accepted ordinary copper is straightened unless `--no-route-smoothing` is
 given. Opt-in `--layer-assignment-passes`, `--local-demand-cost` and
 `--guide-escape-mm` move ordinary guide runs away from same-layer crossings and
-full channels; see the [layer-balance review](routing-layer-balance-review.md).
+full channels; see the [layer-balance review](routing-backlog.md).
 A reserved package escape is one terminal of its pin, beside the pin's own
 surface access and its launch via on every layer; escape copper the finished
 route does not need is removed (`--no-escape-terminals` restores port-only
@@ -170,17 +170,16 @@ routing failures. These experiments do not waive physical DRC. Pass
 `--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` to
 refill a disposable KiCad copy and include authoritative open-net/island
 findings in the report; a zone outline or stitched via alone is not proof of
-connectivity. See [routing research tasks](routing-research-tasks.md).
+connectivity. See [routing research tasks](routing-backlog.md).
 Use the [current backlog](../TODO.md) for unresolved solver work.
 
 ### Full-vertical routing from a fresh checkout (Windows / PowerShell)
 
 This recomputes placement and routing from the declared board inputs. Use the
-shared Make configuration instead of copying a historical run's option list.
+shared Make configuration for the selected source.
 Package access, critical compatibility and fresh native verification are
 separate gates; local escape witnesses alone do not prove board closure.
-Historical USB routes with the former incorrect choke winding mapping must not
-be fabricated. Exact component/internal-contact evidence remains required even
+Exact component/internal-contact and coupled-winding evidence is required even
 when copper DRC passes. See [routing invariants](filled-copper-feedback.md).
 
 Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and

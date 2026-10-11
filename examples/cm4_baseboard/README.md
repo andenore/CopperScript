@@ -61,7 +61,8 @@ uv run --no-sync copper edit-mechanical examples/cm4_baseboard/board.copper --lo
 The editor shows the locked imported sockets, mounting holes, keepouts and
 toggleable ratsnest. Wheel zoom and right-button pan work as in other examples.
 Run a fresh editor session for this board; existing sessions retain their own
-in-memory poses. The editor currently previews poses but does not save them.
+in-memory poses. Temporary poses remain session-only. Persistent project-owned edits require
+reviewed source saves; imported socket/profile geometry remains read-only.
 
 On Linux/macOS with `make`, from this example directory:
 

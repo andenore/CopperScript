@@ -154,27 +154,3 @@ cluster keepouts at board level with stable `cluster/<name>/<id>` identities.
 Existing unsupported keepout-hole geometry fails at KiCad export; it is not
 silently removed. Pad/copper clearance is still checked by native DRC rather
 than inferred solely from courtyard legality.
-
-## Remaining full-vertical work
-
-Verification: 386 CopperScript tests pass, retaining the installed-KiCad 10.0.6
-differential keepout checks and adding scene identity/integration, exact board-edge
-equivalence, and matching-only real-footprint routing probes at 0 and 45 degrees.
-Those two probes connect the raw matching tree with no vias and less than 5 mm
-of copper, without critical opens or hard native findings. They are not complete
-operational MCU circuits. The suite retains 459 upstream CAM-library warnings.
-
-The source-backed placement run is recorded in [pass 7](history/routing-review-pass7.md).
-Its 17.19 mm raw matching-tree detour motivates the bounded local alternative
-implemented in [pass 8](history/routing-review-pass8.md): 2.31 mm with unchanged poses,
-complete terminal coverage and independent KiCad checking. The modem USB pair
-still fails bounded search. Template placement alone does not imply local
-route quality, and this is not a complete ordinary-net reroute or production
-signoff. No vendor ground copper was transplanted.
-
-Nordic support/crystal completion, matching-ground reservations and Johanson
-corner/ground-clearance qualification remain open. Vendor three-member midpoint,
-orientation and pad-role extraction is now implemented; complete reference
-support/return geometry and actual part/value identity checks are not. GNSS
-noise-source separation and actual six-layer return-path/impedance evidence
-remain separate gates.

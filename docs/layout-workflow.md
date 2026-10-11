@@ -1,62 +1,12 @@
 # Physical layout workflow
 
-CopperScript exposes four physical-design gates: **Prepare**, **Place**,
-**Route**, and **Verify**. This is intentionally smaller than the many-step
-checklists used by individual EDA tools. The detailed algorithms still exist,
-but they are internal substeps with one clear input and exit condition per
-gate.
+The electrical source owns connectivity; resolved physical IR owns pads,
+placements, rules and geometry. Use [CLI workflow](cli-workflow.md) and
+[Make builds](make-builds.md) for commands. This reference covers the planner
+and global guide contracts; [detailed routing](detailed-routing-research.md)
+accepts actual copper.
 
-No generated board is fabrication-ready until all four gates pass. The first
-implementation completes only a placement candidate. It marks Route as not run
-and Verify as blocked.
-
-## Research and consolidation
-
-The original workflow listed thirteen stages. Research did not support keeping
-each as a separate user-visible stage:
-
-| Original concern | Current method | Gate |
-|---|---|---|
-| Footprints, board mechanics, stackup, fabrication limits, net classes | Validate and normalize exact inputs before optimization | Prepare |
-| Functional partitioning, mechanical anchors, power/RF/thermal regions | Fixed and soft placement constraints | Prepare / Place |
-| Global floorplan | Connectivity-aware analytical or partitioning-based placement | Place |
-| Legalization | Constraint-graph, packing, or MILP repair of overlaps and boundaries | Place |
-| Detailed placement | Local refinement with wirelength, density, alignment, and routability costs | Place |
-| Routability prediction | Coarse global-routing demand/capacity estimate | Place |
-| Layer/corridor planning | Global routing with capacity and topology constraints | Route |
-| Critical and general routing | Constraint-driven detailed routing, normally A* or maze search with negotiated rip-up and reroute | Route |
-| Length/skew tuning and return-path repair | Post-route constrained refinement | Route |
-| Planes and copper zones | Connectivity-aware fill followed by another route/DRC pass | Route |
-| Electrical, thermal, assembly, fabrication, and CAM checks | Domain-specific sign-off checks with release gating | Verify |
-
-This removes two important overlaps. First, “floorplan,” “global placement,”
-“legalization,” and “detailed placement” are one iterative placement problem,
-not four independent deliverables. Second, routability estimation is feedback
-to placement; actual global and detailed routing belong together in Route.
-
-Modern PCB-placement work supports a multi-stage implementation internally:
-analytical or connectivity-driven global placement, legalization, then detailed
-refinement. Recent work also treats routability and local routing space as
-first-class costs rather than relying on wirelength alone. NS-Place combines
-routability optimization with MILP legalization; newer analytical work follows
-the same global/legalize/fine-tune structure. Constraint-graph legalization is
-a useful scalable direction when richer relative-placement constraints are
-introduced.
-
-For routing, the mature baseline remains global capacity estimation followed by
-maze/A* detailed routing with negotiated congestion, rip-up, and reroute.
-Interactive commercial flows add constraint-driven topology, width, layer,
-via, impedance, length, skew, and return-path checks. CopperScript should use
-the same separation: the global estimate guides placement, while a future
-detailed router owns geometrically valid copper.
-
-Verification is not one algorithm. It is a release gate aggregating geometric
-DRC, connectivity, impedance and timing constraints, return paths, SI/PI,
-thermal/RF checks where applicable, assembly/fabrication checks, and independent
-CAM inspection. CopperScript must retain explicit not-run or failed states
-instead of equating successful file generation with sign-off.
-
-## Implemented placement planner
+## Placement planner
 
 `pcbir.layout.plan_placement()` currently performs:
 
@@ -105,8 +55,6 @@ provisional 0.09 mm clearance and 0.20 mm default track width as the four-layer
 profile. This is not a controlled-impedance stackup model or a six-layer
 manufacturing qualification; a routed draft still requires plane-fill,
 independent KiCad DRC, electrical review, and CAM signoff.
-The matched four/six-layer prototype results and identified router limitations
-are recorded in [routing-layer-comparison.md](routing-layer-comparison.md).
 
 The report schema is `copperscript-layout-report/v0.1`. It contains the four
 gate states, actionable findings, the selected candidate, the retained Pareto
@@ -114,23 +62,9 @@ frontier, per-phase statistics, pad-aware HPWL, crossings, estimated vias,
 pin-escape pressure, dense-package spacing penalty, constraint penalty and margin, group spread, and
 routing-bin capacity, overflow, and maximum estimated utilization.
 
-## Deliberate limitations and next increments
 
-The implemented legalizer accepts polygonal board and region outlines and uses
-orthogonal component orientations. Courtyard polygons are used when present;
-otherwise footprint body bounds are the conservative occupied shape. Routing
-capacity is a coarse uniform-bin model. Crossings, vias, and pad escape are
-placement proxies rather than geometrically valid routes, and the current model
-does not yet understand differential-pair topology, controlled impedance, RF
-keep-in geometry, thermal coupling, planes, or copper zones.
 
-The next major increment belongs to Route: a global routing graph with
-per-layer edge capacity and topology constraints, followed by a detailed router
-with negotiated rip-up/reroute. Verify remains a collection of independently
-reportable sign-off checks, with release blocked unless every required check
-passes.
-
-## Implemented global routing
+## Global routing
 
 `pcbir.routing.route_global()` builds a deterministic multilayer G-cell graph,
 derives pad-access nodes, accounts for per-net width and clearance demand, and
@@ -193,23 +127,16 @@ files before an atomic publish. The release includes a provenance manifest and
 SHA-256 checksum inventory. See `docs/routing-manufacturing-research.md` for the
 individual research tasks, recommendations, limitations, and sources.
 
-## Sources
 
-- [Analytical PCB placement optimization with fine tuning (Integration, 2026)](https://www.sciencedirect.com/science/article/pii/S016792602500224X)
-- [NS-Place: routability-driven PCB placement with legalization](https://cseweb.ucsd.edu/classes/fa23/cse248-a/papers/placement/PCBPlacement.pdf)
-- [PathFinder negotiated-congestion routing](https://janders.eecg.utoronto.ca/1387_2015/readings/pathfinder.pdf)
-- [FastRoute global routing](https://onlinelibrary.wiley.com/doi/10.1155/2012/608362)
-- [OpenROAD global-router architecture](https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/grt/README.md)
-- [RePlAce routability-driven placement](https://vlsicad.ucsd.edu/Publications/Journals/j126.pdf)
-- [TI high-speed interface layout guidelines](https://www.ti.com/lit/an/spraar7j/spraar7j.pdf)
-- [USB 2.0 specification](https://www.usb.org/document-library/usb-20-specification)
-- [TI CAN physical-layer requirements](https://www.ti.com/lit/an/slla270/slla270.pdf)
-- [Constraint-graph-based PCB placement legalization (DAC 2025)](https://scholars.lib.ntu.edu.tw/entities/publication/ba17d07b-da5e-4ff4-b3f9-d13ef75303aa)
-- [Negotiated-congestion and rip-up/reroute routing](https://engineering.lehigh.edu/sites/engineering.lehigh.edu/files/_DEPARTMENTS/ise/pdf/tech-papers/08/08t_003.pdf)
-- [Altium PCB routing workflow and constraints](https://www.altium.com/documentation/altium-designer/pcb/routing)
-- [Altium high-speed rules, xSignals, tuning, and return paths](https://www.altium.com/documentation/altium-designer/pcb/high-speed-design/xsignals/design-rule-support)
-- [Altium batch and online design-rule checking](https://www.altium.com/documentation/altium-designer/pcb/drc)
-- [KiCad PCB Editor reference](https://docs.kicad.org/8.0/en/pcbnew/pcbnew.pdf)
-- [IPC-2231 DFX guidelines](https://www.ipc.org/TOC/IPC-2231-toc.pdf)
-- [IPC-2581 Revision C manufacturing data standard](https://www.ipc.org/news-release/ipc-releases-ipc-2581-revision-c-generic-requirements-printed-board-assembly-products)
-- [Ucamco Gerber format specifications](https://www.ucamco.com/en/gerber/downloads)
+
+## Limits and acceptance
+
+Planning scores, bins and global capacity are heuristics, not routability or
+physical-clearance certificates. The placer supports source-declared permitted
+angles and fixed/rigid intent; it cannot independently move macro members.
+[Directional access/domain/inline placement](placement-internals.md) supplements
+connectivity scores. Package, critical and detailed stages retain exact gates.
+
+Actual filled references, RF/USB impedance, thermal/current capacity and final
+CAM require separate evidence. Finite search failure never permits weaker source
+rules. Open algorithm scope is in [routing backlog](routing-backlog.md).

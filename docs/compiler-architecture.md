@@ -15,11 +15,12 @@
                                           `-> KiCad PCB backend
 ```
 
-The stages are intentionally separate so editor tooling and a future language
-server can reuse parsing, semantic lowering, and ERC independently.
+The stages are intentionally separate so editor tooling and the [language
+server](language-server.md) can reuse parsing, semantic lowering, and ERC independently.
 
 Key modules:
 
+- `pcbir.lsp` � versioned editor workspace, recovering source index, compiler-backed diagnostics and standard LSP stdio server.
 - `pcbir.lexer` and `pcbir.parser` — dependency-free source frontend.
 - `pcbir.syntax` — source locations and syntax-tree declarations.
 - `pcbir.compiler` — semantic lowering and typed unit validation.

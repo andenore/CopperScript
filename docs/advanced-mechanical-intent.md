@@ -150,18 +150,3 @@ rounding source geometry; transformed coordinates round once for display only.
 See the [Autodesk entity reference](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-DXF/files/GUID-7D07C886-FD1D-4A0C-A7AB-B4D21F18E484.htm)
 and [LWPOLYLINE definition](https://help.autodesk.com/cloudhelp/2018/ENU/AutoCAD-DXF/files/GUID-748FC305-F3F2-4F74-825A-61F04D757A50.htm).
 Use `*.dxf -text` in Git attributes to retain checksum-pinned bytes across hosts.
-
-Detailed implementation sequence for item 28:
-
-1. Typed retained guide primitives and transforms; bounded strict DXF parser,
-   path authority/checksum/header-unit validation and source lowering.
-2. Physicalization/serialization/provenance, asset-change guards for both editor
-   hosts, source transform review/undo; no manufacturing or ratsnest credit.
-3. Shared read-only SVG layer, visibility/side controls and local example assets.
-4. Parser/security/topology/unit/transform/profile/history/native exclusion tests,
-   headless browser inspection, package build and CopperLedRing integration check.
-5. Record evidence, mark the checklist only after verification, commit locally.
-
-Implementation order: typed source/IR and validation → shared physicalization/
-queries → native backend/export regression → reviewed source patches → shared UI
-→ real example verification → checklist record and commit.

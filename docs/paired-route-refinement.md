@@ -3,7 +3,7 @@
 Joint package-escape search keeps its accepted raw candidate as a fallback.
 Before locking it, `pcbir.pair_refine.paired_shortcuts` proposes bounded local
 alternatives on the **shared spine**, not independent lane cleanup or arbitrary
-track deletion. This extends the critical routing quality work in review R5.
+track deletion. Both members retain coupled geometry and acceptance.
 
 ## Geometry ownership
 
@@ -65,10 +65,6 @@ transition routes. Earlier/later critical groups and ordinary tracks are not
 moved or globally ripped up. External impedance and USB/RF qualification remain
 separate requirements even when native geometry and measured budgets pass.
 
-Tests exercise actual detour shortening, exact escape/endpoint preservation,
+Regressions cover actual detour shortening, exact escape/endpoint preservation,
 reversal/collinearity, keepout/reserved-route rejection, deterministic bounds,
-missing provenance, original profile/native rejection, and malformed width/net/
-layer proposals. Real-board results and unresolved topology limitations are in
-[pass 10](history/routing-review-pass10.md).
-The corrected-part rerun and short-miter/access fixes are reviewed in
-[pass 12](history/routing-review-pass12.md).
+missing provenance, profile/native rejection and malformed width/net/layer inputs.

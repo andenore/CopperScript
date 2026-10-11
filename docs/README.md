@@ -22,10 +22,18 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Generate manufacturing or assembly files | [Manufacturing files](manufacturing-files.md), [assembly pinning](assembly-pinning.md) |
 | Share KiCad outputs | [Project export](kicad-project-export.md) |
 | Work on compiler internals or ERC | [Compiler architecture](compiler-architecture.md) |
+| Simulate analog or power behavior | [Simulation](simulation.md), [model/numerical review](simulation-qualification.md) |
 | Generate device models | [Device generation](device-generation.md); lab-specific rules live in `tools/device-model-lab/` |
 | Plan unfinished work | [Current backlog](../TODO.md) |
 
-Specifications define current contracts; dated observations establish evidence
-only for their recorded inputs. Completed plans and review passes are in
-`history/`; consult its index only for a specific historical investigation.
-Do not treat old test counts, commands or publication notes as current status.
+
+
+Current contracts describe supported behavior. Board guides keep their latest
+documented status; old routing/bug narratives are recoverable from Git rather
+than duplicated in the checkout. Read accepted [design decisions](design-decisions.md)
+only for a specific architectural change. Contributor tasks live in the
+[routing backlog](routing-backlog.md), [optimization backlog](routing-optimization-todo.md),
+[qualification backlog](qualification-todo.md) and [other contributor backlog](contributor-backlog.md).
+The [device model](device-model.md) and [placement contracts](placement-internals.md)
+are focused internal references. Simulation numerical/model review is in
+[simulation qualification](simulation-qualification.md).

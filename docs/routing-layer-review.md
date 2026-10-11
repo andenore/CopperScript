@@ -1,23 +1,5 @@
 # Via policy and per-layer review
 
-## Working list
-
-- [x] Reject complete via annulus contact with any pad by default, including
-  same-net pads in ordinary, critical, package escape and soft rip-up searches.
-- [x] Remove automatic ground via-in-pad from the complete-board script.
-- [x] Add native physical DRC for unintended same-net via/pad contact.
-- [x] Replace clear ordinary perpendicular corners with checked 45-degree
-  chamfers; preserve branches, pads, vias and locked input copper. Joint USB
-  pair refinement retains responsibility for differential-pair shape.
-- [x] Add a reproducible read-only KiCad per-layer audit and SVG plots.
-- [x] Prefer matched via escapes for internal SMD pairs after the coarse-guide
-  route fails; retain surface-first search for perimeter terminals and all
-  original profile, clearance and atomic acceptance gates.
-- [ ] Finish profiled full-board rerun with current placement and strict policy.
-- [ ] Independently refill/DRC and inspect every copper layer of the fresh rerun.
-- [ ] Record remaining bends, local density, opens and escape failures without
-  relaxing defaults to obtain closure.
-
 Ordinary vias may not touch even the edge of a same-net pad. Native KiCad DRC
 normally accepts that electrical connection, so CopperScript also checks it as
 `DRC-VIA-PAD-OVERLAP`. Explicit, qualified `filled-capped` via-in-pad remains a
@@ -46,67 +28,3 @@ degree-two sharp turns (90 degrees or greater), branches, non-octilinear segment
 and coarse 10mm local track-area estimates. Plane fill is not recomputed by the
 audit. Refill/DRC separately before interpreting plane connectivity. These style
 and density metrics are not electrical, impedance or manufacturing signoff.
-
-## Historical baseline, 2026-10-02
-
-Audited `build/full-vertical/20261002T080102482942Z/board.kicad_pcb`, then
-independently refilled a disposable copy. This predates the fixed mechanical
-floorplan and strict via policy; it is not a controlled single-change benchmark.
-KiCad found zero unconnected items but ten other findings (eight library findings
-and two dangling copper findings). It is not production signoff.
-
-The native shape audit found 37 via/pad contacts: 14 on GND and 23 on other nets.
-The ordinary router's same-net exemption, not just opt-in GND via-in-pad, mattered.
-
-| Layer | Track length (mm) | Sharp-turn candidates | Free-corner candidates | Highest 10mm track-area estimate |
-| --- | ---: | ---: | ---: | ---: |
-| F.Cu | 857.618 | 106 | 76 | 16.38% |
-| In1.Cu | 0 | 0 | 0 | 0% (GND plane) |
-| In2.Cu | 597.025 | 33 | 31 | 12.64% |
-| In3.Cu | 129.765 | 8 | 8 | 6.35% |
-| In4.Cu | 142.340 | 12 | 12 | 5.38% |
-| B.Cu | 181.813 | 13 | 13 | 6.22% |
-
-Candidates include 153 right-angle turns, eight 135-degree direction changes and
-eleven overlapping/backtracking endpoint junctions. A degree-two endpoint is not
-necessarily a simple bend: fanout/terminal copper may also meet a track interior.
-Free-corner counts exclude pad-center and exact via-center junctions, but do not
-prove a legal alternative exists. F.Cu also has two oblique GND closure segments.
-
-Visual inspection: F.Cu is dominated by package access and central component
-density; In2.Cu carries the most long inner-layer runs and several detours;
-In3.Cu/In4.Cu/B.Cu have spare-looking regions but some local doglegs. The saved
-board has no plane fill until independently refilled. In1.Cu then shows the GND
-plane rather than missing routing. Sparse signal layers are not automatically
-free capacity near terminals: through-via collisions also involve outer pads.
-The current preference model favors In2.Cu because it borders the declared plane,
-and applies complementary soft headings to the inner signal layers. Congestion
-balancing must preserve reference-plane constraints rather than simply equalize
-track length on all layers.
-
-## Strict-policy rerun, validation in progress
-
-Full regression suite: **657 passed, 1 skipped**. The default annulus/pad
-rejection, immutable-pad behavior during rip-up, transactional fanout gate,
-checked corner cleanup, closure idempotence and paired search-order reporting
-have regression coverage. This does not substitute for inspecting a new board.
-
-The profiled current-placement run started from commit `a2659e4` and writes to
-`build/full-vertical/20261002T160832468344Z/`. At the 2026-10-02 16:59 UTC
-checkpoint it had completed placement/global routing, reserved 76 ordinary
-package escapes with none pending, and accepted four RF routes and the MCU USB
-pair. The MCU pair used surface-first search and expanded 210,502 states. The
-modem USB pair search was still active: **no final board, final DRC, profile or
-fresh per-layer zero-overlap result was available yet**. These intermediate
-events are not full-route completion evidence.
-
-The superseded `ef1da49` surface-first comparison was explicitly interrupted
-after spending over 58 minutes on the modem pair. Its partial log is not a
-completed comparison or profiling benchmark. The revised internal-land search
-keeps the same clearance, allowed layers, return-via requirements, paired
-geometry and native acceptance gates. Timings are instrumented and initially
-concurrent; do not infer a speedup without completed comparable evidence.
-
-The independently refilled historical layer plots above are saved under
-`build/baseline-filled-review/layers/` on this workstation. They deliberately
-remain labeled as the pre-fix baseline, not the new fixed-placement board.

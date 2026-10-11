@@ -23,8 +23,7 @@ copper-clearance exemptions.
 Front/back previews include a dashed opposite-side courtyard to show the
 MCU/holder offset; this overlay is not copper on the viewed face. Explicit
 0.15 mm minimum track width and clearance permit launches from the QFN's
-0.20 mm-wide, 0.40 mm-pitch pads; the previous generic 0.25 mm track floor was
-too wide. These prototype rules are checked by the same exact clearance gates,
+0.20 mm-wide, 0.40 mm-pitch pads; these are explicitly selected prototype dimensions. These prototype rules are checked by the same exact clearance gates,
 not DRC exclusions or a claim of a qualified fabrication process.
 
 ## Reproduce
@@ -83,15 +82,14 @@ run cannot reuse a previous successful completion status.
 The physical DRC report can still show GND opens because it does not fabricate
 filled-zone evidence from an unfilled intent.
 
-### Verified baseline
+## Latest documented status
 
 The placed example passes electrical ERC and placement legality. Native KiCad
 10.0.6 reports **zero geometry/library violations and 63 unconnected items**
 for this deliberately unrouted 34-component nRF52832 baseline. Regression tests
 cover all twelve distinct GPIOs, LDO support, SWD/reset, fixed two-layer placement
 and MCU/holder pad-projection separation. No full routing run is claimed for this
-revision. The earlier centred STM32 version's 20-minute interrupted attempt does
-not validate this circuit. Further package escape/routing tuning is follow-up work,
+revision. Further package escape/routing tuning is follow-up work,
 not a clearance or via/pad-overlap exemption.
 The early ground-escape check reaches prospective rear-plane contacts for all
 front GND pads, including the exposed MCU ground pad, without via-in-pad. Actual
@@ -145,15 +143,15 @@ coin cell inaccessible to children in the final enclosure.
 Electrical connectivity, the separate mechanical section, fixed ring placements
 and ground-pour intent are all in `.copper`. The optional Python wrapper is
 repository-only rendering/verification tooling, not a hidden design input.
-Named placement datums remain future work. `BoardOutline.circle()` retains an
+Named datums and bounded advanced mechanical intent are available in the language. `BoardOutline.circle()` retains an
 authoritative `CircularBoardBoundary` and an explicitly bounded inscribed query
 ring (default chord error 0.01 mm). Every ring edge is integer/Fraction-certified
 inside the circle with that radial bound. Shared material/copper predicates use
 the exact disk; grid-only consumers may remain conservatively inside the ring.
 KiCad exports one native `gr_circle` on `Edge.Cuts`, never the query facets.
 
-General arc paths, slots, circular cutouts and independent curved-outline CAM /
-tooling qualification remain future work. Manufacturing release stays blocked
+The frontend supports bounded convex arc paths and NPTH slots. Independent
+curved-outline/cutout/slot CAM and tooling qualification remain separate gates. Manufacturing release stays blocked
 for this new mechanical geometry, even with a clean native routed board. The
 example is not a complete enclosure, production BOM, firmware or production
 release. See [mechanical geometry](mechanical-geometry.md).

@@ -221,7 +221,7 @@ native-rejected candidates, repeated states and tool/schema limitations.
 These are algorithm fixtures, not reusable production component definitions.
 
 For unresolved work, use the [current backlog](../TODO.md). Dated board closure
-and test evidence are retained in `history/`; they apply to their recorded inputs.
+and test evidence are recoverable from Git; use current contracts and input-bound reports.
 
 ## Contributor invariants
 

@@ -215,35 +215,6 @@ Report `package_access`
 records readiness, pending identities, critical failures, hard findings,
 placement trial outcomes and whether ordinary area routing started.
 
-## Remaining implementation sequence
-
-- [x] Preserve explicit ordinary access before critical long routes.
-- [x] Add a fail-closed access gate and zero-pass diagnostic output.
-- [x] Rebuild reservations transactionally during legal placement feedback.
-- [x] Preserve original critical profiles, ownership and native geometry checks.
-- [x] Compare alternate ordinary/critical/selected-plane patterns with bounded
-  owner-order negotiation and full transactional revalidation.
-- [ ] Extend to joint critical paired/single-ended access-domain allocation with
-  ordinary and dense power/GND exits, beyond the alternate-order proposals.
-- [x] Add local collars and jointly compatible ordinary boundary-capacity
-  witnesses on permitted layers, with a fail-closed gate and bounded multi-bend
-  fallback. See [boundary access](package-boundary-access.md) for scope/evidence.
-- [x] Reserve owned, layer-aware ordinary boundary ports as detailed-router
-  anchors, preserving paths in subset repair and limiting cleanup to owned copper.
-- [ ] Extend boundary-domain allocation to specialized critical/power/GND access.
-  A through-via or local boundary path is not end-to-end connectivity.
-- [ ] Extend multi-bend alternatives to specialized critical access while
-  preserving pair coupling, exact anchors and copper ownership. Ordinary
-  boundary multi-bend witnesses and ownership are already implemented above.
-- [ ] Derive directional placement margins from connected-pin bank demand,
-  trace/clearance rules, via rows and nearby obstacles. Score margins cheaply,
-  then gate finalists with exact access; do not inflate every courtyard or
-  move decouplers independently. Existing high-pin spacing remains a heuristic.
-- [ ] Rank complete patterns using onward congestion and escape order; permit
-  bounded pattern replacement with complete critical/access revalidation.
-- [ ] Repeat the full-board run, independent filled-zone/DRC checks and layer
-  review before claiming closure or manufacturing readiness.
-
 Eligible ordinary crowded SMD pins normally receive dogbones; cleanup may remove
 them when a verified surface path needs no transition. No-layer-change contracts
 and unavailable dogbone sites now use directly validated via-free surface escapes.
@@ -253,17 +224,9 @@ connectivity and the manufacturing gates remain required. See
 [bounded filled-copper feedback](filled-copper-feedback.md) for native repair,
 placement rejection explanations and the surface fallback.
 
-### Regression evidence
+Remaining specialized allocation and onward-pattern work is in the [routing backlog](routing-backlog.md).
 
-`tests/test_package_access.py` includes a physical nearest-pattern trap: an
-ordinary dogbone blocks a same-layer, no-via, length-limited critical launch.
-Alternate-order negotiation moves the ordinary via, retains the same required
-pad identities and unchanged placement, and passes fresh native checking. A
-selected-plane-contact regression similarly rebuilds a blocked ground via around
-a different ordinary pattern. Candidate-loss, lost eligibility, added hard DRC,
-exchanged critical failures and non-improving proposals must all roll back.
-These fixtures validate negotiation and ownership, not full-board routability.
-The [2026-10-05 allocation review](package-access-budget-review.md) records the
-matched-placement full-vertical experiment: fixing mixed compatibility-budget
-accounting recovers `PWR/U_MODEM.13` and yields 76/76 ordinary exits. Critical,
-plane and onward/area verification remain separate gates.
+Compatibility accounting separates conservative disjoint-bound acceptances from
+exact overlapping-pair queries. Cached/broad-phase requests still count toward
+a separate total-work bound; exhausting either allowance rolls back atomically.
+No broad-phase speedup weakens copper, drill, layer or owner predicates.

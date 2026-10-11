@@ -144,7 +144,7 @@ automatic boundary allocation and RF/stackup qualification remain out of scope.
 The full-vertical board now opts into board-specific, digest-bound adaptations
 of the TPS62130A and Nordic/Johanson assets. The assets retain their original
 local copper; the board supplies the matching electrical nets and added parts.
-See [the integration plan](full-vertical-macro-ground-plan.md).
+See [the integration plan](full-vertical-example.md).
 
 ## v0.4 scoped track-width contracts
 

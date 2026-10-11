@@ -1,7 +1,7 @@
 # Mechanical and floorplan editor specification
 
 Status: implemented contract in CopperScript; this guide describes supported
-behavior and current limitations. Historical delivery checkpoints are opt-in.
+behavior and current limitations. The source and scene protocols remain authoritative.
 This is a physical-intent editor, not a schematic editor or another PCB router.
 
 ## Ownership and user workflow
@@ -58,9 +58,9 @@ optional screw-head placement clearance. Distinguish substrate voids, placement
 keepouts and copper keepouts; creating one must not silently create the others.
 Plated/net-connected holes remain component pads, not unconnected NPTH features.
 
-Later increments add named datums, dimension/edge-relative attachment, rounded
-corners, exact arcs and routed slots. Each requires language/IR, legality, export
-and regression coverage before enabling its editing controls. References to
+Named datums, dimension/edge-relative attachment, rounded corners, bounded exact
+arc paths and NPTH slots are supported as described below. Unsupported geometry
+fails rather than being silently approximated. References to
 arbitrary edges must be stable IDs, not unstable polygon vertex indices.
 Explicit connector-body overhang must be separate from copper-to-edge legality.
 Enclosure/DXF overlays are reference data with explicit units/transforms and
@@ -83,12 +83,13 @@ editing of a source lock requires a reviewed source transaction; an ordinary
 auto-placement or drag must not bypass it. Session locks must be visibly distinct
 from source locks and must not be described as saved before source persistence.
 
-Initial auto-placement reuses the existing connectivity-aware estimator,
+Auto-placement reuses the existing connectivity-aware estimator,
 legalizer and refinement engine. 'Place remaining' retains manual/source locks,
 regions, allowed orientations, fixed sides and rigid geometry. Candidate
 selection is deterministic; preview is cancellable and cannot mutate accepted
 state on failure. Interactive hints may be approximate, but apply/save checks
-use the existing authoritative placement/material predicates. Validation reports
+use authoritative material/hard-geometry predicates; source saves and automatic
+placement additionally enforce represented relative constraints. Validation reports
 must explain the reference and rule involved, not merely say 'illegal'.
 
 ## Ratsnest
@@ -132,96 +133,21 @@ for presentation. Derived scene fingerprints are not manufacturing signoff.
 
 Undo/redo is bounded. A new successful edit discards redo, whereas previewing or
 rejecting a candidate leaves history intact. Successful mutations invalidate
-older pending previews. Future async jobs are bound to revisions and cancelled
+older pending previews. Async jobs are bound to revisions and cancelled
 or discarded when their input changes; stale results cannot apply.
 
-## Verification and first delivery scope
+## Launch and source editing
 
-Test front/rear and 45-degree transforms, hole/cutout rendering, deterministic
-ratsnest, physically separate duplicate lands, declared internal connections,
-explicit copper reuse, source/session lock retention, undo/redo, failed/stale
-transaction rollback, HTTP origin/host/token/body validation and wheel assets.
-Browser verification must exercise auto-place preview/apply and ratsnest filters,
-not just load a screenshot. Later test source round-trips, conflicting constraints,
-mechanical legality and routing/fill invalidation end-to-end.
-
-First delivery: read-only source, mechanical/footprint view, ratsnest filters,
-rough auto-place preview/apply, legal in-session whole-unit pose previews,
-temporary full-pose locks and undo/redo. It must explicitly say that edits are
-not saved, provide no misleading save control and leave source bytes unchanged.
-This describes the historical first preview, not the current delivery. Mechanical
-authoring, persistent/partial locks, source links, copper overlays, measurements,
-datums, slots and VS Code hosting are now implemented as recorded in the checklist.
-
-CLI contract: `copper edit-mechanical board.copper --footprint-root <root>`.
-`--locked --offline`, physical layer/profile settings, explicit templates/macros,
-`--no-browser` and a scene JSON export support reproducible/headless inspection.
-
-## First preview delivery: use and limitations
-
-The launch command is now implemented. From the CopperScript checkout:
-
-```powershell
-uv run copper edit-mechanical examples/mechanical_editor_demo/board.copper --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints"
-# Compile a real project's locked scene without starting a service:
-uv run copper edit-mechanical ../CopperLedRing/board.copper --locked --offline --footprint-root "C:/Program Files/KiCad/10.0/share/kicad/footprints" --scene-output build/led-ring-scene.json
+```console
+copper edit-mechanical board.copper --locked --offline --footprint-root <root>
 ```
 
-Linux: use your installed footprint root, commonly `/usr/share/kicad/footprints`.
-The first command launches the local UI. Keep the terminal alive; Ctrl+C stops
-it. `--no-browser` prints a private loopback launch URL for manual opening.
-Scene export refuses existing files and cannot overwrite source. `--layers`,
-`--fab-profile`, `--placement-templates` and repeatable `--hard-macro` mirror the
-existing physical pipeline. `--allow-proxy-footprints` is labelled inspection-only.
+Keep the terminal alive for the local UI; Ctrl+C stops it. `--no-browser` prints
+a private loopback launch URL. `--scene-output <new.json>` supports headless
+inspection; `--layers`, `--fab-profile`, `--placement-templates` and repeatable
+`--hard-macro` select the physical build. Proxy footprints are inspection-only.
 
-Click 'Preview rough auto-placement', inspect, then apply/discard. Select an
-unlocked component and left-drag it: the pose applies after legality checking and
-can be undone. Enable 'Preview drags before applying' for explicit drag previews.
-Numeric X/Y/angle/side edits still require Apply or Discard; a visible pending
-banner explains why another move cannot start. Wheel zoom is cursor-anchored;
-right-button drag pans, including when a preview is pending. Both navigate only,
-without changing placements. A rejected/conflicting operation reloads the accepted
-scene revision; 'Reload session scene' also refreshes it explicitly (not source).
-Temporary locking preserves that pose during
-subsequent placement. Source locks cannot be edited/unlocked in this increment.
-The demo's R1 allows 45-degree rotations; other demo parts retain their normal
-angle constraints. Nets/side/selected-component toggles filter ratsnest display.
-
-Live drag shifts pad-anchored airwire geometry; the authoritative island graph
-and nearest-pad MST are recomputed on release, not continuously during a drag.
-Rear view currently uses shared unmirrored coordinates, not a mirrored display.
-Footprint bodies are conservative envelopes; pads/courtyards use imported geometry.
-Unplaced/illegal macros produce an explicit warning and receive no private-copper
-connectivity credit until their pose can materialize legally. Copper overlays,
-footprint-local copper-keepout rendering, measurements and detailed per-rule rejection diagnostics
-remain future work; the first pose gate uses complete-board legality.
-Board-level copper keepouts are now displayed by the profile integration, with
-layer-scope and imported-owner tooltips. They are not a routed-copper overlay.
-
-Session state is in memory only. Closing/restarting loses temporary poses/locks;
-no action writes the `.copper` source or saves a derived second floorplan. There
-is no mechanical drawing tool or save button yet. Source file changes disable
-mutations until restart. Dependencies/asset changes during a running preview
-are not monitored yet; restart after changing them. Placement runs are synchronous
-and serialized in this increment, without a cancellation/progress UI.
-
-Regression tests: `uv run --extra test pytest tests/test_mechanical_editor.py`.
-Optional browser smoke: with Node, Playwright and a Chromium browser installed,
-run `node tests/browser/mechanical-editor.cjs <private-local-demo-URL>` against
-the freshly started demo session (the smoke changes temporary poses/locks).
-`COPPER_PLAYWRIGHT_MODULE` and `COPPER_BROWSER_EXECUTABLE` may
-point to explicitly installed test tools. These are not runtime dependencies.
-
-### Source-patch foundation (not yet a save workflow)
-
-`pcbir.editor.source` provides immutable UTF-8 snapshots, exact token-end offsets,
-revision-bound non-overlapping text edits, and targeted board-owned
-`fixed_placement` candidates. Existing comments (even inside a scalar), UTF-8 BOM,
-newlines and unrelated source bytes survive. New constraints are inserted
-deterministically. Shared/duplicate constraints and unowned imported poses are
-rejected; imports are neither fetched nor edited by this pure patch layer.
-
-## Persistent editing and initial mechanical authoring
+## Reviewed persistent editing
 
 The local editor now supports reviewed source saves. Select a component, enable
 **Edit source locks explicitly**, choose position/rotation/side independently,
@@ -346,3 +272,32 @@ geometry cannot be dragged; project-owned declaration transforms can be reviewed
 like other source edits. Imported owners stay read-only. Changed asset bytes stale
 the guide and block edits until reload, with no silent checksum update. Native
 manufacturing excludes guides entirely. 3D enclosure inspection is deferred.
+
+
+## Inspection and temporary moves
+
+Wheel zoom is cursor-anchored; right-button drag pans. Numeric pose changes
+require Apply/Discard; optional preview drags use the same revision protocol.
+Shift-click selects a group; dragging or arrow movement translates it atomically.
+Rigid members expand automatically. Unknown, source-position-locked, temporarily
+locked or physically illegal members reject the whole move.
+
+Temporary moves use hard-geometry legality. Relative distance/alignment
+violations remain visible with measurements, limits and participating references;
+automatic placement and source-save validation still enforce all represented
+constraints. A temporary inspection pose is not saved intent.
+
+Hovering a pad shows its electrical name, or physical number when unnamed; the
+complete reference/net tooltip remains available. Visual body envelopes preserve
+offset footprint origins and derive from graphics/pads, with a conservative proxy
+fallback. Courtyards remain the placement authority.
+
+| Shortcut | Action |
+| --- | --- |
+| `L` | Lock the selected temporary pose |
+| `Shift+L` or `U` | Unlock the selected temporary pose |
+| `R` / `Shift+R` | Rotate to the next / previous allowed orientation |
+| `S` | Toggle front/back when the side is not constrained |
+| `Ctrl/Cmd+Z` | Undo |
+| `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` | Redo |
+| `Home` or `F` | Fit the board |

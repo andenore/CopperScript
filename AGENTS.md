@@ -4,8 +4,7 @@ Start with `copper agent-guide` in the active CLI environment. Request individua
 topics and selected library contracts as needed. For contributor work, use the
 [task index](docs/README.md) to choose the relevant reference; consult
 [TODO.md](TODO.md) only when planning unfinished work. Do not bulk-read `docs/`.
-Historical plans and review passes in `docs/history/` are opt-in investigations,
-not current instructions. Read them only for a specific regression or decision.
+Accepted architectural rationale is opt-in; follow current task references.
 
 - Generic algorithms belong in CopperScript; reusable parts/circuits belong in
   independently versioned library repositories; board composition and evidence

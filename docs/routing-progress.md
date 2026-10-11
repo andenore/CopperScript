@@ -32,8 +32,9 @@ Only the completed report and independently checked exported board establish
 closure. The run manifest remains `running` until the subprocess actually ends;
 its final exit status and elapsed time remain authoritative for completion.
 
-Telemetry does not yet expose each ordinary-net search, within-pair maze progress
-or reusable serialized stage geometry. Those parts of R9 remain open.
+Ordinary area routing emits `detailed_pass` and `detailed_net` start/finish
+events. Within-pair maze progress and reusable serialized stage geometry are
+not exposed by this telemetry.
 
 The full-run wrapper also enables function profiling and derives inclusive
 phase/trial intervals from the persisted log. See
