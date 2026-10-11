@@ -89,6 +89,7 @@ def test_critical_router_rejects_stale_unowned_or_illegal_reservations(defect):
 
 def test_pending_exit_stops_area_router_with_zero_search_passes(monkeypatch):
     board, guides, options, _ = fixture()
+    options = replace(options, surface_fallback=False)  # Isolate dogbone failure injection.
     monkeypatch.setattr(fanout, "_candidates", lambda *args: ())
     monkeypatch.setattr("pcbir.flow.optimize_placement_for_routing", lambda *_:
         PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
@@ -181,12 +182,16 @@ def test_failed_critical_group_also_stops_area_and_preserves_ordinary_exits(monk
 
 def test_legal_move_rebuilds_exits_from_unrouted_source_and_is_deterministic(monkeypatch):
     board, guides, options, router = fixture()
+    options = replace(options, surface_fallback=False)  # Isolate mocked via domains.
     real = fanout._candidates
     def choices(position, center, settings):
         return () if center == Point.mm(5, 7) else real(position, center, settings)
     monkeypatch.setattr(fanout, "_candidates", choices)
     baseline = access.preflight_package_access(board, guides, options)
-    kwargs = dict(options=access.PackageAccessOptions(maximum_trials=1), global_options=router)
+    # Explicit zero probes retains the historical generator order. Real
+    # feasibility-ranked placement is covered separately without search mocks.
+    kwargs = dict(options=access.PackageAccessOptions(maximum_trials=1,
+        maximum_placement_probes=0), global_options=router)
     repaired = access.improve_package_access(baseline, options, **kwargs)
     assert repaired.ready and repaired.accepted_moves == 1
     assert repaired.trials[0].outcome == "accepted"

@@ -138,16 +138,20 @@ def improve_escape_assignment(
     incumbent: Mapping[PadReference, int],
     expand: Callable[[PadReference], tuple[EscapeCandidate, ...]],
     options: EscapeAssignmentOptions,
+    *, fallback_expand: Callable[[PadReference], tuple[EscapeCandidate, ...]] | None = None,
 ) -> tuple[dict[PadReference, int], EscapeAssignmentReport]:
     """Try missing pins with current blockers; outside selections stay fixed.
 
     Expansion is once per affected pin. An unsolved/over-budget cluster changes
     no selection. Search uses minimum remaining values and forward checking;
     incumbent alternatives are tried before appended alternatives when legal.
+    Optional fallback domains are added only after the original cluster search
+    fails, within the SAME search/pair/query budgets, once per affected pin.
     """
     selected = dict(incumbent)
     conflicts = EscapeConflicts(board, options.maximum_pair_checks, options.maximum_pair_queries)
     expanded: set[PadReference] = set()
+    fallback_expanded: set[PadReference] = set()
     trials = []
     rank = {pad: index for index, pad in enumerate(ordered)}
     for root in ordered:
@@ -213,6 +217,17 @@ def improve_escape_assignment(
                     diagnostic = "compatible local assignment found"
                     break
                 if not pressure:
+                    changed = False
+                    if fallback_expand is not None:
+                        for pad in sorted(cluster):
+                            if pad not in fallback_expanded:
+                                old = domains[pad]
+                                domains[pad] = tuple(dict.fromkeys((*old, *fallback_expand(pad))))
+                                fallback_expanded.add(pad)
+                                expanded.add(pad)
+                                changed |= domains[pad] != old
+                    if changed:
+                        continue
                     diagnostic = "no compatible assignment in local domains"
                     break
                 if len(cluster) >= options.maximum_cluster_pins:

@@ -594,12 +594,18 @@ def test_transactional_repair_can_displace_three_blockers(monkeypatch) -> None:
             return detailed_module._failed("SIGNAL", "no alternate path")
         return original_route_net(*args, **kwargs)
     monkeypatch.setattr(detailed_module, "_route_net", only_candidate_for_signal)
+    repair_records = []
     repaired = _repair_from_passes(
         board, list(board.nets), {}, guides, first, [first, second],
         DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
-                              maximum_ripup_blockers=3),
+                              maximum_ripup_blockers=3), repair_trials=repair_records,
     )
     assert repaired.metrics.routed_net_count == 4
+    committed = next(item for item in repair_records if item.outcome == "accepted_in_merge")
+    assert len(committed.displaced_nets) == 3
+    assert {item.net for item in committed.blockers} == set(committed.displaced_nets)
+    assert all(not item.immutable for item in committed.blockers)
+    assert committed.orders_tried >= 1 and committed.reroute_searches >= 3
     all_tracks = tuple(track for item in repaired.nets for track in item.tracks)
     all_vias = tuple(via for item in repaired.nets for via in item.vias)
     assert not {item.code for item in run_physical_drc(

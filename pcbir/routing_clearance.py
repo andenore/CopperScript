@@ -8,8 +8,12 @@ as a broad phase.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Iterable, Iterator
+from hashlib import sha256
+from enum import Enum
+from decimal import Decimal
+import json
 
 from .breakout import BreakoutRegions
 from .drc import non_plated_holes, placed_pad_shape
@@ -61,6 +65,32 @@ class _DrilledHole:
     locked: bool
     reusable: bool = False
     span: tuple[CopperLayer, CopperLayer] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingBlocker:
+    identity: str
+    reason: str
+    net: str | None
+    immutable: bool
+    layers: tuple[str, ...]
+    positions_nm: tuple[tuple[int, int], ...]
+
+
+def _geometry_identity(value) -> str:
+    def canonical(item):
+        if isinstance(item, Enum):
+            return item.value
+        if isinstance(item, Decimal):
+            return format(item, "f")
+        if is_dataclass(item):
+            return {field.name: canonical(getattr(item, field.name)) for field in fields(item)}
+        if isinstance(item, (set, frozenset)):
+            return sorted((canonical(part) for part in item), key=lambda part: json.dumps(part, sort_keys=True))
+        if isinstance(item, (tuple, list)):
+            return [canonical(part) for part in item]
+        return item
+    return sha256(json.dumps(canonical(value), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 class RoutingClearanceIndex:
@@ -407,6 +437,69 @@ class RoutingClearanceIndex:
         """Return movable blocker nets and whether immutable geometry blocks a track."""
         shape = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
         return self._blockers(track.net, shape, (track.layer,), for_via=False)
+
+    def track_blocker_records(self, track: TrackSegment) -> tuple[RoutingBlocker, ...]:
+        """Snapshot-bound exact blocker evidence; does not relax the query."""
+        shape = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
+        return self._blocker_records(track.net, shape, (track.layer,), for_via=False)
+
+    def _blocker_records(self, net, shape, layers, *, for_via, clearance_floor_nm=0):
+        records = []
+        def add(identity, reason, other_net, locked, other_layers, points):
+            records.append(RoutingBlocker(identity, reason, other_net, locked,
+                tuple(layer.value for layer in other_layers),
+                tuple((p.x_nm, p.y_nm) for p in points)))
+        if not for_via:
+            for layer in layers:
+                for zone in self.zone_reservations.blocking_zones(net, shape, layer):
+                    add("zone:" + zone.id, "source routing reservation", zone.net, True,
+                        (layer,), zone.outline.outer.vertices)
+        for region in self._static_regions:
+            if (set(layers).intersection(region.layers)
+                    and (region.block_vias if for_via else region.block_tracks)
+                    and (region.has_holes or not shapes_clear(shape, region.shape, region.clearance_nm))):
+                add("region:" + _geometry_identity(region), "keepout or immutable macro region",
+                    None, True, sorted(region.layers, key=lambda layer: layer.value), region.shape.spine)
+        land = self._breakout_land(net, shape)
+        for other in self._overlapping_objects(shape, layers):
+            if other.net == net:
+                continue
+            required = max(self._rule_clearance(net, land, other), other.clearance_nm, clearance_floor_nm)
+            if not shapes_clear(shape, other.shape, required):
+                identity = (f"pad:{other.pad_reference.component}.{other.pad_reference.pad}:"
+                            if other.pad_reference else "copper:") + _geometry_identity(other)
+                add(identity, "pad clearance" if other.is_pad else "copper clearance",
+                    other.net, other.locked, other.layers, other.shape.spine)
+        if (not self._keepout_clear(shape, layers, for_via=for_via)
+                and not any(item.net is None for item in records)):
+            add("board-material:" + _geometry_identity(self.board.outline),
+                "board material, hole or unsupported keepout geometry", None, True, layers, shape.spine)
+        return tuple(sorted(set(records), key=lambda item: item.identity))
+
+    def via_blocker_records(self, via: Via) -> tuple[RoutingBlocker, ...]:
+        layers = self._via_layers(via.from_layer, via.to_layer)
+        shape = RoundedConvexShape((via.position,), via.size_nm // 2)
+        records = list(self._blocker_records(via.net, shape, layers, for_via=True))
+        records.extend(self._blocker_records(via.net,
+            RoundedConvexShape((via.position,), via.drill_nm // 2), layers, for_via=True,
+            clearance_floor_nm=self.board.rules.minimum_hole_clearance_nm))
+        for other in self._overlapping_objects(shape, layers):
+            if other.is_pad and not shapes_clear(shape, other.shape, 1):
+                records.append(RoutingBlocker("pad-contact:" + _geometry_identity(other),
+                    "via annulus must avoid pad copper", other.net, True,
+                    tuple(layer.value for layer in other.layers),
+                    tuple((p.x_nm, p.y_nm) for p in other.shape.spine)))
+        for hole in self._holes:
+            distance = (via.position.x_nm-hole.position.x_nm)**2 + (via.position.y_nm-hole.position.y_nm)**2
+            if (distance == 0 and hole.net == via.net and hole.reusable
+                    and hole.span == (via.from_layer, via.to_layer)):
+                continue
+            required = via.drill_nm//2 + hole.radius_nm + self.board.rules.minimum_hole_clearance_nm
+            if distance < required**2:
+                records.append(RoutingBlocker("drill:" + _geometry_identity(hole), "drill spacing",
+                    hole.net, hole.locked or hole.net == via.net,
+                    tuple(layer.value for layer in layers), ((hole.position.x_nm, hole.position.y_nm),)))
+        return tuple(sorted(set(records), key=lambda item: item.identity))
 
     def route_blockers(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer,

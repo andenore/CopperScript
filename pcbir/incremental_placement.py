@@ -51,6 +51,9 @@ def repair_placement_trial(
         return None
 
     source = initial.placement_and_global.board
+    if (initial.critical.plane_reservation_track_count
+            or initial.critical.plane_reservation_via_count):
+        return fallback("plane-before-critical reservations require full preflight")
     poses = {pose.reference: pose for pose in initial.board.placements}
     if (trial.tracks or trial.vias or trial.zone_fills or baseline.board.zone_fills
             or replace(source, placements=trial.placements) != trial):
@@ -155,7 +158,8 @@ def repair_placement_trial(
         access_fanout = replace(fans, board=replace(trial, tracks=fan_tracks, vias=fan_vias,
             metadata={**trial.metadata, "global_routing_fingerprint": global_route.routing_fingerprint}),
             created_tracks=fan_tracks, created_vias=fan_vias, added_track_count=len(fan_tracks),
-            added_via_count=len(fan_vias), pin_analysis=(), assignment=None)
+            added_via_count=len(fan_vias), pin_analysis=(), assignment=None,
+            decoupling_tracks=tuple((Counter(fans.decoupling_tracks) & Counter(fan_tracks)).elements()))
         critical = replace(critical, reserved_track_count=len(fan_tracks), reserved_via_count=len(fan_vias))
     access = (replace(initial.package_access, source=trial, global_route=global_route,
         fanout=access_fanout, critical=critical, plane_stitch=early,

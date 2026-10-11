@@ -260,7 +260,12 @@ def generate_placement_candidates(
         refined, spacing_moves = _spread_escape_components(board, refined, options, spacing)
         moves += spacing_moves
         from .decoupling import improve_decoupling_placement
-        refined, bypass_moves = improve_decoupling_placement(board, refined, phase_options)
+        # Cluster legalization adds phase-only locks at the current rigid poses.
+        # Their original source seeds are not lock coordinates for this phase.
+        # Keep source rules intact and still validate against the original board
+        # and caller's real session locks below before accepting the candidate.
+        bypass_board = replace(board, placements=tuple(refined[p.reference] for p in board.placements))
+        refined, bypass_moves = improve_decoupling_placement(bypass_board, refined, phase_options)
         moves += bypass_moves
         metrics = placement_metrics(board, refined, options, spacing_model=spacing)
         if metrics.constraint_penalty_nm or not placement_solution_is_legal(board, refined, options):

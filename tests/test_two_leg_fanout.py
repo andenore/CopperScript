@@ -47,7 +47,7 @@ def opts(**kw):
 
 def test_two_leg_escape_reaches_real_off_ray_site_and_tries_other_order():
     board = base_board()
-    old = route_fanout(board, opts(two_leg_escapes=False))
+    old = route_fanout(board, opts(two_leg_escapes=False, surface_fallback=False))
     new = route_fanout(board, opts())
     assert old.pending_pads == (PadReference("U", "1"),)
     assert not new.pending_pads
@@ -82,7 +82,9 @@ def test_bounded_maze_fallback_retains_exact_clearance_and_determinism(monkeypat
     # Isolate the fallback owner: empty straight/elbow domains do not grant a
     # via permission or bypass any physical obstacles.
     monkeypatch.setattr(module, "_legal_choices", lambda *args, **kwargs: ())
-    settings = opts(maze_escapes=True, joint_escapes=False)
+    # Keep this specifically a via-maze budget test. Surface access is separately
+    # covered by the real no-dogbone fixtures and can remain legal at this bound.
+    settings = opts(maze_escapes=True, joint_escapes=False, surface_fallback=False)
     result = route_fanout(board, settings)
     assert not result.pending_pads and result.added_via_count == 1
     assert result == route_fanout(board, settings)

@@ -159,9 +159,11 @@ def test_fixed_rotation_cannot_override_explicit_allowed_angles(reverse):
         prototype_physicalize(result)
 
 
-def test_surface_zone_escape_is_an_explicit_generic_cli_option():
+def test_surface_zone_escape_cli_default_has_an_explicit_generic_opt_out():
     from pcbir.cli import _parser
     default = _parser().parse_args(["route-board", "board.copper"])
     enabled = _parser().parse_args(["route-board", "board.copper", "--stitch-surface-zones"])
-    assert not default.stitch_surface_zones
+    disabled = _parser().parse_args(["route-board", "board.copper", "--no-stitch-surface-zones"])
+    assert default.stitch_surface_zones
     assert enabled.stitch_surface_zones
+    assert not disabled.stitch_surface_zones

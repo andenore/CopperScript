@@ -15,6 +15,12 @@ claim fabrication readiness from routing guidance. Its prototype physical
 workflow can place components and attempt geometry-checked detailed routing,
 but a routed board still requires independent physical and KiCad DRC signoff.
 
+The standard `route-board` command now owns bounded package/placement feedback,
+ordinary blocker repair and native-filled copper feedback. See the
+[profiles, evidence and limits](docs/filled-copper-feedback.md) and the
+[implementation checklist](docs/autonomous-routing-plan.md). No board-specific
+repair selector is required; unresolved constraints remain failed review drafts.
+
 The [mechanical-geometry specification and checklist](docs/mechanical-geometry.md)
 adds polygonal outlines, cutouts and round mounting holes to the physical IR.
 Try the routed L-shaped inspection probe (including performance profiling):
@@ -311,8 +317,9 @@ spacing to other copper inside and outside breakout regions, coupled length to
 other pairs and bends. `route-board` and `python -m pcbir.critical_preflight`
 (for its critical copper) print it as one `CRITICAL LANES:` line; see the
 [language reference](docs/language-reference.md#critical-routing-and-qualification).
-For difficult boards, `--fanout` pre-escapes crowded SMD pads, `--soft-ripup`
-and `--maximum-ripup-blockers 4` try bounded transactional rerouting, and
+`route-board` now plans package exits and compatible plane contacts before area
+routing by default; `--no-fanout` explicitly selects the legacy diagnostic flow.
+For difficult boards, `--soft-ripup` and `--maximum-ripup-blockers 4` try bounded transactional rerouting, and
 `--detailed-feedback-trials 4` retries legal placement changes against exact
 routing failures. These experiments do not waive physical DRC. Pass
 `--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` to
@@ -374,7 +381,8 @@ The historical [compatible-escape increment](docs/routing-review-pass17.md) impr
 matched partial package stage from 72 to 74 exits. Two MCU exits remain pending;
 that stage predates the successful current full rerun linked above.
 The [escape-first increment](docs/package-access-first.md) now reserves ordinary
-package exits before critical long routes with `--fanout`. If package access or
+package exits before critical long routes by default (`--fanout` remains accepted).
+If package access or
 critical compatibility fails, ordinary area routing is blocked with zero search
 passes. Bounded legal placement feedback rebuilds the reservations; use
 `--package-access-trials 0` to disable moves without disabling the gate.

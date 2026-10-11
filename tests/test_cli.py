@@ -378,6 +378,7 @@ def test_cli_writes_global_routing_guides(tmp_path: Path) -> None:
 
 def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_path: Path) -> None:
     # The report may live in a fresh directory independently of the PCB.
+    # Exercise the default package-access flow without a --fanout opt-in.
     report = tmp_path / "new-review" / "reports" / "route-report.json"
     pcb = tmp_path / "route-draft.kicad_pcb"
     result = subprocess.run(
@@ -385,7 +386,6 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
             sys.executable, "-m", "copperscript", "route-board",
             "examples/valid_board/board.copper", "--allow-proxy-footprints",
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
-            "--fanout",
             "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
             "--plane-stitch-radius-mm", "5",
             "--plane-maze-step-mm", "0.025", "--plane-maze-budget", "50000",
@@ -412,6 +412,14 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert "trials" in document["package_access"]
     assert document["package_access"]["pattern_trial_limit"] == 2
     assert document["package_access"]["initial_pair_state_limit"] == 6000
+    assert document["package_access"]["placement_probe_limit"] == 16
+    assert "excludes generated critical copper" in document["package_access"]["placement_probe_scope"]
+    assert document["package_access"]["placement_stop_reason"] in {
+        "ready", "disabled", "trial_budget_exhausted", "no_improvement", "no_legal_unseen_trials"}
+    assert len(document["package_access"]["placement_probes"]) <= 16
+    assert all(isinstance(probe[key], list) and all(isinstance(pad, str) for pad in probe[key])
+               for probe in document["package_access"]["placement_probes"]
+               for key in ("ordinary_pending_pads", "plane_pending_pads", "boundary_pending_pads", "lost_access_pads"))
     assert len(document["package_access"]["search_tiers"]) >= 1
     assert any(t["selected"] for t in document["package_access"]["search_tiers"])
     assert isinstance(document["package_access"]["pattern_trials"], list)

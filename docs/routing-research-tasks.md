@@ -86,7 +86,160 @@ before manufacturing export.
 
 **Primary reference.** [KiCad PCB editor zone filling and DRC](https://docs.kicad.org/master/en/pcbnew/pcbnew.pdf).
 
-## Prototype implementation and limits
+## R5. Automatic fragmented-fill repair and routing-guide coordination
+
+**Question.** When native refill splits one source zone into disconnected copper
+fragments, how should the shared pipeline identify affected terminals, choose
+legal repair actions and obtain routing guides for a normally deferred zone net?
+
+**Reproduction.** `tests/test_autonomous_routing_quality.py` has two renamed
+real-KiCad cases: a fill-only keepout divides a single pour even though both pads
+have prospective surface contact. Native opens correctly prevent completion.
+A candidate from the shared exact-clearance surface search joins them and passes
+fresh refill without changing zone/keepout intent. Merely setting detailed
+`defer_zone_nets=False` is insufficient: global routing still defers the net,
+leaving no connected guide. This is captured behavior, not an automatic repair.
+
+**Investigation checklist.** Generic implementation belongs in CopperScript;
+reusable electrical/layout contracts belong in CopperLib, not board scripts.
+
+- [x] Reproduce disconnected fill with real native evidence and a legal bridge
+  control, including renamed pads/nets and stale-evidence rejection.
+- [x] Retain structured native finding/object identities and map opens to
+  physical pads, layers and filled fragments; preserve exact artifact hashes.
+- [x] Investigate explicit, bounded zone-net guide generation or guide-free
+  local bridging, preserving authored distribution reservations and widths.
+- [x] Choose bounded small mutable blockers/actions from geometry, never net-name
+  lists; protect macros, required via arrays, critical copper and successful exits.
+- [x] Revalidate ordinary/critical/boundary access and displaced-net continuity;
+  commit only after fresh native refill proves improvement without new violations.
+- [x] Roll back rejected trials, cap work, detect repeated states and report
+  exhaustion/tool limitations separately from impossible or inadequate zone intent.
+- [x] Integrate into ordinary CLI feedback and validate consumer runs without
+  project-specific routing fixes, preserving unresolved failures.
+- [ ] Demonstrate equivalent shared tracker closure before retiring historical
+  project repair scripts. LED shared closure is already verified.
+
+**Acceptance.** A standard bounded pipeline repairs the fragmented-fill fixture
+without targeted pad/net selectors; constrained/unrepairable variants remain
+truthfully unresolved with their original copper intact. Stale evidence cannot
+approve a candidate. Native routing closure is not CAM/RF/power or release approval.
+
+See [autonomous routing plan](autonomous-routing-plan.md), especially its filled-
+copper feedback and CLI integration milestones. Initial evidence: 14 new quality
+cases passed; the wider focused run was 210 passed, one optional skip, with both
+new fragmented-fill cases executed using installed KiCad.
+
+2026-10-11 implementation: [bounded native feedback](filled-copper-feedback.md)
+now repairs both renamed fragmented-fill fixtures through the standard CLI,
+including mutable ordinary dependencies and immutable macro/array rollback.
+Actual filled polygon membership handles source zones whose disconnected
+fragments share one UUID. Retained evidence binds native version and exact
+input/output/report hashes. The bounded surface path is intentionally guide-free;
+it does not authorize source-zone edits or claim globally minimal displacement.
+CopperLedRing's shared balanced run has zero native opens/violations; the initial
+tracker run remains blocked and does not justify deleting its historical helpers.
+
+## R6. Narrow package-owner coordination
+
+2026-10-11 consumer evidence: ordinary-first keeps every ordinary exit but blocks
+one constrained RF connection and one selected plane contact. A clean critical
+probe connects the RF feed within its original limit; critical-first and
+critical/plane-first proposals then lose other ordinary escape identities.
+The shared gates correctly reject those candidates. This is not evidence that
+the fixed source design is impossible, nor authority to change its rules.
+
+- [x] Record the all-owner ordering conflict and preserve failed candidates as
+  diagnostic evidence; do not waive lost ordinary access to force area routing.
+- [x] Reduce a partial-owner negotiation fixture, including renamed owners and
+  a rollback case with immutable macros/required arrays.
+- [ ] Investigate retaining unaffected ordinary escapes during the critical
+  probe, releasing only geometry-derived conflicting generated ownership.
+  Rebase retained and rebuilt ownership with occurrence-counted geometry.
+- [x] Use the existing disposable probe to propose a partial ordinary rebuild:
+  keep nonintersecting escape contributions, release intersecting nets only,
+  then rebuild all critical/contact/boundary owners against the combined result.
+- [x] Feed measured lost ordinary identities from rejected ordering trials into
+  legal placement hints, even when the original failed endpoints are fixed.
+  Hints never install rejected copper or unlock source/session constraints.
+- [x] Bound partial proposal/dependency rebuilding explicitly; preserve the same
+  acceptance gates, successful identities and fresh all-owner verification.
+- [x] Demonstrate equivalent source-matched tracker closure through the standard
+  shared CLI before removing historical selected-net repair helpers.
+
+Placement-hint verification passed 65 package/access ranking tests, including
+fixed-owner guards and failed-proposal rollback. A smaller partial-ordinary
+proposal passed focused verification: reuse the existing disposable critical
+probe, retain all nonintersecting generated ordinary ownership exactly, and
+rebuild only intersecting ordinary nets. Final critical, plane and boundary
+owners are rebuilt against the combined contribution. This does not yet retain
+ordinary prefixes during the *initial* critical probe; that remains research.
+Twenty-three partial-owner cases cover real scarce-neighbor fallback, renamed
+identities, protected macro/required-array success and rollback, strict source
+length limits, release/trial budgets and CLI controls. The new two-case scarce-
+neighbor fixture runs without patched routing/candidate/connected flags. The
+dispatch budget test separately injects first-search exhaustion; it is not used
+as proof of geometry feasibility. Fresh full-board Tracker validation is pending.
+Actual feed geometry is now protected separately from unrelated escapes on the
+same net. Cheap partial eligibility rejection retains the established second
+critical-only ordering, within the existing pattern allowance. Four renamed
+clearance cases exercise same-net release and actual-feed rejection.
+
+The Tracker contact maps to `V3V3`, not GND. Its supply decoupler is
+`C_LEVEL_A`; both translator pairs remained distant in the failed review.
+Read-only source/native pose diagnostics found legal local placements with the
+existing full-link optimizer. A reduced planner reproduction found stale phase
+locks after rigid legalization; its correction and fresh consumer routing are
+being verified. No component, net, source pose or macro geometry was edited.
+
+## R7. Budget-exhausted ordinary final retries
+
+The post-placement Tracker benchmark now clears all package owners, but ordinary
+area searches still hit their computational limits. Repeating the same bounded
+search policy is not a proof that a route is impossible.
+
+- [x] Reduce a real four-layer surface-wall case: four renamed/reversed variants
+  exhaust the normal search while a weighted search finds legal copper at the
+  same 200-state-per-search limit. No candidate/search/connected flags are mocked.
+  The coarse guide is deliberately surface-biased; exact searches see the wall.
+- [x] Record actual failed search-budget exceptions separately from diagnostic
+  strings, missing guides and completed routes. Preserve both baseline passes.
+- [x] Diversify only the existing final strict retry after actual exhaustion,
+  to at least 200 percent heuristic weight. Retain a larger requested weight,
+  existing state/pitch bounds, source width/length/layer rules and ownership.
+  No additional search attempt or net/component selector is introduced.
+- [x] Verify affected routing, report, flow, native and ownership regressions:
+  94 detailed/report/benchmark tests, 177 pipeline/ownership/native tests and
+  28 retry/checkpoint/reuse/native-CLI tests passed. Overlapping cases are not
+  counted as distinct: a collection audit confirms 285 unique affected cases.
+  Replay preserves geometry and reports with reuse off.
+- [x] Validate a fresh source-matched Tracker run before retiring historical
+  helpers; previous balanced runs predate this retry policy.
+
+Weighted search can choose a longer legal path; it does not promise an optimal
+route or authorize violating authored length limits. `search_budget_exhausted`
+identifies an incomplete attempt stopped at its allowance, and
+`retry_heuristic_weight_percent` discloses an automatically changed final retry.
+
+2026-10-11 closure: fresh balanced and thorough Tracker profiles each connect
+60/60 ordinary nets, with actual KiCad 10.0.6 refill reporting zero opens,
+violations and islands. The source/lock hashes are unchanged. The new shared
+native reader checks actual lands, macro copper, polygons and required arrays;
+it never reinserts missing copper. The frozen solver suite passed 2,436 tests
+with 21 skips; the reader was added afterwards and tested separately.
+
+## R8. Endpoint-only surface-chain readback
+
+- [x] Record the Tracker C_STATUS_B false negative: a legitimate T junction
+  contacts the interior of a straight track rather than its endpoint. The
+  existing exact copper-contact graph, with all vias/fills/internal component
+  joins excluded, confirms top-copper connectivity for all 14 associations.
+- [ ] Reduce renamed/rotated real-geometry interior-junction cases and decide
+  whether the path extractor should node tracks or use exact contact witnesses.
+  Preserve width, clearance, layer, ownership and via-free checks. Do not invent
+  a path length from mere electrical connectivity or add consumer-specific code.
+
+## Prototype implementation and limits (historical R1–R4 checkpoint)
 
 - R1: `pcbir.fanout.route_fanout` now creates DRC-checked, non-via-in-pad
   escapes for crowded ordinary SMD pads. The stage is opt-in (`--fanout`),

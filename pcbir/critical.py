@@ -19,6 +19,7 @@ from types import MappingProxyType
 from typing import Callable, Iterable
 
 from .fanout import FanoutResult
+from .plane import PlaneStitchOptions
 
 from .engineering import EvidenceGrade, propagation_delay
 from .physical import (
@@ -253,6 +254,8 @@ class CriticalRoutingResult:
     bundles: tuple[CriticalBundle, ...] = ()
     # Length-match tuning outcome per ``length_match`` group (plan R3).
     match_tuning: tuple[MatchTuningResult, ...] = ()
+    plane_reservation_track_count: int = 0
+    plane_reservation_via_count: int = 0
 
     def to_json(self) -> str:
         document = {
@@ -262,6 +265,8 @@ class CriticalRoutingResult:
             "routing_fingerprint": self.routing_fingerprint,
             "reserved_track_count": self.reserved_track_count,
             "reserved_via_count": self.reserved_via_count,
+            "plane_reservation_track_count": self.plane_reservation_track_count,
+            "plane_reservation_via_count": self.plane_reservation_via_count,
             "nets": [critical_net_document(item) for item in self.nets],
             "lanes": list(critical_lane_table(self.board, self.nets)),
             "bundles": [bundle_document(item) for item in self.bundles],
@@ -309,6 +314,7 @@ def route_critical_nets(
     global_route: GlobalRoutingResult,
     *, on_progress: Callable[[str, tuple[str, ...], CriticalNetResult | None], None] | None = None,
     reserved_accesses: FanoutResult | None = None,
+    plane_stitch_options: PlaneStitchOptions | None = None,
     pair_state_limit: int | None = None,
     bundle_repair_limit: int = BUNDLE_REPAIR_LIMIT,
     plan_crossings: bool = True,
@@ -316,8 +322,11 @@ def route_critical_nets(
 ) -> CriticalRoutingResult:
     """Route critical groups around explicit, immutable ordinary package access.
 
-    The locked prefix includes reservations, but ownership remains with fanout.
-    Reservations cannot be arbitrary prior area copper or critical-net stubs.
+    The locked prefix includes ordinary reservations, owned by fanout.
+    Those reservations cannot be arbitrary prior area copper or critical stubs.
+    Optional early plane contacts are freshly generated from source intent and
+    validated ordinary reservations, never accepted as arbitrary input copper.
+    They form a separate locked prefix, not ordinary fanout or filled evidence.
 
     Groups are routed by priority, kind and name, except that the pairs of a
     bundle (same two components, kind and priority) are routed outermost
@@ -408,6 +417,14 @@ def route_critical_nets(
                 _fingerprint(global_route.routing_fingerprint, tracks, vias, list(nets)), len(tracks), len(vias))
         tracks.extend(reserved_accesses.created_tracks)
         vias.extend(reserved_accesses.created_vias)
+    plane_reservations = None
+    if plane_stitch_options is not None:
+        from .plane import stitch_zone_pads
+        if global_route.placement_fingerprint != _placement_fingerprint(board):
+            raise ValueError("plane-contact critical guides are stale")
+        plane_reservations = stitch_zone_pads(
+            replace(board, tracks=tuple(tracks), vias=tuple(vias)), plane_stitch_options)
+        tracks, vias = list(plane_reservations.board.tracks), list(plane_reservations.board.vias)
     results: list[CriticalNetResult] = []
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
@@ -639,7 +656,7 @@ def route_critical_nets(
         if warnings
         else CriticalRoutingStatus.SUCCESS
     )
-    metadata = dict(board.metadata)
+    metadata = dict(plane_reservations.board.metadata if plane_reservations else board.metadata)
     metadata.update(
         {
             "critical_routing": "complete" if not failed else "failed",
@@ -670,6 +687,8 @@ def route_critical_nets(
                   nested_exits=_nested_outcomes(bundle, results, result_index, turns))
               for bundle, records in zip(bundles, repairs)),
         match_tuning,
+        plane_reservations.added_track_count if plane_reservations else 0,
+        plane_reservations.added_via_count if plane_reservations else 0,
     )
 
 
@@ -1730,6 +1749,20 @@ def _route_single_exact(
         _external_assumptions(rule), evidence_digests=_external_evidence(rule),
         strategy="exact_single_net",
     )
+    if (not result.connected and rule.max_vias == 0
+            and any(item.net == rule.net and item.connected for item in global_route.routes)):
+        # A board-wide fine grid can spend its whole budget far from a short
+        # surface connection. Reuse the exact bounded local maze; acceptance
+        # still enforces the original specialized length and clearance rules.
+        owner_board = replace(board, tracks=tuple(committed_tracks), vias=tuple(committed_vias))
+        for candidate_tracks in local_surface_candidates(owner_board, rule, maze=True):
+            candidate = replace(result, connected=True, track_count=len(candidate_tracks), via_count=0,
+                lengths_nm=(_track_length(candidate_tracks),),
+                diagnostics=_budget_diagnostics(rule, candidate_tracks, ()), strategy="local_surface_maze")
+            candidate, candidate_tracks, candidate_vias = _validate_candidate(
+                board, candidate, candidate_tracks, (), committed_tracks, committed_vias)
+            if candidate.connected:
+                return candidate, candidate_tracks, candidate_vias
     return _validate_candidate(board, result, tracks, vias,
                                committed_tracks, committed_vias)
 

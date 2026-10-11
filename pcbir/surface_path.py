@@ -6,10 +6,12 @@ from collections import defaultdict, deque
 from functools import lru_cache
 from heapq import heappop, heappush
 from typing import Callable
+from dataclasses import asdict
 
 from .geometry import point_in_polygon, point_segment_distance_squared, segment_distance_squared
 from .physical import CopperLayer, PhysicalBoard, Point, TrackSegment, nm_from_mm
 from .routing_clearance import RoutingClearanceIndex
+from .progress import ProgressCallback, emit
 
 
 def surface_path(
@@ -248,6 +250,7 @@ def surface_path_between(
     start: Point, end: Point, width_nm: int, layer: CopperLayer, *,
     step_nm: int = nm_from_mm("0.1"),
     maximum_detour_nm: int = nm_from_mm("1"), state_budget: int = 4000,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[TrackSegment, ...] | None:
     """Bounded local octilinear A* with exact, possibly off-grid terminals.
 
@@ -271,6 +274,8 @@ def surface_path_between(
     queue = [(heuristic(start), 0, *initial)]
     best, parent = {initial: 0}, {initial: None}
     expanded = 0
+    failure_blockers = set()
+    rejection_samples = 0
     while queue and expanded < state_budget:
         _, cost, x, y, heading = heappop(queue)
         state = (x, y, heading)
@@ -301,6 +306,8 @@ def surface_path_between(
                 if all(_track_inside_board(board, t.start, t.end, t.width_nm)
                        and clearance.can_track(net, t.start, t.end, t.width_nm, layer)
                        for t in pieces):
+                    emit(on_progress, "surface_bridge_search", "finished", net=net,
+                         expanded_states=expanded, state_budget=state_budget, outcome="found")
                     return (*pieces, *tail)
         for next_heading, (dx, dy) in enumerate(directions):
             nx, ny = x+dx, y+dy
@@ -310,6 +317,10 @@ def surface_path_between(
                 continue
             if (not _track_inside_board(board, point, neighbor, width_nm)
                     or not clearance.can_route(net, point, neighbor, width_nm, layer)):
+                if on_progress is not None and rejection_samples < 16:
+                    rejection_samples += 1
+                    for piece in clearance.route_pieces(net, point, neighbor, width_nm, layer):
+                        failure_blockers.update(clearance.track_blocker_records(piece))
                 continue
             difference = abs(next_heading-heading) if heading >= 0 else 0
             turn = min(difference, 8-difference)
@@ -319,6 +330,10 @@ def surface_path_between(
                 continue
             best[next_state], parent[next_state] = candidate, state
             heappush(queue, (candidate+heuristic(neighbor), candidate, *next_state))
+    emit(on_progress, "surface_bridge_search", "finished", net=net,
+         expanded_states=expanded, state_budget=state_budget,
+         blocker_records=[asdict(item) for item in sorted(failure_blockers, key=lambda item: item.identity)[:32]],
+         outcome="state_budget_exhausted" if queue else "search_exhausted")
     return None
 
 

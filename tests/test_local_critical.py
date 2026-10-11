@@ -75,6 +75,36 @@ def test_fine_surface_repair_does_not_invent_a_connected_global_guide():
     assert not tracks and not vias
 
 
+@pytest.mark.parametrize("renamed", (False, True))
+@pytest.mark.parametrize("length_mm", (5, 9))
+def test_bounded_critical_surface_maze_preserves_length_and_source_owners(renamed, length_mm):
+    board, _ = fixture(False)
+    name = "RADIO_Z" if renamed else "MATCH"
+    poses = tuple(replace(pose, reference=f"PORT_{index}" if renamed else pose.reference)
+                  for index, pose in enumerate(board.placements))
+    rule = replace(board.net_routing_rules[0], net=name, kind=RouteKind.RF_FEED,
+                   max_length_nm=nm_from_mm(length_mm))
+    wall = CopperKeepout("immutable-wall", (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+        Point.mm(7, 4), Point.mm(8, 4), Point.mm(8, 6), Point.mm(7, 6)))))
+    board = replace(board, placements=poses,
+        nets=(PhysicalNet(name, tuple(PadReference(pose.reference, "1") for pose in poses)),),
+        net_routing_rules=(rule,), copper_keepouts=(wall,))
+    assert not tuple(local_surface_candidates(board, rule))
+    alternatives = tuple(local_surface_candidates(board, rule, maze=True))
+    assert alternatives and all(track.net == name and track.layer is CopperLayer.FRONT
+                                for track in alternatives[0])
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("0.5")))
+    result = route_critical_nets(board, guides)
+    assert result.nets[0].connected == (length_mm == 9)
+    assert result.board.placements == board.placements and result.board.copper_keepouts == (wall,)
+    assert not result.board.vias
+    if length_mm == 9:
+        assert result.nets[0].lengths_nm[0] <= rule.max_length_nm
+        assert not hard_findings(result.board)
+    else:
+        assert not result.board.tracks
+
+
 def test_short_tree_replaces_legal_detour_and_preserves_every_branch():
     board, guides = fixture()
     original, tracks, vias = _route_single(board, board.net_routing_rules[0], guides.routes[0])

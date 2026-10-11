@@ -9,6 +9,8 @@ from decimal import InvalidOperation
 from math import isqrt
 from pathlib import Path
 import traceback
+import sys
+from uuid import uuid4
 from typing import Sequence
 
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
@@ -39,6 +41,7 @@ from .pad_stitch import stitch_duplicate_pads
 from .pad_via_arrays import via_in_pad_array_report
 from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
+from .filled_feedback import FilledCopperFeedbackOptions, improve_filled_copper
 from .route_closure import reconcile_zone_lands, routing_complete_with_fill
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
 from .routeflow import (
@@ -347,6 +350,8 @@ def _parser() -> argparse.ArgumentParser:
     _add_resolution_options(board_route_parser)
     board_route_parser.add_argument("-o", "--output", type=Path, help="optional routed KiCad PCB draft")
     board_route_parser.add_argument("--report", type=Path, help="physical routing and DRC report JSON")
+    board_route_parser.add_argument("--routing-profile", choices=("quick", "balanced", "thorough"),
+        help="bounded generic work profile; explicit numerical CLI options override the profile")
     board_route_parser.add_argument("--no-check", action="store_true", help="attempt routing despite ERC errors")
     board_route_parser.add_argument("--footprint-root", action="append", default=[], type=Path)
     board_route_parser.add_argument("--allow-proxy-footprints", action="store_true")
@@ -404,13 +409,17 @@ def _parser() -> argparse.ArgumentParser:
              "routed copper is unchanged (default: 128; 0 disables)",
     )
     board_route_parser.add_argument(
-        "--fanout", action="store_true",
-        help="reserve crowded ordinary-pin escapes before critical routes; gate ordinary area routing on access",
+        "--fanout", action=argparse.BooleanOptionalAction, default=True,
+        help="reserve and negotiate package exits and plane access before area routing (default; --no-fanout opts out)",
     )
     board_route_parser.add_argument("--package-access-trials", type=int, default=8,
         help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
+    board_route_parser.add_argument("--package-placement-probes", type=_nonnegative_int, default=16,
+        help="total disposable local-access probes for ranking placement repair (default: 16; 0 retains move order; full preflight still required)")
     board_route_parser.add_argument("--package-pattern-trials", type=int, choices=range(3), default=2,
         help="alternate ordinary/critical/plane escape patterns before placement repair (default: up to 2; 0 disables negotiation)")
+    board_route_parser.add_argument("--package-partial-owner-nets", type=int, choices=range(9), default=8,
+        help="maximum intersecting ordinary escape nets rebuilt in a partial-owner pattern (default: 8; 0 disables; shares pattern trial budget)")
     board_route_parser.add_argument("--package-initial-pair-states", type=_nonnegative_int, default=6000,
         help="initial aggregate pair-search state cap with --fanout (default: 6000; 0 disables staged search; full-budget fallback if incomplete)")
     board_route_parser.add_argument("--package-boundary-step-mm", type=_positive_mm, default="0.5",
@@ -498,8 +507,8 @@ def _parser() -> argparse.ArgumentParser:
         help="explicitly request the default DRC-checked pad escapes for declared zones",
     )
     board_route_parser.add_argument(
-        "--stitch-surface-zones", action="store_true",
-        help="allow legal plane-pad escapes to opposite-side surface pours on two-layer boards",
+        "--stitch-surface-zones", action=argparse.BooleanOptionalAction, default=True,
+        help="consider authored surface-zone contacts by default; still requires native fill connectivity evidence",
     )
     board_route_parser.add_argument(
         "--plane-stitch-step-mm", default="0.5", type=_positive_mm,
@@ -553,6 +562,12 @@ def _parser() -> argparse.ArgumentParser:
         "--verify-plane-fill", type=Path, metavar="KICAD_CLI",
         help="refill disposable KiCad board and report actual zone/connectivity DRC",
     )
+    board_route_parser.add_argument("--filled-copper-trials", type=_nonnegative_int, default=8,
+        help="bounded native-open surface bridge/dependency trials after refill (0 verifies only)")
+    board_route_parser.add_argument("--filled-copper-search-states", type=int, default=4000,
+        help="maximum expanded states per native-driven bridge search (default: 4000)")
+    board_route_parser.add_argument("--native-evidence-directory", type=Path,
+        help="new directory for recoverable native candidates/reports; default: fresh sibling of route report")
 
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
@@ -598,8 +613,26 @@ def _planner_options(args) -> PlacementPlannerOptions:
         power_domain_weight=args.power_domain_weight)
 
 
+def _apply_routing_profile(args, argv):
+    if args.command != "route-board" or args.routing_profile is None:
+        return
+    profiles = {
+        "quick": (1, 10000, 2, 4, 2, 2000),
+        "balanced": (2, 30000, 8, 16, 8, 4000),
+        "thorough": (4, 100000, 16, 32, 16, 12000),
+    }
+    flags = {item.split("=", 1)[0] for item in argv if item.startswith("--")}
+    names = ("passes", "search_budget", "package_access_trials", "package_placement_probes",
+             "filled_copper_trials", "filled_copper_search_states")
+    for name, value in zip(names, profiles[args.routing_profile]):
+        if "--" + name.replace("_", "-") not in flags:
+            setattr(args, name, value)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(argv)
+    _apply_routing_profile(args, argv)
     if args.command == "editor-overlay":
         from .editor.overlay import export_overlay
         try:
@@ -1054,9 +1087,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     critical_feedback_trials=args.critical_feedback_trials,
                     package_access_options=PackageAccessOptions(
                         maximum_trials=args.package_access_trials,
+                        maximum_placement_probes=args.package_placement_probes,
                         reserve_plane_contacts=args.early_plane_stitch,
                         movement_nm=nm_from_mm(args.package_access_movement_mm),
                         maximum_pattern_trials=args.package_pattern_trials,
+                        maximum_partial_owner_nets=args.package_partial_owner_nets,
                         initial_pair_state_limit=args.package_initial_pair_states,
                         boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
                             destination_ports=args.package_destination_ports,
@@ -1073,9 +1108,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         fanout_options=fanout_options,
                         package_access_options=PackageAccessOptions(
                             maximum_trials=args.package_access_trials,
+                            maximum_placement_probes=args.package_placement_probes,
                             reserve_plane_contacts=args.early_plane_stitch,
                             movement_nm=nm_from_mm(args.package_access_movement_mm),
                             maximum_pattern_trials=args.package_pattern_trials,
+                            maximum_partial_owner_nets=args.package_partial_owner_nets,
                             initial_pair_state_limit=args.package_initial_pair_states,
                             boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
                                 destination_ports=args.package_destination_ports,
@@ -1122,17 +1159,33 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else result.drc
             )
             emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
+            filled_feedback = None
             try:
                 if args.verify_plane_fill:
                     emit(progress, "independent_kicad", "started")
-                plane_verification = (verify_filled_planes(
-                    output_board, kicad_cli=args.verify_plane_fill,
-                ) if args.verify_plane_fill else None)
+                plane_verification = None
+                if args.verify_plane_fill:
+                    report_location = args.report or Path(f"{board.name}.route-report.json")
+                    evidence_directory = args.native_evidence_directory or report_location.with_name(
+                        report_location.stem + ".native-" + uuid4().hex[:12])
+                    filled_feedback = improve_filled_copper(result, output_board,
+                        kicad_cli=args.verify_plane_fill,
+                        options=FilledCopperFeedbackOptions(maximum_trials=args.filled_copper_trials,
+                            maximum_search_states=args.filled_copper_search_states,
+                            maximum_blockers=args.maximum_ripup_blockers,
+                            maximum_dependency_expansions=args.zone_dependency_expansions),
+                        detailed_options=detailed_options, artifact_directory=evidence_directory,
+                        on_progress=progress)
+                    result = filled_feedback.pipeline
+                    output_board = filled_feedback.board
+                    plane_verification = filled_feedback.verification
+                    output_drc = run_physical_drc(output_board)
                 if plane_verification is not None:
                     from .plane_verify import remove_native_dangling_tracks
                     output_board, plane_verification = remove_native_dangling_tracks(
                         output_board, plane_verification, fixed,
-                        kicad_cli=args.verify_plane_fill)
+                        kicad_cli=args.verify_plane_fill,
+                        artifact_directory=evidence_directory / "native-cleanup")
                     if not plane_verification.matches(output_board):
                         raise RuntimeError("native cleanup verification is stale")
                     if output_board is not swept:
@@ -1140,7 +1193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     emit(progress, "independent_kicad", "finished", passed=plane_verification.passed,
                          unconnected=plane_verification.unconnected_count,
                          other_violations=plane_verification.other_violation_count)
-            except RuntimeError as exc:
+            except (RuntimeError, ValueError, OSError) as exc:
                 _print_error(args, "PLANE VERIFICATION ERROR", exc)
                 return 2
             duplicate_pending, duplicate_verified = reconcile_zone_lands(
@@ -1151,6 +1204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             closure_status = (
                 PhysicalFlowStatus.PASS
                 if routing_complete_with_fill(result, output_board, output_drc, plane_verification)
+                and (not args.verify_plane_fill or plane_verification is not None and plane_verification.passed)
                 and not duplicate_pending
                 and not plane_pending
                 else PhysicalFlowStatus.FAIL
@@ -1160,6 +1214,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "schema": "copperscript-route-board/v0.1",
                 "status": closure_status.value,
                 "erc_pass": not has_errors(diagnostics),
+                "routing_profile": args.routing_profile or "custom_defaults",
+                "work_limits": {name: getattr(args, name) for name in (
+                    "passes", "search_budget", "package_access_trials", "package_placement_probes",
+                    "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
+                    "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
+                    "filled_copper_search_states")},
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 "fabrication_ready": False,
                 "routing_complete": closure_status is PhysicalFlowStatus.PASS,
@@ -1184,7 +1244,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "failed_critical_nets": sorted(access.failed_critical_nets),
                     "hard_findings": access.hard_findings,
                     "accepted_moves": access.accepted_moves,
+                    "placement_probe_limit": args.package_placement_probes,
+                    "placement_probe_scope": "local ordinary exits, selected plane contacts and boundary access; excludes generated critical copper and native filled connectivity",
+                    "placement_stop_reason": access.placement_stop_reason,
+                    "placement_constraints": [asdict(item) for item in access.placement_constraints],
+                    "placement_constraint_scope": "at most 32 sampled rejected proposals; not an impossibility proof",
+                    "placement_probes": [{**asdict(probe), **{
+                        key: [f"{p.component}.{p.pad}" for p in getattr(probe, key)]
+                        for key in ("ordinary_pending_pads", "plane_pending_pads", "boundary_pending_pads", "lost_access_pads")}}
+                        for probe in access.placement_probes],
                     "pattern_trial_limit": args.package_pattern_trials,
+                    "partial_owner_net_limit": args.package_partial_owner_nets,
                     "initial_pair_state_limit": args.package_initial_pair_states,
                     "search_tiers": [asdict(tier) for tier in access.search_tiers],
                     "pattern_trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
@@ -1311,6 +1381,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
                     "decoupling_pending": [{"capacitor": f"{pad.component}.{pad.pad}", "reason": reason}
                                             for pad, reason in result.fanout.decoupling_pending],
+                    "protected_decoupling_track_count": len(result.fanout.decoupling_tracks),
                     **({"surface_escaped_pads": [f"{pad.component}.{pad.pad}"
                                                  for pad in result.fanout.surface_accesses]}
                        if result.fanout.surface_accesses else {}),
@@ -1413,6 +1484,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     report["plane_stitch"]["zone_fill_verified"] = plane_verification.passed
                     report["plane_stitch"]["zone_connectivity_verified"] = (
                         plane_verification.zone_connectivity_verified(output_board))
+            if filled_feedback is not None:
+                report["filled_copper_feedback"] = json.loads(filled_feedback.to_json())
             try:
                 emit(progress, "export", "started")
                 report_path.parent.mkdir(parents=True, exist_ok=True)

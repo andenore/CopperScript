@@ -42,6 +42,7 @@ class FanoutOptions:
     maximum_refined_two_leg_candidates: int = 1500
     maze_escapes: bool = False
     maze_state_budget: int = 12_000
+    surface_fallback: bool = True
 
     def __post_init__(self) -> None:
         if min(self.minimum_component_pads, self.maximum_neighbor_distance_nm,
@@ -77,10 +78,12 @@ class FanoutResult:
     created_tracks: tuple[TrackSegment, ...] = ()
     assignment: EscapeAssignmentReport | None = None
     boundary_accesses: Mapping[PadReference, RoutingAccess] | None = None
-    # Pins whose net may not change layer: owned surface paths to the package
-    # collar from the pad itself, never a via (plan R13).
+    # Owned surface paths, either required by a no-layer-change contract or
+    # selected when there is no legal dogbone-via site.
     surface_accesses: Mapping[PadReference, RoutingAccess] | None = None
     decoupling_pending: tuple[tuple[PadReference, str], ...] = ()
+    # Exact generated semantic feeds, separate from unrelated same-net launches.
+    decoupling_tracks: tuple[TrackSegment, ...] = ()
 
     @property
     def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
@@ -177,6 +180,7 @@ def route_fanout(
     surface = {reference: layer for reference, items in pin_by_ref.items()
                if (layer := _surface_layer(board, net_by_pad[reference],
                                            rules.get(net_by_pad[reference]), items[0][3])) is not None}
+    required_surface = frozenset(surface)
     collars = {}
     def surface_choices(reference, index, *, refined=False):
         # Collar and port bounds are the boundary stage defaults.
@@ -232,6 +236,15 @@ def route_fanout(
         if not choices and options.maze_escapes:
             choices = _maze_choices(board, clearance, net_by_pad[reference],
                                     pin_by_ref[reference], options)
+        if not choices and options.surface_fallback:
+            pose = pin_by_ref[reference][0][3]
+            side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
+            if side in routing_layers(board, net_by_pad[reference], rules.get(net_by_pad[reference])):
+                surface[reference] = side
+                choices = surface_choices(reference, clearance)
+                if not choices:
+                    choices = surface_choices(reference, clearance, refined=True)
+                    refined_counts[reference] = len(choices)
         domains[reference] = choices
 
     ordered = sorted((min(items, key=lambda item: item[0]) for items in pin_by_ref.values()), key=lambda item: (
@@ -251,22 +264,35 @@ def route_fanout(
     assignment = None
     if options.joint_escapes:
         def expand(reference):
-            if reference in surface:
+            if reference in required_surface:
                 index = RoutingClearanceIndex(board)
                 fine = surface_choices(reference, index, refined=True)
                 refined_counts[reference] = len(fine)
                 return tuple(dict.fromkeys((*surface_choices(reference, index), *fine)))
-            if not options.two_leg_escapes:
-                return refine(reference)
-            coarse = choices_for(reference, RoutingClearanceIndex(board), options,
-                                 elbows=True, multiple_orders=True)
+            coarse = (choices_for(reference, RoutingClearanceIndex(board), options,
+                                  elbows=True, multiple_orders=True) if options.two_leg_escapes else ())
             fine = refine(reference)
             refined_counts[reference] = len(fine)
             maze = (_maze_choices(board, RoutingClearanceIndex(board), net_by_pad[reference],
                                  pin_by_ref[reference], options) if options.maze_escapes else ())
             return tuple(dict.fromkeys((*coarse, *fine, *maze)))
+        def expand_surface(reference):
+            alternative_surface = ()
+            if options.surface_fallback:
+                pose = pin_by_ref[reference][0][3]
+                side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
+                if side in routing_layers(board, net_by_pad[reference], rules.get(net_by_pad[reference])):
+                    surface[reference] = side
+                    index = RoutingClearanceIndex(board)
+                    alternative_surface = (*surface_choices(reference, index),
+                                           *surface_choices(reference, index, refined=True))
+            # Compatible assignment may need a surface choice even when a via
+            # was legal in isolation. Both remain proposals, never permissions
+            # to evict input copper or abandon an already escaped identity.
+            return tuple(dict.fromkeys(alternative_surface))
         selected, assignment = improve_escape_assignment(
-            board, ordered_refs, domains, selected, expand, options.assignment_options)
+            board, ordered_refs, domains, selected, expand, options.assignment_options,
+            fallback_expand=expand_surface if options.surface_fallback else None)
 
     def materialize(selection):
         index = RoutingClearanceIndex(board)
@@ -310,16 +336,26 @@ def route_fanout(
                             created_tracks=bypass.created_tracks, pin_analysis=tuple(
                                 replace(item, selected_candidate_index=None,
                                         diagnostic="whole fanout proposal rejected by native DRC")
-                                for item in analysis), assignment=assignment)
+                                for item in analysis), assignment=assignment,
+                            decoupling_tracks=bypass.created_tracks,
+                            decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending))
+    def selected_surface(reference):
+        path, via = domains[reference][selected[reference]]
+        # None can also mean reusing an already installed dogbone via. That
+        # retains its original via handoff, without granting new ownership.
+        return (reference in surface and via is None and not any(
+            item.net == net_by_pad[reference] and item.position == path[-1].end
+            for item in board.vias))
     escapes = {reference: RoutingAccess(path[-1].end, surface[reference], path[0].start, path)
-               for reference in accesses if reference in surface
+               for reference in accesses if selected_surface(reference)
                for path in (domains[reference][selected[reference]][0],)}
     return FanoutResult(routed, MappingProxyType({reference: anchor for reference, anchor in accesses.items()
-                                                  if reference not in surface}), tuple(pending),
+                                                  if reference not in escapes}), tuple(pending),
                         len(tracks) + len(bypass.created_tracks), len(vias), tuple(vias), tuple(analysis),
                         (*bypass.created_tracks, *tracks), assignment,
                         surface_accesses=MappingProxyType(escapes) if surface else None,
-                        decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending))
+                        decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending),
+                        decoupling_tracks=bypass.created_tracks)
 
 
 def _surface_layer(board, net, rule, placement) -> CopperLayer | None:

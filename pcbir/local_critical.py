@@ -11,11 +11,13 @@ from .physical import BoardSide, CopperLayer, NetRoutingRule, PadKind, PhysicalB
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers
-from .surface_path import surface_path
+from .surface_path import surface_path, surface_path_between
+from .physical import nm_from_mm
 
 
 def local_surface_candidates(
     board: PhysicalBoard, rule: NetRoutingRule,
+    *, maze: bool = False,
 ) -> Iterator[tuple[TrackSegment, ...]]:
     """Yield deterministic, via-free octilinear trees for two to eight lands.
 
@@ -23,7 +25,9 @@ def local_surface_candidates(
     then Kruskal's minimum spanning tree on that bounded weighted graph. Every
     terminal remains a graph vertex, including repeated physical pad numbers.
     A missing edge is not a reason to drop a terminal. No maze search, long
-    arbitrary-angle shortcuts, component movement or cross-layer guesses occur.
+    arbitrary-angle shortcuts, component movement or cross-layer guesses occur
+    by default. The optional two-terminal, explicitly via-free fallback uses
+    the shared exact surface maze with a 20,000-state bound per permitted layer.
     """
     if rule.kind not in {RouteKind.CRITICAL, RouteKind.CLOCK, RouteKind.RF_FEED}:
         return
@@ -65,6 +69,10 @@ def local_surface_candidates(
         for first, second in combinations(range(len(terminals)), 2):
             path = surface_path(board, clearance, rule.net, terminals[first], terminals[second],
                                 width, layer, board.tracks)
+            if not path and maze and len(terminals) == 2 and rule.max_vias == 0:
+                path = surface_path_between(
+                    board, clearance, rule.net, terminals[first], terminals[second], width, layer,
+                    step_nm=nm_from_mm("0.1"), maximum_detour_nm=nm_from_mm(2), state_budget=20_000)
             if not path or any(
                 track.start.x_nm != track.end.x_nm and track.start.y_nm != track.end.y_nm
                 and abs(track.start.x_nm - track.end.x_nm) != abs(track.start.y_nm - track.end.y_nm)

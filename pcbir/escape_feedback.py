@@ -138,8 +138,8 @@ def improve_zone_escapes(
     from .zone_geometry import distribution_zone_nets
     zone_nets = distribution_zone_nets(initial.board)
     baseline_signal_failures = frozenset(_failed_signals(initial, zone_nets))
-    baseline_hard = _hard_drc_findings(baseline_stitch.board)
-    accepted_pending = len(baseline_stitch.pending_pads)
+    baseline_hard = _hard_drc_fingerprints(baseline_stitch.board)
+    accepted_pending = frozenset(baseline_stitch.pending_pads)
     base = initial.placement_and_global.board
     attempts: list[EscapeFeedbackAttempt] = []
     seen_copper: set[tuple[object, ...]] = set()
@@ -216,14 +216,14 @@ def improve_zone_escapes(
         late = incremental.plane_stitch if incremental else stitch_zone_pads(trial_pipeline.board, plane_options)
         failed_signals = _failed_signals(trial_pipeline, zone_nets)
         signal_failures = len(failed_signals)
-        hard = _hard_drc_findings(late.board)
+        hard = _hard_drc_fingerprints(late.board)
         accepted = (
             trial_pipeline.placement_and_global.global_route.status
             is GlobalRoutingStatus.SUCCESS
             and trial_pipeline.critical.status is not CriticalRoutingStatus.FAILED
             and hard <= baseline_hard
             and set(failed_signals).issubset(baseline_signal_failures)
-            and len(late.pending_pads) < accepted_pending
+            and frozenset(late.pending_pads) < accepted_pending
         )
         if accepted:
             decision = "accepted: fewer pending zone pads"
@@ -231,12 +231,12 @@ def improve_zone_escapes(
             decision = "rejected: global routing regressed"
         elif trial_pipeline.critical.status is CriticalRoutingStatus.FAILED:
             decision = "rejected: critical routing failed"
-        elif hard > baseline_hard:
+        elif not hard <= baseline_hard:
             decision = "rejected: hard DRC regressed"
         elif not set(failed_signals).issubset(baseline_signal_failures):
             decision = "rejected: signal routing regressed"
         else:
-            decision = "rejected: zone pad count did not improve"
+            decision = "rejected: zone pad identities did not improve"
         attempts.append(EscapeFeedbackAttempt(
             description, preflight.pending_pads, late.pending_pads,
             signal_failures, accepted, decision, failed_signals,
@@ -251,7 +251,7 @@ def improve_zone_escapes(
              pending_pads=[f"{p.component}.{p.pad}" for p in late.pending_pads],
              failed_signals=list(failed_signals))
         if accepted:
-            accepted_pending = len(late.pending_pads)
+            accepted_pending = frozenset(late.pending_pads)
             baseline_hard = hard
             if (accepted_pending
                     and routed_trials < options.maximum_trials):
@@ -356,7 +356,7 @@ def _repair_with_local_ripup(
         tracks=tuple((*fixed_tracks, *plane_tracks)),
         vias=tuple((*fixed_vias, *plane_vias)),
     )
-    baseline_hard = _hard_drc_findings(baseline.board)
+    baseline_hard = _hard_drc_fingerprints(baseline.board)
     baseline_failures = set(_failed_signals(initial, zone_nets))
     full_clearance = RoutingClearanceIndex(fixed)
     for track in movable_tracks:
@@ -418,8 +418,8 @@ def _repair_with_local_ripup(
                     != _unaffected_copper(trial_board, displaced)):
                 continue
             late = stitch_zone_pads(routed_board, plane_options)
-            if (len(late.pending_pads) >= len(baseline.pending_pads)
-                    or _hard_drc_findings(late.board) > baseline_hard):
+            if (not frozenset(late.pending_pads) < frozenset(baseline.pending_pads)
+                    or not _hard_drc_fingerprints(late.board) <= baseline_hard):
                 continue
             # Report total newly committed plane copper, including the
             # baseline contacts installed before this local transaction.
@@ -629,11 +629,13 @@ def _unaffected_copper(board: PhysicalBoard, changed: frozenset[str]):
 
 
 def _hard_drc_findings(board: PhysicalBoard) -> int:
-    return sum(
-        item.severity.value == "error"
-        and item.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
-        for item in run_physical_drc(board).findings
-    )
+    return len(_hard_drc_fingerprints(board))
+
+
+def _hard_drc_fingerprints(board: PhysicalBoard) -> frozenset[str]:
+    return frozenset(item.fingerprint for item in run_physical_drc(board).findings
+        if item.severity.value == "error"
+        and item.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"})
 
 
 def _candidate_placements(

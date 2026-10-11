@@ -43,6 +43,7 @@ def test_resume_searches_only_failed_branch_and_does_not_leak_partial_copper(mon
     monkeypatch.setattr(detailed, "_search", stop_after_branch)
     partial = search(board, options, guide, grid, RoutingClearanceIndex(board))
     assert not partial.result.connected and partial.checkpoint is not None
+    assert partial.result.search_budget_exhausted is budget_exhausted
     assert partial.tracks == partial.vias == () and not partial.resources
     assert board.tracks == board.vias == ()
     assert len(partial.checkpoint.remaining) == 1
@@ -54,6 +55,7 @@ def test_resume_searches_only_failed_branch_and_does_not_leak_partial_copper(mon
     monkeypatch.setattr(detailed, "_search", count)
     resumed = search(board, options, guide, grid, RoutingClearanceIndex(board), resume=partial.checkpoint)
     assert resumed.result.connected and resumed.result.resumed_branch_count == 1
+    assert not resumed.result.search_budget_exhausted
     assert len(resumed_calls) == 1
     from pcbir.drc import explicit_copper_connectivity
     routed = replace(board, tracks=resumed.tracks, vias=resumed.vias)

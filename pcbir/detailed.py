@@ -44,7 +44,7 @@ from .placement import (
 )
 from .routing import GlobalNetRoute, GlobalRoutingResult
 from .progress import ProgressCallback, emit
-from .routing_clearance import RoutingClearanceIndex
+from .routing_clearance import RoutingBlocker, RoutingClearanceIndex
 from .breakout import BreakoutRegions
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
@@ -99,6 +99,8 @@ class DetailedNetResult:
     orthogonal_mode_used: bool = False
     search_policy: DetailedSearchPolicy | None = None
     resumed_branch_count: int = 0
+    search_budget_exhausted: bool = False
+    retry_heuristic_weight_percent: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +126,18 @@ class DetailedRoutingMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class DetailedRepairTrial:
+    owner: str
+    index_digest: str
+    blockers: tuple[RoutingBlocker, ...]
+    displaced_nets: tuple[str, ...]
+    outcome: str
+    orders_tried: int = 0
+    reroute_searches: int = 0
+    merge_selected: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class DetailedRoutingResult:
     status: DetailedRoutingStatus
     board: PhysicalBoard
@@ -133,6 +147,7 @@ class DetailedRoutingResult:
     locked_via_count: int
     global_routing_fingerprint: str
     routing_fingerprint: str
+    repair_trials: tuple[DetailedRepairTrial, ...] = ()
 
     def to_json(self) -> str:
         document = {
@@ -140,6 +155,8 @@ class DetailedRoutingResult:
             "status": self.status.value,
             "global_routing_fingerprint": self.global_routing_fingerprint,
             "routing_fingerprint": self.routing_fingerprint,
+            "repair_trials": [asdict(item) for item in self.repair_trials],
+            "repair_trial_report_limit": 256,
             "locked_track_count": self.locked_track_count,
             "locked_via_count": self.locked_via_count,
             "metrics": {
@@ -164,6 +181,8 @@ class DetailedRoutingResult:
                     "orthogonal_mode_used": item.orthogonal_mode_used,
                     "search_policy": asdict(item.search_policy) if item.search_policy else None,
                     "resumed_branch_count": item.resumed_branch_count,
+                    "search_budget_exhausted": item.search_budget_exhausted,
+                    "retry_heuristic_weight_percent": item.retry_heuristic_weight_percent,
                 }
                 for item in self.nets
             ],
@@ -513,6 +532,7 @@ def route_detailed(
     history: dict[str, int] = {}
     best: _Pass | None = None
     completed: list[_Pass] = []
+    repair_trials: list[DetailedRepairTrial] = []
     completed_passes = 0
     for pass_index in range(1, options.maximum_passes + 1):
         emit(on_progress, "detailed_pass", "started", pass_index=pass_index,
@@ -614,6 +634,7 @@ def route_detailed(
         repaired = _repair_from_passes(
             board, general_nets, rules, guides, best, completed, options,
             fanout_accesses, on_progress=on_progress, reuse=reuse,
+            repair_trials=repair_trials,
         )
         improved = repaired.metrics.quality_vector < best.metrics.quality_vector
         emit(on_progress, "detailed_repair", "finished", selected=improved,
@@ -626,6 +647,7 @@ def route_detailed(
                  saved_seconds_estimate=round(reuse.saved_seconds, 3))
         if improved:
             best = repaired
+            repair_trials = [replace(item, merge_selected=True) for item in repair_trials]
     # Layer/direction preferences must not strand a signal merely because
     # they changed search ordering within a finite state budget. Compare a
     # neutral-cost reroute only when an ordinary net was left open; zone nets
@@ -657,7 +679,9 @@ def route_detailed(
                 best.metrics.total_conflict_overflow)
         emit(on_progress, "detailed_neutral_fallback", "finished", selected=improved)
         if improved:
-            return replace(neutral, nets=_with_search_policy(
+            return replace(neutral, repair_trials=tuple(
+                [replace(item, merge_selected=False) for item in repair_trials] + list(neutral.repair_trials))[:256],
+                nets=_with_search_policy(
                 neutral.nets, zone_nets, options, best.metrics, neutral_metrics, True,
             ))
     metrics = replace(best.metrics, passes=completed_passes)
@@ -727,6 +751,7 @@ def route_detailed(
         len(board.vias),
         global_route.routing_fingerprint,
         fingerprint,
+        tuple(repair_trials),
     )
 
 
@@ -780,6 +805,7 @@ def _search_detailed_net(
          connected=attempt.result.connected, track_count=len(attempt.tracks),
          via_count=len(attempt.vias), diagnostics=list(attempt.result.diagnostics),
          resumed_branch_count=attempt.result.resumed_branch_count,
+         search_budget_exhausted=attempt.result.search_budget_exhausted,
          final_pitch_nm=attempt.pitch_nm or options.pitch_nm, **telemetry, **context)
     return attempt
 
@@ -1010,10 +1036,13 @@ def _repair_from_passes(
     options: DetailedRouterOptions,
     fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
     *, on_progress: ProgressCallback | None = None, reuse: _SearchReuse | None = None,
+    repair_trials: list[DetailedRepairTrial] | None = None,
 ) -> _Pass:
     """Keep the best legal pass and add compatible routes found in other passes."""
 
     selected = {item.result.net: item for item in best.nets}
+    from .drc import physical_board_digest
+    source_digest = physical_board_digest(board)
     fanout_accesses = fanout_accesses or {}
     clearance = RoutingClearanceIndex(board)
     usage = dict(best.usage)
@@ -1096,6 +1125,17 @@ def _repair_from_passes(
         for candidate in candidates:
             blockers: set[str] = set()
             immutable = False
+            identities = tuple(sorted({item for track in candidate.tracks
+                for item in clearance.track_blocker_records(track)} | {
+                item for via in candidate.vias for item in clearance.via_blocker_records(via)},
+                key=lambda item: item.identity))
+            index_digest = sha256(repr((source_digest, clearance.additions())).encode()).hexdigest()
+            def record(outcome, orders=0, searches=0):
+                item = DetailedRepairTrial(net.name, index_digest, identities,
+                    tuple(sorted(blockers)), outcome, orders, searches)
+                if repair_trials is not None and len(repair_trials) < 256:
+                    repair_trials.append(item)
+                emit(on_progress, "detailed_blocker_transaction", "finished", stage="blocker_transaction", **asdict(item))
             for track in candidate.tracks:
                 names, locked = clearance.blocking_track_nets(track)
                 blockers.update(names)
@@ -1105,11 +1145,13 @@ def _repair_from_passes(
                 blockers.update(names)
                 immutable |= locked
             if immutable or not 1 <= len(blockers) <= options.maximum_ripup_blockers:
+                record("immutable_or_oversized_blocker_set" if blockers or immutable else "no_blocker")
                 continue
             if any(
                 name not in net_by_name or not selected[name].result.connected
                 for name in blockers
             ):
+                record("ineligible_blocker")
                 continue
             trial = {**selected, net.name: candidate}
             trial_clearance = RoutingClearanceIndex(board)
@@ -1129,15 +1171,18 @@ def _repair_from_passes(
                     net.name, via.position, via.size_nm, via.from_layer, via.to_layer,
                 ) for via in candidate.vias
             ):
+                record("candidate_geometry_rejected")
                 continue
             for track in candidate.tracks:
                 trial_clearance.add_track(track)
             for via in candidate.vias:
                 trial_clearance.add_via(via)
             rerouted: dict[str, _NetAttempt] = {}
+            orders_tried = searches = 0
             # Order is a first-class repair variable. Rebuild the index for
             # every trial so failed partial reroutes cannot leak copper.
             for order in _ripup_orders(blockers):
+                orders_tried += 1
                 trial_clearance = RoutingClearanceIndex(board)
                 for name, item in trial.items():
                     if not item.result.connected or name in blockers or name == net.name:
@@ -1155,6 +1200,7 @@ def _repair_from_passes(
                     options.minimum_repair_pitch_nm,
                     min(options.pitch_nm, candidate.pitch_nm or options.pitch_nm)))
                 for blocker_name in order:
+                    searches += 1
                     blocker = net_by_name[blocker_name]
                     attempt = _search_detailed_net(
                         board, blocker, rules.get(blocker.name),
@@ -1173,7 +1219,9 @@ def _repair_from_passes(
                 if len(rerouted) == len(blockers):
                     break
             if len(rerouted) != len(blockers):
+                record("displaced_net_reroute_failed", orders_tried, searches)
                 continue
+            record("accepted_in_merge", orders_tried, searches)
             selected.update(rerouted)
             selected[net.name] = candidate
             clearance = trial_clearance
@@ -1189,6 +1237,13 @@ def _repair_from_passes(
             maximum_search_states=(
                 options.maximum_search_states * options.repair_budget_multiplier
             ),
+            # Preserve both baseline passes. Diversify the existing final strict
+            # retry only after a real search-budget exception, not every open.
+            # Same states/pitch/rules/ownership; weighted search may choose a
+            # longer legal path, never a waiver of source length/width limits.
+            heuristic_weight_percent=(max(200, options.heuristic_weight_percent)
+                if selected[net.name].result.search_budget_exhausted
+                else options.heuristic_weight_percent),
         )
         attempt = _search_detailed_net(
             board, net,
@@ -1197,6 +1252,9 @@ def _repair_from_passes(
             resume=checkpoints.get(net.name),
             on_progress=on_progress, stage="final_retry", reuse=reuse,
         )
+        if repair_options.heuristic_weight_percent != options.heuristic_weight_percent:
+            attempt = replace(attempt, result=replace(attempt.result,
+                retry_heuristic_weight_percent=repair_options.heuristic_weight_percent))
         if not attempt.result.connected:
             selected[net.name] = attempt
             continue
@@ -1452,8 +1510,10 @@ def _route_net(
             orthogonal_mode_used |= resume.orthogonal_mode_used
             resumed_branches = max(0, len({entry[0] for entry in resume.chosen}) - 1)
 
-    def suspend(message: str) -> _NetAttempt:
+    def suspend(message: str, *, budget_exhausted: bool = False) -> _NetAttempt:
         failure = _failed(name, message)
+        if budget_exhausted:
+            failure = replace(failure, result=replace(failure.result, search_budget_exhausted=True))
         if not tree or not route_edges:
             return failure
         checkpoint = _BranchCheckpoint(board, _CheckpointGrid(grid.layers, grid.xs, grid.ys), name, pads, tuple(allowed), width,
@@ -1493,6 +1553,7 @@ def _route_net(
                 return suspend(
                     f"search budget of {options.maximum_search_states} states exhausted "
                     f"for {target_entry[0].component}.{target_entry[0].pad}",
+                    budget_exhausted=True,
                 )
             try:
                 found = _search(
@@ -1507,6 +1568,7 @@ def _route_net(
                 return suspend(
                     f"octilinear and fallback search budgets exhausted "
                     f"for {target_entry[0].component}.{target_entry[0].pad}",
+                    budget_exhausted=True,
                 )
         if found is None:
             return suspend(f"detailed search cannot reach {target_entry[0].component}.{target_entry[0].pad}")

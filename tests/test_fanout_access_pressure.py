@@ -71,7 +71,8 @@ def test_locked_input_exit_retained_when_domain_is_empty(monkeypatch):
     base = board()
     monkeypatch.setattr(fanout, "_candidates", candidates)
     first = fanout.route_fanout(base, options(), only_nets=frozenset({"A"}))
-    second = fanout.route_fanout(first.board, options(), only_nets=frozenset({"B"}))
+    # This test measures the exhausted dogbone domain, not the new surface domain.
+    second = fanout.route_fanout(first.board, options(surface_fallback=False), only_nets=frozenset({"B"}))
     assert second.pending_pads == (PadReference("U", "2"),)
     assert second.pin_analysis[0].legal_candidate_count == 0
     assert second.pin_analysis[0].diagnostic == "no legal candidate against immutable input"
@@ -149,7 +150,8 @@ def test_adaptive_radial_sampling_finds_narrow_off_grid_via_window():
     base = replace(base,footprints={**base.footprints,"two":package},copper_keepouts=keepouts)
     settings = fanout.FanoutOptions(minimum_component_pads=2,
         maximum_neighbor_distance_nm=nm_from_mm(5),two_leg_escapes=False,joint_escapes=False)
-    coarse = fanout.route_fanout(base,replace(settings,refinement_step_nm=settings.step_nm))
+    coarse = fanout.route_fanout(base,replace(settings,refinement_step_nm=settings.step_nm,
+                                           surface_fallback=False))
     assert PadReference("U","1") in coarse.pending_pads
     fine = fanout.route_fanout(base,settings)
     assert fine.accesses[PadReference("U","1")] == Point.mm(4.9,6)

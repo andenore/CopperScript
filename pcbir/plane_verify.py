@@ -8,7 +8,8 @@ parses KiCad's independent connectivity/DRC report.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
+from contextlib import nullcontext
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -19,7 +20,97 @@ from .backends import KiCadPcbBackend
 from .backends.kicad_project import kicad_export_digest, write_kicad_project
 from .drc import physical_board_digest
 from .manufacturing import CommandRunner, _subprocess_runner
-from .physical import PhysicalBoard, RouteKind, TrackSegment
+from .physical import BoardSide, CopperLayer, PadKind, PhysicalBoard, RouteKind, TrackSegment
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCopperItem:
+    """Exact export UUID binding; unknown objects never become repair authority."""
+    uuid: str
+    kind: str = "unknown"
+    net: str | None = None
+    component: str | None = None
+    pad: str | None = None
+    layers: tuple[str, ...] = ()
+    positions_nm: tuple[tuple[int, int], ...] = ()
+    region: str | None = None
+    index: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NativeFinding:
+    category: str
+    type: str
+    description: str
+    items: tuple[NativeCopperItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeFilledRegion:
+    zone_uuid: str
+    fragment_digest: str
+    net: str
+    layer: str
+    vertices_nm: tuple[tuple[int, int], ...]
+
+
+def _filled_regions(pcb_text: str, objects: dict[str, NativeCopperItem]):
+    from .importers.kicad_mod import _parse_sexpr, _children, _first, _atom
+    from .physical import nm_from_mm
+    root = _parse_sexpr(pcb_text, "native filled board")
+    regions = []
+    for zone in _children(root, "zone"):
+        uuid = _atom(_first(zone, "uuid"), 1)
+        binding = objects.get(uuid)
+        for polygon in _children(zone, "filled_polygon"):
+            if binding is None or binding.kind != "zone" or binding.net is None:
+                raise RuntimeError("native filled polygon has no exact source-zone UUID binding")
+            layer = _atom(_first(polygon, "layer"), 1)
+            if layer not in binding.layers:
+                raise RuntimeError("native filled polygon has an unexpected layer")
+            points = _first(polygon, "pts")
+            if points is None:
+                raise RuntimeError("native filled polygon lacks vertices")
+            vertices = tuple((nm_from_mm(_atom(point, 1)), nm_from_mm(_atom(point, 2)))
+                             for point in _children(points, "xy"))
+            if len(vertices) < 3:
+                raise RuntimeError("native filled polygon has insufficient vertices")
+            regions.append(NativeFilledRegion(uuid, sha256(repr((uuid, layer, vertices)).encode()).hexdigest(),
+                binding.net, layer, vertices))
+    return tuple(regions)
+
+
+def native_object_map(board: PhysicalBoard) -> dict[str, NativeCopperItem]:
+    from .backends.kicad_pcb import _stable_uuid
+    from .placement import transformed_local_point
+    assigned = {(pad.component, pad.pad): net.name for net in board.nets for pad in net.pads}
+    objects = {}
+    def add(kind, parts, **kwargs):
+        uuid = _stable_uuid(board.name, kind, *parts)
+        objects[uuid] = NativeCopperItem(uuid, kind, **kwargs)
+    for pose in board.placements:
+        for index, pad in enumerate(board.footprints[pose.footprint].pads):
+            position = transformed_local_point(pose, pad.position)
+            layers = ((CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK,)
+                      if pad.kind is PadKind.SMD else board.stackup.copper_layers)
+            add("pad", (pose.reference, str(index), pad.number),
+                net=assigned.get((pose.reference, pad.number)), component=pose.reference, pad=pad.number,
+                layers=tuple(layer.value for layer in layers),
+                positions_nm=((position.x_nm, position.y_nm),), index=index)
+    for index, track in enumerate(board.tracks):
+        add("segment", (str(index),), net=track.net, layers=(track.layer.value,), index=index,
+            positions_nm=((track.start.x_nm, track.start.y_nm), (track.end.x_nm, track.end.y_nm)))
+    for index, via in enumerate(board.vias):
+        first, last = sorted((board.stackup.copper_layers.index(via.from_layer),
+                              board.stackup.copper_layers.index(via.to_layer)))
+        add("via", (str(index),), net=via.net, index=index,
+            layers=tuple(layer.value for layer in board.stackup.copper_layers[first:last+1]),
+            positions_nm=((via.position.x_nm, via.position.y_nm),))
+    for zone in board.zones:
+        for layer in zone.layers:
+            add("zone", (zone.id, layer.value), net=zone.net, layers=(layer.value,), region=zone.id,
+                positions_nm=tuple((point.x_nm, point.y_nm) for point in zone.outline.outer.vertices))
+    return objects
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +126,9 @@ class PlaneVerification:
     other_violation_count: int
     findings: tuple[str, ...]
     dangling_track_uuids: tuple[str, ...] = ()
+    native_findings: tuple[NativeFinding, ...] = ()
+    artifact_directory: str | None = None
+    filled_regions: tuple[NativeFilledRegion, ...] = ()
 
     def matches(self, board: PhysicalBoard) -> bool:
         """Reject evidence reused after any source-board geometry change."""
@@ -71,6 +165,9 @@ class PlaneVerification:
             "other_violation_count": self.other_violation_count,
             "findings": list(self.findings),
             "dangling_track_uuids": list(self.dangling_track_uuids),
+            "native_findings": [asdict(item) for item in self.native_findings],
+            "artifact_directory": self.artifact_directory,
+            "filled_regions": [asdict(item) for item in self.filled_regions],
         }, indent=2, sort_keys=True) + "\n"
 
 
@@ -80,16 +177,23 @@ def verify_filled_planes(
     kicad_cli: Path,
     runner: CommandRunner | None = None,
     qualified_major: int = 10,
+    artifact_directory: Path | None = None,
 ) -> PlaneVerification:
     """Refill a private KiCad board and require zero DRC/connectivity findings."""
 
     runner = runner or _subprocess_runner
-    with tempfile.TemporaryDirectory(prefix="copperscript-plane-") as directory:
+    if artifact_directory is not None:
+        # Never overwrite an existing candidate or production evidence directory.
+        artifact_directory.mkdir(parents=True, exist_ok=False)
+    context = (tempfile.TemporaryDirectory(prefix="copperscript-plane-")
+               if artifact_directory is None else nullcontext(str(artifact_directory)))
+    with context as directory:
         stage = Path(directory)
         version_result = runner((str(kicad_cli), "--version"), stage)
         if version_result.returncode:
             raise RuntimeError(f"KiCad version query failed: {version_result.stderr}")
-        version = version_result.stdout.strip().splitlines()[0]
+        lines = version_result.stdout.strip().splitlines()
+        version = lines[0] if lines else ""
         match = re.match(r"(\d+)", version)
         if match is None or int(match.group(1)) != qualified_major:
             raise RuntimeError(
@@ -102,6 +206,10 @@ def verify_filled_planes(
         pcb_path = stage / pcb_artifact.name
         # Preserve the backend's exact UTF-8 bytes on Windows as well as Unix.
         write_kicad_project(manifest, pcb_path)
+        if artifact_directory is not None:
+            original = stage / "input"
+            original.mkdir()
+            write_kicad_project(manifest, original / pcb_artifact.name)
         export_digest = kicad_export_digest(manifest)
         report_path = stage / "drc.json"
         command = [str(kicad_cli), "pcb", "drc", "--format", "json",
@@ -120,6 +228,8 @@ def verify_filled_planes(
             report = json.loads(report_bytes)
         except (ValueError, UnicodeDecodeError) as exc:
             raise RuntimeError("KiCad produced an invalid JSON DRC report") from exc
+        if not isinstance(report, dict):
+            raise RuntimeError("KiCad produced a non-object DRC report")
         violations = report.get("violations")
         unconnected = report.get("unconnected_items")
         if not isinstance(violations, list) or not isinstance(unconnected, list):
@@ -134,18 +244,40 @@ def verify_filled_planes(
             if _violation_type(item) == "track_dangling"
             for entry in item.get("items", ()) if isinstance(entry, dict)
             and isinstance(entry.get("uuid"), str)}))
+        objects = native_object_map(board)
+        mapped = []
+        for category, entries in (("unconnected", unconnected), ("violation", violations)):
+            for item in entries:
+                raw_items = item.get("items", [])
+                if not isinstance(raw_items, list):
+                    raise RuntimeError("malformed KiCad DRC objects")
+                bindings = []
+                for entry in raw_items:
+                    if not isinstance(entry, dict) or not isinstance(entry.get("uuid"), str):
+                        raise RuntimeError("malformed KiCad DRC object UUID")
+                    uuid = entry["uuid"]
+                    bindings.append(objects.get(uuid, NativeCopperItem(uuid)))
+                mapped.append(NativeFinding(category, _violation_type(item),
+                    str(item.get("description", "")), tuple(bindings)))
+        try:
+            filled_regions = _filled_regions(pcb_path.read_text(encoding="utf-8"), objects) if board.zones else ()
+        except (ValueError, TypeError, IndexError, ArithmeticError) as exc:
+            raise RuntimeError("unsupported or malformed native filled polygons") from exc
         return PlaneVerification(
             not findings,
             physical_board_digest(board), export_digest,
             sha256(pcb_path.read_bytes()).hexdigest(),
             sha256(report_bytes).hexdigest(), version,
             len(unconnected), len(islands), len(others), findings, dangling,
+            tuple(mapped), str(stage.resolve()) if artifact_directory is not None else None,
+            filled_regions,
         )
 
 
 def remove_native_dangling_tracks(
     board: PhysicalBoard, evidence: PlaneVerification, protected: Counter[TrackSegment],
     *, kicad_cli: Path,
+    artifact_directory: Path | None = None,
 ) -> tuple[PhysicalBoard, PlaneVerification]:
     """Drop only KiCad-identified ordinary dead ends when fresh refill proves safe."""
     if (not evidence.matches(board) or evidence.unconnected_count or evidence.island_count
@@ -165,7 +297,7 @@ def remove_native_dangling_tracks(
         return board, evidence
     candidate = replace(board, tracks=tuple(track for index, track in enumerate(board.tracks)
                                              if index not in selected))
-    checked = verify_filled_planes(candidate, kicad_cli=kicad_cli)
+    checked = verify_filled_planes(candidate, kicad_cli=kicad_cli, artifact_directory=artifact_directory)
     return (candidate, checked) if checked.passed else (board, evidence)
 
 

@@ -1,5 +1,22 @@
 # Agent guidance
 
+## Shared placement and routing
+
+Use the standard `route-board` pipeline and bounded routing profiles for new
+solver work. Board projects may wrap commands and supply electrical/mechanical
+intent, macro assets and qualification data; do not add selected-net/pad repair
+algorithms there. Algorithms belong in CopperScript and reusable component
+contracts in CopperLib. Follow [the autonomous routing plan](docs/autonomous-routing-plan.md)
+and [native-feedback limits](docs/filled-copper-feedback.md).
+
+Reproduce failures as small real-geometry cases with renamed nets/components.
+Preserve successful escape identities, fixed/rigid placement intent, immutable
+macro copper and required via-array multiplicity. Trial mutable dependencies
+transactionally with bounded work, exact blockers, fresh validation and complete
+rollback. Report unresolved constraints and missing tools without claiming
+impossibility. Keep historical consumer helpers until equivalent shared behavior
+is verified; do not extend their board-specific repair logic.
+
 ## Human-readable numeric output
 
 Use ordinary fixed-point numbers and explicit engineering units in diagnostics,

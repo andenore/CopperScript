@@ -46,13 +46,14 @@ transactional whole-board acceptance.
 
 ## Implemented first increment
 
-With `route-board --fanout`, the order is now:
+With `route-board` (package access enabled by default), the order is now:
 
 1. Legal placement and coarse global guides.
 2. Joint ordinary crowded-pin fanout against the unrouted placement.
 3. Profile-driven critical routing around those local reservations.
    Pairs still use the coupled search; generic fanout never creates their stubs.
-4. Explicitly requested early plane contacts, checked against both stages.
+4. Source-declared inner-plane contacts by default, checked against both stages;
+   explicit selectors remain available for diagnostics.
 5. Allocate compatible provisional ordinary paths beyond package collars.
    Bounded cross-owner pattern negotiation and placement feedback repair failed
    access before the fail-closed gate.
@@ -73,6 +74,13 @@ whose source, created tracks and created vias match the unrouted board. The
 locked-copper prefix includes these reservations; critical reports expose
 `reserved_track_count`/`reserved_via_count`. Their ownership remains with fanout,
 including downstream unused-via/abandoned-stub cleanup.
+
+An alternate plane-first trial uses `plane_stitch_options` to generate fresh
+contact copper inside the critical stage from source intent and validated
+ordinary reservations. Reports separately expose `plane_reservation_track_count`
+and `plane_reservation_via_count`; contacts never become ordinary-owned copper
+or filled-connectivity evidence. Critical-only placement feedback and incremental
+prefix reuse require a full package-preflight rebuild for this ownership order.
 
 Placement trials rebuild global guides, fanout, critical copper and selected
 plane contacts from an unrouted source. They try small translations with growing
@@ -101,8 +109,12 @@ different ordinary pattern:
    all-owner critical/plane revalidation before acceptance.
 2. When selected plane contacts or ordinary allocation failed, propose ordinary escapes against both
    that critical copper and provisional plane contacts. A second bounded
-   proposal can use critical copper alone. For critical-only failures there is
-   just one useful ordering.
+   proposal can use critical copper alone. If the probe cannot establish contacts,
+   or rebuilding critical copper around the new ordinary pattern loses contacts,
+   use the second trial for `plane_first`: propose ordinary exits around early
+   contacts, then freshly regenerate contacts before routing critical owners.
+   The default two-trial bound remains unchanged, with no blanket power-first
+   policy. For critical-only failures there is just one useful ordering.
 3. Discard probe copper. Rebase only the proposed fanout-owned tracks/vias onto
    the original source, then rerun critical routing and selected plane contacts
    from scratch against those reservations.
@@ -120,7 +132,9 @@ checked. Unrequested ground pads still belong to the late plane stage.
 
 `--package-pattern-trials` selects a budget of 0, 1 or 2 per search tier (default 2). Ready
 preflights do not run probes. Failed clean-source critical probes and duplicate
-ordinary patterns are not repeatedly searched. `package_access.pattern_trials`
+geometry/owner-order combinations are not repeatedly searched. An unchanged
+ordinary pattern can still be revalidated with a different owner order.
+`package_access.pattern_trials`
 records strategy, pending identities, critical failures, outcome and whether
 the proposal received all-owner revalidation; progress events separate probe
 and trial costs for profiling. These records describe the selected placement;
@@ -136,7 +150,45 @@ patterns and `package_access.search_tiers` with total work, including rejected
 probes/trials. Limited failure is not evidence of impossibility. Exact/native
 geometry, coupled pair profiles and all readiness gates remain unchanged.
 
-Defaults are eight evaluated placement trials and a 0.5 mm initial movement.
+### Feasibility-ranked placement feedback
+
+When access remains blocked, the controller measures a bounded look-ahead of
+legal whole-unit poses before choosing expensive full-routing trials. Each
+disposable probe materializes the source macro/required-array owners, runs real
+ordinary fanout, selected plane stitching and ordinary boundary allocation,
+and checks hard native geometry. It records pending pin identities and lost
+previously successful ordinary access. No probe copper is committed.
+
+Candidates rank first by hard findings, lost access, newly pending pins and
+remaining pending pins, then by the shared placement quality vector (including
+escape-channel demand, congestion and weighted wire length). This can prefer a
+slightly longer signal route when the shorter placement cannot reach a declared
+plane contact. Equal ranks retain deterministic proposal order.
+
+Generated critical routes are deliberately excluded from these local probes;
+authored macro copper is retained. Local success is only a ranking hint. Every
+selected pose receives fresh global routing and complete ordinary/critical/
+plane/boundary preflight, with the existing identity-preserving acceptance gate.
+A candidate breaking a critical length/via/layer/coupling requirement is rolled
+back even when its local probe looks complete. Native filled connectivity and
+RF/power/release approval remain separate gates.
+
+`--package-placement-probes` is a total budget per feedback call (default 16),
+shared across accepted moves. Probes do not consume or expand the full placement
+trial budget. Once exhausted, unprobed moves retain the existing proposal order;
+zero probes explicitly restores that order. Fixed or already-ready placements
+and disabled placement feedback do not launch probes. This is bounded feedback
+ranking, not a change to every analytical-placement inner loop or proof that the
+best legal placement has been found.
+
+Reports expose `placement_probes`, `placement_probe_scope`, the probe limit,
+and `placement_probe_index` on full trials. Progress separates ranking/probe work
+from full trials. `placement_stop_reason` distinguishes ready, disabled,
+trial-budget exhaustion, no improvement and no legal unseen proposals. The last
+status does not prove physical impossibility or identify every conflicting rule;
+more detailed constraint explanations remain planned.
+
+Defaults are eight evaluated full placement trials and a 0.5 mm initial movement.
 Trial runtime can be substantial because critical routing is rebuilt. With
 fanout enabled, `--critical-feedback-trials` adds budget to this unified
 controller rather than running a second critical-first placement controller.
@@ -145,7 +197,7 @@ controller rather than running a second critical-first placement controller.
 uv run --no-sync python -m copperscript route-board examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
   --fanout --package-pattern-trials 2 `
-  --package-access-trials 8 --package-access-movement-mm 0.5 `
+  --package-access-trials 8 --package-placement-probes 16 --package-access-movement-mm 0.5 `
   --report build/access-route-report.json -o build/access-board.kicad_pcb
 ```
 
@@ -156,8 +208,10 @@ the gate or pattern negotiation. Locked Git providers supply footprints without
 a sibling CopperLib checkout. Before an offline run, populate both source and
 footprint caches with `copper audit-footprints examples/full_vertical/board.copper
 --locked` (or the equivalent `uv run --no-sync python -m copperscript` command).
-Standalone fanout remains usable for partial diagnostics, and a flow
-without `--fanout` retains its existing behavior. Report `package_access`
+Standalone fanout remains usable for partial diagnostics. `--fanout` remains
+accepted; `--no-fanout` explicitly selects the old no-package-preflight flow.
+The lower-level Python API still accepts `fanout_options=None` for that flow.
+Report `package_access`
 records readiness, pending identities, critical failures, hard findings,
 placement trial outcomes and whether ordinary area routing started.
 
@@ -190,11 +244,14 @@ placement trial outcomes and whether ordinary area routing started.
 - [ ] Repeat the full-board run, independent filled-zone/DRC checks and layer
   review before claiming closure or manufacturing readiness.
 
-This increment still allocates vias for eligible ordinary crowded SMD pins;
-cleanup may remove them when a verified surface path needs no transition. It
-does not yet generate via-free surface access directly, include all
-ground contacts by default, or prove access for every package type. An NC needs
-no exit. Native/KiCad connectivity and the manufacturing gates remain required.
+Eligible ordinary crowded SMD pins normally receive dogbones; cleanup may remove
+them when a verified surface path needs no transition. No-layer-change contracts
+and unavailable dogbone sites now use directly validated via-free surface escapes.
+Selected plane contacts participate in preflight, but it does not prove filled
+continuity or access for every package type. An NC needs no exit. Native/KiCad
+connectivity and the manufacturing gates remain required. See
+[bounded filled-copper feedback](filled-copper-feedback.md) for native repair,
+placement rejection explanations and the surface fallback.
 
 ### Regression evidence
 

@@ -177,6 +177,10 @@ assembly approvals remain outstanding. New review archives have
 
 ### Local plane-access repair follow-up
 
+The next shared-placement/routing work is tracked in
+[the autonomous routing checklist](autonomous-routing-plan.md). Board-local
+repair selectors are a regression source, not the target user workflow.
+
 Local surface searches now emit and reuse the same region-bounded neckdown
 pieces as detailed routing. Both cheap paths and the via-search fallback check
 the actual widths; compressed maze paths are rechecked. An existing narrow

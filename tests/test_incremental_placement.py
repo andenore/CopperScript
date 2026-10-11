@@ -62,6 +62,17 @@ def repair(case, **overrides):
     return repair_placement_trial(initial, trial, baseline, early, plane, **(kwargs | overrides))
 
 
+@pytest.mark.parametrize("field", ("plane_reservation_track_count", "plane_reservation_via_count"))
+def test_plane_before_critical_prefix_requires_full_preflight_rebuild(placement_case, field):
+    initial, *rest = placement_case
+    case = (replace(initial, critical=replace(initial.critical, **{field: 1})), *rest)
+    events = []
+    assert repair(case, on_progress=lambda *e: events.append(e)) is None
+    assert any(p == "zone_incremental_guard" and e == "fallback"
+               and d["reason"] == "plane-before-critical reservations require full preflight"
+               for p, e, d in events)
+
+
 def test_real_move_repairs_incident_net_and_preserves_critical_copper(placement_case):
     initial, trial, baseline, _, _, _ = placement_case
     before = initial.board

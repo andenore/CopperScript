@@ -29,11 +29,13 @@ from .critical_feedback import (
     improve_critical_placement,
 )
 from .package_access import (PackageAccessOptions, PackageAccessResult, PackageAccessTrial, PackagePatternTrial,
-                             PackageSearchTier,
+                             PackageSearchTier, PackagePlacementProbe, PackagePlacementConstraint,
                              preflight_package_access, improve_package_access)
 from .boundary_access import (BoundaryAccessOptions, BoundaryAccessResult, BoundaryPort,
                               PackageCollar, analyze_boundary_access, reserve_boundary_access)
 from .pin_escape import RoutingAccess
+from .filled_feedback import (FilledCopperFeedbackOptions, FilledCopperFeedbackResult,
+                              FilledCopperTrial, improve_filled_copper)
 from .detailed import (
     DetailedNetResult,
     DetailedNode,
@@ -625,6 +627,12 @@ __all__ = [
     "PackageAccessTrial",
     "PackagePatternTrial",
     "PackageSearchTier",
+    "PackagePlacementProbe",
+    "FilledCopperFeedbackOptions",
+    "FilledCopperFeedbackResult",
+    "FilledCopperTrial",
+    "improve_filled_copper",
+    "PackagePlacementConstraint",
     "preflight_package_access",
     "improve_package_access",
     "route_any_angle",

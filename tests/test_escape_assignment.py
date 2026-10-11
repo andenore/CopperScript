@@ -79,9 +79,36 @@ def test_locked_subset_copper_is_not_a_replaceable_escape(monkeypatch):
     base = board()
     monkeypatch.setattr(fanout,"_candidates",trap_candidates)
     installed = fanout.route_fanout(base,opts(two_leg_escapes=False),only_nets=frozenset({"A"}))
-    trial = fanout.route_fanout(installed.board,opts(two_leg_escapes=False),only_nets=frozenset({"B"}))
+    # Isolate dogbone replacement; the default may now find a legal surface exit.
+    trial = fanout.route_fanout(installed.board,opts(two_leg_escapes=False, surface_fallback=False),only_nets=frozenset({"B"}))
     assert trial.board is installed.board and trial.pending_pads == (PadReference("U","2"),)
     assert not trial.created_tracks and not trial.created_vias and not trial.assignment.trials
+    surface = fanout.route_fanout(installed.board, opts(two_leg_escapes=False), only_nets=frozenset({"B"}))
+    assert not surface.pending_pads and surface.surface_accesses
+    assert surface.board.tracks[:len(installed.board.tracks)] == installed.board.tracks
+    assert surface.board.vias[:len(installed.board.vias)] == installed.board.vias
+    assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING"}
+                   for f in run_physical_drc(surface.board).findings)
+
+
+def test_joint_domain_can_mix_surface_and_via_without_misclassifying_ownership(monkeypatch):
+    base = board()
+    # Each dogbone is legal alone but both have the same only site. Joint
+    # expansion may keep one dogbone and use a surface exit for the other.
+    monkeypatch.setattr(fanout, "_candidates", lambda *args: (Point.mm(3, 7),))
+    old = fanout.route_fanout(base, opts(two_leg_escapes=False, surface_fallback=False,
+                                       refinement_step_nm=nm_from_mm("0.5")))
+    new = fanout.route_fanout(base, opts(two_leg_escapes=False,
+                                       refinement_step_nm=nm_from_mm("0.5")))
+    assert old.pending_pads and not new.pending_pads
+    assert new.accesses and new.surface_accesses
+    assert set(new.accesses).isdisjoint(new.surface_accesses)
+    assert new.escaped_pads == {PadReference("U", "1"), PadReference("U", "2")}
+    assert len(new.created_vias) == len(new.accesses) == 1
+    assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING"}
+                   for f in run_physical_drc(new.board).findings)
+    assert new == fanout.route_fanout(base, opts(two_leg_escapes=False,
+                                               refinement_step_nm=nm_from_mm("0.5")))
 
 
 def test_exact_whole_board_gate_rolls_failed_assignment_back_to_greedy(monkeypatch):
