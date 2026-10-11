@@ -67,6 +67,15 @@ statuses. Endpoint sampling is bounded to 64 anchors per reported zone item;
 failure of this sampled search does not prove there is no physical solution.
 Anchors are sampled round-robin across eligible fragments, so a busy first
 fragment cannot consume the entire allowance before another is represented.
+Repair proposals also share the trial allowance round-robin across distinct
+open nets. Equivalent net/layer/endpoint proposals are deduplicated before
+spending a trial; source names do not select the repair policy.
+For a non-zone native item, anchors may also come from its actual connected
+bare-copper component. Existing plated transitions can therefore supply a
+same-layer bridge endpoint even when KiCad names two opposite-layer tracks.
+Same-net labels, installed-component internal joins and source-zone outlines
+do not join this graph. Sampling stays capped at 64 nearby explicit anchors;
+no new transition is invented and fresh native acceptance remains mandatory.
 
 1. Prefer a legal surface bridge with **no displaced owner**. With mutable area
    copper present, spend at most one quarter of the per-trial bridge state budget
@@ -79,9 +88,27 @@ fragment cannot consume the entire allowance before another is represented.
    This is minimal for the chosen path, not a globally optimal blocker-set proof.
 4. Restore all unaffected copper exactly, preserve the immutable prefix and all
    accepted contacts/bridges, reroute displaced nets and check hard physical DRC.
+   Dependency routes with retained package exits must use those ports: flexible
+   pad alternatives cannot abandon a preserved launch via's other-layer witness.
+   Main routing may have replaced a collar witness with ordinary area copper.
+   If its owned launch via remains, the original witness can be regenerated
+   only after actual land-path and exact clearance verification against the
+   reserved prefix/bridge, then rerouted through that port. The shared cone
+   allowance is 64 regenerated witnesses. Released vias are never recreated;
+   blocked witness regeneration rolls back rather than evicting a fixed owner.
 5. Refill independently. Accept only a strict reduction in native opens, no newly
    open net, no island and no native non-library violation. Unknown new objects
    fail closed. Geometry-changing closure after verification rejects the trial.
+
+Inside a trial, up to 64 exact native dangling tracks/vias on displaced ordinary
+nets may be removed transactionally. Macro, required-array and caller prefix
+ownership is occurrence-counted even when the caller supplies empty guards.
+Only already explicitly connected ordinary nets are eligible; no supply-zone or
+specialized copper is cleanup authority. Both before/after explicit connectivity
+and one further fresh native refill are required. Unrelated zone opens may remain
+during cleanup, but no new open net, increased open count, violation or island may
+be accepted. This extra refill does not grant another routing trial. Protected,
+unknown, mixed unsupported or stale findings leave the entire candidate intact.
 
 Source, macro, required via-array, critical, package/boundary escape and accepted
 plane/bridge ownership is protected using occurrence-counted geometry, not a
@@ -195,3 +222,6 @@ These are algorithm fixtures, not reusable production component definitions.
 
 See the [checked implementation plan](autonomous-routing-plan.md) and
 [R5 investigation](routing-research-tasks.md#r5-automatic-fragmented-fill-repair-and-routing-guide-coordination).
+The [fresh-source native closure checklist](native-closure-plan.md) records the
+91-component source-only closure and unchanged 83-component regression, exact
+frozen inputs, protected-exit regressions and retained native/test evidence.

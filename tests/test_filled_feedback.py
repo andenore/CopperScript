@@ -162,7 +162,9 @@ def test_repeated_candidate_is_not_reverified_and_exhaustion_is_not_impossibilit
     report = {"violations":[], "unconnected_items":[finding, finding]}
     result = improve_filled_copper(initial, kicad_cli=Path("fake"), runner=runner(report),
         options=FilledCopperFeedbackOptions(maximum_trials=4))
-    assert [item.outcome for item in result.trials] == ["native_not_improved", "repeated_state"]
+    # Identical terminal-pair proposals are deduplicated before searching;
+    # different proposals reaching an identical state still use the digest guard.
+    assert [item.outcome for item in result.trials] == ["native_not_improved"]
     assert result.stop_reason == "stagnation" and result.board == initial.board
 
 

@@ -21,7 +21,7 @@ from .fanout import FanoutOptions
 from .package_access import PackageAccessOptions
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
 from .physical import PadReference, PhysicalBoard, Placement, Point, TrackSegment, Via, nm_from_mm
-from .pin_escape import RoutingAccess
+from .pin_escape import RoutingAccess, verified_routing_access
 from .placement import PlacementPlannerOptions, placement_solution_is_legal
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .routeflow import PlacementRoutingFeedbackOptions
@@ -481,18 +481,53 @@ def _reroute_local_dependencies(
         return _with_preserved_area(fixed, movable_tracks, movable_vias, changed), None, changed, 0
 
     accesses = initial.fanout.routing_accesses if initial.fanout else None
+    stale_accesses = {}
     if accesses and detailed_options.escape_terminals:
-        # Escape copper released after the main route no longer exists; those
-        # pins are ordinary surface terminals (R18), not stale reservations.
+        # Main routing may replace a collar witness while retaining its launch
+        # via and using it through actual area copper. Before displacing that
+        # area, regenerate the original small witness only if the owned via,
+        # actual land path and exact clearance all still validate. A genuinely
+        # released launch remains an ordinary terminal, not a stale reservation.
         present = Counter(initial.board.tracks)
-        accesses = {pad: anchor for pad, anchor in accesses.items()
-                    if not isinstance(anchor, RoutingAccess) or not Counter(anchor.path) - present}
+        net_by_pad = {pad: net.name for net in fixed.nets for pad in net.pads}
+        stale_accesses = {pad: anchor for pad, anchor in accesses.items()
+                          if isinstance(anchor, RoutingAccess) and Counter(anchor.path) - present}
+        accesses = {pad: anchor for pad, anchor in accesses.items() if pad not in stale_accesses}
+
+    regenerated = set()
+    def reserve_retained_exits(names):
+        nonlocal fixed
+        for pad, anchor in sorted(stale_accesses.items()):
+            net = net_by_pad[pad]
+            if net not in names or pad in regenerated:
+                continue
+            launch = next((via for via in fixed.vias
+                           if via.net == net and via.position == anchor.launch_position), None)
+            if launch is None:
+                continue
+            if len(regenerated) >= 64:
+                return False
+            missing = Counter(anchor.path) - Counter(fixed.tracks)
+            witness = replace(fixed, tracks=(*fixed.tracks, *missing.elements()))
+            if verified_routing_access(witness, pad, net, anchor, RoutingClearanceIndex(witness)) is None:
+                return False
+            fixed = witness
+            accesses[pad] = anchor
+            regenerated.add(pad)
+        if regenerated:
+            emit(on_progress, "zone_retained_exits", "finished", regenerated_witnesses=len(regenerated))
+        return True
 
     def search(source, names, kind, expansion):
         emit(on_progress, "zone_subset_search", "started", kind=kind,
              affected_nets=sorted(names), expansion=expansion)
+        # This transaction cannot release the preserved escape prefix. Flexible
+        # land/chain alternatives are valid only when their owner may clean up
+        # unused launch vias and witnesses afterwards. Route through retained
+        # ports instead, so a dependency reroute cannot strand protected vias.
+        reserved_options = replace(detailed_options, escape_terminals=False) if accesses else detailed_options
         result = route_detailed(source, initial.placement_and_global.global_route,
-            detailed_options, fanout_accesses=accesses,
+            reserved_options, fanout_accesses=accesses,
             # Local transactions do not own/prune the fixed fanout prefix.
             fanout_created_vias=frozenset(), fanout_created_tracks=(), only_nets=names,
             on_progress=on_progress)
@@ -509,6 +544,8 @@ def _reroute_local_dependencies(
                 and result.metrics.total_conflict_overflow == 0)
 
     for expansion in range(options.maximum_dependency_expansions + 1):
+        if not reserve_retained_exits(changed):
+            return None
         trial = _with_preserved_area(fixed, movable_tracks, movable_vias, changed)
         actual = search(trial, changed, "transaction", expansion)
         if complete(actual, changed):

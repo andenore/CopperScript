@@ -183,12 +183,13 @@ def verify_filled_planes(
 
     runner = runner or _subprocess_runner
     if artifact_directory is not None:
+        artifact_directory = artifact_directory.resolve()
         # Never overwrite an existing candidate or production evidence directory.
         artifact_directory.mkdir(parents=True, exist_ok=False)
     context = (tempfile.TemporaryDirectory(prefix="copperscript-plane-")
                if artifact_directory is None else nullcontext(str(artifact_directory)))
     with context as directory:
-        stage = Path(directory)
+        stage = Path(directory).resolve()
         version_result = runner((str(kicad_cli), "--version"), stage)
         if version_result.returncode:
             raise RuntimeError(f"KiCad version query failed: {version_result.stderr}")
@@ -299,6 +300,88 @@ def remove_native_dangling_tracks(
                                              if index not in selected))
     checked = verify_filled_planes(candidate, kicad_cli=kicad_cli, artifact_directory=artifact_directory)
     return (candidate, checked) if checked.passed else (board, evidence)
+
+
+def remove_native_dangling_copper(
+    board: PhysicalBoard, evidence: PlaneVerification,
+    protected_tracks: Counter, protected_vias: Counter, *,
+    eligible_nets: frozenset[str], kicad_cli: Path,
+    artifact_directory: Path | None = None, verifier=None,
+) -> tuple[PhysicalBoard, PlaneVerification]:
+    """Clean exact disposable ordinary native ends inside a repair transaction.
+
+    Unrelated filled-zone opens may remain, but affected ordinary nets must
+    already have actual explicit connectivity. Every removal needs fresh native
+    proof: no remaining violations/islands, no new open net or increased opens.
+    Macro, array and caller-supplied ownership is occurrence-counted.
+    """
+    from .drc import explicit_copper_connectivity
+    from .hard_macros import resolved_macro_geometry
+    from .pad_via_arrays import via_in_pad_array_vias
+    from .zone_geometry import distribution_zone_nets
+    if not evidence.matches(board) or evidence.island_count:
+        return board, evidence
+    findings = [item for item in evidence.native_findings if item.category == "violation"]
+    if (not findings or len(findings) > 64 or len(findings) != evidence.other_violation_count
+            or any(item.type not in {"track_dangling", "via_dangling"} for item in findings)):
+        return board, evidence
+    blocked = distribution_zone_nets(board) | {
+        rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
+    tracks, vias = protected_tracks.copy(), protected_vias.copy()
+    vias |= Counter(via_in_pad_array_vias(board))
+    macro_tracks, macro_vias = Counter(), Counter()
+    for macro in board.hard_macros:
+        if macro.cluster in board.materialized_macros:
+            geometry = resolved_macro_geometry(board, macro)
+            owner_tracks, owner_vias = geometry[:2]
+            macro_tracks.update(owner_tracks)
+            macro_vias.update(owner_vias)
+    tracks |= macro_tracks
+    vias |= macro_vias
+    objects = native_object_map(board)
+    indices = {"segment": set(), "via": set()}
+    affected = set()
+    for finding in findings:
+        kind = "segment" if finding.type == "track_dangling" else "via"
+        if len(finding.items) != 1:
+            return board, evidence
+        item = finding.items[0]
+        if (objects.get(item.uuid) != item or item.kind != kind or item.index is None
+                or item.net not in eligible_nets or item.net in blocked):
+            return board, evidence
+        indices[kind].add(item.index)
+        affected.add(item.net)
+    removed_tracks = Counter(board.tracks[index] for index in indices["segment"])
+    removed_vias = Counter(board.vias[index] for index in indices["via"])
+    if (removed_tracks - (Counter(board.tracks) - tracks)
+            or removed_vias - (Counter(board.vias) - vias)):
+        return board, evidence
+    candidate = replace(board,
+        tracks=tuple(item for index, item in enumerate(board.tracks) if index not in indices["segment"]),
+        vias=tuple(item for index, item in enumerate(board.vias) if index not in indices["via"]))
+    nets = tuple(net for net in board.nets if net.name in affected)
+    for current in (board, candidate):
+        graph = explicit_copper_connectivity(current, only_nets=frozenset(affected))
+        if not all(graph.net_connected(net) for net in nets):
+            return board, evidence
+    def opens(checked):
+        entries = [item for item in checked.native_findings if item.category == "unconnected"]
+        if len(entries) != checked.unconnected_count or any(
+                item.type != "unconnected_items" or not item.items or any(
+                    obj.kind == "unknown" or obj.net is None for obj in item.items) for item in entries):
+            return None
+        return {obj.net for item in entries for obj in item.items}
+    old_opens = opens(evidence)
+    if old_opens is None:
+        return board, evidence
+    checked = (verifier(candidate) if verifier else verify_filled_planes(candidate,
+        kicad_cli=kicad_cli, artifact_directory=artifact_directory))
+    new_opens = opens(checked)
+    if (checked.matches(candidate) and checked.island_count == checked.other_violation_count == 0
+            and new_opens is not None and new_opens <= old_opens
+            and checked.unconnected_count <= evidence.unconnected_count):
+        return candidate, checked
+    return board, evidence
 
 
 def _violation_type(item: object) -> str:

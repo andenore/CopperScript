@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict, dataclass, replace
-from itertools import product
+from itertools import chain, product
 import json
 from pathlib import Path
 
@@ -20,7 +20,8 @@ from .escape_feedback import (EscapeFeedbackOptions, _merge_local_detail,
 from .flow import RoutingPipelineResult
 from .manufacturing import CommandRunner
 from .physical import CopperLayer, PhysicalBoard, Point, RouteKind, nm_from_mm
-from .plane_verify import PlaneVerification, native_object_map, verify_filled_planes
+from .plane_verify import (PlaneVerification, native_object_map, verify_filled_planes,
+                          remove_native_dangling_copper)
 from .geometry import point_in_polygon
 from .progress import ProgressCallback, emit
 from .routing_clearance import RoutingBlocker, RoutingClearanceIndex
@@ -66,6 +67,8 @@ class FilledCopperTrial:
     dependency_searches: int = 0
     candidate_digest: str | None = None
     verification: PlaneVerification | None = None
+    cleanup_removed_tracks: int = 0
+    cleanup_removed_vias: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,13 +106,43 @@ def _open_nets(evidence):
     return frozenset(item.net for finding in entries for item in finding.items)
 
 
-def _proposals(board, evidence, anchor_limit):
+def _finding_proposals(board, evidence, anchor_limit):
     eligible = distribution_zone_nets(board)
     rules = {rule.net: rule for rule in board.net_routing_rules}
     objects = tuple(native_object_map(board).values())
+    explicit_roots = None
+    def root(item):
+        if item.kind == "pad":
+            identity = f"pad:{item.component}.{item.pad}:{item.index}"
+        elif item.kind == "segment":
+            identity = f"track:{item.index}"
+        elif item.kind == "via":
+            identity = f"via:{item.index}"
+        else:
+            return None
+        return explicit_roots.roots.get(identity)
     def anchors(item):
+        nonlocal explicit_roots
         if item.kind != "zone":
-            return [(None, item, point) for point in item.positions_nm]
+            # A native nearest-item report can name a front track and a back
+            # track although either connected copper component already owns a
+            # plated transition. Follow actual bare copper, never a same-net
+            # label, component-internal edge or an authored zone outline.
+            if explicit_roots is None:
+                from .drc import explicit_copper_connectivity
+                explicit_roots = explicit_copper_connectivity(board,
+                    only_nets=eligible, include_internal_connections=False)
+            connected = root(item)
+            found = [(None, item, point) for point in item.positions_nm]
+            if connected is not None:
+                additions = [(None, owner, position) for owner in objects
+                    if owner.uuid != item.uuid and owner.net == item.net and root(owner) == connected
+                    for position in owner.positions_nm]
+                additions.sort(key=lambda anchor: (
+                    min(sum((a-b)**2 for a,b in zip(anchor[2], point)) for point in item.positions_nm),
+                    anchor[1].uuid, anchor[2]))
+                found.extend(additions)
+            return found[:anchor_limit]
         groups = []
         # Native DRC can identify two fragments with the SAME zone UUID and
         # nominal origin. Membership is measured in the freshly filled polygon,
@@ -160,6 +193,30 @@ def _proposals(board, evidence, anchor_limit):
         for (_, a, start), (_, b, end) in pairs:
             for layer in sorted(set(a.layers) & set(b.layers) & allowed):
                 yield first.net, (a.uuid, b.uuid), CopperLayer(layer), Point(*start), Point(*end)
+
+
+def _proposals(board, evidence, anchor_limit):
+    """Share trials across open nets, without materializing every anchor pair."""
+    grouped = {}
+    for finding in evidence.native_findings:
+        if finding.category == "unconnected" and len(finding.items) == 2:
+            net = finding.items[0].net
+            grouped.setdefault(net, []).append(_finding_proposals(
+                board, replace(evidence, native_findings=(finding,)), anchor_limit))
+    queues = [iter(chain.from_iterable(groups)) for groups in grouped.values()]
+    seen = set()
+    while queues:
+        active = []
+        for queue in queues:
+            for proposal in queue:
+                net, _, layer, start, end = proposal
+                key = (net, layer, tuple(sorted(((start.x_nm, start.y_nm), (end.x_nm, end.y_nm)))))
+                if key not in seen:
+                    seen.add(key)
+                    yield proposal
+                    active.append(queue)
+                    break
+        queues = active
 
 
 def improve_filled_copper(
@@ -287,6 +344,7 @@ def improve_filled_copper(
             blockers, displaced, expansions, checked, digest = tuple(failure_blockers), frozenset(), 0, None, None
             outcome = "no_legal_surface_bridge"
             candidate = None
+            cleaned_tracks = cleaned_vias = 0
             if bridge:
                 blockers = tuple(sorted({item for track in bridge
                                          for item in full.track_blocker_records(track)},
@@ -320,6 +378,14 @@ def improve_filled_copper(
                             seen.add(digest)
                             try:
                                 checked = verify(candidate)
+                                before_cleanup = candidate
+                                candidate, checked = remove_native_dangling_copper(candidate, checked,
+                                    Counter(reserved.tracks), Counter(reserved.vias),
+                                    eligible_nets=displaced, kicad_cli=kicad_cli, verifier=verify)
+                                cleaned_tracks = len(before_cleanup.tracks) - len(candidate.tracks)
+                                cleaned_vias = len(before_cleanup.vias) - len(candidate.vias)
+                                digest = physical_board_digest(candidate)
+                                seen.add(digest)
                             except (OSError, RuntimeError) as exc:
                                 failure = tool_failure(exc)
                                 records.append(FilledCopperTrial(len(records)+1, physical_board_digest(board),
@@ -339,10 +405,11 @@ def improve_filled_copper(
                                 outcome = "accepted"
             record = FilledCopperTrial(len(records)+1, physical_board_digest(board), net, uuids,
                 layer.value, outcome, blockers, tuple(sorted(displaced)), expansions,
-                work["states"], work["dependency_searches"], digest, checked)
+                work["states"], work["dependency_searches"], digest, checked, cleaned_tracks, cleaned_vias)
             records.append(record)
             emit(on_progress, "filled_copper_trial", "finished", index=record.index,
-                 net=net, outcome=outcome, displaced_nets=list(record.displaced_nets))
+                 net=net, outcome=outcome, displaced_nets=list(record.displaced_nets),
+                 cleanup_removed_tracks=cleaned_tracks, cleanup_removed_vias=cleaned_vias)
             if outcome == "accepted":
                 merged = _merge_local_detail(pipeline, candidate, reroute, displaced)
                 # Closure must not alter geometry after this native certificate.
