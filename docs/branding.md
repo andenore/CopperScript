@@ -1,8 +1,8 @@
 # Shared Copper logo
 
 The Copper projects use one **Cu** mark, based on CopperReview's original
-Georgia bold lettering in a rounded badge. Keep the uppercase C and lowercase u;
-do not add an atomic number, weight, circuit trace or a different lettermark.
+Georgia bold lettering in a rounded badge. Keep the uppercase C and lowercase u, with copper's atomic number 29 set small at the upper left.
+Do not add atomic weight, circuit traces or a different lettermark.
 Product names remain separate text beside the badge.
 
 The canonical files are `pcbir/editor/assets/copper-logo.svg` and
