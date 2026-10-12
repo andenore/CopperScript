@@ -251,7 +251,7 @@ class Parser:
                 parameters[key] = self._scalar()
             self._expect_symbol(";")
         self._expect_symbol("}")
-        return MechanicalItemDecl(location, kind, name, shape, parameters)
+        return parameters
 
     def _mechanical_point(self):
         self._expect_symbol("(")
