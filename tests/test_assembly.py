@@ -210,3 +210,95 @@ def test_bom_api_checks_erc_independently(tmp_path):
     with pytest.raises(AssemblyError, match="ERC failed"):
         write_jlcpcb_bom(broken, reviewed_lock(broken), tmp_path / "bom.csv")
     assert not (tmp_path / "bom.csv").exists()
+
+
+def mixed_board() -> Board:
+    """One part the assembler stocks, one it does not, one deliberately unfitted."""
+    stocked = PartDefinition("R", {}, manufacturer="Example Manufacturer", footprints=("Generic:R",))
+    specialist = PartDefinition("U", {}, manufacturer="Specialist Semiconductor", footprints=("Generic:QFN",))
+    return Board("MixedBoard", {"R": stocked, "U": specialist}, (
+        ComponentInstance("R1", "R", Resistance.of(10, "kohm")),
+        ComponentInstance("U1", "U"),
+        ComponentInstance("R9", "R", Resistance.of(10, "kohm")),
+    ), ())
+
+
+def mixed_lock(board: Board):
+    draft = snapshot(board)
+    selections = []
+    for entry in draft.selections:
+        if entry.reference == "U1":          # stocked nowhere; hand-placed from consigned stock
+            selections.append(replace(entry, mpn="SPECIAL-1234", reviewed=True, populate="consigned"))
+        elif entry.reference == "R9":        # fitted by nobody
+            selections.append(replace(entry, reviewed=True, populate="none"))
+        else:
+            selections.append(replace(entry, mpn="EXAMPLE-10K-0603-1P", supplier="jlcpcb",
+                                      supplier_part="C123", reviewed=True))
+    return replace(draft, selections=tuple(selections))
+
+
+def test_consigned_and_unfitted_selections_pass_without_a_supplier_offer():
+    board = mixed_board()
+    report = check_assembly(board, mixed_lock(board))
+    assert report["passed"], report["issues"]
+    assert report["supplier_assembled_count"] == 1
+    assert report["consigned"] == ["U1"] and report["not_fitted"] == ["R9"]
+
+
+def test_bom_carries_only_supplier_assembled_components(tmp_path):
+    board = mixed_board()
+    output = tmp_path / "bom.csv"
+    write_jlcpcb_bom(board, mixed_lock(board), output)
+    with output.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    # U1 and R9 must not reach the assembler: the CPL is built from these
+    # designators, so a stray row would ask it to place an unsupplied part.
+    assert [row["Designator"] for row in rows] == ["R1"]
+
+
+def test_consigned_still_needs_a_part_identity_but_no_supplier():
+    board = mixed_board()
+    lock = mixed_lock(board)
+    vague = replace(lock, selections=tuple(
+        replace(e, mpn=None) if e.reference == "U1" else e for e in lock.selections))
+    assert "UNRESOLVED_SELECTION" in codes(check_assembly(board, vague))
+    message = next(i["message"] for i in check_assembly(board, vague)["issues"]
+                   if i["code"] == "UNRESOLVED_SELECTION")
+    assert "consigned" in message
+
+
+def test_bom_refuses_a_foreign_supplier_on_a_supplier_assembled_part(tmp_path):
+    board = mixed_board()
+    lock = mixed_lock(board)
+    foreign = replace(lock, selections=tuple(
+        replace(e, supplier="other-supplier") if e.reference == "R1" else e for e in lock.selections))
+    with pytest.raises(AssemblyError, match="supplier-assembled"):
+        write_jlcpcb_bom(board, foreign, tmp_path / "bom.csv")
+
+
+def test_bom_refuses_when_nothing_is_supplier_assembled(tmp_path):
+    board = mixed_board()
+    lock = mixed_lock(board)
+    none_ordered = replace(lock, selections=tuple(
+        replace(e, populate="consigned") if e.ordered else e for e in lock.selections))
+    with pytest.raises(AssemblyError, match="nothing to export"):
+        write_jlcpcb_bom(board, none_ordered, tmp_path / "bom.csv")
+
+
+def test_populate_mode_is_validated():
+    with pytest.raises(AssemblyError, match="populate must be one of"):
+        snapshot(mixed_board()).selections[0].__class__(
+            reference="R1", part="R", footprint="Generic:R", populate="maybe")
+
+
+def test_v0_1_locks_load_and_mean_supplier_assembly(tmp_path):
+    board = board_fixture()
+    lock = reviewed_lock(board)
+    legacy = json.loads(lock_to_json(lock))
+    legacy["schema"] = "copperscript-assembly-lock/v0.1"
+    for entry in legacy["selections"]:
+        del entry["populate"]
+    path = tmp_path / "assembly.lock"
+    path.write_text(json.dumps(legacy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    assert load_lock(path) == lock
+    assert all(entry.ordered for entry in load_lock(path).selections)

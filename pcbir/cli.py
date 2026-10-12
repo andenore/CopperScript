@@ -877,11 +877,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 print(f"Assembly selections: {report['exact_selection_count']}/{report['component_count']} exact; "
                       f"{report['reviewed_count']} reviewed; availability not checked")
+                # Never let an exclusion from the supplier BOM/CPL pass silently.
+                for label, key in (("consigned", "consigned"), ("not fitted", "not_fitted")):
+                    names = report[key]
+                    if names:
+                        shown = ", ".join(names[:12]) + (f", +{len(names) - 12} more" if len(names) > 12 else "")
+                        print(f"Outside the supplier BOM/CPL, {label}: {len(names)} ({shown})")
                 for issue in report["issues"]:
                     print(f"{issue['code']}: {issue['reference'] or board.name}: {issue['message']}")
                 return 0 if report["passed"] else 1
             write_jlcpcb_bom(board, lock, args.output)
-            print(f"Generated selection BOM -> {args.output}; stock and manufacturing signoff not checked")
+            left_out = report["consigned_count"] + report["not_fitted_count"]
+            print(f"Generated selection BOM -> {args.output}; "
+                  f"{report['supplier_assembled_count']} supplier-assembled"
+                  + (f", {report['consigned_count']} consigned and {report['not_fitted_count']} "
+                     "not fitted left out" if left_out else "")
+                  + "; stock and manufacturing signoff not checked")
             return 0
         except (AssemblyError, BoardLoadError, OSError) as exc:
             print(f"ASSEMBLY ERROR: {exc}")

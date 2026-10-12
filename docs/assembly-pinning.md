@@ -14,6 +14,37 @@ copper assembly check board.copper --locked --offline --lock assembly.lock --rep
 copper assembly bom board.copper --locked --offline --lock assembly.lock -o build/bom.csv
 ```
 
+## Partially assembled boards
+
+Each selection carries a `populate` mode saying how the component reaches the
+board:
+
+| `populate` | Meaning | In the supplier BOM/CPL |
+| --- | --- | --- |
+| `supplier` (default) | the assembler sources and places it | yes |
+| `consigned` | fitted, but supplied and placed outside the supplier order | no |
+| `none` | deliberately not fitted | no |
+
+This is what makes a mixed build exportable: a board whose passives and common
+ICs the assembler stocks, with a few specialist parts it does not, can still
+hand JLCPCB everything it *can* place. Mark the rest and the BOM succeeds.
+
+A consigned component is still fitted, so it keeps a full part identity
+(manufacturer, MPN, footprint) for whoever hand-places it, but needs no
+supplier offer. A `none` component needs neither. All three still require
+explicit review.
+
+Exclusion is never silent: `assembly check` lists the consigned and not-fitted
+references, `assembly bom` reports how many it left out, and the report carries
+`supplier_assembled_count`, `consigned_count`, `not_fitted_count` plus the
+reference lists. Because the CPL is generated from the BOM's designators,
+excluded components leave both files together, which preserves the mandatory
+BOM/CPL reference equality and keeps the assembler from being asked to place a
+part nobody supplied.
+
+Locks written before `populate` (`copperscript-assembly-lock/v0.1`) still load;
+every selection in them means `supplier`. New locks are written as `v0.2`.
+
 Snapshot creation refuses to overwrite an existing lock. Circuit/library changes
 invalidate the electrical digest; review differences and deliberately create a
 new snapshot rather than silently accepting new parts. Missing fields, unknown
@@ -22,7 +53,8 @@ fail the check. BOM export requires both ERC and assembly checks to pass.
 Constraint diagnostic source locations are excluded from this digest, so the
 same locked design works across checkout paths and operating systems. Actual
 constraints, hierarchy, document evidence and library revisions remain bound.
-The CSV contains JLCPCB's component-selection columns plus manufacturer/MPN.
+The CSV contains JLCPCB's component-selection columns plus manufacturer/MPN,
+for the supplier-assembled components only.
 No stock lookup, order submission or manufacturing signoff is implied.
 The separate [native manufacturing exporter](manufacturing-files.md) can consume
 this BOM and the final routed KiCad board to generate a matching JLCPCB CPL.
