@@ -982,7 +982,7 @@ def _neck_down_changed(
     """Re-cut pruned copper of ordinary breakout nets at region boundaries.
 
     Release and stub pruning keep only parts of tracks; part of a wide piece
-    can end up inside a region and then carries the breakout width (plan R1).
+    can end up inside a region; its checked width is preserved (plan R1).
     Owned route copper and pruned escape remnants are cut, input occurrences
     never. A net whose explicit-copper islands or via contacts would change
     keeps its copper: a released escape may rely on a route's full width.
@@ -1615,7 +1615,7 @@ def _route_net(
     via_positions: set[tuple[Point, CopperLayer, CopperLayer, str | None]] = set()
     for first, second in sorted(route_edges):
         if first.layer_index == second.layer_index:
-            # Exactly the pieces the search checked (necked down near lands).
+            # Exactly the preferred-width pieces the search checked.
             tracks.extend(clearance.route_pieces(
                 name, grid.point(first), grid.point(second), width,
                 grid.layers[first.layer_index],
@@ -1658,8 +1658,8 @@ def _route_net(
         allow_movable_conflicts=allow_movable_conflicts,
     ))
     if name in clearance.breakout.ordinary:
-        # Pruning and chamfers can leave part of a wide piece inside a region;
-        # it necks down too. Every contact here is on a centre line.
+        # Re-cut changed geometry while retaining accepted full-width copper
+        # and keeping necessary neckdowns inside their declared regions.
         tracks = list(clearance.breakout.neck_down(tracks))
     length = sum(
         round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm))

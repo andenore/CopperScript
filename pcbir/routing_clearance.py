@@ -100,6 +100,8 @@ class RoutingClearanceIndex:
         if bin_size_nm <= 0:
             raise ValueError("clearance bin size must be positive")
         self.board = board
+        from .terminal_preferences import TerminalPreferences
+        self.terminal_preferences = TerminalPreferences(board)
         self.zone_reservations = ZoneRoutingReservations(board)
         self.bin_size_nm = bin_size_nm
         self.rules: dict[str, NetRoutingRule] = {
@@ -185,8 +187,25 @@ class RoutingClearanceIndex:
     def route_pieces(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer,
     ) -> tuple[TrackSegment, ...]:
-        """Ordinary copper for one centreline, necked down inside breakout regions."""
-        return self.breakout.ordinary_pieces(net, start, end, width_nm, layer)
+        """Prefer the requested width; use permitted neckdowns only if needed.
+
+        This selects copper, not permission to commit it: callers still check
+        every returned piece. Critical routing owns its coupled width profile.
+        """
+        if net not in self.breakout.ordinary:
+            return (TrackSegment(net, start, end, width_nm, layer),)
+        from .surface_path import _track_inside_board
+
+        def fits(first: Point, second: Point) -> bool:
+            return (self.can_track(net, first, second, width_nm, layer)
+                    and _track_inside_board(self.board, first, second, width_nm))
+
+        if fits(start, end):
+            return (TrackSegment(net, start, end, width_nm, layer),)
+        minimum = self.breakout.ordinary_pieces(net, start, end, width_nm, layer)
+        return tuple(replace(piece, width_nm=width_nm)
+                     if piece.width_nm < width_nm and fits(piece.start, piece.end)
+                     else piece for piece in minimum)
 
     def can_route(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer,

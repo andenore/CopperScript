@@ -181,6 +181,35 @@ KiCad exports preserve locked owner copper; independent native DRC is still
 mandatory. Manual edits to an exported PCB do not preserve CopperScript's
 owner-bound contracts and need authoritative IR revalidation.
 
+## v0.5 host-perimeter openings
+
+The v0.5 format retains v0.4 and requires `edge_openings` (possibly empty):
+
+```json
+{"keepout": "antenna-corner", "edge_indices": [0, 1]}
+```
+
+Indices select consecutive-vertex edges of a local simple zone-blocking keepout
+ring, including its implicit closing edge. They must be distinct, nonnegative
+integers within that ring. Missing keepouts, non-clearance regions, duplicate
+contracts and malformed indices fail at binding. The entire transformed
+keepout must remain within the host outer polygon, and each declared edge must
+coincide fully with the outer perimeter. Point contact, partial overlap and
+internal cutout boundaries are insufficient. Curved host boundaries currently
+fail closed rather than certify sampled polygon approximations.
+
+Whole-unit rotation transforms keepouts and requirements together. Shared
+placement acceptance, macro materialization and immutable-owner replay enforce
+the check; physical fingerprints include the typed contract. Legacy assets
+remain unchanged and reject the new field. This geometric contract is not an
+impedance, matching, radiation or manufacturing qualification.
+
+CopperLib's separate `nrf52832-johanson-managed-corner.json` adaptation declares
+the Johanson two-edge opening while preserving its source-backed Nordic copper,
+all six-layer exclusions and isolated NC land. It does not silently replace the
+older installed-footprint trial or authorize 45-degree corner mounting on a
+rectangular board.
+
 ## Nordic/Johanson trial
 
 CopperLib owns `packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json`

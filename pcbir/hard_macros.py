@@ -21,7 +21,7 @@ from .syntax import CopperScriptError
 from .physical import (
     BoardSide, ComponentPlacementRule, CopperKeepout, CopperLayer, CopperPolygon, CopperZone, MacroPadBinding, MacroPlaneReturn, MacroPort, PadReference,
     PhysicalBoard, PhysicalHardMacro, PhysicalNet, PlacementTarget, MacroTrackWidthContract,
-    PadKind, Point, PolygonRing, PolygonWithHoles, RigidPlacementCluster, ZoneConnection,
+    PadKind, Point, PolygonRing, PolygonWithHoles, RigidPlacementCluster, ZoneConnection, MacroEdgeOpening,
     RigidPlacementMember, TrackSegment, Via,
 )
 
@@ -84,14 +84,16 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
         data = json.loads(raw)
         version = data["schema"]
         fields = "schema source production_publishable anchor members pad_nets isolated_pads tracks vias ports protected_regions keepouts required_layers allowed_rotations internal_clearance_nm unresolved"
-        if version in {"copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4"}:
+        if version in {"copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4", "copperlib-physical-hard-macro/v0.5"}:
             fields += " zones plane_returns"
-        if version in {"copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4"}:
+        if version in {"copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4", "copperlib-physical-hard-macro/v0.5"}:
             fields += " polygons"
-        if version == "copperlib-physical-hard-macro/v0.4":
+        if version in {"copperlib-physical-hard-macro/v0.4", "copperlib-physical-hard-macro/v0.5"}:
             fields += " width_contracts"
+        if version == "copperlib-physical-hard-macro/v0.5":
+            fields += " edge_openings"
         _keys(data, fields)
-        if version not in {"copperlib-physical-hard-macro/v0.1", "copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4"} or data["production_publishable"] is not False:
+        if version not in {"copperlib-physical-hard-macro/v0.1", "copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4", "copperlib-physical-hard-macro/v0.5"} or data["production_publishable"] is not False:
             raise ValueError("unsupported macro qualification/schema")
         sources = {m["reference"] for m in data["members"]}
         if len(sources) != len(data["members"]) or set(bindings) != sources or len(set(bindings.values())) != len(sources):
@@ -225,9 +227,13 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
                 tuple(CopperLayer(layer) for layer in row["layers"]),
                 tuple(pads[tuple(p)] for p in row["pads"]), tuple(contacts)))
         anchor = PlacementTarget(bindings[data["anchor"]], None)
+        edge_openings = []
+        for row in data.get("edge_openings", ()):
+            _keys(row, "keepout edge_indices")
+            edge_openings.append(MacroEdgeOpening(row["keepout"], row["edge_indices"]))
         cluster = RigidPlacementCluster(name, anchor, tuple(members), str(data["source"]),
             allowed_rotations=tuple(data["allowed_rotations"]), keepouts=tuple(region(r) for r in data["keepouts"]),
-            internal_clearance_nm=data["internal_clearance_nm"])
+            internal_clearance_nm=data["internal_clearance_nm"], edge_openings=tuple(edge_openings))
         macro = PhysicalHardMacro(name, expected_sha256, tuple(tracks), tuple(vias), tuple(ports),
             tuple(region(r) for r in data["protected_regions"]), tuple(CopperLayer(x) for x in data["required_layers"]),
             tuple(MacroPadBinding(pads[ref,pad],net_bindings[role]) for ref,pad,role in data["pad_nets"]),

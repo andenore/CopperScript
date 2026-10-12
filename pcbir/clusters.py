@@ -145,7 +145,41 @@ def cluster_placement_matches(
             return False
         if any(placements[reference] != item for reference, item in expected.items()):
             return False
-    return True
+    return not cluster_edge_opening_rejections(board, placements)
+
+
+def cluster_edge_opening_rejections(board: PhysicalBoard, placements: Mapping[str, Placement]) -> tuple[str, ...]:
+    """Prove complete declared edges open to the straight outer board perimeter.
+
+    Point contact, partial overlap and a cutout boundary are not openings.
+    This is a geometric placement contract, never RF/impedance qualification.
+    Curved outlines fail closed until exact arc coincidence is supported.
+    """
+    required = [cluster for cluster in board.rigid_clusters if cluster.edge_openings]
+    if not required:
+        return ()
+    if board.outline.circular_boundary or board.outline.boundary_path:
+        return tuple(f"{c.name}: macro edge openings require a straight polygonal host outline" for c in required)
+    from shapely.geometry import LineString, Polygon
+    host = Polygon([(p.x_nm, p.y_nm) for p in board.outline.vertices])
+    resolved = {region.id: region for region in resolved_cluster_keepouts(board, placements)}
+    errors = []
+    for cluster in required:
+        for opening in cluster.edge_openings:
+            region = resolved.get(f"cluster/{cluster.name}/{opening.keepout}")
+            if region is None:
+                errors.append(f"{cluster.name}: missing anchor for edge opening {opening.keepout}")
+                continue
+            vertices = region.outline.outer.vertices
+            polygon = Polygon([(p.x_nm, p.y_nm) for p in vertices])
+            if not host.covers(polygon):
+                errors.append(f"{cluster.name}: edge-opening keepout {opening.keepout} extends outside the host")
+            for index in opening.edge_indices:
+                a, b = vertices[index], vertices[(index + 1) % len(vertices)]
+                edge = LineString([(a.x_nm, a.y_nm), (b.x_nm, b.y_nm)])
+                if not host.exterior.covers(edge):
+                    errors.append(f"{cluster.name}: keepout {opening.keepout} edge {index} must fully open to the outer board perimeter")
+    return tuple(errors)
 
 
 def move_placement_unit(

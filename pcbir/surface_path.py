@@ -75,6 +75,7 @@ def surface_path(
             (start, Point(start.x_nm, end.y_nm), end),
             (start, Point(end.x_nm, start.y_nm), end),
         ))
+    paths = clearance.terminal_preferences.ordered(net, layer, paths)
     if maximum_detour_nm:
         if maximum_detour_nm < 0 or detour_step_nm <= 0:
             raise ValueError("surface-path detour bounds must be positive")

@@ -511,12 +511,12 @@ def physical_board_digest(board: PhysicalBoard) -> str:
     )
 
 
-def explicit_copper_connectivity(
+def _explicit_copper_contacts(
     board: PhysicalBoard, *, only_nets: frozenset[str] | None = None,
     include_internal_connections: bool = True,
     tracks: tuple[TrackSegment, ...] | None = None, vias: tuple[Via, ...] | None = None,
     polygons: tuple[CopperPolygon, ...] | None = None,
-) -> PhysicalCopperConnectivity:
+) -> tuple:
     """Build the shared exact graph used by native DRC and land closure.
 
     Zone outlines/fill claims do not join this explicit-copper graph. A net
@@ -578,9 +578,25 @@ def explicit_copper_connectivity(
             nodes.append(identity)
         if len(nodes) > 1:
             internal_connections.append(tuple(nodes))
-    groups = tuple(internal_connections)
-    return PhysicalCopperConnectivity(copper_contact_roots(tuple(objects), groups),
-                                      {pad: tuple(nodes) for pad, nodes in pad_nodes.items()}, groups)
+    return (tuple(objects), {pad: tuple(nodes) for pad, nodes in pad_nodes.items()},
+            tuple(internal_connections))
+
+
+def explicit_copper_connectivity(
+    board: PhysicalBoard, *, only_nets: frozenset[str] | None = None,
+    include_internal_connections: bool = True,
+    tracks: tuple[TrackSegment, ...] | None = None, vias: tuple[Via, ...] | None = None,
+    polygons: tuple[CopperPolygon, ...] | None = None,
+) -> PhysicalCopperConnectivity:
+    """Exact explicit copper graph; source zones are never connectivity evidence.
+
+    Disable installed-component internal edges for bare-board continuity.
+    Candidate tracks/vias/polygons may override the source collections.
+    """
+    objects, pads, groups = _explicit_copper_contacts(board, only_nets=only_nets,
+        include_internal_connections=include_internal_connections,
+        tracks=tracks, vias=vias, polygons=polygons)
+    return PhysicalCopperConnectivity(copper_contact_roots(objects, groups), pads, groups)
 
 
 def _check_connectivity(board: PhysicalBoard, findings: list[DrcFinding]) -> None:

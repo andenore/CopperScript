@@ -14,7 +14,7 @@ the critical pair search share this one definition:
   By convexity the centreline between two inside ends is inside too. A track
   segment that crosses the boundary is outside; routers cut their tracks at
   the boundary (``split``) so the part next to the land is inside.
-* Inside a region of its net, copper uses ``breakout_width``,
+* Inside a region of its net, copper may use ``breakout_width``,
   ``breakout_gap`` and ``breakout_clearance`` (where declared) instead of
   ``width``, ``pair_gap`` and ``clearance``. Outside, the normal values apply.
 * Two objects of different nets keep the larger of their nets' values and the
@@ -24,9 +24,10 @@ the critical pair search share this one definition:
   the plain clearance rule, including between pair members.
 * Ordinary (``GENERAL``) nets neck down the same way: the detailed router,
   its pad access paths and the global pin access check and emit each
-  centreline as its ``split_tracks`` pieces (``ordinary_pieces``), and cleanup
-  re-cuts changed copper (``neck_down``). A piece is never wider than its
-  check, so narrow copper is always inside a region.
+  centreline with exact-clearance preferred-width selection. ``ordinary_pieces``
+  defines the permitted minimum-width fallback, not a requirement to narrow.
+  Cleanup re-cuts changed copper (``neck_down``) without shrinking accepted wide
+  copper. A piece is never wider than its check; narrow copper stays in a region.
 """
 
 from __future__ import annotations
@@ -215,11 +216,12 @@ class BreakoutRegions:
 
     def ordinary_pieces(self, net: str, start: Point, end: Point, width_nm: int,
                         layer: CopperLayer) -> tuple[TrackSegment, ...]:
-        """The copper the ordinary router checks and emits for one centreline.
+        """The minimum-width fallback copper for one ordinary centreline.
 
         An ordinary net with breakout properties is cut at its region
         boundaries: ``breakout_width`` inside, ``width_nm`` outside. Any other
-        centreline is one track of ``width_nm``.
+        centreline is one track of ``width_nm``. The clearance index prefers
+        wider copper where it fits before selecting this fallback.
         """
         track = TrackSegment(net, start, end, width_nm, layer)
         return self.split_tracks((track,), width_nm) if net in self.ordinary else (track,)
@@ -227,15 +229,18 @@ class BreakoutRegions:
     def neck_down(self, tracks: Iterable[TrackSegment]) -> tuple[TrackSegment, ...]:
         """Re-cut ordinary copper after a geometry change such as pruning.
 
-        Tracks of ordinary breakout nets are cut at region boundaries; inside
-        pieces get the breakout width, outside pieces the profile width. Other
-        tracks are unchanged. Routers keep narrow copper inside regions, so
-        this only narrows checked copper.
+        Tracks of ordinary breakout nets are cut at region boundaries. Keep
+        their checked width inside; outside restore at least the profile width.
+        A permitted minimum is not a request to shrink an already wide track.
+        Callers must validate geometry changes, including any restored width.
         """
         result: list[TrackSegment] = []
         for track in tracks:
             if track.net in self.ordinary:
-                result.extend(self.split_tracks((track,), self.width_nm(track.net)))
+                profile = self.width_nm(track.net)
+                for start, end, land in self.split(track.net, track.start, track.end):
+                    width = max(track.width_nm, self.track_width_nm(track.net, land, profile))
+                    result.append(TrackSegment(track.net, start, end, width, track.layer))
             else:
                 result.append(track)
         return tuple(result)

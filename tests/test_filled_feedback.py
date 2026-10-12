@@ -11,11 +11,13 @@ from pcbir import (BoardOutline, CopperKeepout, CopperLayer, CopperZone, NetRout
     PadReference, PhysicalBoard, PhysicalNet, Placement, Point, RouteKind, TrackSegment, nm_from_mm,
     DetailedRouterOptions)
 from pcbir.filled_feedback import FilledCopperFeedbackOptions, improve_filled_copper
-from pcbir.filled_feedback import _proposals
-from pcbir.plane_verify import native_object_map, verify_filled_planes
+from pcbir.filled_feedback import _proposals, _rejection_context
+from pcbir.filled_connectivity import filled_component_roots
+from pcbir.plane_verify import NativeFilledRegion, native_object_map, verify_filled_planes
 from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.manufacturing import CommandResult
-from pcbir.physical import IslandPolicy, ZoneConnection
+from pcbir.physical import BoardSide, IslandPolicy, ZoneConnection
+from pcbir.physical import Via
 from test_autonomous_routing_quality import terminal, rectangle, pipeline, hard_findings
 from test_autonomous_plane_access import with_test_owners
 from pcbir.hard_macros import materialize_hard_macros, validate_hard_macros
@@ -140,6 +142,53 @@ def test_anchor_cap_represents_both_fragments_when_one_has_many_lands(native_cli
                              for _, _, _, start, end in proposals)
 
 
+@pytest.mark.parametrize("renamed", (False, True))
+@pytest.mark.parametrize("filled_return", (False, True))
+def test_three_fragments_skip_already_connected_components(native_cli, renamed, filled_return):
+    """Nearest polygons already share a plated return; bridge the third instead."""
+    pytest.importorskip("shapely")
+    net = "RAIL_83" if renamed else "POWER"
+    refs = ("PART_A", "PART_B", "PART_C") if renamed else ("A", "B", "C")
+    land = terminal()
+    board = PhysicalBoard("three-fragments", BoardOutline.rectangle(30, 12), {land.name: land},
+        tuple(Placement(ref, land.name, Point.mm(x, 6)) for ref, x in zip(refs, (3, 12, 27))),
+        (PhysicalNet(net, tuple(PadReference(ref, "1") for ref in refs)),),
+        zones=(CopperZone("front", net, (CopperLayer.FRONT,), rectangle(1, 1, 29, 11),
+            pad_connection=ZoneConnection.SOLID, island_policy=IslandPolicy.REMOVE_ALL,
+            minimum_island_area_nm2=None),),
+        copper_keepouts=tuple(CopperKeepout(f"divider-{x}", (CopperLayer.FRONT,),
+            rectangle(x, 0, x+1, 12), block_tracks=False, block_vias=False, block_zones=True)
+            for x in (9, 19)),
+        vias=tuple(Via(net, Point.mm(x, 6), nm_from_mm("0.6"), nm_from_mm("0.3"),
+                       CopperLayer.FRONT, CopperLayer.BACK) for x in (4, 13)),
+        tracks=tuple(TrackSegment(net, Point.mm(x, 6), Point.mm(x+1, 6),
+            nm_from_mm("0.25"), CopperLayer.FRONT) for x in (3, 12)))
+    if filled_return:
+        board = replace(board, zones=(*board.zones, CopperZone("return", net,
+            (CopperLayer.BACK,), rectangle(2, 5, 14, 7), pad_connection=ZoneConnection.SOLID,
+            island_policy=IslandPolicy.REMOVE_ALL, minimum_island_area_nm2=None)))
+    else:
+        board = replace(board, tracks=(*board.tracks, TrackSegment(net, Point.mm(4, 6), Point.mm(13, 6),
+            nm_from_mm("0.25"), CopperLayer.BACK),))
+    evidence = verify_filled_planes(board, kicad_cli=native_cli)
+    assert evidence.unconnected_count == 1 and evidence.other_violation_count == 0
+    proposals = tuple(_proposals(board, evidence, 2))
+    assert proposals, "Anchor budget must represent distinct electrical components"
+    assert all(27_000_000 in (start.x_nm, end.x_nm) for _, _, _, start, end in proposals)
+    # Model a completed immutable prefix, not an illicit import of routed copper
+    # into the source-only planning API.
+    initial = pipeline(replace(board, tracks=(), vias=()))
+    initial = replace(initial, detailed=replace(initial.detailed, board=board),
+        fanout=replace(initial.fanout, board=board), critical=replace(initial.critical, board=board))
+    assert not hard_findings(board), [(f.code, f.message) for f in hard_findings(board)]
+    result = improve_filled_copper(initial, kicad_cli=native_cli,
+        options=FilledCopperFeedbackOptions(maximum_trials=1))
+    assert result.stop_reason == "verified", result.to_json()
+    assert result.verification.matches(result.board) and result.verification.passed
+    assert Counter(board.tracks) <= Counter(result.board.tracks)
+    assert Counter(board.vias) <= Counter(result.board.vias)
+
+
 def test_native_rejection_rolls_back_real_candidate(tmp_path):
     initial = pipeline(fragmented())
     mapping = native_object_map(initial.board)
@@ -153,6 +202,80 @@ def test_native_rejection_rolls_back_real_candidate(tmp_path):
     assert result.trials[0].outcome == "native_not_improved"
     assert result.trials[0].verification and not result.trials[0].verification.passed
     assert result.trials[0].candidate_digest != result.verification.board_digest
+
+
+def test_stale_fill_is_not_proposal_authority(native_cli):
+    board = fragmented()
+    evidence = verify_filled_planes(board, kicad_cli=native_cli)
+    changed = replace(board, name="different-export")
+    assert not tuple(_proposals(changed, evidence, 64))
+    roots = filled_component_roots(changed, evidence, frozenset({"POWER"}))
+    assert not any(identity.startswith("fill:") for identity in roots)
+
+
+def test_fill_grouping_does_not_join_a_drilled_void_or_another_layer(native_cli):
+    pytest.importorskip("shapely")
+    board = fragmented()
+    board = replace(board, vias=(Via("POWER", Point.mm(10, 6), nm_from_mm("0.6"),
+        nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),))
+    evidence = verify_filled_planes(board, kicad_cli=native_cli)
+    zone = next(i for i in native_object_map(board).values() if i.kind == "zone")
+    # Synthetic geometry exercises the grouping filter only; it is not a
+    # claimed native certificate or a manufacturing approval.
+    void = NativeFilledRegion(zone.uuid, "void", "POWER", "F.Cu",
+        ((9_900_000,5_900_000),(10_100_000,5_900_000),(10_100_000,6_100_000),(9_900_000,6_100_000)))
+    other_layer = NativeFilledRegion(zone.uuid, "back-only", "POWER", "B.Cu",
+        ((2_000_000,5_000_000),(4_000_000,5_000_000),(4_000_000,7_000_000),(2_000_000,7_000_000)))
+    roots = filled_component_roots(board, replace(evidence, filled_regions=(void, other_layer)),
+                                   frozenset({"POWER"}))
+    assert roots["fill:void"] != roots["via:0"]
+    assert roots["fill:back-only"] != roots["pad:SOURCE.1:0"]
+
+
+def test_native_rejection_context_invalidates_relevant_changes(native_cli):
+    board = fragmented()
+    evidence = verify_filled_planes(board, kicad_cli=native_cli)
+    base = _rejection_context(board, evidence, "POWER", frozenset())
+    other = TrackSegment("OTHER", Point.mm(2, 2), Point.mm(4, 2), nm_from_mm("0.25"), CopperLayer.BACK)
+    unrelated = replace(board, nets=(*board.nets, PhysicalNet("OTHER", ())), tracks=(other,))
+    assert _rejection_context(unrelated, evidence, "POWER", frozenset()) == base
+    assert _rejection_context(replace(unrelated, tracks=(replace(other, layer=CopperLayer.FRONT),)),
+        evidence, "POWER", frozenset()) != base
+    assert _rejection_context(unrelated, evidence, "POWER", frozenset({"OTHER"})) != base
+    assert _rejection_context(replace(board, vias=(Via("POWER", Point.mm(3, 6),
+        nm_from_mm("0.6"), nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),)),
+        evidence, "POWER", frozenset()) != base
+    assert _rejection_context(board, replace(evidence, filled_regions=()), "POWER", frozenset()) != base
+
+
+def test_unrelated_accepted_bridge_does_not_repeat_rejected_native_pair():
+    board = fragmented()
+    board = replace(board, placements=(*board.placements,
+        Placement("BS", "terminal", Point.mm(3, 9), side=BoardSide.BACK),
+        Placement("BL", "terminal", Point.mm(17, 9), side=BoardSide.BACK)),
+        nets=(*board.nets, PhysicalNet("OTHER", (PadReference("BS", "1"), PadReference("BL", "1")))),
+        zones=(*board.zones, CopperZone("back-rail", "OTHER", (CopperLayer.BACK,),
+            rectangle(1, 7, 19, 11), pad_connection=ZoneConnection.SOLID,
+            island_policy=IslandPolicy.REMOVE_ALL, minimum_island_area_nm2=None)))
+    initial = pipeline(board)
+    pads = [i for i in native_object_map(initial.board).values() if i.kind == "pad"]
+    findings = [{"type":"unconnected_items", "items":[{"uuid":i.uuid} for i in pads if i.net == net]}
+                for net in ("POWER", "OTHER")]
+    calls = []
+    def native_runner(command, cwd):
+        if command[1:] == ("--version",):
+            return CommandResult(0, "10.0.6")
+        calls.append(command)
+        # Initial + rejected front bridge keep both opens; the accepted back
+        # bridge closes only OTHER. A fourth verification would be redundant.
+        report = {"violations":[], "unconnected_items":findings if len(calls) < 3 else findings[:1]}
+        Path(command[command.index("--output")+1]).write_text(json.dumps(report), encoding="utf-8")
+        return CommandResult(0)
+    result = improve_filled_copper(initial, kicad_cli=Path("fake"), runner=native_runner,
+        options=FilledCopperFeedbackOptions(maximum_trials=4))
+    assert [t.outcome for t in result.trials] == ["native_not_improved", "accepted"]
+    assert len(calls) == 3 and result.stop_reason == "stagnation"
+    assert result.verification.unconnected_count == 1 and not result.verification.passed
 
 
 def test_repeated_candidate_is_not_reverified_and_exhaustion_is_not_impossibility():

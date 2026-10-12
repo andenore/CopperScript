@@ -1073,6 +1073,21 @@ class RigidPlacementMember:
 
 
 @dataclass(frozen=True, slots=True)
+class MacroEdgeOpening:
+    """Local keepout edges that must coincide with the host's outer perimeter."""
+
+    keepout: str
+    edge_indices: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "edge_indices", tuple(self.edge_indices))
+        if (not self.keepout or not self.edge_indices
+                or any(type(index) is not int or index < 0 for index in self.edge_indices)
+                or len(set(self.edge_indices)) != len(self.edge_indices)):
+            raise ValueError("macro edge opening requires unique nonnegative integer edge indices")
+
+
+@dataclass(frozen=True, slots=True)
 class RigidPlacementCluster:
     """Hard physical macro, not a soft proximity group or electrical hierarchy.
 
@@ -1090,10 +1105,12 @@ class RigidPlacementCluster:
     # Additional courtyard-to-courtyard gap inside the audited macro only.
     # None retains the planner's ordinary gap; copper DRC is never changed.
     internal_clearance_nm: Nanometres | None = None
+    edge_openings: tuple[MacroEdgeOpening, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "members", tuple(self.members))
         object.__setattr__(self, "keepouts", tuple(self.keepouts))
+        object.__setattr__(self, "edge_openings", tuple(self.edge_openings))
         references = [member.reference for member in self.members]
         if not self.name or not self.source or len(references) < 2:
             raise ValueError("rigid cluster requires a name, evidence source and two members")
@@ -1107,6 +1124,14 @@ class RigidPlacementCluster:
         })))
         if len({item.id for item in self.keepouts}) != len(self.keepouts):
             raise ValueError("rigid cluster keepout ids must be unique")
+        regions = {item.id: item for item in self.keepouts}
+        if len({item.keepout for item in self.edge_openings}) != len(self.edge_openings):
+            raise ValueError("duplicate macro edge opening keepout")
+        for opening in self.edge_openings:
+            region = regions.get(opening.keepout)
+            if (region is None or not region.block_zones or region.outline.holes
+                    or any(i >= len(region.outline.outer.vertices) for i in opening.edge_indices)):
+                raise ValueError("macro edge opening requires a zone-blocking simple keepout and valid edges")
         if self.internal_clearance_nm is not None and self.internal_clearance_nm < 0:
             raise ValueError("rigid cluster internal courtyard clearance cannot be negative")
 

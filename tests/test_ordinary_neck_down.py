@@ -64,10 +64,10 @@ def _route(board: PhysicalBoard, **options):
 
 
 def _misnecked(board: PhysicalBoard, tracks) -> list[TrackSegment]:
-    """VDD copper whose width disagrees with its region: 0.2 mm inside, 0.4 mm outside."""
+    """VDD copper below its permitted minimum; full width is legal inside too."""
     regions = BreakoutRegions(board)
     return [t for t in tracks if t.net == "VDD" and t.width_nm
-            != (NARROW if regions.region(t.net, (t.start, t.end)) is not None else WIDE)]
+            < (NARROW if regions.region(t.net, (t.start, t.end)) is not None else WIDE)]
 
 
 def _hard_errors(board: PhysicalBoard) -> set[str]:
@@ -123,7 +123,8 @@ def test_a_wide_ordinary_net_reaches_a_fine_pitch_pin_only_by_necking_down() -> 
     necked = [item for item in report.breakout_relaxations if item.check == "track_width"]
     assert necked and all((item.required_nm, item.relaxed_nm, item.measured_nm) == (WIDE, NARROW, NARROW)
                           for item in necked)
-    assert {land for item in necked for net, land, _ in item.regions} == {"pad:U1.3:2", "pad:J1.1:0"}
+    # The large J1 land no longer gets a gratuitous neckdown.
+    assert {land for item in necked for net, land, _ in item.regions} == {"pad:U1.3:2"}
 
 
 def test_routing_checks_and_emits_each_centreline_as_its_pieces() -> None:
@@ -202,9 +203,11 @@ def test_smoothing_a_necked_staircase_checks_and_emits_its_pieces() -> None:
     final = replace(board, tracks=result)
     assert not _misnecked(board, result) and {t.width_nm for t in result} == {NARROW, WIDE}
     assert not _hard_errors(final) and _connected(final)
-    # The staircase between the pins became a 45-degree chord, still necked.
-    assert any(t.width_nm == NARROW and t.start.x_nm != t.end.x_nm and t.start.y_nm != t.end.y_nm
-               for t in result)
+    # The staircase becomes a checked chord. Its open-space pieces may now
+    # use the full width; only genuinely obstructed pin access stays necked.
+    assert any(t.start.x_nm != t.end.x_nm and t.start.y_nm != t.end.y_nm for t in result)
+    index = RoutingClearanceIndex(final)
+    assert all(index.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in result)
 
 
 def test_stub_pruning_joins_neck_down_cuts_on_one_centre_line() -> None:
@@ -279,17 +282,19 @@ def test_re_cutting_pruned_copper_is_transactional() -> None:
     lead = breakout.split_tracks(
         (TrackSegment("VDD", Point.mm(10, 8), Point.mm(10, 11), WIDE, FRONT),
          TrackSegment("VDD", Point.mm(10, 11), Point.mm(14, 11), WIDE, FRONT)), WIDE)
-    # A wide remnant ending at the J1 land centre necks down inside its region.
+    # A wide remnant ending at J1 stays wide, even after region re-cutting.
     centred = (*lead, TrackSegment("VDD", Point.mm(14, 11), Point.mm(14, 14), WIDE, FRONT))
     immutable, mutable = detail._neck_down_changed(board, [], centred, (), breakout)
     assert not immutable and not _misnecked(board, mutable) and len(mutable) == len(centred) + 1
     assert _connected(replace(board, tracks=mutable))
-    # One that touches J1 only through its full width keeps it: narrowed, the
-    # net would fall apart.
+    assert mutable[-1].width_nm == WIDE
+    # One that touches J1 only through its full width also keeps its contact.
     grazing = (*lead, TrackSegment("VDD", Point.mm(14, 11), Point.mm(14, "13.25"), WIDE, FRONT))
     assert _connected(replace(board, tracks=grazing))
-    assert not _connected(replace(board, tracks=breakout.neck_down(grazing)))
-    assert detail._neck_down_changed(board, [], grazing, (), breakout) == ([], grazing)
+    assert _connected(replace(board, tracks=breakout.neck_down(grazing)))
+    fixed_result, kept = detail._neck_down_changed(board, [], grazing, (), breakout)
+    assert not fixed_result and _connected(replace(board, tracks=kept))
+    assert all(t.width_nm == WIDE for t in kept if t.start.x_nm == nm_from_mm(14))
     # Input copper is never re-cut.
     fixed = [TrackSegment("VDD", Point.mm(14, 11), Point.mm(14, 14), WIDE, FRONT)]
     assert detail._neck_down_changed(replace(board, tracks=tuple(fixed)), fixed, (), (), breakout) == (fixed, ())

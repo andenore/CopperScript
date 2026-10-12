@@ -16,8 +16,9 @@ removed copper touched must still be touched. A net whose explicit copper
 connectivity or via-layer contacts would change keeps its original copper.
 No via, immutable, critical or reserved copper is moved or used as input.
 New copper of an ordinary net with breakout properties is checked and emitted
-as its pieces: the breakout width inside a region, the profile width outside
-(plan R1). Width changes stay anchors, so a necked chain is never widened.
+as its exact-checked preferred-width pieces, with permitted breakout-width
+fallback (plan R1). Width changes stay anchors; existing copper is not rewritten
+merely because a wider profile could fit.
 """
 from __future__ import annotations
 
@@ -273,7 +274,11 @@ def _simplify(board, net, layer, width, points, external, clearance, others, via
             old = points[i:j + 1]
             old_scores = _scores(old, incoming, outgoing)
             old_length = _length(old)
-            for candidate in _connections(points[i], points[j]):
+            for candidate in clearance.terminal_preferences.ordered(
+                    net, layer, _connections(points[i], points[j])):
+                if (clearance.terminal_preferences.score(net, layer, candidate)
+                        > clearance.terminal_preferences.score(net, layer, old)):
+                    continue  # Do not undo a checked outward pad launch.
                 new_scores = _scores(candidate, incoming, outgoing)
                 new_length = _length(candidate)
                 if (new_length > old_length or max(new_scores) > max(old_scores)

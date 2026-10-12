@@ -19,6 +19,8 @@ Choose only the relevant focused record for detailed acceptance criteria:
   ordinary topology, bounded quality and path extraction.
 - [Routing quality contracts](docs/routing-quality-todo.md): implemented behavior
   that must survive future changes.
+- [AssetTracker visual review](docs/assettracker-review-plan.md): preferred power
+  width, pad-aware exits, short RF access and source-matched antenna corrections.
 - [Routing optimization](docs/routing-optimization-todo.md): profiled bottlenecks
   and guarded comparisons; preserve output quality and evidence.
 - [Qualification gaps](docs/qualification-todo.md): geometry adapters, derating/

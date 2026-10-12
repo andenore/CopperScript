@@ -62,6 +62,13 @@ def local_surface_candidates(
         return
     width = rule.width_nm or board.rules.default_track_width_nm
     clearance = RoutingClearanceIndex(board)
+
+    def octilinear(path):
+        return path and all(
+            t.start.x_nm == t.end.x_nm or t.start.y_nm == t.end.y_nm
+            or abs(t.start.x_nm-t.end.x_nm) == abs(t.start.y_nm-t.end.y_nm)
+            for t in path)
+
     for layer in routing_layers(board, rule.net, rule):
         if layer not in layers:
             continue
@@ -69,15 +76,11 @@ def local_surface_candidates(
         for first, second in combinations(range(len(terminals)), 2):
             path = surface_path(board, clearance, rule.net, terminals[first], terminals[second],
                                 width, layer, board.tracks)
-            if not path and maze and len(terminals) == 2 and rule.max_vias == 0:
+            if not octilinear(path) and maze and len(terminals) == 2 and rule.max_vias == 0:
                 path = surface_path_between(
                     board, clearance, rule.net, terminals[first], terminals[second], width, layer,
                     step_nm=nm_from_mm("0.1"), maximum_detour_nm=nm_from_mm(2), state_budget=20_000)
-            if not path or any(
-                track.start.x_nm != track.end.x_nm and track.start.y_nm != track.end.y_nm
-                and abs(track.start.x_nm - track.end.x_nm) != abs(track.start.y_nm - track.end.y_nm)
-                for track in path
-            ):
+            if not octilinear(path):
                 continue
             length = sum(round(hypot(track.end.x_nm - track.start.x_nm,
                                      track.end.y_nm - track.start.y_nm)) for track in path)

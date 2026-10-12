@@ -1,9 +1,13 @@
 """Local plane access must honor declared, bounded power-pin neckdowns."""
 from dataclasses import replace
 
+import pytest
+
 from pcbir import (BoardOutline, CopperLayer, FootprintPad, NetRoutingRule,
     PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement,
-    Point, Size, nm_from_mm)
+    Point, Size, TrackSegment, nm_from_mm)
+from pcbir.breakout import BreakoutRegions
+from pcbir.physical import CopperKeepout, PolygonRing, PolygonWithHoles
 from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.surface_path import surface_path, surface_path_to_via
 
@@ -33,6 +37,55 @@ def test_local_power_escape_necks_only_inside_declared_region():
     assert all(t.width_nm >= index.breakout.required_width_nm(t, nm_from_mm('.8'))
                and index.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in tracks)
     assert path(board(neck=False)) is None
+
+
+def test_open_pad_contact_prefers_full_width_despite_breakout_permission():
+    source = board()
+    # Keep only the assigned land: the 800 um profile now fits everywhere.
+    source = replace(source, footprints={'fine-row': replace(
+        source.footprints['fine-row'], pads=(source.footprints['fine-row'].pads[1],))})
+    tracks = path(source)
+    assert tracks and {track.width_nm for track in tracks} == {nm_from_mm('.8')}
+
+
+def test_cleanup_does_not_narrow_an_already_checked_full_width_contact():
+    source = board()
+    source = replace(source, footprints={'fine-row': replace(
+        source.footprints['fine-row'], pads=(source.footprints['fine-row'].pads[1],))})
+    track = TrackSegment('P', Point.mm(5, 5), Point.mm(6, 5), nm_from_mm('.8'), CopperLayer.FRONT)
+    assert RoutingClearanceIndex(source).can_track('P', track.start, track.end, track.width_nm, track.layer)
+    assert BreakoutRegions(source).neck_down((track,)) == (track,)
+
+
+def test_back_layer_contact_prefers_full_width_without_surface_pad_obstacles():
+    source = board()
+    index = RoutingClearanceIndex(source)
+    tracks = index.route_pieces('P', Point.mm(5, 5), Point.mm(8, 5),
+                                nm_from_mm('.8'), CopperLayer.BACK)
+    assert tracks and {track.width_nm for track in tracks} == {nm_from_mm('.8')}
+
+
+@pytest.mark.parametrize('obstacle', ['edge', 'keepout'])
+def test_widening_must_clear_board_material_and_keepouts(obstacle):
+    source = board()
+    source = replace(source, footprints={'fine-row': replace(
+        source.footprints['fine-row'], pads=(source.footprints['fine-row'].pads[1],))})
+    start, end = Point.mm(5, 5), Point.mm(6, 5)
+    if obstacle == 'edge':
+        start, end = Point.mm(5, '.35'), Point.mm(6, '.35')
+        source = replace(source, placements=(replace(source.placements[0], position=start),))
+    else:
+        exclusion = CopperKeepout('routing obstacle', (CopperLayer.FRONT,),
+            PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in (
+                (5, '5.35'), (6, '5.35'), (6, '5.45'), (5, '5.45'))))),
+            block_tracks=True, block_vias=False, block_zones=False)
+        source = replace(source, copper_keepouts=(exclusion,))
+    index = RoutingClearanceIndex(source)
+    tracks = index.route_pieces('P', start, end, nm_from_mm('.8'), CopperLayer.FRONT)
+    assert tracks and {t.width_nm for t in tracks} == {nm_from_mm('.2')}
+    from pcbir.surface_path import _track_inside_board
+    assert all(index.can_track(t.net, t.start, t.end, t.width_nm, t.layer)
+               and _track_inside_board(source, t.start, t.end, t.width_nm) for t in tracks)
 
 
 def test_valid_existing_neckdown_chain_is_reused_not_recreated():

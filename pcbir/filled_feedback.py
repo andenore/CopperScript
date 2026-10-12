@@ -23,6 +23,7 @@ from .physical import CopperLayer, PhysicalBoard, Point, RouteKind, nm_from_mm
 from .plane_verify import (PlaneVerification, native_object_map, verify_filled_planes,
                           remove_native_dangling_copper)
 from .geometry import point_in_polygon
+from .filled_connectivity import filled_component_roots, native_item_identity
 from .progress import ProgressCallback, emit
 from .routing_clearance import RoutingBlocker, RoutingClearanceIndex
 from .surface_path import surface_path_between
@@ -106,44 +107,47 @@ def _open_nets(evidence):
     return frozenset(item.net for finding in entries for item in finding.items)
 
 
+def _sample_anchors(groups, limit):
+    """Bounded round-robin over components, then their accessible layers."""
+    balanced = []
+    for group in groups.values():
+        layers, seen = {}, set()
+        for component, owner, position in group:
+            for layer in owner.layers:
+                key = owner.uuid, position, layer
+                if key not in seen:
+                    seen.add(key)
+                    layers.setdefault(layer, []).append((component, replace(owner, layers=(layer,)), position))
+        balanced.append([values[index] for index in range(limit) for values in layers.values()
+                         if index < len(values)][:limit])
+    return [group[index] for index in range(limit) for group in balanced if index < len(group)][:limit]
+
+
 def _finding_proposals(board, evidence, anchor_limit):
     eligible = distribution_zone_nets(board)
     rules = {rule.net: rule for rule in board.net_routing_rules}
     objects = tuple(native_object_map(board).values())
-    explicit_roots = None
+    components = filled_component_roots(board, evidence, eligible)
     def root(item):
-        if item.kind == "pad":
-            identity = f"pad:{item.component}.{item.pad}:{item.index}"
-        elif item.kind == "segment":
-            identity = f"track:{item.index}"
-        elif item.kind == "via":
-            identity = f"via:{item.index}"
-        else:
-            return None
-        return explicit_roots.roots.get(identity)
+        return components.get(native_item_identity(item))
     def anchors(item):
-        nonlocal explicit_roots
         if item.kind != "zone":
             # A native nearest-item report can name a front track and a back
             # track although either connected copper component already owns a
             # plated transition. Follow actual bare copper, never a same-net
             # label, component-internal edge or an authored zone outline.
-            if explicit_roots is None:
-                from .drc import explicit_copper_connectivity
-                explicit_roots = explicit_copper_connectivity(board,
-                    only_nets=eligible, include_internal_connections=False)
             connected = root(item)
-            found = [(None, item, point) for point in item.positions_nm]
+            found = [(connected, item, point) for point in item.positions_nm]
             if connected is not None:
-                additions = [(None, owner, position) for owner in objects
+                additions = [(connected, owner, position) for owner in objects
                     if owner.uuid != item.uuid and owner.net == item.net and root(owner) == connected
                     for position in owner.positions_nm]
                 additions.sort(key=lambda anchor: (
                     min(sum((a-b)**2 for a,b in zip(anchor[2], point)) for point in item.positions_nm),
                     anchor[1].uuid, anchor[2]))
                 found.extend(additions)
-            return found[:anchor_limit]
-        groups = []
+            return _sample_anchors({connected: found}, anchor_limit)
+        groups = {}
         # Native DRC can identify two fragments with the SAME zone UUID and
         # nominal origin. Membership is measured in the freshly filled polygon,
         # not the authored zone outline or description string.
@@ -151,6 +155,8 @@ def _finding_proposals(board, evidence, anchor_limit):
             if fragment.zone_uuid != item.uuid:
                 continue
             polygon = tuple(Point(*point) for point in fragment.vertices_nm)
+            identity = f"fill:{fragment.fragment_digest}"
+            component = components.get(identity, identity)
             found = []
             for owner in objects:
                 if (owner.net != item.net or owner.kind not in {"pad", "segment", "via"}
@@ -158,21 +164,25 @@ def _finding_proposals(board, evidence, anchor_limit):
                     continue
                 for position in owner.positions_nm:
                     if point_in_polygon(Point(*position), polygon):
-                        found.append((fragment.fragment_digest,
+                        found.append((component,
                             replace(owner, layers=(fragment.layer,)), position))
                         if len(found) >= anchor_limit:
                             break
                 if len(found) >= anchor_limit:
                     break
             if found:
-                groups.append(found)
-                if len(groups) >= anchor_limit:
-                    break
+                groups.setdefault(component, []).extend(found)
+        # A report may name a back-layer zone while the missing component only
+        # has front lands. Follow plated contacts and fresh fill to accessible
+        # surfaces; never invent a via or use a zone's nominal origin.
+        for component, found in groups.items():
+            found.extend((component, owner, position) for owner in objects
+                if owner.net == item.net and root(owner) == component
+                for position in owner.positions_nm)
         # A busy first fragment must not consume the entire anchor allowance
         # before any other fragment is represented. Keep the overall cap while
         # sampling deterministically round-robin across eligible fragments.
-        return [group[index] for index in range(anchor_limit) for group in groups
-                if index < len(group)][:anchor_limit]
+        return _sample_anchors(groups, anchor_limit)
     for finding in evidence.native_findings:
         if finding.category != "unconnected" or len(finding.items) != 2:
             continue
@@ -197,6 +207,8 @@ def _finding_proposals(board, evidence, anchor_limit):
 
 def _proposals(board, evidence, anchor_limit):
     """Share trials across open nets, without materializing every anchor pair."""
+    if not evidence.matches(board):
+        return
     grouped = {}
     for finding in evidence.native_findings:
         if finding.category == "unconnected" and len(finding.items) == 2:
@@ -210,13 +222,37 @@ def _proposals(board, evidence, anchor_limit):
         for queue in queues:
             for proposal in queue:
                 net, _, layer, start, end = proposal
-                key = (net, layer, tuple(sorted(((start.x_nm, start.y_nm), (end.x_nm, end.y_nm)))))
+                key = _proposal_key(net, layer, start, end)
                 if key not in seen:
                     seen.add(key)
                     yield proposal
                     active.append(queue)
                     break
         queues = active
+
+
+def _proposal_key(net, layer, start, end):
+    return net, layer, tuple(sorted(((start.x_nm, start.y_nm), (end.x_nm, end.y_nm))))
+
+
+def _rejection_context(board, evidence, net, dependency_nets):
+    """Ignore only unrelated copper on OTHER layers when reusing a rejection.
+
+    A bridge search and dependency reroute can explore beyond a local box.
+    Keep all same-layer copper, every via, and entire involved-net geometry;
+    changes there invalidate the cache. Source intent/poses/options are invariant
+    within this transaction. No cross-run cache or board-specific selectors.
+    """
+    involved = {net, *dependency_nets}
+    layers = {p.layer for p in board.tracks if p.net in involved}
+    layers.update(layer for zone in board.zones if zone.net == net for layer in zone.layers)
+    if dependency_nets:
+        # A displaced ordinary owner may reroute on a previously unused layer.
+        # Do not cache against only the layers of its incumbent route.
+        layers.update(board.stackup.copper_layers)
+    return (frozenset(Counter(t for t in board.tracks if t.net in involved or t.layer in layers).items()),
+            frozenset(Counter(board.vias).items()),
+            frozenset(fragment.fragment_digest for fragment in evidence.filled_regions if fragment.net in involved))
 
 
 def improve_filled_copper(
@@ -297,15 +333,20 @@ def improve_filled_copper(
                 mutable.append(item)
         return tuple(fixed), tuple(mutable)
     records, seen = [], {physical_board_digest(board)}
+    rejected = {}
     pipeline = initial
     reason, diagnostic = "stagnation", None
     while evidence.unconnected_count and len(records) < options.maximum_trials:
         improved, proposed = False, False
         for net, uuids, layer, start, end in _proposals(board, evidence, options.maximum_fragment_anchors):
+            proposed = True
+            key = _proposal_key(net, layer, start, end)
+            previous = rejected.get(key)
+            if previous and previous[1] == _rejection_context(board, evidence, net, previous[0]):
+                continue
             if len(records) >= options.maximum_trials:
                 reason = "trial_budget_exhausted"
                 break
-            proposed = True
             fixed_tracks, mutable_tracks = partition(board.tracks, protected_tracks)
             fixed_vias, mutable_vias = partition(board.vias, protected_vias)
             fixed = replace(board, tracks=fixed_tracks, vias=fixed_vias)
@@ -407,6 +448,10 @@ def improve_filled_copper(
                 layer.value, outcome, blockers, tuple(sorted(displaced)), expansions,
                 work["states"], work["dependency_searches"], digest, checked, cleaned_tracks, cleaned_vias)
             records.append(record)
+            # Failed native trials have unchanged input geometry. Do not repeat
+            # them merely because another rail accepted an unrelated bridge.
+            if outcome == "native_not_improved":
+                rejected[key] = (displaced, _rejection_context(board, evidence, net, displaced))
             emit(on_progress, "filled_copper_trial", "finished", index=record.index,
                  net=net, outcome=outcome, displaced_nets=list(record.displaced_nets),
                  cleanup_removed_tracks=cleaned_tracks, cleanup_removed_vias=cleaned_vias)

@@ -65,17 +65,32 @@ RF/USB/critical nets do not become ordinary bridge candidates. Unknown objects,
 unsupported findings and absent fragment anchors remain explicit unresolved
 statuses. Endpoint sampling is bounded to 64 anchors per reported zone item;
 failure of this sampled search does not prove there is no physical solution.
-Anchors are sampled round-robin across eligible fragments, so a busy first
-fragment cannot consume the entire allowance before another is represented.
+Anchors are sampled round-robin across electrically distinct components, then
+their accessible layers. Separate polygons already joined by explicit copper,
+plated transitions or actual native fill do not consume separate component slots
+or receive redundant bridges. The grouping filter shares DRC's bare-copper
+contacts, excludes installed-component internal edges, and requires fresh
+source/export-bound fill. The optional `qualification` geometry dependency
+decodes exact reversible native hole slits without healing arbitrary polygons.
+Positive-area contacts use conservative inscribed copper/circumscribed drills;
+boundary-only contact, drilled voids and unsupported/disconnected polygon walks
+do not establish a join. Without that dependency, native-fill component grouping
+is unavailable; non-zone explicit-copper anchor expansion remains available and
+unresolved searches still cannot claim native closure.
 Repair proposals also share the trial allowance round-robin across distinct
 open nets. Equivalent net/layer/endpoint proposals are deduplicated before
 spending a trial; source names do not select the repair policy.
-For a non-zone native item, anchors may also come from its actual connected
-bare-copper component. Existing plated transitions can therefore supply a
+For a zone or non-zone native item, anchors may also come from its actual connected
+bare-copper/native-fill component. Existing plated transitions can therefore supply a
 same-layer bridge endpoint even when KiCad names two opposite-layer tracks.
 Same-net labels, installed-component internal joins and source-zone outlines
 do not join this graph. Sampling stays capped at 64 nearby explicit anchors;
 no new transition is invented and fresh native acceptance remains mandatory.
+Native-rejected endpoint pairs are skipped only within the current transaction
+when involved-net fill/geometry, every via and all copper on involved layers
+remain unchanged. Unrelated other-layer bridges do not trigger identical failed
+trials; relevant geometry changes invalidate the rejection cache. This does not
+increase the configured trial or search budgets.
 
 1. Prefer a legal surface bridge with **no displaced owner**. With mutable area
    copper present, spend at most one quarter of the per-trial bridge state budget

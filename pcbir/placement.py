@@ -503,7 +503,8 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
         return ("component inventory differs from physical source",)
     from .geometry import RoundedConvexShape, shapes_clear
     from .mechanical import shape_in_outline, hole_shape
-    errors = []
+    from .clusters import cluster_edge_opening_rejections
+    errors = list(cluster_edge_opening_rejections(board, placements))
     for ref, pose in sorted(placements.items()):
         rule = _rules(board).get(ref)
         if ref in options.fixed_references and pose != original[ref]:

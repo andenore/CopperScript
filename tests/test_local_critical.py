@@ -260,3 +260,49 @@ def test_native_rejection_preserves_incumbent_even_if_builder_proposes_shorter_c
     assert result.locked_tracks == tracks
     assert result.nets[0].lengths_nm == original.lengths_nm
     assert not hard_findings(result.board)
+
+
+@pytest.mark.parametrize("name", ["FEED", "RENAMED_PORT"])
+def test_rf_improvement_checks_bounded_maze_without_inventing_length_limit(name):
+    board, guides = fixture(False)
+    rule = replace(board.net_routing_rules[0], net=name, kind=RouteKind.RF_FEED,
+                   target_impedance_ohms=50, max_length_nm=None)
+    wall = CopperKeepout("feed-obstacle", (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+        Point.mm(7,4), Point.mm(8,4), Point.mm(8,6), Point.mm(7,6)))))
+    board = replace(board, nets=(replace(board.nets[0], name=name),),
+                    net_routing_rules=(rule,), copper_keepouts=(wall,))
+    guide = replace(guides.routes[0], net=name, segments=tuple(replace(s, net=name) for s in guides.routes[0].segments))
+    original, tracks, vias = _route_single(board, rule, guide)
+    original, tracks, vias = _validate_candidate(board, original, tracks, vias, [], [])
+    assert original.connected
+    assert not tuple(local_surface_candidates(board, rule))
+    result, shortened, actual_vias = _improve_single_surface(board, rule, guide, original, tracks, vias, [], [])
+    assert result.connected and result.strategy == "local_surface_tree"
+    assert result.lengths_nm[0] < original.lengths_nm[0]
+    assert result.local_candidate_attempts == 1
+    assert not actual_vias and all(t.layer is CopperLayer.FRONT for t in shortened)
+    assert not hard_findings(replace(board, tracks=shortened))
+    assert board.net_routing_rules == (rule,) and rule.max_length_nm is None
+    assert rule.target_impedance_ohms == 50
+
+
+def test_rf_shortening_does_not_invent_missing_guide_or_remove_obstacles():
+    board, guides = fixture(False)
+    rule = replace(board.net_routing_rules[0], kind=RouteKind.RF_FEED)
+    board = replace(board, net_routing_rules=(rule,))
+    guide = replace(guides.routes[0], connected=False)
+    original, tracks, vias = _route_single(board, rule, guide)
+    result, actual, actual_vias = _improve_single_surface(board, rule, guide, original, tracks, vias, [], [])
+    assert not result.connected and not actual and not actual_vias
+
+
+def test_rejected_any_angle_cheap_path_does_not_suppress_bounded_octilinear_search(monkeypatch):
+    board, _ = fixture(False)
+    rule = replace(board.net_routing_rules[0], kind=RouteKind.RF_FEED)
+    angled = (TrackSegment(rule.net, Point.mm(5,5), Point.mm(10,6), nm_from_mm('.2'), CopperLayer.FRONT),)
+    monkeypatch.setattr('pcbir.local_critical.surface_path', lambda *args: angled)
+    assert not tuple(local_surface_candidates(board, rule))
+    path = next(local_surface_candidates(board, rule, maze=True))
+    assert path and not hard_findings(replace(board, tracks=path))
+    assert all(t.start.x_nm == t.end.x_nm or t.start.y_nm == t.end.y_nm
+        or abs(t.start.x_nm-t.end.x_nm) == abs(t.start.y_nm-t.end.y_nm) for t in path)

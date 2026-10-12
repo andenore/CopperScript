@@ -86,7 +86,7 @@ def checked_access_path(
     start: Point, end: Point, width_nm: int, layer: CopperLayer,
     allow_movable_conflicts: bool = False, *, allow_orthogonal: bool = True,
 ) -> tuple[TrackSegment, ...] | None:
-    """Try both diagonal/straight orders; emit precisely the checked legs."""
+    """Prefer outward terminal exits; emit precisely the checked fallback legs."""
     return next(checked_access_paths(board, clearance, net, start, end, width_nm,
                                     layer, allow_movable_conflicts,
                                     allow_orthogonal=allow_orthogonal), None)
@@ -97,7 +97,7 @@ def checked_access_paths(
     start: Point, end: Point, width_nm: int, layer: CopperLayer,
     allow_movable_conflicts: bool = False, *, allow_orthogonal: bool = True,
 ):
-    """Lazily enumerate checked orders; ordinary access still takes the first."""
+    """Lazily enumerate checked orders ranked by both terminal departures."""
     if start == end:
         yield ()
         return
@@ -114,9 +114,9 @@ def checked_access_paths(
         if allow_orthogonal:
             paths += ((start, Point(start.x_nm, end.y_nm), end),
                       (start, Point(end.x_nm, start.y_nm), end))
-    for points in paths:
-        # Each leg is checked and emitted as its pieces: an ordinary breakout
-        # net necks down inside its regions (plan R1), any other is one track.
+    for points in clearance.terminal_preferences.ordered(net, layer, paths):
+        # Each leg emits exactly its checked preferred-width pieces. An
+        # ordinary breakout net may neck down only inside its regions.
         tracks = tuple(piece for a, b in zip(points, points[1:]) if a != b
                        for piece in clearance.route_pieces(net, a, b, width_nm, layer))
         for track in tracks:

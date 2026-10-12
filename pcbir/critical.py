@@ -1773,15 +1773,20 @@ def _improve_single_surface(
     incumbent_vias: tuple[Via, ...], committed_tracks: list[TrackSegment],
     committed_vias: list[Via],
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
-    # Global transitions are handled by their existing owner. This initial
-    # improvement only compares surface-guide candidates, never paired nets.
-    if guide is None or not guide.connected or guide.vias or any(access.via for access in guide.accesses):
+    # A point-to-point RF profile explicitly forbidding vias can replace a
+    # coarse guide's transitions with a fully checked surface candidate. Other
+    # transition owners retain their existing behavior; pairs never enter here.
+    bounded_rf = rule.kind is RouteKind.RF_FEED and rule.max_vias == 0
+    if (guide is None or not guide.connected
+            or ((guide.vias or any(access.via for access in guide.accesses)) and not bounded_rf)):
         return incumbent, incumbent_tracks, incumbent_vias
     guide_length = incumbent.lengths_nm[0] if incumbent.lengths_nm else None
     search_board = replace(board, tracks=tuple(committed_tracks), vias=tuple(committed_vias))
     best, best_tracks, best_vias = incumbent, incumbent_tracks, incumbent_vias
     attempts = 0
-    for tracks in local_surface_candidates(search_board, rule):
+    candidates = (local_surface_candidates(search_board, rule, maze=True) if bounded_rf
+                  else local_surface_candidates(search_board, rule))
+    for tracks in candidates:
         attempts += 1
         length = _track_length(tracks)
         if best.connected and not best_vias and length >= best.lengths_nm[0]:
