@@ -1,15 +1,8 @@
 {
-  "canonical_source_sha256": "03883bab0bd8e5734127711bc1137698ea355e77c202afc825b2807430e2baff",
-  "component_count": 91,
-  "composition_inputs": {
-    "board.copper": "03883bab0bd8e5734127711bc1137698ea355e77c202afc825b2807430e2baff",
-    "revisions/battery-v1/placement.json": "5170741f89d0de6722d873d6e5f6a623447973affc9888aaea08736a5960b92b",
-    "revisions/battery-v1/power_tree.copper": "00b2b88b16184113f1722d97582da20f6f187d30f42b07c7c67109d2d55d355e",
-    "revisions/modem-power-v1/distribution.copper": "f4498e510d36e6d5c56e059ef1bf3c3f8359c337797b773973624a66c29fab0a",
-    "revisions/modem-power-v1/modem-power-macro.json": "195efd77da070e21bc23f43e15a16a33c4ddda91260580242279e95bf83bda2f",
-    "revisions/modem-power-v1/placement.json": "97b92d450aca9445d1bd0d16c2a43475c5eb5a7d37d856f93804874a60008651",
-    "scripts/build_battery_revision.py": "b70dcf7898b3186cde5676bb3c81199abfe45f337f504eda3f33a8e3cd48db9d"
-  },
+  "assembly_preview_review": "required; verify centroid, pin 1, polarity and supplier rotation",
+  "blocked_requirement_count": 13,
+  "candidate": "prototype-preorder-v3-20261012 / manufacturing-NOT-APPROVED",
+  "component_count": 97,
   "copper_layers": [
     "F.Cu",
     "In1.Cu",
@@ -18,38 +11,35 @@
     "In4.Cu",
     "B.Cu"
   ],
-  "locked_release_input": false,
+  "electrical_ir_sha256": "99690c984432df71dff945987135aac20bdf5f04bc22b15cdd60a4080a1610bc",
+  "ignored_drc_check_types": [
+    "missing_courtyard",
+    "track_not_centered_on_via",
+    "tuning_profile_track_geometries",
+    "footprint_filters_mismatch",
+    "footprint_type_mismatch"
+  ],
+  "independent_cam": "skipped_by_request",
+  "manufacturing_manifest_sha256": "e7e8a10e56ef3c40a274600c423fb1a344024384c34b2af4ea191cce20e0bf1e",
+  "native_drc_sha256": "dd61ab6ae2c9c5185f9ce18a1b73a3f885cb45cd9289e8e8cb2524fe4d355f7b",
   "native_drc_violation_count": 0,
-  "native_report_sha256": "fae32b7c060321f67dffe1fd2f96cd2678e710cc628ecd61860f97a8cee543b1",
   "native_unconnected_item_count": 0,
-  "net_count": 75,
-  "pcb": "build/latest-power-review-20261011/native-closure-v5/verification-003/CopperAssetTracker.kicad_pcb",
-  "pcb_sha256": "b63dd47ae84b9d9fea381420208dd6ffa113d89f1d9ecff8af07968907e3c3b1",
-  "placement_view": "Same candidate poses and pads, with tracks/vias/zones hidden for illustration.",
+  "pcb_sha256": "3c12ec9e7a1113477232fe00069e36f9bdb5dfa224a4afe3d2291fff5771e346",
+  "placement_view": "Native KiCad front fabrication/courtyard layers from the exact exported candidate; copper omitted for clarity.",
   "qualified_release": false,
   "rendered_assets": {
-    "electrical-ir.excerpt.json": "90c897942558b2b075ac37ad02fccbf345a69f608c7af1e7be38019823fee60b",
-    "physical-ir.excerpt.json": "d44848300f9e4fe519822c44c4f9a358a57d1e3ab56eb4eedfab5b3696365bc4",
-    "placement.svg": "21b757a0623d881475e3d2a31635a795f741b535eb42ecff0ca37420be5f11e9",
-    "routing-bottom.svg": "cce2f17f896141c03eb3c585d147e788c7d5dfdfc2a4eefb91e7d20dca4b9300",
-    "routing-inner.svg": "efeca73c5b32f58ccca9eba2eef50353f022affa261b3facdc94dafafc1af74d",
-    "routing-top.svg": "b681e1c7c31258966885fc079eb4eb2b47f30465fce76958fd3515b4fc51f523"
+    "electrical-ir.excerpt.json": "ac889c73d2fac8996a469321dfab8d95efc06c8410390b22223d50a80b7956ad",
+    "physical-ir.excerpt.json": "c812a7b1de639928941914f792c4686bd81000885e5816ca9beeadf104018cd6",
+    "placement.svg": "800ed70bb61f5b623a293d01148923119e73fffc966e4c813e866f1c29478598",
+    "routing-bottom.svg": "e48d892488d00cf02efd2f9365a0b431cc94bf5cfb87a87872588423c5e69ea1",
+    "routing-inner.svg": "7b3cc6fc954918032d354438647b30d1fd76bd52eaf92f6bc248a0d21a89524c",
+    "routing-top.svg": "d7004b8646dfb6efae8a9e86a601c3d8693140902f56eb759c45e63ee9513e3e"
   },
-  "review_inputs": {
-    "assembly.lock": "332cdbf7fe8c2fed9168884069466fb4c3688dbbef0fe0e5ba2c363ef02197e7",
-    "board.copper": "2d0a5dcda3e61cc0066c0c8938e2c3547479f275c182ed67704c61dc47412205",
-    "copper.lock": "b9f99ccf343a78c859e0a4c3af7c64a2c3b7f87827b076bdf382b523819eea50",
-    "copper.mod": "7d116f879fb7aab7b50e5d7b07126bd156d10bfc1b811308d814a7707909c9fd",
-    "logic-power-macro.json": "a4dc661340406b37e49265089190804e962268ae38db10739a1789cd38b7b073",
-    "modem-power-macro.json": "195efd77da070e21bc23f43e15a16a33c4ddda91260580242279e95bf83bda2f",
-    "nrf-antenna-macro.json": "bdddda24fe5dc4a95e17747d019ad79becbf7aaea7376f282a5218ef972a8e08",
-    "packages/tracker/power_tree.copper": "00b2b88b16184113f1722d97582da20f6f187d30f42b07c7c67109d2d55d355e"
-  },
-  "revision": "modem-power-v1",
-  "route_report_sha256": "b8418acdb0024543fd9d5aecf4870ce09f2774bd77962a9b3b027c7fa94ae443",
-  "routing_views": "Native KiCad exports of the unchanged filled review candidate; unmirrored top view.",
-  "source": "build/latest-power-review-20261011/board.copper",
-  "source_sha256": "2d0a5dcda3e61cc0066c0c8938e2c3547479f275c182ed67704c61dc47412205",
-  "track_count": 921,
-  "via_count": 314
+  "route_summary_sha256": "a7939d843f864db9c65c801ae640e0b0f814e0a9af5dab344e3d628db7733054",
+  "routing_status": "pass",
+  "routing_views": "Native KiCad exports from the exact manufacturing review PCB; inner and bottom views are shown from above without mirroring.",
+  "source_sha256": "60d44faa43321811788604fa76b4d94297bbb314df47886452e2dd306cf05826",
+  "supplier_availability": "not_checked",
+  "track_count": 968,
+  "via_count": 340
 }

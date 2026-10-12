@@ -2,10 +2,10 @@
 
 // The links still open the native illustrations when JavaScript is unavailable.
 const views = {
-  top: { image: "assets/routing-top.svg", alt: "Native KiCad F.Cu top copper and silkscreen of the recorded tracker review candidate", caption: "F.Cu · top copper and silkscreen. All views show the same recorded review candidate." },
-  inner: { image: "assets/routing-inner.svg", alt: "Native KiCad In2.Cu regional modem supply and signal routing, viewed from above", caption: "In2.Cu · regional 3.8 V distribution and signal routing. Viewed from above without mirroring; return-path qualification remains open." },
-  bottom: { image: "assets/routing-bottom.svg", alt: "Native KiCad B.Cu bottom copper routing, viewed from above without mirroring", caption: "B.Cu · bottom copper, viewed from above without mirroring. A single layer does not show every connection." },
-  placement: { image: "assets/placement.svg", alt: "The same tracker component poses, pads and courtyards with copper hidden", caption: "Placement · the same recorded candidate poses with copper hidden. This is not a fresh unconstrained placement run." }
+  top: { image: "assets/routing-top.svg", alt: "Native KiCad F.Cu top copper and silkscreen of the 12 October 2026 manufacturing review candidate", caption: "F.Cu · top copper and silkscreen. prototype-preorder-v3-20261012; unapproved review candidate." },
+  inner: { image: "assets/routing-inner.svg", alt: "Native KiCad In2.Cu regional modem supply and signal routing from the 12 October review candidate, viewed from above", caption: "In2.Cu · regional supply and signal routing from the same 12 October manufacturing candidate. Viewed from above without mirroring; return-path qualification remains open." },
+  bottom: { image: "assets/routing-bottom.svg", alt: "Native KiCad B.Cu bottom copper routing from the 12 October review candidate, viewed from above without mirroring", caption: "B.Cu · bottom copper from the same 12 October candidate, viewed from above without mirroring. A single layer does not show every connection." },
+  placement: { image: "assets/placement.svg", alt: "The same 97 candidate footprints and courtyards with copper omitted", caption: "Placement · 97 footprints from the exported candidate with copper omitted. This is not a new placement run." }
 };
 
 const image = document.getElementById("board-view");
