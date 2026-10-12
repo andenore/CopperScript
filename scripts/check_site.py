@@ -11,6 +11,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from sync_branding import check_copies
+
 ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / "site"
 BASE_URL = "https://andenore.github.io/CopperScript/"
@@ -113,6 +115,8 @@ def check_site(site: Path = SITE) -> list[str]:
             errors.append("Social preview is not a PNG")
     except (OSError, ValueError, KeyError, ET.ParseError) as error:
         errors.append(str(error))
+    if site.resolve() == SITE.resolve():
+        errors.extend(check_copies())
     return errors
 
 

@@ -3,9 +3,10 @@
 **PCB design as code. Hardware intent, written in code.**
 
 CopperScript is a strongly typed language and compiler for PCB connectivity,
-electrical intent and physical constraints. Describe components, peripheral
-selection, nets and supply domains in readable `.copper` source; check electrical
-rules, resolve versioned library parts and inspect placement, experimental
+electrical intent, mechanical geometry and physical constraints. Describe
+components, peripheral selection, nets, supply domains, board shape and placement
+intent in readable `.copper` source. Check electrical rules, resolve versioned
+library parts, edit mechanics and floorplans visually, and inspect experimental
 routing and native KiCad exports.
 
 [Project website](https://andenore.github.io/CopperScript/) ·
@@ -38,6 +39,60 @@ This excerpt from the tracker composition associates a bypass capacitor with
 its supply pin. The association survives compilation and informs generic
 decoupling placement and surface-feed decisions. It is not a complete board.
 
+## Mechanical design and constraints
+
+Define board shape and fit in the same version-controlled source as the circuit:
+rectangular, circular, polygonal and supported curved outlines; cutouts; mounting
+holes and slots; placement and copper keepouts. Named datums and edge/pad
+attachments locate connectors precisely. Declared component heights, enclosure
+limits and assembly-access regions express supported fit requirements; pinned
+DXF drawings provide read-only reference guides.
+
+Placement constraints capture fixed position, rotation and side, allowed angles,
+placement regions, distance limits, alignment and groups. Routing constraints
+describe widths, clearances, permitted layers, differential pairs and length
+matching. Supported constraints reach physical IR and their placement, routing
+or verification consumers; reports retain unresolved requirements and external
+evidence obligations.
+
+This excerpt from [the mechanical editor demo](examples/mechanical_editor_demo/board.copper)
+defines a board outline, a mounting hole and a component pose. The complete
+example supplies the component declarations and nets:
+
+```copper
+mechanical {
+    outline rectangle { width = 40mm; height = 30mm; }
+    hole H1 {
+        position = (3mm, 3mm); diameter = 2.2mm;
+        head_clearance_radius = 2mm;
+    }
+}
+constraint fixed_placement(R_ANCHOR) {
+    x = 7mm; y = 8mm;
+    rotation = 0; side = front;
+}
+```
+
+The browser-based mechanical editor shows actual pads, courtyards, board material
+and ratsnest guides. Preview automatic placement, drag or enter exact poses,
+measure geometry and deliberately lock placement intent. Review the source diff
+and explicitly save geometry or constraint changes back to `.copper`, with
+undo/redo. The VS Code custom editor uses the same shared UI and source workflow.
+Temporary placement previews stay temporary until you save explicit intent;
+imported profile definitions retain their library ownership.
+
+```console
+uv run copper edit-mechanical examples/mechanical_editor_demo/board.copper
+```
+
+Resolve the example's real KiCad footprints before opening the editor. See
+[mechanical source](docs/mechanical-language.md),
+[the editor workflow](docs/mechanical-editor.md),
+[reusable board profiles](docs/mechanical-profiles.md),
+[constraint syntax and coverage](docs/language-reference.md#constraints) and
+[VS Code setup](integrations/vscode/README.md). Supported mechanical checks do
+not establish a full 3D enclosure fit or manufacturing qualification.
+
 ## See a complete design
 
 ![Native KiCad top copper and silkscreen of CopperAssetTracker](site/assets/routing-top.svg)
@@ -59,8 +114,8 @@ The picture is native KiCad output, not a photograph of assembled hardware.
 
 | Repository | Owns |
 | --- | --- |
-| CopperScript | Language, compiler, electrical checks, generic placement/routing and KiCad export |
-| [CopperLib](https://github.com/andenore/CopperLib) | Versioned parts, footprints, reusable circuits and engineering contracts |
+| CopperScript | Language/compiler, electrical and physical checks, mechanical editor, constraint-driven placement/routing and KiCad export |
+| [CopperLib](https://github.com/andenore/CopperLib) | Versioned parts, footprints, reusable circuits, mechanical profiles and engineering contracts |
 | [CopperAssetTracker](https://github.com/andenore/CopperAssetTracker) | Board composition, application configuration and board-specific evidence |
 
 CopperLib is one library provider; independent libraries use the same interfaces.
@@ -126,13 +181,6 @@ layers, fabrication profile, footprints and macro assets. See
 [build configuration](docs/make-builds.md). KiCad 10 is needed for the qualified
 native refill adapter. Outputs and reports go into fresh build directories;
 failed runs remain review drafts.
-
-The [mechanical editor](docs/mechanical-editor.md) displays real footprint and
-board geometry and supports checked placement and reviewed source edits:
-
-```console
-uv run copper edit-mechanical examples/mechanical_editor_demo/board.copper
-```
 
 ## Qualification and outputs
 

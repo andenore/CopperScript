@@ -17,9 +17,18 @@ body {
   margin:0}
 
 header {
+  display:flex;
+  align-items:center;
+  gap:12px;
   padding:14px 22px;
   background:#202b34;
   border-bottom:1px solid #44515b}
+
+.copper-logo {
+  display:block;
+  flex:none;
+  width:42px;
+  height:42px}
 
 h1 {
   font-size:20px;

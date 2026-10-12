@@ -71,7 +71,8 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
                 return
             assets = {"/": ("index.html", "text/html; charset=utf-8"),
                       "/editor.js": ("editor.js", "text/javascript; charset=utf-8"),
-                      "/editor.css": ("editor.css", "text/css; charset=utf-8")}
+                      "/editor.css": ("editor.css", "text/css; charset=utf-8"),
+                      "/copper-logo.svg": ("copper-logo.svg", "image/svg+xml")}
             if path not in assets:
                 self.respond(404, {"error": "not found"})
                 return

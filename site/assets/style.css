@@ -153,25 +153,10 @@ pre code {
 }
 
 .mark {
-  display:inline-grid;
-  place-items:center;
-  width:32px;
-  height:32px;
-  border:2px solid var(--copper);
-  color:var(--copper);
-  font-family:var(--mono);
-  font-weight:700;
-  font-size:22px;
-  position:relative;
-}
-
-.mark span {
-  position:absolute;
-  right:-5px;
-  top:12px;
-  width:10px;
-  height:3px;
-  background:var(--copper);
+  display:block;
+  width:42px;
+  height:42px;
+  flex:none;
 }
 
 nav {
@@ -432,6 +417,38 @@ nav a {
   padding:0 26px 21px;
   font-size:11px;
   color:#bac3b6;
+}
+
+.mechanics {
+  border-top:1px solid var(--line);
+}
+
+.feature-list {
+  list-style:none;
+  padding:0;
+  margin:25px 0 0;
+  display:grid;
+  gap:18px;
+  color:var(--muted);
+  font-size:14px;
+}
+
+.feature-list strong {
+  color:var(--ink);
+}
+
+.mechanics-links {
+  display:flex;
+  flex-wrap:wrap;
+  gap:0 22px;
+}
+
+.mechanics .code-window pre {
+  font-size:12px;
+}
+
+.mechanics .code-footnote a {
+  text-underline-offset:3px;
 }
 
 .workflow {

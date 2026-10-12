@@ -13,7 +13,8 @@ secondary action is to inspect a complete, documented board.
 - Introduce CopperScript consistently across the three repository READMEs.
 - Show actual source, inspectable IR and native KiCad illustrations rather than
   invented renders or unsupported performance claims.
-- Explain language intent, the shared workflow, the tracker, quick start,
+- Explain language intent, mechanical design and constraints, the shared workflow,
+  the tracker, quick start,
   practical questions and repository ownership in that order.
 - Use static HTML/CSS and small progressive enhancements. No framework,
   installation, external fonts, analytics or board build is needed to publish.
@@ -99,6 +100,20 @@ Link the verified deployed URL with the announcement. Share where project
 posts are welcome. No posts, account settings or search submissions are sent
 automatically. Track indexed pages, search queries, GitHub referrals and example
 feedback; search-enabled LLM answers are a useful spot check, not a stable score.
+
+## Feature descriptions
+
+The mechanics and constraints section uses the current compiler documentation
+and `examples/mechanical_editor_demo/board.copper`. Keep its source excerpt,
+editor/save behavior and supported constraint kinds aligned with those inputs.
+The tracker illustrations describe their recorded candidate separately; they do
+not establish that every current mechanical feature is used by that board.
+
+## Shared logo
+
+Website headers, favicon, mobile bookmark icon and social preview use the same
+Cu badge as CopperReview and the CopperScript UI tools. See
+[the branding guide](../docs/branding.md) for canonical assets and copy checks.
 
 ## Maintain the recorded showcase
 
