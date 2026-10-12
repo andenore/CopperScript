@@ -14,7 +14,14 @@ from .erc import check, has_errors
 from .model import Board, ComponentInstance, PartDefinition
 from .serializer import board_to_dict
 
-SCHEMA = "copperscript-assembly-lock/v0.1"
+SCHEMA = "copperscript-assembly-lock/v0.2"
+# v0.1 locks predate `populate` and load unchanged: every selection defaults to
+# supplier assembly, which is exactly what those locks meant.
+READABLE_SCHEMAS = (SCHEMA, "copperscript-assembly-lock/v0.1")
+
+# How a populated component reaches the board. Only "supplier" components are
+# ordered and placed by the assembler, so only they belong in its BOM/CPL.
+POPULATE_MODES = ("supplier", "consigned", "none")
 
 
 class AssemblyError(ValueError):
@@ -32,6 +39,7 @@ class AssemblySelection:
     supplier_part: str | None = None
     source_url: str | None = None
     reviewed: bool = False
+    populate: str = "supplier"
 
     def __post_init__(self) -> None:
         for name in ("reference", "part"):
@@ -42,10 +50,28 @@ class AssemblySelection:
                 _text(value, name)
         if type(self.reviewed) is not bool:
             raise AssemblyError("reviewed must be a boolean")
+        if self.populate not in POPULATE_MODES:
+            raise AssemblyError(f"populate must be one of {', '.join(POPULATE_MODES)}")
+
+    @property
+    def ordered(self) -> bool:
+        """The assembler sources and places this component."""
+        return self.populate == "supplier"
 
     @property
     def exact(self) -> bool:
-        return all((self.manufacturer, self.mpn, self.supplier, self.supplier_part, self.footprint))
+        """Identity required for this component's populate mode.
+
+        A consigned component is still fitted, so it needs a full part identity
+        for whoever hand-places it, but no supplier offer. A component that is
+        not fitted needs neither.
+        """
+        if self.populate == "none":
+            return True
+        identity = (self.manufacturer, self.mpn, self.footprint)
+        if self.populate == "consigned":
+            return all(identity)
+        return all((*identity, self.supplier, self.supplier_part))
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +149,7 @@ def load_lock(path: str | Path) -> AssemblyLock:
         data = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
         if not isinstance(data, dict) or set(data) != {"schema", "board", "electrical_sha256", "selections"}:
             raise AssemblyError("expected schema, board, electrical_sha256 and selections fields only")
-        if data["schema"] != SCHEMA or not isinstance(data["selections"], list):
+        if data["schema"] not in READABLE_SCHEMAS or not isinstance(data["selections"], list):
             raise AssemblyError("unsupported assembly schema or invalid selections list")
         names = {f.name for f in fields(AssemblySelection)}
         entries = []
@@ -134,6 +160,13 @@ def load_lock(path: str | Path) -> AssemblyLock:
         return AssemblyLock(data["board"], data["electrical_sha256"], tuple(entries))
     except (json.JSONDecodeError, TypeError) as exc:
         raise AssemblyError(f"invalid assembly lock: {exc}") from exc
+
+
+_UNRESOLVED = {
+    "supplier": "manufacturer, full MPN, supplier, supplier part and footprint are required",
+    "consigned": "a consigned component still requires manufacturer, full MPN and footprint",
+    "none": "",
+}
 
 
 def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
@@ -152,6 +185,7 @@ def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
     offers = {}
     exact = set()
     reviewed = set()
+    populate: dict[str, set[str]] = {mode: set() for mode in POPULATE_MODES}
     for entry in sorted(lock.selections, key=lambda e: e.reference):
         ref = entry.reference
         if ref in seen:
@@ -168,12 +202,13 @@ def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
             issue("PART_MISMATCH", ref, "selected library part differs from the board")
         if entry.footprint != _footprint(component, part):
             issue("FOOTPRINT_MISMATCH", ref, "selected footprint differs from the board")
-        if part.manufacturer and entry.manufacturer != part.manufacturer:
+        if entry.populate != "none" and part.manufacturer and entry.manufacturer != part.manufacturer:
             issue("MANUFACTURER_MISMATCH", ref, "selection must use the library's manufacturer identity")
         if not entry.exact:
-            issue("UNRESOLVED_SELECTION", ref, "manufacturer, full MPN, supplier, supplier part and footprint are required")
+            issue("UNRESOLVED_SELECTION", ref, _UNRESOLVED[entry.populate])
         else:
             exact.add(ref)
+        populate[entry.populate].add(ref)
         if not entry.reviewed:
             issue("REVIEW_REQUIRED", ref, "package, ratings, mapping and footprint have not been approved")
         else:
@@ -192,21 +227,39 @@ def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
         "schema": "copperscript-assembly-report/v0.1", "board": board.name,
         "passed": not issues, "component_count": len(required),
         "exact_selection_count": len(exact), "reviewed_count": len(reviewed),
+        # Consigned and not-fitted components are absent from the supplier
+        # BOM/CPL by design; report them so the omission is never silent.
+        "supplier_assembled_count": len(populate["supplier"]),
+        "consigned_count": len(populate["consigned"]),
+        "not_fitted_count": len(populate["none"]),
+        "consigned": sorted(populate["consigned"]), "not_fitted": sorted(populate["none"]),
         "availability": "not_checked", "manufacturing_ready": False, "issues": issues,
     }
 
 
 def write_jlcpcb_bom(board: Board, lock: AssemblyLock, path: str | Path) -> None:
-    """Write only a fully reviewed selection BOM, not an ordering certificate."""
+    """Write the fully reviewed, supplier-assembled selections; not an order.
+
+    Consigned and not-fitted components are deliberately absent. The CPL is
+    built from this file's designators, so omitting them here preserves the
+    mandatory BOM/CPL reference equality and keeps the assembler from being
+    asked to place a part nobody supplied it. Whoever fits the consigned parts
+    works from the assembly report, which lists them by reference.
+    """
     if has_errors(check(board)):
         raise AssemblyError("ERC failed; BOM export refused")
     if not check_assembly(board, lock)["passed"]:
         raise AssemblyError("assembly selections failed; BOM export refused")
-    if any(e.supplier != "jlcpcb" for e in lock.selections):
-        raise AssemblyError("JLCPCB BOM export requires jlcpcb offers for every populated component")
+    ordered = [entry for entry in lock.selections if entry.ordered]
+    if any(entry.supplier != "jlcpcb" for entry in ordered):
+        raise AssemblyError(
+            "JLCPCB BOM export requires jlcpcb offers for every supplier-assembled component; "
+            'mark the others populate="consigned" or populate="none"')
+    if not ordered:
+        raise AssemblyError("no supplier-assembled components; nothing to export")
     components = _components(board)
     groups = {}
-    for entry in lock.selections:
+    for entry in ordered:
         component, _ = components[entry.reference]
         value = str(component.value) if component.value is not None else entry.mpn
         key = (value, entry.footprint, entry.supplier_part, entry.manufacturer, entry.mpn)

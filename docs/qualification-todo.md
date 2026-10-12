@@ -15,6 +15,14 @@ belong to libraries; operating choices and measurements belong to consumers.
   Existing pair inventories/path geometry remain auxiliary screens.
 - [ ] Provision/pin a second independent CAM parser and qualify its corpus/matrix:
   polarity, arcs, aperture macros, regions, slots and metamorphic comparisons.
+- [x] Support partially-assembled boards: a per-selection `populate` mode
+  (`supplier` / `consigned` / `none`) carried through `assembly.lock`, the check
+  report and the BOM exporter, so a board whose specialist parts the assembler
+  does not stock can still export everything it can place. Consigned and
+  not-fitted components leave the BOM *and* the CPL together, because the CPL is
+  built from the BOM's designators and their reference sets must stay equal.
+  Exclusions are reported, never silent. The mode records intent only: it implies
+  no sourcing, stock or assembly approval.
 
 External release requirements remain mandatory: exact source/variant applicability,
 stackup/plating/loss capabilities, actual operating/load/temperature envelopes,
