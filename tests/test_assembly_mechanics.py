@@ -157,3 +157,38 @@ def test_profile_assembly_roles_and_edge_names_are_explicitly_bound(tmp_path):
     assert d.mechanical.body_overhangs[0].edge=='host/TOP'
     assert d.mechanical.component_heights[0].reference=='J1'
     assert all(s.profile is not None for s in d.mechanical.sources)
+
+
+
+def test_requirement_edge_clearance_uses_the_legalizer_predicate():
+    """The requirement verifier must agree with the legalizer about overhangs.
+
+    A declared body overhang is part of the placement rule. Re-checking the pose
+    against the bare outline fails a placement the legalizer accepted, leaving a
+    permanent expected-failure in the requirements report that can later mask a
+    real one. requirement_verification._placement therefore calls
+    body_in_material, not shape_in_board.
+    """
+    import inspect
+    from pcbir.mechanical import shape_in_board
+    from pcbir.placement import _placement_polygon
+    from pcbir import requirement_verification
+
+    board = fixture()
+    pose = board.placements[0]
+    shape = RoundedConvexShape(_placement_polygon(board, pose))
+    clearance = 100000  # 0.1 mm, as a fixed_placement edge_clearance
+
+    # The declaration is what separates the two predicates on this pose.
+    assert legal(board)
+    assert body_in_material(board, pose, shape, clearance)
+    assert not shape_in_board(board, shape, clearance)
+
+    # Without the declaration both must reject it, and the legalizer agrees.
+    bare = replace(board, body_overhangs=())
+    assert not legal(bare)
+    assert not body_in_material(bare, pose, shape, clearance)
+
+    source = inspect.getsource(requirement_verification._placement)
+    assert "body_in_material(board, pose," in source
+    assert "shape_in_board(board,\n" not in source
