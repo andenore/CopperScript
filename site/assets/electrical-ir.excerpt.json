@@ -1,0 +1,35 @@
+{
+  "components": [
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "modes": {},
+      "part": "CAPACITOR",
+      "properties": {
+        "decouples": "U_MCU.VDD",
+        "role": "decoupling"
+      },
+      "ref": "C_MCU",
+      "value": {
+        "base_value": "0.0000001",
+        "unit": "nF",
+        "value": "100"
+      }
+    }
+  ],
+  "kind": "board",
+  "name": "CopperAssetTracker",
+  "nets": [
+    {
+      "endpoints": [
+        "PWR.V3V8",
+        "U_MODEM.USB_VBUS",
+        "U_MODEM.VBAT_1",
+        "U_MODEM.VBAT_2",
+        "U_MODEM.VBAT_3",
+        "C_MODEM_BULK.1"
+      ],
+      "name": "V3V8"
+    }
+  ],
+  "schema": "copperscript-ir/v0.1"
+}

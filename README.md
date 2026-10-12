@@ -1,14 +1,69 @@
 # CopperScript
 
-CopperScript is a strongly typed language for PCB connectivity, electrical
-intent and physical constraints. It compiles `.copper` source, checks electrical
-rules, resolves versioned library parts and footprints, and provides placement,
-routing and KiCad export workflows.
+**PCB design as code. Hardware intent, written in code.**
+
+CopperScript is a strongly typed language and compiler for PCB connectivity,
+electrical intent and physical constraints. Describe components, peripheral
+selection, nets and supply domains in readable `.copper` source; check electrical
+rules, resolve versioned library parts and inspect placement, experimental
+routing and native KiCad exports.
+
+[Project website](https://andenore.github.io/CopperScript/) ·
+[Language reference](docs/language-reference.md) ·
+[Examples](examples/README.md) ·
+[CopperAssetTracker](https://github.com/andenore/CopperAssetTracker)
 
 LLM agents: start with `copper agent-guide`, then request only the topics and
 library contracts needed for the task. Contributors also follow [AGENTS.md](AGENTS.md).
 The [documentation index](docs/README.md) routes tasks to current references;
 [TODO.md](TODO.md) tracks unfinished work.
+
+## More than connections
+
+A capacitor protects a particular pin. A switching converter has a critical
+current loop. A radio needs reference geometry and a return path. CopperScript
+makes supported intent explicit alongside the connections, with reusable
+engineering definitions and inspectable intermediate representations.
+
+```copper
+component C_MCU: CAPACITOR {
+    value = 100nF;
+    footprint = "Capacitor_SMD:C_0402_1005Metric";
+    role = decoupling;
+    decouples = "U_MCU.VDD";
+}
+```
+
+This excerpt from the tracker composition associates a bypass capacitor with
+its supply pin. The association survives compilation and informs generic
+decoupling placement and surface-feed decisions. It is not a complete board.
+
+## See a complete design
+
+![Native KiCad top copper and silkscreen of CopperAssetTracker](site/assets/routing-top.svg)
+
+[CopperAssetTracker](https://github.com/andenore/CopperAssetTracker) combines
+an STM32 host, cellular connectivity, GNSS, Bluetooth and motion sensing on a
+six-layer board. The recorded 2026-10-11 modem-power review has 91 components and
+75 physical nets, with zero native DRC violations and zero unconnected items.
+These are results for that recorded candidate, not a success guarantee for other
+boards or a production approval. Routing remains experimental; RF, power,
+battery, assembly, CAM and prototype qualification remain open.
+
+Inspect the [snapshot provenance](site/assets/snapshot.json),
+[current board status](https://github.com/andenore/CopperAssetTracker/blob/main/docs/validation.md)
+and [revision reproduction guide](https://github.com/andenore/CopperAssetTracker/blob/main/revisions/modem-power-v1/README.md).
+The picture is native KiCad output, not a photograph of assembled hardware.
+
+## Three repositories, one workflow
+
+| Repository | Owns |
+| --- | --- |
+| CopperScript | Language, compiler, electrical checks, generic placement/routing and KiCad export |
+| [CopperLib](https://github.com/andenore/CopperLib) | Versioned parts, footprints, reusable circuits and engineering contracts |
+| [CopperAssetTracker](https://github.com/andenore/CopperAssetTracker) | Board composition, application configuration and board-specific evidence |
+
+CopperLib is one library provider; independent libraries use the same interfaces.
 
 ## Quick start
 
@@ -95,3 +150,10 @@ no routing copper and must not be sent for fabrication.
 The [GitHub board-build workflow](docs/github-board-builds.md) publishes
 inspection artifacts with reports and checksums; their presence is not approval.
 Contributor internals and ERC coverage are in [compiler architecture](docs/compiler-architecture.md).
+
+## Project website
+
+The [static project website](https://andenore.github.io/CopperScript/) introduces
+the language and the tracker showcase. Its source, deployment configuration and
+[publishing plan](site/README.md) live in this repository. Website validation
+does not compile boards or change compiler, library or release pins.

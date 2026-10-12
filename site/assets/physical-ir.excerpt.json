@@ -1,0 +1,58 @@
+{
+  "note": "Selected fields of native-source-checked physical IR; not a complete serialization.",
+  "placements": [
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "position": {
+        "x_nm": 54044976,
+        "y_nm": 21190002
+      },
+      "reference": "C_MCU",
+      "rotation_degrees": "0",
+      "side": "front",
+      "source_path": "C_MCU",
+      "value": "100 nF"
+    },
+    {
+      "footprint": "github.com/andenore/CopperLib/packages/parts/simcom/sim7670g-lngv/footprints/SIM7670G_LNGV.kicad_mod",
+      "position": {
+        "x_nm": 20000000,
+        "y_nm": 24000000
+      },
+      "reference": "U_MODEM/U",
+      "rotation_degrees": "90",
+      "side": "front",
+      "source_path": "U_MODEM/U",
+      "value": "SIM7670G_LNGV"
+    }
+  ],
+  "tracks": [
+    {
+      "end": {
+        "x_nm": 6629992,
+        "y_nm": 20000008
+      },
+      "layer": "F.Cu",
+      "net": "V3V8",
+      "start": {
+        "x_nm": 8000024,
+        "y_nm": 20000008
+      },
+      "width_nm": 240000
+    },
+    {
+      "end": {
+        "x_nm": 7129994,
+        "y_nm": 21000006
+      },
+      "layer": "F.Cu",
+      "net": "V3V8",
+      "start": {
+        "x_nm": 8000024,
+        "y_nm": 21000006
+      },
+      "width_nm": 240000
+    }
+  ],
+  "units": "nanometres; rotations in degrees"
+}
