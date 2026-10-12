@@ -17,6 +17,8 @@ from .syntax import (
     InterfaceDecl,
     ModuleInstanceDecl,
     MechanicalDecl,
+    SilkscreenDecl,
+    SilkscreenItemDecl,
     MechanicalItemDecl,
     MechanicalProfileUseDecl,
     MuxDecl,
@@ -74,6 +76,10 @@ class Parser:
                 import_path = self._expect(TokenKind.STRING, "package import path").text
                 imports.append(ImportDecl(import_location, alias, import_path))
                 self._expect_symbol(";")
+            elif keyword == "silkscreen":
+                if root.text != "board":
+                    self._error("PAR015", "silkscreen blocks are board-only", self.tokens[self.index - 1])
+                declarations.append(self._silkscreen())
             elif root.text == "board_profile":
                 declarations.append(self._mechanical_item(keyword, self.tokens[self.index - 1].location, profile=True))
             elif keyword == "use":
@@ -175,6 +181,20 @@ class Parser:
         self._expect_symbol("}")
         return MechanicalDecl(location, tuple(items))
 
+    def _silkscreen(self) -> SilkscreenDecl:
+        location = self.tokens[self.index - 1].location
+        self._expect_symbol("{")
+        items = []
+        while not self._at_symbol("}"):
+            start = self.current.location
+            kind = self._name("silkscreen declaration")
+            if kind not in {"branding", "text", "logo", "line", "rectangle", "circle", "arc", "polygon"}:
+                self._error("PAR016", f"unknown silkscreen declaration {kind!r}")
+            name = "branding" if kind == "branding" else self._name("silkscreen feature id")
+            items.append(SilkscreenItemDecl(start, kind, name, self._geometry_parameters()))
+        self._expect_symbol("}")
+        return SilkscreenDecl(location, tuple(items))
+
     def _stackup(self, location) -> StackupDecl:
         """Ordered top-to-bottom ``copper NAME { ... }`` / ``dielectric NAME { ... }``."""
         self._expect_symbol("{")
@@ -208,6 +228,9 @@ class Parser:
             self._error("PAR013", f"unknown mechanical declaration {kind!r}")
         name = self._name("mechanical feature id") if kind in allowed - {"outline","rules"} else ""
         shape = self._name("mechanical shape") if kind in {"outline", "cutout", "keepout", "copper_keepout", "enclosure", "assembly_access", "boundary", "reference"} else ""
+        return MechanicalItemDecl(location, kind, name, shape, self._geometry_parameters())
+
+    def _geometry_parameters(self):
         self._expect_symbol("{")
         parameters = {}
         while not self._at_symbol("}"):
@@ -228,7 +251,7 @@ class Parser:
                 parameters[key] = self._scalar()
             self._expect_symbol(";")
         self._expect_symbol("}")
-        return MechanicalItemDecl(location, kind, name, shape, parameters)
+        return parameters
 
     def _mechanical_point(self):
         self._expect_symbol("(")

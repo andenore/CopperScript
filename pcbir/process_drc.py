@@ -75,6 +75,11 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
     stencil_failed = False
     assembly_failed = False
     fabrication_incomplete = False
+    from .silkscreen import ArtworkMaterial
+    if any(item.material is ArtworkMaterial.COPPER and item.exposed for item in board.silkscreen):
+        fabrication_incomplete = True
+        findings.append(ProcessFinding("FAB-ARTWORK-MASK-UNSUPPORTED", "fabrication",
+            "exposed copper artwork requires final native mask registration and web verification"))
     for hole in board.mechanical_holes:
         limit = profile.minimum_non_plated_drill_nm
         if limit is None:
@@ -100,7 +105,7 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
             fabrication_failed=True
             findings.append(ProcessFinding('FAB-SLOT-MIN','fabrication','routed slot is below the specified tool width',(slot.id,)))
     placed_pads: list[tuple[str, object, object, object, RoundedConvexShape]] = []
-    silk_shapes: list[tuple[str, RoundedConvexShape]] = []
+    silk_shapes: list[tuple[str, RoundedConvexShape, object]] = []
     for placement in board.placements:
         footprint = board.footprints[placement.footprint]
         if profile.require_courtyards and not footprint.courtyard:
@@ -159,7 +164,7 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
             if isinstance(graphic, FootprintLine):
                 silk_shapes.append((identity, RoundedConvexShape(
                     (_placed_point(placement, graphic.start), _placed_point(placement, graphic.end)),
-                    graphic.width_nm // 2)))
+                    (graphic.width_nm + 1) // 2), placement.side))
             elif isinstance(graphic, FootprintArc):
                 fabrication_incomplete = True
                 findings.append(ProcessFinding("FAB-SILK-ARC-UNSUPPORTED", "fabrication",
@@ -179,9 +184,24 @@ def run_process_drc(board: PhysicalBoard, profile: FabricationAssemblyProfile) -
                                                f"mask web between {left_name} and {right_name} is below profile",
                                                tuple(sorted((left_name, right_name)))))
     if profile.minimum_silkscreen_clearance_nm is not None:
-        for silk_name, silk in silk_shapes:
-            for pad_name, _, pad, _, pad_shape in placed_pads:
+        from .silkscreen import SilkscreenGraphic, ArtworkMaterial
+        for item in board.silkscreen:
+            if item.material is not ArtworkMaterial.SILKSCREEN:
+                continue
+            identity = f"silk:board:{item.id}"
+            if isinstance(item, SilkscreenGraphic) and isinstance(item.graphic, FootprintLine):
+                graphic = item.graphic
+                silk_shapes.append((identity, RoundedConvexShape((graphic.start, graphic.end),
+                    (graphic.width_nm + 1) // 2), item.side))
+            else:
+                fabrication_incomplete = True
+                findings.append(ProcessFinding("FAB-SILK-ARTWORK-UNSUPPORTED", "fabrication",
+                    f"{identity} requires final native artwork clearance verification", (identity,)))
+        for silk_name, silk, side in silk_shapes:
+            for pad_name, _, pad, placement, pad_shape in placed_pads:
                 if not pad.has_solder_mask:
+                    continue
+                if pad.kind in {PadKind.SMD, PadKind.APERTURE} and placement.side is not side:
                     continue
                 mask = RoundedConvexShape(pad_shape.spine, pad_shape.radius_nm + expansion)
                 if not shapes_clear(silk, mask, profile.minimum_silkscreen_clearance_nm.value):

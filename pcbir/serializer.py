@@ -31,6 +31,8 @@ from .mechanical_profiles import mechanical_provenance
 def board_to_dict(board: Board | Design) -> dict[str, object]:
     if isinstance(board, Design):
         result = board_to_dict(board.electrical)
+        from .silkscreen import design_document
+        result["silkscreen"] = design_document(board.silkscreen)
         if board.mechanical is not None:
             m = board.mechanical
             point = lambda p: {"x_nm": p.x_nm, "y_nm": p.y_nm}

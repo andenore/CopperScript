@@ -1,4 +1,4 @@
-"""Separate electrical and mechanical design inputs; no presentation geometry."""
+"""Separate electrical, mechanical and board artwork design inputs."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -20,6 +20,7 @@ from .physical import BodyOverhang, ComponentHeight, AssemblyEnvelope, AssemblyA
 from .physical import MechanicalSlot,BoundaryLine,BoundaryArc,BoardBoundaryPath
 from .mechanical_references import MechanicalReference, lower_reference
 from .mechanical_stackup import MechanicalStackup, StackupDecl, lower_stackup
+from .silkscreen import SilkscreenDesign
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +78,7 @@ class MechanicalDesign:
 class Design:
     electrical: Board
     mechanical: MechanicalDesign | None = None
+    silkscreen: SilkscreenDesign = field(default_factory=SilkscreenDesign)
 
 
 def lower_mechanical(document: Document,

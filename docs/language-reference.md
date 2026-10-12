@@ -34,6 +34,26 @@ silently reported as direct bypasses. Placement never moves existing routed copp
 
 See [routing-quality progress and remaining work](routing-quality-todo.md).
 
+## Board silkscreen
+
+Board-level `silkscreen` blocks support text, the Cu logo and line, rectangle,
+circle, arc and polygon artwork on either board side. The CopperScript logo,
+name and compiler version are included by default. Opt out explicitly:
+
+```copper
+silkscreen {
+    branding { enabled = false; }
+    text REVISION { text = "Rev A"; position = (10mm, 10mm); }
+}
+```
+
+See [board silkscreen](silkscreen.md) for positioning, defaults and validation.
+Each item can opt into `material = copper`; `side` selects the outer copper
+layer and `exposed = true` adds a matching mask opening. Copper artwork reserves
+placement/routing space without acquiring an electrical net. Copper text,
+filled artwork feature widths and exposed-mask qualification currently keep
+physical signoff incomplete; see the same reference for the exact limits.
+
 ## Mechanical geometry status
 
 A board may declare a separate `mechanical` section containing a circular,
@@ -1625,7 +1645,13 @@ item           = library | package_import | port | pin | pad | power_domain
                | part_property | peripheral | mux | route | pad_set | resource
                | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
-               | power_state | interface | constraint | mechanical ;
+               | power_state | interface | constraint | mechanical | silkscreen ;
+silkscreen     = "silkscreen", "{", silk_item*, "}" ;
+silk_item      = "branding", geometry_properties
+               | ("text" | "logo" | "line" | "rectangle" | "circle" | "arc" | "polygon"), name, geometry_properties ;
+geometry_properties = "{", (name, "=", (scalar | coordinate | coordinates), ";")*, "}" ;
+coordinate    = "(", scalar, ",", scalar, ")" ;
+coordinates   = "[", coordinate, (",", coordinate)*, "]" ;
 mechanical     = "mechanical", "{", (mechanical_item | stackup)*, "}" ;
 stackup        = "stackup", "{", stackup_layer*, "}" ;   (* board mechanical only *)
 stackup_layer  = ("copper" | "dielectric"), qualified_name, properties ;

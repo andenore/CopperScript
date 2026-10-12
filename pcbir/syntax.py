@@ -235,6 +235,20 @@ class MechanicalDecl:
     items: tuple[MechanicalItemDecl | MechanicalProfileUseDecl, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class SilkscreenItemDecl:
+    location: SourceLocation
+    kind: str
+    name: str
+    parameters: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class SilkscreenDecl:
+    location: SourceLocation
+    items: tuple[SilkscreenItemDecl, ...]
+
+
 Declaration = (
     ComponentDecl
     | PortDecl
@@ -259,6 +273,7 @@ Declaration = (
     | InterfaceDecl
     | ConstraintDecl
     | MechanicalDecl
+    | SilkscreenDecl
     | MechanicalItemDecl
     | MechanicalProfileUseDecl
 )

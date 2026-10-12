@@ -38,6 +38,7 @@ from ..physical import (
 )
 from .base import Artifact, ArtifactManifest
 from ..clusters import footprint_geometry_digest, resolved_cluster_keepouts
+from ..silkscreen import SilkscreenText, artwork_layer
 
 
 KICAD_PCB_FORMAT = "20240108"
@@ -400,6 +401,11 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
         for layer in sorted(keepout.layers, key=lambda item: item.value):
             lines.extend(_copper_keepout_lines(board, keepout, layer))
 
+    for item in sorted(board.silkscreen, key=lambda item: item.id):
+        lines.extend(_silkscreen_lines(board.name, item))
+        if item.exposed:
+            lines.extend(_silkscreen_lines(board.name, item, mask=True))
+
     circle = board.outline.circular_boundary
     if circle is not None:
         lines.extend([
@@ -436,6 +442,40 @@ def _render(board: PhysicalBoard, library_names: dict[str, str]) -> str:
             )
     lines.append(")")
     return "\n".join(lines) + "\n"
+
+
+def _silkscreen_lines(board_name, item, *, mask=False):
+    copper = artwork_layer(item)
+    prefix = "F" if item.side is BoardSide.FRONT else "B"
+    layer = prefix+".Mask" if mask else copper.value if copper else prefix+".SilkS"
+    identity = _stable_uuid(board_name, "silkscreen", item.id, "mask") if mask else _stable_uuid(board_name, "silkscreen", item.id)
+    locked = ["    (locked yes)"] if copper and not mask else []
+    if isinstance(item, SilkscreenText):
+        justify = " (justify mirror)" if item.side is BoardSide.BACK else ""
+        return [
+            f"  (gr_text {_quote(item.text)}",
+            f"    (at {_point(item.position)} {_decimal(-item.rotation_degrees)})",
+            f"    (layer {_quote(layer)})",
+            *locked,
+            f'    (uuid "{identity}")',
+            f"    (effects (font (size {_mm(item.size_nm)} {_mm(item.size_nm)})"
+            f" (thickness {_mm(item.thickness_nm)})){justify})", "  )",
+        ]
+    graphic = item.graphic
+    if isinstance(graphic, FootprintLine):
+        kind, geometry = "line", [f"(start {_point(graphic.start)})", f"(end {_point(graphic.end)})"]
+    elif isinstance(graphic, FootprintRectangle):
+        kind, geometry = "rect", [f"(start {_point(graphic.start)})", f"(end {_point(graphic.end)})"]
+    elif isinstance(graphic, FootprintCircle):
+        kind, geometry = "circle", [f"(center {_point(graphic.center)})", f"(end {_point(graphic.end)})"]
+    elif isinstance(graphic, FootprintArc):
+        kind, geometry = "arc", [f"(start {_point(graphic.start)})", f"(mid {_point(graphic.midpoint)})", f"(end {_point(graphic.end)})"]
+    else:
+        kind, geometry = "poly", ["(pts " + " ".join(f"(xy {_point(p)})" for p in graphic.points) + ")"]
+    return [f"  (gr_{kind}", *(f"    {line}" for line in geometry),
+            f"    (stroke (width {_mm(graphic.width_nm)}) (type default))",
+            *([f"    (fill {'solid' if graphic.filled else 'none'})"] if hasattr(graphic, "filled") else []),
+            f"    (layer {_quote(layer)})", *locked, f'    (uuid "{identity}")', "  )"]
 
 
 def _mechanical_export_board(board: PhysicalBoard) -> PhysicalBoard:

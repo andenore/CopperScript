@@ -229,6 +229,7 @@ def placement_copper_findings(board: PhysicalBoard) -> tuple[DrcFinding, ...]:
     _check_board_edge(board, findings)
     _check_copper_spacing(board, findings)
     _check_fixed_polygons(board, findings)
+    _check_copper_artwork(board, findings)
     _check_non_plated_hole_clearance(board, findings)
     _check_via_hole_clearance(board, findings)
     _check_drill_spacing(board, findings)
@@ -285,7 +286,22 @@ def run_physical_drc(
     coverage.append(DrcCoverage("copper_to_board_edge", DrcCoverageStatus.EXECUTED, True))
     _check_copper_spacing(board, findings, relaxations)
     _check_fixed_polygons(board, findings)
+    _check_copper_artwork(board, findings)
     coverage.append(DrcCoverage("shorts_and_clearance", DrcCoverageStatus.EXECUTED, True))
+    from .silkscreen import artwork_layer, SilkscreenText
+    copper_art = tuple(item for item in board.silkscreen if artwork_layer(item) is not None)
+    if copper_art:
+        coverage.append(DrcCoverage("copper_artwork_envelopes", DrcCoverageStatus.EXECUTED, True,
+            "conservative immutable reservations checked against copper, board material and holes"))
+        if any(isinstance(item, SilkscreenText) for item in copper_art):
+            coverage.append(DrcCoverage("copper_artwork_glyphs", DrcCoverageStatus.UNSUPPORTED, True,
+                "native font geometry is not normalized; copper text export is for inspection, not physical signoff"))
+        if any(getattr(getattr(item, "graphic", None), "filled", False) for item in copper_art):
+            coverage.append(DrcCoverage("copper_artwork_feature_width", DrcCoverageStatus.UNSUPPORTED, True,
+                "minimum feature widths of filled artwork require final native/CAM geometry verification"))
+        if any(item.exposed for item in copper_art):
+            coverage.append(DrcCoverage("copper_artwork_mask", DrcCoverageStatus.UNSUPPORTED, True,
+                "matching mask openings require final native mask registration/sliver qualification"))
     if any(rule.breakout_length_nm is not None for rule in board.net_routing_rules):
         coverage.append(DrcCoverage(
             "breakout_regions", DrcCoverageStatus.EXECUTED, True,
@@ -420,10 +436,12 @@ def run_incremental_physical_drc(
 def physical_board_digest(board: PhysicalBoard) -> str:
     """Digest all geometry and rules that can affect manufacturing signoff."""
     from .mechanical_references import reference_scene
+    from .silkscreen import artwork_document
 
     return _digest(
         {
             "name": board.name,
+            **({"silkscreen": artwork_document(board.silkscreen)} if board.silkscreen else {}),
             "outline": [(p.x_nm, p.y_nm) for p in board.outline.vertices],
             "circular_boundary": repr(board.outline.circular_boundary),
             "boundary_path": repr(board.outline.boundary_path),
@@ -1296,6 +1314,46 @@ def _check_zone_fill_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                     spacing.record(spacing.check(net, pad.net), (objects, pad.identity),
                                    ((net, None), (pad.net, pad_lands[pad.identity])),
                                    (fill.layer.value,), normal, clearance, None)
+
+
+def _check_copper_artwork(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+    from .silkscreen import artwork_bounds, artwork_layer
+    from .mechanical import shape_in_outline
+    holes = non_plated_holes(board)
+    reservations = {k.id: k for k in board.copper_keepouts}
+    for item in board.silkscreen:
+        layer = artwork_layer(item)
+        if layer is None:
+            continue
+        left, low, right, high = artwork_bounds(item)
+        shape = RoundedConvexShape((Point(left,low), Point(right,low), Point(right,high), Point(left,high)))
+        identity = "artwork:"+item.id
+        width = item.thickness_nm if hasattr(item, "thickness_nm") else item.graphic.width_nm
+        if 0 < width < board.rules.minimum_track_width_nm and not getattr(getattr(item, "graphic", None), "filled", False):
+            findings.append(_finding("DRC-ARTWORK-WIDTH", DrcSeverity.ERROR,
+                f"copper artwork {item.id} stroke is below the minimum copper width",
+                objects=(identity,), layers=(layer.value,),
+                required_nm=board.rules.minimum_track_width_nm, measured_nm=width))
+        if not shape_in_outline(shape, board.outline, board.rules.minimum_clearance_nm):
+            findings.append(_finding("DRC-ARTWORK-BOARD-EDGE", DrcSeverity.ERROR,
+                f"copper artwork {item.id} envelope violates board material/edge clearance",
+                objects=(identity,), layers=(layer.value,)))
+        for name, hole in holes:
+            if not shapes_clear(shape, hole, board.rules.minimum_hole_clearance_nm):
+                findings.append(_finding("DRC-ARTWORK-HOLE", DrcSeverity.ERROR,
+                    f"copper artwork {item.id} envelope violates hole clearance",
+                    objects=(identity, name), layers=(layer.value,)))
+        reservation = RoundedConvexShape(reservations["__copper_artwork:"+item.id].outline.outer.vertices)
+        for polygon in board.polygons:
+            if polygon.layer is layer and not _shape_clear_of_region(reservation, PolygonWithHoles(polygon.outline), 0):
+                findings.append(_finding("DRC-ARTWORK-CLEARANCE", DrcSeverity.ERROR,
+                    f"fixed copper polygon {polygon.id} enters artwork reservation {item.id}",
+                    objects=(identity, "polygon:"+polygon.id), layers=(layer.value,)))
+        for fill in board.zone_fills:
+            if fill.layer is layer and any(not _shape_clear_of_region(reservation, region, 0) for region in fill.polygons):
+                findings.append(_finding("DRC-ARTWORK-CLEARANCE", DrcSeverity.ERROR,
+                    f"filled zone {fill.zone_id} enters artwork reservation {item.id}",
+                    objects=(identity, "zone:"+fill.zone_id), layers=(layer.value,)))
 
 
 def _check_fixed_polygons(board: PhysicalBoard, findings: list[DrcFinding]) -> None:

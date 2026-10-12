@@ -255,6 +255,8 @@ def _physicalize(
     metadata: dict[str, str],
 ) -> PhysicalBoard:
     mechanical = board.mechanical if isinstance(board, Design) else None
+    from .silkscreen import SilkscreenDesign, physical_artwork
+    silkscreen = board.silkscreen if isinstance(board, Design) else SilkscreenDesign()
     board = board.electrical if isinstance(board, Design) else board
     outline = mechanical.outline if mechanical else BoardOutline.rectangle(
         options.board_width_mm, options.board_height_mm)
@@ -435,6 +437,7 @@ def _physicalize(
                else Stackup(copper_layers=copper_layers))
     return PhysicalBoard(
         name=board.name,
+        silkscreen=physical_artwork(silkscreen, outline),
         outline=outline,
         stackup=stackup,
         rules=rules,

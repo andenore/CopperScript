@@ -10,6 +10,7 @@ from typing import Callable, Mapping
 
 from .library import LIBRARIES, library_factory
 from .design import Design, lower_mechanical
+from .silkscreen import lower_silkscreen
 from .mechanical_profiles import MechanicalProfileDefinition
 from .pad_connections import InternalPadGroup
 from .modes import active_bonded_pads, condition_active, effective_modes
@@ -160,6 +161,7 @@ def compile_design_source(source: str, filename: str = "<memory>", *,
     document = parse(source, filename)
     imported = _resolve_board_imports(document, locked=locked, offline=offline, source_reader=source_reader, package_resolver=package_resolver)
     mechanical = lower_mechanical(document, imported.profiles)
+    silkscreen = lower_silkscreen(document)
     electrical = _compile_board(document, imported.modules, imported.parts,
                                 imported.devices, imported.dependencies)
     if mechanical:
@@ -168,7 +170,7 @@ def compile_design_source(source: str, filename: str = "<memory>", *,
         for connector in (*mechanical.connectors, *mechanical.attachments, *mechanical.body_overhangs, *mechanical.component_heights, *mechanical.assembly_access):
             if connector.reference not in references:
                 _error("MEC005", f"mechanical binding references unknown component {connector.reference!r}", getattr(connector,'location',document.location))
-    return Design(electrical, mechanical)
+    return Design(electrical, mechanical, silkscreen)
 
 
 def compile_source(source: str, filename: str = "<memory>", *,
@@ -200,6 +202,7 @@ def lower(document: Document) -> Board:
     if document.imports:
         _error("CMP020", "lower() cannot resolve package imports", document.location)
     lower_mechanical(document)
+    lower_silkscreen(document)
     return _compile_board(document, {}, {}, {}, ())
 
 
