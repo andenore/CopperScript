@@ -81,10 +81,14 @@ jobs:
           echo 'COPPER_SIM_REQUIRED=1' >> "$GITHUB_ENV"
       - name: Run complete test suite
         run: python -m pytest
+      - name: Exercise language server and VS Code providers
+        env:
+          COPPER_TEST_PYTHON: python
+        run: node --test tests/compiler-client.cjs tests/lsp-client.cjs
       - name: Package shared mechanical editor (offline VSIX)
         run: |
           node integrations/vscode/build.cjs
-          python integrations/vscode/package.py -o build/editor-dist/copperscript-mechanical.vsix
+          python integrations/vscode/package.py -o build/editor-dist/copperscript.vsix
           python -m pcbir.editor.document --fingerprint > build/editor-dist/compiler-fingerprint.txt
       - name: Preserve editor release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -157,7 +161,7 @@ jobs:
           mkdir -p build/ci-dist
           python -m build --no-isolation --outdir build/ci-dist
           node integrations/vscode/build.cjs
-          python integrations/vscode/package.py -o build/ci-dist/copperscript-mechanical.vsix
+          python integrations/vscode/package.py -o build/ci-dist/copperscript.vsix
           python -m pcbir.editor.document --fingerprint > build/ci-dist/compiler-fingerprint.txt
           git archive --format=zip --output=build/ci-dist/copperscript-sources.zip HEAD
           python scripts/ci_board_bundle.py sources

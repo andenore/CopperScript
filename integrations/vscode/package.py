@@ -18,19 +18,21 @@ def package(stage, output):
 <Default Extension="js" ContentType="application/javascript"/>
 <Default Extension="html" ContentType="text/html"/>
 <Default Extension="css" ContentType="text/css"/>
+<Default Extension="svg" ContentType="image/svg+xml"/>
+<Default Extension="png" ContentType="image/png"/>
 <Default Extension="md" ContentType="text/markdown"/>
 <Default Extension="" ContentType="text/plain"/>
 </Types>'''
     xml = f'''<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
 <Metadata><Identity Id="{escape(manifest['name'])}" Version="{escape(manifest['version'])}" Language="en-US" Publisher="{escape(manifest['publisher'])}"/>
-<DisplayName>{escape(manifest['displayName'])}</DisplayName><Description xml:space="preserve">{escape(manifest['description'])}</Description><License>extension/LICENSE</License></Metadata>
+<DisplayName>{escape(manifest['displayName'])}</DisplayName><Description xml:space="preserve">{escape(manifest['description'])}</Description><License>extension/LICENSE</License><Icon>extension/{escape(manifest['icon'])}</Icon></Metadata>
 <Installation><InstallationTarget Id="Microsoft.VisualStudio.Code"/></Installation><Dependencies/>
 <Prerequisites><Prerequisite Id="Microsoft.VisualStudio.Code" Version="[1.90.0,)" DisplayName="Visual Studio Code"/></Prerequisites>
-<Assets><Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true"/></Assets>
+<Assets><Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true"/><Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/{escape(manifest['icon'])}" Addressable="true"/></Assets>
 </PackageManifest>'''.encode()
     files = {"[Content_Types].xml": content_types, "extension.vsixmanifest": xml}
-    for name in ("package.json", "extension.cjs", "README.md", "LICENSE", "media/index.html", "media/editor.js", "media/editor.css"):
+    for name in ("package.json", "extension.cjs", "lsp-client.cjs", "compiler.cjs", "setup.cjs", "language-configuration.json", "README.md", "CHANGELOG.md", "LICENSE", "media/index.html", "media/editor.js", "media/editor.css", "media/copper-logo.svg", "media/copper-logo.png"):
         files["extension/" + name] = (stage / name).read_bytes()
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("xb") as stream, zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:

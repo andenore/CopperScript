@@ -105,6 +105,7 @@ from .syntax import (
 )
 
 
+SourceReader = Callable[[Path], str]
 LibraryFactory = Callable[[], dict[str, PartDefinition]]
 
 QUANTITY_TYPES: dict[str, type[Quantity]] = {
@@ -128,6 +129,8 @@ def _resolve_board_imports(
     *,
     locked: bool = False,
     offline: bool = False,
+    source_reader: SourceReader | None = None,
+    package_resolver: PackageResolver | None = None,
 ) -> PackageContents:
     """Resolve a board's packages once for both electrical and mechanical lowering."""
 
@@ -137,20 +140,25 @@ def _resolve_board_imports(
     if document.imports and filename.startswith("<"):
         _error("CMP020", "package imports require a source filename", document.location)
     if document.imports:
-        resolver = PackageResolver.for_source(
+        resolver = package_resolver or PackageResolver.for_source(
             Path(filename).resolve(), document.location, locked=locked, offline=offline
         )
-        imported = _load_imports(document, resolver, ())
+        imported = _load_imports(document, resolver, (), source_reader=source_reader)
     else:
         imported = PackageContents({}, {}, {}, ())
     return imported
 
 
 def compile_design_source(source: str, filename: str = "<memory>", *,
-                          locked: bool = False, offline: bool = False) -> Design:
-    """Compile a complete design, with mechanics separate from electrical IR."""
+                          locked: bool = False, offline: bool = False,
+                          source_reader: SourceReader | None = None,
+                          package_resolver: PackageResolver | None = None) -> Design:
+    """Compile a complete design; editor callers may supply snapshot reads/resolution.
+
+    Default filesystem reads and package verification remain the build contract.
+    """
     document = parse(source, filename)
-    imported = _resolve_board_imports(document, locked=locked, offline=offline)
+    imported = _resolve_board_imports(document, locked=locked, offline=offline, source_reader=source_reader, package_resolver=package_resolver)
     mechanical = lower_mechanical(document, imported.profiles)
     electrical = _compile_board(document, imported.modules, imported.parts,
                                 imported.devices, imported.dependencies)
@@ -164,9 +172,11 @@ def compile_design_source(source: str, filename: str = "<memory>", *,
 
 
 def compile_source(source: str, filename: str = "<memory>", *,
-                   locked: bool = False, offline: bool = False) -> Board:
+                   locked: bool = False, offline: bool = False,
+                   source_reader: SourceReader | None = None,
+                   package_resolver: PackageResolver | None = None) -> Board:
     """Electrical projection of a validated design, for ERC/schematics/simulation."""
-    return compile_design_source(source, filename, locked=locked, offline=offline).electrical
+    return compile_design_source(source, filename, locked=locked, offline=offline, source_reader=source_reader, package_resolver=package_resolver).electrical
 
 
 def compile_design_file(path: str | Path, *, locked: bool = False, offline: bool = False) -> Design:
@@ -193,9 +203,9 @@ def lower(document: Document) -> Board:
     return _compile_board(document, {}, {}, {}, ())
 
 
-def _read_document(path: Path) -> Document:
+def _read_document(path: Path, source_reader: SourceReader | None = None) -> Document:
     try:
-        source = path.read_text(encoding="utf-8")
+        source = source_reader(path) if source_reader else path.read_text(encoding="utf-8")
     except OSError as exc:
         location = SourceLocation(str(path), 0, 1, 1)
         raise CopperScriptError("CMP001", f"cannot read source: {exc}", location) from exc
@@ -216,6 +226,7 @@ def _load_imports(
     resolver: PackageResolver,
     stack: tuple[str, ...],
     namespace_prefix: str = "",
+    *, source_reader: SourceReader | None = None,
 ) -> PackageContents:
     parts: dict[str, PartDefinition] = {}
     devices: dict[str, DeviceDefinition] = {}
@@ -237,7 +248,7 @@ def _load_imports(
             else declaration.alias
         )
         package = _load_package(
-            resolved, namespace, resolver, (*stack, resolved.import_path)
+            resolved, namespace, resolver, (*stack, resolved.import_path), source_reader=source_reader
         )
         _merge_library(parts, package.parts, declaration.location)
         _merge_devices(devices, package.devices, declaration.location)
@@ -261,12 +272,13 @@ def _load_package(
     namespace: str,
     resolver: PackageResolver,
     stack: tuple[str, ...],
+    *, source_reader: SourceReader | None = None,
 ) -> PackageContents:
     source_paths = sorted(resolved.directory.glob("*.copper"))
     if not source_paths:
         location = SourceLocation(str(resolved.directory), 0, 1, 1)
         _error("CMP022", f"package {resolved.import_path!r} exports no .copper files", location)
-    documents = [_read_document(path) for path in source_paths]
+    documents = [_read_document(path, source_reader) for path in source_paths]
     for document in documents:
         if document.kind not in {"device", "part", "module", "board_profile"}:
             _error(
@@ -318,7 +330,7 @@ def _load_package(
     dependencies: list[Dependency] = []
     import_contexts: dict[str, PackageContents] = {}
     for name, document in {**module_documents, **{f"profile:{k}": v for k, v in profile_documents.items()}}.items():
-        imported = _load_imports(document, resolver, stack, namespace)
+        imported = _load_imports(document, resolver, stack, namespace, source_reader=source_reader)
         import_contexts[name] = imported
         _merge_library(parts, imported.parts, document.location)
         _merge_devices(devices, imported.devices, document.location)

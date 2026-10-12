@@ -1,6 +1,7 @@
 "use strict";
 const vscode=require("vscode"), cp=require("node:child_process"), path=require("node:path"), fs=require("node:fs"), crypto=require("node:crypto"), readline=require("node:readline");
 const escape=s=>s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll('"',"&quot;");
+const {resolveCompiler,validateCommand}=require("./compiler.cjs");
 class Backend {
   constructor(command,args,cwd) {
     this.pending=new Map();this.id=0;this.closed=false;this.errors="";
@@ -84,14 +85,18 @@ class DocumentBridge {
 }
 
 function activate(context) {
+  const languageTools=require("./lsp-client.cjs").activateLsp(vscode,context);
+  require("./setup.cjs").activateSetup(vscode,context,languageTools);
   const active=new Map();
   context.subscriptions.push(vscode.window.registerCustomEditorProvider("copperscript.mechanical",{
     async resolveCustomTextEditor(document,panel) {
       if(!vscode.workspace.isTrusted || document.uri.scheme!=="file" || !vscode.workspace.getWorkspaceFolder(document.uri))throw new Error("Mechanical editing requires a trusted local workspace");
       const config=vscode.workspace.getConfiguration("copperscript.mechanical",document.uri);
-      const command=config.get("compilerCommand"),digest=config.get("compilerDigest");
-      if(!Array.isArray(command)||command.length<1||command.length>32||command.some(s=>typeof s!=="string"||!s||s.length>8192)||!/^([a-f0-9]{64})$/.test(digest||""))throw new Error("Configure compilerCommand and the exact compilerDigest before opening. See the extension README.");
+      const configured=config.get("compilerCommand",[]),digest=config.get("compilerDigest");
+      validateCommand(configured);
+      if(!/^([a-f0-9]{64})$/.test(digest||""))throw new Error("Set the reviewed compilerDigest before mechanical editing. Run CopperScript: Show Setup for instructions.");
       const cwd=vscode.workspace.getWorkspaceFolder(document.uri).uri.fsPath;
+      const {command}=await resolveCompiler(configured,cwd,"mechanical");
       const local=s=>path.resolve(cwd,s);
       const args=[document.uri.fsPath,"--layers",String(config.get("layers")),"--fab-profile",config.get("fabricationProfile")];
       for(const root of config.get("footprintRoots")) args.push("--footprint-root",local(root));
@@ -105,11 +110,13 @@ function activate(context) {
       } catch(error) {backend.dispose();throw error;}
       active.set(document.uri.toString(),bridge);
       const media=vscode.Uri.file(path.join(__dirname,"media"));
+      panel.iconPath=vscode.Uri.joinPath(media,"copper-logo.png");
       panel.webview.options={enableScripts:true,localResourceRoots:[media]};
       const nonce=crypto.randomBytes(24).toString("hex");
       let html=fs.readFileSync(path.join(media.fsPath,"index.html"),"utf8");
-      html=html.replace("<head>",`<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}';">`)
+      html=html.replace("<head>",`<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${panel.webview.cspSource}; style-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}';">`)
         .replace('href="/editor.css"',`href="${panel.webview.asWebviewUri(vscode.Uri.joinPath(media,"editor.css"))}"`)
+        .replaceAll('/copper-logo.svg',String(panel.webview.asWebviewUri(vscode.Uri.joinPath(media,"copper-logo.svg"))))
         .replace('src="/editor.js"',`nonce="${nonce}" src="${panel.webview.asWebviewUri(vscode.Uri.joinPath(media,"editor.js"))}"`);
       panel.webview.html=html;
       const messages=panel.webview.onDidReceiveMessage(message=>{
@@ -130,6 +137,6 @@ function activate(context) {
     }
   },{webviewOptions:{retainContextWhenHidden:true},supportsMultipleEditorsPerDocument:false}));
   // Test access to the same bridge used by real webview messages, not a second implementation.
-  return {active,DocumentBridge,Backend};
+  return {active,DocumentBridge,Backend,languageTools};
 }
 module.exports={activate};

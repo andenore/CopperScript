@@ -95,6 +95,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
     from .agent_guide import TOPICS
+    subparsers.add_parser("lsp", help="serve CopperScript language features over LSP stdio (locked/offline)")
     agent_parser = subparsers.add_parser("agent-guide", help="read compact, versioned agent guidance; start here")
     agent_parser.add_argument("topic", nargs="?", choices=TOPICS, default="start")
     agent_parser.add_argument("--json", action="store_true", help="emit compact structured guidance")
@@ -671,6 +672,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(argv)
     _apply_routing_profile(args, argv)
+    if args.command == "lsp":
+        from .lsp.server import main as lsp_main
+        return lsp_main()
     if args.command == "agent-guide":
         from .agent_guide import get_guide, render_guide
         print(render_guide(get_guide(args.topic), as_json=args.json))

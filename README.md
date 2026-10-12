@@ -151,6 +151,19 @@ The [GitHub board-build workflow](docs/github-board-builds.md) publishes
 inspection artifacts with reports and checksums; their presence is not approval.
 Contributor internals and ERC coverage are in [compiler architecture](docs/compiler-architecture.md).
 
+## Editor language support
+
+The [CopperScript language server](docs/language-server.md) provides live source
+checks, completion, hover, definition navigation and document outlines for
+`.copper` files. Start it through an LSP client with `copper lsp` or
+`python -m pcbir.lsp.server`. The [VS Code extension](integrations/vscode/README.md)
+includes the client alongside the mechanical editor and builds offline without
+npm dependencies. It discovers the project's Python environment and accepts
+Python 3.11 or newer, without an upper bound. The separate
+[extension release plan](docs/extension-release-plan.md) covers Marketplace
+packaging and automated releases. Analysis uses unsaved source and the project's locked/offline
+imports; older compiler pins need an explicitly selected LSP-capable environment.
+
 ## Project website
 
 The [static project website](https://andenore.github.io/CopperScript/) introduces

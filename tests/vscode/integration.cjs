@@ -15,7 +15,7 @@ exports.run=async()=>{
   await config.update("compilerCommand",[python],vscode.ConfigurationTarget.WorkspaceFolder);
   await config.update("compilerDigest",digest,vscode.ConfigurationTarget.WorkspaceFolder);
   await config.update("footprintRoots",[process.env.COPPER_TEST_FOOTPRINTS],vscode.ConfigurationTarget.WorkspaceFolder);
-  const extension=vscode.extensions.getExtension("andenore.copperscript-mechanical");assert(extension);
+  const extension=vscode.extensions.getExtension("andenore.copperscript");assert(extension);
   const api=await extension.activate();
   await vscode.commands.executeCommand("vscode.openWith",source,"copperscript.mechanical");
   await waitUntil(()=>api.active.has(source.toString()));

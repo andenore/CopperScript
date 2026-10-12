@@ -33,28 +33,37 @@ class Lexer:
         self.offset = 0
         self.line = 1
         self.column = 1
+        self.errors: list[CopperScriptError] = []
 
-    def tokenize(self) -> tuple[Token, ...]:
+    def tokenize(self, *, recover: bool = False) -> tuple[Token, ...]:
         tokens: list[Token] = []
         while self.offset < len(self.source):
-            character = self._peek()
-            if character.isspace():
-                self._advance()
-            elif character == "#" or (character == "/" and self._peek(1) == "/"):
-                self._skip_comment()
-            elif character.isalpha() or character == "_":
-                tokens.append(self._identifier())
-            elif character.isdigit():
-                tokens.append(self._number())
-            elif character == '"':
-                tokens.append(self._string())
-            elif character in "{}[]():;=,.+-/":
-                location = self._location()
-                tokens.append(Token(TokenKind.SYMBOL, self._advance(), location, self.offset))
-            else:
-                raise CopperScriptError(
-                    "LEX001", f"unexpected character {character!r}", self._location()
-                )
+            start = self.offset
+            try:
+                character = self._peek()
+                if character.isspace():
+                    self._advance()
+                elif character == "#" or (character == "/" and self._peek(1) == "/"):
+                    self._skip_comment()
+                elif character.isalpha() or character == "_":
+                    tokens.append(self._identifier())
+                elif character.isdigit():
+                    tokens.append(self._number())
+                elif character == '"':
+                    tokens.append(self._string())
+                elif character in "{}[]():;=,.+-/":
+                    location = self._location()
+                    tokens.append(Token(TokenKind.SYMBOL, self._advance(), location, self.offset))
+                else:
+                    raise CopperScriptError(
+                        "LEX001", f"unexpected character {character!r}", self._location()
+                    )
+            except CopperScriptError as exc:
+                if not recover:
+                    raise
+                self.errors.append(exc)
+                if self.offset == start:
+                    self._advance()
         tokens.append(Token(TokenKind.EOF, "", self._location(), self.offset))
         return tuple(tokens)
 
