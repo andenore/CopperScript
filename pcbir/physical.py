@@ -1616,8 +1616,12 @@ class PhysicalBoard:
     match_groups: tuple[NetMatchGroup, ...] = ()
     component_hole_clearances: tuple[ComponentHoleClearance, ...] = ()
     decoupling_links: tuple[DecouplingLink, ...] = ()
+    silkscreen: tuple["SilkscreenArtwork", ...] = ()
 
     def __post_init__(self) -> None:
+        from .silkscreen import validate_artwork, copper_artwork_keepouts
+        object.__setattr__(self, "silkscreen", tuple(self.silkscreen))
+        validate_artwork(self.silkscreen)
         object.__setattr__(self, "decoupling_links", tuple(self.decoupling_links))
         if len({link.capacitor.component for link in self.decoupling_links}) != len(self.decoupling_links):
             raise ValueError("a decoupler requires one explicit protected pin association")
@@ -1639,6 +1643,10 @@ class PhysicalBoard:
         object.__setattr__(self, "zones", tuple(self.zones))
         object.__setattr__(self, "polygons", tuple(self.polygons))
         object.__setattr__(self, "copper_keepouts", tuple(self.copper_keepouts))
+        # Derived reservations are regenerated after normalizing inputs on every
+        # replacement, including artwork, board rules, net or zone clearance.
+        authored_keepouts = tuple(k for k in self.copper_keepouts if not k.id.startswith("__copper_artwork:"))
+        object.__setattr__(self, "copper_keepouts", (*authored_keepouts, *copper_artwork_keepouts(self)))
         object.__setattr__(self, "zone_fills", tuple(self.zone_fills))
         object.__setattr__(self, "rigid_clusters", tuple(self.rigid_clusters))
         object.__setattr__(self, "hard_macros", tuple(self.hard_macros))

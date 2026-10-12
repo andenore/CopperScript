@@ -21,12 +21,20 @@ from .packages import SnapshotResolver
 MAX_TEXT = 8 * 1024 * 1024
 MAX_IMPORT_DEPTH = 64
 KEYWORDS = ('component', 'module', 'net', 'supply', 'interface', 'constraint',
-            'configure', 'power_state', 'import', 'use', 'port', 'mechanical')
+            'configure', 'power_state', 'import', 'use', 'port', 'mechanical', 'silkscreen')
 PROPERTIES = {
     'component': ('value', 'footprint', 'role', 'decouples'),
     'supply': ('voltage', 'net', 'source', 'external'),
     'pin': ('number', 'domains', 'directions', 'drive_modes', 'voltage_min',
             'voltage_max', 'bond', 'connection', 'traits'),
+    'branding': ('enabled', 'position', 'size', 'rotation', 'side', 'material', 'exposed', 'layout'),
+    'text': ('text', 'position', 'size', 'thickness', 'rotation', 'side', 'material', 'exposed'),
+    'logo': ('position', 'size', 'rotation', 'side', 'material', 'exposed'),
+    'line': ('start', 'end', 'thickness', 'side', 'material', 'exposed'),
+    'rectangle': ('start', 'end', 'thickness', 'filled', 'side', 'material', 'exposed'),
+    'circle': ('center', 'radius', 'thickness', 'filled', 'side', 'material', 'exposed'),
+    'arc': ('start', 'mid', 'end', 'thickness', 'side', 'material', 'exposed'),
+    'polygon': ('vertices', 'thickness', 'filled', 'side', 'material', 'exposed'),
 }
 KINDS = {'ComponentDecl': 19, 'ModuleInstanceDecl': 2, 'NetDecl': 13,
          'SupplyDecl': 13, 'PortDecl': 8, 'PinDecl': 8, 'PadDecl': 8,
@@ -318,6 +326,9 @@ class Analysis:
             if stack:
                 kind = stack[-1][0] if stack[-1] else ''
                 candidates.update({p: (10, f'{kind} property') for p in PROPERTIES.get(kind, ())})
+                if kind == 'silkscreen':
+                    candidates.update({p: (14, 'Silkscreen declaration') for p in
+                        ('branding', 'text', 'logo', 'line', 'rectangle', 'circle', 'arc', 'polygon')})
         return [{'label': name, 'kind': kind, 'detail': detail,
                  'textEdit': {'range': self.root.text.range(offset - len(prefix), offset), 'newText': name}}
                 for name, (kind, detail) in sorted(candidates.items()) if name.startswith(prefix)]

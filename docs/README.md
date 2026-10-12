@@ -7,6 +7,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Task | Current reference |
 | --- | --- |
 | Write or change `.copper` | [Language reference](language-reference.md) |
+| Author board silkscreen or change default branding | [Silkscreen](silkscreen.md) |
 | Run check, compile, placement or export | [CLI workflow](cli-workflow.md) |
 | Configure a board build | [Make builds](make-builds.md), [examples](../examples/README.md) |
 | Find parts across dependencies | [Library context](library-context.md) |

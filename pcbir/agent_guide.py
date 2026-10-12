@@ -42,6 +42,8 @@ _TOPICS = {
         "title": "Language essentials",
         "guidance": [
             "A .copper file declares one board, module, part, device or board_profile. A board composes components/modules, nets, supplies, interfaces and physical constraints.",
+            "Board silkscreen blocks declare text, logo and shapes. The Cu logo and compiler version are included by default; opt out with silkscreen { branding { enabled = false; } }. Review final artwork placement and native DRC.",
+            "Artwork can opt into material = copper on its front/back side; exposed = true adds a matching mask opening. Branding layout = stacked puts compact name/version labels below the logo. Floating artwork reserves placement/routing space and has no electrical net. Copper glyph, filled-feature and exposed-mask qualification remain unsupported signoff checks.",
             'Import with: import sensor "PROVIDER/PACKAGE"; component U1: sensor.Part; module SUPPORT: sensor.Support;. Use the actual exported kind and names returned by library inspection.',
             "A net connects named endpoints: net VDD { U1.VDD; C1.1; }. Module ports become instance endpoints in the host. Inspect pin/port names and voltage/direction limits; do not infer them from footprints.",
             "Versions and replacements live in copper.mod; copper.lock binds consumed assets. Cross-library requirements must be declared in the host manifest. Source imports do not select versions.",
