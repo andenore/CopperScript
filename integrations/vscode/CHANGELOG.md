@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Add theme-aware syntax highlighting for declarations, types, properties, comments, strings, numbers and engineering units.
+- Highlight text without starting the language server or requiring an installed compiler.
+- Include the grammar in both offline and Marketplace packages and test it with VS Code's TextMate tokenizer.
+
 ## 0.3.0
 
 - Prepare the combined language and mechanical tools as `andenore.copperscript`.

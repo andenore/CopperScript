@@ -38,6 +38,8 @@ def test_offline_vsix_is_reproducible_and_matches_shared_assets(tmp_path):
         shutil.copyfile(ROOT / "integrations/vscode" / name, stage / name)
     for name in ("index.html", "editor.js", "editor.css", "copper-logo.svg", "copper-logo.png"):
         shutil.copyfile(ROOT / "pcbir/editor/assets" / name, stage / "media" / name)
+    (stage / "syntaxes").mkdir()
+    shutil.copyfile(ROOT / "integrations/vscode/syntaxes/copper.tmLanguage.json", stage / "syntaxes/copper.tmLanguage.json")
     one = module.package(stage, tmp_path / "one.vsix")
     two = module.package(stage, tmp_path / "two.vsix")
     assert sha256(one.read_bytes()).digest() == sha256(two.read_bytes()).digest()
@@ -56,6 +58,12 @@ def test_offline_vsix_is_reproducible_and_matches_shared_assets(tmp_path):
         assert 'copperscript.lsp.compilerCommand' in manifest['contributes']['configuration']['properties']
         assert archive.read('extension/lsp-client.cjs') == (ROOT / 'integrations/vscode/lsp-client.cjs').read_bytes()
         assert manifest['name'] == 'copperscript'
+        contribution = manifest['contributes']['grammars'][0]
+        assert contribution['language'] == 'copper'
+        grammar_path = contribution['path'].removeprefix('./')
+        raw_grammar = archive.read('extension/' + grammar_path)
+        assert raw_grammar == (ROOT / 'integrations/vscode' / grammar_path).read_bytes()
+        assert json.loads(raw_grammar)['scopeName'] == contribution['scopeName']
         assert manifest['contributes']['configuration']['properties']['copperscript.lsp.compilerCommand']['default'] == []
         assert archive.read('extension/compiler.cjs') == (ROOT / 'integrations/vscode/compiler.cjs').read_bytes()
         assert archive.read('extension/setup.cjs') == (ROOT / 'integrations/vscode/setup.cjs').read_bytes()

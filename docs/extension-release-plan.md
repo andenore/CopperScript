@@ -26,7 +26,7 @@ The mechanical editor still requires its reviewed compiler content fingerprint.
    optional mechanical editor and PNG branding. Keep offline deterministic VSIX
    packaging; use Microsoft's pinned `vsce` with a separate npm tooling lock for
    Marketplace validation and publishing. No npm runtime dependencies are added.
-3. **Compatibility/release CI — implemented, remote execution pending.** Run core
+3. **Compatibility/release CI — implemented and passed.** Run core
    compiler, LSP, mechanical host, packaging and actual client/provider tests on
    Python 3.11 through 3.15 on Linux, plus 3.15 on Windows and macOS. Extend this
    matrix when Python adds a stable minor version; newer versions remain accepted
@@ -67,7 +67,7 @@ and [Azure Login OIDC setup](https://github.com/Azure/login#login-with-openid-co
    Set repository variable `COPPER_MARKETPLACE_ENABLED=true` when ready to enable
    tag publication. No access-token secrets are stored by this workflow.
 6. Commit the extension version and changelog, then create and push the matching
-   `extension-v0.3.0` tag for this version. Ordinary compiler `v*` tags and manual
+   `extension-v0.3.1` tag for this version. Ordinary compiler `v*` tags and manual
    package checks do not publish the extension. An existing Marketplace version
    is not silently replaced; use a new extension version for the next release.
 
@@ -78,7 +78,7 @@ python -m pytest tests/test_compiler.py tests/test_packages.py tests/test_lsp.py
 # Set COPPER_TEST_PYTHON to the selected interpreter before the Node tests.
 node --test tests/compiler-client.cjs tests/lsp-client.cjs
 node integrations/vscode/build.cjs
-python integrations/vscode/package.py -o build/copperscript-0.3.0.vsix
+python integrations/vscode/package.py -o build/copperscript-0.3.1.vsix
 ```
 
 For the official package check, use Node 22 or newer:
@@ -87,7 +87,7 @@ For the official package check, use Node 22 or newer:
 npm ci --prefix integrations/vscode/tools --ignore-scripts --no-audit --no-fund
 cd build/vscode-extension/extension
 # Unix shell; on Windows use the corresponding vsce.cmd launcher.
-../../../integrations/vscode/tools/node_modules/.bin/vsce package --no-dependencies --out ../../copperscript-marketplace-0.3.0.vsix
+../../../integrations/vscode/tools/node_modules/.bin/vsce package --no-dependencies --out ../../copperscript-marketplace-0.3.1.vsix
 ```
 
 Bundled runtimes, downloads and automatic compiler upgrades are deferred until
@@ -103,4 +103,9 @@ The 3.15 checks used an isolated installed checkout, including its library entry
 points. The client tests exercised real stdio processes and recovery after a
 failed selected interpreter. Offline VSIX packaging and official `vsce` 4.0.0
 packaging passed; Actionlint 1.7.12 accepted the new workflow. The complete
-Linux/macOS/Windows CI matrix and authenticated publication have not run yet.
+Linux/macOS/Windows CI matrix and Marketplace packaging subsequently passed for
+commit `a8f5680` on GitHub Actions. Authenticated publication remains unverified.
+
+Version 0.3.1 adds compiler-independent syntax highlighting. The release workflow
+tests the grammar with VS Code's actual TextMate/Oniguruma tokenizer before
+packaging; both the offline and official VSIX must include the registered grammar.

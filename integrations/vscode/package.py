@@ -32,7 +32,7 @@ def package(stage, output):
 <Assets><Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true"/><Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/{escape(manifest['icon'])}" Addressable="true"/></Assets>
 </PackageManifest>'''.encode()
     files = {"[Content_Types].xml": content_types, "extension.vsixmanifest": xml}
-    for name in ("package.json", "extension.cjs", "lsp-client.cjs", "compiler.cjs", "setup.cjs", "language-configuration.json", "README.md", "CHANGELOG.md", "LICENSE", "media/index.html", "media/editor.js", "media/editor.css", "media/copper-logo.svg", "media/copper-logo.png"):
+    for name in ("package.json", "extension.cjs", "lsp-client.cjs", "compiler.cjs", "setup.cjs", "language-configuration.json", "syntaxes/copper.tmLanguage.json", "README.md", "CHANGELOG.md", "LICENSE", "media/index.html", "media/editor.js", "media/editor.css", "media/copper-logo.svg", "media/copper-logo.png"):
         files["extension/" + name] = (stage / name).read_bytes()
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("xb") as stream, zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:

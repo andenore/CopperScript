@@ -68,6 +68,10 @@ locks are visible diagnostics; bootstrap them through the normal CLI workflow.
 ## VS Code
 
 Build/install using [the extension README](../integrations/vscode/README.md).
+The extension supplies a TextMate grammar for syntax highlighting, including
+engineering units. It works independently of the compiler process; semantic
+tokens remain follow-up work in the LSP.
+
 Text `.copper` documents automatically activate the language tools in trusted
 local workspaces. `copperscript.lsp.compilerCommand` selects an interpreter argv
 array. Its default `[]` discovers the project's `.venv`, then an existing

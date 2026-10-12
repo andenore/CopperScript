@@ -2,7 +2,7 @@
   "name": "copperscript",
   "displayName": "CopperScript",
   "description": "CopperScript language server and source-authoritative mechanical editor, using a selected local compiler",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "andenore",
   "license": "MIT",
   "icon": "media/copper-logo.png",
@@ -11,7 +11,7 @@
   "bugs": {"url": "https://github.com/andenore/CopperScript/issues"},
   "categories": ["Programming Languages", "Other"],
   "keywords": ["copper", "copperscript", "pcb", "hardware", "language server"],
-  "files": ["extension.cjs", "lsp-client.cjs", "compiler.cjs", "setup.cjs", "language-configuration.json", "README.md", "CHANGELOG.md", "LICENSE", "media/**"],
+  "files": ["extension.cjs", "lsp-client.cjs", "compiler.cjs", "setup.cjs", "language-configuration.json", "README.md", "CHANGELOG.md", "LICENSE", "media/**", "syntaxes/**"],
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -122,6 +122,9 @@
         }
       }
     },
+    "grammars": [
+      {"language": "copper", "scopeName": "source.copper", "path": "./syntaxes/copper.tmLanguage.json"}
+    ],
     "languages": [
       {
         "id": "copper",
