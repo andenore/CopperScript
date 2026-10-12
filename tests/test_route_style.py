@@ -32,6 +32,18 @@ def test_branch_and_via_contacts_are_not_cut_away():
     assert chamfer_ordinary_corners(board, (*tracks, branch), (), RoutingClearanceIndex(board)) == (*tracks, branch)
 
 
+def test_explicit_committed_prefix_preserves_branches_and_replaces_board_track_context():
+    board, tracks = setup()
+    branch = TrackSegment("S", Point.mm(7.9, 5), Point.mm(7.9, 2), nm_from_mm(.2), CopperLayer.FRONT)
+    index = RoutingClearanceIndex(board)
+    expected = chamfer_ordinary_corners(replace(board, tracks=(branch,)), tracks, (), index)
+    assert chamfer_ordinary_corners(board, tracks, (), index, committed_tracks=(branch,)) == expected == tracks
+    # An explicit empty prefix has exactly the old replace(board, tracks=()) behavior.
+    branched_board = replace(board, tracks=(branch,))
+    assert chamfer_ordinary_corners(branched_board, tracks, (), index, committed_tracks=()) == (
+        chamfer_ordinary_corners(board, tracks, (), index))
+
+
 def test_immutable_foreign_obstacle_preserves_corner_even_during_ripup():
     board, tracks = setup()
     obstacle = TrackSegment("X", Point.mm(7.6, 5.4), Point.mm(7.6, 6), nm_from_mm(.2), CopperLayer.FRONT)

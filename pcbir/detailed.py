@@ -1824,18 +1824,19 @@ def _search_once(
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     allowed_indexes = {grid.layers.index(layer) for layer in allowed}
     queue: list[tuple[int, int, int, int, DetailedNode, str, int]] = []
-    best: dict[tuple[DetailedNode, str], int] = {}
+    best: dict[tuple[int, str], int] = {}
     previous: dict[tuple[DetailedNode, str], tuple[DetailedNode, str] | None] = {}
     heuristic_cache: dict[DetailedNode, int] = {}
     guide_cache: dict[DetailedNode, bool] = {}
-    legal_edge_cache: dict[tuple[DetailedNode, DetailedNode], bool] = {}
+    legal_edge_cache: dict[tuple[int, int], bool] = {}
     via_legality_cache: dict[tuple[Point, CopperLayer, CopperLayer], tuple[bool, int]] = {}
-    movable_edge_cache: dict[tuple[DetailedNode, DetailedNode], int] = {}
-    edge_resource_cache: dict[tuple[DetailedNode, DetailedNode], tuple[str, ...]] = {}
+    movable_edge_cache: dict[tuple[int, int], int] = {}
+    # Usage/history, clearance and guide are fixed during this search. Cache
+    # the symmetric edge cost once, independently of arrival direction/bends.
+    edge_cost_cache: dict[tuple[int, int], int] = {}
     layer_ranks, headings = signal_layer_preferences(grid.board)
     guide_exposure = GuideExposure(guide, guide_margin_nm,
                                    ignore_layer=project_guide_layers)
-    guide_edge_costs: dict[tuple[DetailedNode, DetailedNode], int] = {}
 
     def heuristic(node: DetailedNode) -> int:
         value = heuristic_cache.get(node)
@@ -1870,12 +1871,20 @@ def _search_once(
             guide_cache[node] = value
         return value
 
+    rows, columns = len(grid.ys), len(grid.xs)
+
+    def node_id(node: DetailedNode) -> int:
+        # The grid axes/layers are immutable during this search. This ordering
+        # agrees with DetailedNode's (layer, x, y) order; queue ties still use
+        # the original nodes and directions, and traceback retains real nodes.
+        return (node.layer_index * columns + node.x_index) * rows + node.y_index
+
     serial = 0
     for start in sorted(starts):
         if start.layer_index not in allowed_indexes:
             continue
         state = (start, "")
-        best[state] = 0
+        best[node_id(start), ""] = 0
         previous[state] = None
         heappush(queue, (
             options.heuristic_weight_percent * heuristic(start) // 100,
@@ -1887,7 +1896,8 @@ def _search_once(
     while queue:
         _, cost, vias, bends, node, direction, _ = heappop(queue)
         state = (node, direction)
-        if cost != best.get(state):
+        identifier = node_id(node)
+        if cost != best.get((identifier, direction)):
             continue
         expanded += 1
         if expanded > state_budget:
@@ -1905,7 +1915,8 @@ def _search_once(
                 next_direction = "h" if node.y_index == neighbor.y_index else "n"
             if next_direction == "v" and grid.point(node) in forbidden_via_positions:
                 continue
-            edge = _edge_key(node, neighbor)
+            neighbor_id = node_id(neighbor)
+            edge = (identifier, neighbor_id) if identifier < neighbor_id else (neighbor_id, identifier)
             # One search has one net and profile width, so an edge determines
             # the widths it is checked at, necked or not (``route_pieces``).
             legal = legal_edge_cache.get(edge)
@@ -1933,49 +1944,49 @@ def _search_once(
                 movable_edge_cache[edge] = movable_count
             if not legal:
                 continue
-            resource_ids = edge_resource_cache.get(edge)
-            if resource_ids is None:
-                resource_ids = _edge_resources(grid, node, neighbor)
-                edge_resource_cache[edge] = resource_ids
-            congestion = sum(
-                options.present_penalty * max(0, usage.get(resource, 0))
-                + options.history_penalty * history.get(resource, 0)
-                for resource in resource_ids
-            )
             outside = not inside_guide(neighbor)
             if outside and not options.allow_guide_deviation:
                 continue
-            if next_direction == "v":
-                base = options.via_cost * COST_UNIT
-                preference = 0
-                deviation = guide_transition_cost(inside_guide(node), not outside,
-                                                  50 * COST_UNIT)
-            else:
-                first_point, second_point = grid.point(node), grid.point(neighbor)
-                base = length_cost(first_point, second_point)
-                layer = grid.layers[node.layer_index]
-                deviation = guide_edge_costs.get(edge)
-                if deviation is None:
+            edge_cost = edge_cost_cache.get(edge)
+            if edge_cost is None:
+                congestion = sum(
+                    options.present_penalty * max(0, usage.get(resource, 0))
+                    + options.history_penalty * history.get(resource, 0)
+                    for resource in _edge_resources(grid, node, neighbor)
+                )
+                if next_direction == "v":
+                    base = options.via_cost * COST_UNIT
+                    preference = deviation = 0
+                else:
+                    first_point, second_point = grid.point(node), grid.point(neighbor)
+                    base = length_cost(first_point, second_point)
+                    layer = grid.layers[node.layer_index]
                     deviation = 50 * guide_exposure.outside_length_nm(
                         first_point, second_point, layer)
-                    guide_edge_costs[edge] = deviation
-                wrong_way = 0
-                diagonal = False
-                heading = headings.get(layer)
-                if heading is not None:
-                    if options.octilinear_search:
-                        horizontal = next_direction in {"E", "W"}
-                        vertical = next_direction in {"N", "S"}
-                        if (horizontal and heading != "h"
-                                or vertical and heading != "n"):
+                    wrong_way = 0
+                    diagonal = False
+                    heading = headings.get(layer)
+                    if heading is not None:
+                        if options.octilinear_search:
+                            horizontal = next_direction in {"E", "W"}
+                            vertical = next_direction in {"N", "S"}
+                            if (horizontal and heading != "h"
+                                    or vertical and heading != "n"):
+                                wrong_way = options.direction_preference_cost
+                            elif not horizontal and not vertical:
+                                wrong_way = options.direction_preference_cost
+                                diagonal = True
+                        elif next_direction != heading:
                             wrong_way = options.direction_preference_cost
-                        elif not horizontal and not vertical:
-                            wrong_way = options.direction_preference_cost
-                            diagonal = True
-                    elif next_direction != heading:
-                        wrong_way = options.direction_preference_cost
-                preference = preference_cost(first_point, second_point, layer_ranks[layer],
-                                             options.layer_preference_cost, wrong_way, diagonal)
+                    preference = preference_cost(first_point, second_point, layer_ranks[layer],
+                                                 options.layer_preference_cost, wrong_way, diagonal)
+                edge_cost = (base + preference + deviation + COST_UNIT * (congestion
+                             + 2 * options.present_penalty * movable_edge_cache[edge]))
+                edge_cost_cache[edge] = edge_cost
+            # Entering an unguided layer is directional. Do not put this event
+            # in the undirected cache: reversing a via may have zero cost.
+            transition = (guide_transition_cost(inside_guide(node), not outside, 50 * COST_UNIT)
+                          if next_direction == "v" else 0)
             if options.octilinear_search:
                 bend = _turn_steps(direction, next_direction) * options.bend_cost
             else:
@@ -1985,15 +1996,12 @@ def _search_once(
                     and "v" not in {direction, next_direction}
                     else 0
                 )
-            step = (
-                base + preference + deviation + COST_UNIT * (bend + congestion
-                + 2 * options.present_penalty * movable_edge_cache[edge])
-            )
+            step = edge_cost + transition + COST_UNIT * bend
             candidate_cost = cost + step
             candidate = (neighbor, next_direction)
-            if candidate_cost >= best.get(candidate, 1 << 60):
+            if candidate_cost >= best.get((neighbor_id, next_direction), 1 << 60):
                 continue
-            best[candidate] = candidate_cost
+            best[neighbor_id, next_direction] = candidate_cost
             previous[candidate] = state
             next_vias = vias + (next_direction == "v")
             next_bends = bends + (bend > 0)

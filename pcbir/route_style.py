@@ -18,7 +18,11 @@ def chamfer_ordinary_corners(
     board: PhysicalBoard, tracks: tuple[TrackSegment, ...],
     vias: tuple[Via, ...], clearance: RoutingClearanceIndex,
     *, allow_movable_conflicts: bool = False,
+    committed_tracks: tuple[TrackSegment, ...] | None = None,
 ) -> tuple[TrackSegment, ...]:
+    # Surface routing supplies its complete committed prefix without creating
+    # a new PhysicalBoard (and revalidating unrelated owner copper).
+    committed = board.tracks if committed_tracks is None else committed_tracks
     active = list(tracks)
     # Each input corner is visited once. New diagonal endpoints are not
     # recursively rounded, which keeps geometry and runtime deterministic.
@@ -59,7 +63,7 @@ def chamfer_ordinary_corners(
             # branch meeting the interior of a segment rather than its end.
             if any(not clearance.pad_copper_clear(shape, (layer,)) for shape in removed):
                 continue
-            peers = [t for k, t in enumerate(active) if k not in (i, j)] + list(board.tracks)
+            peers = [t for k, t in enumerate(active) if k not in (i, j)] + list(committed)
             if any(t.layer == layer and t.net == first.net
                    and any(not shapes_clear(shape, RoundedConvexShape(
                        (t.start, t.end), t.width_nm//2), 1) for shape in removed)

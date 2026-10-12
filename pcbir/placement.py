@@ -15,6 +15,8 @@ from heapq import heappop, heappush
 from math import ceil, cos, exp, hypot, isfinite, radians, sin
 from typing import Iterable, Mapping
 
+from ._cache import IdentityKey
+
 from .clusters import (
     cluster_placement_matches, resolved_cluster_keepouts,
 )
@@ -1901,6 +1903,31 @@ def _candidate_positions(
     )
 
 
+@lru_cache(maxsize=256)
+def _macro_copper_shapes(tracks: IdentityKey, vias: IdentityKey):
+    from .geometry import RoundedConvexShape, bounds
+    shapes = tuple((
+        *(RoundedConvexShape((track.start, track.end), track.width_nm // 2) for track in tracks.value),
+        *(RoundedConvexShape((via.position,), via.size_nm // 2) for via in vias.value),
+    ))
+    envelope = bounds(Point(x, y) for shape in shapes for x, y in (
+        (shape.bounds.min_x, shape.bounds.min_y), (shape.bounds.max_x, shape.bounds.max_y)))
+    return shapes, envelope
+
+
+@lru_cache(maxsize=256)
+def _local_land_shapes(pads: IdentityKey, rotation, side):
+    from .drc import placed_pad_shape
+    from .geometry import bounds
+    pose = Placement("local", "local", Point(0, 0), rotation, side)
+    shapes = tuple((pad, placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose))
+                   for pad in pads.value if pad.kind is not PadKind.APERTURE)
+    envelope = (bounds(Point(x, y) for _, shape in shapes for x, y in (
+        (shape.bounds.min_x, shape.bounds.min_y), (shape.bounds.max_x, shape.bounds.max_y)))
+        if shapes else None)
+    return shapes, envelope
+
+
 def _lands_meet_macro_copper(
     board: PhysicalBoard, pose: Placement,
     tracks: tuple[TrackSegment, ...], vias: tuple[Via, ...],
@@ -1911,20 +1938,25 @@ def _lands_meet_macro_copper(
     routing clearance; every foreign via drill also keeps the board hole
     clearance. Same-net copper may touch, as in physical DRC.
     """
-    from .drc import placed_pad_shape
-    from .geometry import RoundedConvexShape, shapes_clear
+    from .geometry import Bounds, RoundedConvexShape, shapes_clear
 
-    lands = [pad for pad in board.footprints[pose.footprint].pads
-             if pad.kind is not PadKind.APERTURE]
-    if not lands or (not tracks and not vias):
+    if not tracks and not vias:
+        return False
+    local, local_bounds = _local_land_shapes(IdentityKey(board.footprints[pose.footprint].pads),
+                                           pose.rotation_degrees, pose.side)
+    if local_bounds is None:
         return False
     rules = {rule.net: rule for rule in board.net_routing_rules}
     reach = max(board.rules.minimum_clearance_nm, board.rules.minimum_hole_clearance_nm,
                 *(rule.clearance_nm or 0 for rule in rules.values()))
-    shapes = [(pad, placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose))
-              for pad in lands]
-    copper = [*(RoundedConvexShape((track.start, track.end), track.width_nm // 2) for track in tracks),
-              *(RoundedConvexShape((via.position,), via.size_nm // 2) for via in vias)]
+    copper, copper_bounds = _macro_copper_shapes(IdentityKey(tracks), IdentityKey(vias))
+    x, y = pose.position.x_nm, pose.position.y_nm
+    envelope = Bounds(local_bounds.min_x + x, local_bounds.min_y + y,
+                      local_bounds.max_x + x, local_bounds.max_y + y)
+    if not envelope.intersects_expanded(copper_bounds, reach):
+        return False
+    shapes = [(pad, RoundedConvexShape(tuple(Point(p.x_nm + x, p.y_nm + y) for p in shape.spine),
+                                      shape.radius_nm)) for pad, shape in local]
     if not any(shape.bounds.intersects_expanded(item.bounds, reach)
                for _, shape in shapes for item in copper):
         return False
@@ -2088,9 +2120,17 @@ def _keepout_blocks(
 
 def _placement_polygon(board: PhysicalBoard, placement: Placement) -> tuple[Point, ...]:
     footprint = board.footprints[placement.footprint]
+    return _placed_courtyard(IdentityKey(footprint), placement.position,
+                             placement.rotation_degrees, placement.side)
+
+
+@lru_cache(maxsize=8192)
+def _placed_courtyard(footprint: IdentityKey, position: Point, rotation, side) -> tuple[Point, ...]:
+    """One lookup for repeated exact poses, retaining the immutable footprint."""
+    footprint = footprint.value
     local = _rotated_courtyard(footprint.courtyard, footprint.body_size,
-                               placement.rotation_degrees, placement.side)
-    return _translated_polygon(local, placement.position)
+                               rotation, side)
+    return _translated_polygon(local, position)
 
 
 @lru_cache(maxsize=4096)

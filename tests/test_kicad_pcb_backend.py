@@ -26,6 +26,30 @@ from pcbir import (
 ROOT = Path(__file__).parents[1]
 
 
+def test_library_namespace_matches_renamed_board_including_local_keepouts(monkeypatch):
+    from dataclasses import replace
+    from pcbir import CopperKeepout, PolygonRing, PolygonWithHoles
+    from pcbir.backends.kicad_pcb import (GENERATED_LIBRARY, KICAD_PCB_FORMAT,
+                                        _footprint_lines, _render_library_footprint)
+    board = _routed_board()
+    original = next(iter(board.footprints.values()))
+    keepout = CopperKeepout("local", (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing(
+        (Point.mm(-1, -1), Point.mm(1, -1), Point.mm(1, 1), Point.mm(-1, 1)))))
+    footprint = replace(original, keepouts=(keepout,), height_nm=1000000)
+    board = replace(board, footprints={**board.footprints, footprint.name: footprint})
+    name = "library-test"
+    pose = Placement("REF", footprint.name, Point(0, 0), value=name)
+    lines = _footprint_lines(replace(board, name=f"{GENERATED_LIBRARY}:{name}"),
+                             pose, footprint, {}, {}, export_name=name)
+    lines[1:1] = [f"    (version {KICAD_PCB_FORMAT})", '    (generator "copperscript")']
+    expected = "\n".join(lines) + "\n"
+    # Rendering itself must not construct/revalidate another physical board.
+    def reject_copy(self):
+        raise AssertionError("unexpected PhysicalBoard construction")
+    monkeypatch.setattr(PhysicalBoard, "__post_init__", reject_copy)
+    assert _render_library_footprint(board, footprint, name) == expected
+
+
 def test_kicad_pcb_backend_emits_deterministic_board_geometry() -> None:
     board = _routed_board()
     backend = KiCadPcbBackend()

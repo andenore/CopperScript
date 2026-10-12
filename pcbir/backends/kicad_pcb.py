@@ -188,8 +188,8 @@ def _render_library_footprint(board: PhysicalBoard, footprint: PhysicalFootprint
     # The same renderer creates both canonical library geometry and board
     # instances. No source files, network requests or KiCad installation needed.
     pose = Placement("REF", footprint.name, Point(0, 0), value=name)
-    canonical_board = replace(board, name=f"{GENERATED_LIBRARY}:{name}")
-    lines = _footprint_lines(canonical_board, pose, footprint, {}, {}, export_name=name)
+    lines = _footprint_lines(board, pose, footprint, {}, {}, export_name=name,
+                             board_name=f"{GENERATED_LIBRARY}:{name}")
     version = "20260206" if footprint.internal_pad_groups else KICAD_PCB_FORMAT
     lines[1:1] = [f"    (version {version})", '    (generator "copperscript")']
     return "\n".join(lines) + "\n"
@@ -598,6 +598,7 @@ def _copper_keepout_lines(
     *,
     identity: str | None = None,
     footprint_local: bool = False,
+    board_name: str | None = None,
 ) -> list[str]:
     if keepout.outline.holes:
         raise ValueError(
@@ -610,7 +611,7 @@ def _copper_keepout_lines(
         "    (net 0)",
         '    (net_name "")',
         f"    (layer {_quote(layer.value)})",
-        f'    (uuid "{_stable_uuid(board.name, "copper-keepout", name, layer.value)}")',
+        f'    (uuid "{_stable_uuid(board.name if board_name is None else board_name, "copper-keepout", name, layer.value)}")',
         f"    (name {_quote(keepout.id if footprint_local else name)})",
         "    (hatch edge 0.5)",
         "    (keepout",
@@ -638,9 +639,12 @@ def _footprint_lines(
     net_codes: dict[str, int],
     *,
     export_name: str,
+    board_name: str | None = None,
 ) -> list[str]:
+    # Library rendering changes the UUID namespace, not the physical board.
+    board_name = board.name if board_name is None else board_name
     side_layer = "F.Cu" if placement.side is BoardSide.FRONT else "B.Cu"
-    footprint_uuid = _stable_uuid(board.name, "footprint", placement.reference)
+    footprint_uuid = _stable_uuid(board_name, "footprint", placement.reference)
     lines = [
         f"  (footprint {_quote(export_name)}",
         *( ["    (locked yes)"] if any(
@@ -652,7 +656,7 @@ def _footprint_lines(
     ]
     lines.extend(
         _property_lines(
-            board.name,
+            board_name,
             placement.reference,
             "Reference",
             _kicad_reference(placement.reference),
@@ -663,7 +667,7 @@ def _footprint_lines(
     )
     lines.extend(
         _property_lines(
-            board.name,
+            board_name,
             placement.reference,
             "Value",
             placement.value,
@@ -676,12 +680,12 @@ def _footprint_lines(
     from ..mechanical_assembly import component_height
     height=component_height(board,placement)
     if height is not None:
-        lines.extend(_property_lines(board.name,placement.reference,"CopperScriptHeightMM",_mm(height),
+        lines.extend(_property_lines(board_name,placement.reference,"CopperScriptHeightMM",_mm(height),
                     0,0,"F.Fab" if placement.side is BoardSide.FRONT else "B.Fab",hidden=True))
     if placement.source_path:
         lines.extend(
             _property_lines(
-                board.name,
+                board_name,
                 placement.reference,
                 "CopperScriptPath",
                 placement.source_path,
@@ -713,19 +717,19 @@ def _footprint_lines(
     if footprint.graphics:
         for index, graphic in enumerate(footprint.graphics):
             lines.extend(
-                _graphic_lines(board.name, placement, graphic, index)
+                _graphic_lines(board_name, placement, graphic, index)
             )
     else:
         half_width = footprint.body_size.width_nm // 2
         half_height = footprint.body_size.height_nm // 2
-        lines.extend(_graphic_lines(board.name, placement, FootprintRectangle(
+        lines.extend(_graphic_lines(board_name, placement, FootprintRectangle(
             Point(-half_width, -half_height), Point(half_width, half_height),
             150000, FootprintLayer.SILKSCREEN,
         ), 0))
     for index, pad in enumerate(footprint.pads):
         net_name = pad_nets.get(PadReference(placement.reference, pad.number))
         lines.extend(
-            _pad_lines(board.name, placement, pad, index, net_name, net_codes)
+            _pad_lines(board_name, placement, pad, index, net_name, net_codes)
         )
     for local in sorted(footprint.keepouts, key=lambda item: item.id):
         # Zones remain owned by the footprint, but KiCad board files store
@@ -747,6 +751,7 @@ def _footprint_lines(
                 board, resolved, layer,
                 identity=f"{placement.reference}/{local.id}",
                 footprint_local=True,
+                board_name=board_name,
             ))
     lines.append("  )")
     return lines

@@ -13,6 +13,8 @@ from functools import lru_cache
 import json
 from pathlib import Path
 
+from ._cache import IdentityKey
+
 from .clusters import (cluster_placement_matches, footprint_geometry_digest,
                        legacy_footprint_geometry_digest)
 from .geometry import RoundedConvexShape, circle_inside_shape, point_in_polygon, polygon_triangles, segment_in_polygon, segments_intersect, shapes_clear
@@ -528,11 +530,26 @@ def materialized_track_width_contracts(board):
     return result
 
 
+@lru_cache(maxsize=8)
+def _macro_smd_lands(placements, footprints):
+    """Exact immutable land geometry; permissions and process are never cached."""
+    from .drc import placed_pad_shape
+    from .geometry import SpatialIndex, SpatialItem
+    library = {name: key.value for name, key in footprints}
+    lands = {}
+    for pose in placements.value:
+        for pad in library[pose.footprint].pads:
+            if pad.kind is PadKind.SMD:
+                shape = placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose)
+                lands[f"{len(lands):016d}"] = (PadReference(pose.reference, pad.number), shape)
+    return lands, SpatialIndex(SpatialItem(key, shape.bounds) for key, (_, shape) in lands.items())
+
+
 def _validate_macro_via_permissions(board, macro, vias):
     """An asset's finish string cannot authorize otherwise forbidden via-in-pad."""
-    from .drc import placed_pad_shape
     permitted = {rule.pad for rule in board.via_in_pad_rules}
     bound = {binding.pad for binding in macro.pad_bindings if binding.net == "GND"}
+    land_snapshot = None
     for via in vias:
         if via.finish != "filled-capped":
             continue
@@ -542,19 +559,21 @@ def _validate_macro_via_permissions(board, macro, vias):
             raise ValueError("macro filled-capped vias require the six-layer GND through-via process")
         annulus = RoundedConvexShape((via.position,), via.size_nm // 2)
         contacts = []
-        for pose in board.placements:
-            for pad in board.footprints[pose.footprint].pads:
-                if pad.kind is not PadKind.SMD:
-                    continue
-                shape = placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose)
-                if shapes_clear(annulus, shape, 1):
-                    continue
-                ref = PadReference(pose.reference, pad.number)
-                if ref not in permitted or ref not in bound:
-                    raise ValueError("macro via-in-pad requires explicit permission for the contacted private pad")
-                if not circle_inside_shape(via.position, via.size_nm // 2, shape):
-                    raise ValueError("macro via-in-pad annulus must be contained in its permitted pad")
-                contacts.append(ref)
+        if land_snapshot is None:
+            land_snapshot = _macro_smd_lands(IdentityKey(board.placements), tuple(
+                (name, IdentityKey(footprint)) for name, footprint in board.footprints.items()))
+        lands, index = land_snapshot
+        # Inclusive bounds plus 1 nm retain every contact checked by the exact
+        # oracle, including tangent and odd-nanometre annuli.
+        for key in index.query(annulus.bounds.expanded(1)):
+            ref, shape = lands[key]
+            if shapes_clear(annulus, shape, 1):
+                continue
+            if ref not in permitted or ref not in bound:
+                raise ValueError("macro via-in-pad requires explicit permission for the contacted private pad")
+            if not circle_inside_shape(via.position, via.size_nm // 2, shape):
+                raise ValueError("macro via-in-pad annulus must be contained in its permitted pad")
+            contacts.append(ref)
         if len(contacts) > 1:
             raise ValueError("macro via-in-pad cannot overlap multiple pad lands")
 

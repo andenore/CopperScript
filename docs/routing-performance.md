@@ -1,5 +1,143 @@
 # Routing performance and optimization assessment
 
+## Isolated hotspot experiments (2026-10-12)
+
+The fresh standard full-vertical profile in
+`build/full-vertical/runs/20261012T054251927652Z` took 1,391.918 s with
+`cProfile`. It identified four targets: redundant physical-board construction,
+macro via-permission geometry, repeated maze-edge work and placement legality.
+The pre-change sources used by the experiments match that profile's source
+hashes, including its uncommitted routing work.
+
+The repeatable fixture runner is
+[`scripts/benchmark_routing_hotspots.py`](../scripts/benchmark_routing_hotspots.py).
+Snapshot the working `pcbir` sources before an intervention, retaining the
+`backends/kicad_pcb.py` subdirectory, then run:
+
+```powershell
+.venv/Scripts/python.exe -m scripts.benchmark_routing_hotspots `
+  --baseline-dir build/performance-research-20261012/baseline `
+  --output build/performance-research-20261012/isolated-results.json
+```
+
+`--only macro|construction|placement|maze` isolates a research area. The runner
+loads selected baseline functions against the current unchanged helpers/types,
+so each comparison isolates that intervention. It checks exact return values,
+alternates method order, warms up once, and records five unprofiled samples,
+medians, Python/platform information and source hashes. It also checks 64 maze
+equivalence cases with different grids, congestion, guide-layer projection,
+movable obstacles, forbidden vias and budget exhaustion. This is a developer
+diagnostic, not a timing threshold or manufacturing qualification.
+
+| Target | Methods tried | Selected method and correctness boundary |
+| --- | --- | --- |
+| Board construction | Whole-board replacement with linear validation; replacement with indexed validation; explicit rendering/track context | Pass the complete committed track prefix into chamfering and a UUID namespace into footprint rendering. No physical board is constructed just to change that context. Real board construction still validates its existing reference and macro invariants. |
+| Macro permissions | Linear scan; linear scan with an LRU pad-shape cache; indexed land snapshot, cold and warm | An eight-entry memo retains exact immutable placement/footprint identities and indexes their SMD shapes. Every via still checks current process, binding, permission, exact contact, containment and multiplicity. |
+| Maze | Existing resource/guide caches; congestion-only cache; symmetric edge-cost cache; edge costs plus integer keys | Cache only search-local symmetric costs and use grid-derived integer keys for best costs and edges. Arrival-direction bends and directional via guide transitions remain separate. Queue ordering, nodes, traceback and state budgets stay unchanged. |
+| Placement | Rebuilt shapes; cached macro copper; cached local land/copper envelopes; those envelopes plus exact posed courtyards | Reject distant candidates using conservative aggregate bounds, then retain the original exact net/layer/copper/drill checks. Geometry caches retain immutable inputs, with 256-entry land/copper and 8,192-entry courtyard limits. Current rules and net ownership are read for every check. |
+
+On this Windows/Python 3.13.1 run, representative median fixture batches were:
+
+| Fixture batch | Baseline | Selected method |
+| --- | ---: | ---: |
+| 12 warm permission checks, 1,538 lands / two vias | 253.0 ms | 0.304 ms |
+| One cold permission check | 20.75 ms | 12.60 ms |
+| 30 surface paths with macro-bearing board | 640.0 ms | 0.650 ms |
+| 30 library renders, 16-pad footprint | 657.3 ms | 7.386 ms |
+| 240 macro-copper placement checks | 159.7 ms | 4.489 ms |
+| 240 complete placement legality checks | 40.50 ms | 21.13 ms |
+| Orthogonal maze with congestion | 177.7 ms | 143.9 ms |
+| Octilinear maze with congestion | 624.2 ms | 413.4 ms |
+
+All compared outputs matched. The large construction and warm-index ratios are
+specific to deliberately dense, repeated-validation fixtures; they are not
+whole-board speedup estimates. Congestion-only caching barely helped, so the
+larger symmetric cost cache was selected. Retained JSON includes every method,
+individual sample and exact-output digest. Bounded invalidation, rotated/odd-nm
+geometry, permissions, drills, branches and renderer namespace regressions are
+covered by the routing/cache/backend tests.
+The cold-index case clears the land snapshot before each call; both methods
+retain the existing coordinate-transform caches. It is not a cold-process run.
+
+### Matched full-vertical profile
+
+The optimized standard run is
+`build/full-vertical/runs/20261012T071852682556Z`. Both runs used Python 3.13.1,
+KiCad 10.0.6, the same locked/offline inputs, six-layer fabrication profile,
+both immutable macros, `candidate-00`, 20,000 search states, two detailed passes
+and the standard bounded pipeline. Router commands and all recorded input hashes
+match. Source hashes did not change during either run.
+
+| Observed cProfile run / phase | Before | After |
+| --- | ---: | ---: |
+| Full build elapsed | 1,391.918 s | 724.974 s |
+| Placement/global planning | 312.686 s | 166.158 s |
+| Initial package plane contacts | 129.998 s | 1.525 s |
+| Detailed pass 1 | 308.930 s | 167.251 s |
+| Detailed pass 2 | 316.699 s | 220.029 s |
+| Ordinary area phase | 643.494 s | 398.753 s |
+| Export phase | 5.761 s | 0.638 s |
+| Independent KiCad phase | 33.543 s | 40.886 s |
+
+The observed full profiled run used **47.9% less elapsed time (1.92x ratio)**.
+This compares two instrumented runs, not repeated unprofiled whole-board runs.
+Profiler overhead and external machine load affect the ratio. Function/phase
+times below overlap and must not be summed.
+
+| Hotspot, cumulative cProfile time | Before | After | Work/output check |
+| --- | ---: | ---: | --- |
+| Physical-board reference validation | 280.788 s | 11.67 s | Constructors reduced from 1,863 to 192; real constructors still validate. |
+| Macro via permissions | 134.271 s | 0.18 s | 324 fresh permission calls; three cold land snapshots. |
+| Surface paths | 176.955 s | 1.36 s | Same 1,356 calls. |
+| Canonical footprint rendering | 82.437 s | 0.51 s | Same 476 renders. |
+| Placement legality | 167.737 s | 62.75 s | Same 213,465 probes. |
+| Placement versus macro copper | 64.970 s | 1.68 s | Same 58,653 checks. |
+| Maze search | 603.149 s | 368.56 s | Same 393 searches and 1,170,524 neighbor-generation calls. |
+| All plane stitching | 179.091 s | 2.86 s | Same two calls. |
+
+Total profiled calls fell from 2.265 billion to 1.282 billion. The initial
+critical tier still expanded 27 states; package exits remained 76 accepted / 0
+pending. Both runs made 100 detailed net attempts, with the same two first-pass
+failures and all 50 ordinary nets connected after the second pass. No additional
+repair searches were needed.
+
+The draft board SHA-256 and editor-intent SHA-256 match exactly. Saved native
+boards differ only in **110 UUIDs for KiCad-generated empty Datasheet/Description
+properties**; every other line, including routed and filled copper, is identical.
+Both have 680 tracks, 223 vias, 1,981.243638 mm of track, and fresh native DRC with
+zero violations / zero unconnected items. Native fill resolves the same three
+deferred explicit-copper observations. The same eight engineering requirements
+remain blocked; fabrication readiness is false.
+
+Regression coverage: 2,673 passed / 18 skipped in the initial full-suite run,
+plus 13 environment failures. All affected tests passed in a 107-test rerun
+with localhost access and a temporary directory outside the repository. That
+rerun also covers one regression added after initial collection, giving 2,687
+distinct passing tests / 18 skipped / no unresolved failures. Localhost was
+sandbox-blocked, and a repository-local temp directory changed the module root
+seen by the import-escape test. Optional skipped capabilities remain unverified.
+
+The optimized router process measured 110.6 MiB peak Windows working set and
+457.1 MiB peak pagefile usage, including cProfile and excluding child KiCad
+processes. A small exit hook captured these counters; its hash and scope are
+retained in `peak-memory.json`. The baseline has no peak-memory measurement.
+
+Retained research evidence is in `build/performance-research-20261012/`:
+`isolated-results.json`, baseline source snapshots/hashes,
+`full-profile-comparison.json`, `test-results.json` and the original test logs.
+Each full run retains raw `routing.prof`, summaries, phase events, routing/native
+reports and provenance. The remaining dominant consumer is maze search:
+neighbor generation and grid/material queries account for much of its 368.6 s;
+physical DRC is now 97.0 s and placement legality 62.8 s, with overlap.
+
+Exact profiled sources are retained in
+`build/performance-research-20261012/profiled-sources/`, verified against every
+launch-time source hash. Subsequent shared-checkout edits to KiCad clearance-rule
+export arrived after the profile finished and are preserved. These timing,
+regression and native-verification results apply to the retained profiled
+revision; they do not verify those later export changes. See
+`post-profile-edits.json` for the recorded boundary.
+
 ## Package-access via search
 
 The preferred plane-contact search stops considering farther via rings once

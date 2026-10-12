@@ -121,10 +121,9 @@ def surface_path(
             # Import lazily: route_style shares this module's board-edge test.
             # Include committed branches when deciding whether a corner is
             # movable; never polish another owner's existing copper.
-            from dataclasses import replace
             from .route_style import chamfer_ordinary_corners
             return chamfer_ordinary_corners(
-                replace(board, tracks=committed), tuple(additions), (), clearance,
+                board, tuple(additions), (), clearance, committed_tracks=committed,
             )
     return None
 
