@@ -226,17 +226,13 @@ class Analysis:
                         key = namespace + '.' + child.document.name
                         self.exports.setdefault(key, []).append(child.symbols[0])
                         if child.document.kind == 'macro':
-                            from ..macro_bindings import MacroAssetReference, prepare_macro_asset
-                            identity = self.resolver.qualify_macro_asset('./' + path.name, child.document.location)
-                            ref = MacroAssetReference(identity, str(self.resolver.source_directory),
-                                child.document.location, True, True, child.document.name)
-                            try:
-                                self.macro_contracts[(unit.path, declaration.alias + '.' + child.document.name)] = prepare_macro_asset(
-                                    ref, source_reader=self.reader, package_resolver=self.resolver)
-                            except (OSError, ValueError, CopperScriptError) as exc:
-                                if isinstance(exc, CopperScriptError):
-                                    raise
-                                raise CopperScriptError('MAC005', f'macro contract unavailable: {exc}', child.document.location) from exc
+                            from ..macro_definitions import lower_macro
+                            # Index source roles for completion without requiring
+                            # footprint inventories for unselected variants.
+                            # Board diagnostics prepare only actual bindings.
+                            data, _ = lower_macro(child.document, self.resolver, resolve_footprints=False)
+                            self.macro_contracts[(unit.path, declaration.alias + '.' + child.document.name)] = (
+                                path, None, data, {'validation': 'definition_only'})
                         self.imports(child, (*stack, resolved.import_path))
             except (CopperScriptError, OSError, ValueError) as exc:
                 self.import_errors.append(exc)

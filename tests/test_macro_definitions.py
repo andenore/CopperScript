@@ -177,6 +177,18 @@ def test_named_exports_lsp_overlay_completion_and_navigation(tmp_path):
     assert 'width' in {c['label'] for c in standalone.completion(standalone.root.text.position(DEFINITION.index('width =')))}
 
 
+def test_lsp_does_not_require_footprints_for_unselected_package_variants(tmp_path):
+    path, definition, _, source = definition_project(tmp_path)
+    alternate = DEFINITION.replace('TestLayout', 'UnusedLayout').replace('../test.kicad_mod',
+        'github.com/unselected/provider/Missing.kicad_mod')
+    (definition.parent / 'alternate.copper').write_text(alternate, encoding='utf-8')
+    ws = Workspace()
+    ws.update(path.as_uri(), 1, source)
+    analysis = ws.analysis(path.as_uri())
+    assert not [d for d in analysis.diagnostics() if d['code'].startswith(('MAC', 'PKG'))]
+    assert 'layout.UnusedLayout' in analysis.exports
+
+
 def test_serialization_retains_portable_named_selection(tmp_path):
     records = []
     for name in ('one', 'two'):
