@@ -9,6 +9,7 @@ import re
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+from .backends.kicad_pcb import kicad_reference
 from .elaborate import elaborate
 from .erc import check, has_errors
 from .model import Board, ComponentInstance, PartDefinition
@@ -237,6 +238,28 @@ def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
     }
 
 
+def _designators(entries) -> dict[str, str]:
+    """Board designator for each selection, as placed and printed on the PCB.
+
+    Assemblers match the BOM, the CPL and the silkscreen by designator, and the
+    KiCad export flattens hierarchical source references (BUCK_1V2/C_AVIN ->
+    BUCK_1V2_C_AVIN). Using the source form would leave every hierarchical
+    component unmatched against its own placement. Two references that flatten
+    to the same designator would be indistinguishable to the assembler, so that
+    is refused rather than silently merged.
+    """
+    result: dict[str, str] = {}
+    owner: dict[str, str] = {}
+    for entry in entries:
+        designator = kicad_reference(entry.reference)
+        if designator in owner and owner[designator] != entry.reference:
+            raise AssemblyError(f"references {owner[designator]} and {entry.reference} "
+                                f"both become board designator {designator}")
+        owner[designator] = entry.reference
+        result[entry.reference] = designator
+    return result
+
+
 def write_jlcpcb_bom(board: Board, lock: AssemblyLock, path: str | Path) -> None:
     """Write the fully reviewed, supplier-assembled selections; not an order.
 
@@ -258,12 +281,13 @@ def write_jlcpcb_bom(board: Board, lock: AssemblyLock, path: str | Path) -> None
     if not ordered:
         raise AssemblyError("no supplier-assembled components; nothing to export")
     components = _components(board)
+    designators = _designators(lock.selections)
     groups = {}
     for entry in ordered:
         component, _ = components[entry.reference]
         value = str(component.value) if component.value is not None else entry.mpn
         key = (value, entry.footprint, entry.supplier_part, entry.manufacturer, entry.mpn)
-        groups.setdefault(key, []).append(entry.reference)
+        groups.setdefault(key, []).append(designators[entry.reference])
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as stream:
@@ -291,13 +315,14 @@ def write_hand_assembly_list(board: Board, lock: AssemblyLock, path: str | Path)
     """
     if not check_assembly(board, lock)["passed"]:
         raise AssemblyError("assembly selections failed; hand-assembly list refused")
+    designators = _designators(lock.selections)
     groups: dict[tuple[str, str, str, str], list[str]] = {}
     for entry in lock.selections:
         if entry.ordered:
             continue
         action = "hand-assemble" if entry.populate == "consigned" else "do not fit"
         key = (action, entry.manufacturer or "", entry.mpn or "", _short_footprint(entry.footprint))
-        groups.setdefault(key, []).append(entry.reference)
+        groups.setdefault(key, []).append(designators[entry.reference])
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as stream:
