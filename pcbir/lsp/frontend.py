@@ -58,6 +58,9 @@ def parse_recovering(text: str, filename: str) -> Parsed:
                     depth -= 1
                     if depth == 0:
                         i += 1
+                        if (empty.kind == 'macro' and start + 1 < len(tokens)
+                                and tokens[start + 1].text == '=' and tokens[i].text == ';'):
+                            i += 1
                         break
                 elif t.text == ';' and depth == 0:
                     i += 1

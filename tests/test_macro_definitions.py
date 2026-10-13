@@ -305,6 +305,8 @@ def test_reviewed_json_conversion_preserves_structured_evidence_and_exact_geomet
     refs = {'test.kicad_mod': '../test.kicad_mod'}
     source = macro_definition_source(data, 'Converted', footprint_references=refs)
     assert 'footprint_digest' not in source
+    from pcbir.lsp.frontend import parse_recovering
+    assert not parse_recovering(source, str(definition)).errors
     doc = parse(source, str(definition))
     resolver = PackageResolver.for_source(path, doc.location, offline=True)
     converted, _ = lower_macro(doc, resolver)
