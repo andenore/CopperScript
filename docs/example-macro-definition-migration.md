@@ -59,11 +59,16 @@ explicit synthetic land with supported assembly-exclusion attributes instead.
 That importer limitation remains visible and unchanged.
 
 CopperAssetTracker consumes the installed published compiler
-`8519783d7c6c39b2f51162629f92888a1b514198`. Its 64 tests and 34 subtests pass with
-seven optional integration skips. With the reviewed library supplied explicitly,
-all eight revision-builder tests pass, including real RF-layout and RF-support
-source generation using the corner/power-output exports. Both terminated TPS63020
+`17ebc6f488dcc8f80a3e0052a18af35760a9b759`. With the reviewed library supplied,
+70 consumer tests and 34 subtests pass with one retained-review-artifact case
+skipped. All eight revision-builder tests pass, including real RF-layout and
+RF-support source generation using the corner/power-output exports. Both terminated TPS63020
 variants pass native refill/DRC at all four cardinal rotations (eight clean reports).
 The coin-cell native geometry check passes; ordinary non-RF opens remain explicitly
 unclaimed in that placed draft. These results establish format/geometry compatibility,
 not fresh full-board or hardware qualification.
+
+Final clean-checkout acceptance passes 128 selected example, compiler-macro,
+LSP and build tests with one platform skip, plus independent native refill/DRC
+of the enabled TPS62130A fixture. Real example package exports are indexed
+locked/offline without preparing footprint assets for unused macro variants.
