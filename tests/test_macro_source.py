@@ -84,6 +84,19 @@ def test_source_binding_matches_scene_and_retains_electrical_nets(tmp_path):
         apply_hard_macro_scene(resolved_physicalize(design, FootprintResolver(tmp_path)), scene)
 
 
+def test_serialized_macro_descriptors_are_portable_between_checkouts(tmp_path):
+    documents = []
+    for name in ('first', 'second'):
+        directory = tmp_path / name
+        directory.mkdir()
+        path, _, _ = project(directory)
+        documents.append(board_to_dict(compile_design_file(path)))
+    assert documents[0]['physical_macros'] == documents[1]['physical_macros']
+    macro = documents[0]['physical_macros'][0]
+    assert macro['base_directory'] == '.'
+    assert macro['origin'].startswith('board.copper:')
+
+
 @pytest.mark.parametrize('replacement,code', [
     ('member chip = MISSING;', 'MAC002'),
     ('member chip = R1;', 'MAC003'),

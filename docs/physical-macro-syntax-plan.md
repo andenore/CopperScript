@@ -221,6 +221,9 @@ Realization descriptors are retained on board/module records, exposed through
 keeps the existing electrical projection and JSON serializer from dropping
 bindings. Empty realization fields are omitted from serialized designs to
 preserve existing output. Electrical connectivity remains unchanged.
+Serialized macro paths/origins are relative to the entry source directory;
+machine-specific absolute macro paths remain runtime resolution/diagnostic data
+and are not added to compiled design digests.
 
 1. Add parser/AST records, typed alias handling and reference diagnostics.
    Preserve all existing package import behavior and source locations.
@@ -266,8 +269,8 @@ contracts.
 
 ## Validation record
 
-The new `tests/test_macro_source.py` suite has 37 passing cases. Together with
-the language-server suite, the final feature/editor run passed 70 tests. It
+The new `tests/test_macro_source.py` suite has 38 passing cases. Together with
+the language-server suite, the final feature/editor run passed 71 tests. It
 includes source-only `route-board`, `plan-layout` and PCB export, a partial net
 with external routing, two asset providers, scoped/nested/repeated bindings,
 lock tampering, preparation/binding races, missing/changed owner requirements,
@@ -288,3 +291,10 @@ reproducing these checks. The compact final feature command is:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_macro_source.py tests/test_lsp.py -o addopts= -q --basetemp build/macro-feature-checks
 ```
+
+The nRF RF/coin-cell, full-vertical and TPS62130A examples now select macros in
+source. The Make settings and CI provenance no longer load their former binding
+scenes. TPS62130A copper is unchanged from the pinned assets and reuses the
+existing managed-footprint adaptation. A clean publish checkout passed 155
+selected implementation/example/build tests, with one environment skip; the
+final descriptor portability check additionally passed the feature/editor suite.

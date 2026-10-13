@@ -78,6 +78,8 @@ def main():
             if not any(f'(net "{polygon.net}")' in block and "(fill yes)" in block
                        for block in copper[1:]):
                 raise SystemExit(f"native KiCad lost fixed copper polygon {polygon.id}")
+    else:
+        print("Native KiCad refill/DRC: not run (kicad-cli unavailable on PATH).")
     print(target)
 
 

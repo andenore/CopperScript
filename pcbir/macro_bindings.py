@@ -2,6 +2,7 @@
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 
 from .syntax import CopperScriptError, MacroMappingDecl, PhysicalMacroDecl, SourceLocation
@@ -194,12 +195,15 @@ def apply_source_macros(physical, board, *, locked=None, offline=None):
 
 
 def macro_binding_document(binding):
+    def origin(location):
+        path = Path(os.path.relpath(location.filename, binding.asset.base_directory)).as_posix()
+        return f"{path}:{location.line}:{location.column}"
     return {"name": binding.name, "asset": binding.asset.asset,
-            "base_directory": binding.asset.base_directory, "scope": binding.scope,
-            "origin": str(binding.location), "asset_origin": str(binding.asset.location),
+            "base_directory": ".", "scope": binding.scope,
+            "origin": origin(binding.location), "asset_origin": origin(binding.asset.location),
             "asset_validation": "pending_physical_preparation",
             "mappings": [{"kind": m.kind, "key": m.key, "target": m.target,
-                          "origin": str(m.location)} for m in binding.mappings]}
+                          "origin": origin(m.location)} for m in binding.mappings]}
 
 
 def macro_binding_identity(binding):
