@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
+import math
 from pathlib import Path
 from io import BytesIO
 import re
@@ -183,8 +184,89 @@ class PyGerberAdapter:
 
     def parse_gerber(self, path: Path) -> NormalizedCamLayer:
         from pygerber.gerberx3.api import v2
+        from pygerber.gerberx3.parser2.commands2.arc2 import Arc2, CCArc2
+        from pygerber.gerberx3.parser2.commands2.line2 import Line2
+        from pygerber.gerberx3.parser2.commands2.region2 import Region2
+
         parsed = v2.GerberFile.from_file(path).parse(on_parser_error=v2.OnParserErrorEnum.Raise)
-        info = parsed.get_info()
+        # PyGerber's generic command bounds expand Line2/Arc2 by the active
+        # aperture. Gerber region D01 commands describe an unstroked contour,
+        # so using get_info() overstates every region by the aperture width.
+        # The adapter is version-pinned; use its parsed command buffer to
+        # normalize region geometry correctly while retaining aperture-aware
+        # bounds for ordinary draws and flashes.
+        bounds: list[tuple[float, float]] = []
+
+        def region_points(region: Region2) -> list[tuple[float, float]]:
+            points: list[tuple[float, float]] = []
+            for segment in region.command_buffer:
+                if isinstance(segment, Line2):
+                    points.extend((
+                        (float(segment.start_point.x.value), float(segment.start_point.y.value)),
+                        (float(segment.end_point.x.value), float(segment.end_point.y.value)),
+                    ))
+                    continue
+                if not isinstance(segment, Arc2):
+                    raise ValueError(
+                        f"unsupported command inside Gerber region: {type(segment).__name__}"
+                    )
+
+                start_x = float(segment.start_point.x.value)
+                start_y = float(segment.start_point.y.value)
+                end_x = float(segment.end_point.x.value)
+                end_y = float(segment.end_point.y.value)
+                center_x = float(segment.center_point.x.value)
+                center_y = float(segment.center_point.y.value)
+                points.extend(((start_x, start_y), (end_x, end_y)))
+
+                start_angle = math.atan2(start_y - center_y, start_x - center_x)
+                end_angle = math.atan2(end_y - center_y, end_x - center_x)
+                counterclockwise = isinstance(segment, CCArc2)
+                if (start_x, start_y) == (end_x, end_y):
+                    sweep = math.tau
+                elif counterclockwise:
+                    sweep = (end_angle - start_angle) % math.tau
+                else:
+                    sweep = (start_angle - end_angle) % math.tau
+
+                radius = float(segment.get_radius().value)
+                for quadrant, angle in enumerate((0.0, math.pi / 2, math.pi, 3 * math.pi / 2)):
+                    distance = (
+                        (angle - start_angle) % math.tau
+                        if counterclockwise
+                        else (start_angle - angle) % math.tau
+                    )
+                    if distance <= sweep + 1e-12:
+                        if quadrant == 0:
+                            points.append((center_x + radius, center_y))
+                        elif quadrant == 1:
+                            points.append((center_x, center_y + radius))
+                        elif quadrant == 2:
+                            points.append((center_x - radius, center_y))
+                        else:
+                            points.append((center_x, center_y - radius))
+            return points
+
+        for command in parsed._command_buffer:
+            if isinstance(command, Region2):
+                points = region_points(command)
+                if not points:
+                    raise ValueError("Gerber region has no contour geometry")
+                bounds.extend(points)
+            else:
+                box = command.get_bounding_box()
+                bounds.extend((
+                    (float(box.min_x.value), float(box.min_y.value)),
+                    (float(box.max_x.value), float(box.max_y.value)),
+                ))
+
+        if bounds:
+            min_x = min(point[0] for point in bounds)
+            min_y = min(point[1] for point in bounds)
+            max_x = max(point[0] for point in bounds)
+            max_y = max(point[1] for point in bounds)
+        else:
+            min_x = min_y = max_x = max_y = 0.0
         output = BytesIO()
         parsed.render_raster(output, dpmm=100, image_format=v2.ImageFormatEnum.PNG,
                              pixel_format=v2.PixelFormatEnum.RGBA)
@@ -197,8 +279,7 @@ class PyGerberAdapter:
             function.group(1) if function else "",
             polarity.group(1) if polarity else "",
             unit,
-            tuple(round(float(value) * scale) for value in (
-                info.min_x_mm, info.min_y_mm, info.max_x_mm, info.max_y_mm)),
+            tuple(round(value * scale) for value in (min_x, min_y, max_x, max_y)),
             sha256(output.getvalue()).hexdigest(),
         )
 
@@ -607,13 +688,32 @@ def qualify_cam_artifacts(directory: Path, profile: CamQualificationProfile,
         findings.extend(f"required CAM tool unavailable: {item.name} {item.version}" for item in missing)
         return CamQualificationEvidence(CamGateStatus.INCOMPLETE, tuple(hashes), tuple(actual), tuple(findings))
     for path in gerbers:
-        parsed: list[NormalizedCamLayer] = []
+        parsed: list[tuple[ToolIdentity, NormalizedCamLayer]] = []
         for identity in profile.required_tool_identities:
             try:
-                parsed.append(actual[identity].parse_gerber(path))
+                parsed.append((identity, actual[identity].parse_gerber(path)))
             except Exception as exc:  # adapters are an isolation boundary
                 findings.append(f"{identity.name} could not parse {path.name}: {exc}")
-        if parsed and any(item != parsed[0] for item in parsed[1:]):
-            findings.append(f"independent parser disagreement: {path.name}")
+        if len(parsed) > 1:
+            baseline_identity, baseline = parsed[0]
+            for identity, candidate in parsed[1:]:
+                differences = []
+                for field_name in ("file_function", "file_polarity", "units", "bounds_nm"):
+                    expected_value = getattr(baseline, field_name)
+                    actual_value = getattr(candidate, field_name)
+                    if expected_value != actual_value:
+                        differences.append(
+                            f"{field_name}: {baseline_identity.name}={expected_value!r}, "
+                            f"{identity.name}={actual_value!r}"
+                        )
+                if baseline.topology_digest != candidate.topology_digest:
+                    differences.append(
+                        f"render_digest: {baseline_identity.name}={baseline.topology_digest}, "
+                        f"{identity.name}={candidate.topology_digest}"
+                    )
+                if differences:
+                    findings.append(
+                        f"independent parser disagreement: {path.name}: " + "; ".join(differences)
+                    )
     status = CamGateStatus.PASS if not findings else CamGateStatus.FAIL
     return CamQualificationEvidence(status, tuple(hashes), profile.required_tool_identities, tuple(findings))

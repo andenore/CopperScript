@@ -157,6 +157,7 @@ def test_round_placement_and_battery_side_are_fixed_not_baked_into_electrical_ir
     assert not board.via_in_pad_rules
     assert not board.tracks and not board.vias and not board.zone_fills
     assert {l for z in board.zones for l in z.layers} == {CopperLayer.BACK}
+    assert board.silkscreen and all(item.side is BoardSide.FRONT for item in board.silkscreen)
     assert "inspection only" in placement_svg(board)
     assert "nRF52832" in placement_svg(board)
     assert "rear CR2032 holder" in placement_svg(board)

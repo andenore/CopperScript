@@ -47,3 +47,21 @@ Supplier offers should eventually live beside exact reusable CopperLib parts.
 This bounded prototype uses explicit board-side selections without changing
 the electrical language or claiming generic passives are qualified replacements.
 There are no board-specific rules or selections in `pcbir`.
+
+## Unapproved review candidates
+
+`copper assembly candidate-bom board.copper --locked --offline --lock assembly.lock
+-o build/assembly-review` creates a new, explicitly unapproved bundle for human
+review. It retains every unreviewed selection flag and lists those findings in
+`assembly-review.json`; missing, stale, conflicting or incomplete identities and
+ERC errors refuse output. Its CSV is named `bom-candidate-NOT-APPROVED.csv`.
+Stock, native placement orientation and ordering approval remain unconfirmed.
+The strict `assembly bom` and release qualification gates are unchanged.
+CSV designators use the same native-reference normalization as the KiCad PCB
+backend (for example `BANK/R1` becomes `BANK_R1`), while lock/diagnostics retain
+source-qualified references. Collisions refuse output, and candidate diagnostics
+include the exact source-to-native map. No supplier rotation correction is inferred.
+Optional `--positions final/positions-kicad.csv` also writes an explicitly
+unapproved matching CPL, excluding non-fitted references and binding the native
+CSV hash. It retains native coordinates/rotations; a reference match alone does
+not verify source/pose identity, pin 1 or supplier-specific placement conventions.

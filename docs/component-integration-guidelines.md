@@ -43,6 +43,18 @@ compiler test fixtures are not reusable component catalogue entries.
    placement alone cannot preserve prescribed copper or matching-ground paths.
 4. Check the placed and routed result with the real footprints and stackup.
    Component-centre proximity alone cannot prove short pin-to-pad routing.
+   Verify transformed land positions and the backend's rotation convention;
+   rotating a symmetric protection device can keep its courtyard unchanged
+   while moving the signal land away from the connector. Source-fixed pin
+   distances must be mutually feasible before copper-access optimization.
+   For co-located transmitters/receivers, quantify maximum transmitted power
+   including tolerance, minimum measured isolation, filter rejection and the
+   receiver's immunity in its actual gain mode. The shared
+   `pcbir.rf_coexistence.isolation_budget` API accepts integer mdB bounds and
+   leaves unknown isolation/rejection incomplete. Point samples cannot be
+   interpolated into band guarantees. Review filter passband loss, power/ESD,
+   harmonics and non-antenna coupling independently; a favourable budget is
+   not installed RF approval.
    Preserve antenna copper/component exclusions and avoid generic ground fills
    or stitching that bypass a prescribed matching return. Different packages,
    antennas, bands or stackups require reviewed adaptations and tuning; do not
@@ -100,3 +112,14 @@ Implementation references:
 - [Language constraints and routing profiles](language-reference.md)
 - [Device and part generation](device-generation.md)
 - [CopperLib hard-macro review checklist](https://github.com/andenore/CopperLib/blob/main/docs/hard-macro-review-checklist.md)
+
+## Via-free RF support trees
+
+RF feeds default to point-to-point. A port net that also connects a shunt TVS
+or tuning land may explicitly declare `topology = "tree"` with `max_vias = 0`.
+The shared router then considers bounded surface trees joining every physical
+land (including DNP and repeated-pad lands), retaining original layer, width,
+clearance and total length budgets. Clock and differential profiles are not
+silently reinterpreted. The local proposal is not a Steiner or RF network solver:
+review branch lengths, launch discontinuities, component parasitics, ESD return
+and reference geometry independently. A connected tree is not an RF approval.

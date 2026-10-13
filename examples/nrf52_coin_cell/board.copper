@@ -2,6 +2,8 @@
 // Not production-qualified. See docs/nrf52-coin-cell.md for hardware/FW limits.
 board Nrf52CoinCell {
     use library "tiny";
+    // Keep branding clear of the fixed front-side SWD and RF assemblies.
+    silkscreen { branding { position = (30mm, 30mm); side = back; } }
     import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
     import johanson "github.com/andenore/CopperLib/packages/parts/johanson/2450at18a0100001e";
     import keystone "github.com/andenore/CopperLib/packages/parts/keystone/3034";

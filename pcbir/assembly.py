@@ -204,14 +204,71 @@ def write_jlcpcb_bom(board: Board, lock: AssemblyLock, path: str | Path) -> None
         raise AssemblyError("assembly selections failed; BOM export refused")
     if any(e.supplier != "jlcpcb" for e in lock.selections):
         raise AssemblyError("JLCPCB BOM export requires jlcpcb offers for every populated component")
+    _write_bom_rows(board, lock, Path(path))
+
+
+def write_candidate_bom(board: Board, lock: AssemblyLock, directory: str | Path,
+                        *, native_positions: str | Path | None = None) -> dict:
+    """Prepare an explicitly unapproved review bundle without changing any gate.
+
+    Only REVIEW_REQUIRED can remain unresolved. Missing/stale/conflicting
+    selections and ERC errors still refuse output. The production BOM API is
+    unchanged; this candidate is for human review, not an ordering certificate.
+    """
+    if has_errors(check(board)):
+        raise AssemblyError("ERC failed; candidate BOM refused")
+    diagnostics = check_assembly(board, lock)
+    if any(i['code'] != 'REVIEW_REQUIRED' for i in diagnostics['issues']):
+        raise AssemblyError("candidate selections are inconsistent or incomplete")
+    if any(e.supplier != 'jlcpcb' for e in lock.selections):
+        raise AssemblyError("candidate BOM requires jlcpcb offers")
+    reference_map = _native_reference_map(lock)
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=False)
+    _write_bom_rows(board, lock, directory / 'bom-candidate-NOT-APPROVED.csv')
+    diagnostics.update(purpose='human_review_only', qualified_release=False,
+                       ordering_approved=False, electrical_sha256=lock.electrical_sha256,
+                       native_reference_map=reference_map)
+    if native_positions is not None:
+        from .manufacturing_files import ManufacturingFilesError, write_jlcpcb_cpl
+        native_positions = Path(native_positions)
+        before = hashlib.sha256(native_positions.read_bytes()).hexdigest()
+        try:
+            write_jlcpcb_cpl(native_positions, directory / 'cpl-candidate-NOT-APPROVED.csv',
+                             references=set(reference_map.values()))
+        except ManufacturingFilesError as exc:
+            raise AssemblyError(f'candidate CPL rejected: {exc}') from exc
+        if hashlib.sha256(native_positions.read_bytes()).hexdigest() != before:
+            raise AssemblyError('native positions changed during candidate review export')
+        diagnostics['native_positions_sha256'] = before
+        diagnostics['placement_review'] = 'not_approved; source/pose/pin-1/rotation review required'
+    (directory / 'assembly-review.json').write_text(
+        json.dumps(diagnostics, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    (directory / 'README.txt').write_text(
+        'UNAPPROVED ASSEMBLY REVIEW CANDIDATE\n'
+        'Do not submit this bundle as an approved order.\n'
+        'Review exact packages/ratings/pin maps, supplier stock and final CPL.\n'
+        'Selection flags and production BOM gates have not been changed.\n', encoding='utf-8')
+    return diagnostics
+
+
+def _native_reference_map(lock: AssemblyLock) -> dict[str, str]:
+    from .backends.kicad_pcb import kicad_reference
+    mapping = {entry.reference: kicad_reference(entry.reference) for entry in lock.selections}
+    if len(set(mapping.values())) != len(mapping):
+        raise AssemblyError("assembly references collide after native KiCad normalization")
+    return mapping
+
+
+def _write_bom_rows(board: Board, lock: AssemblyLock, output: Path) -> None:
+    reference_map = _native_reference_map(lock)
     components = _components(board)
     groups = {}
     for entry in lock.selections:
         component, _ = components[entry.reference]
         value = str(component.value) if component.value is not None else entry.mpn
         key = (value, entry.footprint, entry.supplier_part, entry.manufacturer, entry.mpn)
-        groups.setdefault(key, []).append(entry.reference)
-    output = Path(path)
+        groups.setdefault(key, []).append(reference_map[entry.reference])
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)

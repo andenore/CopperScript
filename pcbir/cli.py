@@ -177,7 +177,7 @@ def _parser() -> argparse.ArgumentParser:
     qualification.add_argument("--report", type=Path, required=True)
     assembly_parser = subparsers.add_parser("assembly", help="pin and check explicit assembly selections offline")
     assembly_commands = assembly_parser.add_subparsers(dest="assembly_command", required=True)
-    for action in ("snapshot", "check", "bom"):
+    for action in ("snapshot", "check", "bom", "candidate-bom"):
         assembly = assembly_commands.add_parser(action)
         assembly.add_argument("board", type=Path, help="a .copper source file")
         _add_resolution_options(assembly)
@@ -189,6 +189,11 @@ def _parser() -> argparse.ArgumentParser:
             assembly.add_argument("--report", type=Path, help="write offline selection diagnostics as JSON")
         if action == "bom":
             assembly.add_argument("-o", "--output", type=Path, required=True, help="JLCPCB selection BOM CSV")
+        if action == "candidate-bom":
+            assembly.add_argument("-o", "--output", type=Path, required=True,
+                                  help="new unapproved human-review bundle directory; never overwritten")
+            assembly.add_argument("--positions", type=Path,
+                                  help="optional final native KiCad position CSV; generates unapproved matched CPL")
     sim_parser = subparsers.add_parser("sim", help="export or run a separate analog/power simulation plan")
     sim_commands = sim_parser.add_subparsers(dest="sim_command", required=True)
     for action in ("export", "run"):
@@ -853,7 +858,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"MANUFACTURING EXPORT ERROR: {exc}")
             return 2
     if args.command == "assembly":
-        from .assembly import AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_jlcpcb_bom
+        from .assembly import AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_jlcpcb_bom, write_candidate_bom
         try:
             board = load_board(args.board, locked=args.locked, offline=args.offline)
             diagnostics = check(board)
@@ -871,6 +876,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             lock = load_lock(args.lock)
             report = check_assembly(board, lock)
+            if args.assembly_command == "candidate-bom":
+                write_candidate_bom(board, lock, args.output, native_positions=args.positions)
+                print(f"Created UNAPPROVED assembly review candidate -> {args.output}; not an ordering certificate")
+                return 0
             if args.assembly_command == "check":
                 if args.report:
                     args.report.parent.mkdir(parents=True, exist_ok=True)

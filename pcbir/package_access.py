@@ -350,11 +350,16 @@ def _negotiate_patterns(
     emit(on_progress, "package_pattern_probe", "finished",
          failed_critical_nets=sorted(probe_failed), hard_findings=probe_hard, reused_critical=reuse,
          search_tier=search_tier)
-    # Spend the bounded budget on clean-source probes with a strictly smaller
-    # failure set, or on failed plane access. This is a heuristic, not proof
-    # that the skipped joint search has no solution.
+    # A clean-source ordering may exchange failed critical owners rather than
+    # produce a strict subset: one pair becomes routable while another loses
+    # its launch. Its successful copper is still useful as a disposable
+    # obstacle for a new ordinary pattern. Spend the same bounded proposal
+    # budget on a changed, no-larger failure set; NEVER accept that exchange
+    # itself. Final all-owner validation retains the strict identity gate.
+    changed_probe = (probe_failed != baseline.failed_critical_nets
+                     and len(probe_failed) <= len(baseline.failed_critical_nets))
     if probe_hard or (not (plane_pending or ordinary_pending)
-                      and not probe_failed < baseline.failed_critical_nets):
+                      and not changed_probe):
         return baseline
     include_planes = bool(plane_options and baseline.source.zones and (plane_pending or ordinary_pending))
     strategies = (["critical_and_plane_first", "critical_first"] if include_planes else

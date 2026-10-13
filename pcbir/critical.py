@@ -574,7 +574,8 @@ def route_critical_nets(
             if (not result.connected and routes.get(rule.net) is not None
                     and routes[rule.net].connected
                     and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
-                         or len(routes[rule.net].accesses) == 2)):
+                         or len(routes[rule.net].accesses) == 2
+                         or (rule.kind is RouteKind.RF_FEED and rule.topology == "tree" and rule.max_vias == 0))):
                 repaired_single, net_tracks, net_vias = _route_single_exact(
                     board, rule, global_route, tracks, vias,
                 )
@@ -1745,7 +1746,7 @@ def _route_single_exact(
     result = CriticalNetResult(
         (rule.net,), net is not None and net.connected,
         len(tracks), len(vias), (_track_length(tracks),), 0,
-        net.diagnostics if net is not None else ("no exact critical-net attempt",),
+        (*net.diagnostics, *_budget_diagnostics(rule, tracks, vias)) if net is not None else ("no exact critical-net attempt",),
         _external_assumptions(rule), evidence_digests=_external_evidence(rule),
         strategy="exact_single_net",
     )
@@ -1818,7 +1819,8 @@ def _route_single(
             (),
             (),
         )
-    if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(guide.accesses) != 2:
+    rf_tree = rule.kind is RouteKind.RF_FEED and rule.topology == "tree" and rule.max_vias == 0
+    if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(guide.accesses) != 2 and not rf_tree:
         return (
             CriticalNetResult(
                 (rule.net,),

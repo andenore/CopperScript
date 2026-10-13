@@ -5,3 +5,5 @@ copper.mod text eol=lf
 *.dxf -text
 # Hard-macro/reference JSON is bound by raw SHA-256 in example scenes.
 *.json text eol=lf
+# Showcase illustration hashes describe exact SVG bytes on every platform.
+site/assets/*.svg text eol=lf

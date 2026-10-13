@@ -42,6 +42,8 @@ def test_standard_cli_refills_repairs_or_saves_explicit_tool_failure(tmp_path, m
         net POWER { R1.1; R2.1; }
         net DATA { R1.2; R2.2; }
         mechanical { outline rectangle { width=20mm; height=12mm; } }
+        // This compact routing fixture has no artwork clearance reservation.
+        silkscreen { branding { enabled = false; } }
         constraint fixed_placement(R1) { x=3mm; y=6mm; rotation=0; side=front; }
         constraint fixed_placement(R2) { x=17mm; y=6mm; rotation=0; side=front; }
         constraint copper_zone(POWER) { layers="F.Cu"; x=1mm; y=1mm; width=18mm; height=10mm;

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from pcbir.assembly import (
-    AssemblyError, check_assembly, electrical_digest, load_lock, lock_to_json, snapshot, write_jlcpcb_bom,
+    AssemblyError, check_assembly, electrical_digest, load_lock, lock_to_json, snapshot, write_jlcpcb_bom, write_candidate_bom,
 )
 from pcbir.cli import main
 from pcbir.compiler import compile_file
@@ -210,3 +210,88 @@ def test_bom_api_checks_erc_independently(tmp_path):
     with pytest.raises(AssemblyError, match="ERC failed"):
         write_jlcpcb_bom(broken, reviewed_lock(broken), tmp_path / "bom.csv")
     assert not (tmp_path / "bom.csv").exists()
+
+
+def test_candidate_bundle_preserves_unreviewed_flags_and_strict_export(tmp_path):
+    board = board_fixture()
+    lock = replace(reviewed_lock(board), selections=tuple(
+        replace(e, reviewed=False) for e in reviewed_lock(board).selections))
+    data = write_candidate_bom(board, lock, tmp_path / 'candidate')
+    assert not data['passed'] and not data['ordering_approved']
+    assert not data['qualified_release'] and data['reviewed_count'] == 0
+    assert all(not e.reviewed for e in lock.selections)
+    assert (tmp_path / 'candidate/bom-candidate-NOT-APPROVED.csv').is_file()
+    assert json.loads((tmp_path / 'candidate/assembly-review.json').read_text()) == data
+    with pytest.raises(AssemblyError):
+        write_jlcpcb_bom(board, lock, tmp_path / 'production.csv')
+    with pytest.raises(FileExistsError):
+        write_candidate_bom(board, lock, tmp_path / 'candidate')
+
+
+@pytest.mark.parametrize('change', ['missing', 'stale', 'unresolved', 'other_supplier'])
+def test_candidate_refuses_bad_selection_identity_without_output(tmp_path, change):
+    board = board_fixture()
+    lock = reviewed_lock(board)
+    if change == 'missing':
+        lock = replace(lock, selections=lock.selections[:1])
+    elif change == 'stale':
+        lock = replace(lock, electrical_sha256='0' * 64)
+    elif change == 'unresolved':
+        lock = snapshot(board)
+    else:
+        lock = replace(lock, selections=tuple(replace(e, supplier='other') for e in lock.selections))
+    with pytest.raises(AssemblyError):
+        write_candidate_bom(board, lock, tmp_path / 'candidate')
+    assert not (tmp_path / 'candidate').exists()
+
+
+def test_hierarchical_bom_uses_native_references_without_changing_lock(tmp_path):
+    board = board_fixture()
+    board = replace(board, components=(replace(board.components[0], ref='BANK/R1'), *board.components[1:]))
+    lock = reviewed_lock(board)
+    path = tmp_path / 'bom.csv'
+    write_jlcpcb_bom(board, lock, path)
+    with path.open(newline='', encoding='utf-8') as stream:
+        rows = list(csv.DictReader(stream))
+    assert rows[0]['Designator'] == 'BANK_R1,R2'
+    assert lock.selections[0].reference == 'BANK/R1'
+    data = write_candidate_bom(board, lock, tmp_path / 'candidate')
+    assert data['native_reference_map']['BANK/R1'] == 'BANK_R1'
+
+
+def test_native_reference_collision_refuses_bom_and_candidate(tmp_path):
+    board = board_fixture()
+    board = replace(board, components=(replace(board.components[0], ref='BANK/R1'),
+                                       replace(board.components[1], ref='BANK_R1')))
+    lock = reviewed_lock(board)
+    with pytest.raises(AssemblyError, match='collide'):
+        write_jlcpcb_bom(board, lock, tmp_path / 'bom.csv')
+    with pytest.raises(AssemblyError, match='collide'):
+        write_candidate_bom(board, lock, tmp_path / 'candidate')
+    assert not (tmp_path / 'bom.csv').exists() and not (tmp_path / 'candidate').exists()
+
+
+def test_candidate_cpl_matches_native_references_and_excludes_dnp(tmp_path):
+    from hashlib import sha256
+    board = board_fixture()
+    lock = reviewed_lock(board)
+    positions = tmp_path / 'native.csv'
+    positions.write_text('Ref,PosX,PosY,Rot,Side\nR1,1,-2,90,top\nR2,3,-4,180,bottom\nM1,5,-6,0,top\n')
+    data = write_candidate_bom(board, lock, tmp_path / 'candidate', native_positions=positions)
+    with (tmp_path / 'candidate/cpl-candidate-NOT-APPROVED.csv').open(newline='') as stream:
+        rows = list(csv.DictReader(stream))
+    assert {r['Designator'] for r in rows} == {'R1', 'R2'}
+    assert rows[1]['Rotation'] == '180' and rows[1]['Layer'] == 'Bottom'
+    assert data['native_positions_sha256'] == sha256(positions.read_bytes()).hexdigest()
+    assert 'not_approved' in data['placement_review']
+    assert not data['ordering_approved']
+
+
+def test_candidate_cpl_missing_native_reference_never_writes_completion_report(tmp_path):
+    board = board_fixture()
+    positions = tmp_path / 'native.csv'
+    positions.write_text('Ref,PosX,PosY,Rot,Side\nR1,1,-2,90,top\n')
+    with pytest.raises(AssemblyError, match='candidate CPL rejected'):
+        write_candidate_bom(board, reviewed_lock(board), tmp_path / 'candidate', native_positions=positions)
+    assert not (tmp_path / 'candidate/assembly-review.json').exists()
+    assert not (tmp_path / 'candidate/cpl-candidate-NOT-APPROVED.csv').exists()

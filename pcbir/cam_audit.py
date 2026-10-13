@@ -251,7 +251,19 @@ def audit_cam(directory: Path, *, profile=None, cases=(), adapters=(), native=No
         qualification = qualify_cam_artifacts(directory, profile, tuple(adapters))
         inputs["profile"] = asdict(profile)
         inputs["corpus"] = matrix.corpus_hashes
-        checks.append(check("cam.parser-corpus", matrix.status.value, "Pinned independent parser corpus", findings=matrix.findings))
+        corpus_cells = [
+            {
+                "case_id": cell.case_id,
+                "tool": cell.tool.name,
+                "tool_version": cell.tool.version,
+                "passed": cell.passed,
+                "detail": cell.detail,
+            }
+            for cell in matrix.cells
+        ]
+        checks.append(check("cam.parser-corpus", matrix.status.value,
+                            "Pinned independent parser corpus", findings=matrix.findings,
+                            cells=corpus_cells))
         checks.append(check("cam.parser-agreement", qualification.status.value,
                             "Parse/render agreement only; NOT electrical copper proof", findings=qualification.findings))
     for identifier in ("cam.copper-connectivity", "cam.fabrication-geometry"):

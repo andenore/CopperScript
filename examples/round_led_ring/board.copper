@@ -3,6 +3,8 @@
 // CR2032 is primary (not rechargeable). SWD VREF is sense only; no power injection.
 board RoundLedRing {
     use library "tiny";
+    // The circular rim carries LEDs; reserve the open front centre for artwork.
+    silkscreen { branding { position = (30mm, 27mm); size = 8mm; layout = stacked; } }
     import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
     import keystone "github.com/andenore/CopperLib/packages/parts/keystone/3034";
     import swd "github.com/andenore/CopperLib/packages/interfaces/arm/swd-10pin";

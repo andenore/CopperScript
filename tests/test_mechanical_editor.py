@@ -339,8 +339,9 @@ def http_request(server, method="GET", path="/api/scene", body=None, headers=Non
 def test_http_assets_and_authenticated_scene(http_editor):
     server, session = http_editor
     assert server.server_address[0] == "127.0.0.1"
-    for path in ("/", "/editor.js", "/editor.css"):
+    for path in ("/", "/editor.js", "/editor.css", "/copper-logo.svg"):
         assert http_request(server, path=path)[0] == 200
+    assert http_request(server, path="/copper-logo.svg")[1] == files("pcbir.editor").joinpath("assets", "copper-logo.svg").read_bytes()
     code, body = http_request(server)
     assert code == 200 and json.loads(body)["source_revision"] == sha256(session.source.read_bytes()).hexdigest()
     assert http_request(server, path="/../../board.copper")[0] == 404

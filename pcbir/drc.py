@@ -267,7 +267,10 @@ def run_physical_drc(
     if not placement_solution_is_legal(
         board, {item.reference: item for item in board.placements}
     ):
-        findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR, "component placement violates board, keepout, or courtyard legality"))
+        from .placement import placement_rejection_reasons
+        reasons = placement_rejection_reasons(board, {item.reference: item for item in board.placements})
+        findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR,
+            "component placement violates board, keepout, or courtyard legality: " + "; ".join(reasons)))
     coverage.append(DrcCoverage("placement_legality", DrcCoverageStatus.EXECUTED, True))
     _check_track_rules(board, findings, relaxations)
     coverage.append(DrcCoverage("track_width_and_budgets", DrcCoverageStatus.EXECUTED, True))

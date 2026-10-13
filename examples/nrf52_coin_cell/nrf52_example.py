@@ -11,7 +11,8 @@ import json
 from pathlib import Path
 import pstats
 
-from pcbir import compile_file, resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
+from pcbir import resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
+from pcbir.compiler import compile_design_file
 from pcbir.backends.kicad_pcb import KiCadPcbBackend
 from pcbir.backends.kicad_project import write_kicad_project
 from pcbir.clusters import cluster_placements
@@ -26,11 +27,11 @@ SOURCE = ROOT / "examples/nrf52_coin_cell/board.copper"
 
 
 def make_example(footprint_roots=(), *, offline=False):
-    electrical = compile_file(SOURCE, locked=True, offline=offline)
-    diagnostics = check(electrical)
+    design = compile_design_file(SOURCE, locked=True, offline=offline)
+    diagnostics = check(design.electrical)
     if diagnostics:
         raise ValueError(f"coin-cell example must pass ERC: {diagnostics}")
-    board = resolved_physicalize(electrical,
+    board = resolved_physicalize(design,
         FootprintResolver(SOURCE.parent, tuple(footprint_roots), locked=True, offline=offline),
         PrototypePhysicalOptions(board_width_mm=50, board_height_mm=40,
             copper_layers=6, fabrication_profile="jlcpcb-six-layer"))

@@ -184,7 +184,7 @@ def test_repeated_pad_numbers_are_separate_required_lands():
 @pytest.mark.parametrize("kind", [RouteKind.RF_FEED, RouteKind.CLOCK])
 def test_point_to_point_profile_cannot_be_reinterpreted_as_matching_tree(kind):
     board, _ = fixture()
-    rule = replace(board.net_routing_rules[0], kind=kind)
+    rule = replace(board.net_routing_rules[0], kind=kind, topology="point_to_point")
     assert not tuple(local_surface_candidates(board, rule))
 
 
@@ -306,3 +306,43 @@ def test_rejected_any_angle_cheap_path_does_not_suppress_bounded_octilinear_sear
     assert path and not hard_findings(replace(board, tracks=path))
     assert all(t.start.x_nm == t.end.x_nm or t.start.y_nm == t.end.y_nm
         or abs(t.start.x_nm-t.end.x_nm) == abs(t.start.y_nm-t.end.y_nm) for t in path)
+
+
+@pytest.mark.parametrize('name', ['RF_PORT', 'OTHER_RADIO'])
+@pytest.mark.parametrize('length_mm', [5, 12])
+def test_explicit_via_free_rf_tree_preserves_every_shunt_and_original_budgets(name, length_mm):
+    board, guides = fixture()
+    rule = replace(board.net_routing_rules[0], net=name, kind=RouteKind.RF_FEED,
+                   width_nm=nm_from_mm('.22'), clearance_nm=nm_from_mm('.201'),
+                   max_length_nm=nm_from_mm(length_mm), target_impedance_ohms=50)
+    board = replace(board, nets=(replace(board.nets[0], name=name),), net_routing_rules=(rule,))
+    guide = replace(guides.routes[0], net=name, segments=tuple(replace(s, net=name) for s in guides.routes[0].segments))
+    guides = replace(guides, routes=(guide,))
+    result = route_critical_nets(board, guides)
+    assert result.nets[0].connected == (length_mm == 12)
+    assert board.net_routing_rules == (rule,)
+    assert result.board.placements == board.placements and not result.board.vias
+    if length_mm == 12:
+        assert result.nets[0].strategy == 'local_surface_tree'
+        assert not hard_findings(result.board)
+        assert all(t.net == name and t.width_nm == rule.width_nm and t.layer is CopperLayer.FRONT
+                   for t in result.board.tracks)
+        assert result.nets[0].lengths_nm[0] <= rule.max_length_nm
+    else:
+        assert not result.board.tracks
+
+
+def test_rf_tree_opt_in_does_not_enable_clocks_or_permitted_vias():
+    board, _ = fixture()
+    for rule in (replace(board.net_routing_rules[0], kind=RouteKind.CLOCK),
+                 replace(board.net_routing_rules[0], kind=RouteKind.RF_FEED, max_vias=1)):
+        assert not tuple(local_surface_candidates(board, rule, maze=True))
+
+
+def test_rf_tree_does_not_drop_unreachable_shunt_or_prior_copper():
+    board, _ = fixture()
+    rule = replace(board.net_routing_rules[0], kind=RouteKind.RF_FEED)
+    wall = CopperKeepout('radio-wall', (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing((
+        Point.mm(0,7), Point.mm(30,7), Point.mm(30,8), Point.mm(0,8)))))
+    blocked = replace(board, net_routing_rules=(rule,), copper_keepouts=(wall,))
+    assert not tuple(local_surface_candidates(blocked, rule, maze=True))

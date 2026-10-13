@@ -306,6 +306,41 @@ def test_source_zone_design_and_specialized_net_are_not_silently_changed():
 
 
 @pytest.mark.parametrize("renamed", (False, True))
+@pytest.mark.parametrize("protected", (False, True))
+def test_bridge_cleans_unrelated_completed_area_end_but_preserves_prefix(native_cli, renamed, protected):
+    board = fragmented(renamed=renamed)
+    signal = "CONTROL_91" if renamed else "DATA"
+    refs = ("HOST_8", "SENSOR_6") if renamed else ("S1", "S2")
+    board = replace(board, placements=(*board.placements,
+        *(Placement(ref, "terminal", Point.mm(x, 3)) for ref, x in zip(refs, (3, 7)))),
+        nets=(*board.nets, PhysicalNet(signal, tuple(PadReference(ref, "1") for ref in refs))))
+    initial = pipeline(board)
+    assert next(item for item in initial.detailed.nets if item.net == signal).connected
+    spur = TrackSegment(signal, Point.mm(3, 3), Point.mm(3, 2),
+                        nm_from_mm("0.25"), CopperLayer.FRONT)
+    candidate = replace(initial.board, tracks=(*initial.board.tracks, spur))
+    initial = replace(initial, detailed=replace(initial.detailed, board=candidate))
+    if protected:
+        initial = replace(initial, fanout=replace(initial.fanout,
+            board=replace(initial.fanout.board, tracks=(*initial.fanout.board.tracks, spur))))
+    assert not hard_findings(candidate)
+    evidence = verify_filled_planes(candidate, kicad_cli=native_cli)
+    assert evidence.unconnected_count == 1 and evidence.other_violation_count == 1
+    assert evidence.native_findings[-1].type == "track_dangling"
+    result = improve_filled_copper(initial, kicad_cli=native_cli,
+        options=FilledCopperFeedbackOptions(maximum_trials=1))
+    assert result.board.placements == candidate.placements and result.board.zones == candidate.zones
+    if protected:
+        assert result.board == candidate and not result.verification.passed
+        assert spur in result.board.tracks
+    else:
+        assert result.verification.passed and result.verification.matches(result.board), result.to_json()
+        assert spur not in result.board.tracks
+        assert result.trials[0].displaced_nets == ()
+        assert result.trials[0].cleanup_removed_tracks == 1
+
+
+@pytest.mark.parametrize("renamed", (False, True))
 @pytest.mark.parametrize("immutable", (False, True))
 def test_native_bridge_dependency_transaction_preserves_signal_and_owners(native_cli, renamed, immutable):
     board = fragmented(renamed=renamed)

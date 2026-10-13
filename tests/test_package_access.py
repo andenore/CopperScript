@@ -432,7 +432,7 @@ def test_cli_pattern_budget_is_explicit_and_bounded():
         access.PackageAccessOptions(initial_pair_state_limit=-1)
 
 
-@pytest.mark.parametrize("case", ("easy", "alternate", "full_only", "unavoidable", "rollback"))
+@pytest.mark.parametrize("case", ("easy", "alternate", "exchange", "full_only", "unavoidable", "rollback"))
 def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
     # Isolate scheduling/rollback. Other tests above use actual copper/native
     # gates; pair_vias tests exercise limited searches and coupled acceptance.
@@ -450,11 +450,11 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
         return original if len(proposals) == 1 else alternative
     def critical(source, route, *, reserved_accesses=None, pair_state_limit=None, on_progress=None):
         searches.append((pair_state_limit, reserved_accesses))
-        connected = (case == "easy" or case == "alternate" and reserved_accesses is not original
+        connected = (case == "easy" or case in {"alternate", "exchange"} and reserved_accesses is not original
                      or case == "full_only" and pair_state_limit is None)
         # Clean-owner probe can propose a new pattern, including a rejected
         # transaction. Preserve all work in telemetry regardless of selection.
-        if reserved_accesses is None and case in {"alternate", "rollback"}:
+        if reserved_accesses is None and case in {"alternate", "exchange", "rollback"}:
             connected = True
         if (case == "rollback" and reserved_accesses is not None
                 and reserved_accesses.created_tracks == alternative.created_tracks):
@@ -473,20 +473,25 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
     monkeypatch.setattr(access, "route_fanout", escape)
     monkeypatch.setattr(access, "route_critical_nets", critical)
     monkeypatch.setattr(access, "_access_result", evaluate)
-    monkeypatch.setattr(access, "_failures", lambda source, critical:
-        (frozenset() if critical.nets[0].connected else frozenset({"A"}), 0))
+    def probe_failures(source, critical):
+        # Scheduler fixture: the unreserved ordering exchanges the failed
+        # owner. It is only a proposal seed, never an accepted copper state.
+        if case == "exchange" and searches[-1][1] is None:
+            return frozenset({"B"}), 0
+        return (frozenset() if critical.nets[0].connected else frozenset({"A"}), 0)
+    monkeypatch.setattr(access, "_failures", probe_failures)
     options = access.PackageAccessOptions(maximum_pattern_trials=1, initial_pair_state_limit=12)
     result = access.preflight_package_access(board, guides, settings, options=options,
         on_progress=lambda *event: events.append(event))
-    assert result.ready == (case in {"easy", "alternate", "full_only"})
+    assert result.ready == (case in {"easy", "alternate", "exchange", "full_only"})
     assert [tier.name for tier in result.search_tiers] == (
-        ["initial"] if case in {"easy", "alternate"} else ["initial", "full"])
+        ["initial"] if case in {"easy", "alternate", "exchange"} else ["initial", "full"])
     assert sum(tier.expanded_states for tier in result.search_tiers) == sum(3 if cap else 30 for cap, _ in searches)
     assert sum(tier.critical_passes for tier in result.search_tiers) == len(searches)
     assert sum(tier.selected for tier in result.search_tiers) == 1
     if case == "easy":
         assert len(searches) == 1 and not result.pattern_trials
-    elif case == "alternate":
+    elif case in {"alternate", "exchange"}:
         assert len(searches) == 3 and result.pattern_trials[0].outcome == "accepted"
         assert result.pattern_trials[0].search_tier == "initial"
         assert all(details['search_tier'] == 'initial' for phase, _, details in events

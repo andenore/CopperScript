@@ -8,7 +8,7 @@ import pytest
 from pcbir import check, compile_file
 from pcbir.drc import PhysicalDrcPolicy, run_physical_drc
 from examples.nrf52_coin_cell.nrf52_example import SOURCE, make_example
-from pcbir.physical import PadReference, Point
+from pcbir.physical import BoardSide, PadReference, Point
 from pcbir.placement import placement_solution_is_legal
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +65,7 @@ def test_placed_example_preserves_macro_and_reports_unrouted_circuit():
     report = run_physical_drc(board, policy=PhysicalDrcPolicy(require_completed_detailed_route=False))
     assert report.findings and {f.code for f in report.findings} == {"DRC-OPEN-NET"}
     assert board.metadata["fabrication_ready"] == "false"
+    assert board.silkscreen and all(item.side is BoardSide.BACK for item in board.silkscreen)
 
 
 def test_coin_cell_export_has_locked_macro_no_kicad_geometry_violations(tmp_path):
