@@ -1,58 +1,24 @@
 {
-  "note": "Selected fields of native-source-checked physical IR; not a complete serialization.",
+  "note": "Selected native KiCad placement geometry from the exact manufacturing review candidate; this is not a full CopperScript physical-IR serialization or production approval.",
   "placements": [
     {
-      "footprint": "Capacitor_SMD:C_0402_1005Metric",
-      "position": {
-        "x_nm": 54044976,
-        "y_nm": 21190002
+      "footprint": "CopperScript:SIM7670G_LNGV_kicad_mod__dc0ea19d644b367fc68e",
+      "position_mm": {
+        "x": "20",
+        "y": "24"
+      },
+      "reference": "U_MODEM_U",
+      "rotation_degrees": "90"
+    },
+    {
+      "footprint": "CopperScript:C_0402_1005Metric__86575c98c1bd84414ad1",
+      "position_mm": {
+        "x": "53.599976",
+        "y": "21.190002"
       },
       "reference": "C_MCU",
-      "rotation_degrees": "0",
-      "side": "front",
-      "source_path": "C_MCU",
-      "value": "100 nF"
-    },
-    {
-      "footprint": "github.com/andenore/CopperLib/packages/parts/simcom/sim7670g-lngv/footprints/SIM7670G_LNGV.kicad_mod",
-      "position": {
-        "x_nm": 20000000,
-        "y_nm": 24000000
-      },
-      "reference": "U_MODEM/U",
-      "rotation_degrees": "90",
-      "side": "front",
-      "source_path": "U_MODEM/U",
-      "value": "SIM7670G_LNGV"
+      "rotation_degrees": "90"
     }
   ],
-  "tracks": [
-    {
-      "end": {
-        "x_nm": 6629992,
-        "y_nm": 20000008
-      },
-      "layer": "F.Cu",
-      "net": "V3V8",
-      "start": {
-        "x_nm": 8000024,
-        "y_nm": 20000008
-      },
-      "width_nm": 240000
-    },
-    {
-      "end": {
-        "x_nm": 7129994,
-        "y_nm": 21000006
-      },
-      "layer": "F.Cu",
-      "net": "V3V8",
-      "start": {
-        "x_nm": 8000024,
-        "y_nm": 21000006
-      },
-      "width_nm": 240000
-    }
-  ],
-  "units": "nanometres; rotations in degrees"
+  "units": "millimetres and degrees as represented in the KiCad PCB"
 }

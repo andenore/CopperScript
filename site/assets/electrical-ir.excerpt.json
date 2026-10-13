@@ -31,5 +31,6 @@
       "name": "V3V8"
     }
   ],
+  "note": "Selected excerpt from the electrical IR generated for the prototype-preorder-v3-20261012 source snapshot.",
   "schema": "copperscript-ir/v0.1"
 }

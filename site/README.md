@@ -13,8 +13,7 @@ secondary action is to inspect a complete, documented board.
 - Introduce CopperScript consistently across the three repository READMEs.
 - Show actual source, inspectable IR and native KiCad illustrations rather than
   invented renders or unsupported performance claims.
-- Explain language intent, mechanical design and constraints, the shared workflow,
-  the tracker, quick start,
+- Explain language intent, the shared workflow, the tracker, quick start,
   practical questions and repository ownership in that order.
 - Use static HTML/CSS and small progressive enhancements. No framework,
   installation, external fonts, analytics or board build is needed to publish.
@@ -101,27 +100,16 @@ posts are welcome. No posts, account settings or search submissions are sent
 automatically. Track indexed pages, search queries, GitHub referrals and example
 feedback; search-enabled LLM answers are a useful spot check, not a stable score.
 
-## Feature descriptions
-
-The mechanics and constraints section uses the current compiler documentation
-and `examples/mechanical_editor_demo/board.copper`. Keep its source excerpt,
-editor/save behavior and supported constraint kinds aligned with those inputs.
-The tracker illustrations describe their recorded candidate separately; they do
-not establish that every current mechanical feature is used by that board.
-
-## Shared logo
-
-Website headers, favicon, mobile bookmark icon and social preview use the same
-Cu badge as CopperReview and the CopperScript UI tools. See
-[the branding guide](../docs/branding.md) for canonical assets and copy checks.
-
 ## Maintain the recorded showcase
 
 The six tracker asset files and `snapshot.json` are byte-for-byte copies from
-CopperAssetTracker's `docs/showcase/`. The site's illustrations represent the
-recorded 2026-10-11 modem-power review; they do not track future board changes
-automatically. The snapshot records input, output and illustration hashes and
-`qualified_release: false`. The site links to current board status separately.
+CopperAssetTracker's `docs/showcase/`. The current illustrations represent the
+`prototype-preorder-v3-20261012` manufacturing review candidate, not a released
+board. Its snapshot binds the exact exported PCB, source, native DRC, route
+summary and rendered-asset hashes. Native DRC is clean, but five check types were
+ignored, 13 electrical-requirement checks remain blocked, independent CAM was
+skipped, and supplier/assembly review is incomplete. `qualified_release` stays
+false. The site links to current board status separately.
 
 Refresh from a regenerated, source-matched tracker showcase:
 
