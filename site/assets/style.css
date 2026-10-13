@@ -423,6 +423,14 @@ nav a {
   border-top:1px solid var(--line);
 }
 
+.macros {
+  border-top:1px solid var(--line);
+}
+
+.macros .code-window pre {
+  font-size:13px;
+}
+
 .feature-list {
   list-style:none;
   padding:0;

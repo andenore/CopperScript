@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CopperScript — PCB design as code</title>
-  <meta name="description" content="A typed language and compiler for PCB design. Describe connections, electrical intent and physical constraints; inspect placement, experimental routing and KiCad exports.">
+  <meta name="description" content="A typed language and compiler for PCB design. Describe circuits, mechanics and reusable hard macros in .copper; inspect placement, experimental routing and KiCad exports.">
   <meta name="theme-color" content="#f6f4ee">
   <link rel="canonical" href="https://andenore.github.io/CopperScript/">
   <meta property="og:type" content="website">
   <meta property="og:title" content="CopperScript — PCB design as code">
-  <meta property="og:description" content="Hardware intent, written in code. Explore the language, a routed asset-tracker example and the path from source to KiCad.">
+  <meta property="og:description" content="Hardware intent in code. Explore native .copper hard macros, mechanical constraints, a routed asset-tracker example and KiCad export.">
   <meta property="og:url" content="https://andenore.github.io/CopperScript/">
   <meta property="og:image" content="https://andenore.github.io/CopperScript/assets/social-preview.png">
   <meta property="og:image:width" content="1200">
@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="assets/style.css">
   <script src="assets/site.js?v=20261013" defer></script>
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"CopperScript","description":"A strongly typed language and compiler for PCB connectivity, electrical intent and physical constraints.","url":"https://andenore.github.io/CopperScript/","codeRepository":"https://github.com/andenore/CopperScript","programmingLanguage":"Python"}
+  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"CopperScript","description":"A strongly typed PCB language and compiler for circuit intent, native .copper hard macros, mechanical constraints and KiCad export.","url":"https://andenore.github.io/CopperScript/","codeRepository":"https://github.com/andenore/CopperScript","programmingLanguage":"Python"}
   </script>
 </head>
 <body>
@@ -28,7 +28,7 @@
   <header class="header wrap">
     <a class="wordmark" href="./" aria-label="CopperScript home"><span class="mark" aria-hidden="true">C<span></span></span>CopperScript</a>
     <nav aria-label="Main navigation">
-      <a href="#language">The language</a><a href="#showcase">The board</a><a href="#start">Get started</a>
+      <a href="#language">The language</a><a href="#macros">Hard macros</a><a href="#showcase">The board</a><a href="#start">Get started</a>
       <a class="nav-github" href="https://github.com/andenore/CopperScript">GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
@@ -50,7 +50,7 @@
       </figure>
     </section>
 
-    <div class="capabilities"><div class="wrap capability-line"><span>Readable .copper source</span><span>Electrical rule checks</span><span>Reusable circuits</span><span>Inspectable IR</span><span>Native KiCad export</span></div></div>
+    <div class="capabilities"><div class="wrap capability-line"><span>Readable .copper source</span><span>Electrical rule checks</span><span>Native .copper hard macros</span><span>Inspectable IR</span><span>Native KiCad export</span></div></div>
 
     <section class="section wrap language" id="language" aria-labelledby="language-title">
       <div class="section-copy">
@@ -73,13 +73,33 @@
       </div>
     </section>
 
+    <section class="section wrap language macros" id="macros" aria-labelledby="macros-title">
+      <div class="section-copy">
+        <p class="eyebrow">03 / REUSABLE PHYSICAL MACROS</p>
+        <h2 id="macros-title">Reuse deliberate physical layouts.</h2>
+        <p>A hard macro packages a physical realization for an electrical module or component set: exact footprints and poses, copper, ports and protected regions. The unit is placed and routed as a rigid block while its owner geometry stays intact.</p>
+        <p>Hard macros are now authored and exported from libraries in CopperScript’s native <code>.copper</code> syntax. Board source imports a named definition and binds its members and nets explicitly; a generated JSON asset is optional.</p>
+        <div class="mechanics-links"><a class="text-link" href="https://github.com/andenore/CopperScript/blob/main/docs/macro-definitions.md">Read the native definition syntax <span aria-hidden="true">↗</span></a><a class="text-link" href="https://github.com/andenore/CopperScript/blob/main/docs/example-macro-definition-migration.md">See the migration to .copper <span aria-hidden="true">↗</span></a><a class="text-link" href="https://github.com/andenore/CopperLib/blob/main/packages/circuits/ti/tps63020-buck-boost/always-on-layout.copper">Inspect a library definition <span aria-hidden="true">↗</span></a></div>
+      </div>
+      <div class="code-window">
+        <div class="code-heading"><span>board.copper</span><span>Explicit physical binding</span></div>
+        <pre><code><span class="syntax-key">physical_macro</span> LINK: layouts.TestLayout {
+    member chip = U1;
+    member passive = R1;
+    net signal = SIGNAL;
+}</code></pre>
+        <div class="code-annotation"><span class="annotation-arrow" aria-hidden="true">↳</span><p><strong>One reusable layout, explicit board mapping.</strong><br>The electrical module remains authoritative; the macro supplies its pinned physical realization.</p></div>
+        <p class="code-footnote">The binding is from the <a href="https://github.com/andenore/CopperScript/blob/main/examples/macro_definition/README.md">runnable language example</a>. Hard-macro routing remains experimental; these definitions do not establish RF, power, assembly or production qualification.</p>
+      </div>
+    </section>
+
     <section class="workflow section" id="workflow" aria-labelledby="workflow-title">
       <div class="wrap">
-        <div class="section-heading"><div><p class="eyebrow">03 / THE WORKFLOW</p><h2 id="workflow-title">Follow every transformation.</h2></div><p>Generated artifacts stay inspectable.<br>Missing evidence stays visible.</p></div>
+        <div class="section-heading"><div><p class="eyebrow">04 / THE WORKFLOW</p><h2 id="workflow-title">Follow every transformation.</h2></div><p>Generated artifacts stay inspectable.<br>Missing evidence stays visible.</p></div>
         <ol class="pipeline">
           <li><span class="step-number">01</span><h3>Describe</h3><p>Components, peripheral selection, nets, supply domains and physical constraints in <code>.copper</code>.</p><span class="step-output">Source + pinned libraries</span></li>
           <li><span class="step-number">02</span><h3>Check &amp; resolve</h3><p>Compile electrical intent, check rules and resolve real footprints and supported physical constraints.</p><span class="step-output">Electrical + physical IR</span></li>
-          <li><span class="step-number">03</span><h3>Place &amp; route</h3><p>Combine anchors, generic placement and rigid hard macros through the bounded experimental pipeline.</p><span class="step-output">KiCad board + reports</span></li>
+          <li><span class="step-number">03</span><h3>Place &amp; route</h3><p>Combine constraint-aware placement and native .copper hard macros through the bounded experimental pipeline.</p><span class="step-output">KiCad board + reports</span></li>
           <li><span class="step-number">04</span><h3>Review &amp; qualify</h3><p>Check native geometry, then collect board-specific RF, power, assembly, CAM and prototype evidence.</p><span class="step-output">A separate release decision</span></li>
         </ol>
         <div class="workflow-links"><a href="assets/electrical-ir.excerpt.json">Inspect electrical IR excerpt ↗</a><a href="assets/physical-ir.excerpt.json">Inspect physical IR excerpt ↗</a><a href="https://github.com/andenore/CopperScript/blob/main/docs/cli-workflow.md">CLI workflow ↗</a></div>
@@ -87,7 +107,7 @@
     </section>
 
     <section class="section wrap showcase" id="showcase" aria-labelledby="showcase-title">
-      <div class="section-heading"><div><p class="eyebrow">04 / A REAL DESIGN</p><h2 id="showcase-title">From source to<br>a cellular asset tracker.</h2></div><p>STM32 host. LTE Cat-1 bis. GNSS.<br>Bluetooth and motion sensing.<br>A rechargeable, six-layer review candidate.</p></div>
+      <div class="section-heading"><div><p class="eyebrow">05 / A REAL DESIGN</p><h2 id="showcase-title">From source to<br>a cellular asset tracker.</h2></div><p>STM32 host. LTE Cat-1 bis. GNSS.<br>Bluetooth and motion sensing.<br>A rechargeable, six-layer review candidate.</p></div>
       <div class="board-explorer">
         <div class="view-bar"><span class="view-title">COPPERASSETTRACKER / REVIEW VIEWS</span><div class="view-controls" aria-label="Choose a board view">
           <a href="assets/routing-top.svg?v=20261013" data-view="top" aria-current="true">Top copper</a><a href="assets/routing-inner.svg?v=20261013" data-view="inner">Inner copper</a><a href="assets/routing-bottom.svg?v=20261013" data-view="bottom">Bottom copper</a><a href="assets/placement.svg?v=20261013" data-view="placement">Placement</a>
@@ -100,7 +120,7 @@
     </section>
 
     <section class="start section" id="start" aria-labelledby="start-title"><div class="wrap start-grid">
-      <div><p class="eyebrow">05 / GET STARTED</p><h2 id="start-title">Start with a small circuit.</h2><p>Check and compile the included sensor-board example before trying a full physical workflow.</p><p class="small">Requires Git, Python 3.11+ and <a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a>. KiCad 10 is needed for the native refill and DRC workflow, not for this first compile.</p></div>
+      <div><p class="eyebrow">06 / GET STARTED</p><h2 id="start-title">Start with a small circuit.</h2><p>Check and compile the included sensor-board example before trying a full physical workflow.</p><p class="small">Requires Git, Python 3.11+ and <a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a>. KiCad 10 is needed for the native refill and DRC workflow, not for this first compile.</p></div>
       <div class="quickstart"><div class="code-heading"><span>Terminal / PowerShell or shell</span><button type="button" class="copy-button" data-copy="start-code" hidden>Copy commands</button></div><pre><code id="start-code">git clone https://github.com/andenore/CopperScript.git
 cd CopperScript
 uv sync
@@ -110,14 +130,14 @@ uv run copper compile examples/valid_board/board.copper -o build/board.json</cod
       <div class="start-next"><a href="https://github.com/andenore/CopperScript/tree/main/examples">Browse complete examples ↗</a><a href="https://github.com/andenore/CopperScript/blob/main/docs/README.md">Find the right documentation ↗</a><a href="https://github.com/andenore/CopperScript/blob/main/docs/llm-workflow.md">Work with an LLM agent ↗</a></div>
     </div></section>
 
-    <section class="section wrap faq" aria-labelledby="faq-title"><div><p class="eyebrow">06 / PRACTICAL QUESTIONS</p><h2 id="faq-title">Before you dive in.</h2></div><div class="questions">
+    <section class="section wrap faq" aria-labelledby="faq-title"><div><p class="eyebrow">07 / PRACTICAL QUESTIONS</p><h2 id="faq-title">Before you dive in.</h2></div><div class="questions">
       <details open><summary>How does CopperScript work with KiCad?</summary><p>CopperScript describes intent in source and exports native KiCad boards. KiCad provides an independent native refill and DRC checkpoint. Generated projects include their local footprint assets; keep the exported directory together when sharing it. <a href="https://github.com/andenore/CopperScript/blob/main/docs/kicad-project-export.md">Read the export guide.</a></p></details>
       <details><summary>Can an LLM design a board with it?</summary><p>Agents can read and write the same source, start with <code>copper agent-guide</code>, retrieve selected library contracts and inspect compact reports. Generated designs still need the project's checks and engineering review. Guidance does not qualify a design.</p></details>
       <details><summary>Is the router ready for every board?</summary><p>The router is experimental. The tracker is a documented example of the shared bounded placement, routing and native-feedback workflow. Success on this candidate is not a guarantee for another design.</p></details>
       <details><summary>What belongs in the language, library or board?</summary><p>CopperScript owns generic language and compiler algorithms. CopperLib owns reusable definitions and engineering contracts. A board repository owns application composition, configuration and qualification evidence.</p></details>
     </div></section>
 
-    <section class="ecosystem section" aria-labelledby="ecosystem-title"><div class="wrap"><div class="section-heading"><div><p class="eyebrow">07 / THE ECOSYSTEM</p><h2 id="ecosystem-title">Three repositories.<br>One inspectable workflow.</h2></div><p>Explore the source. Try an example.<br>Report what worked and what needs work.</p></div><div class="repo-list">
+    <section class="ecosystem section" aria-labelledby="ecosystem-title"><div class="wrap"><div class="section-heading"><div><p class="eyebrow">08 / THE ECOSYSTEM</p><h2 id="ecosystem-title">Three repositories.<br>One inspectable workflow.</h2></div><p>Explore the source. Try an example.<br>Report what worked and what needs work.</p></div><div class="repo-list">
       <a href="https://github.com/andenore/CopperScript"><span class="repo-index">01</span><div><h3>CopperScript</h3><p>The language, compiler, electrical checks, placement, routing and KiCad export.</p></div><span aria-hidden="true">↗</span></a>
       <a href="https://github.com/andenore/CopperLib"><span class="repo-index">02</span><div><h3>CopperLib</h3><p>Versioned parts, footprints, interfaces, reusable circuits and engineering contracts.</p></div><span aria-hidden="true">↗</span></a>
       <a href="https://github.com/andenore/CopperAssetTracker"><span class="repo-index">03</span><div><h3>CopperAssetTracker</h3><p>The board composition, exact candidate selections and board-specific review evidence.</p></div><span aria-hidden="true">↗</span></a>
