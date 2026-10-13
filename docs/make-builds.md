@@ -1,8 +1,8 @@
 # Shared Make builds
 
 Every board uses the same recipes in `make/board.mk`. Board settings live in
-`make/examples/*.mk`; electrical/mechanical intent remains in `.copper`, and
-explicit hard-macro/placement scenes remain data files. There are no CM4 or
+`make/examples/*.mk`; electrical/mechanical intent and physical macro bindings
+remain in `.copper`, while macro geometry and placement scenes remain data files. There are no CM4 or
 full-vertical Python routing wrappers. CI uses these same Make configurations;
 it explicitly sets `PLACEMENT_TEMPLATES=` for its full-vertical run to preserve
 its source-only placement policy, and owns timeout/artifact handling separately.

@@ -789,6 +789,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 inputs += [root / "copper.mod", root / "copper.lock"]
             inputs += [Path(fp.metadata["source_path"]) for fp in physical.footprints.values()
                        if fp.metadata.get("source_path")]
+            from .macro_bindings import source_macro_input_paths
+            inputs += list(source_macro_input_paths(physical))
             workspace = SourceWorkspace(args.board, design, rebuild, input_paths=tuple(inputs))
             from .editor.overlay import RoutedOverlay
             session = EditorSession(physical, args.board, workspace=workspace,
@@ -988,10 +990,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 managed = prepare_footprint_dependencies(board, FootprintResolver(
                     args.board.resolve().parent, locked=getattr(args, "locked", False), offline=getattr(args, "offline", False)))
-            except (FootprintResolutionError, OSError) as exc:
+                from .macro_bindings import prepare_macro_bindings
+                macros = prepare_macro_bindings(design, locked=getattr(args, "locked", False), offline=getattr(args, "offline", False))
+            except (FootprintResolutionError, OSError, ValueError) as exc:
                 print(f"FOOTPRINT ERROR: {exc}")
                 return 2
-            print(f"Locked package content for {board.name} -> copper.lock ({len(managed)} managed footprints)")
+            suffix = f", {len(macros)} physical macros" if macros else ""
+            print(f"Locked package content for {board.name} -> copper.lock ({len(managed)} managed footprints{suffix})")
             return 0
         if args.command == "audit-footprints":
             resolver = FootprintResolver(
@@ -1041,6 +1046,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(diagnostic)
             else:
                 print(f"OK: {board.name} passed ERC")
+            from .elaborate import elaborate
+            if elaborate(board).physical_macros:
+                print("Physical macro asset and geometry checks remain pending; run lock and the physical build workflow.")
             return 1 if has_errors(diagnostics) else 0
         if args.command == "power-check":
             if diagnostics:

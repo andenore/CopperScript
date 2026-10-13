@@ -31,7 +31,7 @@ def parse_recovering(text: str, filename: str) -> Parsed:
     i = 3
     closed = False
     starters = {'component', 'module', 'net', 'supply', 'interface', 'constraint',
-                'configure', 'power_state', 'port', 'import', 'use', 'mechanical', 'silkscreen',
+                'configure', 'power_state', 'port', 'import', 'use', 'mechanical', 'silkscreen', 'physical_macro',
                 'pin', 'pad', 'peripheral', 'power_domain', 'unit', 'resource',
                 'group', 'mode_group', 'pad_set', 'route'}
     while i < len(tokens) - 1:

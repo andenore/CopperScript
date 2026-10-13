@@ -16,6 +16,8 @@ from .syntax import (
     ImportDecl,
     InterfaceDecl,
     ModuleInstanceDecl,
+    PhysicalMacroDecl,
+    MacroMappingDecl,
     MechanicalDecl,
     SilkscreenDecl,
     SilkscreenItemDecl,
@@ -80,6 +82,10 @@ class Parser:
                 if root.text != "board":
                     self._error("PAR015", "silkscreen blocks are board-only", self.tokens[self.index - 1])
                 declarations.append(self._silkscreen())
+            elif keyword == "physical_macro":
+                if root.text not in {"board", "module"}:
+                    self._error("PAR016", "physical macros require a board or module", self.tokens[self.index - 1])
+                declarations.append(self._physical_macro())
             elif root.text == "board_profile":
                 declarations.append(self._mechanical_item(keyword, self.tokens[self.index - 1].location, profile=True))
             elif keyword == "use":
@@ -443,6 +449,34 @@ class Parser:
         self._expect_symbol(")")
         parameters = self._assignment_block()
         return ConstraintDecl(location, kind, tuple(targets), parameters)
+
+    def _physical_macro(self) -> PhysicalMacroDecl:
+        location = self.current.location
+        name = self._name("physical macro name")
+        self._expect_symbol(":")
+        alias = self._name("macro asset import alias")
+        scope = ""
+        if self.current.text == "on":
+            self._advance()
+            scope = self._reference()
+        self._expect_symbol("{")
+        mappings = []
+        keys = set()
+        while not self._at_symbol("}"):
+            token = self.current
+            kind = self._name("'member' or 'net'")
+            if kind not in {"member", "net"}:
+                self._error("PAR016", "macro bindings accept member and net mappings", token)
+            key = self._advance().text if self.current.kind is TokenKind.STRING else self._name("asset role")
+            if not key or (kind, key) in keys:
+                self._error("PAR016", f"empty or duplicate macro {kind} key {key!r}", token)
+            keys.add((kind, key))
+            self._expect_symbol("=")
+            target = self._reference()
+            self._expect_symbol(";")
+            mappings.append(MacroMappingDecl(token.location, kind, key, target))
+        self._expect_symbol("}")
+        return PhysicalMacroDecl(location, name, alias, scope, tuple(mappings))
 
     def _assignment_block(self) -> dict[str, Scalar]:
         self._expect_symbol("{")

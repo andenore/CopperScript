@@ -81,6 +81,7 @@ def board_to_dict(board: Board | Design) -> dict[str, object]:
         "schema": "copperscript-ir/v0.1",
         "kind": "board",
         "name": board.name,
+        **_macro_fields(board.physical_macros),
         **_unit_fields(
             board.library,
             board.components,
@@ -124,6 +125,7 @@ def _module_to_dict(definition: ModuleDefinition) -> dict[str, object]:
     return {
         "kind": "module",
         "name": definition.name,
+        **_macro_fields(definition.physical_macros),
         "ports": {
             name: pin_type.value for name, pin_type in definition.ports.items()
         },
@@ -140,6 +142,11 @@ def _module_to_dict(definition: ModuleDefinition) -> dict[str, object]:
             (),
         ),
     }
+
+
+def _macro_fields(bindings):
+    from .macro_bindings import macro_binding_document
+    return {"physical_macros": [macro_binding_document(b) for b in bindings]} if bindings else {}
 
 
 def _unit_fields(

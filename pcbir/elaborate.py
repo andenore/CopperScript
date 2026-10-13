@@ -44,6 +44,8 @@ def elaborate(board: Board) -> FlatElectricalView:
         devices=board.devices,
         peripheral_selections=board.peripheral_selections,
         power_states=board.power_states,
+        physical_macros=board.physical_macros,
+        net_aliases={n.name: n.name for n in board.nets},
     )
     cache: dict[str, _Template] = {}
     for instance in board.module_instances:
@@ -73,6 +75,8 @@ def _template_for(
         constraints=definition.constraints,
         devices=definition.devices,
         peripheral_selections=definition.peripheral_selections,
+        physical_macros=definition.physical_macros,
+        net_aliases={n.name: n.name for n in definition.nets},
     )
     for instance in definition.module_instances:
         child = _template_for(instance.module, definitions, cache, (*stack, name))
@@ -252,6 +256,13 @@ def _expand_one(
         devices=devices,
         peripheral_selections=tuple(peripheral_selections),
         power_states=parent.power_states,
+        physical_macros=(*parent.physical_macros, *(replace(binding,
+            name=_qualify(instance_ref, binding.name),
+            scope=_qualify(instance_ref, binding.scope) if binding.scope else instance_ref)
+            for binding in template.body.physical_macros)),
+        net_aliases={**parent.net_aliases, **{
+            _qualify(instance_ref, alias): child_net_map.get(net, _qualify(instance_ref, net))
+            for alias, net in template.body.net_aliases.items()}},
     )
 
 

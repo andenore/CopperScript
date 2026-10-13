@@ -119,8 +119,8 @@ def save_performance(output: Path, mode: str, exit_code: int) -> dict:
     return result
 
 
-def provenance(project: Path, source: Path, options: list[str]) -> dict:
-    paths = {source}
+def provenance(project: Path, source: Path, options: list[str], *, macro_paths=()) -> dict:
+    paths = {source, *macro_paths}
     # Hash project-owned sources and manifests, excluding generated/cache trees.
     # External package inventories are authenticated by the committed lock.
     for directory, subdirs, files in os.walk(project):
@@ -186,8 +186,10 @@ def main(argv: list[str] | None = None) -> int:
         route = routing_command(source, output, cli, footprints, options, locked=args.locked)
         # Resolve this board's actual imports through its nearest manifest. No
         # hardcoded library, sibling checkout, relocking or executed vendor code.
-        compile_design_file(source, locked=args.locked, offline=args.offline or args.dry_run)
-        inputs = provenance(project, source, options)
+        design = compile_design_file(source, locked=args.locked, offline=args.offline or args.dry_run)
+        from .macro_bindings import prepare_macro_bindings
+        macros = prepare_macro_bindings(design, locked=args.locked, offline=args.offline or args.dry_run) if design is not None else ()
+        inputs = provenance(project, source, options, macro_paths=tuple(m.path for m in macros))
     except (OSError, ValueError, CopperScriptError) as exc:
         print(f"SETUP ERROR: {exc}", file=sys.stderr)
         return 2

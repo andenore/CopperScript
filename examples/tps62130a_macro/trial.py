@@ -1,7 +1,7 @@
 """Small TPS62130A hard-macro layout probe; no CopperVigo dependency."""
 
 import argparse
-import importlib.util
+from dataclasses import replace
 import json
 from pathlib import Path
 import shutil
@@ -9,29 +9,51 @@ import subprocess
 
 from pcbir.backends.kicad_pcb import KiCadPcbBackend
 from pcbir.backends.kicad_project import write_kicad_project
+from pcbir.compiler import compile_design_source
+from pcbir.clusters import cluster_placements
+from pcbir.footprints import FootprintResolver
+from pcbir.hard_macros import materialize_hard_macros
+from pcbir.physical import Point
+from pcbir.physicalize import resolved_physicalize, PrototypePhysicalOptions
+
+SOURCE = Path(__file__).with_name("board.copper")
+
+
+def make_trial(directory, *, enabled=False, rotation=180, footprint_roots=(), offline=False):
+    source = SOURCE.read_text(encoding="utf-8")
+    if enabled:
+        source = source.replace("./assets/tps62130a-managed-always-on.json", "../full_vertical/assets/tps62130a-managed-footprints.json")
+        source = source.replace("net VIN { B.VIN; B.EN; }", "net VIN { B.VIN; }\n    net ENABLE { B.EN; }")
+        source = source.replace("net FB = FB;", "net EN = ENABLE;\n        net FB = FB;")
+    design = compile_design_source(source, str(SOURCE), locked=True, offline=offline)
+    board = resolved_physicalize(design,
+        FootprintResolver(SOURCE.parent, tuple(footprint_roots), locked=True, offline=offline),
+        PrototypePhysicalOptions(board_width_mm=40, board_height_mm=40, copper_layers=6,
+                                 fabrication_profile="jlcpcb-six-layer"))
+    poses = {p.reference: p for p in board.placements}
+    anchor = replace(poses["B/U"], position=Point.mm(20, 20), rotation_degrees=rotation)
+    poses.update(cluster_placements(board, board.rigid_clusters[0], anchor))
+    board = replace(board, placements=tuple(poses.values()),
+                    metadata={**board.metadata, "prototype_placement": "false", "fabrication_ready": "false"})
+    output = Path(directory)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "source.copper.txt").write_text(source, encoding="utf-8")
+    return materialize_hard_macros(board)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--copperlib", type=Path,
-                        default=Path(__file__).resolve().parents[3] / "CopperLib")
     parser.add_argument("--output-dir", type=Path,
                         default=Path(__file__).resolve().parents[2] / "build/tps62130a-macro")
-    parser.add_argument("--footprint-root", type=Path, default=Path("/usr/share/kicad/footprints"))
+    parser.add_argument("--footprint-root", type=Path, action="append", default=[])
+    parser.add_argument("--offline", action="store_true")
     parser.add_argument("--enabled", action="store_true")
     parser.add_argument("--rotation", type=int, choices=(0, 90, 180, 270), default=180)
     args = parser.parse_args()
 
-    trial_path = args.copperlib / "packages/circuits/ti/tps62130a-buck/layout_trial.py"
-    if not trial_path.is_file():
-        parser.error(f"CopperLib trial not found: {trial_path}")
-    spec = importlib.util.spec_from_file_location("tps62130a_layout_trial", trial_path)
-    trial = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(trial)
-
     output = args.output_dir.resolve()
-    board = trial.make_trial(output, enabled=args.enabled, rotation=args.rotation,
-                             footprint_root=args.footprint_root, external=False)
+    board = make_trial(output, enabled=args.enabled, rotation=args.rotation,
+                       footprint_roots=args.footprint_root, offline=args.offline)
     target = output / "buck.kicad_pcb"
     write_kicad_project(KiCadPcbBackend().generate(board), target)
     cli = shutil.which("kicad-cli")

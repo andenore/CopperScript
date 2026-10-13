@@ -222,13 +222,12 @@ def test_shared_make_routes_use_generic_runner_and_exact_settings(make, example,
         assert args.fanout_maze and args.fab_profile == "jlcpcb-four-layer"
     if example == "full-vertical":
         assert args.placement_templates is None
-        assert args.hard_macro == [ROOT / "examples/full_vertical/buck-macro.json",
-                                   ROOT / "examples/full_vertical/nrf-antenna-macro.json"]
+        assert args.hard_macro == []
         assert args.candidates == 3
         assert args.placement_candidate == "candidate-00"
         assert args.zone_dependency_expansions == 2 and args.critical_feedback_trials == 0
     if example == "nrf52":
-        assert args.hard_macro == [ROOT / "examples/nrf_antenna_macro/hard_macro.json"]
+        assert args.hard_macro == []
 
 
 def test_shared_make_can_still_request_an_explicit_placement_candidate(make):

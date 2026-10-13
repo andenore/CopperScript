@@ -1,13 +1,17 @@
-// Powered electrical example with a separately bound physical RF hard macro.
+// Powered electrical example with a source-selected physical RF hard macro.
 // Not production-qualified. See docs/nrf52-coin-cell.md for hardware/FW limits.
 board Nrf52CoinCell {
     use library "tiny";
+    // Keep generated branding clear of the front-side SWD header and pads.
+    silkscreen { branding { position = (25mm, 35mm); size = 5mm; side = back; } }
     import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
     import johanson "github.com/andenore/CopperLib/packages/parts/johanson/2450at18a0100001e";
     import keystone "github.com/andenore/CopperLib/packages/parts/keystone/3034";
     import swd "github.com/andenore/CopperLib/packages/interfaces/arm/swd-10pin";
     import generic_switch "github.com/andenore/CopperLib/packages/generic/switch-button";
     import nrf52_support "github.com/copperscript/examples/nrf52_support";
+
+    import nordic_layout "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json";
 
     component U_NRF: nordic.NRF52832_QFAA;
     component ANT_BT: johanson.JOHANSON_2450AT18A0100001E;
@@ -91,7 +95,7 @@ board Nrf52CoinCell {
     }
 
     // Provisional 50 x 40 mm placement. Antenna/RF member poses come from
-    // nrf_antenna_macro/hard_macro.json, as one rigid unit anchored at U_NRF.
+    // physical_macro declaration below, as one rigid unit anchored at U_NRF.
     constraint fixed_placement(U_NRF) { x = 34mm; y = 12mm; rotation = 0; side = front; }
     constraint fixed_placement(BT1) { x = 15mm; y = 25mm; rotation = 0; side = front; }
     constraint fixed_placement(J_SWD) { x = 12mm; y = 7mm; rotation = 0; side = front; }
@@ -113,4 +117,20 @@ board Nrf52CoinCell {
     constraint fixed_placement(X1) { x = 39.8mm; y = 17.7mm; rotation = 0; side = front; }
     constraint fixed_placement(C_X1) { x = 38mm; y = 21mm; rotation = 90; side = front; }
     constraint fixed_placement(C_X2) { x = 41mm; y = 21mm; rotation = 90; side = front; }
+
+    // Source-selected physical realizations; geometry remains in the assets.
+    physical_macro nordic-antenna-trial: nordic_layout {
+        member U1 = U_NRF;
+        member C3 = C_BT_MATCH;
+        member L1 = L_BT_MATCH;
+        member CA = C_ANT_SERIES;
+        member LA = L_ANT_SHUNT;
+        member LB = L_ANT_SERIES;
+        member ANT = ANT_BT;
+        net raw = NRF_RF_RAW;
+        net ground = GND;
+        net feed = NRF_RF_ANT;
+        net tee = ANT_TEE;
+        net antenna = ANT_FEED;
+    }
 }

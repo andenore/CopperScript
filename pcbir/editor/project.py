@@ -38,5 +38,7 @@ def document_session(source, reader, *, footprint_roots=(), layers=2, fab_profil
     if manifest:
         paths += [manifest, manifest.parent / "copper.lock"]
     paths += [Path(fp.metadata["source_path"]) for fp in board.footprints.values() if fp.metadata.get("source_path")]
+    from ..macro_bindings import source_macro_input_paths
+    paths += list(source_macro_input_paths(board))
     workspace = SourceWorkspace(source, design, build, input_paths=tuple(paths), source_reader=reader)
     return EditorSession(board, source, workspace=workspace)

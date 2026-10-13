@@ -39,6 +39,27 @@ def _keys(row, expected):
         raise ValueError("unsupported hard-macro fields")
 
 
+def validate_macro_asset_data(data):
+    """Shared root schema validation for lock preparation and physical binding."""
+    if not isinstance(data, dict):
+        raise ValueError("hard-macro asset must be an object")
+    version = data.get("schema")
+    versions = tuple(f"copperlib-physical-hard-macro/v0.{i}" for i in range(1, 6))
+    if version not in versions or data.get("production_publishable") is not False:
+        raise ValueError("unsupported macro qualification/schema")
+    level = versions.index(version) + 1
+    fields = "schema source production_publishable anchor members pad_nets isolated_pads tracks vias ports protected_regions keepouts required_layers allowed_rotations internal_clearance_nm unresolved"
+    if level >= 2:
+        fields += " zones plane_returns"
+    if level >= 3:
+        fields += " polygons"
+    if level >= 4:
+        fields += " width_contracts"
+    if level >= 5:
+        fields += " edge_openings"
+    _keys(data, fields)
+
+
 def _macro_footprint_digest(footprint, reference, asset):
     """Verify legacy module-root asset IDs without weakening geometry checks."""
     if footprint.name == reference:
@@ -82,21 +103,14 @@ def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
     raw = Path(asset).read_bytes()
     if sha256(raw).hexdigest() != expected_sha256:
         raise ValueError("hard-macro asset identity changed")
+    if any(m.cluster == name for m in board.hard_macros):
+        raise ValueError(f"duplicate hard-macro identity: {name}")
+    existing_members = {member.reference for cluster in board.rigid_clusters for member in cluster.members}
+    if existing_members.intersection(bindings.values()):
+        raise ValueError("hard-macro members already belong to a rigid owner")
     try:
         data = json.loads(raw)
-        version = data["schema"]
-        fields = "schema source production_publishable anchor members pad_nets isolated_pads tracks vias ports protected_regions keepouts required_layers allowed_rotations internal_clearance_nm unresolved"
-        if version in {"copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4", "copperlib-physical-hard-macro/v0.5"}:
-            fields += " zones plane_returns"
-        if version in {"copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4", "copperlib-physical-hard-macro/v0.5"}:
-            fields += " polygons"
-        if version in {"copperlib-physical-hard-macro/v0.4", "copperlib-physical-hard-macro/v0.5"}:
-            fields += " width_contracts"
-        if version == "copperlib-physical-hard-macro/v0.5":
-            fields += " edge_openings"
-        _keys(data, fields)
-        if version not in {"copperlib-physical-hard-macro/v0.1", "copperlib-physical-hard-macro/v0.2", "copperlib-physical-hard-macro/v0.3", "copperlib-physical-hard-macro/v0.4", "copperlib-physical-hard-macro/v0.5"} or data["production_publishable"] is not False:
-            raise ValueError("unsupported macro qualification/schema")
+        validate_macro_asset_data(data)
         sources = {m["reference"] for m in data["members"]}
         if len(sources) != len(data["members"]) or set(bindings) != sources or len(set(bindings.values())) != len(sources):
             raise ValueError("hard-macro bindings must cover unique members exactly")

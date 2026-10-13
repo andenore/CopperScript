@@ -11,31 +11,31 @@ import json
 from pathlib import Path
 import pstats
 
-from pcbir import compile_file, resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
+from pcbir import resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
 from pcbir.backends.kicad_pcb import KiCadPcbBackend
 from pcbir.backends.kicad_project import write_kicad_project
 from pcbir.clusters import cluster_placements
 from pcbir.drc import run_physical_drc
 from pcbir.erc import check
-from pcbir.hard_macros import apply_hard_macro_scene, materialize_hard_macros
+from pcbir.hard_macros import materialize_hard_macros
 from examples.nrf_antenna_macro.hard_macro_trial import document
 from pcbir.placement import placement_solution_is_legal
+from pcbir.compiler import compile_design_file
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "examples/nrf52_coin_cell/board.copper"
 
 
 def make_example(footprint_roots=(), *, offline=False):
-    electrical = compile_file(SOURCE, locked=True, offline=offline)
+    design = compile_design_file(SOURCE, locked=True, offline=offline)
+    electrical = design.electrical
     diagnostics = check(electrical)
     if diagnostics:
         raise ValueError(f"coin-cell example must pass ERC: {diagnostics}")
-    board = resolved_physicalize(electrical,
+    board = resolved_physicalize(design,
         FootprintResolver(SOURCE.parent, tuple(footprint_roots), locked=True, offline=offline),
         PrototypePhysicalOptions(board_width_mm=50, board_height_mm=40,
             copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
-    scene_path = ROOT / "examples/nrf_antenna_macro/hard_macro.json"
-    board = apply_hard_macro_scene(board, scene_path, offline=offline)
     poses = {p.reference: p for p in board.placements}
     for rule in board.placement_rules:
         if rule.fixed_position is not None:
@@ -64,8 +64,7 @@ def main(argv=None):
         from pcbir.cli import main as cli_main
         args.output_dir.mkdir(parents=True,exist_ok=True)
         command = ["route-board",str(SOURCE),"--locked","--width-mm","50","--height-mm","40",
-            "--layers","6","--fab-profile","jlcpcb-six-layer","--hard-macro",
-            str(ROOT / "examples/nrf_antenna_macro/hard_macro.json"),
+            "--layers","6","--fab-profile","jlcpcb-six-layer",
             "--pitch-mm","0.5","--passes","2","--search-budget","20000","--soft-ripup",
             "--fanout","--package-access-trials","0","--zone-escape-trials","0",
             "--zone-local-ripup-trials","0","--constrained-pins-first","--progressive-guides",

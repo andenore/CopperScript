@@ -256,6 +256,8 @@ def verify_requirements(source, physical, *, drc=None, native=None, stage="route
             "required": required, "status": status, "detail": detail, "measurements": measurements,
             "verifier": "copperscript-final-geometry/v0.1",
             "declared_consumers": list(original.consumers), "declared_verifier": original.verifier})
+    from .macro_bindings import verify_source_macros
+    rows.extend(verify_source_macros(flat, physical, stage=stage, stale_drc=stale_drc))
     hard = [r for r in rows if r["required"]]
     overall = "fail" if any(r["status"] == "fail" for r in hard) else (
         "blocked" if any(r["status"] != "pass" for r in hard) else "pass")

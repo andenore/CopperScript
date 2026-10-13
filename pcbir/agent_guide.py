@@ -47,6 +47,7 @@ _TOPICS = {
             'Import with: import sensor "PROVIDER/PACKAGE"; component U1: sensor.Part; module SUPPORT: sensor.Support;. Use the actual exported kind and names returned by library inspection.',
             "A net connects named endpoints: net VDD { U1.VDD; C1.1; }. Module ports become instance endpoints in the host. Inspect pin/port names and voltage/direction limits; do not infer them from footprints.",
             "Versions and replacements live in copper.mod; copper.lock binds consumed assets. Cross-library requirements must be declared in the host manifest. Source imports do not select versions.",
+            'Import a physical macro with import layout "PROVIDER/assets/layout.json"; bind existing circuitry with physical_macro NAME: layout on MODULE { member ROLE = COMPONENT; net ROLE = port.PORT; }. Omit on for board-relative mappings. Asset hashes come from copper.lock; electrical checks leave geometry pending.',
             "Source quantities attach units (100nF, 3.3V, 0.25mm). Display engineering values with spaces and exact fixed-point fractions. Physical intent uses constraint KIND(TARGETS) { PARAMETERS; }; choose source-backed limits.",
             'Pin-associated bypasses use role = decoupling; decouples = "U.PIN"; on the capacitor. Apply this to bypasses, not every capacitor.',
             "The following builtin resistor divider demonstrates electrical syntax only; it is not a layout or an orderable component selection.",

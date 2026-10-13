@@ -62,6 +62,7 @@ from .model import (
 )
 from .parser import parse
 from .packages import PackageResolver, ResolvedPackage
+from .macro_bindings import MacroAssetReference, compile_macro_bindings, resolve_macro_bindings, is_macro_import
 from .constraint_coverage import ConstraintMode
 from .quantities import (
     Capacitance,
@@ -163,7 +164,10 @@ def compile_design_source(source: str, filename: str = "<memory>", *,
     mechanical = lower_mechanical(document, imported.profiles)
     silkscreen = lower_silkscreen(document)
     electrical = _compile_board(document, imported.modules, imported.parts,
-                                imported.devices, imported.dependencies)
+                                imported.devices, imported.dependencies, imported.macro_assets)
+    if electrical.physical_macros or any(m.physical_macros for m in electrical.module_definitions.values()):
+        from .elaborate import elaborate
+        resolve_macro_bindings(elaborate(electrical))
     if mechanical:
         from .elaborate import elaborate
         references = {c.ref for c in elaborate(electrical).components}
@@ -222,6 +226,7 @@ class PackageContents:
     modules: dict[str, ModuleDefinition]
     dependencies: tuple[Dependency, ...]
     profiles: dict[str, MechanicalProfileDefinition] = field(default_factory=dict)
+    macro_assets: dict[str, MacroAssetReference] = field(default_factory=dict)
 
 
 def _load_imports(
@@ -237,10 +242,17 @@ def _load_imports(
     profiles: dict[str, MechanicalProfileDefinition] = {}
     dependencies: list[Dependency] = []
     aliases: set[str] = set()
+    macro_assets = {}
     for declaration in document.imports:
         if declaration.alias in aliases:
             _error("CMP039", f"duplicate import alias {declaration.alias!r}", declaration.location)
         aliases.add(declaration.alias)
+        if is_macro_import(declaration.path):
+            identity = resolver.qualify_macro_asset(declaration.path, declaration.location)
+            macro_assets[declaration.alias] = MacroAssetReference(
+                identity, str(resolver.source_directory), declaration.location,
+                resolver.locked, resolver.offline)
+            continue
         resolved = resolver.resolve(declaration.path, declaration.location)
         if resolved.import_path in stack:
             chain = " -> ".join((*stack, resolved.import_path))
@@ -267,7 +279,7 @@ def _load_imports(
                 resolved.checksum,
             )
         )
-    return PackageContents(parts, devices, modules, _unique_dependencies(dependencies), profiles)
+    return PackageContents(parts, devices, modules, _unique_dependencies(dependencies), profiles, macro_assets)
 
 
 def _load_package(
@@ -397,6 +409,7 @@ def _load_package(
             resolve_part,
             resolve_module,
             devices,
+            imported.macro_assets,
         )
         definition = replace(definition, components=tuple(
             replace(component, footprint=resolver.qualify_footprint(component.footprint, document.location))
@@ -463,9 +476,10 @@ def _compile_board(
     imported_parts: Mapping[str, PartDefinition],
     imported_devices: Mapping[str, DeviceDefinition],
     dependencies: tuple[Dependency, ...],
+    macro_assets: Mapping[str, MacroAssetReference] | None = None,
 ) -> Board:
     body, ports, declarations = _lower_unit(
-        document, imported_parts, imported_devices=imported_devices
+        document, imported_parts, imported_devices=imported_devices, macro_assets=macro_assets
     )
     if ports:
         _error("CMP024", "ports may only be declared inside a module", document.location)
@@ -489,6 +503,7 @@ def _compile_board(
         devices=body.devices,
         peripheral_selections=body.peripheral_selections,
         power_states=body.power_states,
+        physical_macros=body.physical_macros,
     )
 
 
@@ -500,6 +515,7 @@ def _compile_module(
     resolve_part: Callable[[str], str] = lambda value: value,
     resolve_module: Callable[[str], str] = lambda value: value,
     imported_devices: Mapping[str, DeviceDefinition] | None = None,
+    macro_assets: Mapping[str, MacroAssetReference] | None = None,
 ) -> ModuleDefinition:
     body, ports, declarations = _lower_unit(
         document,
@@ -507,12 +523,16 @@ def _compile_module(
         resolve_part,
         resolve_module,
         imported_devices or {},
+        macro_assets,
     )
     _validate_module_ports(body, ports, document.location)
     if body.power_states:
         _error("CMP072", "power states may only be declared on a board", document.location)
     instances = _validate_instances(body, declarations, modules)
     _validate_hole_clearance_targets(document, body, instances, modules)
+    if body.physical_macros:
+        from .elaborate import elaborate
+        resolve_macro_bindings(elaborate(replace(body, module_instances=instances, module_definitions=modules)))
     return ModuleDefinition(
         name=name or document.name,
         ports=ports,
@@ -525,6 +545,7 @@ def _compile_module(
         constraints=body.constraints,
         devices=body.devices,
         peripheral_selections=body.peripheral_selections,
+        physical_macros=body.physical_macros,
     )
 
 
@@ -534,6 +555,7 @@ def _lower_unit(
     resolve_part: Callable[[str], str] = lambda value: value,
     resolve_module: Callable[[str], str] = lambda value: value,
     imported_devices: Mapping[str, DeviceDefinition] | None = None,
+    macro_assets: Mapping[str, MacroAssetReference] | None = None,
 ) -> tuple[Board, dict[str, PinType], tuple[ModuleInstanceDecl, ...]]:
     library = _load_libraries(document)
     _merge_library(library, imported_parts or {}, document.location)
@@ -605,6 +627,7 @@ def _lower_unit(
             devices=devices,
             peripheral_selections=selections,
             power_states=tuple(power_states),
+            physical_macros=compile_macro_bindings(document, macro_assets or {}),
         ),
         ports,
         tuple(module_instances),

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pcbir import ConnectionPolicy, PrototypePhysicalOptions, check, compile_file, prototype_physicalize
+from pcbir import ConnectionPolicy, PrototypePhysicalOptions, check, compile_file, resolved_physicalize, FootprintResolver
 from pcbir.elaborate import elaborate
 from pcbir.power import analyze_power_states
 from pcbir.physical import BoardSide, CopperLayer, Point, RouteKind, nm_from_mm
@@ -12,6 +12,12 @@ from pcbir.physical import BoardSide, CopperLayer, Point, RouteKind, nm_from_mm
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples/full_vertical/board.copper"
+
+
+def physical_example(board=None):
+    return resolved_physicalize(board or compile_file(EXAMPLE, locked=True, offline=True),
+        FootprintResolver(EXAMPLE.parent, locked=True, offline=True),
+        PrototypePhysicalOptions(copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
 
 FIXED_FLOORPLAN = {
     "J_POWER": ("12", "74", 0),
@@ -26,8 +32,7 @@ FIXED_FLOORPLAN = {
 
 
 def test_full_vertical_mechanical_intent_lowers_to_hard_physical_rules() -> None:
-    physical = prototype_physicalize(compile_file(EXAMPLE), PrototypePhysicalOptions(
-        copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
+    physical = physical_example()
     fixed = {rule.reference: rule for rule in physical.placement_rules
              if rule.fixed_position is not None}
     assert fixed.keys() == FIXED_FLOORPLAN.keys()
@@ -52,13 +57,11 @@ def test_fixed_floorplan_is_legal_with_both_hard_macros() -> None:
     from pcbir import FootprintResolver, PhysicalBoard, resolved_physicalize
     from pcbir.clusters import cluster_placements
     from pcbir.placement import placement_solution_is_legal, transformed_footprint_polygon, transformed_pad_position
-    from pcbir.hard_macros import apply_hard_macro_scene
 
     physical = resolved_physicalize(compile_file(EXAMPLE, locked=True, offline=True),
         FootprintResolver(EXAMPLE.parent, (), locked=True, offline=True),
         PrototypePhysicalOptions(copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
-    for name in ("buck-macro.json", "nrf-antenna-macro.json"):
-        physical = apply_hard_macro_scene(physical, EXAMPLE.parent / name, locked=True, offline=True)
+    assert {m.cluster for m in physical.hard_macros} == {"modem-buck", "nordic-antenna"}
     refs = set(FIXED_FLOORPLAN) | {member.reference for cluster in physical.rigid_clusters
                                   for member in cluster.members}
     poses = {pose.reference: pose for pose in physical.placements if pose.reference in refs}
@@ -96,15 +99,16 @@ def test_full_vertical_footprint_adaptations_preserve_copperlib_macro_copper() -
     import hashlib
     import json
     from pcbir.packages import resolve_module_asset
+    from pcbir.macro_bindings import prepare_macro_bindings
 
     base = "github.com/andenore/CopperLib/packages/circuits/"
-    for scene_name, source in (
-        ("buck-macro.json", base + "ti/tps62130a-buck/assets/tps62130a-six-layer-enabled.json"),
-        ("nrf-antenna-macro.json", base + "nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json"),
+    selected = {p.binding.name: p for p in prepare_macro_bindings(compile_file(EXAMPLE, locked=True, offline=True))}
+    for name, source in (
+        ("modem-buck", base + "ti/tps62130a-buck/assets/tps62130a-six-layer-enabled.json"),
+        ("nordic-antenna", base + "nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json"),
     ):
-        scene = json.loads((EXAMPLE.parent / scene_name).read_text())
-        adapted_bytes = (EXAMPLE.parent / scene["asset"]).read_bytes()
-        assert hashlib.sha256(adapted_bytes).hexdigest() == scene["asset_sha256"]
+        adapted_bytes = selected[name].path.read_bytes()
+        assert hashlib.sha256(adapted_bytes).hexdigest() == selected[name].digest
         adapted = json.loads(adapted_bytes)
         source_bytes = resolve_module_asset(EXAMPLE, source, locked=True, offline=True).read_bytes()
         assert hashlib.sha256(source_bytes).hexdigest() == adapted["source"]["base_asset_sha256"]
@@ -121,8 +125,7 @@ def test_full_vertical_footprint_adaptations_preserve_copperlib_macro_copper() -
 
 def test_full_vertical_explicit_critical_profiles_lower_without_claiming_qualification() -> None:
     board = compile_file(EXAMPLE)
-    physical = prototype_physicalize(board, PrototypePhysicalOptions(
-        copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
+    physical = physical_example(board)
     profiles = {rule.net: rule for rule in physical.net_routing_rules}
     assert set(profiles) == {
         "USB_DP_MCU", "USB_DM_MCU", "USB_DP_MODEM", "USB_DM_MODEM",
@@ -172,8 +175,7 @@ def test_full_vertical_example_compiles_and_passes_erc() -> None:
 
 def test_full_vertical_declares_inner_and_top_ground_fill() -> None:
     board = compile_file(EXAMPLE)
-    physical = prototype_physicalize(board, PrototypePhysicalOptions(
-        copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
+    physical = physical_example(board)
     assert len(physical.zones) == 6
     ground = [zone for zone in physical.zones if zone.net == "GND"]
     assert len(ground) == 5
@@ -298,8 +300,7 @@ def test_usb_choke_uses_coilcraft_winding_pairs_and_land_pattern() -> None:
     windings = {frozenset({"1", "2"}), frozenset({"4", "3"})}
     assert {frozenset({part.pins[f"{lane}_IN"].number,
                       part.pins[f"{lane}_OUT"].number}) for lane in ("DP", "DM")} == windings
-    physical = prototype_physicalize(board, PrototypePhysicalOptions(
-        copper_layers=6, fabrication_profile="jlcpcb-six-layer"))
+    physical = physical_example(board)
     choke_pads = {
         net.name: {pad.pad for pad in net.pads if pad.component == "FL_USB"}
         for net in physical.nets if any(pad.component == "FL_USB" for pad in net.pads)

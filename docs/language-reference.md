@@ -507,6 +507,52 @@ Module ports do not provide a second connectivity mechanism. `port.VIN` and
 `PWR.VIN` are ordinary net endpoints that identify opposite sides of the same
 boundary during elaboration.
 
+## Physical macro bindings
+
+Import an exact physical hard-macro JSON asset, then map its members and net
+roles onto existing circuitry. The asset URL uses the same `copper.mod`
+requirements, replacements and `copper.lock` inventory as managed footprints.
+No content hash is authored in `.copper`.
+
+```copper
+import buck_layout "github.com/vendor/power/assets/buck.json";
+physical_macro BUCK: buck_layout on PWR {
+    member U = U1;
+    member L = L1;
+    member CIN = C_IN;
+    member COUT = C_OUT;
+    net VIN = port.VIN;
+    net VOUT = port.VOUT;
+    net GND = port.GND;
+    net SW = SWITCH;
+}
+```
+
+The example assumes the asset exposes exactly those member keys and net roles.
+`on PWR` resolves targets within that existing module instance; omit it to bind
+a component set in the declaring board/module, including explicit descendants
+such as `PWR/U1`. Net names, descendant net paths and module port references
+select existing electrical nets. Elaboration maps boundary nets to their actual
+parent nets; bindings never create components, connect nets or rewrite the circuit.
+Member mappings cannot name pins. Net mappings cannot use component-pin selectors.
+
+Declarations are supported in boards and modules. Module-authored bindings repeat
+with qualified identities for each instance. Duplicate ownership, unknown
+references and distinct asset roles collapsing onto one net are errors; there
+is no implicit override or name-based binding. Asset keys can be quoted strings.
+
+`import layout "./assets/layout.json";` selects a local asset relative to its
+declaring source. Imported package paths remain confined to that module and
+retain its provider identity. Workspace assets are hashed as build inputs;
+files outside required modules are not pinned by the package lock.
+
+Electrical checks validate source references without loading geometry and
+leave asset/physical validation pending. `copper lock` prepares selected assets
+and checks exact mapping coverage. Physical commands bind exact footprints,
+pads, nets and layer contracts through the existing immutable macro lifecycle.
+See [physical hard macros](physical-hard-macros.md) for routing, export and
+qualification limits, and [the implementation plan](physical-macro-syntax-plan.md).
+
 ## Components
 
 ```copper
@@ -1645,7 +1691,8 @@ item           = library | package_import | port | pin | pad | power_domain
                | part_property | peripheral | mux | route | pad_set | resource
                | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
-               | power_state | interface | constraint | mechanical | silkscreen ;
+               | power_state | interface | constraint | mechanical | silkscreen
+               | physical_macro ;
 silkscreen     = "silkscreen", "{", silk_item*, "}" ;
 silk_item      = "branding", geometry_properties
                | ("text" | "logo" | "line" | "rectangle" | "circle" | "arc" | "polygon"), name, geometry_properties ;
@@ -1678,6 +1725,9 @@ resource       = "resource", name, ";" ;
 configuration  = "configure", name, ".", name, "as", name, properties ;
 qualified_name = name, (".", name)* ;
 module_instance = "module", name, ":", qualified_name, ";" ;
+physical_macro = "physical_macro", name, ":", name, ["on", instance_path],
+                 "{", macro_mapping*, "}" ;
+macro_mapping  = ("member" | "net"), (name | string), "=", target_reference, ";" ;
 component      = "component", name, ":", qualified_name, (";" | properties) ;
 net            = "net", name, "{", endpoint*, "}" ;
 endpoint       = name, ".", qualified_name, ";" ;

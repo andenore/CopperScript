@@ -46,6 +46,13 @@ SHA, footprint identities, C3's protected VSS31 return, antenna fill exclusions
 and isolated antenna pad 2 are retained unchanged. Electrical connectivity
 remains exclusively in the `.copper` file; physical assets cannot redefine it.
 
+The board imports the macro asset URL and declares all member/net bindings in
+`physical_macro nordic-antenna-trial`. Dependency hashes come from the existing
+package lock. The builder and Make targets use that source declaration without
+separate scene files or `--hard-macro` arguments.
+The builder consumes the full design so source artwork is retained; branding is
+placed on the back near the lower edge to clear the SWD header's silk and pads.
+
 Without `--route` this remains a placed draft. To attempt the full standard
 placement/global/package-access/critical/plane/detailed pipeline:
 

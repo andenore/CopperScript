@@ -26,6 +26,15 @@ Compile a valid design to normalized JSON IR:
 python -m copperscript compile examples/valid_board/board.copper -o board.json
 ```
 
+Source `physical_macro` declarations and their module-owned bindings survive
+compilation as realization descriptors; geometry remains in the selected JSON
+assets. `copper check` reports their physical checks as pending. Prepare managed
+macro assets with `copper lock board.copper`; use the normal locked/offline
+physical workflow afterwards. Source-bound macros are applied automatically
+by placement, routing, PCB export and editor rebuilds. `--hard-macro SCENE.json`
+remains available for legacy bindings; conflicting identities/ownership fail.
+See [the source syntax](language-reference.md#physical-macro-bindings).
+
 Generate a self-contained KiCad 8 schematic:
 
 ```console

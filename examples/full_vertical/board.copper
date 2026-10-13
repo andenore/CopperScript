@@ -22,6 +22,9 @@ board FullVerticalTracker {
     import swd "github.com/andenore/CopperLib/packages/interfaces/arm/swd-10pin";
     import vertical_support "github.com/copperscript/examples/vertical_support";
 
+    import modem_buck_layout "./assets/tps62130a-managed-footprints.json";
+    import nordic_layout "./assets/nrf52832-johanson-managed-footprints.json";
+
     component J_POWER: gct_usb.GCT_USB4135_GF_A;
     component U_CC: tusb.TUSB320LAI;
     module PWR: vertical_support.FullVerticalPowerTree;
@@ -466,5 +469,40 @@ board FullVerticalTracker {
         id = "top-ground-south"; layers = "F.Cu";
         polygon_mm = "0.5,53.6;99.5,53.6;99.5,79.5;0.5,79.5";
         priority = 4; pad_connection = solid; island_policy = "remove_all";
+    }
+
+    // Source-selected physical realizations; geometry remains in the assets.
+    physical_macro modem-buck: modem_buck_layout on PWR {
+        member C_AVIN = C_MODEM_AVIN;
+        member C_OUT1 = C_3V8;
+        member C_OUT2 = C_3V8_2;
+        member C_PVIN = C_5V;
+        member C_SS = C_MODEM_SS;
+        member L = L_MODEM;
+        member R_FB_BOT = R_MODEM_FB_BOT;
+        member R_FB_TOP = R_MODEM_FB_TOP;
+        member U = U_MODEM;
+        net EN = port.MODEM_EN;
+        net FB = MODEM_FB;
+        net GND = port.GND;
+        net SS = MODEM_SS;
+        net SW = MODEM_SW;
+        net VIN = port.VIN5;
+        net VOUT = port.V3V8;
+    }
+
+    physical_macro nordic-antenna: nordic_layout {
+        member ANT = ANT_BT;
+        member C3 = C_BT_MATCH;
+        member CA = C_ANT_SERIES;
+        member L1 = L_BT_MATCH;
+        member LA = L_ANT_SHUNT;
+        member LB = L_ANT_SERIES;
+        member U1 = U_NRF;
+        net antenna = ANT_FEED;
+        net feed = NRF_RF_ANT;
+        net ground = GND;
+        net raw = NRF_RF_RAW;
+        net tee = ANT_TEE;
     }
 }
