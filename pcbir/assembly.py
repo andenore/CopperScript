@@ -316,19 +316,23 @@ def write_hand_assembly_list(board: Board, lock: AssemblyLock, path: str | Path)
     if not check_assembly(board, lock)["passed"]:
         raise AssemblyError("assembly selections failed; hand-assembly list refused")
     designators = _designators(lock.selections)
-    groups: dict[tuple[str, str, str, str], list[str]] = {}
+    groups: dict[tuple[str, ...], list[str]] = {}
     for entry in lock.selections:
         if entry.ordered:
             continue
         action = "hand-assemble" if entry.populate == "consigned" else "do not fit"
-        key = (action, entry.manufacturer or "", entry.mpn or "", _short_footprint(entry.footprint))
+        # Sourcing is optional on consigned selections; when recorded it is
+        # what the person buying the parts needs, so carry it through.
+        key = (action, entry.manufacturer or "", entry.mpn or "", _short_footprint(entry.footprint),
+               entry.supplier or "", entry.supplier_part or "", entry.source_url or "")
         groups.setdefault(key, []).append(designators[entry.reference])
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(("Action", "Designator", "Quantity", "Manufacturer", "MPN", "Footprint"))
-        for (action, manufacturer, mpn, footprint), references in sorted(groups.items()):
+        writer.writerow(("Action", "Designator", "Quantity", "Manufacturer", "MPN", "Footprint",
+                         "Supplier", "Supplier Part", "URL"))
+        for (action, manufacturer, mpn, footprint, supplier, part, url), references in sorted(groups.items()):
             writer.writerow((action, ",".join(sorted(references)), len(references),
-                             manufacturer, mpn, footprint))
+                             manufacturer, mpn, footprint, supplier, part, url))
     return sum(len(references) for references in groups.values())
