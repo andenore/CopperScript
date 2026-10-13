@@ -211,7 +211,7 @@ def macro_binding_identity(binding):
     def neutral(location):
         return replace(location, offset=0, line=0, column=0)
     return replace(binding, location=neutral(binding.location),
-                   asset=replace(binding.asset, location=neutral(binding.asset.location)),
+                   asset=replace(binding.asset, location=neutral(binding.asset.location), locked=False, offline=False),
                    mappings=tuple(replace(m, location=neutral(m.location)) for m in binding.mappings))
 
 

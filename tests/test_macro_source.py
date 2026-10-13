@@ -291,6 +291,8 @@ def test_editor_tracks_macro_inputs_and_ignores_diagnostic_offset_changes(tmp_pa
     before = compile_design_file(path)
     after = compile_design_source(source.replace('physical_macro UNIT', '\n\nphysical_macro UNIT'), str(path))
     assert electrical_identity(before.electrical) == electrical_identity(after.electrical)
+    locked = compile_design_source(source, str(path), locked=True, offline=True)
+    assert electrical_identity(before.electrical) == electrical_identity(locked.electrical)
     session = document_session(path, lambda: path.read_bytes())
     assert asset in session.workspace.input_paths
     asset.write_text(asset.read_text() + '\n', encoding='utf-8')
