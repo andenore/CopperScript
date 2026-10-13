@@ -230,6 +230,8 @@ def _parser() -> argparse.ArgumentParser:
         "lock", help="resolve package content and update copper.lock"
     )
     lock_parser.add_argument("board", type=Path, help="a .copper source file")
+    lock_parser.add_argument("--locked", action="store_true",
+                             help="verify existing copper.lock without rewriting it")
     lock_parser.add_argument(
         "--offline", action="store_true", help="reject remote package cache misses"
     )

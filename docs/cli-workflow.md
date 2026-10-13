@@ -34,6 +34,8 @@ physical workflow afterwards. Source-bound macros are applied automatically
 by placement, routing, PCB export and editor rebuilds. `--hard-macro SCENE.json`
 remains available for legacy bindings; conflicting identities/ownership fail.
 See [the source syntax](language-reference.md#physical-macro-bindings).
+`copper lock board.copper --locked` prepares/verifies selected assets against an
+existing lock without rewriting it; add `--offline` to require cached inputs.
 
 Generate a self-contained KiCad 8 schematic:
 

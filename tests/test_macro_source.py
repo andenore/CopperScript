@@ -269,6 +269,9 @@ def test_cli_lock_and_route_use_source_macros_without_scene_argument(tmp_path, c
     path, asset, source = managed_project(tmp_path)
     assert main(['lock', str(path), '--offline']) == 0
     assert '1 physical macros' in capsys.readouterr().out
+    lock_bytes = (tmp_path / 'copper.lock').read_bytes()
+    assert main(['lock', str(path), '--locked', '--offline']) == 0
+    assert (tmp_path / 'copper.lock').read_bytes() == lock_bytes
     output = tmp_path / 'routed.kicad_pcb'
     report = tmp_path / 'route.json'
     assert main(['route-board', str(path), '--locked', '--offline', '--report', str(report), '-o', str(output)]) == 0
