@@ -271,3 +271,39 @@ def write_jlcpcb_bom(board: Board, lock: AssemblyLock, path: str | Path) -> None
         writer.writerow(("Comment", "Designator", "Footprint", "LCSC Part #", "Manufacturer", "MPN"))
         for (value, footprint, code, manufacturer, mpn), references in sorted(groups.items()):
             writer.writerow((value, ",".join(sorted(references)), footprint, code, manufacturer, mpn))
+
+
+def _short_footprint(footprint: str | None) -> str:
+    """Library-qualified or path-like footprint ids, reduced to the footprint name."""
+    if not footprint:
+        return ""
+    name = footprint.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    return name.removesuffix(".kicad_mod")
+
+
+def write_hand_assembly_list(board: Board, lock: AssemblyLock, path: str | Path) -> int:
+    """Write every component the supplier will not place; return the count.
+
+    The companion to write_jlcpcb_bom, which omits these by design. Consigned
+    components must be bought and fitted by hand; not-fitted components are
+    listed too, so their empty footprints read as intended rather than as an
+    assembly defect.
+    """
+    if not check_assembly(board, lock)["passed"]:
+        raise AssemblyError("assembly selections failed; hand-assembly list refused")
+    groups: dict[tuple[str, str, str, str], list[str]] = {}
+    for entry in lock.selections:
+        if entry.ordered:
+            continue
+        action = "hand-assemble" if entry.populate == "consigned" else "do not fit"
+        key = (action, entry.manufacturer or "", entry.mpn or "", _short_footprint(entry.footprint))
+        groups.setdefault(key, []).append(entry.reference)
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("Action", "Designator", "Quantity", "Manufacturer", "MPN", "Footprint"))
+        for (action, manufacturer, mpn, footprint), references in sorted(groups.items()):
+            writer.writerow((action, ",".join(sorted(references)), len(references),
+                             manufacturer, mpn, footprint))
+    return sum(len(references) for references in groups.values())

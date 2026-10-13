@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from pcbir.assembly import (
-    AssemblyError, check_assembly, electrical_digest, load_lock, lock_to_json, snapshot, write_jlcpcb_bom,
+    AssemblyError, check_assembly, electrical_digest, load_lock, lock_to_json, snapshot, write_hand_assembly_list,
+    write_jlcpcb_bom,
 )
 from pcbir.cli import main
 from pcbir.compiler import compile_file
@@ -302,3 +303,31 @@ def test_v0_1_locks_load_and_mean_supplier_assembly(tmp_path):
     path.write_text(json.dumps(legacy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     assert load_lock(path) == lock
     assert all(entry.ordered for entry in load_lock(path).selections)
+
+
+def test_hand_assembly_list_is_exactly_what_the_supplier_bom_omits(tmp_path):
+    board = mixed_board()
+    lock = mixed_lock(board)
+    bom, hand = tmp_path / "bom.csv", tmp_path / "hand.csv"
+    write_jlcpcb_bom(board, lock, bom)
+    assert write_hand_assembly_list(board, lock, hand) == 2
+    with hand.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert {(row["Action"], row["Designator"]) for row in rows} == {
+        ("hand-assemble", "U1"), ("do not fit", "R9")}
+    consigned = next(row for row in rows if row["Designator"] == "U1")
+    assert (consigned["Manufacturer"], consigned["MPN"], consigned["Quantity"]) == (
+        "Specialist Semiconductor", "SPECIAL-1234", "1")
+    with bom.open(newline="", encoding="utf-8") as stream:
+        supplied = {ref for row in csv.DictReader(stream) for ref in row["Designator"].split(",")}
+    # Together the two files cover every populated component, with no overlap.
+    assert supplied | {"U1", "R9"} == {e.reference for e in lock.selections}
+    assert not supplied & {"U1", "R9"}
+
+
+def test_hand_assembly_list_refuses_an_unreviewed_lock(tmp_path):
+    board = mixed_board()
+    lock = mixed_lock(board)
+    unreviewed = replace(lock, selections=tuple(replace(e, reviewed=False) for e in lock.selections))
+    with pytest.raises(AssemblyError, match="hand-assembly list refused"):
+        write_hand_assembly_list(board, unreviewed, tmp_path / "hand.csv")

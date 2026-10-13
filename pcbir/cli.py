@@ -189,6 +189,8 @@ def _parser() -> argparse.ArgumentParser:
             assembly.add_argument("--report", type=Path, help="write offline selection diagnostics as JSON")
         if action == "bom":
             assembly.add_argument("-o", "--output", type=Path, required=True, help="JLCPCB selection BOM CSV")
+            assembly.add_argument("--hand-assembly", type=Path,
+                                  help="also write the consigned/not-fitted components the supplier will not place")
     sim_parser = subparsers.add_parser("sim", help="export or run a separate analog/power simulation plan")
     sim_commands = sim_parser.add_subparsers(dest="sim_command", required=True)
     for action in ("export", "run"):
@@ -857,7 +859,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"MANUFACTURING EXPORT ERROR: {exc}")
             return 2
     if args.command == "assembly":
-        from .assembly import AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_jlcpcb_bom
+        from .assembly import (AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_hand_assembly_list,
+                               write_jlcpcb_bom)
         try:
             board = load_board(args.board, locked=args.locked, offline=args.offline)
             diagnostics = check(board)
@@ -897,6 +900,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                   + (f", {report['consigned_count']} consigned and {report['not_fitted_count']} "
                      "not fitted left out" if left_out else "")
                   + "; stock and manufacturing signoff not checked")
+            if args.hand_assembly:
+                count = write_hand_assembly_list(board, lock, args.hand_assembly)
+                print(f"Generated hand-assembly list -> {args.hand_assembly}; {count} component(s) to fit or leave empty by hand")
             return 0
         except (AssemblyError, BoardLoadError, OSError) as exc:
             print(f"ASSEMBLY ERROR: {exc}")
