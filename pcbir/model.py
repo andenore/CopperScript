@@ -9,6 +9,8 @@ own set as required by the design specification.
 
 from __future__ import annotations
 
+from .macro_bindings import MacroBinding
+
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
@@ -568,6 +570,7 @@ class ModuleDefinition:
     constraints: tuple[Constraint, ...] = ()
     devices: Mapping[str, DeviceDefinition] = field(default_factory=dict)
     peripheral_selections: tuple[PeripheralSelection, ...] = ()
+    physical_macros: tuple[MacroBinding, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ports", MappingProxyType(dict(self.ports)))
@@ -606,6 +609,7 @@ class Board:
     devices: Mapping[str, DeviceDefinition] = field(default_factory=dict)
     peripheral_selections: tuple[PeripheralSelection, ...] = ()
     power_states: tuple[PowerState, ...] = ()
+    physical_macros: tuple[MacroBinding, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "library", MappingProxyType(dict(self.library)))
@@ -630,7 +634,10 @@ class FlatElectricalView:
     devices: Mapping[str, DeviceDefinition] = field(default_factory=dict)
     peripheral_selections: tuple[PeripheralSelection, ...] = ()
     power_states: tuple[PowerState, ...] = ()
+    physical_macros: tuple[MacroBinding, ...] = ()
+    net_aliases: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "library", MappingProxyType(dict(self.library)))
         object.__setattr__(self, "devices", MappingProxyType(dict(self.devices)))
+        object.__setattr__(self, "net_aliases", MappingProxyType(dict(self.net_aliases)))

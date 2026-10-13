@@ -175,6 +175,23 @@ class ModuleInstanceDecl:
 
 
 @dataclass(frozen=True, slots=True)
+class MacroMappingDecl:
+    location: SourceLocation
+    kind: str
+    key: str
+    target: str
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalMacroDecl:
+    location: SourceLocation
+    name: str
+    asset_alias: str
+    scope: str
+    mappings: tuple[MacroMappingDecl, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class NetDecl:
     location: SourceLocation
     name: str
@@ -268,6 +285,7 @@ Declaration = (
     | RouteRuleDecl
     | ConfigurationDecl
     | ModuleInstanceDecl
+    | PhysicalMacroDecl
     | NetDecl
     | SupplyDecl
     | InterfaceDecl

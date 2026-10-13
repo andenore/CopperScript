@@ -76,7 +76,16 @@ build/vscode-extension/extension> <project-directory>`. On a `.copper` tab use
 text editor. Select a component and **Show component source declaration** to open
 its root declaration (or hierarchical instance) beside the board view.
 
-Review source edits and choose Save reviewed source. Native document changes
+Use **CopperScript: Open Mechanical Editor** from the Command Palette or the
+context menu on a `.copper` file. Without an active `.copper` text tab, the command
+opens a board file picker. The same trusted workspace and compiler pin checks apply.
+
+Use the Components, Mechanics and View sidebar tabs. The file bar shows source
+status and **Save reviewed changes**; **More** contains source reload/history.
+Temporary placement has its own toolbar and history. **Open board…** opens the
+native picker directly from the mechanical view.
+
+Review source edits and choose **Save reviewed changes**. Native document changes
 invalidate old previews; invalid text remains editable in the regular text view
 and can recover on the next valid document version. Native Undo/Redo restores
 source, while temporary placement history is separate. A failed save leaves the

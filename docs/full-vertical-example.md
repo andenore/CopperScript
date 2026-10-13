@@ -68,8 +68,10 @@ reviewing these coordinates.
 
 `J_GNSS` remains automatic but must be within 5 mm of the GNSS RF input.
 Other components remain automatic and retain their existing proximity rules.
-The default Make workflow binds both the TPS62130A buck and Nordic/Johanson
-antenna hard macros. Their footprint-adapted assets live under
+The board source selects both the TPS62130A buck and Nordic/Johanson antenna
+hard macros through `physical_macro` declarations. The buck uses module-relative
+bindings (`on PWR`); no additional Make/CLI macro arguments are needed.
+Their footprint-adapted assets live under
 `examples/full_vertical/assets/`; their copper and member poses are immutable.
 Placement/routing feedback cannot move a hard lock; incompatible constraints
 must fail rather than silently relax it.

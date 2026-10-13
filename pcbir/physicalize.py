@@ -240,6 +240,8 @@ def resolved_physicalize(
         resolve_footprint,
         options or PrototypePhysicalOptions(),
         metadata,
+        macro_locked=resolver.locked,
+        macro_offline=resolver.offline,
     )
 
 
@@ -253,6 +255,7 @@ def _physicalize(
     footprint_provider: _FootprintProvider,
     options: PrototypePhysicalOptions,
     metadata: dict[str, str],
+    *, macro_locked: bool | None = None, macro_offline: bool | None = None,
 ) -> PhysicalBoard:
     mechanical = board.mechanical if isinstance(board, Design) else None
     from .silkscreen import SilkscreenDesign, physical_artwork
@@ -440,7 +443,7 @@ def _physicalize(
     stackup = (mechanical.stackup.to_stackup(copper_layers)
                if mechanical and mechanical.stackup is not None
                else Stackup(copper_layers=copper_layers))
-    return PhysicalBoard(
+    physical = PhysicalBoard(
         name=board.name,
         silkscreen=physical_artwork(silkscreen, outline),
         outline=outline,
@@ -474,6 +477,9 @@ def _physicalize(
         match_groups=_check_tuning_groups(flat, _lower_match_groups(flat)),
         component_hole_clearances=_lower_hole_clearances(flat, footprints, placements, rules, metadata),
     )
+    from .macro_bindings import apply_source_macros
+    return (apply_source_macros(physical, flat, locked=macro_locked, offline=macro_offline)
+            if flat.physical_macros else physical)
 
 
 def _lower_decoupling(flat, nets):

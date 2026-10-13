@@ -64,7 +64,12 @@ def test_review_save_preserves_bytes_and_electrical_identity(tmp_path):
     assert s.source.read_bytes() == raw
     assert result["scene"]["source_review"]["diff"]
     assert result["source_preview"]["components"][0]["position"] == [9000000, 8000000]
+    refreshed = s.scene()
+    assert refreshed["source_preview"]["components"][0]["position"] == [9000000, 8000000]
+    assert refreshed["source_review"]["id"] == result["scene"]["source_review"]["id"]
+    assert s.source.read_bytes() == raw
     save(s)
+    assert s.scene()["source_preview"] is None
     assert s.source.read_bytes() == raw.replace(b"x = 8mm", b"x = 9mm", 1).replace(
         b"rotation = 0; side = front", b"rotation = 90; side = back", 1)
     assert s.workspace.identity == original

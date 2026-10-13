@@ -24,7 +24,7 @@ const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||"playwright");
     assert.equal(sockets.length,2);
     assert(sockets.every(c=>c.pads.length===100 && c.source_position_locked && c.profile_role));
     assert(await page.locator(".airwire").count()>0);
-    await page.locator("#airwires").uncheck();
+    await page.locator("#tab-view").click();await page.locator("#airwires").uncheck();
     assert.equal(await page.locator(".airwire").count(),0);
     if(process.argv[3])await page.screenshot({path:process.argv[3],fullPage:true});
     assert.deepEqual(errors,[]);

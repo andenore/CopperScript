@@ -192,6 +192,31 @@ class PackageResolver:
             return module + "/" + asset.relative_to(root).as_posix()
         return Path(os.path.relpath(asset, self.source_directory)).as_posix()
 
+    def qualify_macro_asset(self, reference: str, location: SourceLocation) -> str:
+        """Qualify a data import without fetching geometry during electrical checks."""
+        identity = reference.removeprefix("https://")
+        if identity.startswith(("github.com/", "gitlab.com/")):
+            if (not identity.endswith(".json") or "\\" in identity or
+                    any(p in {".", "..", ""} for p in identity.split("/")) or
+                    any(c in identity for c in "?#%:")):
+                raise CopperScriptError("PKG004", "invalid macro module asset path", location)
+            if self._matching_module(identity) is None:
+                raise CopperScriptError("PKG002", f"no requirement in copper.mod provides macro asset {identity!r}", location)
+            return identity
+        if (not reference.endswith(".json") or not reference.startswith(("./", "../")) or
+                "\\" in reference or ":" in reference):
+            raise CopperScriptError("PKG004", "local macro import must be a relative .json path", location)
+        importer = Path(location.filename).resolve()
+        roots = [root for root in self._source_roots if importer.is_relative_to(root)]
+        root = max(roots, key=lambda p: len(p.parts)) if roots else self.manifest.root.resolve()
+        unresolved = importer.parent / reference
+        asset = unresolved.resolve()
+        if not asset.is_relative_to(root) or any(p.is_symlink() for p in (unresolved, *unresolved.parents) if p.is_relative_to(root)):
+            raise CopperScriptError("PKG004", "macro path must stay inside its source module without symlinks", location)
+        if root in self._source_roots:
+            return self._source_roots[root][0] + "/" + asset.relative_to(root).as_posix()
+        return Path(os.path.relpath(asset, self.source_directory)).as_posix()
+
     def resolve_asset(self, import_path: str, location: SourceLocation,
                       verified_modules: dict[str, ResolvedPackage] | None = None) -> ResolvedAsset:
         """Resolve checked data; an operation may reuse a verified module snapshot."""

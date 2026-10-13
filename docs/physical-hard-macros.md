@@ -9,8 +9,9 @@ A hard macro is a physical realization attached to an electrical module or
 explicit component set. Electrical hierarchy, pins and nets remain authoritative
 in electrical IR. Geometry belongs only in physical IR/assets. The intended
 reusable unit is an electrical module plus a separately selected physical macro;
-the first trial explicitly binds component instances, without new frontend
-syntax or automatic component-name inference.
+the first trial explicitly bound component instances through JSON scenes.
+Source bindings now use `physical_macro` declarations with explicit member/net
+mappings; automatic component-name inference is not supported.
 
 - Pin asset content, exact member/footprint identities and explicit pad/net
   role bindings. Isolated lands remain present and unassigned. Different packages
@@ -34,6 +35,34 @@ syntax or automatic component-name inference.
   arcs, mirrored instances and arbitrary vendor CAD import remain unsupported.
 
 ## Implemented lifecycle
+
+Boards/modules can select assets through ordinary imports and declare bindings:
+
+```copper
+import layout "github.com/vendor/library/assets/layout.json";
+physical_macro UNIT: layout on CIRCUIT {
+    member chip = U1;
+    member passive = R1;
+    net signal = port.SIGNAL;
+}
+```
+
+This illustrative asset has two members and one net role. The declaration
+references existing circuitry. `on` is optional; unscoped bindings can use
+explicit descendant paths. Dependency versions live in `copper.mod`; hashes
+come from `copper.lock`, without a source SHA field. `copper lock` prepares the
+selected JSON assets; shared physicalization binds them for placement, routing,
+export and editor rebuilds without an extra CLI scene argument. Local imports
+resolve from the declaring source and retain package ownership. See the
+[language reference](language-reference.md#physical-macro-bindings).
+
+Electrical-only checks keep asset/geometry checks pending. Source requirement
+verification checks current selected assets, member/pad/net bindings and
+materialized immutable ownership. Missing macros or changed input bytes cannot
+reuse old evidence; this check does not establish RF/power/native-fill or
+manufacturing qualification. The existing JSON scene interface remains supported
+with explicit hashes; source and scene bindings must have disjoint owners and
+distinct identities.
 
 `bind_hard_macro()` reads pinned JSON without execution, fetching, rewiring or
 movement. It creates a `RigidPlacementCluster` plus typed `PhysicalHardMacro`,
@@ -214,8 +243,10 @@ rectangular board.
 
 CopperLib owns `packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json`
 and its package-local generator.
-The electrical probe/bindings are `examples/nrf_antenna_macro/board.copper` and
-`examples/nrf_antenna_macro/hard_macro.json`.
+The electrical probe and its URL-imported `physical_macro` binding are both in
+`examples/nrf_antenna_macro/board.copper`. The coin-cell board selects the same
+pinned library asset in its own source. The former example binding scenes have
+been removed; legacy scenes remain supported by the compiler.
 
 Seven members: nRF52832 QFAA, Nordic 0.8 pF/3.9 nH chip matching, a **separate**
 Johanson evaluation-style tee (1 pF series, 2.7 nH shunt, 3.9 nH series), and

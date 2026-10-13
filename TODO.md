@@ -32,8 +32,9 @@ Choose only the relevant focused record for detailed acceptance criteria:
 
 - [ ] Add explicit source layer roles/dedicated-plane semantics beyond coverage
   inference, preserving existing zone/stitching/per-pad controls.
-- [ ] Add hierarchical module-to-macro frontend selection and movable-macro
-  feedback with complete boundary/owner revalidation.
+- [x] Add hierarchical module-to-macro frontend selection following the
+  [source syntax plan](docs/physical-macro-syntax-plan.md).
+- [ ] Extend movable-macro feedback with complete boundary/owner revalidation.
 - [ ] Extend qualified mirrored/curved/local-zone macro variants only with exact
   serialization, fingerprints, native fill/export and independent CAM coverage.
 

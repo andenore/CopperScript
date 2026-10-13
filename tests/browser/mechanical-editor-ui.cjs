@@ -1,0 +1,75 @@
+/* Navigation and form regression: never writes board source. */
+const assert=require("node:assert/strict"),fs=require("node:fs");
+const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||"playwright");
+const {tab,expand}=require("./editor-tools.cjs");
+(async()=>{
+  const [url,source,screenshot]=process.argv.slice(2),original=fs.readFileSync(source);
+  const browser=await chromium.launch({headless:true,executablePath:process.env.COPPER_BROWSER_EXECUTABLE});
+  try {
+    const page=await browser.newPage({viewport:{width:1600,height:1000}}),errors=[];
+    page.on("pageerror",e=>errors.push(e.message));
+    await page.goto(url);await page.waitForFunction(()=>document.querySelectorAll(".component").length===4);
+    assert.equal(await page.getByRole("tabpanel").count(),1);
+    assert.equal(await page.locator("#open-board").isVisible(),false,"Standalone host has no filesystem picker");
+    assert.equal(await page.locator("#save-source").isDisabled(),true);
+    await page.locator("#tab-components").focus();await page.keyboard.press("ArrowRight");
+    assert.equal(await page.locator("#tab-mechanics").getAttribute("aria-selected"),"true");
+    assert.equal(await page.locator("#tab-mechanics").evaluate(n=>n===document.activeElement),true);
+    await page.keyboard.press("End");assert.equal(await page.locator("#panel-view").isVisible(),true);
+    await page.keyboard.press("Home");assert.equal(await page.locator("#panel-components").isVisible(),true);
+    await page.locator("#reference").selectOption("R_ANCHOR");
+    assert.match(await page.locator("#source-lock-state").innerText(),/position, rotation, side/);
+    assert.match(await page.locator("#temporary-lock-state").innerText(),/unlocked/);
+    assert.equal(await page.locator("#position-lock").isDisabled(),true);
+    await page.locator("#edit-locks").check();assert.equal(await page.locator("#position-lock").isEnabled(),true);
+    assert.equal(await page.locator("#rotation-lock").isVisible(),false);
+    await expand(page,"advanced-locks");assert.equal(await page.locator("#rotation-lock").isVisible(),true);
+    await page.locator("#x").fill("8.25");await tab(page,"view");await tab(page,"components");
+    assert.equal(await page.locator("#x").inputValue(),"8.25","Tab navigation must preserve typed poses");
+    await tab(page,"mechanics");await page.locator("#feature-kind").selectOption("hole");
+    assert.equal(await page.locator("#feature-shape").isVisible(),false);
+    assert.equal(await page.locator("#draw-vertices").isVisible(),false);
+    assert.equal(await page.locator("#feature-param-diameter").isVisible(),true);
+    await page.locator("#feature-kind").selectOption("keepout");
+    assert.deepEqual(await page.locator("#feature-shape option").evaluateAll(ns=>ns.map(n=>n.value)),["rectangle","polygon"]);
+    await page.locator("#feature-shape").selectOption("polygon");
+    assert.equal(await page.locator("#draw-vertices").isVisible(),true);
+    await page.locator("#draw-vertices").check();await tab(page,"components");
+    assert.equal(await page.locator("#draw-vertices").isChecked(),false,"Hidden drawing tools must not capture board gestures");
+    await tab(page,"mechanics");await page.locator("#feature-kind").selectOption("datum");
+    assert.equal(await page.locator("#feature-param-relative_to").isVisible(),false);
+    await page.locator("#feature-frame").selectOption("relative");
+    assert.equal(await page.locator("#feature-param-position").isVisible(),false);
+    await page.locator("#feature-kind").selectOption("attach");
+    assert.equal(await page.locator("#feature-param-anchor_pad").isVisible(),false);
+    await page.locator("#feature-param-anchor").selectOption("pad");
+    assert.equal(await page.locator("#feature-param-anchor_pad").isVisible(),true);
+    await page.locator("#feature-param-anchor_pad").fill("1");
+    await page.locator("#feature-param-anchor").selectOption("origin");
+    let submitted;
+    await page.route("**/api/operation",async route=>{submitted=route.request().postDataJSON();await route.abort();});
+    await page.locator("#prepare-feature").click();
+    await page.waitForFunction(()=>document.querySelector("#status").classList.contains("error"));
+    assert.equal(submitted.parameters.anchor,"origin");
+    assert.equal("anchor_pad" in submitted.parameters,false,"Hidden anchor fields must not enter the source transaction");
+    assert.equal("position" in submitted.parameters,false,"Relative attachment excludes absolute position");
+    await page.unroute("**/api/operation");
+    await page.reload();await page.waitForFunction(()=>document.querySelectorAll(".component").length===4);
+    await page.locator("#reference").selectOption("R1");
+    await expand(page,"file-menu");await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#file-menu").evaluate(n=>n.open),false);
+    await tab(page,"components");
+    for(const viewport of [{width:1600,height:1000},{width:900,height:700},{width:640,height:720}]) {
+      await page.setViewportSize(viewport);
+      const box=await page.locator("#board").boundingBox();
+      assert(box.width>200 && box.height>250,"Board must retain usable space");
+      assert(box.y+box.height<=viewport.height,"Board fits above the status bar");
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,"No horizontal document overflow");
+    }
+    await page.setViewportSize({width:1600,height:1000});
+    await page.locator("#reference").selectOption("R_ANCHOR");
+    if(screenshot)await page.screenshot({path:screenshot,fullPage:true});
+    assert.deepEqual(fs.readFileSync(source),original);assert.deepEqual(errors,[]);
+    console.log("PASS: accessible tabs, contextual forms and request fields, distinct locks, keyboard menus, responsive layout; source unchanged");
+  } finally {await browser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -3,79 +3,81 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CopperScript mechanical editor</title><link rel="icon" href="/copper-logo.svg" type="image/svg+xml"><link rel="stylesheet" href="/editor.css"></head>
 <body>
-<header><img class="copper-logo" src="/copper-logo.svg" width="42" height="42" alt="Cu"><div><h1>CopperScript <span>mechanical / floorplan editor</span></h1>
-<p id="notice">Source is read-only. Temporary changes are not saved.</p></div></header>
-<nav aria-label="Placement commands">
-<button id="auto" disabled>Preview rough auto-placement</button><button id="apply" disabled>Apply preview</button>
-<button id="cancel-auto" disabled>Cancel auto-placement</button><label>Budget (seconds) <input id="placement-budget" type="number" min="1" max="300" value="120" size="4"></label>
-<button id="discard" disabled>Discard preview</button><button id="undo" disabled>Undo</button><button id="redo" disabled>Redo</button>
-<button id="reload">Reload session scene</button>
-<button id="reload-source" disabled>Reload source (discard session)</button>
-<button id="save-source" disabled>Save reviewed source</button><button id="discard-source" disabled>Discard source review</button>
-<button id="undo-source" disabled>Undo source save</button><button id="redo-source" disabled>Redo source save</button>
-<button id="fit">Fit board</button><button id="zoom-in">Zoom +</button><button id="zoom-out">Zoom −</button>
-</nav>
-<p id="pending" role="status" hidden>Preview pending: apply or discard it to resume placement editing. Zoom and pan remain available.</p>
-<p id="job-status" role="status" hidden></p><details id="job-profile" hidden><summary>Placement profile</summary><pre id="profile-text"></pre></details>
-<details id="source-review" hidden open><summary>Exact proposed source diff — inspect before saving</summary><pre id="source-diff"></pre></details>
-<main><aside>
-<h2>View</h2>
-<label><input id="reference-guides" type="checkbox" checked> Locked DXF / enclosure guides (read-only)</label>
-<label><input id="airwires" type="checkbox" checked> Ratsnest</label>
-<label><input id="selected-only" type="checkbox"> Selected component nets only</label>
-<label><input id="zone-nets" type="checkbox"> Include zone nets (e.g. GND)</label>
-<label>Power nets <select id="power-filter"><option value="all">Signals and supplies</option><option value="signal">Signals only</option><option value="power">Supplies only</option></select></label>
-<label><input id="net-labels" type="checkbox"> Airwire net labels / lengths</label>
-<label><input id="net-costs" type="checkbox"> Show remaining net costs</label><output id="net-cost-summary" hidden></output>
-<label>Net <select id="net"><option value="">All nets</option></select></label>
-<label>Side <select id="side"><option value="both">Both, shared top-view coordinates</option><option value="front">Front</option><option value="back">Rear, unmirrored</option></select></label>
-<fieldset id="overlay-controls" hidden><legend>Routed reference (read-only)</legend>
-<p id="overlay-status" role="status"></p>
-<label>Layer <select id="copper-layer"><option value="">All copper layers</option></select></label>
-<label><input id="routed-tracks" type="checkbox" checked> Tracks / vias</label>
-<label><input id="filled-zones" type="checkbox" checked> Actual native filled copper</label>
-<label><input id="native-opens" type="checkbox" checked> Native remaining-connection markers</label>
-</fieldset>
-<h2>Component</h2>
-<label>Reference <select id="reference"><option value="">Select a component</option></select></label>
-<p id="details">Click a footprint to inspect it.</p>
-<button id="source-link" hidden>Show component source declaration</button>
-<label>X (mm) <input id="x" type="number" step="0.1"></label>
-<label>Y (mm) <input id="y" type="number" step="0.1"></label>
+<header><img class="copper-logo" src="/copper-logo.svg" width="36" height="36" alt="Cu">
+<div class="board-title"><h1>CopperScript <span>mechanical editor</span></h1><p id="board-name">Loading board…</p></div>
+<nav class="file-actions" aria-label="File and source actions">
+<button id="open-board" hidden>Open board…</button><span id="source-state" role="status">Loading</span>
+<button id="save-source" class="primary" disabled>Save reviewed changes</button>
+<details id="file-menu" class="toolbar-menu"><summary>More</summary><div class="menu-content">
+<button id="reload">Refresh view</button><button id="reload-source" disabled>Reload source…</button>
+<button id="undo-source" disabled>Undo source change</button><button id="redo-source" disabled>Redo source change</button>
+</div></details></nav></header>
+<div class="source-banner"><p id="notice">Loading source workspace…</p><p id="save-help">Loading save status…</p></div>
+<section id="source-review" hidden aria-label="Review source changes">
+<div class="review-heading"><h2>Review source changes</h2><button id="discard-source" disabled>Discard source review</button></div>
+<p>These changes update the board source. Inspect the diff, then choose Save reviewed changes.</p><pre id="source-diff" tabindex="0" aria-label="Proposed source diff"></pre></section>
+<main><aside aria-label="Editor tools">
+<div class="tool-tabs" role="tablist" aria-label="Editor tools">
+<button id="tab-components" role="tab" aria-selected="true" aria-controls="panel-components" tabindex="0">Components</button>
+<button id="tab-mechanics" role="tab" aria-selected="false" aria-controls="panel-mechanics" tabindex="-1">Mechanics</button>
+<button id="tab-view" role="tab" aria-selected="false" aria-controls="panel-view" tabindex="-1">View</button></div>
+<section id="panel-components" class="tool-panel" role="tabpanel" aria-labelledby="tab-components">
+<h2>Component pose</h2><label>Component <select id="reference"><option value="">Select a component</option></select></label>
+<p id="details">Click a footprint to inspect it.</p><button id="source-link" hidden>Show source declaration</button>
+<div class="pose-grid"><label>X (mm) <input id="x" type="number" step="0.1"></label><label>Y (mm) <input id="y" type="number" step="0.1"></label></div>
 <label>Rotation (degrees) <input id="rotation" type="number" step="45"></label>
 <label>Placement side <select id="pose-side"><option value="front">Front</option><option value="back">Rear</option></select></label>
-<button id="move" disabled>Preview pose</button><button id="lock" disabled>Lock temporary pose</button>
-<fieldset id="persistent-controls" disabled><legend>Persistent source constraints</legend>
-<label><input id="edit-locks" type="checkbox"> Edit source locks explicitly</label>
-<label><input id="position-lock" type="checkbox"> Lock position</label>
-<label><input id="rotation-lock" type="checkbox"> Lock rotation</label>
-<label><input id="side-lock" type="checkbox"> Lock side</label>
-<button id="prepare-lock" disabled>Review persistent pose / locks</button>
-</fieldset>
-<label>Drag snap (mm) <input id="snap" type="number" min="0.001" value="0.1" step="0.1"></label>
-<label><input id="preview-drags" type="checkbox"> Preview drags before applying</label>
-<p id="board-help">Scroll to zoom; right-drag to pan. Click a footprint to select it; Shift-click toggles additional components, then drag any highlighted component to move the group together. Focus the board: arrows move by one snap (Shift: ten); R rotates forward, Shift+R backward; L locks, Shift+L or U unlocks; S flips front/back; Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Y) undo/redo; +/− zoom; F/Home fits. Escape cancels a gesture. Tab/Enter selects a footprint. Hover any pad to show its name or number; labels scale to the pad and never remain fixed-size. Temporary placement and source history are separate.</p>
-<fieldset id="mechanical-controls" disabled><legend>Mechanical features</legend>
-<label>Project-owned feature <select id="feature"><option value="">New feature</option></select></label>
-<label>Kind <select id="feature-kind"><option>outline</option><option>hole</option><option>slot</option><option>boundary</option><option>reference</option><option>cutout</option><option>keepout</option><option>copper_keepout</option><option>rules</option><option>datum</option><option>edge</option><option>attach</option><option>overhang</option><option>component_height</option><option>enclosure</option><option>assembly_access</option></select></label>
-<label>Stable ID <input id="feature-name" type="text" placeholder="H2"></label>
-<label>Shape <select id="feature-shape"><option>rectangle</option><option>rounded_rectangle</option><option>circle</option><option>polygon</option><option>path</option><option>line</option><option>arc</option><option>dxf</option><option value="">Not applicable</option></select></label>
-<div id="feature-parameters"></div>
-<label><input id="draw-vertices" type="checkbox"> Click snapped polygon vertices</label>
-<button id="prepare-feature">Review feature</button><button id="remove-feature">Review feature removal</button>
-<p>Dimensions use exact CopperScript units (e.g. 2.2mm). Position is (xmm, ymm); vertices are [(xmm, ymm), ...]. Holes are NPTH; plated holes must be electrical components. Imported profiles remain read-only.</p>
-<details><summary>Closed line/arc path</summary>
-<p>Edit all joined endpoints together. JSON entries use id, kind (line/arc), start/end, and mid for arcs; coordinates are CopperScript length-pair literals. Unsupported concave curved paths fail rather than heal.</p>
-<label>Primitives <textarea id="path-segments" rows="12" spellcheck="false"></textarea></label>
-<button id="prepare-path">Review complete closed path</button>
-</details>
-</fieldset>
-<h2>Measure</h2><label><input id="measure" type="checkbox"> Click two snapped points</label><output id="measurement">No measurement</output>
-<h2>Scope</h2><p>Source edits rebuild unrouted physical intent. Existing routing, copper fills and manufacturing outputs become stale; rebuild before ordering. Ratsnest is a guide, not routing.</p>
+<fieldset><legend>Temporary placement</legend><p>Moves affect this session. They are not saved to the board source.</p>
+<button id="move" disabled>Preview pose</button><button id="lock" disabled>Lock for this session</button><p id="temporary-lock-state">No component selected.</p></fieldset>
+<fieldset id="persistent-controls" disabled><legend>Saved source locks</legend>
+<p id="source-lock-state">Select a component to inspect its saved locks.</p><label><input id="edit-locks" type="checkbox"> Edit source locks</label>
+<label><input id="position-lock" type="checkbox"> Save a position lock</label>
+<details id="advanced-locks"><summary>Rotation and side locks</summary><label><input id="rotation-lock" type="checkbox"> Save a rotation lock</label><label><input id="side-lock" type="checkbox"> Save a side lock</label></details>
+<button id="prepare-lock" disabled>Review pose and locks</button><p>Review and save to keep these locks when the board is reopened.</p></fieldset>
+<details id="drag-options"><summary>Drag options</summary><label>Grid snap (mm) <input id="snap" type="number" min="0.001" value="0.1" step="0.1"></label>
+<label><input id="preview-drags" type="checkbox"> Review drags before applying</label></details></section>
+<section id="panel-mechanics" class="tool-panel" role="tabpanel" aria-labelledby="tab-mechanics" hidden>
+<h2>Mechanical features</h2><fieldset id="mechanical-controls" disabled><legend>Board geometry</legend>
+<label>Feature <select id="feature"><option value="">New feature</option></select></label>
+<label>Feature type <select id="feature-kind">
+<option value="outline">Board outline</option><option value="hole">Mounting hole (NPTH)</option><option value="slot">Mounting slot (NPTH)</option>
+<option value="cutout">Board cutout</option><option value="keepout">Placement keepout</option><option value="copper_keepout">Copper keepout</option>
+<option value="datum">Datum</option><option value="edge">Named edge</option><option value="attach">Component attachment</option>
+<option value="overhang">Body overhang</option><option value="component_height">Component height</option><option value="enclosure">Enclosure limit</option>
+<option value="assembly_access">Assembly access</option><option value="reference">DXF reference</option><option value="rules">Board rules</option><option value="boundary">Outline segment</option></select></label>
+<label id="feature-name-label">Feature name <input id="feature-name" type="text" placeholder="e.g. H2"></label>
+<label id="feature-shape-label">Shape <select id="feature-shape"></select></label><div id="feature-parameters"></div>
+<label id="draw-vertices-label" hidden><input id="draw-vertices" type="checkbox"> Click polygon vertices on the board</label>
+<div class="feature-actions"><button id="prepare-feature">Review feature</button><button id="remove-feature">Review removal</button></div>
+<details id="path-editor"><summary>Closed line/arc path</summary><p>Edit all joined endpoints together. Each entry has a name (id), line/arc kind, start/end, and mid for arcs. Coordinates use length pairs such as (10mm, 5mm).</p>
+<label>Segments <textarea id="path-segments" rows="10" spellcheck="false"></textarea></label><button id="prepare-path">Review complete path</button></details>
+<details><summary>Geometry help</summary><p>Use exact lengths such as 2.2 mm and positions such as (3mm, 3mm). Holes and slots are NPTH; plated holes must be electrical components. Imported profiles remain read-only.</p></details></fieldset>
+<h2>Measure</h2><label><input id="measure" type="checkbox"> Measure between two grid points</label><output id="measurement">No measurement</output></section>
+<section id="panel-view" class="tool-panel" role="tabpanel" aria-labelledby="tab-view" hidden>
+<h2>Board view</h2><label>Side <select id="side"><option value="both">Both sides</option><option value="front">Front</option><option value="back">Rear</option></select></label>
+<p>Both sides use the same board coordinates; the rear view is not mirrored.</p>
+<label><input id="airwires" type="checkbox" checked> Show ratsnest</label><label><input id="selected-only" type="checkbox"> Selected component nets only</label>
+<label>Net <select id="net"><option value="">All nets</option></select></label>
+<details id="ratsnest-options"><summary>Ratsnest options</summary><label><input id="zone-nets" type="checkbox"> Include zone nets (e.g. GND)</label>
+<label>Power nets <select id="power-filter"><option value="all">Signals and supplies</option><option value="signal">Signals only</option><option value="power">Supplies only</option></select></label>
+<label><input id="net-labels" type="checkbox"> Net labels and lengths</label><label><input id="net-costs" type="checkbox"> Remaining net costs</label><output id="net-cost-summary" hidden></output></details>
+<label><input id="reference-guides" type="checkbox" checked> Show DXF / enclosure guides</label>
+<fieldset id="overlay-controls" hidden><legend>Routed reference (read-only)</legend><p id="overlay-status" role="status"></p>
+<label>Layer <select id="copper-layer"><option value="">All copper layers</option></select></label>
+<label><input id="routed-tracks" type="checkbox" checked> Tracks / vias</label><label><input id="filled-zones" type="checkbox" checked> Native filled copper</label>
+<label><input id="native-opens" type="checkbox" checked> Remaining connections</label></fieldset>
+<details><summary>Keyboard and mouse shortcuts</summary><p id="board-help">Scroll to zoom; right-drag to pan. Click a footprint to select it; Shift-click toggles a group. Focus the board: arrows move by one snap (Shift: ten); R / Shift+R rotates; L locks temporarily, Shift+L or U unlocks; S flips sides; Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Y) undo/redo temporary placement; +/− zoom; F/Home fits. Escape cancels a gesture. Tab/Enter selects a footprint. Hover a pad to see its name. Source history is separate.</p></details>
+<details><summary>Build and manufacturing scope</summary><p>Source edits rebuild unrouted physical intent. Routing, copper fills and manufacturing outputs become stale; rebuild before ordering. Ratsnest is a guide, not routing.</p></details>
 <details id="placement-constraint-warnings" hidden><summary>Placement constraint warnings</summary><pre id="constraint-warnings"></pre></details>
-<details><summary>Footprint / source warnings</summary><pre id="warnings"></pre></details>
-</aside>
-<section id="viewport" aria-label="Board view"><svg id="board" tabindex="0" role="group" aria-label="Mechanical board and placement editor" aria-describedby="board-help"></svg></section>
-</main>
+<details><summary>Footprint / source warnings</summary><pre id="warnings"></pre></details></section></aside>
+<section id="viewport" aria-label="Board view">
+<nav class="placement-actions" aria-label="Temporary placement and view actions">
+<button id="auto" disabled>Auto-place</button><button id="cancel-auto" disabled hidden>Cancel placement</button>
+<details class="toolbar-menu" id="placement-options"><summary>Options</summary><div class="menu-content"><label>Placement budget (seconds) <input id="placement-budget" type="number" min="1" max="300" value="120"></label></div></details>
+<div class="history-actions"><button id="undo" disabled>Undo</button><button id="redo" disabled>Redo</button></div>
+<div class="zoom-actions"><button id="fit">Fit board</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="zoom-out" aria-label="Zoom out">−</button></div></nav>
+<div id="pending" class="preview-bar" role="status" hidden><span>Temporary preview — apply or discard to continue.</span><button id="apply" class="primary" disabled>Apply preview</button><button id="discard" disabled>Discard preview</button></div>
+<p id="job-status" role="status" hidden></p><details id="job-profile" hidden><summary>Placement performance</summary><pre id="profile-text"></pre></details>
+<svg id="board" tabindex="0" role="group" aria-label="Mechanical board and placement editor" aria-describedby="board-help"></svg></section></main>
 <footer><output id="status" aria-live="polite">Loading scene…</output></footer>
 <script src="/editor.js"></script></body></html>

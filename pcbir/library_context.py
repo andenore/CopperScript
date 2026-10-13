@@ -20,6 +20,7 @@ from .packages import (
 from .parser import parse
 from .quantities import decimal_text
 from .syntax import CopperScriptError, Document, RawQuantity, SourceLocation
+from .macro_bindings import is_macro_import
 
 INDEX_SCHEMA = "copperscript.library-index/v1"
 PAGE_SCHEMA = "copperscript.library-context/v1"
@@ -28,7 +29,7 @@ SECTIONS = ("overview", "interfaces", "requirements", "composition", "properties
             "dependencies", "declarations", "source")
 _INTERFACES = {"PinDecl", "PadDecl", "PortDecl", "PeripheralDecl", "InterfaceDecl",
                "UnitDecl", "PowerDomainDecl", "SignalGroupDecl", "ModeGroupDecl", "PadSetDecl"}
-_REQUIREMENTS = {"ConstraintDecl", "RouteRuleDecl", "SupplyDecl", "PowerStateDecl"}
+_REQUIREMENTS = {"ConstraintDecl", "RouteRuleDecl", "SupplyDecl", "PowerStateDecl", "PhysicalMacroDecl"}
 _COMPOSITION = {"ComponentDecl", "ModuleInstanceDecl", "NetDecl", "ConfigurationDecl",
                 "MuxDecl", "MechanicalProfileUseDecl", "MechanicalItemDecl", "MechanicalDecl"}
 _CORE_PROPERTIES = {"category", "manufacturer", "assembled", "mpn", "description", "device",
@@ -270,6 +271,17 @@ def inspect(catalog: Catalog, selector: str, *, kind: str | None = None, section
         for declaration in document.imports:
             row = _record(declaration, len(rows))
             try:
+                is_macro = is_macro_import(declaration.path)
+                if catalog.resolver and is_macro:
+                    identity = catalog.resolver.qualify_macro_asset(declaration.path, declaration.location)
+                    if identity.startswith(("github.com/", "gitlab.com/")):
+                        asset = catalog.resolver.resolve_asset(identity, declaration.location)
+                        row.update(status="resolved", asset=asset.identity, provider=asset.module_path,
+                                   version=asset.version, content_digest=asset.checksum, asset_sha256=asset.sha256)
+                    else:
+                        row.update(status="local_input", asset=identity)
+                    rows.append(row)
+                    continue
                 resolved = catalog.resolver.resolve(declaration.path, declaration.location) if catalog.resolver else None
                 if resolved:
                     row.update(status="resolved", package=resolved.import_path, provider=resolved.module_path,

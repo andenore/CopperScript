@@ -168,6 +168,7 @@ class EditorSession:
             scene["references_stale"]=True
             scene["warnings"]["reference_assets_changed"]="Locked reference assets changed; reload source before editing. Guides are stale."
         scene["pending_preview"] = self._document(self.pending) if self.pending else None
+        scene["source_preview"] = self._document(State(self.source_pending.board)) if self.source_pending else None
         return scene
 
     def _poll_job(self):
@@ -485,7 +486,7 @@ class EditorSession:
         self.revision += 1
         response = {"scene": self.scene(), "accepted": True}
         if self.source_pending:
-            response["source_preview"] = self._document(State(self.source_pending.board))
+            response["source_preview"] = response["scene"]["source_preview"]
         return response
 
     def _saved(self, raw, board):

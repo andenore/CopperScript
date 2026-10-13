@@ -52,6 +52,7 @@ def _placement(constraint, lowered, board):
     from .geometry import RoundedConvexShape
     from .mechanical import shape_in_outline, shape_in_board
     from .placement import _placement_polygon, _keepout_blocks, transformed_pad_position
+    from .mechanical_assembly import body_in_material
     regions, keepouts, rules, relative = lowered[:4]
     poses = {p.reference: p for p in board.placements}
     measurements, violations = [], []
@@ -86,7 +87,12 @@ def _placement(constraint, lowered, board):
                 violations.append(f"{rule.reference}: fixed rotation differs")
             if rule.side is not None and pose.side is not rule.side:
                 violations.append(f"{rule.reference}: fixed side differs")
-            if rule.edge_clearance_nm is not None and not shape_in_board(board,
+            # Use the legalizer's own predicate. A declared body overhang is
+            # part of the placement rule, so re-checking the pose against the
+            # bare outline would fail a placement the legalizer accepted.
+            # body_in_material falls back to shape_in_board when the reference
+            # declares no overhang, so unaffected components are unchanged.
+            if rule.edge_clearance_nm is not None and not body_in_material(board, pose,
                     RoundedConvexShape(_placement_polygon(board, pose)), rule.edge_clearance_nm):
                 violations.append(f"{rule.reference}: declared edge clearance is violated")
         elif constraint.kind is ConstraintKind.ALLOWED_ORIENTATIONS:
@@ -250,6 +256,8 @@ def verify_requirements(source, physical, *, drc=None, native=None, stage="route
             "required": required, "status": status, "detail": detail, "measurements": measurements,
             "verifier": "copperscript-final-geometry/v0.1",
             "declared_consumers": list(original.consumers), "declared_verifier": original.verifier})
+    from .macro_bindings import verify_source_macros
+    rows.extend(verify_source_macros(flat, physical, stage=stage, stale_drc=stale_drc))
     hard = [r for r in rows if r["required"]]
     overall = "fail" if any(r["status"] == "fail" for r in hard) else (
         "blocked" if any(r["status"] != "pass" for r in hard) else "pass")

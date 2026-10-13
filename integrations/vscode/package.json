@@ -30,9 +30,14 @@
   },
   "contributes": {
     "commands": [
+      {"command": "copperscript.openMechanical", "title": "Open Mechanical Editor", "category": "CopperScript"},
       {"command": "copperscript.showSetup", "title": "Show Setup", "category": "CopperScript"},
       {"command": "copperscript.restartLanguageServer", "title": "Restart Language Server", "category": "CopperScript"}
     ],
+    "menus": {
+      "explorer/context": [{"command": "copperscript.openMechanical", "when": "resourceExtname == .copper", "group": "navigation"}],
+      "editor/title/context": [{"command": "copperscript.openMechanical", "when": "resourceExtname == .copper", "group": "navigation"}]
+    },
     "customEditors": [
       {
         "viewType": "copperscript.mechanical",

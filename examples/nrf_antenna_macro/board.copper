@@ -5,6 +5,8 @@ board NrfAntennaMacroProbe {
     use library "tiny";
     import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
     import johanson "github.com/andenore/CopperLib/packages/parts/johanson/2450at18a0100001e";
+    import nordic_layout "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json";
+
     component U_NRF: nordic.NRF52832_QFAA;
     component ANT_BT: johanson.JOHANSON_2450AT18A0100001E;
     component C_BT_MATCH: CAPACITOR { value = 0.8pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
@@ -18,4 +20,20 @@ board NrfAntennaMacroProbe {
     net ANT_FEED { L_ANT_SERIES.2; ANT_BT.FEED; }
     net GND { U_NRF.VSS_1; U_NRF.VSS_2; U_NRF.VSS_EP; C_BT_MATCH.1; L_ANT_SHUNT.1; }
     supply GND { voltage = 0V; external = true; }
+
+    // Source-selected physical realizations; geometry remains in the assets.
+    physical_macro nordic-antenna-trial: nordic_layout {
+        member U1 = U_NRF;
+        member C3 = C_BT_MATCH;
+        member L1 = L_BT_MATCH;
+        member CA = C_ANT_SERIES;
+        member LA = L_ANT_SHUNT;
+        member LB = L_ANT_SERIES;
+        member ANT = ANT_BT;
+        net raw = NRF_RF_RAW;
+        net ground = GND;
+        net feed = NRF_RF_ANT;
+        net tee = ANT_TEE;
+        net antenna = ANT_FEED;
+    }
 }

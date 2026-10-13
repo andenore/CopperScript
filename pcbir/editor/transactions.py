@@ -34,9 +34,12 @@ def electrical_identity(board):
     """
     constraints = tuple(replace(c, origins=()) for c in board.constraints
                         if c.kind is not ConstraintKind.FIXED_PLACEMENT)
+    from ..macro_bindings import macro_binding_identity
     modules = {name: replace(module, constraints=tuple(replace(c, origins=())
-               for c in module.constraints)) for name, module in board.module_definitions.items()}
-    return replace(board, constraints=constraints, module_definitions=modules)
+               for c in module.constraints), physical_macros=tuple(map(macro_binding_identity, module.physical_macros)))
+               for name, module in board.module_definitions.items()}
+    return replace(board, constraints=constraints, module_definitions=modules,
+                   physical_macros=tuple(map(macro_binding_identity, board.physical_macros)))
 
 
 def seed_placements(board: PhysicalBoard, seeds: PhysicalBoard) -> PhysicalBoard:

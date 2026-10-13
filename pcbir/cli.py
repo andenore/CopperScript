@@ -189,6 +189,8 @@ def _parser() -> argparse.ArgumentParser:
             assembly.add_argument("--report", type=Path, help="write offline selection diagnostics as JSON")
         if action == "bom":
             assembly.add_argument("-o", "--output", type=Path, required=True, help="JLCPCB selection BOM CSV")
+            assembly.add_argument("--hand-assembly", type=Path,
+                                  help="also write the consigned/not-fitted components the supplier will not place")
         if action == "candidate-bom":
             assembly.add_argument("-o", "--output", type=Path, required=True,
                                   help="new unapproved human-review bundle directory; never overwritten")
@@ -235,6 +237,8 @@ def _parser() -> argparse.ArgumentParser:
         "lock", help="resolve package content and update copper.lock"
     )
     lock_parser.add_argument("board", type=Path, help="a .copper source file")
+    lock_parser.add_argument("--locked", action="store_true",
+                             help="verify existing copper.lock without rewriting it")
     lock_parser.add_argument(
         "--offline", action="store_true", help="reject remote package cache misses"
     )
@@ -794,6 +798,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 inputs += [root / "copper.mod", root / "copper.lock"]
             inputs += [Path(fp.metadata["source_path"]) for fp in physical.footprints.values()
                        if fp.metadata.get("source_path")]
+            from .macro_bindings import source_macro_input_paths
+            inputs += list(source_macro_input_paths(physical))
             workspace = SourceWorkspace(args.board, design, rebuild, input_paths=tuple(inputs))
             from .editor.overlay import RoutedOverlay
             session = EditorSession(physical, args.board, workspace=workspace,
@@ -858,7 +864,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"MANUFACTURING EXPORT ERROR: {exc}")
             return 2
     if args.command == "assembly":
-        from .assembly import AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_jlcpcb_bom, write_candidate_bom
+        from .assembly import (AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_hand_assembly_list,
+                               write_jlcpcb_bom, write_candidate_bom)
         try:
             board = load_board(args.board, locked=args.locked, offline=args.offline)
             diagnostics = check(board)
@@ -886,11 +893,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 print(f"Assembly selections: {report['exact_selection_count']}/{report['component_count']} exact; "
                       f"{report['reviewed_count']} reviewed; availability not checked")
+                # Never let an exclusion from the supplier BOM/CPL pass silently.
+                for label, key in (("consigned", "consigned"), ("not fitted", "not_fitted")):
+                    names = report[key]
+                    if names:
+                        shown = ", ".join(names[:12]) + (f", +{len(names) - 12} more" if len(names) > 12 else "")
+                        print(f"Outside the supplier BOM/CPL, {label}: {len(names)} ({shown})")
                 for issue in report["issues"]:
                     print(f"{issue['code']}: {issue['reference'] or board.name}: {issue['message']}")
                 return 0 if report["passed"] else 1
             write_jlcpcb_bom(board, lock, args.output)
-            print(f"Generated selection BOM -> {args.output}; stock and manufacturing signoff not checked")
+            left_out = report["consigned_count"] + report["not_fitted_count"]
+            print(f"Generated selection BOM -> {args.output}; "
+                  f"{report['supplier_assembled_count']} supplier-assembled"
+                  + (f", {report['consigned_count']} consigned and {report['not_fitted_count']} "
+                     "not fitted left out" if left_out else "")
+                  + "; stock and manufacturing signoff not checked")
+            if args.hand_assembly:
+                count = write_hand_assembly_list(board, lock, args.hand_assembly)
+                print(f"Generated hand-assembly list -> {args.hand_assembly}; {count} component(s) to fit or leave empty by hand")
             return 0
         except (AssemblyError, BoardLoadError, OSError) as exc:
             print(f"ASSEMBLY ERROR: {exc}")
@@ -986,10 +1007,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 managed = prepare_footprint_dependencies(board, FootprintResolver(
                     args.board.resolve().parent, locked=getattr(args, "locked", False), offline=getattr(args, "offline", False)))
-            except (FootprintResolutionError, OSError) as exc:
+                from .macro_bindings import prepare_macro_bindings
+                macros = prepare_macro_bindings(design, locked=getattr(args, "locked", False), offline=getattr(args, "offline", False))
+            except (FootprintResolutionError, OSError, ValueError) as exc:
                 print(f"FOOTPRINT ERROR: {exc}")
                 return 2
-            print(f"Locked package content for {board.name} -> copper.lock ({len(managed)} managed footprints)")
+            suffix = f", {len(macros)} physical macros" if macros else ""
+            print(f"Locked package content for {board.name} -> copper.lock ({len(managed)} managed footprints{suffix})")
             return 0
         if args.command == "audit-footprints":
             resolver = FootprintResolver(
@@ -1039,6 +1063,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(diagnostic)
             else:
                 print(f"OK: {board.name} passed ERC")
+            from .elaborate import elaborate
+            if elaborate(board).physical_macros:
+                print("Physical macro asset and geometry checks remain pending; run lock and the physical build workflow.")
             return 1 if has_errors(diagnostics) else 0
         if args.command == "power-check":
             if diagnostics:

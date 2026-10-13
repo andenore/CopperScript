@@ -1,0 +1,42 @@
+// Isolated 1.2 V regulator geometry probe; no current/thermal/assembly qualification.
+board BuckLayoutTrial {
+    import buck "github.com/andenore/CopperLib/packages/circuits/ti/tps62130a-buck";
+    import passives "github.com/andenore/CopperLib/packages/generic/passives";
+    // Same copper as the pinned library asset, with the existing managed-footprint adaptation.
+    import buck_layout "./assets/tps62130a-managed-always-on.json";
+
+    module B: buck.TPS62130A_BUCK_2U2;
+    component R_TOP: passives.RESISTOR { value = 49.9kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_BOT: passives.RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+
+    net VIN { B.VIN; B.EN; }
+    net FB { B.FB; R_TOP.P2; R_BOT.P1; }
+    net VOUT { B.VOUT; R_TOP.P1; }
+    net GND { B.GND; R_BOT.P2; }
+    supply VIN { voltage = 5V; external = true; }
+    supply VOUT { voltage = 1.2V; source = B.VOUT; }
+    supply GND { voltage = 0V; external = true; }
+
+    constraint copper_zone(GND) { layers = "In1.Cu,In4.Cu"; pad_connection = solid; }
+    constraint via_in_pad(B/U.EP) { process = "filled-capped"; }
+    constraint routing(VIN) { width = 0.25mm; }
+    constraint routing(VOUT) { width = 0.25mm; }
+
+    physical_macro regulator: buck_layout {
+        member C_AVIN = B/C_AVIN;
+        member C_OUT1 = B/C_OUT1;
+        member C_OUT2 = B/C_OUT2;
+        member C_PVIN = B/C_PVIN;
+        member C_SS = B/C_SS;
+        member L = B/L;
+        member R_FB_BOT = R_BOT;
+        member R_FB_TOP = R_TOP;
+        member U = B/U;
+        net FB = FB;
+        net GND = GND;
+        net SS = B/SS;
+        net SW = B/SW;
+        net VIN = VIN;
+        net VOUT = VOUT;
+    }
+}

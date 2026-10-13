@@ -150,9 +150,10 @@ inspection; `--layers`, `--fab-profile`, `--placement-templates` and repeatable
 ## Reviewed persistent editing
 
 The local editor now supports reviewed source saves. Select a component, enable
-**Edit source locks explicitly**, choose position/rotation/side independently,
-enter the intended pose, and choose **Review persistent pose / locks**. Review
-the complete source diff and geometry before **Save reviewed source**. Clearing
+**Edit source locks**, choose position/rotation/side independently (rotation and
+side are under **Rotation and side locks**), enter the intended pose, and choose
+**Review pose and locks**. Review the complete source diff and geometry before
+**Save reviewed changes**. Clearing
 a lock removes only its owned properties. Imported module/profile poses require
 editing their public binding or original owner; the editor reports this conflict.
 
@@ -166,6 +167,42 @@ clearance, polygon cutouts, side-specific placement keepouts and layer-specific
 copper keepouts. Select a feature to update its properties or review its removal.
 Polygon vertices can be entered numerically or clicked on the snap grid. The
 measurement tool reports distance and coordinate deltas between snapped points.
+
+Refreshing or reopening the browser view retains pending
+placement and source reviews in the running session, including the proposed
+geometry and apply/save controls. The save hint explains which changes persist;
+a successful save is explicitly reported. Restarting the service reconstructs
+only persisted source intent.
+
+The sidebar has **Components**, **Mechanics**, and **View** tabs. Left/right arrows
+and Home/End switch tabs with keyboard focus. Component selection on the board
+opens Components; switching tabs preserves typed pose values. Leaving Mechanics
+turns off active polygon drawing and measurement so hidden tools cannot consume
+board gestures.
+
+The top bar contains board identity, source status and reviewed Save. **More**
+contains source reload/history and a view refresh; temporary placement Undo/Redo
+stays above the board. In VS Code, **Open board…** uses the native file picker.
+Standalone board selection stays with the CLI launch command. Pending placement
+Apply/Discard appears beside the board, while pending source diffs and their
+Discard action appear under the file bar. These are separate transactions.
+
+Advanced drag, ratsnest and lock settings are collapsible. The mechanics form
+offers only the supported shapes for its feature type, hides shape/name selectors
+where they do not apply, and shows absolute/relative and pad/mating-face anchor
+fields only for the selected mode. Hidden incompatible fields are excluded from
+review requests; exact source literals and existing validation remain authoritative.
+
+Contributor browser verification uses disposable copies and fresh sessions:
+
+```console
+python tests/browser/run-editor-smokes.py ui save placement keyboard curves anchors references --footprint-root <installed-KiCad-footprints>
+```
+
+Install Playwright/Chromium in the test environment first, or set
+`COPPER_PLAYWRIGHT_MODULE` and `COPPER_BROWSER_EXECUTABLE` to existing local tools.
+The runner never downloads tools and writes only disposable `build/` copies and
+screenshots. The browser checks assert source-byte preservation or exact undo.
 
 Every source candidate is compiled and physicalized in memory using offline,
 locked dependencies. Electrical identity, placement rules, substrate topology,
