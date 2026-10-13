@@ -25,7 +25,7 @@ exports.run=async()=>{
     const s=await scene();return bridge.enqueue(()=>bridge.handle({path:"/api/operation",body:{action,revision:s.revision,...fields}}));
   };
   assert.equal((await scene()).components.length,4);
-  await operation("start_auto_place",{budget_seconds:30});
+  await operation("start_auto_place");
   await waitUntil(async()=>!(await scene()).placement_job || (await scene()).placement_job.status!=="running");
   assert((await scene()).pending_preview,"Placement worker must complete");await operation("apply");
   await operation("prepare_lock",{reference:"R_ANCHOR",x_nm:8000000,y_nm:8000000,rotation:0,side:"back",locks:["position","rotation","side"]});

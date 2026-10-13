@@ -223,9 +223,10 @@ unrouted physical intent and flag routing/fill/manufacturing outputs stale.
 Reopening reconstructs source locks; movable seeds can change. Re-run the build
 before using existing manufacturing output. These checks are not routing signoff.
 
-Automatic placement now runs in a cancellable process with a wall-time budget,
-phase progress and a cumulative performance profile. The service remains usable
-during computation. Manual edits cancel older work, and a changed source/session
+Automatic placement runs in a cancellable process without a time limit, with
+phase progress, elapsed time and a cumulative performance profile. It continues
+until the planner completes, reports an error or the user presses Cancel placement.
+The service remains usable during computation. Manual edits cancel older work, and a changed source/session
 revision discards the result. Only incident ratsnest nets are recomputed for pose
 changes; exact graph semantics remain unchanged.
 

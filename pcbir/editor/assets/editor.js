@@ -362,7 +362,7 @@ function updateControls() {
   $("cancel-auto").hidden=job?.status!=="running";
   $("auto").title="Preview automatic placement; existing locks and physical constraints are preserved.";
   $("job-status").hidden=!job;
-  $("job-status").textContent=job ? `Auto-placement ${job.status}: ${job.progress.phase}, candidate ${Math.min(job.progress.candidate+1,job.progress.candidates)}/${job.progress.candidates}; ${job.elapsed_seconds}s / ${job.budget_seconds}s${job.error?" — "+job.error:""}` : "";
+  $("job-status").textContent=job ? `Auto-placement ${job.status}: ${job.progress.phase}, candidate ${Math.min(job.progress.candidate+1,job.progress.candidates)}/${job.progress.candidates}; ${job.elapsed_seconds}s elapsed${job.error?" — "+job.error:""}` : "";
   $("job-profile").hidden=!job?.profile;$("profile-text").textContent=job?.profile?.top_cumulative||"";
   if (job?.status==="running" && jobPoll===null) jobPoll=setTimeout(pollJob,250);
   $("reload").disabled = busy;
@@ -552,7 +552,7 @@ for (const id of ["side","net","airwires","selected-only","zone-nets","power-fil
   for(const [id,value] of draft)$(id).value=value;
 });
 for (const [id,action] of [["apply","apply"],["discard","discard"],["undo","undo"],["redo","redo"]]) $(id).onclick=()=>operation(action);
-$("auto").onclick=()=>operation("start_auto_place",{budget_seconds:Number($("placement-budget").value)});
+$("auto").onclick=()=>operation("start_auto_place");
 $("cancel-auto").onclick=()=>operation("cancel_auto_place");
 $("lock").onclick=()=>operation("lock",{reference:selected,locked:!scene().components.find(c=>c.reference===selected).session_locked});
 $("move").onclick=()=>operation("move",{reference:selected,x_nm:Math.round(Number($("x").value)*1e6),y_nm:Math.round(Number($("y").value)*1e6),rotation:$("rotation").value,side:$("pose-side").value});

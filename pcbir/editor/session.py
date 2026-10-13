@@ -213,7 +213,7 @@ class EditorSession:
                   "prepare_mechanical_batch": ("features",),
                   "save_source": ("review_id",), "discard_source": (),
                   "undo_source": (), "redo_source": (), "reload_source": (),
-                  "start_auto_place": ("budget_seconds",), "cancel_auto_place": ()}
+                  "start_auto_place": (), "cancel_auto_place": ()}
         if not isinstance(action, str) or action not in fields:
             raise EditorError("unknown editor operation")
         if set(request) != {"action", "revision", *fields[action]}:
@@ -258,14 +258,11 @@ class EditorSession:
         if action in {"prepare_lock", "prepare_mechanical", "prepare_mechanical_batch", "save_source", "discard_source", "undo_source", "redo_source"}:
             return self._source_operation(action, request)
         if action == "start_auto_place":
-            budget = request["budget_seconds"]
-            if type(budget) not in (int, float) or not 1 <= budget <= 300:
-                raise EditorError("placement budget must be 1–300 seconds")
             self.pending = None
             self.revision += 1
             self.job_consumed = False
             self.job = PlacementJob(self.state.board, self._options(), revision=self.revision,
-                                   source_revision=self.source_revision, timeout_seconds=budget)
+                                   source_revision=self.source_revision)
             return {"scene": self.scene(), "accepted": True}
         if action == "auto_place":
             # A failed attempt invalidates an old preview, but never accepted state.

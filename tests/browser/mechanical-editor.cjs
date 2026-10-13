@@ -31,8 +31,13 @@ const {chromium} = require(process.env.COPPER_PLAYWRIGHT_MODULE || "playwright")
     await page.locator("#airwires").check();
     await page.locator("#net").selectOption("SIGNAL");
     assert.equal(await page.locator(".airwire").count(),3);
+    assert.equal(await page.locator("#placement-budget").count(),0,"Auto-place has no time budget control");
+    const requests=[];
+    page.on("request",request=>{if(request.url().endsWith("/api/operation"))requests.push(request.postDataJSON());});
     await page.getByRole("button",{name:"Auto-place"}).click();
     await page.waitForFunction(()=>!document.querySelector("#apply").disabled);
+    assert(requests.some(request=>request.action==="start_auto_place" && !("budget_seconds" in request)));
+    assert.match(await page.locator("#job-status").innerText(),/s elapsed/);
     await page.getByRole("button",{name:"Apply preview",exact:true}).click();
     await page.waitForFunction(()=>!document.querySelector("#undo").disabled);
     await tab(page,"components");
