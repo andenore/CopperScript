@@ -2,11 +2,14 @@
 
 // The links still open the native illustrations when JavaScript is unavailable.
 const views = {
-  top: { image: "assets/routing-top.svg", alt: "Native KiCad F.Cu top copper and silkscreen of the 12 October 2026 manufacturing review candidate", caption: "F.Cu · top copper and silkscreen. prototype-preorder-v3-20261012; unapproved review candidate." },
-  inner: { image: "assets/routing-inner.svg", alt: "Native KiCad In2.Cu regional modem supply and signal routing from the 12 October review candidate, viewed from above", caption: "In2.Cu · regional supply and signal routing from the same 12 October manufacturing candidate. Viewed from above without mirroring; return-path qualification remains open." },
-  bottom: { image: "assets/routing-bottom.svg", alt: "Native KiCad B.Cu bottom copper routing from the 12 October review candidate, viewed from above without mirroring", caption: "B.Cu · bottom copper from the same 12 October candidate, viewed from above without mirroring. A single layer does not show every connection." },
-  placement: { image: "assets/placement.svg", alt: "The same 97 candidate footprints and courtyards with copper omitted", caption: "Placement · 97 footprints from the exported candidate with copper omitted. This is not a new placement run." }
+  top: { image: "assets/routing-top.svg", alt: "Native KiCad F.Cu top copper and silkscreen from the fresh 13 October 2026 source-matched route", caption: "F.Cu · top copper and silkscreen. promo-reroute-20261013; unapproved routing review." },
+  inner: { image: "assets/routing-inner.svg", alt: "Native KiCad In2.Cu regional modem supply and signal routing from the fresh 13 October route, viewed from above", caption: "In2.Cu · regional supply and signal routing from the same 13 October route. Viewed from above without mirroring; return-path qualification remains open." },
+  bottom: { image: "assets/routing-bottom.svg", alt: "Native KiCad B.Cu bottom copper routing from the fresh 13 October route, viewed from above without mirroring", caption: "B.Cu · bottom copper from the same 13 October route, viewed from above without mirroring. A single layer does not show every connection." },
+  placement: { image: "assets/placement.svg", alt: "Native front fabrication and courtyard artwork for the same 97 footprints from the fresh route, with copper omitted", caption: "Placement · 97 footprints at their final routed poses. Native fabrication/courtyard artwork, with copper omitted; not an assembled-board photograph." }
 };
+
+// Keep browser caches from mixing previous artwork with a new snapshot.
+for (const view of Object.values(views)) view.image += "?v=20261013";
 
 const image = document.getElementById("board-view");
 const caption = document.getElementById("board-caption");

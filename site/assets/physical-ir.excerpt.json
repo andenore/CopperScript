@@ -1,5 +1,5 @@
 {
-  "note": "Selected native KiCad placement geometry from the exact manufacturing review candidate; this is not a full CopperScript physical-IR serialization or production approval.",
+  "note": "Selected source-checked native PCB placements; not a full physical-IR serialization or production approval.",
   "placements": [
     {
       "footprint": "CopperScript:SIM7670G_LNGV_kicad_mod__dc0ea19d644b367fc68e",

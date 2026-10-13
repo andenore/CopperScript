@@ -104,11 +104,12 @@ feedback; search-enabled LLM answers are a useful spot check, not a stable score
 
 The six tracker asset files and `snapshot.json` are byte-for-byte copies from
 CopperAssetTracker's `docs/showcase/`. The current illustrations represent the
-`prototype-preorder-v3-20261012` manufacturing review candidate, not a released
+`promo-reroute-20261013` fresh source-matched routing review, not a released
 board. Its snapshot binds the exact exported PCB, source, native DRC, route
-summary and rendered-asset hashes. Native DRC is clean, but five check types were
+summary, in-language macro binding and rendered-asset hashes. Native DRC is clean, but five check types were
 ignored, 13 electrical-requirement checks remain blocked, independent CAM was
-skipped, and supplier/assembly review is incomplete. `qualified_release` stays
+not run for this review. No new manufacturing export is claimed, and
+supplier/assembly review is incomplete. `qualified_release` stays
 false. The site links to current board status separately.
 
 Refresh from a regenerated, source-matched tracker showcase:
