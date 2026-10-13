@@ -17,18 +17,25 @@ def test_tps_probe_source_variant_materializes_without_executing_library_code(tm
     assert board.materialized_macros == ('regulator',)
     assert board.tracks and board.vias and board.polygons
     assert (tmp_path / 'source.copper.txt').exists()
-    assert json.loads(board.metadata['source_physical_macros'])[0]['resolution'] == 'local_input'
+    provenance = json.loads(board.metadata['source_physical_macros'])[0]
+    assert provenance['resolution'] == 'managed'
+    assert provenance['symbol'] == ('TPS62130A_MANAGED_ENABLED' if enabled else 'TPS62130A_MANAGED_ALWAYS_ON')
+    if enabled:
+        assert any(p.reference == 'J_ENABLE' for p in board.placements)
+        assert board.tracks[-1].net == 'ENABLE'
+        assert board.tracks[-1].end == next(p.position for p in board.placements if p.reference == 'J_ENABLE')
 
 
 def test_tps_always_on_adaptation_preserves_every_source_copper_object():
     selection = prepare_macro_bindings(compile_file(SOURCE, locked=True, offline=True))[0]
-    adapted = json.loads(selection.path.read_bytes())
+    adapted = selection.data
     original_path = resolve_module_asset(SOURCE,
         'github.com/andenore/CopperLib/packages/circuits/ti/tps62130a-buck/assets/tps62130a-six-layer-always-on.json',
         locked=True, offline=True)
     original = json.loads(original_path.read_bytes())
     assert adapted['source']['base_asset_sha256'] == sha256(original_path.read_bytes()).hexdigest()
-    for key in original.keys() - {'members', 'source'}:
+    original['vias'] = [{'finish': 'standard', **v} for v in original['vias']]
+    for key in original.keys() - {'members', 'source', 'schema'}:
         assert adapted[key] == original[key]
     for member, prior in zip(adapted['members'], original['members'], strict=True):
         assert {k: v for k, v in member.items() if k not in {'footprint', 'footprint_digest'}} == {

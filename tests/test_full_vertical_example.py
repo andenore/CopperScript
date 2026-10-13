@@ -107,16 +107,19 @@ def test_full_vertical_footprint_adaptations_preserve_copperlib_macro_copper() -
         ("modem-buck", base + "ti/tps62130a-buck/assets/tps62130a-six-layer-enabled.json"),
         ("nordic-antenna", base + "nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json"),
     ):
-        adapted_bytes = selected[name].path.read_bytes()
-        assert hashlib.sha256(adapted_bytes).hexdigest() == selected[name].digest
-        adapted = json.loads(adapted_bytes)
+        from pcbir.macro_definitions import canonical_macro_bytes
+        adapted = selected[name].data
+        assert hashlib.sha256(canonical_macro_bytes(adapted)).hexdigest() == selected[name].digest
         source_bytes = resolve_module_asset(EXAMPLE, source, locked=True, offline=True).read_bytes()
         assert hashlib.sha256(source_bytes).hexdigest() == adapted["source"]["base_asset_sha256"]
         original = json.loads(source_bytes)
-        for key in original.keys() - {"members", "source"}:
+        original['vias'] = [{'finish': 'standard', **v} for v in original['vias']]
+        for key in original.keys() - {"members", "source", "schema"}:
             assert adapted[key] == original[key]
         assert len(adapted["members"]) == len(original["members"])
         for member, prior in zip(adapted["members"], original["members"]):
+            from pcbir.quantities import decimal_text
+            prior = {**prior, 'rotation_degrees': decimal_text(Decimal(str(prior['rotation_degrees'])))}
             assert {key: value for key, value in member.items()
                     if key not in {"footprint", "footprint_digest"}} == {
                         key: value for key, value in prior.items()

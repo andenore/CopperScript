@@ -7,9 +7,10 @@ planes. The default 180° view puts VIN on the left, the inductor and VOUT on th
 right, and the broad GND return below, matching the orientation of TI datasheet
 Figure 11-1. The committed `board.copper` imports the electrical module by URL
 and selects its physical implementation with a `physical_macro` declaration.
-The existing managed-footprint adaptation preserves the pinned library copper;
-its always-on variant only rebinds the reviewed footprint identities. The enabled
-variant reuses the full-vertical adaptation. A `source.copper.txt` diagnostic
+The package exports `TPS62130A_MANAGED_ALWAYS_ON` and
+`TPS62130A_MANAGED_ENABLED` as Copper definitions with exact footprint URLs.
+They preserve the existing managed-footprint adaptations' copper and evidence;
+the former local JSON files remain historical regression snapshots. A `source.copper.txt` diagnostic
 snapshot records the selected variant; the committed source and repository
 manifest/lock remain authoritative.
 
@@ -28,3 +29,8 @@ to remain netted.
 No sibling library checkout or executable library-side generator is required.
 This is a geometry probe,
 not a production regulator qualification.
+
+The enabled geometry fixture adds a synthetic one-land terminal outside the
+rigid unit and an ordinary lead to its declared EN port. This terminates the otherwise dangling native track
+without changing immutable macro copper; it does not model or qualify an EN
+drive circuit. The always-on fixture needs no added terminal.

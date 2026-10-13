@@ -3,7 +3,7 @@ board BuckLayoutTrial {
     import buck "github.com/andenore/CopperLib/packages/circuits/ti/tps62130a-buck";
     import passives "github.com/andenore/CopperLib/packages/generic/passives";
     // Same copper as the pinned library asset, with the existing managed-footprint adaptation.
-    import buck_layout "./assets/tps62130a-managed-always-on.json";
+    import buck_layout "github.com/andenore/CopperLib/packages/circuits/ti/tps62130a-buck";
 
     module B: buck.TPS62130A_BUCK_2U2;
     component R_TOP: passives.RESISTOR { value = 49.9kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
@@ -22,7 +22,7 @@ board BuckLayoutTrial {
     constraint routing(VIN) { width = 0.25mm; }
     constraint routing(VOUT) { width = 0.25mm; }
 
-    physical_macro regulator: buck_layout {
+    physical_macro regulator: buck_layout.TPS62130A_MANAGED_ALWAYS_ON {
         member C_AVIN = B/C_AVIN;
         member C_OUT1 = B/C_OUT1;
         member C_OUT2 = B/C_OUT2;

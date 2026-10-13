@@ -11,7 +11,7 @@ board Nrf52CoinCell {
     import generic_switch "github.com/andenore/CopperLib/packages/generic/switch-button";
     import nrf52_support "github.com/copperscript/examples/nrf52_support";
 
-    import nordic_layout "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/assets/nrf52832-johanson-six-layer-trial.json";
+    import nordic_layout "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference";
 
     component U_NRF: nordic.NRF52832_QFAA;
     component ANT_BT: johanson.JOHANSON_2450AT18A0100001E;
@@ -119,7 +119,7 @@ board Nrf52CoinCell {
     constraint fixed_placement(C_X2) { x = 41mm; y = 21mm; rotation = 90; side = front; }
 
     // Source-selected physical realizations; geometry remains in the assets.
-    physical_macro nordic-antenna-trial: nordic_layout {
+    physical_macro nordic-antenna-trial: nordic_layout.NRF52832_JOHANSON_SIX_LAYER_TRIAL {
         member U1 = U_NRF;
         member C3 = C_BT_MATCH;
         member L1 = L_BT_MATCH;

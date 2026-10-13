@@ -1,0 +1,5 @@
+// Synthetic native-geometry probe terminal; not an orderable circuit component.
+part EnableProbeTerminal {
+    footprint = "./EnableProbeTerminal.kicad_mod";
+    pin P { number = "1"; domains = "digital"; directions = "passive"; }
+}

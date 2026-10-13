@@ -98,6 +98,7 @@ def warm_requirements(source: Path) -> None:
 
 def prepare(output: Path) -> None:
     from pcbir.compiler import compile_file
+    from pcbir.macro_bindings import prepare_macro_bindings
     pins = json.loads((ROOT / ".github/board-toolchain.json").read_text())
     lock_path = ROOT / "copper.lock"
     original = lock_path.read_bytes()
@@ -119,24 +120,27 @@ def prepare(output: Path) -> None:
         warm_requirements(source)
         compile_file(source, locked=True, offline=False)
         compile_file(source, locked=True, offline=True)
-    compile_file(ROOT / "examples/full_vertical/board.copper", locked=True, offline=True)
+    macro_inputs = {}
+    for example in ('full_vertical', 'nrf52_coin_cell', 'nrf_antenna_macro', 'tps62130a_macro'):
+        source = ROOT / 'examples' / example / 'board.copper'
+        board = compile_file(source, locked=True, offline=True)
+        for selection in prepare_macro_bindings(board, locked=True, offline=True):
+            macro_inputs[example + '/' + selection.binding.name] = selection.provenance
     if lock_path.read_bytes() != original:
         raise ValueError("locked preparation unexpectedly changed copper.lock")
     save(output / "provenance.json", {
         "schema": "copperscript-ci-provenance/v1", "toolchain": pins,
         "commit": git(ROOT, "rev-parse", "HEAD"), "copperlib_commit": library.version,
         "library_source": f"https://{library.module_path}.git", "library_checksum": library.checksum,
+        "source_macros": macro_inputs,
         "python": sys.version, "platform": platform.platform(),
         "lock_sha256": hashlib.sha256(original).hexdigest(), "lock_modified": False,
         "github": {key: os.environ.get(key) for key in (
             "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")},
         "inputs": {name: sha(ROOT / name) for name in (
             "examples/full_vertical/board.copper",
-            "examples/full_vertical/assets/tps62130a-managed-footprints.json",
-            "examples/full_vertical/assets/nrf52832-johanson-managed-footprints.json",
             "examples/nrf52_coin_cell/board.copper", "examples/nrf_antenna_macro/board.copper",
-            "examples/tps62130a_macro/board.copper",
-            "examples/tps62130a_macro/assets/tps62130a-managed-always-on.json")}})
+            "examples/tps62130a_macro/board.copper")}})
 
 
 def run_logged(command: list[str], output: Path, seconds: float,

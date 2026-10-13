@@ -22,8 +22,8 @@ board FullVerticalTracker {
     import swd "github.com/andenore/CopperLib/packages/interfaces/arm/swd-10pin";
     import vertical_support "github.com/copperscript/examples/vertical_support";
 
-    import modem_buck_layout "./assets/tps62130a-managed-footprints.json";
-    import nordic_layout "./assets/nrf52832-johanson-managed-footprints.json";
+    import modem_buck_layout "github.com/andenore/CopperLib/packages/circuits/ti/tps62130a-buck";
+    import nordic_layout "github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference";
 
     component J_POWER: gct_usb.GCT_USB4135_GF_A;
     component U_CC: tusb.TUSB320LAI;
@@ -472,7 +472,7 @@ board FullVerticalTracker {
     }
 
     // Source-selected physical realizations; geometry remains in the assets.
-    physical_macro modem-buck: modem_buck_layout on PWR {
+    physical_macro modem-buck: modem_buck_layout.TPS62130A_MANAGED_ENABLED on PWR {
         member C_AVIN = C_MODEM_AVIN;
         member C_OUT1 = C_3V8;
         member C_OUT2 = C_3V8_2;
@@ -491,7 +491,7 @@ board FullVerticalTracker {
         net VOUT = port.V3V8;
     }
 
-    physical_macro nordic-antenna: nordic_layout {
+    physical_macro nordic-antenna: nordic_layout.NRF52832_JOHANSON_MANAGED_SIX_LAYER {
         member ANT = ANT_BT;
         member C3 = C_BT_MATCH;
         member CA = C_ANT_SERIES;

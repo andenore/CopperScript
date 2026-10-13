@@ -22,8 +22,9 @@ SOURCE = Path(__file__).with_name("board.copper")
 def make_trial(directory, *, enabled=False, rotation=180, footprint_roots=(), offline=False):
     source = SOURCE.read_text(encoding="utf-8")
     if enabled:
-        source = source.replace("./assets/tps62130a-managed-always-on.json", "../full_vertical/assets/tps62130a-managed-footprints.json")
-        source = source.replace("net VIN { B.VIN; B.EN; }", "net VIN { B.VIN; }\n    net ENABLE { B.EN; }")
+        source = source.replace("TPS62130A_MANAGED_ALWAYS_ON", "TPS62130A_MANAGED_ENABLED")
+        source = source.replace("board BuckLayoutTrial {", 'board BuckLayoutTrial {\n    import probe "./probe";\n    component J_ENABLE: probe.EnableProbeTerminal;')
+        source = source.replace("net VIN { B.VIN; B.EN; }", "net VIN { B.VIN; }\n    net ENABLE { B.EN; J_ENABLE.P; }")
         source = source.replace("net FB = FB;", "net EN = ENABLE;\n        net FB = FB;")
     design = compile_design_source(source, str(SOURCE), locked=True, offline=offline)
     board = resolved_physicalize(design,
@@ -33,12 +34,26 @@ def make_trial(directory, *, enabled=False, rotation=180, footprint_roots=(), of
     poses = {p.reference: p for p in board.placements}
     anchor = replace(poses["B/U"], position=Point.mm(20, 20), rotation_degrees=rotation)
     poses.update(cluster_placements(board, board.rigid_clusters[0], anchor))
+    if enabled:
+        # A one-land probe terminates the external EN access point. Owner
+        # copper remains unchanged; this does not establish an EN drive circuit.
+        from pcbir.placement import transformed_local_point
+        port = next(p for p in board.hard_macros[0].ports if p.net == 'ENABLE')
+        probe_point = Point(port.position.x_nm, port.position.y_nm - 3_500_000)
+        poses['J_ENABLE'] = replace(poses['J_ENABLE'], position=transformed_local_point(anchor, probe_point),
+                                    rotation_degrees=rotation)
     board = replace(board, placements=tuple(poses.values()),
                     metadata={**board.metadata, "prototype_placement": "false", "fabrication_ready": "false"})
     output = Path(directory)
     output.mkdir(parents=True, exist_ok=True)
     (output / "source.copper.txt").write_text(source, encoding="utf-8")
-    return materialize_hard_macros(board)
+    board = materialize_hard_macros(board)
+    if enabled:
+        from pcbir.physical import TrackSegment, CopperLayer
+        lead = TrackSegment('ENABLE', transformed_local_point(anchor, port.position),
+                            poses['J_ENABLE'].position, 250_000, CopperLayer.FRONT)
+        board = replace(board, tracks=(*board.tracks, lead))
+    return board
 
 
 def main():
