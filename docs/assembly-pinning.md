@@ -11,8 +11,14 @@ copper assembly snapshot board.copper --locked --offline -o assembly.lock
 # Fill manufacturer, mpn, supplier, supplier_part and optional catalogue URL.
 # Review exact package, ratings, pin mapping and footprint before reviewed=true.
 copper assembly check board.copper --locked --offline --lock assembly.lock --report build/assembly.json
-copper assembly bom board.copper --locked --offline --lock assembly.lock -o build/bom.csv
+copper assembly bom board.copper --locked --offline --lock assembly.lock -o build/bom.csv \
+    --hand-assembly build/hand-assembly.csv
 ```
+
+`--hand-assembly` writes the components the supplier will not place: every
+`consigned` selection (to buy and fit by hand) and every `populate = "none"`
+selection (to leave empty). Together with the supplier BOM it covers each
+populated component exactly once.
 
 ## Partially assembled boards
 
