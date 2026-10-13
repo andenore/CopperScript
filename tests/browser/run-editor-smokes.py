@@ -14,13 +14,14 @@ from threading import Thread
 
 ROOT = Path(__file__).resolve().parents[2]
 CASES = {
-    "ui": ("mechanical_editor_demo", "mechanical-editor-ui", True),
-    "save": ("mechanical_editor_demo", "mechanical-editor-save", True),
-    "placement": ("mechanical_editor_demo", "mechanical-editor", False),
-    "keyboard": ("mechanical_editor_demo", "mechanical-editor-keyboard", True),
-    "curves": ("mechanical_curves", "mechanical-editor-curves", True),
-    "anchors": ("mechanical_anchors", "mechanical-editor-anchors", True),
-    "references": ("mechanical_reference", "mechanical-editor-references", True),
+    "ui": ("examples/mechanical_editor_demo", "mechanical-editor-ui", True),
+    "save": ("examples/mechanical_editor_demo", "mechanical-editor-save", True),
+    "placement": ("examples/mechanical_editor_demo", "mechanical-editor", False),
+    "keyboard": ("examples/mechanical_editor_demo", "mechanical-editor-keyboard", True),
+    "curves": ("examples/mechanical_curves", "mechanical-editor-curves", True),
+    "anchors": ("examples/mechanical_anchors", "mechanical-editor-anchors", True),
+    "references": ("examples/mechanical_reference", "mechanical-editor-references", True),
+    "artwork": ("tests/fixtures/editor-artwork", "mechanical-editor-artwork", True),
 }
 
 
@@ -28,7 +29,7 @@ def run_case(name, roots):
     example, script, needs_source = CASES[name]
     output = ROOT / "build/editor-ui-smokes" / name
     output.mkdir(parents=True, exist_ok=True)
-    original = ROOT / "examples" / example
+    original = ROOT / example
     source = output / "board.copper"
     shutil.copyfile(original / "board.copper", source)
     for asset_directory in ("assets", "mechanical-assets"):
@@ -50,7 +51,7 @@ def run_case(name, roots):
     try:
         while True:
             try:
-                line = lines.get(timeout=30)
+                line = lines.get(timeout=120)
             except Empty:
                 raise RuntimeError("Editor startup timed out")
             if line is None:

@@ -39,3 +39,31 @@ def test_inventory_still_rejects_symlinks_even_for_unlocked_file_types(tmp_path)
         pytest.skip("symlink creation is unavailable")
     with pytest.raises(ValueError, match="package assets may not be symlinks: linked.txt"):
         packages._module_inventory(tmp_path)
+
+
+def test_large_inventory_hashes_fresh_bytes_in_canonical_order_with_bounded_reads(tmp_path, monkeypatch):
+    from threading import Lock
+    from time import sleep
+    for index in range(260):
+        (tmp_path / f"{index:04}.kicad_mod").write_bytes(str(index).encode())
+    expected = tuple(packages.LockedFile(f"{index:04}.kicad_mod", len(str(index)),
+                       hashlib.sha256(str(index).encode()).hexdigest()) for index in range(260))
+    original = packages._inventory_file
+    lock = Lock()
+    active = maximum = 0
+    def read(candidate):
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        try:
+            sleep(0.001)
+            return original(candidate)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(packages, "_inventory_file", read)
+    assert packages._module_inventory(tmp_path) == expected
+    assert 1 < maximum <= 4
+    (tmp_path / "0000.kicad_mod").write_bytes(b"X")
+    assert packages._module_inventory(tmp_path)[0].sha256 == hashlib.sha256(b"X").hexdigest()

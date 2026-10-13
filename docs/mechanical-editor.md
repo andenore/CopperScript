@@ -202,7 +202,7 @@ review requests; exact source literals and existing validation remain authoritat
 Contributor browser verification uses disposable copies and fresh sessions:
 
 ```console
-python tests/browser/run-editor-smokes.py ui save placement keyboard curves anchors references --footprint-root <installed-KiCad-footprints>
+python tests/browser/run-editor-smokes.py ui save placement keyboard curves anchors references artwork --footprint-root <installed-KiCad-footprints>
 ```
 
 Install Playwright/Chromium in the test environment first, or set
@@ -318,6 +318,16 @@ manufacturing excludes guides entirely. 3D enclosure inspection is deferred.
 
 
 ## Inspection and temporary moves
+
+Board silkscreen, generated Cu/name/version branding and imported footprint
+silkscreen graphics are visible by default. The View tab offers separate
+silkscreen/branding and decorative copper-artwork toggles, both respecting the
+front/rear filter. Footprint graphics follow component poses; board artwork stays
+in its accepted source position. Native geometry is used for shapes and source
+version labels; text uses a preview font rather than KiCad's stroke font.
+Visibility filters preserve unreviewed numeric pose drafts.
+Artwork is read-only in the mechanical view and grants no connectivity or
+manufacturing credit. Existing copper reservations and process checks still apply.
 
 Wheel zoom is cursor-anchored; right-button drag pans. Numeric pose changes
 require Apply/Discard; optional preview drags use the same revision protocol.

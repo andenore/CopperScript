@@ -56,6 +56,9 @@
 <section id="panel-view" class="tool-panel" role="tabpanel" aria-labelledby="tab-view" hidden>
 <h2>Board view</h2><label>Side <select id="side"><option value="both">Both sides</option><option value="front">Front</option><option value="back">Rear</option></select></label>
 <p>Both sides use the same board coordinates; the rear view is not mirrored.</p>
+<label><input id="silkscreen" type="checkbox" checked> Silkscreen and branding</label>
+<label><input id="copper-artwork" type="checkbox" checked> Decorative copper artwork</label>
+<p>Artwork is read-only. Text uses a preview font; native KiCad text remains authoritative.</p>
 <label><input id="airwires" type="checkbox" checked> Show ratsnest</label><label><input id="selected-only" type="checkbox"> Selected component nets only</label>
 <label>Net <select id="net"><option value="">All nets</option></select></label>
 <details id="ratsnest-options"><summary>Ratsnest options</summary><label><input id="zone-nets" type="checkbox"> Include zone nets (e.g. GND)</label>

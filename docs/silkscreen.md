@@ -190,4 +190,10 @@ side when the fabrication profile supplies a silkscreen-clearance capability.
 Text and complex board graphics report `FAB-SILK-ARTWORK-UNSUPPORTED` and keep
 that fabrication gate incomplete. Native DRC and final artwork inspection
 remain necessary; export alone is not manufacturing qualification. The
-mechanical editor currently does not render or edit board silkscreen.
+mechanical editor renders board artwork and the bundled branding, plus imported
+footprint silkscreen graphics. **View → Silkscreen and branding** controls legend
+visibility; **Decorative copper artwork** controls copper marks independently.
+Both follow the side filter. Rear text is mirrored in the shared front-view
+coordinates. Text uses a browser preview font; exact native glyph geometry and
+manufacturing checks remain authoritative. Artwork editing stays in `.copper`
+source; the mechanical view is read-only for artwork.

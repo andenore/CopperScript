@@ -15,6 +15,7 @@ from ..placement import (PlacementPlannerOptions, placement_solution_is_hard_leg
                          placement_solution_is_legal, relative_placement_violations,
                          transformed_footprint_polygon, transformed_local_point)
 from .islands import nearest_island_tree
+from .artwork import board_artwork_scene, footprint_silkscreen_scene
 
 SCHEMA = "copperscript-editor-scene/v0.1"
 
@@ -231,6 +232,7 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
             "footprint": pose.footprint, "position": _point(pose.position),
             "rotation": str(pose.rotation_degrees), "side": pose.side.value,
             "value": pose.value, "body": [_point(p) for p in body],
+            "silkscreen": footprint_silkscreen_scene(footprint, pose),
             "courtyard": [_point(p) for p in transformed_footprint_polygon(board, pose)],
             "pads": pads, "source_position_locked": bool(rule and rule.fixed_position is not None),
             "source_rotation_locked": bool(rule and rule.fixed_rotation_degrees is not None),
@@ -256,7 +258,9 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         "revision": revision, "units": "nm", "source_writable": False,
         "mechanical_provenance": json.loads(board.metadata.get("mechanical_provenance", "{}")),
         "capabilities": {"auto_place": True, "pose_preview": True, "session_locks": True,
-                         "source_save": False, "mechanical_edit": False},
+                         "source_save": False, "mechanical_edit": False,
+                         "artwork_view": True, "artwork_edit": False},
+        "artwork": board_artwork_scene(board),
         "bounds": [extent.min_x, extent.min_y, extent.max_x, extent.max_y],
         "outline": {"vertices": [_point(p) for p in board.outline.vertices],
             "path": _outline_path(board.outline.boundary_path),

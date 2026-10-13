@@ -9,6 +9,7 @@ into a project-local cache and CopperScript never executes package code.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -476,13 +477,23 @@ def _module_inventory(root: Path) -> tuple[LockedFile, ...]:
                 elif (entry.is_file(follow_symlinks=False) and
                       (entry.name == "copper.mod" or os.path.splitext(entry.name)[1].casefold() in _LOCKED_SUFFIXES)):
                     candidates.append((relative, Path(entry.path)))
-    inventory: list[LockedFile] = []
-    for relative, path in sorted(candidates):
-        data = path.read_bytes()
-        inventory.append(
-            LockedFile(relative, len(data), hashlib.sha256(data).hexdigest())
-        )
-    return tuple(inventory)
+    ordered = sorted(candidates)
+    if len(ordered) < 256:
+        return tuple(map(_inventory_file, ordered))
+    # Large footprint libraries contain thousands of small files. Bound the
+    # concurrent reads and queued work without caching file contents or hashes.
+    # map preserves the canonical inventory order, independent of completion.
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="copper-inventory") as executor:
+        result = []
+        for start in range(0, len(ordered), 128):
+            result.extend(executor.map(_inventory_file, ordered[start:start+128]))
+        return tuple(result)
+
+
+def _inventory_file(candidate) -> LockedFile:
+    relative, path = candidate
+    data = path.read_bytes()
+    return LockedFile(relative, len(data), hashlib.sha256(data).hexdigest())
 
 
 def _inventory_checksum(files: tuple[LockedFile, ...]) -> str:

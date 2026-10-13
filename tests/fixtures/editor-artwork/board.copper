@@ -1,0 +1,22 @@
+// Read-only editor rendering fixture, not a production circuit.
+board EditorArtwork {
+    use library "standard";
+    component R_FRONT: RESISTOR { footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_BACK: RESISTOR { footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    net SIGNAL { R_FRONT.1; R_BACK.1; }
+    net GND { R_FRONT.2; R_BACK.2; }
+    mechanical { outline rectangle { width = 40mm; height = 30mm; } }
+    constraint fixed_placement(R_FRONT) { x = 8mm; y = 25mm; rotation = 90; side = front; }
+    constraint fixed_placement(R_BACK) { x = 32mm; y = 25mm; rotation = 90; side = back; }
+    silkscreen {
+        branding { position = (4mm, 4mm); size = 4mm; layout = stacked; }
+        text FRONT_LABEL { text = "Front\nRev A"; position = (15mm, 7mm); size = 1.2mm; }
+        text BACK_LABEL { text = "Rear"; position = (30mm, 7mm); rotation = 90; side = back; }
+        line LINE { start = (10mm, 11mm); end = (20mm, 11mm); thickness = 0.2mm; }
+        rectangle RECT { start = (10mm, 13mm); end = (14mm, 16mm); }
+        circle CIRCLE { center = (18mm, 15mm); radius = 1mm; side = back; }
+        arc ARC { start = (22mm, 13mm); mid = (24mm, 15mm); end = (26mm, 13mm); }
+        polygon TRIANGLE { vertices = [(5mm, 12mm), (8mm, 15mm), (5mm, 18mm)]; filled = true; thickness = 0mm; }
+        line COPPER { start = (27mm, 18mm); end = (34mm, 18mm); thickness = 0.3mm; material = copper; exposed = true; side = back; }
+    }
+}

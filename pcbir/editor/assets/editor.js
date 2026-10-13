@@ -111,6 +111,32 @@ function shape(data, cls) {
   if (spine.length === 2) {attrs.fill="none"; return node("polyline",attrs);}
   return node("polygon",attrs);
 }
+function artworkShape(item) {
+  const style={stroke:item.width_nm ? "currentColor" : "none","stroke-width":mm(item.width_nm),
+    fill:item.filled ? "currentColor" : "none","stroke-linejoin":"round","stroke-linecap":"round"};
+  if(item.kind==="text") {
+    const text=node("text",{class:"artwork-text","font-size":mm(item.size_nm),
+      transform:`translate(${item.position.map(mm).join(" ")}) rotate(${Number(item.rotation)})${item.mirrored ? " scale(-1 1)" : ""}`});
+    const lines=item.text.split("\n");
+    for(const [index,line] of lines.entries())text.append(node("tspan",{x:0,y:(index-(lines.length-1)/2)*mm(item.size_nm)*1.4},line));
+    return text;
+  }
+  if(item.kind==="line")return node("line",{x1:mm(item.start[0]),y1:mm(item.start[1]),x2:mm(item.end[0]),y2:mm(item.end[1]),...style});
+  if(item.kind==="polygon")return node("polygon",{points:points(item.vertices),...style});
+  if(item.kind==="circle")return node("circle",{cx:mm(item.center[0]),cy:mm(item.center[1]),
+    r:Math.hypot(item.end[0]-item.center[0],item.end[1]-item.center[1])/1e6,...style});
+  if(item.kind==="arc")return node("path",{d:`M ${item.start.map(mm).join(" ")} A ${mm(item.radius_nm)} ${mm(item.radius_nm)} 0 ${item.large_arc?1:0} ${item.sweep?1:0} ${item.end.map(mm).join(" ")}`,...style});
+}
+function artworkGroup(items,side,material,cls) {
+  const group=node("g",{class:`artwork artwork-${material} ${side} ${cls}`,"pointer-events":"none"});
+  for(const item of items) {
+    const drawing=artworkShape(item);if(!drawing)continue;
+    const feature=node("g",{"data-artwork-id":item.id});
+    feature.append(node("title",{},`${item.id}: ${item.layer||side+" silkscreen"}${item.exposed ? "; exposed copper" : ""}${item.kind==="text" ? "; text uses a preview font" : ""}`),drawing);
+    group.append(feature);
+  }
+  return group;
+}
 function padLabelLayout(pad,label) {
   const spine=pad.shape?.spine||[], radius=mm(Number(pad.shape?.radius_nm)||0);
   const xs=spine.map(point=>mm(point[0])), ys=spine.map(point=>mm(point[1]));
@@ -267,6 +293,7 @@ function render() {
       "aria-pressed":isSelected?"true":"false",
       "aria-label":`${component.reference}, ${component.value||component.footprint}, ${component.side}, X ${mm(component.position[0])} mm, Y ${mm(component.position[1])} mm${locked?", pose constraints present":""}${warning?`, ${component.constraint_warning_count} relative placement warning${component.constraint_warning_count===1?"":"s"}`:""}`});
     g.append(node("polygon",{points:points(component.courtyard),class:"courtyard"}),node("polygon",{points:points(component.body),class:"body"}));
+    if($("silkscreen").checked)g.append(artworkGroup(component.silkscreen||[],component.side,"silkscreen","footprint-artwork"));
     if (warning) {
       const marker=node("circle",{cx:mm(component.position[0]),cy:mm(component.position[1]),r:.65,class:"constraint-warning-marker"});
       marker.append(node("title",{},`${component.reference}: relative placement constraint warning`));g.append(marker);
@@ -291,6 +318,12 @@ function render() {
     g.append(node("text",{x:mm(component.position[0]),y:mm(component.position[1])-1.4,class:"ref"},component.reference));
     g.addEventListener("pointerdown",event=>startDrag(event,component,g)); svg.append(g);
     g.addEventListener("keydown",event=>{if(["Enter"," "].includes(event.key)){event.preventDefault();selectReferences([component.reference],component.reference);render();syncLockChecks();}});
+  }
+  for(const side of ["front","back"])for(const material of ["silkscreen","copper"]) {
+    if($("side").value!=="both" && $("side").value!==side)continue;
+    if(!$(material==="copper" ? "copper-artwork" : "silkscreen").checked)continue;
+    const items=(s.artwork||[]).filter(item=>item.side===side && item.material===material);
+    if(items.length)svg.append(artworkGroup(items,side,material,"board-artwork"));
   }
   if (vertexPoints.length) svg.append(node("polyline",{points:vertexPoints.map(p=>p.join(",")).join(" "),class:"vertex-preview"}));
   if (measurePoints.length===2) {
@@ -513,7 +546,11 @@ $("board").addEventListener("lostpointercapture",()=>{if(drag||pan) cancelGestur
 $("reference").addEventListener("change",()=>{selectReferences($("reference").value ? [$("reference").value] : [],$("reference").value);render();});
 $("reference").addEventListener("change",syncLockChecks);
 $("edit-locks").onchange=()=>{syncLockChecks();updateControls();};
-for (const id of ["side","net","airwires","selected-only","zone-nets","power-filter","net-labels","net-costs","copper-layer","routed-tracks","filled-zones","native-opens","reference-guides"]) $(id).addEventListener("change",render);
+for (const id of ["side","net","airwires","selected-only","zone-nets","power-filter","net-labels","net-costs","copper-layer","routed-tracks","filled-zones","native-opens","reference-guides","silkscreen","copper-artwork"]) $(id).addEventListener("change",()=>{
+  const draft=["x","y","rotation","pose-side"].map(id=>[id,$(id).value]);
+  render();
+  for(const [id,value] of draft)$(id).value=value;
+});
 for (const [id,action] of [["apply","apply"],["discard","discard"],["undo","undo"],["redo","redo"]]) $(id).onclick=()=>operation(action);
 $("auto").onclick=()=>operation("start_auto_place",{budget_seconds:Number($("placement-budget").value)});
 $("cancel-auto").onclick=()=>operation("cancel_auto_place");

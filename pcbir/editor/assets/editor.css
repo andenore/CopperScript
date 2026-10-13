@@ -250,6 +250,13 @@ footer {
   text-anchor:middle;
   pointer-events:none}
 
+.artwork {pointer-events:none;}
+.artwork-silkscreen {color:#f2eee2;}
+.artwork-silkscreen.back {color:#accbea;}
+.artwork-copper {color:#dcb465;}
+.artwork-copper.back {color:#8db6ed;}
+.artwork-text {fill:currentColor;font-family:monospace;text-anchor:middle;dominant-baseline:central;}
+
 .pad-label {
   fill:#172027;
   stroke:#f7e6b0;

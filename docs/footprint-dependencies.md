@@ -93,6 +93,12 @@ module content, including individual footprint SHA-256 hashes. Downloaded
 modules live in the project-local `.copper-cache/pkg` cache. The first geometry
 resolution downloads a complete module; subsequent builds reuse it.
 
+Inventory verification prunes ignored Git/cache directories and uses bounded
+parallel reads for large libraries (four readers, at most 128 queued files).
+Relevant file contents are freshly hashed on every verification; canonical
+ordering, lock checksums and selected-asset checks remain unchanged. No timestamp
+or previously cached digest can substitute for current dependency bytes.
+
 | Flag | Behavior |
 | --- | --- |
 | `--locked` | Require the declared dependency revision and complete file inventory to match `copper.lock`. Never rewrite the lock. Downloads remain allowed to refill missing cache entries. |
