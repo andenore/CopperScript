@@ -18,7 +18,9 @@ copper assembly bom board.copper --locked --offline --lock assembly.lock -o buil
 `--hand-assembly` writes the components the supplier will not place: every
 `consigned` selection (to buy and fit by hand) and every `populate = "none"`
 selection (to leave empty). Together with the supplier BOM it covers each
-populated component exactly once.
+populated component exactly once. Consigned selections may record `supplier`,
+`supplier_part` and `source_url` (any supplier, not only `jlcpcb`); the list
+carries them so it doubles as the order sheet for the hand-fitted parts.
 
 ## Partially assembled boards
 

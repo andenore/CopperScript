@@ -229,7 +229,9 @@ def mixed_lock(board: Board):
     selections = []
     for entry in draft.selections:
         if entry.reference == "U1":          # stocked nowhere; hand-placed from consigned stock
-            selections.append(replace(entry, mpn="SPECIAL-1234", reviewed=True, populate="consigned"))
+            selections.append(replace(entry, mpn="SPECIAL-1234", reviewed=True, populate="consigned",
+                                      supplier="digikey", supplier_part="123-SPECIAL-1234-ND",
+                                      source_url="https://example.com/special-1234"))
         elif entry.reference == "R9":        # fitted by nobody
             selections.append(replace(entry, reviewed=True, populate="none"))
         else:
@@ -318,6 +320,9 @@ def test_hand_assembly_list_is_exactly_what_the_supplier_bom_omits(tmp_path):
     consigned = next(row for row in rows if row["Designator"] == "U1")
     assert (consigned["Manufacturer"], consigned["MPN"], consigned["Quantity"]) == (
         "Specialist Semiconductor", "SPECIAL-1234", "1")
+    # Where to buy it travels with the part, so the list is an order sheet.
+    assert (consigned["Supplier"], consigned["Supplier Part"], consigned["URL"]) == (
+        "digikey", "123-SPECIAL-1234-ND", "https://example.com/special-1234")
     with bom.open(newline="", encoding="utf-8") as stream:
         supplied = {ref for row in csv.DictReader(stream) for ref in row["Designator"].split(",")}
     # Together the two files cover every populated component, with no overlap.
