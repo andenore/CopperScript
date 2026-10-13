@@ -331,3 +331,38 @@ def test_hand_assembly_list_refuses_an_unreviewed_lock(tmp_path):
     unreviewed = replace(lock, selections=tuple(replace(e, reviewed=False) for e in lock.selections))
     with pytest.raises(AssemblyError, match="hand-assembly list refused"):
         write_hand_assembly_list(board, unreviewed, tmp_path / "hand.csv")
+
+
+def hierarchical_board() -> Board:
+    part = PartDefinition("R", {}, manufacturer="Example Manufacturer", footprints=("Generic:R",))
+    return Board("Hier", {"R": part}, (
+        ComponentInstance("BUCK/R1", "R", Resistance.of(10, "kohm")),
+        ComponentInstance("BUCK/R2", "R", Resistance.of(10, "kohm")),
+        ComponentInstance("R3", "R", Resistance.of(10, "kohm")),
+    ), ())
+
+
+def test_bom_and_hand_list_use_the_board_designator_not_the_source_path(tmp_path):
+    # The KiCad export flattens BUCK/R1 to BUCK_R1, and the assembler matches the
+    # BOM against the CPL and silkscreen by that designator.
+    board = hierarchical_board()
+    lock = reviewed_lock(board)
+    lock = replace(lock, selections=tuple(
+        replace(e, populate="consigned") if e.reference == "BUCK/R2" else e for e in lock.selections))
+    bom, hand = tmp_path / "bom.csv", tmp_path / "hand.csv"
+    write_jlcpcb_bom(board, lock, bom)
+    write_hand_assembly_list(board, lock, hand)
+    with bom.open(newline="", encoding="utf-8") as stream:
+        assert [r["Designator"] for r in csv.DictReader(stream)] == ["BUCK_R1,R3"]
+    with hand.open(newline="", encoding="utf-8") as stream:
+        assert [r["Designator"] for r in csv.DictReader(stream)] == ["BUCK_R2"]
+
+
+def test_references_that_flatten_to_one_designator_are_refused(tmp_path):
+    part = PartDefinition("R", {}, manufacturer="Example Manufacturer", footprints=("Generic:R",))
+    board = Board("Clash", {"R": part}, (
+        ComponentInstance("A/B", "R", Resistance.of(1, "kohm")),
+        ComponentInstance("A_B", "R", Resistance.of(1, "kohm")),
+    ), ())
+    with pytest.raises(AssemblyError, match="both become board designator A_B"):
+        write_jlcpcb_bom(board, reviewed_lock(board), tmp_path / "bom.csv")
