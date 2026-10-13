@@ -34,6 +34,8 @@ Choose only the relevant focused record for detailed acceptance criteria:
   inference, preserving existing zone/stitching/per-pad controls.
 - [x] Add hierarchical module-to-macro frontend selection following the
   [source syntax plan](docs/physical-macro-syntax-plan.md).
+- [x] Author named hard-macro definitions in Copper, following the
+  [requirements and implementation plan](docs/macro-definition-plan.md).
 - [ ] Extend movable-macro feedback with complete boundary/owner revalidation.
 - [ ] Extend qualified mirrored/curved/local-zone macro variants only with exact
   serialization, fingerprints, native fill/export and independent CAM coverage.

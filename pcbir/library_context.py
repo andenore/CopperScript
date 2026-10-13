@@ -24,12 +24,12 @@ from .macro_bindings import is_macro_import
 
 INDEX_SCHEMA = "copperscript.library-index/v1"
 PAGE_SCHEMA = "copperscript.library-context/v1"
-KINDS = ("part", "device", "module", "board_profile")
+KINDS = ("part", "device", "module", "board_profile", "macro")
 SECTIONS = ("overview", "interfaces", "requirements", "composition", "properties", "notes",
             "dependencies", "declarations", "source")
-_INTERFACES = {"PinDecl", "PadDecl", "PortDecl", "PeripheralDecl", "InterfaceDecl",
+_INTERFACES = {"PinDecl", "PadDecl", "PortDecl", "PeripheralDecl", "InterfaceDecl", "MacroPadDecl",
                "UnitDecl", "PowerDomainDecl", "SignalGroupDecl", "ModeGroupDecl", "PadSetDecl"}
-_REQUIREMENTS = {"ConstraintDecl", "RouteRuleDecl", "SupplyDecl", "PowerStateDecl", "PhysicalMacroDecl"}
+_REQUIREMENTS = {"ConstraintDecl", "RouteRuleDecl", "SupplyDecl", "PowerStateDecl", "PhysicalMacroDecl", "MacroItemDecl"}
 _COMPOSITION = {"ComponentDecl", "ModuleInstanceDecl", "NetDecl", "ConfigurationDecl",
                 "MuxDecl", "MechanicalProfileUseDecl", "MechanicalItemDecl", "MechanicalDecl"}
 _CORE_PROPERTIES = {"category", "manufacturer", "assembled", "mpn", "description", "device",
@@ -113,7 +113,7 @@ def _provider(root: Path, module: str, version: str, expected_digest: str | None
         package = module if directory == "." else f"{module}/{directory}"
         selector = f"{package}::{document.name}"
         properties = {d.name: _value(d.value) for d in document.declarations
-                      if type(d).__name__ in {"PartPropertyDecl", "DevicePropertyDecl"}}
+                      if type(d).__name__ in {"PartPropertyDecl", "DevicePropertyDecl", "MacroPropertyDecl"}}
         capabilities = sorted({getattr(d, "kind", getattr(d, "pin_type", ""))
                                for d in document.declarations
                                if type(d).__name__ in {"PeripheralDecl", "InterfaceDecl", "PortDecl"}} - {""})
@@ -304,7 +304,7 @@ def inspect(catalog: Catalog, selector: str, *, kind: str | None = None, section
             rows.extend(_notes(catalog.source_text[key]))
         for i, declaration in enumerate(declarations):
             t = type(declaration).__name__
-            property_decl = t in {"PartPropertyDecl", "DevicePropertyDecl"}
+            property_decl = t in {"PartPropertyDecl", "DevicePropertyDecl", "MacroPropertyDecl"}
             selected = (section == "declarations" or
                         section == "interfaces" and t in _INTERFACES or
                         section == "requirements" and _is_requirement(declaration) or

@@ -16,7 +16,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Change routing or native repair | [Filled-copper feedback](filled-copper-feedback.md); follow linked specialized references only as needed |
 | Profile or compare routing | [Routing performance](routing-performance.md) |
 | Add components or reusable circuits | [Integration guidelines](component-integration-guidelines.md) |
-| Bind physical macros | [Physical hard macros](physical-hard-macros.md); [source syntax and implementation record](physical-macro-syntax-plan.md) |
+| Author or bind physical macros | [Physical hard macros](physical-hard-macros.md); [definition syntax](macro-definitions.md); [binding syntax](physical-macro-syntax-plan.md); [definition requirements](macro-definition-plan.md) |
 | Edit mechanics or floorplan | [Mechanical editor](mechanical-editor.md) |
 | Author mechanical geometry or profiles | [Mechanical language](mechanical-language.md), [profiles](mechanical-profiles.md) |
 | Assess engineering or release evidence | [Engineering qualification](engineering-qualification.md) |

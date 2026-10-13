@@ -94,6 +94,11 @@ def _nonnegative_int(value: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="copper", description="CopperScript v0.1 compiler")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    macro_parser = subparsers.add_parser("compile-macro", help="lower a Copper macro to a verified JSON asset")
+    macro_parser.add_argument("source", type=Path)
+    macro_parser.add_argument("-o", "--output", type=Path, required=True)
+    macro_parser.add_argument("--locked", action="store_true")
+    macro_parser.add_argument("--offline", action="store_true")
     from .agent_guide import TOPICS
     subparsers.add_parser("lsp", help="serve CopperScript language features over LSP stdio (locked/offline)")
     agent_parser = subparsers.add_parser("agent-guide", help="read compact, versioned agent guidance; start here")
@@ -676,6 +681,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(argv)
     _apply_routing_profile(args, argv)
+    if args.command == "compile-macro":
+        from .macro_definitions import compile_macro_file, canonical_macro_bytes
+        from .syntax import CopperScriptError
+        try:
+            if args.output.resolve() == args.source.resolve():
+                raise ValueError("macro output must differ from source")
+            data, inputs = compile_macro_file(args.source, locked=args.locked, offline=args.offline)
+            if any(args.output.resolve() == Path(p) for p in inputs):
+                raise ValueError("macro output cannot overwrite a source or footprint input")
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_bytes(canonical_macro_bytes(data))
+            print(f"Compiled macro {args.source} -> {args.output} ({len(inputs)} verified inputs; unqualified)")
+            return 0
+        except (CopperScriptError, OSError, ValueError) as exc:
+            _print_error(args, "MACRO ERROR", exc)
+            return 2
     if args.command == "lsp":
         from .lsp.server import main as lsp_main
         return lsp_main()

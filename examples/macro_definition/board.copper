@@ -1,0 +1,15 @@
+// Synthetic two-land test circuit; no hardware qualification.
+board MacroDefinitionDemo {
+    import parts "./parts";
+    import layouts "./layouts";
+    component U1: parts.TestLand;
+    component R1: parts.TestLand;
+    net SIGNAL { U1.P; R1.P; }
+    constraint fixed_placement(U1) { x = 10 mm; y = 10 mm; }
+    constraint fixed_placement(R1) { x = 12 mm; y = 10 mm; }
+    physical_macro LINK: layouts.TestLayout {
+        member chip = U1;
+        member passive = R1;
+        net signal = SIGNAL;
+    }
+}

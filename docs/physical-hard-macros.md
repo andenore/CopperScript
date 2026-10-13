@@ -36,6 +36,14 @@ mappings; automatic component-name inference is not supported.
 
 ## Implemented lifecycle
 
+Definitions can also be authored as `macro NAME { ... }` Copper documents and
+exported from ordinary packages. Bind a named export with
+`physical_macro UNIT: alias.NAME { ... }`. Lowering generates footprint digests
+from verified assets and the current v0.5 JSON contract; physical binding uses
+the same immutable lifecycle. `copper compile-macro` emits optional compatible
+JSON. Source/footprint revisions invalidate previous evidence. See
+[definition syntax](macro-definitions.md) and [requirements](macro-definition-plan.md).
+
 Boards/modules can select assets through ordinary imports and declare bindings:
 
 ```copper

@@ -192,6 +192,35 @@ class PhysicalMacroDecl:
 
 
 @dataclass(frozen=True, slots=True)
+class MacroPadReference:
+    member: str
+    pad: str
+
+
+@dataclass(frozen=True, slots=True)
+class MacroPropertyDecl:
+    location: SourceLocation
+    name: str
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class MacroItemDecl:
+    location: SourceLocation
+    kind: str
+    name: str
+    parameters: dict[str, object]
+    children: tuple[MacroItemDecl, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class MacroPadDecl:
+    location: SourceLocation
+    reference: MacroPadReference
+    net: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class NetDecl:
     location: SourceLocation
     name: str
@@ -286,6 +315,9 @@ Declaration = (
     | ConfigurationDecl
     | ModuleInstanceDecl
     | PhysicalMacroDecl
+    | MacroPropertyDecl
+    | MacroItemDecl
+    | MacroPadDecl
     | NetDecl
     | SupplyDecl
     | InterfaceDecl

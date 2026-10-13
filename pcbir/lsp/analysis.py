@@ -13,7 +13,7 @@ from ..lexer import TokenKind
 from ..library import library_factory
 from ..syntax import (ComponentDecl, ConfigurationDecl, ConstraintDecl,
                       CopperScriptError, Document, ModuleInstanceDecl, RawQuantity,
-                      PhysicalMacroDecl, ImportDecl)
+                      PhysicalMacroDecl, ImportDecl, MacroItemDecl, MacroPadReference)
 from .frontend import Parsed, parse_recovering
 from .text import Text, path_from_uri
 from .packages import SnapshotResolver
@@ -23,7 +23,7 @@ from ..macro_bindings import is_macro_import
 MAX_TEXT = 8 * 1024 * 1024
 MAX_IMPORT_DEPTH = 64
 KEYWORDS = ('component', 'module', 'net', 'supply', 'interface', 'constraint',
-            'configure', 'power_state', 'import', 'use', 'port', 'mechanical', 'silkscreen', 'physical_macro')
+            'configure', 'power_state', 'import', 'use', 'port', 'mechanical', 'silkscreen', 'physical_macro', 'macro')
 PROPERTIES = {
     'component': ('value', 'footprint', 'role', 'decouples'),
     'supply': ('voltage', 'net', 'source', 'external'),
@@ -45,6 +45,10 @@ KINDS = {'ComponentDecl': 19, 'ModuleInstanceDecl': 2, 'NetDecl': 13,
 
 
 def scalar(value) -> str:
+    if isinstance(value, MacroPadReference):
+        return f'{value.member}."{value.pad}"'
+    if isinstance(value, tuple):
+        return '[' + ', '.join(map(scalar, value)) + ']'
     if isinstance(value, RawQuantity):
         kind = QUANTITY_TYPES.get(value.unit)
         return str(kind.of(value.value, value.unit)) if kind else f'{value.value} {value.unit}'
@@ -127,7 +131,7 @@ def index_unit(unit: Unit):
     unit.symbols.append(Symbol(doc.name, unit, doc, tokens[0].location.offset,
                                len(unit.text.source), tokens[1].location.offset,
                                tokens[1].end_offset, 2))
-    for node in (*doc.declarations, *(d for d in doc.imports if is_macro_import(d.path))):
+    for node in (*doc.declarations, *(d for d in doc.imports if is_macro_import(d.path) or doc.kind == 'macro')):
         name = node.alias if isinstance(node, ImportDecl) else getattr(node, 'ref', getattr(node, 'name', getattr(node, 'kind', '')))
         if not name:
             continue
@@ -135,7 +139,7 @@ def index_unit(unit: Unit):
         if i is None:
             continue
         selection = tokens[i]
-        if isinstance(node, (ConstraintDecl, ConfigurationDecl, ImportDecl)):
+        if isinstance(node, (ConstraintDecl, ConfigurationDecl, ImportDecl, MacroItemDecl)):
             selection = next((t for t in tokens[i:] if t.text == name), selection)
         start = i - 1 if i > 0 and tokens[i - 1].text in {*KEYWORDS, 'pin', 'pad', 'peripheral'} else i
         j, depth = i, 0
@@ -198,6 +202,8 @@ class Analysis:
     def imports(self, unit, stack):
         if not unit.document:
             return
+        if unit.document.kind == 'macro':
+            return  # Footprint imports are data assets, never source packages.
         for declaration in unit.document.imports:
             try:
                 if is_macro_import(declaration.path):
@@ -219,6 +225,18 @@ class Analysis:
                     if child.document:
                         key = namespace + '.' + child.document.name
                         self.exports.setdefault(key, []).append(child.symbols[0])
+                        if child.document.kind == 'macro':
+                            from ..macro_bindings import MacroAssetReference, prepare_macro_asset
+                            identity = self.resolver.qualify_macro_asset('./' + path.name, child.document.location)
+                            ref = MacroAssetReference(identity, str(self.resolver.source_directory),
+                                child.document.location, True, True, child.document.name)
+                            try:
+                                self.macro_contracts[(unit.path, declaration.alias + '.' + child.document.name)] = prepare_macro_asset(
+                                    ref, source_reader=self.reader, package_resolver=self.resolver)
+                            except (OSError, ValueError, CopperScriptError) as exc:
+                                if isinstance(exc, CopperScriptError):
+                                    raise
+                                raise CopperScriptError('MAC005', f'macro contract unavailable: {exc}', child.document.location) from exc
                         self.imports(child, (*stack, resolved.import_path))
             except (CopperScriptError, OSError, ValueError) as exc:
                 self.import_errors.append(exc)
@@ -382,7 +400,7 @@ class Analysis:
                 if kind == 'physical_macro':
                     declaration = stack[-1]
                     alias_index = declaration.index(':') + 1 if ':' in declaration else len(declaration)
-                    alias = declaration[alias_index] if alias_index < len(declaration) else ''
+                    alias = ''.join(declaration[alias_index:declaration.index('on') if 'on' in declaration else len(declaration)])
                     contract = self.macro_contracts.get((self.root.path, alias))
                     candidates.update({p: (14, 'Physical macro mapping') for p in ('member', 'net')})
                     if contract and header and header[0] in {'member', 'net'} and '=' not in header:
@@ -399,6 +417,18 @@ class Analysis:
                             candidates = {s.name: (6, s.description()) for s in unit.symbols if type(s.node).__name__ in wanted}
                             if header[0] == 'net':
                                 candidates.update({f'port.{s.name}': (5, 'Existing module boundary net') for s in unit.symbols if type(s.node).__name__ == 'PortDecl'})
+        if self.root.document and self.root.document.kind == 'macro':
+            from ..macro_definitions import ROOT_PROPERTIES, ITEM_PROPERTIES
+            kind = stack[-1][0] if stack and stack[-1] else ''
+            if kind == 'macro':
+                candidates = {p: (14, 'Macro declaration') for p in
+                    (*ROOT_PROPERTIES, *ITEM_PROPERTIES.keys(), 'net', 'pad', 'isolated', 'import') if p != 'contact'}
+            elif kind in ITEM_PROPERTIES:
+                candidates = {p: (10, 'Macro property') for p in ITEM_PROPERTIES[kind]}
+                if kind == 'plane_return':
+                    candidates['contact'] = (14, 'Dedicated pad-to-via contact')
+            if header and '=' in header:
+                candidates = {s.name: (6, s.description()) for s in self.root.symbols[1:]}
         return [{'label': name, 'kind': kind, 'detail': detail,
                  'textEdit': {'range': self.root.text.range(offset - len(prefix), offset), 'newText': name}}
                 for name, (kind, detail) in sorted(candidates.items()) if name.startswith(prefix)]
@@ -447,6 +477,16 @@ class Analysis:
         if errors:
             return [self.error_diagnostic(e) for e in errors]
         doc = self.root.document
+        if doc and doc.kind == 'macro':
+            from ..macro_definitions import lower_macro
+            from ..packages import PackageResolver
+            try:
+                resolver = PackageResolver.for_source(self.root.path, doc.location, locked=True, offline=True)
+                lower_macro(doc, resolver, resolve_footprints=False)
+            except (CopperScriptError, ValueError) as exc:
+                error = exc if isinstance(exc, CopperScriptError) else CopperScriptError('MAC010', str(exc), doc.location)
+                return [self.error_diagnostic(error)]
+            return []
         if not doc or doc.kind != 'board':
             return []  # Standalone library files receive syntax diagnostics; boards drive ERC.
         try:
@@ -454,7 +494,8 @@ class Analysis:
                                    offline=True, source_reader=self.reader, package_resolver=self.resolver)
             from ..macro_bindings import prepare_macro_bindings, MacroPreparationError
             try:
-                prepare_macro_bindings(board, locked=True, offline=True)
+                prepare_macro_bindings(board, locked=True, offline=True, source_reader=self.reader,
+                                       package_resolver=self.resolver)
             except MacroPreparationError as exc:
                 return [self.error_diagnostic(CopperScriptError('MAC005', exc.message, exc.location))]
             findings = check(board)

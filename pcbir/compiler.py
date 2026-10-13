@@ -270,6 +270,8 @@ def _load_imports(
         for definition in package.modules.values():
             _register_module(modules, definition, declaration.location)
         _merge_profiles(profiles, package.profiles, declaration.location)
+        for name, ref in package.macro_assets.items():
+            macro_assets[declaration.alias + "." + name.removeprefix(namespace + ".")] = ref
         dependencies.extend(package.dependencies)
         dependencies.append(
             Dependency(
@@ -295,10 +297,10 @@ def _load_package(
         _error("CMP022", f"package {resolved.import_path!r} exports no .copper files", location)
     documents = [_read_document(path, source_reader) for path in source_paths]
     for document in documents:
-        if document.kind not in {"device", "part", "module", "board_profile"}:
+        if document.kind not in {"device", "part", "module", "board_profile", "macro"}:
             _error(
                 "CMP022",
-                f"package source declares a {document.kind}, expected device, part, module, or board_profile",
+                f"package source declares a {document.kind}, expected device, part, module, board_profile, or macro",
                 document.location,
             )
 
@@ -310,6 +312,15 @@ def _load_package(
         document.name: document for document in documents if document.kind == "module"
     }
     profile_documents = {d.name: d for d in documents if d.kind == "board_profile"}
+    macro_documents = {d.name: d for d in documents if d.kind == "macro"}
+    if len(macro_documents) != sum(d.kind == "macro" for d in documents):
+        _error("MAC010", "package contains duplicate macro definition names", documents[0].location)
+    macros = {
+        f"{namespace}.{name}": MacroAssetReference(
+            resolver.qualify_macro_asset("./" + Path(document.location.filename).name, document.location),
+            str(resolver.source_directory), document.location, resolver.locked, resolver.offline, name)
+        for name, document in macro_documents.items()
+    }
     if len(profile_documents) != sum(d.kind == "board_profile" for d in documents):
         _error("MEC004", "package contains duplicate board profile names", documents[0].location)
     if len(part_documents) != sum(document.kind == "part" for document in documents):
@@ -409,7 +420,7 @@ def _load_package(
             resolve_part,
             resolve_module,
             devices,
-            imported.macro_assets,
+            {**{name: macros[f"{namespace}.{name}"] for name in macro_documents}, **imported.macro_assets},
         )
         definition = replace(definition, components=tuple(
             replace(component, footprint=resolver.qualify_footprint(component.footprint, document.location))
@@ -441,7 +452,7 @@ def _load_package(
             items.append(item)
         definition = MechanicalProfileDefinition(f"{namespace}.{name}", document.location, tuple(items))
         _merge_profiles(profiles, {definition.name: definition}, document.location)
-    return PackageContents(parts, devices, modules, _unique_dependencies(dependencies), profiles)
+    return PackageContents(parts, devices, modules, _unique_dependencies(dependencies), profiles, macros)
 
 
 def _merge_profiles(profiles, additions, location):

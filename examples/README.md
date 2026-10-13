@@ -6,6 +6,7 @@ packages under `packages/` are separate from these board and language examples.
 
 | Example | Entry point |
 | --- | --- |
+| Copper hard-macro definition | `macro_definition/board.copper` |
 | Device model showcase | `device_model_showcase/board.copper` |
 | Full vertical integration board | `full_vertical/board.copper` |
 | Hierarchical board | `hierarchical_board/board.copper` |

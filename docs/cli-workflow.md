@@ -1,5 +1,11 @@
 # CLI design and review workflow
 
+For standalone physical assets, `copper compile-macro SOURCE.copper -o ASSET.json`
+lowers a `macro` definition with generated footprint digests. `--locked --offline`
+verifies cached dependency inventory. Boards can import and bind named Copper
+macros directly without generating JSON. This does not establish physical or
+hardware qualification; see [definition syntax and contracts](macro-definitions.md).
+
 Read only the section needed for the current task. Commands use the repository
 examples; consumer projects must supply their own configuration and pins.
 

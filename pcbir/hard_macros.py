@@ -67,6 +67,11 @@ def _macro_footprint_digest(footprint, reference, asset):
     metadata = footprint.metadata
     module = metadata.get("module_path")
     identity = metadata.get("source_asset")
+    if (metadata.get("resolution") == "managed" and identity == reference.removeprefix("https://") and
+            reference.startswith(("github.com/", "gitlab.com/", "https://"))):
+        normalized = replace(footprint, name=reference, source_library_id=reference,
+                             metadata={**metadata, "resolved_reference": reference})
+        return footprint_geometry_digest(normalized)
     if (not module or not identity or metadata.get("resolution") != "managed" or
             "\\" in reference or any(p in {"", ".", ".."} for p in reference.split("/"))):
         return None
@@ -96,11 +101,16 @@ def _macro_footprint_digest(footprint, reference, asset):
 
 
 def bind_hard_macro(board: PhysicalBoard, asset: Path, *, expected_sha256: str,
-                    name: str, bindings: dict[str, str], net_bindings: dict[str, str]) -> PhysicalBoard:
-    """Bind pinned data only. Never execute, fetch, rewire or move components."""
+                    name: str, bindings: dict[str, str], net_bindings: dict[str, str],
+                    asset_data: bytes | None = None) -> PhysicalBoard:
+    """Bind pinned file data or a compiled snapshot with the same digest check.
+
+    Source lowering verifies its input snapshot before passing asset_data.
+    Never execute, fetch, rewire or move components.
+    """
     if board.tracks or board.vias or board.polygons or board.zone_fills or board.materialized_macros:
         raise ValueError("hard-macro binding requires an unrouted, unfilled board")
-    raw = Path(asset).read_bytes()
+    raw = Path(asset).read_bytes() if asset_data is None else asset_data
     if sha256(raw).hexdigest() != expected_sha256:
         raise ValueError("hard-macro asset identity changed")
     if any(m.cluster == name for m in board.hard_macros):

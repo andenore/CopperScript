@@ -1,5 +1,13 @@
 # CopperScript language server
 
+Macro definitions and package-exported macro bindings share the source frontend.
+The editor indexes named members/tracks/net roles, offers declaration/property
+and binding-role completion, and navigates `alias.MacroName` to its source.
+Standalone definitions receive structural/type diagnostics without preparing
+footprints; board-bound definitions inspect footprints locked/offline and report
+unavailable contracts. Unsaved definition buffers feed board diagnostics through
+the same source-reader hook. Editor analysis never writes generated macro assets.
+
 The LSP belongs to CopperScript and reuses its lexer, strict parser, package
 resolver, semantic compiler and electrical checks. CopperLib supplies source
 definitions; consumer boards configure the selected compiler and locked inputs.

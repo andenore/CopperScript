@@ -197,16 +197,16 @@ class PackageResolver:
         """Qualify a data import without fetching geometry during electrical checks."""
         identity = reference.removeprefix("https://")
         if identity.startswith(("github.com/", "gitlab.com/")):
-            if (not identity.endswith(".json") or "\\" in identity or
+            if (not identity.endswith((".json", ".copper")) or "\\" in identity or
                     any(p in {".", "..", ""} for p in identity.split("/")) or
                     any(c in identity for c in "?#%:")):
                 raise CopperScriptError("PKG004", "invalid macro module asset path", location)
             if self._matching_module(identity) is None:
                 raise CopperScriptError("PKG002", f"no requirement in copper.mod provides macro asset {identity!r}", location)
             return identity
-        if (not reference.endswith(".json") or not reference.startswith(("./", "../")) or
+        if (not reference.endswith((".json", ".copper")) or not reference.startswith(("./", "../")) or
                 "\\" in reference or ":" in reference):
-            raise CopperScriptError("PKG004", "local macro import must be a relative .json path", location)
+            raise CopperScriptError("PKG004", "local macro asset must be a relative .json or .copper path", location)
         importer = Path(location.filename).resolve()
         roots = [root for root in self._source_roots if importer.is_relative_to(root)]
         root = max(roots, key=lambda p: len(p.parts)) if roots else self.manifest.root.resolve()

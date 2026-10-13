@@ -18,6 +18,10 @@ from .syntax import (
     ModuleInstanceDecl,
     PhysicalMacroDecl,
     MacroMappingDecl,
+    MacroItemDecl,
+    MacroPropertyDecl,
+    MacroPadDecl,
+    MacroPadReference,
     MechanicalDecl,
     SilkscreenDecl,
     SilkscreenItemDecl,
@@ -56,10 +60,10 @@ class Parser:
 
     def parse(self) -> Document:
         root = self._expect(TokenKind.IDENTIFIER, "'board', 'module', 'part', 'device', or 'board_profile'")
-        if root.text not in {"board", "module", "part", "device", "board_profile"}:
+        if root.text not in {"board", "module", "part", "device", "board_profile", "macro"}:
             self._error(
                 "PAR008",
-                f"expected 'board', 'module', 'part', 'device', or 'board_profile', found {root.text!r}",
+                f"expected board, module, part, device, board_profile, or macro, found {root.text!r}",
                 root,
             )
         start = root.location
@@ -78,6 +82,24 @@ class Parser:
                 import_path = self._expect(TokenKind.STRING, "package import path").text
                 imports.append(ImportDecl(import_location, alias, import_path))
                 self._expect_symbol(";")
+            elif root.text == "macro":
+                location = self.tokens[self.index - 1].location
+                if keyword in {"pad", "isolated"}:
+                    reference = self._macro_pad_reference()
+                    net = None
+                    if keyword == "pad":
+                        self._expect_symbol("=")
+                        net = self._macro_name()
+                    self._expect_symbol(";")
+                    declarations.append(MacroPadDecl(location, reference, net))
+                elif keyword == "net":
+                    declarations.append(MacroItemDecl(location, keyword, self._macro_name(), {}))
+                    self._expect_symbol(";")
+                elif self._accept_symbol("="):
+                    declarations.append(MacroPropertyDecl(location, keyword, self._macro_value()))
+                    self._expect_symbol(";")
+                else:
+                    declarations.append(self._macro_item(keyword, location))
             elif keyword == "silkscreen":
                 if root.text != "board":
                     self._error("PAR015", "silkscreen blocks are board-only", self.tokens[self.index - 1])
@@ -454,7 +476,7 @@ class Parser:
         location = self.current.location
         name = self._name("physical macro name")
         self._expect_symbol(":")
-        alias = self._name("macro asset import alias")
+        alias = self._qualified_name("macro asset import alias or exported definition")
         scope = ""
         if self.current.text == "on":
             self._advance()
@@ -477,6 +499,59 @@ class Parser:
             mappings.append(MacroMappingDecl(token.location, kind, key, target))
         self._expect_symbol("}")
         return PhysicalMacroDecl(location, name, alias, scope, tuple(mappings))
+
+    def _macro_name(self):
+        return self._advance().text if self.current.kind is TokenKind.STRING else self._name("macro name")
+
+    def _macro_pad_reference(self):
+        member = self._macro_name()
+        self._expect_symbol(".")
+        return MacroPadReference(member, self._macro_name())
+
+    def _macro_value(self):
+        if self._accept_symbol("{"):
+            values = {}
+            while not self._at_symbol("}"):
+                token = self.current
+                key = self._macro_name()
+                if key in values:
+                    self._error("PAR004", f"duplicate evidence key {key!r}", token)
+                self._expect_symbol("=")
+                values[key] = self._macro_value()
+                self._expect_symbol(";")
+            self._expect_symbol("}")
+            return values
+        if self._at_symbol("[") or self._at_symbol("("):
+            close = "]" if self._advance().text == "[" else ")"
+            values = []
+            if not self._at_symbol(close):
+                values.append(self._macro_value())
+                while self._accept_symbol(","):
+                    values.append(self._macro_value())
+            self._expect_symbol(close)
+            return tuple(values)
+        if self.current.kind in {TokenKind.IDENTIFIER, TokenKind.STRING, TokenKind.NUMBER}:
+            if self.index + 1 < len(self.tokens) and self.tokens[self.index + 1].text == ".":
+                return self._macro_pad_reference()
+        return self._scalar()
+
+    def _macro_item(self, kind, location):
+        name = self._macro_name()
+        self._expect_symbol("{")
+        parameters, children = {}, []
+        while not self._at_symbol("}"):
+            token = self.current
+            key = self._name("macro property or contact")
+            if key == "contact" and not self._at_symbol("="):
+                children.append(self._macro_item(key, token.location))
+            else:
+                if key in parameters:
+                    self._error("PAR004", f"duplicate property {key!r}", token)
+                self._expect_symbol("=")
+                parameters[key] = self._macro_value()
+                self._expect_symbol(";")
+        self._expect_symbol("}")
+        return MacroItemDecl(location, kind, name, parameters, tuple(children))
 
     def _assignment_block(self) -> dict[str, Scalar]:
         self._expect_symbol("{")

@@ -1,0 +1,4 @@
+part TestLand {
+    footprint = "../test.kicad_mod";
+    pin P { number = "1"; domains = "analog"; directions = "passive"; }
+}

@@ -1,0 +1,33 @@
+macro TestLayout {
+    source = "Synthetic exact-copper authoring demonstration";
+    unresolved = ["Not a qualified circuit or fabrication asset"];
+    anchor = chip;
+    allowed_rotations = [0 deg, 45 deg, 90 deg];
+    required_layers = ["F.Cu", "B.Cu"];
+
+    import land "../test.kicad_mod";
+    net signal;
+    member chip { footprint = land; at = (0 mm, 0 mm); }
+    member passive { footprint = land; at = (2 mm, 0 mm); }
+    pad chip."1" = signal;
+    pad passive."1" = signal;
+
+    track link {
+        net = signal;
+        layer = "F.Cu";
+        width = 0.2 mm;
+        points = [chip."1", passive."1"];
+    }
+    port access {
+        net = signal;
+        layer = "F.Cu";
+        point = chip."1";
+        pads = [chip."1", passive."1"];
+    }
+    protected_region private {
+        layers = ["F.Cu"];
+        vertices = [(1 mm, -0.5 mm), (3 mm, -0.5 mm),
+                    (3 mm, 0.5 mm), (1 mm, 0.5 mm)];
+        block_zones = false;
+    }
+}

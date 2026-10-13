@@ -31,6 +31,8 @@ def parse_recovering(text: str, filename: str) -> Parsed:
     i = 3
     closed = False
     starters = {'component', 'module', 'net', 'supply', 'interface', 'constraint',
+                'member', 'track', 'via', 'isolated', 'port', 'protected_region', 'keepout',
+                'zone', 'polygon', 'plane_return', 'width_contract', 'edge_opening',
                 'configure', 'power_state', 'port', 'import', 'use', 'mechanical', 'silkscreen', 'physical_macro',
                 'pin', 'pad', 'peripheral', 'power_domain', 'unit', 'resource',
                 'group', 'mode_group', 'pad_set', 'route'}

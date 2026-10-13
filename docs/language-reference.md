@@ -507,6 +507,16 @@ Module ports do not provide a second connectivity mechanism. `port.VIN` and
 `PWR.VIN` are ordinary net endpoints that identify opposite sides of the same
 boundary during elaboration.
 
+## Hard-macro definitions
+
+`macro NAME { ... }` defines a named physical realization exported from an
+ordinary package. `import layouts "PROVIDER/PACKAGE";` selects that package;
+`physical_macro UNIT: layouts.NAME { ... }` binds its definition to existing
+circuitry. Definitions use engineering quantities, explicit pad/net roles,
+named fixed geometry and independently resolved footprint assets with generated
+digests. See [the full syntax reference](macro-definitions.md) and
+[the runnable example](../examples/macro_definition/README.md).
+
 ## Physical macro bindings
 
 Import an exact physical hard-macro JSON asset, then map its members and net
@@ -1668,7 +1678,8 @@ exported despite ERC errors.
 
 ## Quantities
 
-Quantities have no whitespace between their number and unit.
+Quantities accept compact or spaced forms (`0.25mm` or `0.25 mm`). Human-facing
+engineering values use a space and the shared fixed-point quantity formatter.
 
 | Dimension | Units |
 |---|---|
@@ -1686,7 +1697,11 @@ display unit.
 ## Grammar sketch
 
 ```ebnf
-document       = ("board" | "module" | "part" | "device" | "board_profile"), name, "{", item*, "}" ;
+document       = design_document | macro_document ;
+design_document = ("board" | "module" | "part" | "device" | "board_profile"), name, "{", item*, "}" ;
+macro_document = "macro", name, "{", macro_definition_item*, "}" ;
+(* Macro definition items, nested values and geometry blocks are specified
+   in macro-definitions.md; electrical items are not permitted there. *)
 item           = library | package_import | port | pin | pad | power_domain
                | part_property | peripheral | mux | route | pad_set | resource
                | unit | signal_group | mode_group | device_property
@@ -1725,7 +1740,7 @@ resource       = "resource", name, ";" ;
 configuration  = "configure", name, ".", name, "as", name, properties ;
 qualified_name = name, (".", name)* ;
 module_instance = "module", name, ":", qualified_name, ";" ;
-physical_macro = "physical_macro", name, ":", name, ["on", instance_path],
+physical_macro = "physical_macro", name, ":", qualified_name, ["on", instance_path],
                  "{", macro_mapping*, "}" ;
 macro_mapping  = ("member" | "net"), (name | string), "=", target_reference, ";" ;
 component      = "component", name, ":", qualified_name, (";" | properties) ;

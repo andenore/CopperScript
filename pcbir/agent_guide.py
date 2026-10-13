@@ -41,13 +41,14 @@ _TOPICS = {
     "syntax": {
         "title": "Language essentials",
         "guidance": [
-            "A .copper file declares one board, module, part, device or board_profile. A board composes components/modules, nets, supplies, interfaces and physical constraints.",
+            "A .copper file declares one board, module, part, device, board_profile or macro. A board composes components/modules, nets, supplies, interfaces and physical constraints.",
             "Board silkscreen blocks declare text, logo and shapes. The Cu logo and compiler version are included by default; opt out with silkscreen { branding { enabled = false; } }. Review final artwork placement and native DRC.",
             "Artwork can opt into material = copper on its front/back side; exposed = true adds a matching mask opening. Branding layout = stacked puts compact name/version labels below the logo. Floating artwork reserves placement/routing space and has no electrical net. Copper glyph, filled-feature and exposed-mask qualification remain unsupported signoff checks.",
             'Import with: import sensor "PROVIDER/PACKAGE"; component U1: sensor.Part; module SUPPORT: sensor.Support;. Use the actual exported kind and names returned by library inspection.',
             "A net connects named endpoints: net VDD { U1.VDD; C1.1; }. Module ports become instance endpoints in the host. Inspect pin/port names and voltage/direction limits; do not infer them from footprints.",
             "Versions and replacements live in copper.mod; copper.lock binds consumed assets. Cross-library requirements must be declared in the host manifest. Source imports do not select versions.",
             'Import a physical macro with import layout "PROVIDER/assets/layout.json"; bind existing circuitry with physical_macro NAME: layout on MODULE { member ROLE = COMPONENT; net ROLE = port.PORT; }. Omit on for board-relative mappings. Asset hashes come from copper.lock; electrical checks leave geometry pending.',
+            'Author exact physical geometry in macro NAME { ... }; import its package normally and bind physical_macro NAME: alias.Definition { ... }. Footprint imports name exact .kicad_mod assets. copper compile-macro SOURCE -o ASSET.json emits the compatible generated asset; source/footprint hashes are automatic and qualification remains separate.',
             "Source quantities attach units (100nF, 3.3V, 0.25mm). Display engineering values with spaces and exact fixed-point fractions. Physical intent uses constraint KIND(TARGETS) { PARAMETERS; }; choose source-backed limits.",
             'Pin-associated bypasses use role = decoupling; decouples = "U.PIN"; on the capacitor. Apply this to bypasses, not every capacitor.',
             "The following builtin resistor divider demonstrates electrical syntax only; it is not a layout or an orderable component selection.",

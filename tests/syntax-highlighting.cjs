@@ -55,7 +55,7 @@ test("declarations, qualified types, properties and endpoints get theme scopes",
 });
 
 test("engineering units work with compact, spaced and signed fixed-point numbers", () => {
-  const units = "V mV ohm kohm Mohm F uF nF pF H mH uH nH m mm um A mA uA Hz kHz MHz GHz".split(" ");
+  const units = "V mV ohm kohm Mohm F uF nF pF H mH uH nH m mm um A mA uA Hz kHz MHz GHz deg".split(" ");
   for (const unit of units) {
     for (const quantity of [`12.5${unit}`, `12.5 ${unit}`, `-12.5${unit}`, `+12.5 ${unit}`]) {
       const line = `value = ${quantity};`;
@@ -66,6 +66,17 @@ test("engineering units work with compact, spaced and signed fixed-point numbers
   expectScope("rotation = -90; external = true; enabled = false;", "90", "constant.numeric.copper");
   expectScope("external = true; enabled = false;", "true", "constant.language.boolean.copper");
   expectScope("external = true; enabled = false;", "false", "constant.language.boolean.copper");
+});
+
+test("macro definitions and bindings highlight named geometry and angle units", () => {
+  expectScope("macro BuckLayout {", "macro", "storage.type.copper");
+  expectScope("macro BuckLayout {", "BuckLayout", "entity.name.type.copper");
+  for (const kind of ["physical_macro", "member", "track", "via", "protected_region", "plane_return", "width_contract", "edge_opening", "contact"]) {
+    expectScope(`${kind} NAME {`, kind, "storage.type.copper");
+    expectScope(`${kind} NAME {`, "NAME", "variable.other.definition.copper");
+  }
+  expectScope("physical_macro UNIT: layout.BuckLayout on PWR {", "on", "storage.type.copper");
+  expectScope("rotation = 45 deg;", "deg", "storage.type.unit.copper");
 });
 
 test("keywords and units do not split longer or hyphenated identifiers", () => {

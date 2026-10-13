@@ -19,6 +19,7 @@ class MacroAssetReference:
     location: SourceLocation
     locked: bool = False
     offline: bool = False
+    symbol: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +36,8 @@ class PreparedMacroBinding:
     binding: MacroBinding
     path: Path
     digest: str
-    provenance: dict[str, str]
+    provenance: dict[str, object]
+    data: dict
 
 
 class MacroPreparationError(ValueError):
@@ -112,16 +114,16 @@ def resolve_macro_bindings(flat):
     return tuple(result)
 
 
-def prepare_macro_asset(ref, *, locked=None, offline=None):
+def prepare_macro_asset(ref, *, locked=None, offline=None, source_reader=None, package_resolver=None):
     """Read one verified data contract; callers may cache this immutable snapshot."""
     from .packages import PackageResolver
     from .hard_macros import validate_macro_asset_data
     use_locked = ref.locked if locked is None else locked
     use_offline = ref.offline if offline is None else offline
     provenance = {"asset": ref.asset}
+    resolver = package_resolver or PackageResolver.for_source(Path(ref.base_directory), ref.location,
+                                                             locked=use_locked, offline=use_offline)
     if ref.asset.startswith(("github.com/", "gitlab.com/", "https://")):
-        resolver = PackageResolver.for_source(Path(ref.base_directory), ref.location,
-                                              locked=use_locked, offline=use_offline)
         asset = resolver.resolve_asset(ref.asset, ref.location)
         path, digest = asset.path, asset.sha256
         provenance.update(module=asset.module_path, version=asset.version,
@@ -136,13 +138,26 @@ def prepare_macro_asset(ref, *, locked=None, offline=None):
     raw = path.read_bytes()
     if sha256(raw).hexdigest() != digest:
         raise ValueError("macro changed after inventory verification")
-    data = json.loads(raw)
+    if ref.symbol:
+        from .parser import parse
+        from .macro_definitions import lower_macro, canonical_macro_bytes, verify_macro_inputs
+        source = source_reader(path) if source_reader else raw.decode('utf-8')
+        document = parse(source, str(path))
+        if document.kind != 'macro' or document.name != ref.symbol:
+            raise ValueError(f'macro source no longer exports {ref.symbol!r}')
+        data, inputs = lower_macro(document, resolver)
+        inputs[str(path)] = digest
+        verify_macro_inputs({p: h for p, h in inputs.items() if not source_reader or p != str(path)})
+        provenance.update(source_sha256=digest, inputs=inputs, symbol=ref.symbol)
+        digest = sha256(canonical_macro_bytes(data)).hexdigest()
+    else:
+        data = json.loads(raw)
     validate_macro_asset_data(data)
     provenance.update(source_path=str(path), asset_sha256=digest)
     return path, digest, data, provenance
 
 
-def prepare_macro_bindings(board, *, locked=None, offline=None):
+def prepare_macro_bindings(board, *, locked=None, offline=None, source_reader=None, package_resolver=None):
     """Prepare verified asset snapshots, without claiming physical connectivity."""
     from .design import Design
     from .elaborate import elaborate
@@ -155,10 +170,11 @@ def prepare_macro_bindings(board, *, locked=None, offline=None):
         ref = binding.asset
         use_locked = ref.locked if locked is None else locked
         use_offline = ref.offline if offline is None else offline
-        key = (ref.asset, ref.base_directory, use_locked, use_offline)
+        key = (ref.asset, ref.base_directory, ref.symbol, use_locked, use_offline)
         try:
             if key not in snapshots:
-                snapshots[key] = prepare_macro_asset(ref, locked=use_locked, offline=use_offline)
+                snapshots[key] = prepare_macro_asset(ref, locked=use_locked, offline=use_offline,
+                    source_reader=source_reader, package_resolver=package_resolver)
             path, digest, data, provenance = snapshots[key]
             expected_members = [row["reference"] for row in data["members"]]
             expected_nets = {row[2] for row in data["pad_nets"]}
@@ -168,7 +184,7 @@ def prepare_macro_bindings(board, *, locked=None, offline=None):
                 raise ValueError(f"member mappings must cover asset members exactly; expected {sorted(expected_members)}, got {sorted(actual_members)}")
             if actual_nets != expected_nets:
                 raise ValueError(f"net mappings must cover asset roles exactly; expected {sorted(expected_nets)}, got {sorted(actual_nets)}")
-            result.append(PreparedMacroBinding(binding, path, digest, provenance))
+            result.append(PreparedMacroBinding(binding, path, digest, provenance, data))
         except (CopperScriptError, OSError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise MacroPreparationError(binding, str(exc)) from exc
     return tuple(result)
@@ -180,10 +196,14 @@ def apply_source_macros(physical, board, *, locked=None, offline=None):
     for prepared in prepare_macro_bindings(board, locked=locked, offline=offline):
         binding = prepared.binding
         try:
+            from .macro_definitions import canonical_macro_bytes, verify_macro_inputs
+            if binding.asset.symbol:
+                verify_macro_inputs(prepared.provenance['inputs'])
             physical = bind_hard_macro(physical, prepared.path, expected_sha256=prepared.digest,
                                       name=binding.name,
                                       bindings={m.key: m.target for m in binding.mappings if m.kind == "member"},
-                                      net_bindings={m.key: m.target for m in binding.mappings if m.kind == "net"})
+                                      net_bindings={m.key: m.target for m in binding.mappings if m.kind == "net"},
+                                      asset_data=canonical_macro_bytes(prepared.data) if binding.asset.symbol else None)
         except (ValueError, KeyError) as exc:
             raise ValueError(f"{binding.location}: MAC006: macro {binding.name!r} ({binding.asset.asset}): {exc}") from exc
         provenance.append({**prepared.provenance, "name": binding.name,
@@ -196,9 +216,14 @@ def apply_source_macros(physical, board, *, locked=None, offline=None):
 
 def macro_binding_document(binding):
     def origin(location):
-        path = Path(os.path.relpath(location.filename, binding.asset.base_directory)).as_posix()
+        if (binding.asset.symbol and location.filename == binding.asset.location.filename and
+                binding.asset.asset.startswith(('github.com/', 'gitlab.com/', 'https://'))):
+            path = binding.asset.asset
+        else:
+            path = Path(os.path.relpath(location.filename, binding.asset.base_directory)).as_posix()
         return f"{path}:{location.line}:{location.column}"
     return {"name": binding.name, "asset": binding.asset.asset,
+            **({"symbol": binding.asset.symbol} if binding.asset.symbol else {}),
             "base_directory": ".", "scope": binding.scope,
             "origin": origin(binding.location), "asset_origin": origin(binding.asset.location),
             "asset_validation": "pending_physical_preparation",
@@ -216,8 +241,9 @@ def macro_binding_identity(binding):
 
 
 def source_macro_input_paths(physical):
-    return tuple(Path(row["source_path"]) for row in
-                 json.loads(physical.metadata.get("source_physical_macros", "[]")))
+    return tuple(dict.fromkeys(Path(path) for row in
+                 json.loads(physical.metadata.get("source_physical_macros", "[]"))
+                 for path in row.get('inputs', {row['source_path']: row['asset_sha256']})))
 
 
 def verify_source_macros(flat, physical, *, stage, stale_drc=False):
@@ -232,6 +258,7 @@ def verify_source_macros(flat, physical, *, stage, stale_drc=False):
     except ValueError as exc:
         prepared, preparation_error = {}, str(exc)
     macros = {m.cluster: m for m in physical.hard_macros}
+    recorded_inputs = {row['name']: row for row in json.loads(physical.metadata.get('source_physical_macros', '[]'))}
     clusters = {c.name: c for c in physical.rigid_clusters}
     for binding in resolve_macro_bindings(flat):
         status, detail = 'blocked', 'physical macro copper is not materialized'
@@ -245,10 +272,16 @@ def verify_source_macros(flat, physical, *, stage, stale_drc=False):
         elif snapshot is not None:
             try:
                 macro = macros[binding.name]
-                raw = snapshot.path.read_bytes()
-                if sha256(raw).hexdigest() != snapshot.digest or macro.asset_sha256 != snapshot.digest:
+                from .macro_definitions import verify_macro_inputs
+                verify_macro_inputs(snapshot.provenance.get('inputs', {str(snapshot.path): snapshot.digest}))
+                if binding.asset.symbol:
+                    recorded = recorded_inputs.get(binding.name, {})
+                    if (recorded.get('source_sha256') != snapshot.provenance['source_sha256'] or
+                            recorded.get('inputs') != snapshot.provenance['inputs']):
+                        raise ValueError('physical macro source or footprint inputs changed since binding')
+                if macro.asset_sha256 != snapshot.digest:
                     raise ValueError('physical macro asset differs from the current source-selected asset')
-                data = json.loads(raw)
+                data = snapshot.data
                 members = {m.key: m.target for m in binding.mappings if m.kind == 'member'}
                 nets = {m.key: m.target for m in binding.mappings if m.kind == 'net'}
                 expected_pads = {(members[member], pad, nets[role]) for member, pad, role in data['pad_nets']}

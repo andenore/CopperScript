@@ -189,7 +189,8 @@ def main(argv: list[str] | None = None) -> int:
         design = compile_design_file(source, locked=args.locked, offline=args.offline or args.dry_run)
         from .macro_bindings import prepare_macro_bindings
         macros = prepare_macro_bindings(design, locked=args.locked, offline=args.offline or args.dry_run) if design is not None else ()
-        inputs = provenance(project, source, options, macro_paths=tuple(m.path for m in macros))
+        inputs = provenance(project, source, options, macro_paths=tuple(
+            Path(p) for m in macros for p in m.provenance.get('inputs', {str(m.path): m.digest})))
     except (OSError, ValueError, CopperScriptError) as exc:
         print(f"SETUP ERROR: {exc}", file=sys.stderr)
         return 2
