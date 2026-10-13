@@ -20,10 +20,43 @@ let jobPoll=null;
 let mechanicalFormRevision="";
 const mm = n => n / 1000000;
 const scene = () => sourcePreview || preview || accepted;
+function acceptScene(value) {
+  accepted=value;
+  preview=value.pending_preview || null;
+  sourcePreview=value.source_preview || null;
+}
+const toolTabs=["components","mechanics","view"];
+function switchTab(name,focus=false) {
+  for(const tab of toolTabs) {
+    const active=tab===name;
+    $("tab-"+tab).setAttribute("aria-selected",String(active));
+    $("tab-"+tab).tabIndex=active ? 0 : -1;
+    $("panel-"+tab).hidden=!active;
+  }
+  if(name!=="mechanics") {$("measure").checked=false;$("draw-vertices").checked=false;}
+  if(focus)$("tab-"+name).focus();
+}
+for(const [index,name] of toolTabs.entries()) {
+  $("tab-"+name).onclick=()=>switchTab(name);
+  $("tab-"+name).onkeydown=event=>{
+    const next=event.key==="ArrowRight" ? (index+1)%3 : event.key==="ArrowLeft" ? (index+2)%3 :
+      event.key==="Home" ? 0 : event.key==="End" ? 2 : null;
+    if(next!==null) {event.preventDefault();switchTab(toolTabs[next],true);}
+  };
+}
+document.addEventListener("keydown",event=>{
+  if(event.key==="Escape")for(const menu of document.querySelectorAll(".toolbar-menu[open]")) {
+    menu.open=false;menu.querySelector("summary").focus();
+  }
+});
+for(const menu of document.querySelectorAll(".toolbar-menu"))menu.addEventListener("click",event=>{
+  if(event.target.closest("button"))menu.open=false;
+});
 function selectReferences(references, primary="") {
   const available=new Set((scene()?.components||[]).map(component=>component.reference));
   selectedReferences=new Set(references.filter(reference=>available.has(reference)));
   selected=selectedReferences.has(primary) ? primary : [...selectedReferences][0] || "";
+  if(selected)switchTab("components");
 }
 function selectionSet() {
   return new Set(selectedReferences.size ? selectedReferences : (selected ? [selected] : []));
@@ -280,12 +313,21 @@ function updateControls() {
   const selectionCount=selectionSet().size, groupCount=expandedSelection().size;
   const sourceReview=!!accepted?.source_review;
   const blocked = busy || !s || !!accepted?.source_stale || sourceReview;
-  $("notice").textContent=accepted?.notice || "Loading source workspace…";
+  $("board-name").textContent=s?.board || "Loading board…";
+  $("notice").textContent=accepted ? "Temporary placement is session-only. Source changes require review and save." : "Loading source workspace…";
+  $("open-board").hidden=!vscodeHost;
+  $("open-board").disabled=busy || !!preview || sourceReview;
+  $("source-state").textContent=accepted?.source_stale ? "Source changed" : sourceReview ? "Review pending" :
+    !accepted ? "Loading" : accepted.source_writable ? "Source ready" : "Read only";
+  $("source-state").classList.toggle("pending",sourceReview);
+  $("source-state").classList.toggle("error",!!accepted?.source_stale);
   $("reference").value = selected;
   $("apply").disabled = !preview || blocked; $("discard").disabled = !preview || blocked;
   const job=accepted?.placement_job;
   $("auto").disabled = blocked || !!preview || job?.status==="running";
   $("cancel-auto").disabled=busy || job?.status!=="running";
+  $("cancel-auto").hidden=job?.status!=="running";
+  $("auto").title="Preview automatic placement; existing locks and physical constraints are preserved.";
   $("job-status").hidden=!job;
   $("job-status").textContent=job ? `Auto-placement ${job.status}: ${job.progress.phase}, candidate ${Math.min(job.progress.candidate+1,job.progress.candidates)}/${job.progress.candidates}; ${job.elapsed_seconds}s / ${job.budget_seconds}s${job.error?" — "+job.error:""}` : "";
   $("job-profile").hidden=!job?.profile;$("profile-text").textContent=job?.profile?.top_cumulative||"";
@@ -293,6 +335,10 @@ function updateControls() {
   $("reload").disabled = busy;
   $("reload-source").disabled=busy || !accepted?.source_writable;
   $("save-source").disabled=busy || !sourceReview || !!accepted?.source_stale;
+  $("save-help").textContent=accepted?.source_stale ? "Source changed externally. Reload source before reviewing changes." :
+    sourceReview ? "Changes are reviewed but unsaved. Inspect the diff, then save or discard." :
+    accepted?.source_writable ? "Components: edit source locks, then review the pose. Mechanics: review a feature. Save becomes available after review." :
+    "This scene is read-only; open a .copper source board to save changes.";
   $("discard-source").disabled=busy || !sourceReview || !!accepted?.source_stale;
   $("undo-source").disabled=blocked || (!accepted?.can_source_undo && !accepted?.document_host);
   $("redo-source").disabled=blocked || (!accepted?.can_source_redo && !accepted?.document_host);
@@ -301,8 +347,11 @@ function updateControls() {
   $("source-review").hidden=!sourceReview;
   $("source-diff").textContent=accepted?.source_review?.diff || "";
   $("persistent-controls").disabled=blocked || !!preview || !accepted?.source_writable;
+  for(const dimension of ["position","rotation","side"])$(dimension+"-lock").disabled=!$("edit-locks").checked || !component;
   $("prepare-lock").disabled=blocked || !!preview || !component || !$("edit-locks").checked || !!component.profile_role || !!component.source_attachment;
   $("mechanical-controls").disabled=blocked || !!preview || !accepted?.capabilities.mechanical_edit;
+  $("remove-feature").disabled=!$("feature").value;
+  $("remove-feature").title=$("feature").value ? "Review removal of the selected board-owned feature." : "Select an existing feature to remove it.";
   $("undo").disabled = blocked || !accepted?.can_undo; $("redo").disabled = blocked || !accepted?.can_redo;
   $("pending").hidden = !preview;
   $("move").disabled = !component || blocked || !!preview || selectionCount>1 || component.session_locked ||
@@ -310,19 +359,29 @@ function updateControls() {
   $("lock").disabled = !component || blocked || !!preview;
   if (component) {
     if(component.source_attachment && !sourceReview && !preview && !busy && !accepted?.source_stale) $("notice").textContent=`Pose owned by attachment ${component.source_attachment}; edit the attachment or its datum in Mechanical features.`;
-    $("x").disabled=$("y").disabled=!!component.source_position_locked && !$("edit-locks").checked;
-    $("rotation").disabled=!!component.source_rotation_locked && !$("edit-locks").checked;
-    $("pose-side").disabled=!!component.source_side_locked && !$("edit-locks").checked;
+    $("x").disabled=$("y").disabled=blocked || !!preview || !!component.source_position_locked && !$("edit-locks").checked;
+    $("rotation").disabled=blocked || !!preview || !!component.source_rotation_locked && !$("edit-locks").checked;
+    $("pose-side").disabled=blocked || !!preview || !!component.source_side_locked && !$("edit-locks").checked;
     $("x").value = mm(component.position[0]); $("y").value = mm(component.position[1]);
     $("rotation").value = component.rotation; $("pose-side").value = component.side;
-    $("lock").textContent = component.session_locked ? "Unlock temporary pose" : "Lock temporary pose";
-    $("details").textContent = `${component.footprint}; ${component.value}. ${component.source_position_locked||component.source_rotation_locked ? "SOURCE LOCK. Enable explicit source-lock editing to change it. " : ""}${component.profile_role ? "Imported profile role: "+component.profile_role+" (read-only). " : ""}${component.macro ? "Rigid unit: "+component.macro+". " : ""}Allowed angles: ${component.allowed_orientations.join(", ")}.`;
+    $("lock").textContent = component.session_locked ? "Unlock for this session" : "Lock for this session";
+    $("temporary-lock-state").textContent=component.session_locked ? "Temporarily locked. This lock will not survive reopening." : "Temporary pose is unlocked.";
+    const sourceLocks=["position","rotation","side"].filter(d=>component["source_"+d+"_locked"]);
+    $("source-lock-state").textContent=sourceLocks.length ? (sourceReview ? "Proposed source locks: " : "Source locks: ")+sourceLocks.join(", ")+"." :
+      sourceReview ? "Proposed source pose has no locks." : "No saved source locks.";
+    $("details").textContent = `${component.footprint}; ${component.value}. ${component.profile_role ? "Imported profile role: "+component.profile_role+" (read-only). " : ""}${component.macro ? "Rigid unit: "+component.macro+". " : ""}Allowed angles: ${component.allowed_orientations.join(", ")}.`;
     $("details").textContent+=` Height: ${component.height_nm==null ? "unknown" : mm(component.height_nm)+" mm"}.`;
     if(selectionCount>1) $("details").textContent+=` ${selectionCount} components selected (${groupCount} including rigid macro members); drag any highlighted component to move them together.`;
     if(component.constraint_warning) $("details").textContent+=` Relative placement warning (${component.constraint_warning_count}); inspect the highlighted components and warning panel.`;
+  } else {
+    $("temporary-lock-state").textContent="No component selected.";
+    $("source-lock-state").textContent="Select a component to inspect its saved locks.";
+    $("details").textContent="Click a footprint to inspect it.";
+    for(const id of ["x","y","rotation","pose-side"])$(id).disabled=true;
   }
 }
 function populate() {
+  if(mechanicalFormRevision!==accepted.source_revision)syncLockChecks();
   for (const [id,values,label] of [["reference",accepted.components.map(c=>c.reference),"Select a component"],["net",accepted.nets,"All nets"]]) {
     const element = $(id), old = element.value; element.replaceChildren(new Option(label,""));
     for (const value of values) element.add(new Option(value,value)); element.value=old;
@@ -353,14 +412,15 @@ async function operation(action, fields={}, applyImmediately=false) {
       result=await api("/api/operation",{action:"apply",revision:result.preview.revision});
     }
     if (result.preview) {preview=result.preview; accepted.revision=preview.revision; status("Preview — inspect, then apply or discard. Source remains unchanged.");}
-    else {accepted=result.scene;preview=null;sourcePreview=result.source_preview||null;populate();
+    else {acceptScene(result.scene);sourcePreview=result.source_preview||sourcePreview;populate();
       status(accepted.source_review ? "Source preview — inspect the exact diff, then Save or Discard." :
+        action==="save_source" ? "Source saved. Temporary moves remain session-only. Rebuild routing, fills and manufacturing outputs." :
         accepted.outputs_stale ? "Source/session updated. Route, fill and manufacturing outputs are stale; rebuild them." : "Temporary session updated. Source remains unchanged.");}
   } catch (error) {
     preview=null;sourcePreview=null;
     // Recover the authoritative revision after conflicts and rejected poses.
     // Otherwise every subsequent edit can fail until the page is reloaded.
-    try {accepted=await api("/api/scene");populate();} catch (_) { /* Keep the original failure visible. */ }
+    try {acceptScene(await api("/api/scene"));populate();} catch (_) { /* Keep the original failure visible. */ }
     status(`${error.message}${error.status===409 && !accepted?.source_stale ? " Scene reloaded; retry your edit." : ""}`,true);
   }
   finally {busy=false;render();}
@@ -373,7 +433,7 @@ async function pollJob() {
   jobPoll=null;
   if (busy) {jobPoll=setTimeout(pollJob,250);return;}
   try {
-    accepted=await api("/api/scene");preview=accepted.pending_preview;
+    acceptScene(await api("/api/scene"));
     if(accepted.placement_job?.status==="completed") status("Auto-placement preview ready — apply or discard.");
     if(accepted.placement_job?.error) status(accepted.placement_job.error,true);
     render();
@@ -478,8 +538,7 @@ $("zoom-in").onclick=()=>zoom(.8); $("zoom-out").onclick=()=>zoom(1.25);
 async function reloadScene() {
   if (busy) return;busy=true;updateControls();
   try {
-    const s=await api("/api/scene");preview=null;sourcePreview=null;
-    accepted=s;populate();render();
+    const s=await api("/api/scene");acceptScene(s);populate();render();
     status(s.source_stale ? "Source changed externally; use Reload source (discard session) before editing." :
       `${s.board}: ${s.components.length} components; ${s.ratsnest.length} airwires. ${s.placement_legal ? "Placement legal." : s.placement_hard_legal && s.placement_constraints?.violations?.length ? "Relative placement warnings are present." : "Initial inspection placement needs legalization."} ${Object.keys(s.warnings).length ? "Footprint/omission warnings are present in scene data." : ""}`,s.source_stale);
   } catch(error) {status(error.message,true);}
@@ -495,6 +554,7 @@ $("prepare-lock").onclick=()=>operation("prepare_lock",{reference:selected,
   rotation:Number($("rotation").value),side:$("pose-side").value,
   locks:["position","rotation","side"].filter(k=>$(k+"-lock").checked)});
 $("save-source").onclick=()=>operation("save_source",{review_id:accepted.source_review.id});
+$("open-board").onclick=()=>api("/api/open-board").catch(e=>status(e.message,true));
 for (const [id,action] of [["discard-source","discard_source"],["undo-source","undo_source"],["redo-source","redo_source"]]) $(id).onclick=()=>operation(action);
 $("reload-source").onclick=()=>{if (confirm("Discard temporary placement, previews and history, and reload the current source?")) operation("reload_source");};
 $("source-link").onclick=()=>api("/api/source-link",{reference:selected}).catch(e=>status(e.message,true));
@@ -531,20 +591,56 @@ function featureInputs(parameters) {
   if ($("feature-kind").value==="datum") for(const key of ["position","relative_to","offset"]) if(!(key in parameters))parameters[key]="";
   if ($("feature-kind").value==="attach") for(const key of ["target","position","offset","anchor_pad","anchor_point"]) if(!(key in parameters))parameters[key]="";
   const container=$("feature-parameters");container.replaceChildren();
-  for (const [key,value] of Object.entries(parameters)) {
-    const label=document.createElement("label");label.textContent=key;
-    const input=document.createElement(key==="vertices"?"textarea":"input");input.id="feature-param-"+key;input.dataset.property=key;input.value=value;label.append(input);container.append(label);
+  const kind=$("feature-kind").value;
+  if(["datum","attach"].includes(kind)) {
+    const label=document.createElement("label");label.textContent="Position reference";
+    const mode=document.createElement("select");mode.id="feature-frame";
+    mode.add(new Option("Absolute position","absolute"));mode.add(new Option(kind==="datum" ? "Relative to another datum" : "Datum or named edge","relative"));
+    mode.value=parameters.relative_to || parameters.target ? "relative" : "absolute";
+    mode.onchange=updateFeatureFields;label.append(mode);container.append(label);
   }
+  for (const [key,value] of Object.entries(parameters)) {
+    const label=document.createElement("label");label.textContent=key.replaceAll("_"," ").replace(/^./,c=>c.toUpperCase());
+    const input=document.createElement(key==="vertices"?"textarea":key==="anchor" ? "select" : "input");
+    if(input.tagName==="INPUT")input.type="text";
+    if(key==="anchor") {
+      for(const [name,title] of [["origin","Footprint origin"],["pad","Physical pad"],["mating_face","Audited mating face"]])input.add(new Option(title,name));
+      if(![...input.options].some(o=>o.value===value))input.add(new Option(value,value));
+      input.onchange=updateFeatureFields;
+    }
+    input.id="feature-param-"+key;input.dataset.property=key;input.value=value;label.append(input);container.append(label);
+  }
+  updateFeatureFields();
+}
+function updateFeatureFields() {
+  const kind=$("feature-kind").value,relative=$("feature-frame")?.value==="relative";
+  const anchor=$("feature-param-anchor")?.value.replaceAll('"',"");
+  for(const input of $("feature-parameters").querySelectorAll("[data-property]")) {
+    const key=input.dataset.property;
+    const visible=key==="anchor_pad" ? anchor==="pad" : key==="anchor_point" ? anchor==="mating_face" :
+      ["datum","attach"].includes(kind) && key==="position" ? !relative :
+      ["relative_to","target","offset"].includes(key) && ["datum","attach"].includes(kind) ? relative : true;
+    input.disabled=!visible;input.closest("label").hidden=!visible;
+  }
+}
+function featureShapeOptions(current="") {
+  const kind=$("feature-kind").value,select=$("feature-shape");
+  const shapes=Object.keys(featureDefaults).filter(key=>key.startsWith(kind+":")).map(key=>key.slice(kind.length+1));
+  if(current && !shapes.includes(current))shapes.push(current);
+  select.replaceChildren();
+  for(const value of shapes)select.add(new Option(value ? value.replaceAll("_"," ") : "Not applicable",value));
+  select.value=shapes.includes(current) ? current : shapes[0]||"";
+  $("feature-shape-label").hidden=shapes.length<=1;
+  $("feature-name-label").hidden=["outline","rules"].includes(kind);
+  $("feature-name").disabled=$("feature-name-label").hidden;
+  $("draw-vertices-label").hidden=select.value!=="polygon";
+  if(select.value!=="polygon")$("draw-vertices").checked=false;
+  $("path-editor").hidden=!["outline","boundary"].includes(kind);
 }
 function featureMode() {
   const kind=$("feature-kind").value;
-  if (["hole","slot","rules","datum","edge","attach","overhang","component_height"].includes(kind)) $("feature-shape").value="";
-  else if(kind==="reference")$("feature-shape").value="dxf";
-  else if(kind==="boundary" && !["line","arc"].includes($("feature-shape").value)) $("feature-shape").value="line";
-  else if (kind==="cutout") $("feature-shape").value="polygon";
-  else if (kind.includes("keepout") && $("feature-shape").value==="circle") $("feature-shape").value="rectangle";
-  else if (["enclosure","assembly_access"].includes(kind) && !["rectangle","polygon"].includes($("feature-shape").value)) $("feature-shape").value="rectangle";
-  $("feature-name").disabled=["outline","rules"].includes(kind);
+  const current=$("feature-shape").value;
+  featureShapeOptions(featureDefaults[kind+":"+current] ? current : "");
   if ($("feature-name").disabled) $("feature-name").value="";
   featureInputs(featureDefaults[kind+":"+$("feature-shape").value]||{});vertexPoints=[];render();
 }
@@ -552,12 +648,11 @@ $("feature-kind").onchange=featureMode;$("feature-shape").onchange=featureMode;
 $("feature").onchange=()=>{
   const f=accepted.mechanical_features?.[Number($("feature").value)];
   if ($("feature").value==="" || !f) {featureMode();return;}
-  $("feature-kind").value=f.kind;$("feature-name").value=f.name;$("feature-shape").value=f.shape;
-  $("feature-name").disabled=["outline","rules"].includes(f.kind);
+  $("feature-kind").value=f.kind;$("feature-name").value=f.name;featureShapeOptions(f.shape||"");
   featureInputs(f.parameters);vertexPoints=[];render();
 };
 function featureRequest(remove=false) {
-  const parameters=Object.fromEntries([...$("feature-parameters").querySelectorAll("[data-property]")].filter(n=>n.value.trim()).map(n=>[n.dataset.property,n.value.trim()]));
+  const parameters=Object.fromEntries([...$("feature-parameters").querySelectorAll("[data-property]")].filter(n=>!n.disabled && n.value.trim()).map(n=>[n.dataset.property,n.value.trim()]));
   if(!remove && $("feature-kind").value==="outline" && $("feature-shape").value==="path") {reviewPath(parameters.maximum_chord_error);return;}
   if(!remove && $("feature-kind").value==="outline" && accepted.mechanical_features?.some(f=>f.kind==="boundary")) {
     operation("prepare_mechanical_batch",{features:[{kind:"outline",name:"",shape:$("feature-shape").value,parameters,remove:false},

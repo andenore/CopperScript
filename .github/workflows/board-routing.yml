@@ -84,7 +84,7 @@ jobs:
       - name: Exercise language server and VS Code providers
         env:
           COPPER_TEST_PYTHON: python
-        run: node --test tests/compiler-client.cjs tests/lsp-client.cjs
+        run: node --test tests/compiler-client.cjs tests/lsp-client.cjs tests/editor-document-bridge.cjs
       - name: Package shared mechanical editor (offline VSIX)
         run: |
           node integrations/vscode/build.cjs

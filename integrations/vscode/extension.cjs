@@ -2,6 +2,13 @@
 const vscode=require("vscode"), cp=require("node:child_process"), path=require("node:path"), fs=require("node:fs"), crypto=require("node:crypto"), readline=require("node:readline");
 const escape=s=>s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll('"',"&quot;");
 const {resolveCompiler,validateCommand}=require("./compiler.cjs");
+async function openMechanical(uri,pick=false) {
+  const source=uri || vscode.window.activeTextEditor?.document.uri;
+  const selected=!pick && source?.scheme==="file" && source.path.endsWith(".copper") ? source :
+    (await vscode.window.showOpenDialog({canSelectMany:false,filters:{"CopperScript boards":["copper"]},openLabel:"Open mechanical editor"}))?.[0];
+  if(selected)await vscode.commands.executeCommand("vscode.openWith",selected,"copperscript.mechanical");
+  return {opened:!!selected};
+}
 class Backend {
   constructor(command,args,cwd) {
     this.pending=new Map();this.id=0;this.closed=false;this.errors="";
@@ -40,16 +47,20 @@ class DocumentBridge {
   enqueue(work) {const result=this.tail.then(work);this.tail=result.catch(()=>{});return result;}
   async sync(force=false) {
     const doc=this.document;
-    if(force || doc.version!==this.version) {
+    while(force || doc.version!==this.version) {
+      force=false;
+      const version=doc.version,text=doc.getText();
       // The backend requires monotonic host versions. A forced reload without
       // a source change restarts the session with a separate monotonic counter.
       this.hostVersion=(this.hostVersion||0)+1;
-      const result=await this.backend.request({method:"open",version:this.hostVersion,text:doc.getText()});
-      this.version=doc.version;this.scene=result.scene;
+      this.scene=null;
+      const result=await this.backend.request({method:"open",version:this.hostVersion,text});
+      this.version=version;this.scene=result.scene;
     }
     return this.scene;
   }
   async handle(message) {
+    if(message.path==="/api/open-board")return openMechanical(null,true);
     await this.sync();
     if(message.path==="/api/scene") {this.scene=(await this.backend.request({method:"scene"})).scene;return this.scene;}
     if(message.path==="/api/source-link") {
@@ -88,6 +99,7 @@ function activate(context) {
   const languageTools=require("./lsp-client.cjs").activateLsp(vscode,context);
   require("./setup.cjs").activateSetup(vscode,context,languageTools);
   const active=new Map();
+  context.subscriptions.push(vscode.commands.registerCommand("copperscript.openMechanical",uri=>openMechanical(uri)));
   context.subscriptions.push(vscode.window.registerCustomEditorProvider("copperscript.mechanical",{
     async resolveCustomTextEditor(document,panel) {
       if(!vscode.workspace.isTrusted || document.uri.scheme!=="file" || !vscode.workspace.getWorkspaceFolder(document.uri))throw new Error("Mechanical editing requires a trusted local workspace");

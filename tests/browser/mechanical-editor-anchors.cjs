@@ -1,5 +1,6 @@
 /* Reviewed anchor editing on a disposable copy only. */
 const assert=require('node:assert/strict'),fs=require('node:fs');
+const {tab,sourceAction}=require('./editor-tools.cjs');
 const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||'playwright');
 (async()=>{
   const [url,source,screenshot]=process.argv.slice(2);assert(source.includes('build'));
@@ -12,6 +13,7 @@ const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||'playwright');
     await page.locator('#reference').selectOption('R1');await page.locator('#edit-locks').check();
     assert.equal(await page.locator('#prepare-lock').isDisabled(),true);
     assert.match(await page.locator('#notice').innerText(),/attachment DEBUG_PAD/);
+    await tab(page,'mechanics');
     const features=page.locator('#feature');
     const value=await features.locator('option').evaluateAll(options=>options.find(o=>o.textContent.includes('datum CENTER')).value);
     await features.selectOption(value);await page.locator('#feature-param-position').fill('(22mm,15mm)');
@@ -22,7 +24,7 @@ const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||'playwright');
     assert.equal(await page.locator('.assembly_envelopes').count(),1);
     assert.equal(await page.locator('.assembly_access').count(),1);
     if(screenshot)await page.screenshot({path:screenshot,fullPage:true});
-    await page.locator('#undo-source').click();await page.waitForFunction(()=>document.querySelector('#undo-source').disabled && !document.querySelector('#auto').disabled);
+    await sourceAction(page,'undo-source');await page.waitForFunction(()=>document.querySelector('#undo-source').disabled && !document.querySelector('#auto').disabled);
     assert.deepEqual(fs.readFileSync(source),original);assert.deepEqual(errors,[]);
     console.log('PASS: datums/edge/anchors rendered, attachment ownership, reviewed dependent-pose save and byte-exact undo; zero page errors');
   } finally {await browser.close();}

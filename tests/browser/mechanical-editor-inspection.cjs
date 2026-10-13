@@ -1,5 +1,6 @@
 /* Read-only browser inspection for the real circular LED-ring project. */
 const assert=require("node:assert/strict");
+const {tab}=require("./editor-tools.cjs");
 const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||"playwright");
 (async()=>{
   const url=process.argv[2];
@@ -20,6 +21,7 @@ const {chromium}=require(process.env.COPPER_PLAYWRIGHT_MODULE||"playwright");
     const front=scene.components.filter(c=>c.side==="front").length;
     const back=scene.components.filter(c=>c.side==="back").length;
     assert(front>0 && back>0,"Must inspect both LEDs/MCU and rear battery");
+    await tab(page,"view");
     await page.locator("#side").selectOption("back");assert.equal(await page.locator(".component").count(),back);
     await page.locator("#side").selectOption("front");assert.equal(await page.locator(".component").count(),front);
     await page.locator("#side").selectOption("both");

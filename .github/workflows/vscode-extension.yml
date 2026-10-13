@@ -59,7 +59,7 @@ jobs:
       - name: Check interpreter discovery and actual language server providers
         env:
           COPPER_TEST_PYTHON: python
-        run: node --test tests/compiler-client.cjs tests/lsp-client.cjs
+        run: node --test tests/compiler-client.cjs tests/lsp-client.cjs tests/editor-document-bridge.cjs
 
   package:
     needs: test
