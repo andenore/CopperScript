@@ -751,6 +751,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .editor.server import serve
         from .hard_macros import apply_hard_macro_scene
         try:
+            if not args.scene_output:
+                print("Opening board: checking source and dependencies...", flush=True)
             design = load_design(args.board, locked=args.locked, offline=args.offline)
             diagnostics = check(design.electrical)
             if has_errors(diagnostics):
@@ -758,6 +760,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(diagnostic)
                 return 1
             options = PrototypePhysicalOptions(copper_layers=args.layers, fabrication_profile=args.fab_profile)
+            if not args.scene_output:
+                print("Opening board: resolving footprints and verifying dependencies...", flush=True)
             if args.allow_proxy_footprints:
                 physical = prototype_physicalize(design, options)
             else:
@@ -797,6 +801,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             inputs += list(source_macro_input_paths(physical))
             workspace = SourceWorkspace(args.board, design, rebuild, input_paths=tuple(inputs))
             from .editor.overlay import RoutedOverlay
+            if not args.scene_output:
+                print("Opening board: preparing the editor session...", flush=True)
             session = EditorSession(physical, args.board, workspace=workspace,
                                     overlay=RoutedOverlay.load(args.overlay) if args.overlay else None)
             if args.scene_output:

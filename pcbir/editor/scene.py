@@ -214,7 +214,10 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
             drill = None
             if pad.drill:
                 drill = _shape(placed_pad_shape(position, replace(pad,
-                    size=pad.drill, kind=PadKind.SMD, drill=None,
+                    # A drill is non-electrical drawing geometry. NPTH pads
+                    # legitimately have no terminal number; never turn one
+                    # into an electrical SMD pad just to draw its opening.
+                    size=pad.drill, kind=PadKind.APERTURE, drill=None,
                     shape=PadShape.CIRCLE if pad.drill.width_nm == pad.drill.height_nm else PadShape.OVAL), pose))
             pads.append({"number": pad.number, "name": pad_names.get(pose.reference, {}).get(pad.number),
                 "land": f"pad:{pose.reference}.{pad.number}:{index}",

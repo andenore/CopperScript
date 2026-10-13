@@ -442,22 +442,25 @@ def _parse_pad(node: list[SExpr], source: str) -> FootprintPad:
                 f"{_tag(child)!r}"
             )
 
-    return FootprintPad(
-        number=number,
-        position=position,
-        size=size,
-        kind=kind,
-        shape=shape,
-        rotation_degrees=rotation,
-        drill=drill,
-        roundrect_ratio_ppm=ratio_ppm,
-        has_solder_mask=has_mask,
-        has_solder_paste=has_paste,
-        zone_connection=zone_connection,
-        heatsink=heatsink,
-        remove_unused_layers=remove_unused_layers,
-        connector_contact=kind_text == "connect",
-    )
+    try:
+        return FootprintPad(
+            number=number,
+            position=position,
+            size=size,
+            kind=kind,
+            shape=shape,
+            rotation_degrees=rotation,
+            drill=drill,
+            roundrect_ratio_ppm=ratio_ppm,
+            has_solder_mask=has_mask,
+            has_solder_paste=has_paste,
+            zone_connection=zone_connection,
+            heatsink=heatsink,
+            remove_unused_layers=remove_unused_layers,
+            connector_contact=kind_text == "connect",
+        )
+    except ValueError as exc:
+        raise KiCadModImportError(f"{source}: pad {number!r}: {exc}") from exc
 
 
 def _validate_pad_layers(

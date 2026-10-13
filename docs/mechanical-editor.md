@@ -147,6 +147,12 @@ a private loopback launch URL. `--scene-output <new.json>` supports headless
 inspection; `--layers`, `--fab-profile`, `--placement-templates` and repeatable
 `--hard-macro` select the physical build. Proxy footprints are inspection-only.
 
+Terminal startup reports source checking, footprint/dependency resolution and
+session preparation before printing the private launch URL. Locked dependency
+verification reads current relevant file bytes; it skips ignored Git/cache trees
+without changing the inventory or lock checksum. Unnumbered NPTH pads remain
+non-electrical and render their round or slotted drills normally.
+
 ## Reviewed persistent editing
 
 The local editor now supports reviewed source saves. Select a component, enable

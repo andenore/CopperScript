@@ -457,20 +457,30 @@ _IGNORED_PARTS = frozenset({".git", ".copper-cache", "cache", "__pycache__", ".p
 
 
 def _module_inventory(root: Path) -> tuple[LockedFile, ...]:
+    # DirEntry reuses directory metadata instead of issuing multiple stats for
+    # every file. Prune ignored trees before walking them, including Git objects
+    # and nested download caches. Every relevant file still gets a fresh hash.
+    candidates: list[tuple[str, Path]] = []
+    pending = [(root, "")]
+    while pending:
+        directory, prefix = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name in _IGNORED_PARTS:
+                    continue
+                relative = prefix + entry.name
+                if entry.is_symlink():
+                    raise ValueError(f"package assets may not be symlinks: {relative}")
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append((Path(entry.path), relative + "/"))
+                elif (entry.is_file(follow_symlinks=False) and
+                      (entry.name == "copper.mod" or os.path.splitext(entry.name)[1].casefold() in _LOCKED_SUFFIXES)):
+                    candidates.append((relative, Path(entry.path)))
     inventory: list[LockedFile] = []
-    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
-        relative = path.relative_to(root)
-        if any(part in _IGNORED_PARTS for part in relative.parts):
-            continue
-        if path.is_symlink():
-            raise ValueError(f"package assets may not be symlinks: {relative.as_posix()}")
-        if not path.is_file():
-            continue
-        if path.name != "copper.mod" and path.suffix.casefold() not in _LOCKED_SUFFIXES:
-            continue
+    for relative, path in sorted(candidates):
         data = path.read_bytes()
         inventory.append(
-            LockedFile(relative.as_posix(), len(data), hashlib.sha256(data).hexdigest())
+            LockedFile(relative, len(data), hashlib.sha256(data).hexdigest())
         )
     return tuple(inventory)
 
