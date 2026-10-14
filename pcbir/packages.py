@@ -1,7 +1,8 @@
 """Go-style package manifests and deterministic dependency resolution.
 
-Package import paths are stable source identities. Versions and local
-development replacements live in ``copper.mod``; complete content inventories
+Package import paths are stable source identities. Versions, local
+development replacements and remote source replacements live in
+``copper.mod``; complete content inventories
 are recorded in ``copper.lock``. Remote modules are fetched as Git repositories
 into a project-local cache and CopperScript never executes package code.
 """
@@ -30,6 +31,9 @@ class ModuleManifest:
     replacements: dict[str, str]
     filename: Path
     footprint_libraries: dict[str, str] = field(default_factory=dict)
+    # Module path -> (source module path, revision). The module keeps its own
+    # identity; only the fetched content comes from the source repository.
+    remote_replacements: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     @property
     def root(self) -> Path:
@@ -88,6 +92,7 @@ def find_manifest(start: Path) -> Path | None:
 def read_manifest(path: Path) -> ModuleManifest:
     requirements: dict[str, str] = {}
     replacements: dict[str, str] = {}
+    remote_replacements: dict[str, tuple[str, str]] = {}
     module_path: str | None = None
     footprint_libraries: dict[str, str] = {}
     try:
@@ -109,10 +114,18 @@ def read_manifest(path: Path) -> ModuleManifest:
             if fields[1] in requirements:
                 _manifest_error(path, line_number, f"duplicate requirement {fields[1]!r}")
             requirements[fields[1]] = fields[2]
-        elif fields[0] == "replace" and len(fields) == 4 and fields[2] == "=>":
-            if fields[1] in replacements:
+        elif fields[0] == "replace" and len(fields) in {4, 5} and fields[2] == "=>":
+            if fields[1] in replacements or fields[1] in remote_replacements:
                 _manifest_error(path, line_number, f"duplicate replacement {fields[1]!r}")
-            replacements[fields[1]] = fields[3]
+            if len(fields) == 4:
+                replacements[fields[1]] = fields[3]
+            else:
+                source, revision = fields[3].removeprefix("https://").removesuffix(".git"), fields[4]
+                if not _is_git_module_path(source) or source == fields[1]:
+                    _manifest_error(path, line_number, f"invalid remote replacement module {fields[3]!r}")
+                if revision.startswith("-"):
+                    _manifest_error(path, line_number, f"invalid remote replacement revision {revision!r}")
+                remote_replacements[fields[1]] = (source, revision)
         elif fields[0] == "footprint-library" and len(fields) == 3:
             name, target = fields[1:]
             if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*", name) or name in footprint_libraries:
@@ -128,7 +141,7 @@ def read_manifest(path: Path) -> ModuleManifest:
 
     if module_path is None:
         _manifest_error(path, 1, "manifest must declare its module path")
-    unknown_replacements = sorted(set(replacements) - set(requirements))
+    unknown_replacements = sorted((set(replacements) | set(remote_replacements)) - set(requirements))
     if unknown_replacements:
         _manifest_error(
             path,
@@ -138,7 +151,8 @@ def read_manifest(path: Path) -> ModuleManifest:
     for name, target in footprint_libraries.items():
         if not any(target == module or target.startswith(module + "/") for module in requirements):
             _manifest_error(path, 1, f"footprint library {name!r} has no matching requirement")
-    return ModuleManifest(module_path, requirements, replacements, path.resolve(), footprint_libraries)
+    return ModuleManifest(module_path, requirements, replacements, path.resolve(), footprint_libraries,
+                          remote_replacements)
 
 
 class PackageResolver:
@@ -260,6 +274,7 @@ class PackageResolver:
             )
         version = self.manifest.requirements[module_path]
         replacement = self.manifest.replacements.get(module_path)
+        remote = self.manifest.remote_replacements.get(module_path)
         key = (module_path, version)
         if self.locked and key not in self._lock_entries:
             raise CopperScriptError(
@@ -279,6 +294,8 @@ class PackageResolver:
                     f"replacement directory does not exist: {module_root}",
                     location,
                 )
+        elif remote is not None:
+            module_root = self._fetch_git_module(*remote, location)
         else:
             module_root = self._fetch_git_module(module_path, version, location)
 
@@ -297,7 +314,14 @@ class PackageResolver:
                 "PKG012", f"cannot inventory {module_path}@{version}: {exc}", location
             ) from exc
         checksum = _inventory_checksum(files)
-        source = f"replace:{replacement}" if replacement is not None else f"git:https://{module_path}.git"
+        if replacement is not None:
+            source = f"replace:{replacement}"
+        elif remote is not None:
+            # The lock key keeps the required version, so record the revision
+            # actually fetched; retargeting the replacement is a lock change.
+            source = f"replace:git:https://{remote[0]}.git@{remote[1]}"
+        else:
+            source = f"git:https://{module_path}.git"
         self._verify_or_record_lock(
             LockedModule(module_path, version, source, checksum, files), location
         )
@@ -345,9 +369,7 @@ class PackageResolver:
                 "remote fetching supports github.com and gitlab.com module paths; use replace for other sources",
                 location,
             )
-        pattern = (r"github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" if module_path.startswith("github.com/") else
-                   r"gitlab\.com/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
-        if not re.fullmatch(pattern, module_path) or any(p in {".", ".."} for p in module_path.split("/")):
+        if not _is_git_module_path(module_path):
             raise CopperScriptError("PKG005", "invalid Git module path", location)
         if not version or version.startswith("-"):
             raise CopperScriptError("PKG006", "invalid Git revision", location)
@@ -421,6 +443,12 @@ class PackageResolver:
             _write_lock(self.lock_path, self._lock_entries)
         except OSError as exc:
             raise CopperScriptError("PKG007", f"cannot write copper.lock: {exc}", location) from exc
+
+
+def _is_git_module_path(module_path: str) -> bool:
+    pattern = (r"github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" if module_path.startswith("github.com/") else
+               r"gitlab\.com/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
+    return bool(re.fullmatch(pattern, module_path)) and not any(p in {".", ".."} for p in module_path.split("/"))
 
 
 def _remove_readonly(function, path, exc_info):

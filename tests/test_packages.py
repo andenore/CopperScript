@@ -188,3 +188,109 @@ replace github.com/vendor/library => ./deps
     with pytest.raises(CopperScriptError) as captured:
         read_manifest(manifest_path)
     assert captured.value.code == "PKG009"
+
+
+def _seed_cached_module(project: Path, module: str, version: str, manufacturer: str) -> None:
+    cache_key = hashlib.sha256(f"{module}@{version}".encode()).hexdigest()[:20]
+    package = project / ".copper-cache" / "pkg" / cache_key / "parts"
+    package.mkdir(parents=True)
+    (package / "part.copper").write_text(
+        f'part R {{ category = "passive.resistor"; manufacturer = "{manufacturer}"; '
+        'pin A { number = "1"; domains = "analog"; directions = "passive"; } }',
+        encoding="utf-8",
+    )
+    (package / "R.kicad_mod").write_text(f'(footprint "{manufacturer}")', encoding="utf-8")
+
+
+def test_remote_replacement_fetches_another_repository_under_the_module_identity(tmp_path: Path) -> None:
+    from pcbir.packages import resolve_module_asset
+
+    _seed_cached_module(tmp_path, "gitlab.com/mirror/group/library", "v2.0.0", "mirror")
+    (tmp_path / "copper.mod").write_text(
+        "module example/project\n"
+        "require github.com/vendor/library v1.0.0\n"
+        "replace github.com/vendor/library => https://gitlab.com/mirror/group/library.git v2.0.0\n",
+        encoding="utf-8",
+    )
+    board_path = tmp_path / "board.copper"
+    board_path.write_text(
+        'board Demo { import parts "github.com/vendor/library/parts"; component R1: parts.R; net N { R1.A; } }',
+        encoding="utf-8",
+    )
+
+    board = compile_file(board_path, offline=True)
+
+    assert board.library["parts.R"].manufacturer == "mirror"
+    assert board.dependencies[0].module_path == "github.com/vendor/library"
+    assert board.dependencies[0].version == "v1.0.0"
+    lock = (tmp_path / "copper.lock").read_text(encoding="utf-8")
+    assert '"module": "github.com/vendor/library"' in lock
+    assert '"source": "replace:git:https://gitlab.com/mirror/group/library.git@v2.0.0"' in lock
+    asset = resolve_module_asset(board_path, "github.com/vendor/library/parts/R.kicad_mod", offline=True)
+    assert asset.read_text(encoding="utf-8") == '(footprint "mirror")'
+    compile_file(board_path, locked=True, offline=True)
+
+
+def test_retargeted_remote_replacement_is_a_lock_mismatch(tmp_path: Path) -> None:
+    for version in ("v2.0.0", "v3.0.0"):
+        _seed_cached_module(tmp_path, "gitlab.com/mirror/library", version, "mirror")
+    manifest = tmp_path / "copper.mod"
+    manifest.write_text(
+        "module example/project\n"
+        "require github.com/vendor/library v1.0.0\n"
+        "replace github.com/vendor/library => gitlab.com/mirror/library v2.0.0\n",
+        encoding="utf-8",
+    )
+    board_path = tmp_path / "board.copper"
+    board_path.write_text(
+        'board Demo { import parts "github.com/vendor/library/parts"; component R1: parts.R; net N { R1.A; } }',
+        encoding="utf-8",
+    )
+    compile_file(board_path, offline=True)
+    # Identical bytes from another revision still change the recorded source.
+    manifest.write_text(manifest.read_text(encoding="utf-8").replace("v2.0.0", "v3.0.0"), encoding="utf-8")
+
+    with pytest.raises(CopperScriptError) as captured:
+        compile_file(board_path, locked=True, offline=True)
+    assert captured.value.code == "PKG008"
+    compile_file(board_path, offline=True)
+    assert "library.git@v3.0.0" in (tmp_path / "copper.lock").read_text(encoding="utf-8")
+
+
+def test_remote_replacement_offline_cache_miss_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "copper.mod").write_text(
+        "module example/project\n"
+        "require github.com/vendor/library v1.0.0\n"
+        "replace github.com/vendor/library => gitlab.com/mirror/library v2.0.0\n",
+        encoding="utf-8",
+    )
+    board_path = tmp_path / "board.copper"
+    board_path.write_text(
+        'board Demo { import parts "github.com/vendor/library/parts"; component R1: parts.R; net N { R1.A; } }',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CopperScriptError) as captured:
+        compile_file(board_path, offline=True)
+    assert captured.value.code == "PKG011"
+    assert "gitlab.com/mirror/library@v2.0.0" in str(captured.value)
+
+
+@pytest.mark.parametrize("replacement", [
+    "replace github.com/vendor/library => example.com/mirror/library v2\n",
+    "replace github.com/vendor/library => gitlab.com/mirror/../library v2\n",
+    "replace github.com/vendor/library => github.com/vendor/library v2\n",
+    "replace github.com/vendor/library => gitlab.com/mirror/library --upload-pack=x\n",
+    "replace github.com/vendor/library => ./deps\nreplace github.com/vendor/library => gitlab.com/mirror/library v2\n",
+    "replace github.com/other/library => gitlab.com/mirror/library v2\n",
+])
+def test_manifest_rejects_invalid_remote_replacements(tmp_path: Path, replacement: str) -> None:
+    manifest_path = tmp_path / "copper.mod"
+    manifest_path.write_text(
+        "module example/project\nrequire github.com/vendor/library v1\n" + replacement,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CopperScriptError) as captured:
+        read_manifest(manifest_path)
+    assert captured.value.code == "PKG009"
