@@ -159,6 +159,16 @@ class PlacementCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class PlacementSeedFailure:
+    """Discarded bounded attempt, never a partial placement certificate."""
+
+    seed: int
+    failed_reference: str
+    accepted_count: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class PlacementStatistics:
     analytical_iterations: int
     exact_repair_count: int
@@ -166,10 +176,23 @@ class PlacementStatistics:
     refinement_move_count: int
     refinement_swap_count: int
     routing_feedback_passes: int
+    failed_seed_attempts: tuple[PlacementSeedFailure, ...] = ()
 
 
 class PlacementAlgorithmError(ValueError):
-    pass
+    def __init__(self, message, *, failed_seed_attempts=()):
+        super().__init__(message)
+        self.failed_seed_attempts = tuple(failed_seed_attempts)
+
+
+class _BoundedLegalizationFailure(PlacementAlgorithmError):
+    """Only exhausted mutable legalization can discard one planned seed."""
+
+    def __init__(self, message, *, failed_reference, accepted_placements):
+        super().__init__(message)
+        self.failed_reference = failed_reference
+        self.accepted_placements = tuple(accepted_placements[ref]
+            for ref in sorted(accepted_placements))
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +256,7 @@ def generate_placement_candidates(
         raise PlacementAlgorithmError("; ".join(conflicts))
     attempts: list[PlacementCandidate] = []
     closest_rejected = None
+    failed_seed_attempts: list[PlacementSeedFailure] = []
     spacing = _escape_model(board, options)
     seeds = max(2, options.candidate_count)
     for seed in range(seeds):
@@ -245,9 +269,16 @@ def generate_placement_candidates(
         continuous, seeded_original, phase_options = _place_rigid_clusters(
             board, continuous, placements, options
         )
-        legalized, exact_repairs = _legalize(
-            board, continuous, seeded_original, phase_options, seed
-        )
+        try:
+            legalized, exact_repairs = _legalize(
+                board, continuous, seeded_original, phase_options, seed
+            )
+        except _BoundedLegalizationFailure as exc:
+            failed_seed_attempts.append(PlacementSeedFailure(seed,
+                exc.failed_reference, len(exc.accepted_placements), str(exc)))
+            if progress:
+                progress("legalization_failed", seed, seeds)
+            continue
         legalized, relative_before = _repair_relative_constraints(
             board, legalized, phase_options, spacing
         )
@@ -294,10 +325,21 @@ def generate_placement_candidates(
         )
     if not attempts:
         details = _local_failure_details(board, closest_rejected[1], options) if closest_rejected else ""
-        raise PlacementAlgorithmError(
-            "no legal placement candidate satisfies all represented physical constraints"
-            + (f"; {details}" if details else "")
-        )
+        message = "no legal placement candidate satisfies all represented physical constraints"
+        if details:
+            message += f"; {details}"
+        if failed_seed_attempts:
+            best_failure = min(failed_seed_attempts,
+                key=lambda failure: (-failure.accepted_count, failure.seed))
+            message += f"; {best_failure.reason}; bounded seed attempts: " + "; ".join(
+                f"seed {failure.seed}: {failure.failed_reference} after {failure.accepted_count} accepted placements"
+                for failure in failed_seed_attempts)
+        raise PlacementAlgorithmError(message,
+            failed_seed_attempts=tuple(failed_seed_attempts))
+    if failed_seed_attempts:
+        failures = tuple(failed_seed_attempts)
+        attempts = [replace(candidate, statistics=replace(candidate.statistics,
+            failed_seed_attempts=failures)) for candidate in attempts]
     frontier = [
         candidate
         for candidate in attempts
@@ -1155,9 +1197,10 @@ def _legalize(
             )
             if repaired is None:
                 if choice is None:
-                    raise PlacementAlgorithmError(
+                    raise _BoundedLegalizationFailure(
                         f"cannot legalize component {reference!r} within the local repair budget; "
-                        + _local_failure_details(board, {**placed, reference: targets[reference]}, options)
+                        + _local_failure_details(board, {**placed, reference: targets[reference]}, options),
+                        failed_reference=reference, accepted_placements=placed,
                     )
                 placed[reference] = choice
             else:

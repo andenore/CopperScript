@@ -183,3 +183,22 @@ Own PTH annuli and own courtyard are exempt from the foreign-obstacle test;
 other own-PTH land checks remain unchanged. Slot-process, native quantization,
 assembly and CAM qualification remain independent. Bounded caches retain only
 immutable footprint and exact transformed pose geometry, never legality answers.
+
+
+## Discarding an exhausted seed
+
+The existing deterministic seed count remains `max(2, candidate_count)`. Only
+the private typed failure from exhausted mutable legalization/local repair
+discards one attempt and permits the next already planned seed. Each attempt
+builds its own tentative placed map from source/fixed intent and keeps the
+existing per-member, local-repair and search bounds. No partial attempt is
+promoted, no budget is restarted within an attempt, and no extra seed is added.
+
+Unrouted-source/unknown-lock/corridor prechecks, invalid fixed geometry, rigid
+contracts, malformed source and unexpected `PlacementAlgorithmError` failures
+remain fatal. Retry classification does not inspect error text. Retained
+candidates carry an immutable `failed_seed_attempts` statistics tuple with the
+seed, failed reference, accepted count and reason, including failures after a
+successful seed. The report omits this field when empty. When all attempts fail,
+the final error retains all bounded reasons and the deepest accepted-count
+message (earliest seed on a tie). Finite attempts never prove infeasibility.

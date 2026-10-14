@@ -140,3 +140,13 @@ connectivity scores. Package, critical and detailed stages retain exact gates.
 Actual filled references, RF/USB impedance, thermal/current capacity and final
 CAM require separate evidence. Finite search failure never permits weaker source
 rules. Open algorithm scope is in [routing backlog](routing-backlog.md).
+
+
+A bounded mutable legalization failure discards only its deterministic seed;
+the planner still tries the other seeds already specified by its existing
+`max(2, candidate_count)` count. Fixed/source/rigid errors remain fatal. Successful
+candidate statistics expose discarded bounded attempts as `failed_seed_attempts`
+with seed, reference, accepted count and reason; empty evidence is omitted from
+JSON. An all-failed result preserves the diagnostic context, never a partial
+placement. Seed retries retain every source constraint and existing search bound
+and do not establish physical access or engineering qualification.
