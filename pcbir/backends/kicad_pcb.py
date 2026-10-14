@@ -215,6 +215,17 @@ def _render_project(board: PhysicalBoard) -> str:
     via_size = float(board.rules.default_via_size_nm) / 1_000_000
     via_drill = float(board.rules.default_via_drill_nm) / 1_000_000
     filled_capped = any(via.finish == "filled-capped" for via in board.vias)
+    # Keep native checking independent of host defaults. Ordinary via choices
+    # come from the declared default and materialized IR, not KiCad's implicit
+    # 0.6/0.3 mm project settings. Process/assembly qualification remains separate.
+    ordinary_sizes = [(board.rules.default_via_size_nm, board.rules.default_via_drill_nm),
+                      *((via.size_nm, via.drill_nm) for via in board.vias
+                        if via.finish != "filled-capped")]
+    ordinary_minima = {
+        "min_via_diameter": min(size for size, _ in ordinary_sizes) / 1_000_000,
+        "min_through_hole_diameter": min(drill for _, drill in ordinary_sizes) / 1_000_000,
+        "min_via_annular_width": min((size - drill) / 2 for size, drill in ordinary_sizes) / 1_000_000,
+    }
     project = {
         "meta": {"filename": f"{_safe_name(board.name)}.kicad_pro", "version": 3},
         "board": {
@@ -230,7 +241,7 @@ def _render_project(board: PhysicalBoard) -> str:
                         "min_via_diameter": 0.30,
                         "min_through_hole_diameter": 0.20,
                         "min_via_annular_width": 0.05,
-                    } if filled_capped else {}),
+                    } if filled_capped else ordinary_minima),
                 }
             }
         },

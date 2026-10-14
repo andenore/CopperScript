@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .drc import placed_pad_shape, run_physical_drc
-from .geometry import point_in_polygon, point_segment_distance_at_least
+from .geometry import RoundedConvexShape, shapes_clear, point_in_polygon, point_segment_distance_at_least
 from .physical import (
     BoardSide, CopperLayer, FootprintPad, PadKind, PadReference, PhysicalBoard,
     Placement, Point, RouteKind, TrackSegment, Via, nm_from_mm,
@@ -390,15 +390,16 @@ def _maze_choices(board, clearance, net, pins, options) -> tuple[EscapeCandidate
         span = physical_via_span(board, side, next(layer for layer in allowed if layer is not side))
         if span is None:
             continue
-        bounds = placed_pad_shape(position, pad, placement).bounds
+        pad_shape = placed_pad_shape(position, pad, placement)
         result = surface_path_to_via(
             board, clearance, net, position, width, side,
             step_nm=options.refinement_step_nm, radius_nm=options.maximum_radius_nm,
             via_size_nm=size, via_drill_nm=drill, via_layers=span[:2],
             state_budget=options.maze_state_budget,
-            accept_via=lambda p: not (
-                bounds.min_x - size // 2 <= p.x_nm <= bounds.max_x + size // 2
-                and bounds.min_y - size // 2 <= p.y_nm <= bounds.max_y + size // 2),
+            accept_via=lambda p: shapes_clear(RoundedConvexShape((p,), size // 2), pad_shape, 1),
+            # The shared via predicate excludes exact pad copper on every
+            # crossed layer, including same-net/unassigned pads. A rectangular
+            # pad bound would wrongly exclude circular-land interstices.
         )
         if result is not None:
             path, endpoint = result
@@ -421,15 +422,13 @@ def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: 
         return ()
     width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
     size, drill = board.rules.default_via_size_nm, board.rules.default_via_drill_nm
-    bounds = placed_pad_shape(position, pad, placement).bounds
     choices = []
     for endpoint in endpoints:
         margin = size // 2 + board.rules.minimum_clearance_nm
         if not outline.admits(endpoint, margin):
             continue
-        if (bounds.min_x - size // 2 <= endpoint.x_nm <= bounds.max_x + size // 2
-                and bounds.min_y - size // 2 <= endpoint.y_nm <= bounds.max_y + size // 2):
-            continue  # No unqualified ordinary via-in-pad process.
+        # can_via checks the complete annulus against exact placed pad shapes;
+        # do not reject a circular-pad corner gap by its rectangular bounds.
         coincident = tuple(v for v in board.vias if v.position == endpoint)
         existing = next((v for v in coincident if v.net == net
                          and (v.from_layer, v.to_layer) == span[:2]), None)
