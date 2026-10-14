@@ -31,6 +31,24 @@ authoring in local coordinates, or standalone `board_profile` authoring. Macro
 view bounds are a viewport, not a manufactured board outline. Placement overlays,
 templates and externally supplied hard-macro scenes remain board-only options.
 
+Omitting `--layers` selects the declared source stackup, or the smallest supported
+2/4/6-layer stack containing the source's copper layers and macro requirements.
+An explicit `--layers` remains strict. VS Code's layer setting defaults to `0`
+(automatic). Fabrication profiles remain explicit; layer inference does not select
+a vendor or certify its processes. Use a board's configured Make `edit` target
+when its fabrication profile or other physical settings are supplied by the build.
+
+For example, the full-vertical build requires six layers and its selected profile:
+
+```console
+copper edit examples/full_vertical/board.copper --fab-profile jlcpcb-six-layer
+```
+
+Open a macro's `.copper` definition rather than an individual `.kicad_mod`
+footprint. Managed-cache definitions use the consuming project's dependency pins
+and remain read-only. When authoring a separate local library definition, use
+`--project PATH` to select the consumer manifest supplying its pinned dependencies.
+
 On initial open, the editor prepares every dependency explicitly declared in the
 nearest `copper.mod`, including source packages, footprints and macro assets.
 It downloads missing modules into the normal package cache, verifies existing

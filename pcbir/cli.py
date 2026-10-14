@@ -142,9 +142,11 @@ def _parser() -> argparse.ArgumentParser:
     overlay.add_argument("-o", "--output", type=Path, required=True, help="new overlay JSON; never overwritten")
     editor = subparsers.add_parser("edit-mechanical", aliases=["edit"], help="open the physical editor for a board, macro or mechanical profile")
     editor.add_argument("board", type=Path)
+    editor.add_argument("--project", type=Path, help="consumer project whose copper.mod pins a library definition's dependencies")
     _add_resolution_options(editor)
     editor.add_argument("--footprint-root", action="append", default=[], type=Path)
-    editor.add_argument("--layers", type=int, choices=(2, 4, 6), default=2)
+    editor.add_argument("--layers", type=int, choices=(2, 4, 6), default=None,
+                        help="explicit copper-layer count; default derives it from source stackup and layer requirements")
     editor.add_argument("--fab-profile", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"), default="generic")
     editor.add_argument("--placement-templates", type=Path)
     editor.add_argument("--hard-macro", action="append", default=[], type=Path)
@@ -774,12 +776,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .editor.dependencies import prepare_editor_dependencies
         try:
             progress = (lambda message: print(message, flush=True)) if not args.scene_output else None
-            prepare_editor_dependencies(args.board, offline=args.offline, locked=args.locked, progress=progress)
+            prepare_editor_dependencies(args.board, offline=args.offline, locked=args.locked, progress=progress,
+                                        project=args.project)
             from .editor.overlay import RoutedOverlay
             session = document_session(args.board, None, footprint_roots=args.footprint_root,
                 layers=args.layers, fab_profile=args.fab_profile, templates=args.placement_templates,
                 macros=args.hard_macro, allow_proxy=args.allow_proxy_footprints,
-                overlay=RoutedOverlay.load(args.overlay) if args.overlay else None)
+                overlay=RoutedOverlay.load(args.overlay) if args.overlay else None, project=args.project)
             if args.scene_output:
                 if args.scene_output.resolve() == args.board.resolve():
                     raise ValueError("scene output cannot overwrite the source board")

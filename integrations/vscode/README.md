@@ -71,7 +71,9 @@ contain `pcbir.editor.document`. Show Setup prints the fingerprint argv for the
 actual selected environment; use that command if you are not using uv.
 Commands are argv arrays, never shell strings. Compiler changes fail closed until
 you intentionally update the digest. Layer/profile/template/macro settings must
-match your build. Missing manifests or undeclared URL dependencies require an
+match your build. The layer setting defaults to `0` (derive from source stackup,
+layer constraints and macros); choose `2`, `4` or `6` to fix it explicitly.
+Fabrication profiles remain explicit. Missing manifests or undeclared URL dependencies require an
 explicit `copper.mod` requirement; the editor does not select floating versions.
 
 Build shared assets with `node integrations/vscode/build.cjs`, then launch an

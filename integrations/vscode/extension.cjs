@@ -127,7 +127,8 @@ function activate(context) {
       const cwd=vscode.workspace.getWorkspaceFolder(document.uri).uri.fsPath;
       const {command}=await resolveCompiler(configured,cwd,"mechanical");
       const local=s=>path.resolve(cwd,s);
-      const args=[document.uri.fsPath,"--layers",String(config.get("layers")),"--fab-profile",config.get("fabricationProfile")];
+      const args=[document.uri.fsPath,"--fab-profile",config.get("fabricationProfile")];
+      if(config.get("layers",0))args.push("--layers",String(config.get("layers")));
       if(config.get("offline",false))args.push("--offline");
       for(const root of config.get("footprintRoots")) args.push("--footprint-root",local(root));
       if(config.get("placementTemplates"))args.push("--placement-templates",local(config.get("placementTemplates")));

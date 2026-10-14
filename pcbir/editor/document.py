@@ -76,6 +76,7 @@ class DocumentHost:
             if not self.prepared:
                 from .dependencies import prepare_editor_dependencies
                 prepare_editor_dependencies(self.source, text, offline=self.offline, locked=self.locked,
+                    project=self.settings.get('project'),
                     progress=lambda message: print(message, file=sys.stderr, flush=True))
                 self.prepared = True
             self.session = document_session(self.source, lambda: self.text.encode("utf-8"), **self.settings)
@@ -184,8 +185,9 @@ if __name__ == "__main__":
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("source", type=Path)
+        parser.add_argument("--project", type=Path)
         parser.add_argument("--footprint-root", action="append", default=[], type=Path)
-        parser.add_argument("--layers", type=int, choices=(2, 4, 6), default=2)
+        parser.add_argument("--layers", type=int, choices=(2, 4, 6), default=None)
         parser.add_argument("--fab-profile", default="generic", choices=("generic", "jlcpcb-four-layer", "jlcpcb-six-layer"))
         parser.add_argument("--placement-templates", type=Path)
         parser.add_argument("--hard-macro", action="append", default=[], type=Path)
@@ -195,4 +197,4 @@ if __name__ == "__main__":
         args = parser.parse_args()
         serve(args.source, footprint_roots=args.footprint_root, layers=args.layers, fab_profile=args.fab_profile,
               templates=args.placement_templates, macros=args.hard_macro, allow_proxy=args.allow_proxy_footprints,
-              offline=args.offline, locked=args.locked)
+              offline=args.offline, locked=args.locked, project=args.project)

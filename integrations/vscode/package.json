@@ -87,11 +87,13 @@
           "scope": "resource",
           "type": "number",
           "enum": [
+            0,
             2,
             4,
             6
           ],
-          "default": 2
+          "default": 0,
+          "description": "Copper-layer count. Zero derives the count from the source stackup and layer requirements; 2, 4 or 6 explicitly fixes it."
         },
         "copperscript.mechanical.fabricationProfile": {
           "scope": "resource",

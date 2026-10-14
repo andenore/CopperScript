@@ -417,6 +417,8 @@ class DefinitionSession:
         self.source = Path(source).absolute()
         if any(p.is_symlink() for p in (self.source,*self.source.parents)): raise SourceEditError('definition editing does not follow source symlinks')
         self.reader = reader
+        from .dependencies import dependency_context
+        self.dependency_source = dependency_context(self.source, settings.get('project'))
         self.readonly = any(p.casefold()=='.copper-cache' for p in self.source.parts)
         self.options = None
         self.revision = 0
@@ -429,11 +431,18 @@ class DefinitionSession:
     def build(self, raw):
         snapshot = SourceSnapshot(raw, str(self.source))
         document = parse(snapshot.text, snapshot.filename)
-        resolver = PackageResolver.for_source(self.source, document.location, locked=True, offline=True)
+        resolver = PackageResolver.for_source(self.dependency_source, document.location, locked=True, offline=True)
+        if self.dependency_source != self.source:
+            # Register the owner using the consumer's verified module inventory.
+            # Relative references stay confined to that source module.
+            for module in resolver.manifest.requirements:
+                package = resolver.resolve(module, document.location)
+                if self.source.is_relative_to(package.directory):
+                    break
         if document.kind == 'macro': scene, inputs = _macro_scene(document, resolver, snapshot.revision)
         elif document.kind == 'board_profile': scene, inputs = _profile_scene(document, resolver, snapshot.revision)
         else: raise SourceEditError('definition editor requires macro or board_profile')
-        manifest = find_manifest(self.source.parent)
+        manifest = find_manifest(self.dependency_source)
         if manifest:
             for path in (manifest, manifest.parent / 'copper.lock'):
                 if path.is_file(): inputs[str(path.resolve())] = sha256(path.read_bytes()).hexdigest()
