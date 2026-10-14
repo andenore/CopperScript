@@ -220,15 +220,16 @@ def _pair_profile(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule:
         return None
     if len(first_guide.accesses) != 2 or len(second_guide.accesses) != 2:
         return None
-    partners = {access.pad.component: access for access in second_guide.accesses}
-    if len(partners) != 2 or set(partners) != {access.pad.component for access in first_guide.accesses}:
+    from .pair_terminals import terminal_partners
+    partners = terminal_partners(first_guide, second_guide)
+    if partners is None:
         return None
     # A guide's access layer can be reached only through its tentative via.
     # Surface-only alternatives start on actual pad-side copper, not an inner
     # grid layer mistaken for a physical terminal contact.
     placements = {p.reference:p for p in board.placements}
     layers = {CopperLayer.FRONT if placements[access.pad.component].side is BoardSide.FRONT
-              else CopperLayer.BACK for access in first_guide.accesses}
+              else CopperLayer.BACK for access in (*first_guide.accesses, *second_guide.accesses)}
     if len(layers) != 1:
         return None
     layer = next(iter(layers))

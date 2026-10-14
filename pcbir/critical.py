@@ -1293,6 +1293,9 @@ def _route_pair_group(
 
     partner_name = partner_rule.net
     first, second = sorted((rule, partner_rule), key=lambda item: item.net)
+    from .pair_terminals import prepare_pair_terminals, terminal_partners
+    routes, first_branches, second_branches = prepare_pair_terminals(
+        replace(board, tracks=tuple(tracks), vias=tuple(vias)), first, second, routes)
     found: set[str] = set()
     if nested is not None:
         accepted = _route_nested_exit(board, first, second, routes, rules, tracks, vias, nested)
@@ -1321,10 +1324,28 @@ def _route_pair_group(
             return result, pair_tracks, pair_vias
     guided = all(routes.get(name) is not None and routes[name].connected
                  for name in (rule.net, partner_name))
+    if (not result.connected and guided and crossing is None and not (first_branches or second_branches)
+            and any(a.tracks for name in (first.net, second.net) for a in routes[name].accesses)):
+        # A coarse guide may already carry a checked multi-leg package exit.
+        # Try one whole-pair proposal that retains those actual lead-ins rather
+        # than inventing a rectangular stub from each original pad centre.
+        attempt, proposed_tracks, proposed_vias = _route_pair(
+            board, first, second, routes, prefer_access_tracks=True)
+        attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
+            board, attempt, proposed_tracks, proposed_vias, rules)
+        attempt, proposed_tracks, proposed_vias = _validate_candidate(
+            board, attempt, proposed_tracks, proposed_vias, tracks, vias)
+        if attempt.connected:
+            return attempt, proposed_tracks, proposed_vias
     if crossing is not None and not guided:
         result = replace(result, diagnostics=("both pair members require connected global guides",))
-    if not result.connected and guided:
-        search_board = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+    supported = (routes.get(first.net) is not None and routes.get(second.net) is not None
+                 and terminal_partners(routes[first.net], routes[second.net]) is not None)
+    from .hard_macros import macro_owned_pads
+    owned_terminals = macro_owned_pads(board)
+    protected_ends = any(p in owned_terminals for n in board.nets if n.name in (first.net, second.net) for p in n.pads)
+    if not result.connected and supported and (guided or not protected_ends):
+        search_board = replace(board, tracks=(*tracks, *first_branches, *second_branches), vias=tuple(vias))
         stats = PairSearchStats()
         if crossing is not None:
             assert crossing.layer is not None
@@ -1361,7 +1382,7 @@ def _route_pair_group(
                 ):
                     attempt, proposed_tracks, proposed_vias = _route_pair(
                         board, first, second, routes,
-                        exact_tracks=(candidate.first, candidate.second),
+                        exact_tracks=((*first_branches, *candidate.first), (*second_branches, *candidate.second)),
                         exact_via_pairs=candidate.via_pairs,
                         exact_return_vias=candidate.return_vias,
                     )
@@ -1377,7 +1398,7 @@ def _route_pair_group(
                         result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
                         if crossing is not None:
                             result = replace(result, strategy="planned_crossing")
-                        elif not candidate.via_pairs:
+                        elif not candidate.via_pairs and not (first_branches or second_branches):
                             result, pair_tracks, pair_vias = _improve_pair_spine(
                                 board, search_board, first, second, routes, candidate,
                                 result, pair_tracks, pair_vias, tracks, vias,
@@ -1878,13 +1899,14 @@ def _route_pair(
     *, exact_tracks: tuple[tuple[TrackSegment, ...], tuple[TrackSegment, ...]] | None = None,
     exact_via_pairs: tuple[tuple[Via, Via], ...] = (),
     exact_return_vias: tuple[Via, ...] = (),
+    prefer_access_tracks: bool = False,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     first_name, second_name = sorted((first_rule.net, second_rule.net))
     first = first_rule if first_rule.net == first_name else second_rule
     second = second_rule if first is first_rule else first_rule
     guide = routes.get(first.net)
     partner_guide = routes.get(second.net)
-    if guide is None or partner_guide is None or not guide.connected or not partner_guide.connected:
+    if guide is None or partner_guide is None or (exact_tracks is None and (not guide.connected or not partner_guide.connected)):
         return (
             CriticalNetResult(
                 (first.net, second.net),
@@ -1930,7 +1952,7 @@ def _route_pair(
             (),
         )
     offset = (first_width + gap) // 2
-    aligned = _aligned_pair_paths(guide, partner_guide, offset) if exact_tracks is None else ([], [])
+    aligned = (None if prefer_access_tracks else _aligned_pair_paths(guide, partner_guide, offset)) if exact_tracks is None else ([], [])
     if aligned is None and (not guide.segments or not partner_guide.segments):
         # Terminals inside one global tile give a connected guide without
         # segments, so the offset fallback has nothing to follow. Reject the
@@ -1979,12 +2001,12 @@ def _route_pair(
         first_tracks, second_tracks = list(exact_tracks[0]), list(exact_tracks[1])
     if aligned is None:
         first_tracks.extend(
-            _pair_pin_stubs(first.net, guide, first_width, positive, 1, first_width + gap)
+            _pair_pin_stubs(first.net, guide, first_width, positive, 1, first_width + gap, board=board, retain_access_tracks=prefer_access_tracks)
         )
         second_tracks.extend(
             _pair_pin_stubs(
                 second.net, partner_guide, second_width, negative, 0,
-                first_width + gap,
+                first_width + gap, board=board, retain_access_tracks=prefer_access_tracks,
             )
         )
     breakout = BreakoutRegions(board)
@@ -2611,6 +2633,7 @@ def _pair_pin_stubs(
     paths: list[tuple[CopperLayer, Point, Point]],
     lane_index: int,
     lane_pitch: int,
+    *, board: PhysicalBoard | None = None, retain_access_tracks: bool = False,
 ) -> tuple[TrackSegment, ...]:
     endpoints = [
         (layer, point)
@@ -2622,18 +2645,27 @@ def _pair_pin_stubs(
     ys = [point.y_nm for _, point in endpoints]
     horizontal = max(xs) - min(xs) >= max(ys) - min(ys)
     for access in guide.accesses:
+        anchor = access.access_position if retain_access_tracks and access.tracks else access.pad_position
+        if retain_access_tracks and access.tracks:
+            result.extend(access.tracks)
         layer, point = min(
             endpoints,
             key=lambda item: (
-                abs(item[1].x_nm - access.pad_position.x_nm)
-                + abs(item[1].y_nm - access.pad_position.y_nm),
+                abs(item[1].x_nm - anchor.x_nm)
+                + abs(item[1].y_nm - anchor.y_nm),
                 str(item[0]),
                 item[1].x_nm,
                 item[1].y_nm,
             ),
         )
-        if access.pad_position == point:
+        if anchor == point:
             continue
+        if board is not None and retain_access_tracks:
+            from .pin_escape import checked_access_path
+            tail = checked_access_path(board, RoutingClearanceIndex(board), net, anchor, point, width, layer)
+            if tail is not None:
+                result.extend(tail)
+                continue
         escape = (lane_index + 1) * max(lane_pitch, width)
         if horizontal:
             outside = (
@@ -2642,8 +2674,8 @@ def _pair_pin_stubs(
                 else max(xs) + escape
             )
             corners = (
-                access.pad_position,
-                Point(outside, access.pad_position.y_nm),
+                anchor,
+                Point(outside, anchor.y_nm),
                 Point(outside, point.y_nm),
                 point,
             )
@@ -2654,8 +2686,8 @@ def _pair_pin_stubs(
                 else max(ys) + escape
             )
             corners = (
-                access.pad_position,
-                Point(access.pad_position.x_nm, outside),
+                anchor,
+                Point(anchor.x_nm, outside),
                 Point(point.x_nm, outside),
                 point,
             )

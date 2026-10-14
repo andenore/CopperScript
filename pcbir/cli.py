@@ -420,6 +420,9 @@ def _parser() -> argparse.ArgumentParser:
                                     help="explicit pinned immutable-copper macro scene (repeatable)")
         physical_parser.add_argument("--placement-templates", type=Path,
                                     help="explicit data-only, digest-bound physical template scene")
+    for router_parser in (global_route_parser, board_route_parser):
+        router_parser.add_argument("--pin-access-step-mm", default="0.5", type=_positive_mm,
+            help="computational pin-to-global-guide escape grid (default: 0.5 mm)")
     board_route_parser.add_argument(
         "--placement-candidate", help="select a named legal candidate, e.g. candidate-01",
     )
@@ -670,7 +673,7 @@ def _apply_routing_profile(args, argv):
         "thorough": (4, 100000, 16, 32, 16, 12000),
     }
     flags = {item.split("=", 1)[0] for item in argv if item.startswith("--")}
-    names = ("passes", "search_budget", "package_access_trials", "package_placement_probes",
+    names = ("passes", "search_budget", "pin_access_step_mm", "package_access_trials", "package_placement_probes",
              "filled_copper_trials", "filled_copper_search_states")
     for name, value in zip(names, profiles[args.routing_profile]):
         if "--" + name.replace("_", "-") not in flags:
@@ -1193,6 +1196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
+                    escape_step_nm=nm_from_mm(args.pin_access_step_mm),
                     maximum_iterations=args.router_iterations,
                     layer_preference_cost=max(0, args.layer_preference_cost // 2),
                     direction_preference_cost=max(0, args.direction_preference_cost // 2),
@@ -1371,7 +1375,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
-                    "passes", "search_budget", "package_access_trials", "package_placement_probes",
+                    "passes", "search_budget", "pin_access_step_mm", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
                     "filled_copper_search_states")},
@@ -1708,6 +1712,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     physical_board = resolved_physicalize(design, resolver, physical_options)
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
+                    escape_step_nm=nm_from_mm(args.pin_access_step_mm),
                     maximum_iterations=args.router_iterations,
                 )
                 if args.placement_templates:

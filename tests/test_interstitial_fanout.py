@@ -69,3 +69,21 @@ def test_native_project_uses_declared_small_ordinary_vias(tmp_path):
     assert result.returncode==0,result.stdout+result.stderr
     violations=json.loads(report.read_text())['violations']
     assert not [v for v in violations if v['type'] in ('via_diameter','drill_out_of_range','annular_width')]
+
+
+def test_plane_launch_uses_exact_round_pad_interstice_without_via_in_pad():
+    from pcbir.physical import CopperZone, PolygonWithHoles, PolygonRing
+    from pcbir.plane import _stitch_land, PlaneStitchOptions
+    board,pose,pad,start=fixture()
+    zone=CopperZone('reference','N5',(CopperLayer.BACK,),PolygonWithHoles(PolygonRing((
+        Point.mm(1,1),Point.mm(11,1),Point.mm(11,11),Point.mm(1,11)))))
+    board=replace(board,zones=(zone,))
+    result=_stitch_land(board,RoutingClearanceIndex(board),'N5',[zone],pad,pose,start,
+        CopperLayer.FRONT,150000,450000,200000,(CopperLayer.FRONT,CopperLayer.BACK),
+        PlaneStitchOptions(step_nm=125000,maze_step_nm=125000,maximum_radius_nm=600000),(),(),{})
+    assert result is not None
+    tracks,via=result
+    assert via is not None and via.finish!='filled-capped'
+    assert RoutingClearanceIndex(board).can_via('N5',via.position,via.size_nm,
+        via.from_layer,via.to_layer,drill_nm=via.drill_nm)
+    assert tracks[0].start==start and tracks[-1].end==via.position

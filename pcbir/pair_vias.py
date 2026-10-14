@@ -216,9 +216,10 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             or any(rule.max_vias is not None and rule.max_vias < 2 for rule in (first, second))
             or len(first_guide.accesses) != 2 or len(second_guide.accesses) != 2):
         return
-    partners = {a.pad.component: a for a in second_guide.accesses}
+    from .pair_terminals import terminal_partners
+    partners = terminal_partners(first_guide, second_guide)
     accesses = sorted(first_guide.accesses, key=lambda a: a.pad.component)
-    if len(partners) != 2 or set(partners) != {a.pad.component for a in accesses}:
+    if partners is None:
         return
     placements = {p.reference:p for p in board.placements}
     surfaces = tuple(CopperLayer.FRONT if placements[a.pad.component].side is BoardSide.FRONT
