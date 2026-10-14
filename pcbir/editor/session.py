@@ -58,8 +58,8 @@ class EditorSession:
         self.redo_stack: list[State] = []
         self.workspace = workspace
         self.source_pending = None
-        self.source_undo: list[tuple[bytes, State]] = []
-        self.source_redo: list[tuple[bytes, State]] = []
+        self.source_undo: list[tuple[bytes, State, tuple | None]] = []
+        self.source_redo: list[tuple[bytes, State, tuple | None]] = []
         self.outputs_stale = False
         self.job = None
         self.job_consumed = False
@@ -85,6 +85,8 @@ class EditorSession:
         if self.scene_board is not state.board or self.scene_locks != state.locks:
             self.scene_template = board_scene(state.board, source_revision=self.source_revision,
                 revision=self.revision, session_locks=state.locks, options=self.options, ratsnest_cache=self.ratsnest_cache)
+            from .features import physical_feature_geometry
+            self.scene_template.update(physical_feature_geometry(state.board))
             self.scene_board, self.scene_locks = state.board, state.locks
         # Job polling does not retransform every pad or rerun full legality.
         # Dynamic fields and component annotations remain per-response records.
@@ -118,8 +120,25 @@ class EditorSession:
             scene["power_nets"] = sorted({s.net for s in elaborate(self.workspace.identity).supplies})
         scene["scene_profile"] = {"ratsnest_recomputed_nets": self.ratsnest_cache.recomputed_nets}
         scene["source_writable"] = self.workspace is not None
+        scene['document_kind'] = 'board'
+        from .features import source_features, feature_catalog
+        feature_raw = self.source_pending.after.raw if self.source_pending and state.board is self.source_pending.board else self.source_raw
+        scene['source_features'] = source_features(SourceSnapshot(feature_raw, str(self.source))) if self.workspace else []
+        from .definitions import board_macro_features
+        scene['source_features'].extend(board_macro_features(state.board))
+        if self.workspace:
+            from .features import dimension_source_names
+            electrical = (self.source_pending.design.electrical
+                          if self.source_pending and state.board is self.source_pending.board else self.workspace.identity)
+            dimensions = dimension_source_names(state.board, electrical, scene['source_features'])
+            scene['physical_geometry'] = [dict(item, source_name=dimensions[item['rule_index']]['name'],
+                targets=dimensions[item['rule_index']]['targets']) if item.get('rule_index') in dimensions else dict(item)
+                for item in scene['physical_geometry']]
+        scene['feature_catalog'] = feature_catalog() if self.workspace else []
         scene["capabilities"].update(source_save=self.workspace is not None,
-                                     mechanical_edit=self.workspace is not None)
+                                     mechanical_edit=self.workspace is not None,
+                                     artwork_edit=self.workspace is not None,
+                                     physical_feature_edit=self.workspace is not None)
         scene["outputs_stale"] = self.outputs_stale
         scene["can_source_undo"] = bool(self.source_undo)
         scene["can_source_redo"] = bool(self.source_redo)
@@ -211,12 +230,16 @@ class EditorSession:
                   "prepare_lock": ("reference", "x_nm", "y_nm", "rotation", "side", "locks"),
                   "prepare_mechanical": ("kind", "name", "shape", "parameters", "remove"),
                   "prepare_mechanical_batch": ("features",),
+                  "review_feature": ("category", "kind", "name", "parameters"),
+                  "review_features": ("features",),
                   "save_source": ("review_id",), "discard_source": (),
                   "undo_source": (), "redo_source": (), "reload_source": (),
                   "start_auto_place": (), "cancel_auto_place": ()}
         if not isinstance(action, str) or action not in fields:
             raise EditorError("unknown editor operation")
-        if set(request) != {"action", "revision", *fields[action]}:
+        required = {"action", "revision", *fields[action]}
+        optional = {'targets', 'remove'} if action == 'review_feature' else set()
+        if not required <= set(request) or set(request) - required - optional:
             raise EditorError("unexpected or missing operation fields")
         if action == "cancel_auto_place":
             if type(request["revision"]) is not int or request["revision"] != self.revision:
@@ -255,7 +278,7 @@ class EditorSession:
             self.job.cancel("stale", "session edited; old placement cancelled")
         if self.source_pending and action not in {"save_source", "discard_source"}:
             raise EditorError("save or discard the source review before another operation")
-        if action in {"prepare_lock", "prepare_mechanical", "prepare_mechanical_batch", "save_source", "discard_source", "undo_source", "redo_source"}:
+        if action in {"prepare_lock", "prepare_mechanical", "prepare_mechanical_batch", "review_feature", "review_features", "save_source", "discard_source", "undo_source", "redo_source"}:
             return self._source_operation(action, request)
         if action == "start_auto_place":
             self.pending = None
@@ -390,7 +413,17 @@ class EditorSession:
         if self.pending:
             raise EditorError("apply or discard the placement preview before editing source")
         snapshot = SourceSnapshot(self.read_source(), str(self.source))
-        if action == "prepare_lock":
+        if action == 'review_features':
+            from .features import feature_batch
+            raw, scope = feature_batch(snapshot, request['features'])
+            self.source_pending = self.workspace.review(snapshot, raw, self.state.board,
+                                                        self.options, constraint_scope=scope)
+        elif action == 'review_feature':
+            from .features import feature_patch
+            patch, scope = feature_patch(snapshot, **{k: v for k,v in request.items() if k not in {'action', 'revision'}})
+            self.source_pending = self.workspace.review(snapshot, patch.apply(snapshot), self.state.board,
+                                                        self.options, constraint_scope=scope)
+        elif action == "prepare_lock":
             reference = request["reference"]
             refs = frozenset(p.reference for p in self.state.board.placements)
             if reference not in refs:
@@ -458,11 +491,11 @@ class EditorSession:
             if review is None or request["review_id"] != review.id:
                 raise StaleRevision("review changed; inspect the current source diff")
             # Repeat validation immediately before the final filesystem CAS.
-            _, validated = self.workspace.validate(review.after.raw, review.board, self.options)
+            _, validated = self.workspace.validate(review.after.raw, review.board, self.options, constraint_scope=review.constraint_scope)
             if validated != review.board:
                 raise EditorError("physical inputs changed since review; discard and prepare the edit again")
             self.workspace.save(review)
-            self.source_undo.append((review.before.raw, self.state))
+            self.source_undo.append((review.before.raw, self.state, review.constraint_scope))
             self.source_undo = self.source_undo[-64:]
             self.source_redo.clear()
             self._saved(review.after.raw, review.board)
@@ -473,11 +506,11 @@ class EditorSession:
             take, put = (self.source_undo, self.source_redo) if action == "undo_source" else (self.source_redo, self.source_undo)
             if not take:
                 raise EditorError("no source history available")
-            raw, state = take[-1]
-            review = self.workspace.review(snapshot, raw, state.board, self.options)
+            raw, state, scope = take[-1]
+            review = self.workspace.review(snapshot, raw, state.board, self.options, constraint_scope=scope)
             self.workspace.save(review)
             take.pop()
-            put.append((snapshot.raw, self.state))
+            put.append((snapshot.raw, self.state, scope))
             self._saved(raw, review.board)
             return {"scene": self.scene(), "accepted": True}
         self.revision += 1
@@ -487,6 +520,9 @@ class EditorSession:
         return response
 
     def _saved(self, raw, board):
+        from ..compiler import compile_design_source
+        from .transactions import electrical_identity
+        self.workspace.identity = electrical_identity(compile_design_source(SourceSnapshot(raw).text, str(self.source), locked=True, offline=True).electrical)
         self.source_raw = raw
         self.source_revision = sha256(raw).hexdigest()
         self.state = State(replace(board, metadata={**board.metadata,

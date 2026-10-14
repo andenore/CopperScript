@@ -21,11 +21,15 @@ let mechanicalFormRevision="";
 const mm = n => n / 1000000;
 const scene = () => sourcePreview || preview || accepted;
 function acceptScene(value) {
+  const initial=!accepted;
   accepted=value;
   preview=value.pending_preview || null;
   sourcePreview=value.source_preview || null;
+  const definition=value.document_kind && value.document_kind!=="board";
+  for(const tab of ["components","mechanics"])$("tab-"+tab).hidden=definition;
+  if(initial && definition)switchTab("features");
 }
-const toolTabs=["components","mechanics","view"];
+const toolTabs=["components","mechanics","features","view"];
 function switchTab(name,focus=false) {
   for(const tab of toolTabs) {
     const active=tab===name;
@@ -34,14 +38,16 @@ function switchTab(name,focus=false) {
     $("panel-"+tab).hidden=!active;
   }
   if(name!=="mechanics") {$("measure").checked=false;$("draw-vertices").checked=false;}
+  if(name!=="features") $("physical-pick-point").checked=false;
   if(focus)$("tab-"+name).focus();
 }
 for(const [index,name] of toolTabs.entries()) {
   $("tab-"+name).onclick=()=>switchTab(name);
   $("tab-"+name).onkeydown=event=>{
-    const next=event.key==="ArrowRight" ? (index+1)%3 : event.key==="ArrowLeft" ? (index+2)%3 :
-      event.key==="Home" ? 0 : event.key==="End" ? 2 : null;
-    if(next!==null) {event.preventDefault();switchTab(toolTabs[next],true);}
+    const tabs=toolTabs.filter(tab=>!$("tab-"+tab).hidden),index=tabs.indexOf(name);
+    const next=event.key==="ArrowRight" ? (index+1)%tabs.length : event.key==="ArrowLeft" ? (index+tabs.length-1)%tabs.length :
+      event.key==="Home" ? 0 : event.key==="End" ? tabs.length-1 : null;
+    if(next!==null) {event.preventDefault();switchTab(tabs[next],true);}
   };
 }
 document.addEventListener("keydown",event=>{
@@ -56,7 +62,7 @@ function selectReferences(references, primary="") {
   const available=new Set((scene()?.components||[]).map(component=>component.reference));
   selectedReferences=new Set(references.filter(reference=>available.has(reference)));
   selected=selectedReferences.has(primary) ? primary : [...selectedReferences][0] || "";
-  if(selected)switchTab("components");
+  if(selected)switchTab(scene()?.document_kind && scene().document_kind!=="board"?"features":"components");
 }
 function selectionSet() {
   return new Set(selectedReferences.size ? selectedReferences : (selected ? [selected] : []));
@@ -128,11 +134,21 @@ function artworkShape(item) {
   if(item.kind==="arc")return node("path",{d:`M ${item.start.map(mm).join(" ")} A ${mm(item.radius_nm)} ${mm(item.radius_nm)} 0 ${item.large_arc?1:0} ${item.sweep?1:0} ${item.end.map(mm).join(" ")}`,...style});
 }
 function artworkGroup(items,side,material,cls) {
-  const group=node("g",{class:`artwork artwork-${material} ${side} ${cls}`,"pointer-events":"none"});
+  const editable=cls==="board-artwork";
+  const group=node("g",{class:`artwork artwork-${material} ${side} ${cls}`,"pointer-events":editable?"visiblePainted":"none"});
   for(const item of items) {
     const drawing=artworkShape(item);if(!drawing)continue;
     const feature=node("g",{"data-artwork-id":item.id});
     feature.append(node("title",{},`${item.id}: ${item.layer||side+" silkscreen"}${item.exposed ? "; exposed copper" : ""}${item.kind==="text" ? "; text uses a preview font" : ""}`),drawing);
+    if(editable)feature.addEventListener("click",event=>{
+      if($("physical-pick-point").checked)return;
+      event.stopPropagation();
+      const found=selectPhysicalFeature(f=>f.category==="artwork" && (f.name===item.id || (f.kind==="logo"&&item.id.startsWith(f.name+":")) || (f.kind==="branding" && item.id.startsWith("__copperscript"))));
+      if(!found && item.id.startsWith("__copperscript")) {
+        const index=(accepted.feature_catalog||[]).findIndex(f=>f.kind==="branding");
+        if(index>=0){$("physical-feature").value="";$("physical-kind").value=String(index);loadPhysicalForm();switchTab("features");}
+      }
+    });
     group.append(feature);
   }
   return group;
@@ -231,6 +247,7 @@ function render() {
     const n=node("path",{d:[ring(k.vertices),...(k.holes||[]).map(ring)].join(" "),class:"copper-keepout","fill-rule":"evenodd"});
     n.append(node("title",{},`${k.name}: copper keepout on ${k.layers.join(", ")}. ${featureLabel("copper_keepout",k.name)}`));svg.append(n);
   }
+  renderPhysicalGeometry(svg,s);
   const visible = new Set(s.components.filter(c => $("side").value === "both" || c.side === $("side").value).map(c => c.reference));
   const relevant = new Set(s.components.filter(component=>selectedSet.has(component.reference))
     .flatMap(component=>component.pads.map(pad=>pad.net).filter(Boolean)));
@@ -357,7 +374,8 @@ function updateControls() {
   $("reference").value = selected;
   $("apply").disabled = !preview || blocked; $("discard").disabled = !preview || blocked;
   const job=accepted?.placement_job;
-  $("auto").disabled = blocked || !!preview || job?.status==="running";
+  $("auto").disabled = blocked || !!preview || job?.status==="running" || !s?.capabilities.auto_place;
+  $("auto").hidden = !s?.capabilities.auto_place;
   $("cancel-auto").disabled=busy || job?.status!=="running";
   $("cancel-auto").hidden=job?.status!=="running";
   $("auto").title="Preview automatic placement; existing locks and physical constraints are preserved.";
@@ -370,7 +388,7 @@ function updateControls() {
   $("save-source").disabled=busy || !sourceReview || !!accepted?.source_stale;
   $("save-help").textContent=accepted?.source_stale ? "Source changed externally. Reload source before reviewing changes." :
     sourceReview ? "Changes are reviewed but unsaved. Inspect the diff, then save or discard." :
-    accepted?.source_writable ? "Components: edit source locks, then review the pose. Mechanics: review a feature. Save becomes available after review." :
+    accepted?.source_writable ? "Edit a feature in Properties or on the canvas, then review and save. Stage related changes to validate them together." :
     "This scene is read-only; open a .copper source board to save changes.";
   $("discard-source").disabled=busy || !sourceReview || !!accepted?.source_stale;
   $("undo-source").disabled=blocked || (!accepted?.can_source_undo && !accepted?.document_host);
@@ -383,13 +401,24 @@ function updateControls() {
   for(const dimension of ["position","rotation","side"])$(dimension+"-lock").disabled=!$("edit-locks").checked || !component;
   $("prepare-lock").disabled=blocked || !!preview || !component || !$("edit-locks").checked || !!component.profile_role || !!component.source_attachment;
   $("mechanical-controls").disabled=blocked || !!preview || !accepted?.capabilities.mechanical_edit;
+  $("physical-fields").disabled=blocked || !!preview || !accepted?.source_writable || activePhysicalFeature()?.editable===false;
+  $("physical-remove").disabled=!$("physical-feature").value || activePhysicalFeature()?.kind==="properties";
+  $("physical-pick-point").disabled=blocked || activePhysicalFeature()?.editable===false;
+  $("physical-polygon").disabled=blocked || activePhysicalFeature()?.editable===false;
+  if(s?.document_kind && s.document_kind!=="board") {
+    $("notice").textContent=`${s.document_kind === "macro" ? "Macro definition: local coordinates" : "Mechanical profile definition"}. Review and save source changes.`;
+    $("persistent-controls").disabled=true;
+    $("move").disabled=true;$("lock").disabled=true;
+  }
   $("remove-feature").disabled=!$("feature").value;
   $("remove-feature").title=$("feature").value ? "Review removal of the selected board-owned feature." : "Select an existing feature to remove it.";
   $("undo").disabled = blocked || !accepted?.can_undo; $("redo").disabled = blocked || !accepted?.can_redo;
   $("pending").hidden = !preview;
-  $("move").disabled = !component || blocked || !!preview || selectionCount>1 || component.session_locked ||
+  $("move").disabled = !s?.capabilities.pose_preview || !component || blocked || !!preview || selectionCount>1 || component.session_locked ||
     (component.source_position_locked && component.source_rotation_locked && component.source_side_locked);
-  $("lock").disabled = !component || blocked || !!preview;
+  $("lock").disabled = !s?.capabilities.session_locks || !component || blocked || !!preview;
+  $("physical-review-staged").disabled=blocked || !physicalStaged.length;
+  $("physical-clear-staged").disabled=busy;
   if (component) {
     if(component.source_attachment && !sourceReview && !preview && !busy && !accepted?.source_stale) $("notice").textContent=`Pose owned by attachment ${component.source_attachment}; edit the attachment or its datum in Mechanical features.`;
     $("x").disabled=$("y").disabled=blocked || !!preview || !!component.source_position_locked && !$("edit-locks").checked;
@@ -414,6 +443,7 @@ function updateControls() {
   }
 }
 function populate() {
+  populatePhysicalFeatures();
   if(mechanicalFormRevision!==accepted.source_revision)syncLockChecks();
   for (const [id,values,label] of [["reference",accepted.components.map(c=>c.reference),"Select a component"],["net",accepted.nets,"All nets"]]) {
     const element = $(id), old = element.value; element.replaceChildren(new Option(label,""));
@@ -473,7 +503,7 @@ async function pollJob() {
   } catch(error) {status(error.message,true);}
 }
 function startDrag(event,component,g) {
-  if (event.button!==0 || busy || drag || pan || accepted?.source_stale || accepted?.source_review || $("measure").checked || $("draw-vertices").checked) return;
+  if (event.button!==0 || busy || drag || pan || accepted?.source_stale || accepted?.source_review || $("measure").checked || $("draw-vertices").checked || $("physical-pick-point").checked) return;
   if (event.shiftKey) {
     event.preventDefault();
     const next=selectionSet();
@@ -486,6 +516,7 @@ function startDrag(event,component,g) {
   if (!selectionSet().has(component.reference)) selectReferences([component.reference],component.reference);
   else selected=component.reference;
   $("reference").value=selected; syncLockChecks(); updateControls();
+  if(scene().document_kind==="macro")selectPhysicalFeature(f=>f.kind==="member" && f.name===component.reference);
   if (preview) {status("Apply or discard the pending preview before moving another component.");return;}
   const start=svgPoint(event);
   const members=expandedSelection();
@@ -533,6 +564,11 @@ $("board").addEventListener("pointerup",event=>{
   const x=Math.round((mm(d.component.position[0])+d.last[0]-d.start[0])/snap)*snap;
   const y=Math.round((mm(d.component.position[1])+d.last[1]-d.start[1])/snap)*snap;
   const dx_nm=Math.round(x*1e6)-d.component.position[0],dy_nm=Math.round(y*1e6)-d.component.position[1];
+  if(scene().document_kind==="macro") {
+    const f=accepted.source_features.find(f=>f.kind==="member" && f.name===d.component.reference);
+    if(f)operation("review_feature",{category:"macro",kind:"member",name:f.name,parameters:{...f.parameters,at:`(${mm(Math.round(x*1e6))} mm, ${mm(Math.round(y*1e6))} mm)`}});
+    return;
+  }
   if (d.members.size>1) operation("move_group",{references:[...d.members],dx_nm,dy_nm},!$("preview-drags").checked);
   else operation("move",{reference:d.component.reference,x_nm:Math.round(x*1e6),y_nm:Math.round(y*1e6),rotation:d.component.rotation,side:d.component.side},!$("preview-drags").checked);
 });
@@ -577,6 +613,7 @@ async function reloadScene() {
   try {
     const s=await api("/api/scene");acceptScene(s);populate();render();
     status(s.source_stale ? "Source changed externally; use Reload source (discard session) before editing." :
+      s.document_kind && s.document_kind!=="board" ? `${s.board}: ${s.document_kind} definition. Local validation only; consumer integration and qualification remain pending.` :
       `${s.board}: ${s.components.length} components; ${s.ratsnest.length} airwires. ${s.placement_legal ? "Placement legal." : s.placement_hard_legal && s.placement_constraints?.violations?.length ? "Relative placement warnings are present." : "Initial inspection placement needs legalization."} ${Object.keys(s.warnings).length ? "Footprint/omission warnings are present in scene data." : ""}`,s.source_stale);
   } catch(error) {status(error.message,true);}
   finally {busy=false;updateControls();}
@@ -748,6 +785,7 @@ $("board").addEventListener("keydown",event=>{
   if(event.key==="+" || event.key==="="){event.preventDefault();zoom(.8);return;}
   if(event.key==="-"){event.preventDefault();zoom(1.25);return;}
   if(event.key.toLowerCase()==="f" || event.key==="Home"){event.preventDefault();resetFit();render();return;}
+  if(scene()?.document_kind && scene().document_kind!=="board")return;
   const c=scene()?.components.find(c=>c.reference===selected);
   if((event.key.toLowerCase()==="l" || event.key.toLowerCase()==="u") && c && !busy && !preview && !accepted?.source_review) {
     const lock=event.key.toLowerCase()==="l" && !event.shiftKey;
@@ -777,6 +815,184 @@ $("board").addEventListener("keydown",event=>{
   }
   if (!c || c.session_locked || c.source_position_locked) return;
   operation("move",{reference:selected,x_nm:c.position[0]+delta[0]*step,y_nm:c.position[1]+delta[1]*step,rotation:c.rotation,side:c.side},true);
+});
+// All physical source forms use the same reviewed transaction controls.
+let physicalFormRevision="", physicalStaged=[];
+function renderPhysicalGeometry(svg,s) {
+  const side=$("side").value, selectedNets=new Set(s.components.filter(c=>selectionSet().has(c.reference)).flatMap(c=>c.pads.map(p=>p.net)));
+  for(const feature of s.physical_geometry||[]) {
+    if(feature.layers && $("copper-layer").value && !feature.layers.includes($("copper-layer").value))continue;
+    if(feature.side && feature.side!=="both" && side!=="both" && feature.side!==side)continue;
+    if(side!=="both" && feature.layers?.length && feature.layers.every(layer=>layer===(side==="front"?"B.Cu":"F.Cu")))continue;
+    const nets=feature.nets||[feature.net].filter(Boolean);
+    if(nets.length && $("net").value && !nets.includes($("net").value))continue;
+    if(nets.length && $("selected-only").checked && !nets.some(n=>selectedNets.has(n)))continue;
+    if(nets.length && $("power-filter").value!=="all" && !nets.some(n=>(s.power_nets||[]).includes(n)===($("power-filter").value==="power")))continue;
+    let drawing;
+    const attrs={class:`physical-geometry physical-${feature.kind}`};
+    if(feature.radius_nm!==undefined && feature.points)drawing=shape({spine:feature.points,radius_nm:feature.radius_nm},"physical-geometry physical-breakout");
+    else if(feature.vertices) {
+      const ring=vertices=>`M ${points(vertices).replaceAll(" "," L ")} Z`;
+      drawing=node("path",{...attrs,d:[ring(feature.vertices),...(feature.holes||[]).map(ring)].join(" "),"fill-rule":"evenodd"});
+    }
+    else if(feature.points)drawing=node("polyline",{...attrs,points:points(feature.points),fill:"none","stroke-width":feature.width_nm?mm(feature.width_nm):.15});
+    else if(feature.position)drawing=node("circle",{...attrs,cx:mm(feature.position[0]),cy:mm(feature.position[1]),r:.35});
+    if(!drawing)continue;
+    drawing.append(node("title",{},`${feature.kind} ${feature.name||""}${feature.net?": "+feature.net:""}; source intent`));
+    drawing.dataset.featureName=feature.name||"";
+    drawing.addEventListener("click",event=>{
+      if($("physical-pick-point").checked)return;
+      event.stopPropagation();
+      if(!selectPhysicalFeature(f=>f.category===feature.category && f.kind===feature.kind && f.name===(feature.source_name||feature.name)))
+        selectPhysicalFeature(f=>f.category===feature.category && f.kind===(["breakout","routing_corridor"].includes(feature.kind)?"routing":feature.kind) && f.targets?.some(t=>(feature.targets||[feature.net]).includes(t)));
+    });svg.append(drawing);
+    if(feature.measured_nm!==undefined && feature.points?.length>=2) {
+      const [a,b]=feature.points;
+      const label=node("text",{x:mm(a[0]+b[0])/2,y:mm(a[1]+b[1])/2-.3,class:"physical-dimension"},`${mm(feature.measured_nm)} mm / ${mm(feature.limit_nm)} mm${feature.satisfied?"":" !"}`);
+      svg.append(label);
+    }
+  }
+  for(const role of s.connector_roles||[]) {
+    const [x,y]=role.position.map(mm),g=node("g",{class:"connector-role"});
+    g.append(node("circle",{cx:x,cy:y,r:.5}),node("text",{x:x+.7,y},role.name));
+    g.addEventListener("click",()=>selectPhysicalFeature(f=>f.kind==="connector"&&f.name===role.name));svg.append(g);
+  }
+}
+function activePhysicalFeature() {
+  const index=$("physical-feature").value;
+  return index!=="" ? accepted?.source_features?.[Number(index)] : accepted?.feature_catalog?.[Number($("physical-kind").value)];
+}
+function addPhysicalInput(key,value="") {
+  if(document.getElementById("physical-param-"+key)) return;
+  const label=document.createElement("label");label.textContent=key.replaceAll("_"," ");
+  const input=document.createElement(["declaration","points","vertices","source","unresolved"].includes(key) ? "textarea" : "input");
+  input.id="physical-param-"+key;input.dataset.property=key;input.value=value;
+  if(input.tagName==="TEXTAREA")input.rows=key==="declaration"?10:3;
+  label.append(input);$("physical-parameters").append(label);
+}
+function loadPhysicalForm() {
+  const f=activePhysicalFeature();$("physical-parameters").replaceChildren();
+  $("physical-name").value=f?.name||"";
+  $("physical-name").disabled=!!$("physical-feature").value;
+  $("physical-name-label").hidden=["constraint","stackup"].includes(f?.category) || f?.kind==="properties";
+  $("physical-targets-label").hidden=f?.category!=="constraint";
+  $("physical-targets").value=(f?.targets||[]).join(", ");
+  $("physical-targets").disabled=!!$("physical-feature").value;
+  $("physical-parent-label").hidden=f?.kind!=="contact";
+  $("physical-parent").value=f?.parent||"";
+  $("physical-polygon").hidden=f?.kind!=="copper_zone";
+  for(const [key,value] of Object.entries(f?.parameters||{})) addPhysicalInput(key,value);
+  $("physical-owner").textContent=f?.editable===false ? `Read only. ${f.owner||f.source||"Imported definition"}` : "Changes update this document after review and save.";
+  $("physical-help").textContent=f?.description || "Pick a canvas point to replace a position or a selected vertex. Numeric edits preserve exact source units.";
+  $("physical-contracts").textContent=f?.contracts ? JSON.stringify(f.contracts,null,2) : "";
+  $("physical-open-definition").hidden=!f?.definition_path;
+  updateControls();
+}
+function populatePhysicalFeatures() {
+  const features=$("physical-feature"),old=features.value, kinds=$("physical-kind"),kind=kinds.value;
+  features.replaceChildren(new Option("New feature",""));
+  for(const [i,f] of (accepted.source_features||[]).entries())features.add(new Option(`${f.category}: ${f.kind} ${f.name||""}${f.editable===false?" (read only)":""}`,String(i)));
+  features.value=old;
+  if(features.selectedIndex<0)features.value="";
+  kinds.replaceChildren();
+  for(const [i,f] of (accepted.feature_catalog||[]).entries())kinds.add(new Option(`${f.category}: ${f.kind}${f.shape?" / "+f.shape:""}`,String(i)));
+  kinds.value=kind;if(kinds.selectedIndex<0)kinds.selectedIndex=0;
+  if(physicalFormRevision!==accepted.source_revision) {physicalStaged=[];physicalFormRevision=accepted.source_revision;loadPhysicalForm();}
+  showStagedFeatures();
+  const stack=$("physical-stackup");stack.replaceChildren();
+  for(const layer of accepted.stackup_layers||[]) {
+    const row=document.createElement("div");row.className="stackup-layer stackup-"+layer.kind;
+    row.textContent=`${layer.name}: ${mm(layer.thickness_nm)} mm${layer.material?" · "+layer.material:""}${layer.er?" · εr "+layer.er:""}`;
+    stack.append(row);
+  }
+}
+function physicalFields(remove=false) {
+  const f=activePhysicalFeature();if(!f)throw new Error("Choose a physical feature type");
+  const parameters={};
+  for(const input of $("physical-parameters").querySelectorAll("[data-property]"))if(input.value.trim())parameters[input.dataset.property]=input.value.trim();
+  const request={category:f.category,kind:f.kind,name:$("physical-name").value.trim(),parameters};
+  if(remove)request.remove=true;
+  if(f.shape)request.shape=f.shape;
+  if(f.parent || f.kind==="contact")request.parent=$("physical-parent").value.trim();
+  if(f.category==="constraint") {request.name=f.name||"";request.targets=$("physical-targets").value.split(",").map(v=>v.trim()).filter(Boolean);}
+  return request;
+}
+function selectPhysicalFeature(predicate) {
+  const index=(accepted?.source_features||[]).findIndex(predicate);if(index<0)return false;
+  $("physical-feature").value=String(index);loadPhysicalForm();switchTab("features");return true;
+}
+$("physical-feature").onchange=loadPhysicalForm;
+$("physical-kind").onchange=()=>{$("physical-feature").value="";loadPhysicalForm();};
+$("physical-polygon").onclick=()=>{
+  for(const key of ["x","y","width","height","region","inset"])$("physical-param-"+key)?.closest("label").remove();
+  addPhysicalInput("polygon_mm",'""');$("physical-param-polygon_mm").value='""';
+  $("physical-point-index").value=0;$("physical-pick-point").checked=true;
+  status("Click at least three boundary vertices, then review the zone. This replaces its previous boundary mode.");
+};
+$("physical-add-property").onclick=()=>{
+  const name=$("physical-property-name").value.trim();
+  if(!/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(name)){status("Enter a property name",true);return;}
+  addPhysicalInput(name);$("physical-property-name").value="";
+};
+for(const [id,remove] of [["physical-review",false],["physical-remove",true]])$(id).onclick=()=>{
+  try {operation("review_feature",physicalFields(remove));}catch(error){status(error.message,true);}
+};
+function showStagedFeatures() {
+  $("physical-staged").hidden=!physicalStaged.length;
+  $("physical-staged-count").textContent=physicalStaged.map((f,i)=>`${i+1}. ${f.remove?"Remove":"Update"} ${f.kind} ${f.name}`).join("; ");
+}
+for(const [id,remove] of [["physical-stage",false],["physical-stage-remove",true]])$(id).onclick=()=>{
+  try {
+    if(physicalStaged.length>=64)throw new Error("Review the current 64 staged changes first");
+    physicalStaged.push(physicalFields(remove));showStagedFeatures();updateControls();
+    status("Change staged. Stage any related changes, then review them together.");
+  }catch(error){status(error.message,true);}
+};
+$("physical-review-staged").onclick=()=>operation("review_features",{features:physicalStaged});
+$("physical-clear-staged").onclick=()=>{physicalStaged=[];showStagedFeatures();updateControls();};
+$("physical-open-definition").onclick=async()=>{
+  const f=activePhysicalFeature();if(!f?.definition_path)return;
+  const view=vscodeHost?null:window.open("about:blank","_blank");
+  if(view)view.opener=null;
+  try {
+    const result=await api("/api/open-definition",{feature_index:Number($("physical-feature").value)});
+    if(view)view.location.href=result.url;
+    else if(!vscodeHost)status("Allow popups to open the definition view.",true);
+  }catch(error){view?.close();status(error.message,true);}
+};
+$("board").addEventListener("click",event=>{
+  if(!$("physical-pick-point").checked || busy || accepted?.source_review || accepted?.source_stale)return;
+  try {
+    const p=snappedPoint(event), literal=`(${p[0]} mm, ${p[1]} mm)`;
+    const single=["at","point","position","center","start","end"].map(k=>$("physical-param-"+k)).find(Boolean);
+    const vertices=$("physical-param-vertices")||$("physical-param-points");
+    const zone=$("physical-param-polygon_mm");
+    if(zone) {
+      const raw=JSON.parse(zone.value), entries=raw?raw.split(";"):[];
+      const index=Number($("physical-point-index").value);
+      if(!Number.isInteger(index)||index<0||index>entries.length)throw new Error("Choose an existing vertex or the next index to append");
+      const append=index===entries.length;entries[index]=p.join(",");zone.value=JSON.stringify(entries.join("; "));
+      if(append)$("physical-point-index").value=index+1;
+    } else if(vertices) {
+      // Split only at top-level commas, preserving pad references and exact literals.
+      const value=vertices.value.trim();if(!value.startsWith("[")||!value.endsWith("]"))throw new Error("Expected a point list");
+      const entries=[];let depth=0,quoted=false,escape=false,start=1;
+      for(let i=1;i<value.length-1;i++) {
+        const c=value[i];if(escape){escape=false;continue;}if(c==="\\"&&quoted){escape=true;continue;}
+        if(c==='"'){quoted=!quoted;continue;}if(quoted)continue;
+        if(c==="(")depth++;else if(c===")")depth--;else if(c===","&&depth===0){entries.push(value.slice(start,i).trim());start=i+1;}
+      }
+      if(value.slice(start,-1).trim())entries.push(value.slice(start,-1).trim());
+      const index=Number($("physical-point-index").value);
+      if(!Number.isInteger(index)||index<0||index>entries.length)throw new Error("Choose an existing point index, or the next index to append");
+      if(entries[index]&&!entries[index].startsWith("("))throw new Error("This point is a pad reference. Edit its literal explicitly to detach it.");
+      const append=index===entries.length;entries[index]=literal;vertices.value="["+entries.join(", ")+"]";
+      if(append)$("physical-point-index").value=index+1;
+    } else if(single) single.value=literal;
+    else if($("physical-param-x") && $("physical-param-y")) {$("physical-param-x").value=`${p[0]} mm`;$("physical-param-y").value=`${p[1]} mm`;}
+    else throw new Error("This feature has no point property; add one or use numeric fields");
+    status("Point updated in the form. Review changes to validate the geometry.");
+  } catch(error){status(error.message,true);}
 });
 featureMode();
 updateControls();reloadScene();

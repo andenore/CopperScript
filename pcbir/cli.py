@@ -140,7 +140,7 @@ def _parser() -> argparse.ArgumentParser:
     overlay.add_argument("run", type=Path, help="generic build run.json")
     overlay.add_argument("--kicad-python", type=Path, required=True, help="explicit Python interpreter with pcbnew")
     overlay.add_argument("-o", "--output", type=Path, required=True, help="new overlay JSON; never overwritten")
-    editor = subparsers.add_parser("edit-mechanical", help="open a reviewed mechanical/floorplan editor")
+    editor = subparsers.add_parser("edit-mechanical", aliases=["edit"], help="open the physical editor for a board, macro or mechanical profile")
     editor.add_argument("board", type=Path)
     _add_resolution_options(editor)
     editor.add_argument("--footprint-root", action="append", default=[], type=Path)
@@ -767,65 +767,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError) as exc:
             print(f"EDITOR OVERLAY ERROR: {exc}")
             return 2
-    if args.command == "edit-mechanical":
-        from .editor.session import EditorSession
+    if args.command in {"edit-mechanical", "edit"}:
         from .editor.server import serve
-        from .hard_macros import apply_hard_macro_scene
+        from .editor.project import document_session
+        from .editor.dependencies import prepare_editor_dependencies
         try:
-            if not args.scene_output:
-                print("Opening board: checking source and dependencies...", flush=True)
-            design = load_design(args.board, locked=args.locked, offline=args.offline)
-            diagnostics = check(design.electrical)
-            if has_errors(diagnostics):
-                for diagnostic in diagnostics:
-                    print(diagnostic)
-                return 1
-            options = PrototypePhysicalOptions(copper_layers=args.layers, fabrication_profile=args.fab_profile)
-            if not args.scene_output:
-                print("Opening board: resolving footprints and verifying dependencies...", flush=True)
-            if args.allow_proxy_footprints:
-                physical = prototype_physicalize(design, options)
-            else:
-                resolver = FootprintResolver(base_directory=args.board.resolve().parent,
-                    search_roots=tuple(root.resolve() for root in args.footprint_root),
-                    locked=args.locked, offline=args.offline)
-                physical = resolved_physicalize(design, resolver, options)
-            if args.placement_templates:
-                physical = apply_placement_templates(physical, args.placement_templates,
-                    locked=args.locked, offline=args.offline)
-            for macro in args.hard_macro:
-                physical = apply_hard_macro_scene(physical, macro, locked=args.locked, offline=args.offline)
-            from .editor.transactions import SourceWorkspace
-
-            def rebuild(candidate):
-                # Never fetch or run downloaded code while reviewing source edits.
-                rebuilt = (prototype_physicalize(candidate, options) if args.allow_proxy_footprints else
-                    resolved_physicalize(candidate, FootprintResolver(
-                        base_directory=args.board.resolve().parent,
-                        search_roots=tuple(root.resolve() for root in args.footprint_root),
-                        locked=True, offline=True), options))
-                if args.placement_templates:
-                    rebuilt = apply_placement_templates(rebuilt, args.placement_templates, locked=True, offline=True)
-                for macro in args.hard_macro:
-                    rebuilt = apply_hard_macro_scene(rebuilt, macro, locked=True, offline=True)
-                return rebuilt
-
-            from .packages import find_manifest
-            manifest = find_manifest(args.board.resolve().parent)
-            root = manifest.parent if manifest else None
-            inputs = [p for p in (args.placement_templates, *args.hard_macro) if p]
-            if root:
-                inputs += [root / "copper.mod", root / "copper.lock"]
-            inputs += [Path(fp.metadata["source_path"]) for fp in physical.footprints.values()
-                       if fp.metadata.get("source_path")]
-            from .macro_bindings import source_macro_input_paths
-            inputs += list(source_macro_input_paths(physical))
-            workspace = SourceWorkspace(args.board, design, rebuild, input_paths=tuple(inputs))
+            progress = (lambda message: print(message, flush=True)) if not args.scene_output else None
+            prepare_editor_dependencies(args.board, offline=args.offline, locked=args.locked, progress=progress)
             from .editor.overlay import RoutedOverlay
-            if not args.scene_output:
-                print("Opening board: preparing the editor session...", flush=True)
-            session = EditorSession(physical, args.board, workspace=workspace,
-                                    overlay=RoutedOverlay.load(args.overlay) if args.overlay else None)
+            session = document_session(args.board, None, footprint_roots=args.footprint_root,
+                layers=args.layers, fab_profile=args.fab_profile, templates=args.placement_templates,
+                macros=args.hard_macro, allow_proxy=args.allow_proxy_footprints,
+                overlay=RoutedOverlay.load(args.overlay) if args.overlay else None)
             if args.scene_output:
                 if args.scene_output.resolve() == args.board.resolve():
                     raise ValueError("scene output cannot overwrite the source board")

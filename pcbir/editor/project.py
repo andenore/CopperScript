@@ -14,9 +14,20 @@ from .transactions import SourceWorkspace
 
 
 def document_session(source, reader, *, footprint_roots=(), layers=2, fab_profile="generic",
-                     templates=None, macros=(), allow_proxy=False):
+                     templates=None, macros=(), allow_proxy=False, overlay=None):
     source = Path(source).resolve()
-    design = compile_design_source(SourceSnapshot(reader(), str(source)).text, str(source), locked=True, offline=True)
+    from ..parser import parse
+    raw = reader() if reader else source.read_bytes()
+    text = SourceSnapshot(raw, str(source)).text
+    document = parse(text, str(source))
+    if document.kind in {"macro", "board_profile"}:
+        if overlay or templates or macros:
+            raise ValueError("board overlays and placement assets require a board document")
+        from .definitions import DefinitionSession
+        return DefinitionSession(source, reader=reader, footprint_roots=footprint_roots)
+    if document.kind != "board":
+        raise ValueError("physical editor supports board, macro and board_profile documents")
+    design = compile_design_source(text, str(source), locked=True, offline=True)
     diagnostics = check(design.electrical)
     if has_errors(diagnostics):
         raise ValueError("source fails ERC: " + "; ".join(map(str, diagnostics)))
@@ -41,4 +52,4 @@ def document_session(source, reader, *, footprint_roots=(), layers=2, fab_profil
     from ..macro_bindings import source_macro_input_paths
     paths += list(source_macro_input_paths(board))
     workspace = SourceWorkspace(source, design, build, input_paths=tuple(paths), source_reader=reader)
-    return EditorSession(board, source, workspace=workspace)
+    return EditorSession(board, source, workspace=workspace, overlay=overlay)

@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CopperScript mechanical editor</title><link rel="icon" href="/copper-logo.svg" type="image/svg+xml"><link rel="stylesheet" href="/editor.css"></head>
+<title>CopperScript physical editor</title><link rel="icon" href="/copper-logo.svg" type="image/svg+xml"><link rel="stylesheet" href="/editor.css"></head>
 <body>
 <header><img class="copper-logo" src="/copper-logo.svg" width="36" height="36" alt="Cu">
-<div class="board-title"><h1>CopperScript <span>mechanical editor</span></h1><p id="board-name">Loading board…</p></div>
+<div class="board-title"><h1>CopperScript <span>physical editor</span></h1><p id="board-name">Loading board…</p></div>
 <nav class="file-actions" aria-label="File and source actions">
 <button id="open-board" hidden>Open board…</button><span id="source-state" role="status">Loading</span>
 <button id="save-source" class="primary" disabled>Save reviewed changes</button>
@@ -20,6 +20,7 @@
 <div class="tool-tabs" role="tablist" aria-label="Editor tools">
 <button id="tab-components" role="tab" aria-selected="true" aria-controls="panel-components" tabindex="0">Components</button>
 <button id="tab-mechanics" role="tab" aria-selected="false" aria-controls="panel-mechanics" tabindex="-1">Mechanics</button>
+<button id="tab-features" role="tab" aria-selected="false" aria-controls="panel-features" tabindex="-1">Properties</button>
 <button id="tab-view" role="tab" aria-selected="false" aria-controls="panel-view" tabindex="-1">View</button></div>
 <section id="panel-components" class="tool-panel" role="tabpanel" aria-labelledby="tab-components">
 <h2>Component pose</h2><label>Component <select id="reference"><option value="">Select a component</option></select></label>
@@ -53,6 +54,28 @@
 <label>Segments <textarea id="path-segments" rows="10" spellcheck="false"></textarea></label><button id="prepare-path">Review complete path</button></details>
 <details><summary>Geometry help</summary><p>Use exact lengths such as 2.2 mm and positions such as (3mm, 3mm). Holes and slots are NPTH; plated holes must be electrical components. Imported profiles remain read-only.</p></details></fieldset>
 <h2>Measure</h2><label><input id="measure" type="checkbox"> Measure between two grid points</label><output id="measurement">No measurement</output></section>
+<section id="panel-features" class="tool-panel" role="tabpanel" aria-labelledby="tab-features" hidden>
+<h2>Physical properties</h2>
+<label>Feature <select id="physical-feature"><option value="">New feature</option></select></label>
+<label>New feature type <select id="physical-kind"></select></label>
+<fieldset id="physical-fields"><legend>Source properties</legend>
+<label id="physical-name-label">Name <input id="physical-name" type="text"></label>
+<label id="physical-targets-label">Targets (comma separated) <input id="physical-targets" type="text"></label>
+<label id="physical-parent-label">Parent <input id="physical-parent" type="text"></label>
+<div id="physical-parameters"></div>
+<details><summary>Add an optional property</summary><label>Property name <input id="physical-property-name" type="text"></label><button id="physical-add-property" type="button">Add property</button></details>
+<p>Use exact CopperScript values, such as 0.25 mm. Quote text values. Clearing a property removes it.</p>
+<button id="physical-review">Review changes</button><button id="physical-remove">Review removal</button>
+<button id="physical-stage">Stage change</button><button id="physical-stage-remove">Stage removal</button>
+</fieldset><p id="physical-owner"></p><button id="physical-open-definition" hidden>Open definition</button>
+<div id="physical-staged" hidden><p id="physical-staged-count"></p><button id="physical-review-staged">Review staged changes</button><button id="physical-clear-staged">Clear staged changes</button></div>
+<label><input id="physical-pick-point" type="checkbox"> Pick a point on the canvas</label>
+<button id="physical-polygon" hidden>Draw a polygon boundary</button>
+<label id="physical-point-index-label">Point index <input id="physical-point-index" type="number" min="0" value="0" step="1"></label>
+<p id="physical-help">Select a feature to inspect its geometry and source properties.</p>
+<pre id="physical-contracts"></pre>
+<div id="physical-stackup" aria-label="Board layer stack"></div>
+</section>
 <section id="panel-view" class="tool-panel" role="tabpanel" aria-labelledby="tab-view" hidden>
 <h2>Board view</h2><label>Side <select id="side"><option value="both">Both sides</option><option value="front">Front</option><option value="back">Rear</option></select></label>
 <p>Both sides use the same board coordinates; the rear view is not mirrored.</p>

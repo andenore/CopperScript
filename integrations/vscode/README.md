@@ -49,11 +49,15 @@ Both the Python server and the VS Code client have no added runtime dependencies
 
 Optional custom text editor for `.copper` boards. Source stays authoritative;
 reviewed edits use native WorkspaceEdit, document Undo/Redo, encoding and Save.
-Unsaved text edits are compiled in memory. No backend source writes, downloads,
-shell invocation or public server. A trusted **local workspace** is required.
+Unsaved text edits are compiled in memory. The editor prepares dependencies on
+initial open, using the versions declared in `copper.mod`. Missing inventory pins
+are added atomically to `copper.lock`; existing pins are verified and preserved.
+Set `copperscript.mechanical.offline` to use only cached/local dependencies.
+Preparation displays cancellable progress; reopen the editor to retry a failure.
+Source review and edits remain locked/offline. A trusted **local workspace** is required.
 
-Pin CopperScript in your project dependencies/lock first, run its normal fetch
-workflow, and compute the exact compiler content identity:
+Pin CopperScript in your project dependencies/lock first and compute the exact
+compiler content identity:
 
 ```sh
 uv run --locked --offline python -m pcbir.editor.document --fingerprint
@@ -67,7 +71,8 @@ contain `pcbir.editor.document`. Show Setup prints the fingerprint argv for the
 actual selected environment; use that command if you are not using uv.
 Commands are argv arrays, never shell strings. Compiler changes fail closed until
 you intentionally update the digest. Layer/profile/template/macro settings must
-match your build. Imports and footprint resolution remain locked/offline.
+match your build. Missing manifests or undeclared URL dependencies require an
+explicit `copper.mod` requirement; the editor does not select floating versions.
 
 Build shared assets with `node integrations/vscode/build.cjs`, then launch an
 Extension Development Host with `code --extensionDevelopmentPath=<absolute

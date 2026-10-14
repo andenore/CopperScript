@@ -5,6 +5,7 @@ const fs=require("node:fs"),path=require("node:path"),vm=require("node:vm");
 function harness() {
   const commands={},calls=[],disposable={dispose() {}};
   const vscode={
+    Uri:{file:fsPath=>({fsPath,scheme:"file"})},
     commands:{registerCommand(name,fn) {commands[name]=fn;return disposable;},
       async executeCommand(...args) {calls.push(args);}},
     window:{registerCustomEditorProvider() {return disposable;},
@@ -96,4 +97,39 @@ test("webview Open always uses a native picker and works with an invalid current
   const bridge=new DocumentBridge({}, {request() {throw new Error("invalid buffer must not prevent opening another board");}});
   assert.equal((await bridge.handle({path:"/api/open-board"})).opened,true);
   assert.equal(calls[0][1],picked);
+});
+
+test("definition navigation uses server scene ownership and rejects client paths",async()=>{
+  const {calls,DocumentBridge,vscode}=harness();
+  const target=path.resolve(__dirname,"fixtures/editor-artwork/board.copper");
+  const bridge=new DocumentBridge({},{});
+  bridge.sync=async()=>{};
+  bridge.scene={source_features:[{definition_path:target}]};
+  await bridge.handle({path:"/api/open-definition",body:{feature_index:0,path:"/untrusted.copper"}});
+  assert.equal(calls[0][0],"vscode.openWith");
+  assert.equal(calls[0][1].fsPath,fs.realpathSync(target));
+  await assert.rejects(()=>bridge.handle({path:"/api/open-definition",body:{feature_index:99,path:target}}),/no editable/);
+  await assert.rejects(()=>bridge.handle({path:"/api/open-definition",body:{feature_index:"0"}}),/Select a definition/);
+  bridge.scene.source_features[0].definition_readonly=true;
+  let shown;
+  vscode.window.showTextDocument=async uri=>{shown=uri;};
+  await bridge.handle({path:"/api/open-definition",body:{feature_index:0}});
+  assert.equal(shown.fsPath,fs.realpathSync(target));
+  assert.equal(calls[1][0],"workbench.action.files.setActiveEditorReadonlyInSession");
+});
+
+test("batched physical feature reviews use the shared document operation bridge",async()=>{
+  const {DocumentBridge}=harness();
+  let received;
+  const bridge=new DocumentBridge({version:4,getText:()=>"board B {}"},
+    {async request(message) {received=message;return {scene:{review:"ready"}};}});
+  bridge.sync=async()=>{};
+  bridge.hostVersion=7;
+  const operation={action:"review_features",revision:2,features:[{category:"artwork",kind:"text",name:"LABEL",parameters:{text:'"Label"'}}]};
+  const result=await bridge.handle({path:"/api/operation",body:operation});
+  assert.equal(received.method,"operation");
+  assert.equal(received.version,7);
+  assert.equal(received.operation,operation);
+  assert.equal(result.scene.review,"ready");
+  assert.equal(bridge.scene,result.scene);
 });

@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 import json
 import secrets
-from threading import RLock
+from threading import RLock, Thread
 from urllib.parse import urlsplit
 
 from .session import EditorError, EditorSession, StaleRevision
@@ -18,6 +18,7 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
         raise ValueError("editor port must be between 0 and 65535")
     token = secrets.token_urlsafe(32)
     lock = RLock()
+    definition_servers = {}
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -82,7 +83,8 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
         def do_POST(self):
             if not self.allowed(api=True):
                 return
-            if urlsplit(self.path).path != "/api/operation":
+            endpoint = urlsplit(self.path).path
+            if endpoint not in {"/api/operation", "/api/open-definition"}:
                 self.respond(404, {"error": "not found"})
                 return
             try:
@@ -105,7 +107,27 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
                 if not isinstance(request, dict):
                     raise EditorError("operation must be an object")
                 with lock:
-                    self.respond(200, session.operation(request))
+                    if endpoint == "/api/open-definition":
+                        if set(request) != {"feature_index"} or type(request["feature_index"]) is not int:
+                            raise EditorError("definition selection requires a feature index")
+                        features = session.scene().get("source_features", [])
+                        index = request["feature_index"]
+                        if not 0 <= index < len(features) or not features[index].get("definition_path"):
+                            raise EditorError("selected feature has no source definition")
+                        from pathlib import Path
+                        source = Path(features[index]["definition_path"]).resolve()
+                        if source.suffix != ".copper":
+                            raise EditorError("this asset has no editable CopperScript definition")
+                        if source not in definition_servers:
+                            from .project import document_session
+                            from .dependencies import prepare_editor_dependencies
+                            prepare_editor_dependencies(source, offline=True, locked=True)
+                            child = create_server(document_session(source, None))
+                            definition_servers[source] = child
+                            Thread(target=child.serve_forever, daemon=True).start()
+                        self.respond(200, {"url": definition_servers[source].editor_url})
+                    else:
+                        self.respond(200, session.operation(request))
             except StaleRevision as exc:
                 self.respond(409, {"error": str(exc)})
             except (ValueError, OSError, TypeError, CopperScriptError) as exc:
@@ -117,6 +139,9 @@ def create_server(session: EditorSession, port: int = 0) -> ThreadingHTTPServer:
     server.editor_token = token
     original_close = server.server_close
     def close():
+        for child in definition_servers.values():
+            child.shutdown()
+            child.server_close()
         session.close()
         original_close()
     server.server_close = close
@@ -127,7 +152,7 @@ def serve(session: EditorSession, *, port: int = 0, open_browser: bool = True):
     import webbrowser
     with create_server(session, port) as server:
         mode = "reviewed source editing" if session.workspace else "source read-only"
-        print(f"Mechanical editor ({mode}): {server.editor_url}", flush=True)
+        print(f"Physical editor ({mode}): {server.editor_url}", flush=True)
         print("Placement previews are temporary; source changes require explicit review/save. Ctrl+C stops the local service.", flush=True)
         if open_browser:
             webbrowser.open(server.editor_url)

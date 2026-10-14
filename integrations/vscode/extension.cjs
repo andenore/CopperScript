@@ -26,10 +26,10 @@ class Backend {
     this.child.stdin.on("error",e=>this.fail(e));
     this.child.on("error",e=>this.fail(e));this.child.on("exit",()=>this.fail(new Error("Compiler exited. "+this.errors)));
   }
-  request(request) {
+  request(request,timeoutMs=60000) {
     if(this.closed)return Promise.reject(new Error("Compiler is closed"));
     return new Promise((resolve,reject)=>{
-      const id=++this.id,timer=setTimeout(()=>{this.pending.delete(id);reject(new Error("Compiler response timed out"));this.dispose();},60000);
+      const id=++this.id,timer=setTimeout(()=>{this.pending.delete(id);reject(new Error("Compiler response timed out; reopen the editor to retry dependency preparation"));this.dispose();},timeoutMs);
       this.pending.set(id,{resolve,reject,timer});this.child.stdin.write(JSON.stringify({id,request})+"\n");
     });
   }
@@ -54,7 +54,7 @@ class DocumentBridge {
       // a source change restarts the session with a separate monotonic counter.
       this.hostVersion=(this.hostVersion||0)+1;
       this.scene=null;
-      const result=await this.backend.request({method:"open",version:this.hostVersion,text});
+      const result=await this.backend.request({method:"open",version:this.hostVersion,text},this.hostVersion===1?300000:60000);
       this.version=version;this.scene=result.scene;
     }
     return this.scene;
@@ -62,6 +62,23 @@ class DocumentBridge {
   async handle(message) {
     if(message.path==="/api/open-board")return openMechanical(null,true);
     await this.sync();
+    if(message.path==="/api/open-definition") {
+      const index=message.body?.feature_index;
+      if(!Number.isInteger(index)||index<0)throw new Error("Select a definition feature first");
+      const feature=this.scene?.source_features?.[index],target=feature?.definition_path;
+      if(typeof target!=="string"||!path.isAbsolute(target)||path.extname(target)!==".copper")
+        throw new Error("The selected feature has no editable CopperScript definition");
+      const actual=fs.realpathSync(target);
+      if(!fs.statSync(actual).isFile())throw new Error("Definition source is unavailable");
+      const uri=vscode.Uri.file(actual);
+      if(feature.definition_readonly || actual.split(/[\\/]/).includes(".copper-cache")) {
+        await vscode.window.showTextDocument(uri,{preview:true,preserveFocus:false});
+        await vscode.commands.executeCommand("workbench.action.files.setActiveEditorReadonlyInSession");
+      } else {
+        await vscode.commands.executeCommand("vscode.openWith",uri,"copperscript.mechanical");
+      }
+      return {opened:true};
+    }
     if(message.path==="/api/scene") {this.scene=(await this.backend.request({method:"scene"})).scene;return this.scene;}
     if(message.path==="/api/source-link") {
       const c=this.scene.components.find(c=>c.reference===message.body?.reference);
@@ -111,6 +128,7 @@ function activate(context) {
       const {command}=await resolveCompiler(configured,cwd,"mechanical");
       const local=s=>path.resolve(cwd,s);
       const args=[document.uri.fsPath,"--layers",String(config.get("layers")),"--fab-profile",config.get("fabricationProfile")];
+      if(config.get("offline",false))args.push("--offline");
       for(const root of config.get("footprintRoots")) args.push("--footprint-root",local(root));
       if(config.get("placementTemplates"))args.push("--placement-templates",local(config.get("placementTemplates")));
       for(const macro of config.get("hardMacros"))args.push("--hard-macro",local(macro));
@@ -118,7 +136,11 @@ function activate(context) {
       try {
         const hello=await backend.request({method:"hello"});
         if(hello.compiler_digest!==digest||hello.protocol!=="copperscript-editor-document/v0.1")throw new Error("Compiler pin mismatch; explicitly review/update compilerDigest");
-        await bridge.sync();
+        await vscode.window.withProgress({location:vscode.ProgressLocation.Notification,
+          title:"Opening CopperScript: preparing dependencies and geometry",cancellable:true},async (_progress,token)=>{
+          const cancel=token.onCancellationRequested(()=>backend.dispose());
+          try {await bridge.sync();} finally {cancel.dispose();}
+        });
       } catch(error) {backend.dispose();throw error;}
       active.set(document.uri.toString(),bridge);
       const media=vscode.Uri.file(path.join(__dirname,"media"));

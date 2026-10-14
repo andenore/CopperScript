@@ -324,3 +324,21 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .mechanical-slot {stroke:#131a20;pointer-events:none}
 .reference-guide {fill:none;stroke:#cf93ef;stroke-width:.12;stroke-dasharray:.8 .3;pointer-events:none}
 .reference-guide.stale {opacity:.3;stroke:#e88787}
+
+.physical-geometry {fill:#668ce51a;stroke:#86a9ff;stroke-width:.12;cursor:pointer}
+.physical-track {stroke:#e6aa60;fill:none}
+.physical-port {fill:#68dfb3;stroke:#caffec}
+.physical-polygon {fill:#e6aa6066;stroke:#e6aa60}
+.physical-zone,.physical-copper_zone {fill:#8facd51a;stroke:#8facd5;stroke-dasharray:.5 .25}
+.physical-breakout {fill:none;stroke:#e8bc65;stroke-dasharray:.3 .3;pointer-events:none}
+.physical-geometry:hover {stroke:#fff}
+.connector-role {fill:#6fcdbc;stroke:#6fcdbc;stroke-width:.1;cursor:pointer}
+.connector-role text {stroke:none;font-size:.9px}
+#physical-parameters textarea {width:100%;box-sizing:border-box;font-family:monospace}
+#physical-contracts {white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem}
+.tool-tabs {flex-wrap:wrap}
+
+.stackup-layer {padding:7px 9px;border-left:6px solid #a2a8b8;margin:2px 0;background:#202c36;font-size:12px}
+.stackup-copper {border-color:#e6aa60;background:#3b3025}
+.board-artwork {pointer-events:visiblePainted;cursor:pointer}
+.physical-dimension {fill:#b7d5ff;font-size:.8px;stroke:none;pointer-events:none}

@@ -52,6 +52,9 @@ def text_edits(before, after):
 class DocumentHost:
     def __init__(self, source, **settings):
         self.source = Path(source).resolve()
+        self.offline = settings.pop("offline", False)
+        self.locked = settings.pop("locked", False)
+        self.prepared = False
         self.settings = settings
         self.text = ""
         self.version = -1
@@ -70,6 +73,11 @@ class DocumentHost:
         self.close()
         self.version, self.text, self.session = version, text, None
         try:
+            if not self.prepared:
+                from .dependencies import prepare_editor_dependencies
+                prepare_editor_dependencies(self.source, text, offline=self.offline, locked=self.locked,
+                    progress=lambda message: print(message, file=sys.stderr, flush=True))
+                self.prepared = True
             self.session = document_session(self.source, lambda: self.text.encode("utf-8"), **self.settings)
             self.error = None
         except (ValueError, OSError, CopperScriptError) as exc:
@@ -86,6 +94,8 @@ class DocumentHost:
         result["can_source_undo"] = False
         result["can_source_redo"] = False
         result["notice"] = "Reviewed source edits use VS Code document undo and Save. Temporary placement is not persisted."
+        if result.get("document_kind", "board") != "board":
+            return result
         from ..parser import parse
         from ..syntax import ComponentDecl, ModuleInstanceDecl
         document = parse(self.text, str(self.source))
@@ -130,7 +140,9 @@ class DocumentHost:
             review = self.session.source_pending
             if review is None or operation["review_id"] != review.id:
                 raise ValueError("review changed; inspect the current source diff")
-            _, board = self.session.workspace.validate(review.after.raw, review.board, self.session.options)
+            validation = ({"constraint_scope": review.constraint_scope}
+                          if hasattr(review, "constraint_scope") else {})
+            _, board = self.session.workspace.validate(review.after.raw, review.board, self.session.options, **validation)
             if board != review.board:
                 raise ValueError("physical inputs changed after review")
             return {"document_edit": {"version": self.version, "source_revision": review.before.revision,
@@ -178,6 +190,9 @@ if __name__ == "__main__":
         parser.add_argument("--placement-templates", type=Path)
         parser.add_argument("--hard-macro", action="append", default=[], type=Path)
         parser.add_argument("--allow-proxy-footprints", action="store_true")
+        parser.add_argument("--offline", action="store_true")
+        parser.add_argument("--locked", action="store_true")
         args = parser.parse_args()
         serve(args.source, footprint_roots=args.footprint_root, layers=args.layers, fab_profile=args.fab_profile,
-              templates=args.placement_templates, macros=args.hard_macro, allow_proxy=args.allow_proxy_footprints)
+              templates=args.placement_templates, macros=args.hard_macro, allow_proxy=args.allow_proxy_footprints,
+              offline=args.offline, locked=args.locked)

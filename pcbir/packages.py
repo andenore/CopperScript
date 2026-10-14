@@ -550,7 +550,56 @@ def _write_lock(path: Path, entries: dict[tuple[str, str], LockedModule]) -> Non
             ],
         })
     content = json.dumps({"schema": LOCK_SCHEMA, "modules": modules}, indent=2, sort_keys=True)
-    path.write_text(content + "\n", encoding="utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n",
+                                         dir=path.parent, prefix=".copper-lock-", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(content + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def prepare_dependencies(source: Path, *, offline=False, locked=False, progress=None) -> tuple[Path, ...]:
+    """Prepare declared inventories, adding missing pins without changing old ones.
+
+    Resolution is staged: a failed fetch or mismatching inventory never commits a
+    partial lock. Cached downloads can remain available for a later retry.
+    """
+    manifest_path = find_manifest(Path(source).resolve().parent)
+    if manifest_path is None:
+        return ()
+    manifest = read_manifest(manifest_path)
+    lock_path = manifest.root / "copper.lock"
+    original = lock_path.read_bytes() if lock_path.exists() else None
+    manifest_bytes = manifest_path.read_bytes()
+
+    class PreparationResolver(PackageResolver):
+        def _verify_or_record_lock(self, entry, location):
+            key = (entry.module_path, entry.version)
+            expected = self._lock_entries.get(key)
+            if expected is not None and expected != entry:
+                raise CopperScriptError("PKG008", f"lock mismatch for {entry.module_path}@{entry.version}: "
+                    f"expected {expected.checksum}, got {entry.checksum}; existing pins were preserved", location)
+            self._lock_entries[key] = entry
+
+    resolver = PreparationResolver(manifest, locked=locked, offline=offline)
+    before = dict(resolver._lock_entries)
+    location = SourceLocation(str(source), 0, 1, 1)
+    for module in sorted(manifest.requirements):
+        if progress:
+            progress(f"Preparing {module}@{manifest.requirements[module]}")
+        resolver.resolve(module, location)
+    if resolver._lock_entries != before:
+        current = lock_path.read_bytes() if lock_path.exists() else None
+        if current != original or manifest_path.read_bytes() != manifest_bytes:
+            raise CopperScriptError("PKG007", "dependency inputs changed during preparation; retry opening", location)
+        _write_lock(lock_path, resolver._lock_entries)
+    return manifest_path, lock_path
 
 
 def _manifest_error(path: Path, line: int, message: str):

@@ -75,7 +75,13 @@
             "type": "string"
           },
           "default": [],
-          "description": "Local KiCad footprint roots; no downloads from the editor."
+          "description": "Local KiCad footprint roots. Declared module dependencies are prepared when the editor opens."
+        },
+        "copperscript.mechanical.offline": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": false,
+          "description": "Prepare dependencies using cached or local inputs only. Editing and source review always remain offline."
         },
         "copperscript.mechanical.layers": {
           "scope": "resource",

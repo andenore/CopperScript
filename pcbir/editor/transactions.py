@@ -42,6 +42,18 @@ def electrical_identity(board):
                    physical_macros=tuple(map(macro_binding_identity, board.physical_macros)))
 
 
+def scoped_identity(board, constraint_scope=None):
+    identity = electrical_identity(board)
+    if constraint_scope is None:
+        return identity
+    from .features import CONSTRAINTS
+    scopes = (constraint_scope,) if isinstance(constraint_scope[0], str) else constraint_scope
+    if not scopes or any(kind not in CONSTRAINTS for kind, targets in scopes):
+        raise SourceEditError('unsupported constraint edit permission')
+    return replace(identity, constraints=tuple(c for c in identity.constraints
+        if not any(c.kind.value == kind and c.targets == tuple(targets) for kind, targets in scopes)))
+
+
 def seed_placements(board: PhysicalBoard, seeds: PhysicalBoard) -> PhysicalBoard:
     """Retain movable session seeds without making them persistent locks."""
     existing = {p.reference: p for p in seeds.placements}
@@ -68,6 +80,8 @@ class ReviewedSource:
     design: Design
     board: PhysicalBoard
     diff: str
+    # One (kind, targets), or an atomic tuple of such scopes.
+    constraint_scope: tuple | None = None
 
     @property
     def id(self):
@@ -98,11 +112,11 @@ class SourceWorkspace:
             raise SourceEditError("compiler/footprint inputs changed externally; reload the source workspace")
 
     def validate(self, raw: bytes, seeds: PhysicalBoard, options: PlacementPlannerOptions,
-                 *, preserve_electrical=True) -> tuple[Design, PhysicalBoard]:
+                 *, preserve_electrical=True, constraint_scope=None) -> tuple[Design, PhysicalBoard]:
         self.check_inputs()
         snapshot = SourceSnapshot(raw, str(self.source))
         design = compile_design_source(snapshot.text, snapshot.filename, locked=True, offline=True)
-        if preserve_electrical and electrical_identity(design.electrical) != self.identity:
+        if preserve_electrical and scoped_identity(design.electrical, constraint_scope) != scoped_identity(self.identity, constraint_scope):
             raise SourceEditError("edit changes electrical intent or dependency bytes")
         diagnostics = check(design.electrical)
         if has_errors(diagnostics):
@@ -124,14 +138,14 @@ class SourceWorkspace:
         return design, board
 
     def review(self, snapshot: SourceSnapshot, raw: bytes, seeds: PhysicalBoard,
-               options: PlacementPlannerOptions) -> ReviewedSource:
+               options: PlacementPlannerOptions, *, constraint_scope=None) -> ReviewedSource:
         if snapshot.raw == raw:
             raise SourceEditError("edit has no source changes")
-        design, board = self.validate(raw, seeds, options)
+        design, board = self.validate(raw, seeds, options, constraint_scope=constraint_scope)
         after = SourceSnapshot(raw, snapshot.filename)
         diff = "".join(unified_diff(snapshot.text.splitlines(keepends=True),
                       after.text.splitlines(keepends=True), fromfile="current.copper", tofile="proposed.copper"))
-        return ReviewedSource(snapshot, after, design, board, diff)
+        return ReviewedSource(snapshot, after, design, board, diff, constraint_scope)
 
     def save(self, review: ReviewedSource):
         """Commit reviewed bytes only, never arbitrary client-supplied source."""

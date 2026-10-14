@@ -1,4 +1,4 @@
-# Mechanical and floorplan editor specification
+# Physical, mechanical and definition editor
 
 Status: implemented contract in CopperScript; this guide describes supported
 behavior and current limitations. The source and scene protocols remain authoritative.
@@ -22,6 +22,62 @@ footprints and hard macros; board projects own their source and constraints.
 Neither a useful preview nor a short ratsnest establishes routability, electrical
 function, impedance, assembly suitability or manufacturing qualification.
 Independent CAM qualification is not a prerequisite for editor use.
+
+## Opening boards, macros and profiles
+
+`copper edit design.copper` opens the shared physical editor; `edit-mechanical`
+remains a compatible alias. The top-level declaration selects board mode, macro
+authoring in local coordinates, or standalone `board_profile` authoring. Macro
+view bounds are a viewport, not a manufactured board outline. Placement overlays,
+templates and externally supplied hard-macro scenes remain board-only options.
+
+On initial open, the editor prepares every dependency explicitly declared in the
+nearest `copper.mod`, including source packages, footprints and macro assets.
+It downloads missing modules into the normal package cache, verifies existing
+inventory pins, and atomically adds missing entries to `copper.lock` only after
+preparation succeeds. It preserves unrelated entries and rejects changed pinned
+content. Missing manifests or undeclared URL dependencies remain explicit errors;
+the editor does not choose versions or create manifest requirements.
+
+Use `--offline` for cached/local inputs only, or `--locked` to require all pins
+already exist. After preparation, opening geometry, previewing, reviewing and
+saving use locked/offline inputs. Reopen after a dependency failure to retry.
+In VS Code, `copperscript.mechanical.offline` provides the same cache-only option;
+initial preparation has a cancellable notification. Native buffer updates do not
+trigger downloads or upgrades.
+
+## Physical feature authoring
+
+The physical-feature panel exposes source-owned placement and routing constraints,
+copper zones, via-in-pad and hole-clearance rules, stackup declarations, and board
+artwork. Select an existing feature or a catalog entry, edit its named properties,
+then review the source diff before saving. Values use CopperScript expressions
+and engineering units; this panel is not a connectivity autorouter or a filled
+copper verifier. Stackup changes are reviewed as a complete declaration.
+
+Use **Stage change** for related edits and **Review staged changes** to validate
+them atomically, such as a new macro net and its pad assignment or paired routing
+rules. Staged forms are temporary and are cleared when the source revision changes.
+The shared source diff, Save and undo controls apply to the complete batch.
+
+Macro members can be dragged into a reviewed source pose. **Pick a point on the
+canvas** updates a position or an indexed track/polygon vertex; pad-referenced
+endpoints require an explicit literal edit before they can be detached. Copper
+zones also offer **Draw a polygon boundary**. Distance/alignment dimensions use
+resolved physical anchors. Layer-stack rows and zone/corridor/breakout overlays
+show source intent, not verified fill or signal-integrity qualification.
+
+Select an imported macro/profile feature and choose **Open definition** to open
+its owning file. Cached dependency definitions remain read-only. Standalone
+opens a separate authenticated local view; VS Code uses its native document host.
+
+Macro authoring exposes member poses, tracks, vias, polygons and contract geometry
+through the same source-review workflow. Profiles expose their mechanical items
+and connector roles independently of a consuming board. Existing source comments
+and unrelated declarations are retained. Validation rejects malformed definitions
+and invalid geometry; consumer-dependent integration and qualification remain
+pending. Board instances retain their rigid ownership while definitions are
+authored separately. Source changes make downstream generated outputs stale.
 
 ## Authoritative data and persistence
 
@@ -273,8 +329,9 @@ does not silently fall back to the disk file, and recovers on a valid later vers
 
 Only trusted local workspaces are supported. Configure an explicit locked compiler
 command and its exact content fingerprint, along with the physical build settings.
-The editor performs no downloads, executes no source-provided code, and opens no
-server port in this host. Component source links navigate to the root declaration
+Initial opening prepares declared dependencies; subsequent editing remains offline.
+The editor executes no source-provided code and opens no server port in this host.
+Component source links navigate to the root declaration
 or hierarchical instance. Follow the extension README to stage and open it.
 Advanced mechanical intent is specified in
 [advanced mechanical intent](advanced-mechanical-intent.md) and its supported
@@ -327,8 +384,10 @@ front/rear filter. Footprint graphics follow component poses; board artwork stay
 in its accepted source position. Native geometry is used for shapes and source
 version labels; text uses a preview font rather than KiCad's stroke font.
 Visibility filters preserve unreviewed numeric pose drafts.
-Artwork is read-only in the mechanical view and grants no connectivity or
-manufacturing credit. Existing copper reservations and process checks still apply.
+Source-owned board artwork is editable through the physical-feature panel;
+imported footprint graphics remain owned by their footprint definition. Neither
+grants connectivity or manufacturing credit. Existing copper reservations and
+process checks still apply.
 
 Wheel zoom is cursor-anchored; right-button drag pans. Numeric pose changes
 require Apply/Discard; optional preview drags use the same revision protocol.
