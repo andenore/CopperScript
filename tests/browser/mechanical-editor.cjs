@@ -86,7 +86,11 @@ const {chromium} = require(process.env.COPPER_PLAYWRIGHT_MODULE || "playwright")
     const legalX=await page.locator("#x").inputValue();
     await page.locator("#x").fill("10000");await page.locator("#move").click();
     await page.waitForFunction(()=>document.querySelector("#status").classList.contains("error") && !document.querySelector("#move").disabled);
-    assert.equal(await page.locator("#x").inputValue(),legalX,"Rejected move must preserve the accepted pose and permit further editing");
+    assert.equal(await page.locator("#x").inputValue(),"10000","Invalid move stays in a correctable draft");
+    assert(await page.locator('[data-reference="R1"]').evaluate(n=>n.classList.contains('pose-invalid')));
+    assert(await page.locator('#apply').isDisabled());
+    await page.locator('#discard').click();
+    await page.waitForFunction(expected=>document.querySelector('#x').value===expected && !document.querySelector('#move').disabled,legalX);
     await expand(page,"drag-options");
     await page.locator("#preview-drags").check();
     await dragR1(15,0);

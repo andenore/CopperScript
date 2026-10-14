@@ -27,9 +27,11 @@
 <p id="details">Click a footprint to inspect it.</p><button id="source-link" hidden>Show source declaration</button>
 <div class="pose-grid"><label>X (mm) <input id="x" type="number" step="0.1"></label><label>Y (mm) <input id="y" type="number" step="0.1"></label></div>
 <label>Rotation (degrees) <input id="rotation" type="number" step="45"></label>
+<div class="rotation-actions"><button id="rotate-left" title="Rotate to the previous allowed angle (Shift+R)" disabled>Rotate left</button><button id="rotate-right" title="Rotate to the next allowed angle (R)" disabled>Rotate right</button></div>
 <label>Placement side <select id="pose-side"><option value="front">Front</option><option value="back">Rear</option></select></label>
 <fieldset><legend>Temporary placement</legend><p>Moves affect this session. They are not saved to the board source.</p>
 <button id="move" disabled>Preview pose</button><button id="lock" disabled>Lock for this session</button><p id="temporary-lock-state">No component selected.</p></fieldset>
+<div id="pose-validation" role="alert" hidden><strong>Invalid temporary pose</strong><p id="pose-validation-reasons"></p></div>
 <fieldset id="persistent-controls" disabled><legend>Saved source locks</legend>
 <p id="source-lock-state">Select a component to inspect its saved locks.</p><label><input id="edit-locks" type="checkbox"> Edit source locks</label>
 <label><input id="position-lock" type="checkbox"> Save a position lock</label>
@@ -101,7 +103,7 @@
 <button id="auto" disabled>Auto-place</button><button id="cancel-auto" disabled hidden>Cancel placement</button>
 <div class="history-actions"><button id="undo" disabled>Undo</button><button id="redo" disabled>Redo</button></div>
 <div class="zoom-actions"><button id="fit">Fit board</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="zoom-out" aria-label="Zoom out">−</button></div></nav>
-<div id="pending" class="preview-bar" role="status" hidden><span>Temporary preview — apply or discard to continue.</span><button id="apply" class="primary" disabled>Apply preview</button><button id="discard" disabled>Discard preview</button></div>
+<div id="pending" class="preview-bar" role="status" hidden><span id="preview-message">Temporary preview — apply or discard.</span><button id="apply" class="primary" disabled>Apply preview</button><button id="discard" disabled>Discard preview</button></div>
 <p id="job-status" role="status" hidden></p><details id="job-profile" hidden><summary>Placement performance</summary><pre id="profile-text"></pre></details>
 <svg id="board" tabindex="0" role="group" aria-label="Mechanical board and placement editor" aria-describedby="board-help"></svg></section></main>
 <footer><output id="status" aria-live="polite">Loading scene…</output></footer>

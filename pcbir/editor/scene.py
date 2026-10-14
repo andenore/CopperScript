@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 import json
+import re
 from math import cos, hypot, isqrt, radians, sin
 
 from ..drc import explicit_copper_connectivity, placed_pad_shape
@@ -13,9 +15,11 @@ from ..physical import (FootprintArc, FootprintCircle, FootprintLayer,
                         PadKind, PadReference, PadShape, PhysicalBoard, Point)
 from ..placement import (PlacementPlannerOptions, placement_solution_is_hard_legal,
                          placement_solution_is_legal, relative_placement_violations,
+                         placement_rejection_reasons,
                          transformed_footprint_polygon, transformed_local_point)
 from .islands import nearest_island_tree
 from .artwork import board_artwork_scene, footprint_silkscreen_scene
+from ..quantities import Length
 
 SCHEMA = "copperscript-editor-scene/v0.1"
 
@@ -199,6 +203,19 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
     pad_names = _metadata_map(board, "pad_names")
     pose_map = {pose.reference: pose for pose in board.placements}
     relative_violations = relative_placement_violations(board, pose_map)
+    hard_legal = placement_solution_is_hard_legal(board, pose_map,
+        replace(options or PlacementPlannerOptions(), fixed_references=session_locks))
+    physical_issues = []
+    relative_messages = {str(issue['message']) for issue in relative_violations}
+    if not hard_legal:
+        for message in placement_rejection_reasons(board, pose_map, options):
+            if message in relative_messages:
+                continue
+            references = [ref for ref in message.partition(':')[0].split(' / ') if ref in pose_map]
+            message = re.sub(r'(-?\d+) nm\b',
+                lambda match: str(Length(Decimal(match.group(1)) / Decimal(1_000_000_000), 'mm')), message)
+            physical_issues.append({'message': message, 'references': references})
+    invalid_references = {ref for issue in physical_issues for ref in issue['references']}
     violating_references = {
         reference for violation in relative_violations
         for reference in violation.get("references", ())
@@ -209,6 +226,13 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         footprint = board.footprints[pose.footprint]
         from ..mechanical_assembly import component_height
         rule = rules.get(pose.reference)
+        cluster = next((c for c in board.rigid_clusters if any(m.reference == pose.reference for m in c.members)), None)
+        angles = rule.allowed_orientations if rule else (0, 90, 180, 270)
+        if cluster:
+            member = next(m for m in cluster.members if m.reference == pose.reference)
+            choices = angles
+            angles = tuple(rotation for angle in cluster.allowed_rotations
+                           if (rotation := ((angle + member.rotation_degrees) % 360 + 360) % 360) in choices)
         pads = []
         for index, pad in enumerate(footprint.pads):
             position = transformed_local_point(pose, pad.position)
@@ -239,9 +263,11 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
             "source_side_locked": bool(rule and rule.side is not None),
             "session_locked": pose.reference in session_locks,
             "constraint_warning": pose.reference in violating_references,
+            "pose_invalid": pose.reference in invalid_references,
+            "pose_issues": [issue['message'] for issue in physical_issues if pose.reference in issue['references']],
             "constraint_warning_count": sum(pose.reference in violation.get("references", ())
                                               for violation in relative_violations),
-            "allowed_orientations": [str(x) for x in rule.allowed_orientations] if rule else ["0", "90", "180", "270"],
+            "allowed_orientations": [str(x) for x in angles],
             "macro": next((c.name for c in board.rigid_clusters
                 if any(m.reference == pose.reference for m in c.members)), None)})
     extent = bounds(board.outline.vertices)
@@ -300,9 +326,8 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         "placement_legal": placement_solution_is_legal(board,
             {p.reference: p for p in board.placements},
             replace(options or PlacementPlannerOptions(), fixed_references=session_locks)),
-        "placement_hard_legal": placement_solution_is_hard_legal(board,
-            {p.reference: p for p in board.placements},
-            replace(options or PlacementPlannerOptions(), fixed_references=session_locks)),
+        "placement_hard_legal": hard_legal,
+        "placement_validation": {"issues": physical_issues, "invalid_components": sorted(invalid_references)},
         "notice": "Session preview only: source is read-only; no routing or manufacturing signoff."}
     _, macro_error = _preview_copper(board)
     if macro_error:

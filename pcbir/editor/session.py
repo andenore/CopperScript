@@ -29,6 +29,7 @@ class StaleRevision(EditorError):
 class State:
     board: PhysicalBoard
     locks: frozenset[str] = frozenset()
+    manual_preview: bool = False
 
 
 def _integer(value, name):
@@ -120,6 +121,7 @@ class EditorSession:
             scene["power_nets"] = sorted({s.net for s in elaborate(self.workspace.identity).supplies})
         scene["scene_profile"] = {"ratsnest_recomputed_nets": self.ratsnest_cache.recomputed_nets}
         scene["source_writable"] = self.workspace is not None
+        scene['preview_editable'] = state is self.pending and state.manual_preview
         scene['document_kind'] = 'board'
         from .features import source_features, feature_catalog
         feature_raw = self.source_pending.after.raw if self.source_pending and state.board is self.source_pending.board else self.source_raw
@@ -217,7 +219,7 @@ class EditorSession:
         self.undo_stack.append(self.state)
         self.undo_stack = self.undo_stack[-64:]
         self.redo_stack.clear()
-        self.state = state
+        self.state = replace(state, manual_preview=False)
         self.pending = None
         self.source_pending = None
         self.revision += 1
@@ -295,9 +297,9 @@ class EditorSession:
             self.revision += 1  # A preview is revision-bound too: another tab cannot replace it silently.
             return {"preview": self._document(self.pending), "accepted": False}
         if action == "move":
-            self.pending = None
+            base = self.pending if self.pending and self.pending.manual_preview else self.state
             reference = request["reference"]
-            poses = {p.reference: p for p in self.state.board.placements}
+            poses = {p.reference: p for p in base.board.placements}
             if not isinstance(reference, str) or reference not in poses:
                 raise EditorError("unknown component reference")
             if reference in self.state.locks:
@@ -312,24 +314,20 @@ class EditorSession:
                     side=BoardSide(request["side"]))
             except (ValueError, InvalidOperation) as exc:
                 raise EditorError(str(exc)) from exc
-            moved = move_placement_unit(self.state.board, poses, reference, proposed)
-            # Relative distance/alignment rules are deliberately advisory while
-            # dragging.  Keep board bounds, keepouts, source locks and rigid
-            # macro geometry hard, then expose any relative violations in the
-            # preview scene for the user to resolve.
-            if not placement_solution_is_hard_legal(self.state.board, moved, self._options()):
-                raise EditorError("pose violates physical constraints: " + "; ".join(
-                    placement_rejection_reasons(self.state.board, moved, self._options())))
+            moved = move_placement_unit(base.board, poses, reference, proposed)
+            self._check_pose_ownership(poses, moved)
+            # Geometry violations remain visible in a correctable draft. Apply
+            # still uses the authoritative hard-geometry predicate below.
             trial = replace(self.state.board, placements=tuple(moved[p.reference]
                 for p in self.state.board.placements), metadata={**self.state.board.metadata,
                     "fabrication_ready": "false", "editor_preview": "true"})
-            self.pending = State(trial, self.state.locks)
+            self.pending = State(trial, self.state.locks, manual_preview=True)
             self.revision += 1
             return {"preview": self._document(self.pending), "accepted": False}
         if action == "move_group":
-            self.pending = None
+            base = self.pending if self.pending and self.pending.manual_preview else self.state
             references = request["references"]
-            poses = {p.reference: p for p in self.state.board.placements}
+            poses = {p.reference: p for p in base.board.placements}
             if (not isinstance(references, list) or not references or
                     len(references) > len(poses) or
                     any(not isinstance(reference, str) or not reference for reference in references) or
@@ -365,13 +363,11 @@ class EditorSession:
                 moved[reference] = replace(pose, position=Point(
                     _integer(pose.position.x_nm + dx_nm, "x_nm"),
                     _integer(pose.position.y_nm + dy_nm, "y_nm")))
-            if not placement_solution_is_hard_legal(self.state.board, moved, self._options()):
-                raise EditorError("group move violates physical constraints: " + "; ".join(
-                    placement_rejection_reasons(self.state.board, moved, self._options())))
+            self._check_pose_ownership(poses, moved)
             trial = replace(self.state.board, placements=tuple(moved[p.reference]
                 for p in self.state.board.placements), metadata={**self.state.board.metadata,
                     "fabrication_ready": "false", "editor_preview": "true"})
-            self.pending = State(trial, self.state.locks)
+            self.pending = State(trial, self.state.locks, manual_preview=True)
             self.revision += 1
             return {"preview": self._document(self.pending), "accepted": False}
         if action == "lock":
@@ -406,6 +402,18 @@ class EditorSession:
             self.pending = None
             self.revision += 1
         return {"scene": self.scene(), "accepted": True}
+
+    def _check_pose_ownership(self, before, after):
+        """Invalid geometry never permits changes to fixed intent or ownership."""
+        for reference in self.state.locks:
+            if after[reference] != before[reference]:
+                raise EditorError(f'unlock the temporary pose before moving {reference}')
+        for rule in self.state.board.placement_rules:
+            pose = after[rule.reference]
+            if ((rule.fixed_position is not None and pose.position != rule.fixed_position)
+                or (rule.fixed_rotation_degrees is not None and pose.rotation_degrees != rule.fixed_rotation_degrees)
+                or (rule.side is not None and pose.side != rule.side)):
+                raise EditorError(f'{rule.reference}: pose violates source-fixed position, rotation or side; edit its source locks explicitly')
 
     def _source_operation(self, action, request):
         if self.workspace is None:

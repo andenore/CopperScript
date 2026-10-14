@@ -18,6 +18,7 @@ CASES = {
     "save": ("examples/mechanical_editor_demo", "mechanical-editor-save", True),
     "placement": ("examples/mechanical_editor_demo", "mechanical-editor", False),
     "keyboard": ("examples/mechanical_editor_demo", "mechanical-editor-keyboard", True),
+    "invalid": ("examples/mechanical_editor_demo", "mechanical-editor-invalid", True),
     "curves": ("examples/mechanical_curves", "mechanical-editor-curves", True),
     "anchors": ("examples/mechanical_anchors", "mechanical-editor-anchors", True),
     "references": ("examples/mechanical_reference", "mechanical-editor-references", True),

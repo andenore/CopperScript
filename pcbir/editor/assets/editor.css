@@ -342,3 +342,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .stackup-copper {border-color:#e6aa60;background:#3b3025}
 .board-artwork {pointer-events:visiblePainted;cursor:pointer}
 .physical-dimension {fill:#b7d5ff;font-size:.8px;stroke:none;pointer-events:none}
+.component.pose-invalid .courtyard {stroke:#ff6278;stroke-width:.22;stroke-dasharray:.2 .12}
+.component.pose-invalid .body {fill:#d6385544;stroke:#ff6278;stroke-width:.15}
+#pose-validation {padding:10px;border:1px solid #bb4053;border-radius:5px;background:#4c202b;color:#ffb3bf;margin-top:12px}
+#pose-validation-reasons {white-space:pre-line;font-size:12px;margin:6px 0 0}
+#pending.invalid {border-color:#bb4053;background:#4c202b;color:#ffb3bf}
+.rotation-actions {display:flex;gap:8px;margin:8px 0}

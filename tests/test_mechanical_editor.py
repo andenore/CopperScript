@@ -209,9 +209,11 @@ def test_manual_move_preview_apply_discard_history_and_failed_rollback(tmp_path)
     request(session, "move", reference="U/R1", x_nm=14000000, y_nm=5000000, rotation="90", side="front")
     request(session, "apply")
     changed = session.state
-    with pytest.raises(EditorError, match="violates"):
-        request(session, "move", reference="U/R1", x_nm=5000000, y_nm=5000000, rotation="0", side="front")
-    assert session.state is changed and session.pending is None
+    result = request(session, "move", reference="U/R1", x_nm=5000000, y_nm=5000000, rotation="0", side="front")
+    assert not result['preview']['placement_hard_legal']
+    assert session.state is changed and session.pending is not None
+    with pytest.raises(EditorError, match="hard physical rules"):
+        request(session, "apply")
     request(session, "undo")
     assert session.state == original
     request(session, "lock", reference="TP1", locked=True)

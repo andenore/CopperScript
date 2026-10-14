@@ -411,9 +411,23 @@ Wheel zoom is cursor-anchored; right-button drag pans. Numeric pose changes
 require Apply/Discard; optional preview drags use the same revision protocol.
 Shift-click selects a group; dragging or arrow movement translates it atomically.
 Rigid members expand automatically. Unknown, source-position-locked, temporarily
-locked or physically illegal members reject the whole move.
+locked or structurally invalid member edits reject the whole move without replacing
+the current draft. Rigid ownership and source locks remain authoritative.
 
-Temporary moves use hard-geometry legality. Relative distance/alignment
+Outside-board, overlapping, keepout-conflicting or disallowed-orientation poses
+remain visible as red temporary drafts with rule explanations. Continue dragging,
+editing coordinates or rotating that draft; it cannot be applied while hard
+geometry is invalid. Valid default drags apply normally. Manual previews remain
+editable until Apply/Discard, while automatic-placement candidates still require
+Apply/Discard before manual adjustment. Escape discards a manual draft and restores
+the accepted session poses. Refreshing the view retains the pending draft.
+
+**Rotate left/right** and `R` / `Shift+R` cycle the selected component's supported
+orientations, including while correcting an invalid draft. Keyboard focus follows
+component selection on the canvas. Source rotation locks still require the
+explicit source-lock workflow.
+
+Apply checks hard-geometry legality. Relative distance/alignment
 violations remain visible with measurements, limits and participating references;
 automatic placement and source-save validation still enforce all represented
 constraints. A temporary inspection pose is not saved intent.
