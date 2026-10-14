@@ -655,10 +655,12 @@ def _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenera
     return ordered, ""
 
 
-def _verified_bypass_links(board, only_nets):
+def _verified_bypass_links(board, only_nets, *, witness_paths=None):
     """Read-only exact same-surface witnesses for explicit source associations.
 
-    No routing, via shortcut or connected flag is used as evidence. Actual
+    Optional witness_paths receives original input track identities, never
+    reconstructed or synthesized ownership. No routing, via shortcut or connected
+    flag is used as evidence. Actual
     preferred/breakout widths, every foreign land and all source copper apply.
     """
     from .routing_clearance import RoutingClearanceIndex
@@ -667,6 +669,8 @@ def _verified_bypass_links(board, only_nets):
     from .physical import BoardSide, CopperLayer, PadKind
     from .routing_layers import routing_layers
     from .hard_macros import macro_owned_pads
+    if witness_paths is not None:
+        witness_paths.clear()
     poses = {p.reference:p for p in board.placements}
     rules = {r.net:r for r in board.net_routing_rules}
     index, owned, verified = RoutingClearanceIndex(board), macro_owned_pads(board), set()
@@ -686,9 +690,12 @@ def _verified_bypass_links(board, only_nets):
             continue
         end=transformed_pad_position(board,cap,link.capacitor.pad)
         width=rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
-        if _verified_land_path(board,lands[0],target,link.net,end,index,require_via=False,
-                               target_layer=layer,required_width_nm=width) is not None:
+        path = _verified_land_path(board,lands[0],target,link.net,end,index,require_via=False,
+                                   target_layer=layer,required_width_nm=width)
+        if path is not None:
             verified.add(link)
+            if witness_paths is not None:
+                witness_paths[link] = path
     return frozenset(verified)
 
 

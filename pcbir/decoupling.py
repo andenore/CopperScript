@@ -122,15 +122,21 @@ def improve_decoupling_placement(board, placements, options):
     Same side and a legal direct surface path win, then pad-centre distance.
     The search radius derives
     from the two footprints, not an electrical maximum-distance requirement.
-    Fixed, attached and macro members are not moved. An obstructed layout keeps
-    its existing legal pose; explicit limits still need source-backed intent.
+    Fixed, attached, macro and required-array members are not moved. A candidate
+    may replace only its own exclusive generated feed; every other exact
+    source-associated witness remains reserved, including later source links.
+    An obstructed layout keeps its existing pose; explicit limits need source
+    intent. No count improvement permits losing an already verified identity.
     At most 64 locally legal poses receive a copper-access check per capacitor.
     """
     from .placement import (_fixed_placements, _allowed_orientations, _legal,
                             placement_solution_is_legal, transformed_pad_position)
-    from .hard_macros import materialize_hard_macros
+    from .hard_macros import materialize_hard_macros, macro_owned_pads
     from .routing_clearance import RoutingClearanceIndex
     from .routing_layers import routing_layers
+    from .package_access import _verified_bypass_links
+    from .pad_via_arrays import array_rules
+    from .route_quality import escape_paths_cross
     if board.tracks or board.vias or board.zone_fills:
         raise ValueError("decoupling placement requires unrouted, unfilled source")
     if not board.decoupling_links:
@@ -138,24 +144,26 @@ def improve_decoupling_placement(board, placements, options):
     poses = dict(placements)
     fixed = _fixed_placements(board, poses, options)
     fixed.update({r: poses[r] for c in board.rigid_clusters for r in (m.reference for m in c.members)})
+    fixed.update({r.pad.component: poses[r.pad.component] for r in array_rules(board)})
     moved = 0
-    # Preserve earlier exact feeds instead of re-running their bounded mazes
-    # for every later capacitor. A candidate still checks the complete retained
-    # feed prefix against its fresh posed pad/copper index before acceptance.
-    reservation = route_decouplers(materialize_hard_macros(replace(board,
-        placements=tuple(poses.values()), decoupling_links=())))
-    for link_index, link in enumerate(board.decoupling_links):
-        if link_index:
-            prior = route_decouplers(replace(reservation.board,
-                placements=tuple(poses.values()),
-                decoupling_links=(board.decoupling_links[link_index - 1],)))
-            reservation = replace(prior,
-                board=replace(prior.board, decoupling_links=board.decoupling_links),
-                created_tracks=(*reservation.created_tracks, *prior.created_tracks),
-                connected_pads=reservation.connected_pads | prior.connected_pads,
-                pending=(*reservation.pending, *prior.pending))
+    # Later-declared valid feeds are just as binding as earlier ones. Generate
+    # this complete baseline once, then retain its exact generated prefix while
+    # incrementally adding pending feeds. Successful labels alone are not proof.
+    frame = materialize_hard_macros(replace(board, placements=tuple(poses.values())))
+    reservation = route_decouplers(frame)
+    baseline_nets = {link.net for link in board.decoupling_links}
+    witnesses = {}
+    verified = _verified_bypass_links(reservation.board, baseline_nets,
+                                     witness_paths=witnesses)
+    baseline_verified = verified
+    pending_links = {link for link, _ in reservation.pending}
+    macro_owned = macro_owned_pads(reservation.board)
+    owned_tracks = reservation.created_tracks
+    reserved = reservation.board
+    for link in board.decoupling_links:
         reference = link.capacitor.component
-        if reference in fixed:
+        if ((link not in pending_links and link not in verified) or reference in fixed
+                or link.target in macro_owned or link.capacitor in macro_owned):
             continue
         current, target = poses[reference], poses[link.target.component]
         point = transformed_pad_position(board, target, link.target.pad)
@@ -188,28 +196,43 @@ def improve_decoupling_placement(board, placements, options):
                     outside, dx*dx+dy*dy,
                     pose.position.x_nm, pose.position.y_nm, pose.rotation_degrees)
         routing_rule = next((r for r in board.net_routing_rules if r.net == link.net), None)
-        ordinary = routing_rule is None or routing_rule.kind is RouteKind.GENERAL
-        # Earlier bypasses are physical reservations, including fixed caps.
-        # Independently accessible poses can otherwise compete for the same
-        # corridor and fail as soon as the complete set is actually routed.
-        reserved = reservation.board
+        # All initially verified feeds and earlier pending feeds are physical
+        # reservations. Source order cannot grant permission to lose a future
+        # association that already had an exact valid witness.
+        own_path = set(witnesses.get(link, ()))
+        other_paths = {track for other, path in witnesses.items() if other != link
+                       for track in path}
+        # Source/macro tracks never acquire generated ownership. Shared original
+        # segments stay in the prefix even if the moving link also used them.
+        releasable = own_path - other_paths - set(frame.tracks)
+        retained = tuple(track for track in owned_tracks if track not in releasable)
         def direct_access(candidate):
-            if not ordinary:
-                return True  # A stronger topology remains with its own router.
             layer = CopperLayer.FRONT if target.side is BoardSide.FRONT else CopperLayer.BACK
             if candidate.side is not target.side or layer not in routing_layers(board, link.net, routing_rule):
-                return False
+                return None
             scratch = replace(reserved, placements=tuple(
-                candidate if p.reference == reference else poses[p.reference] for p in board.placements))
+                candidate if p.reference == reference else poses[p.reference] for p in board.placements),
+                tracks=(*frame.tracks, *retained))
             width = routing_rule.width_nm if routing_rule and routing_rule.width_nm else board.rules.default_track_width_nm
             index = RoutingClearanceIndex(scratch)
-            # Moving this capacitor's return land must not cut an earlier
+            # Moving this capacitor's return land must not cut any retained
             # bypass, even if its own feed path is individually clear.
             if any(not index.can_track(t.net, t.start, t.end, t.width_nm, t.layer)
-                   for t in reservation.created_tracks):
-                return False
-            return next(_surface_candidates(scratch, index, link,
-                                            target, candidate, width, layer), None) is not None
+                   for t in scratch.tracks):
+                return None
+            path = next((path for path in _surface_candidates(scratch, index, link,
+                         target, candidate, width, layer)
+                         if not escape_paths_cross(path, scratch.tracks)), None)
+            if path is None:
+                return None
+            created = tuple(t for t in path if t not in scratch.tracks)
+            trial = replace(scratch, tracks=(*scratch.tracks, *created))
+            trial_witnesses = {}
+            trial_verified = _verified_bypass_links(trial, baseline_nets,
+                                                    witness_paths=trial_witnesses)
+            if not (verified | {link}) <= trial_verified:
+                return None
+            return trial, (*retained, *created), trial_verified, trial_witnesses
         current_access = direct_access(current)
         others = {r: p for r, p in poses.items() if r != reference}
         access_trials = 0
@@ -218,7 +241,8 @@ def improve_decoupling_placement(board, placements, options):
                 break
             if _legal(candidate, others, board, options):
                 access_trials += 1
-                if not direct_access(candidate):
+                trial = direct_access(candidate)
+                if trial is None:
                     if access_trials >= 64:
                         break
                     continue
@@ -228,5 +252,14 @@ def improve_decoupling_placement(board, placements, options):
                     continue
                 poses[reference] = candidate
                 moved += candidate != current
+                reserved, owned_tracks, verified, witnesses = trial
                 break
+    if moved:
+        # The public output is unrouted poses, not a relabelled feed macro.
+        # Fresh normal regeneration must preserve identities as well as the
+        # internal proposal ledger; otherwise roll back this bounded heuristic.
+        regenerated = route_decouplers(materialize_hard_macros(replace(board,
+            placements=tuple(poses.values()))))
+        if not (baseline_verified | verified) <= _verified_bypass_links(regenerated.board, baseline_nets):
+            return dict(placements), 0
     return poses, moved
