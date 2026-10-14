@@ -372,6 +372,11 @@ def _negotiate_patterns(
         if strategy == "partial_ordinary":
             _, partial_skipped_reason = _partial_ordinary_release(
                 baseline.fanout, owner_board, probe.board, options.maximum_partial_owner_nets)
+            if partial_skipped_reason == "protected_ordinary_owner":
+                _, bypass_reason = _partial_ordinary_release(
+                    baseline.fanout, owner_board, probe.board, options.maximum_partial_owner_nets, True)
+                if not bypass_reason:
+                    strategy, partial_skipped_reason = "partial_bypass", ""
             if partial_skipped_reason and records[-1].strategy != "critical_first":
                 # Cheap eligibility failure must not suppress the established
                 # critical-only fallback after a plane-first proposal. No third
@@ -408,9 +413,10 @@ def _negotiate_patterns(
         else:
             obstacles = probe.board
         emit(on_progress, "package_pattern_fanout", "started", strategy=strategy)
-        if strategy == "partial_ordinary":
+        if strategy in {"partial_ordinary", "partial_bypass"}:
             proposed, displaced, retained_tracks, retained_vias, partial_outcome = _partial_ordinary_pattern(
-                baseline.fanout, owner_board, obstacles, fanout_options, options.maximum_partial_owner_nets)
+                baseline.fanout, owner_board, obstacles, fanout_options, options.maximum_partial_owner_nets,
+                strategy == "partial_bypass")
         else:
             proposed = route_fanout(obstacles, fanout_options)
         emit(on_progress, "package_pattern_fanout", "finished", strategy=strategy,
@@ -466,17 +472,19 @@ def _negotiate_patterns(
     return replace(accepted, pattern_trials=tuple(records))
 
 
-def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets):
+def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets, regenerate_bypass=False):
     """Keep legal generated ownership exactly; rebuild only intersecting nets.
 
     The clean critical probe is a disposable obstacle, not committed copper.
     Net-granular release avoids guessing ownership of shared same-net stubs.
     Source/macro/array copper is never in this removable contribution. Semantic
-    decoupling feeds are also protected. Final critical/contact/boundary checks
+    feeds remain protected by default; the explicit regeneration trial requires
+    every previously verified source association to be independently witnessed
+    again against the complete proposal. Final critical/contact/boundary checks
     still rebuild every owner against the combined ordinary contribution.
     """
     names = {pad: net.name for net in owner.nets for pad in net.pads}
-    ordered, reason = _partial_ordinary_release(original, owner, obstacles, maximum_nets)
+    ordered, reason = _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenerate_bypass)
     if reason:
         return None, ordered, 0, 0, reason
     displaced = frozenset(ordered)
@@ -484,14 +492,18 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
     held_tracks = []
     for track in original.created_tracks:
         if feed_counts[track]:
-            held_tracks.append(track)
+            if not regenerate_bypass or track.net not in displaced:
+                held_tracks.append(track)
             feed_counts[track] -= 1
         elif track.net not in displaced:
             held_tracks.append(track)
     tracks = tuple(held_tracks)
     vias = tuple(v for v in original.created_vias if v.net not in displaced)
     held = replace(obstacles, tracks=(*obstacles.tracks, *tracks), vias=(*obstacles.vias, *vias))
+    required_bypass = _verified_bypass_links(original.board, displaced) if regenerate_bypass else frozenset()
     rebuilt = route_fanout(held, settings, only_nets=frozenset(displaced))
+    if required_bypass - _verified_bypass_links(rebuilt.board, displaced):
+        return None, ordered, len(tracks), len(vias), "lost_bypass_connection"
     # Detect accidental owner/prefix replacement, including duplicate geometry.
     if (rebuilt.board.tracks != (*held.tracks, *rebuilt.created_tracks)
             or rebuilt.board.vias != (*held.vias, *rebuilt.created_vias)):
@@ -510,11 +522,12 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
         pin_analysis=tuple(a for a in original.pin_analysis if names[a.pad] not in displaced) + rebuilt.pin_analysis,
         decoupling_pending=tuple(p for p in original.decoupling_pending if names[p[0]] not in displaced)
                            + rebuilt.decoupling_pending,
-        decoupling_tracks=(*original.decoupling_tracks, *rebuilt.decoupling_tracks))
+        decoupling_tracks=(*(t for t in original.decoupling_tracks
+                             if not regenerate_bypass or t.net not in displaced), *rebuilt.decoupling_tracks))
     return proposed, ordered, len(tracks), len(vias), "proposed"
 
 
-def _partial_ordinary_release(original, owner, obstacles, maximum_nets):
+def _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenerate_bypass=False):
     """Cheap exact eligibility, shared by dispatch and the actual proposal."""
     from .routing_clearance import RoutingClearanceIndex
     if (original.board.tracks != (*owner.tracks, *original.created_tracks)
@@ -532,13 +545,59 @@ def _partial_ordinary_release(original, owner, obstacles, maximum_nets):
         via.net, via.position, via.size_nm, via.from_layer, via.to_layer, via.drill_nm))
     displaced.update(names[pad] for pad in original.pending_pads)
     ordered = tuple(sorted(displaced))
-    if any(not index.can_track(t.net, t.start, t.end, t.width_nm, t.layer)
-           for t in original.decoupling_tracks) or any(
-            net in rules and rules[net].kind is not RouteKind.GENERAL for net in displaced):
+    conflicting_feeds = {t.net for t in original.decoupling_tracks
+                         if not index.can_track(t.net, t.start, t.end, t.width_nm, t.layer)}
+    if any(net in rules and rules[net].kind is not RouteKind.GENERAL for net in displaced):
         return ordered, "protected_ordinary_owner"
+    if conflicting_feeds:
+        if not regenerate_bypass:
+            return ordered, "protected_ordinary_owner"
+        # Source/macro copper is outside created_tracks. Only independently
+        # verified source-associated generated feeds are eligible; ambiguous
+        # or unverified associations never grant permission to remove copper.
+        verified = _verified_bypass_links(original.board, conflicting_feeds)
+        if not conflicting_feeds <= {link.net for link in verified}:
+            return ordered, "protected_ordinary_owner"
     if len(displaced) > maximum_nets:
         return ordered, "partial_owner_budget_exhausted"
     return ordered, ""
+
+
+def _verified_bypass_links(board, only_nets):
+    """Read-only exact same-surface witnesses for explicit source associations.
+
+    No routing, via shortcut or connected flag is used as evidence. Actual
+    preferred/breakout widths, every foreign land and all source copper apply.
+    """
+    from .routing_clearance import RoutingClearanceIndex
+    from .pin_escape import _verified_land_path
+    from .placement import transformed_pad_position
+    from .physical import BoardSide, CopperLayer, PadKind
+    from .routing_layers import routing_layers
+    from .hard_macros import macro_owned_pads
+    poses = {p.reference:p for p in board.placements}
+    rules = {r.net:r for r in board.net_routing_rules}
+    index, owned, verified = RoutingClearanceIndex(board), macro_owned_pads(board), set()
+    for link in board.decoupling_links:
+        if link.net not in only_nets or link.target in owned or link.capacitor in owned:
+            continue
+        rule=rules.get(link.net)
+        if rule is not None and rule.kind is not RouteKind.GENERAL:
+            continue
+        target,cap=poses[link.target.component],poses[link.capacitor.component]
+        lands=[p for ref,pose in ((link.target,target),(link.capacitor,cap))
+               for p in board.footprints[pose.footprint].pads if p.number==ref.pad]
+        if cap.side is not target.side or len(lands)!=2 or any(p.kind is not PadKind.SMD for p in lands):
+            continue
+        layer=CopperLayer.FRONT if target.side is BoardSide.FRONT else CopperLayer.BACK
+        if layer not in routing_layers(board,link.net,rule):
+            continue
+        end=transformed_pad_position(board,cap,link.capacitor.pad)
+        width=rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+        if _verified_land_path(board,lands[0],target,link.net,end,index,require_via=False,
+                               target_layer=layer,required_width_nm=width) is not None:
+            verified.add(link)
+    return frozenset(verified)
 
 
 def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
