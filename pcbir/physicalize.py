@@ -742,7 +742,7 @@ def _lower_physical_constraints(
             regions.append(region)
             for target in lowered_targets:
                 rules[target.reference] = _merge_rule(
-                    rules.get(target.reference), target.reference, region=name
+                    rules.get(target.reference), target.reference, region=name, side=region.side
                 )
         elif constraint.kind is ConstraintKind.KEEPOUT:
             keepouts.append(
