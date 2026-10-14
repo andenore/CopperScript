@@ -1883,24 +1883,54 @@ def _candidate_positions(
     )
     last_x = max_x - edge - max_half_width
     last_y = max_y - edge - max_half_height
-    if first_x > last_x or first_y > last_y:
-        return ()
     points = (
         Point(x, y)
         for y in range(first_y, last_y + 1, options.grid_step_nm)
         for x in range(first_x, last_x + 1, options.grid_step_nm)
     )
-    return tuple(
-        sorted(
-            points,
-            key=lambda point: (
-                abs(point.x_nm - placement.position.x_nm)
-                + abs(point.y_nm - placement.position.y_nm),
-                point.y_nm,
-                point.x_nm,
-            ),
+    coarse = tuple(sorted(points, key=lambda point: (
+        abs(point.x_nm - placement.position.x_nm)
+        + abs(point.y_nm - placement.position.y_nm),
+        point.y_nm, point.x_nm,
+    )))
+    if rule is None or rule.region is None:
+        return coarse
+
+    # Small hard regions can have a legal continuous center domain between
+    # lattice sites, or only for a non-square orientation. Keep every existing
+    # lattice proposal in its original order; spend only unused ordinary
+    # legalization allowance on exact boundary/midpoint/target centers.
+    orientations = _allowed_orientations(board, placement.reference)
+    allowance = max(0, options.legalization_candidates // len(orientations) - len(coarse))
+    if not allowance:
+        return coarse
+    seen = set(coarse)
+    extra = []
+    for orientation in orientations:
+        half_width, half_height = _half_extents(
+            board, replace(placement, rotation_degrees=orientation))
+        low_x, high_x = min_x + edge + half_width, max_x - edge - half_width
+        low_y, high_y = min_y + edge + half_height, max_y - edge - half_height
+        if low_x > high_x or low_y > high_y:
+            continue
+        xs = ((low_x + high_x) // 2, low_x, high_x)
+        ys = ((low_y + high_y) // 2, low_y, high_y)
+        proposals = chain(
+            (Point(min(max(placement.position.x_nm, low_x), high_x),
+                   min(max(placement.position.y_nm, low_y), high_y)),),
+            (Point(x, y) for y in ys for x in xs),
         )
-    )
+        for point in proposals:
+            if point in seen:
+                continue
+            seen.add(point)
+            extra.append(point)
+            if len(extra) == allowance:
+                return coarse + tuple(extra)
+    # Region polygons, independent board edges, side, fixed intent and all
+    # held geometry remain the caller's unchanged _legal decision.
+    return coarse + tuple(extra)
+
 
 
 @lru_cache(maxsize=256)
