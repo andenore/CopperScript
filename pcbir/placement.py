@@ -1400,10 +1400,19 @@ def _exact_repair(
         # used by legalization, rather than selecting an unrelated tail.
         # Bound supplemental raw probes as well as the unchanged accepted
         # blocker-probe allowance; relative proposals retain their preference.
-        general = (replace(targets[failed], position=point, rotation_degrees=angle)
-                   for point in _candidate_positions(board, targets[failed], options)
-                   for angle in _allowed_orientations(board, failed))
-        probes = chain(probes, islice(general, options.exact_repair_candidates))
+        positions = _candidate_positions(board, targets[failed], options)
+        angles = _allowed_orientations(board, failed)
+        count = len(positions) * len(angles)
+        sample_count = min(options.exact_repair_candidates, count)
+        # A nearest-prefix samples only a few centers and can miss the held
+        # blockers at the other end of the same hard region. Spread the same
+        # raw probe allowance over the complete finite ordinary domain.
+        indices = (round(i * (count - 1) / max(1, sample_count - 1))
+                   for i in range(sample_count))
+        general = (replace(targets[failed], position=positions[index // len(angles)],
+                           rotation_degrees=angles[index % len(angles)])
+                   for index in indices)
+        probes = chain(probes, general)
     checked = 0
     for candidate in probes:
         if not _legal(candidate, fixed, board, options):

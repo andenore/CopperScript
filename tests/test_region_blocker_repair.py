@@ -84,3 +84,32 @@ def test_nonrectangular_region_and_effective_rotation_side_remain_legal_authorit
     # A bounding rectangle alone would accept the opposite triangular corner.
     assert chosen.position.x_nm+chosen.position.y_nm+400_000 <= 26_000_000
     assert all(result[p.reference]==p for p in tails)
+
+
+@pytest.mark.parametrize("prefix", ("wide-a", "renamed-wide"))
+def test_spread_same_probe_count_detects_right_boundary_blocker_missed_by_prefix(prefix,monkeypatch):
+    import pcbir.placement as implementation
+    board,target,early,tails,held=scene(prefix)
+    target=replace(target,position=Point.mm(14,14))
+    blocker=PhysicalFootprint("boundary-land",(),Size.mm(1,1))
+    early=replace(early,footprint=blocker.name,position=Point.mm(17,14))
+    board=replace(board,footprints={**board.footprints,blocker.name:blocker},
+        placements=(target,early,*tails),
+        regions=(PlacementRegion("tight",rectangle(10,10,8,8),BoardSide.BACK),board.regions[1]))
+    held={p.reference:p for p in (early,*tails)}
+    options=PlacementPlannerOptions(exact_repair_limit=2)
+    positions=implementation._candidate_positions(board,target,options)
+    angles=implementation._allowed_orientations(board,target.reference)
+    domain=tuple(replace(target,position=point,rotation_degrees=angle) for point in positions for angle in angles)
+    assert len(domain)>options.exact_repair_candidates
+    assert all(implementation._legal(c,{early.reference:early},board,options)
+               for c in domain[:options.exact_repair_candidates])
+    captured=[]
+    def record(board,references,base,targets,options,**kwargs):
+        captured.append((references,dict(base)))
+        return None
+    monkeypatch.setattr(implementation,"_pack_local_components",record)
+    implementation._exact_repair(board,target.reference,held,list(held),
+        {p.reference:p for p in board.placements},{},options,0)
+    assert captured[0][0]==[target.reference,early.reference]
+    assert all(captured[0][1][p.reference]==p for p in tails)
