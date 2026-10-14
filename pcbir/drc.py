@@ -323,6 +323,10 @@ def run_physical_drc(
     coverage.append(DrcCoverage("drill_to_drill_spacing", DrcCoverageStatus.EXECUTED, True))
     keepout_covered = _check_copper_keepouts(board, findings)
     _check_zone_routing_reservations(board, findings)
+    _check_zone_priorities(board, findings)
+    if board.zones:
+        coverage.append(DrcCoverage("zone_priority", DrcCoverageStatus.EXECUTED, True,
+                                    "intersecting or touching zone boundaries on one layer require distinct priorities"))
     if any(zone.reserve_routing for zone in board.zones):
         coverage.append(DrcCoverage("zone_routing_reservations", DrcCoverageStatus.EXECUTED, True,
                                     "net-aware reserved polygons checked against all tracks, including macro copper"))
@@ -930,6 +934,32 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                              (left.identity, right.identity),
                              ((left.net, pad_lands[left.identity]), (right.net, pad_lands[right.identity])),
                              tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))))
+
+
+def _check_zone_priorities(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
+    """Catch native ambiguous pours before spending routing work.
+
+    This checks authored boundaries, including holes; it neither changes source
+    priority nor merges pours or claims filled continuity.
+    """
+    from .zone_geometry import _inside, _ring_edges
+    from .geometry import segments_intersect
+    zones = sorted(board.zones, key=lambda zone: zone.id)
+    for index, first in enumerate(zones):
+        for second in zones[:index]:
+            layers = set(first.layers).intersection(second.layers)
+            if first.priority != second.priority or not layers:
+                continue
+            a, b = first.outline, second.outline
+            edges_a = tuple(edge for ring in (a.outer, *a.holes) for edge in _ring_edges(ring.vertices))
+            edges_b = tuple(edge for ring in (b.outer, *b.holes) for edge in _ring_edges(ring.vertices))
+            if (any(segments_intersect(*x, *y) for x in edges_a for y in edges_b)
+                    or any(_inside(point, b) for point in a.outer.vertices)
+                    or any(_inside(point, a) for point in b.outer.vertices)):
+                findings.append(_finding("DRC-ZONE-PRIORITY", DrcSeverity.ERROR,
+                    f"zones {first.id} and {second.id} intersect or touch with equal priority {first.priority}",
+                    objects=tuple(sorted((first.id, second.id))), nets=tuple(sorted({first.net, second.net})),
+                    layers=tuple(sorted(layer.value for layer in layers))))
 
 
 def _check_zone_routing_reservations(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
