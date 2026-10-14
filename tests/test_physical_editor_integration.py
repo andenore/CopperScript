@@ -87,6 +87,17 @@ def test_undeclared_url_stays_explicit_error(tmp_path):
         host.close()
 
 
+def test_cli_dependency_failure_reports_actionable_diagnostic(tmp_path, capsys):
+    from pcbir.cli import main
+    source = tmp_path / 'board.copper'
+    source.write_text('board B { import parts "github.com/example/undeclared"; }', encoding='utf-8')
+    (tmp_path / 'copper.mod').write_text('module example/editor\n', encoding='utf-8')
+    assert main(['edit', str(source), '--offline', '--no-browser']) == 2
+    captured = capsys.readouterr()
+    assert 'no requirement' in captured.out
+    assert 'Traceback' not in captured.out + captured.err
+
+
 def test_missing_manifest_does_not_infer_url_versions(tmp_path, monkeypatch):
     source = tmp_path / "board.copper"
     text = 'board B { import parts "github.com/example/undeclared"; }'

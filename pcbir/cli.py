@@ -768,6 +768,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"EDITOR OVERLAY ERROR: {exc}")
             return 2
     if args.command in {"edit-mechanical", "edit"}:
+        from .syntax import CopperScriptError
         from .editor.server import serve
         from .editor.project import document_session
         from .editor.dependencies import prepare_editor_dependencies
@@ -789,7 +790,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 serve(session, port=args.port, open_browser=not args.no_browser)
             return 0
-        except (BoardLoadError, ValueError, OSError) as exc:
+        except (BoardLoadError, CopperScriptError, ValueError, OSError) as exc:
             print(f"MECHANICAL EDITOR ERROR: {exc}")
             return 2
     if args.command in {"audit-cam", "assess-engineering", "qualification-gate"}:

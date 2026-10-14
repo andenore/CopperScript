@@ -17,6 +17,7 @@ def run(kind):
     destination = ROOT / 'build' / 'physical-editor-smokes'
     destination.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix=kind+'-', dir=destination))
+    (directory / 'copper.mod').write_text('module example/physical-editor-smoke\n', encoding='utf-8')
     source = directory / 'board.copper'
     if kind == 'macro':
         _, source, _, _ = definition_project(directory)
