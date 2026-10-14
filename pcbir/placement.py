@@ -1465,73 +1465,136 @@ def _anchored_candidate_rules(board, anchors):
                  if hops > 1 and target.reference not in anchors)
 
 
-def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False):
+def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False, _region_state=None):
     """One bounded domain search for anchored companions and local repair.
 
     Domains contain individually legal poses; courtyard forward checking removes
     obvious conflicts, while every selected pose still passes the complete gate.
     This changes flexible positions, never rigid membership or source locks.
     """
+    if _region_state is not None:
+        # Private continuation is bound to this exact immutable scene/base and
+        # target set. It carries residual resources, never a new phase budget.
+        if (_region_state["board"] is not board
+                or _region_state["references"] != tuple(references)
+                or _region_state["base"] != base
+                or _region_state["targets"] != targets
+                or _region_state["options"] != options
+                or _region_state["allow_general"] != allow_general
+                or not 0 < _region_state["search_remaining"] <= options.legalization_candidates*options.exact_repair_candidates*64
+                or not 0 <= _region_state["heuristic_remaining"] <= options.legalization_candidates*options.exact_repair_candidates*64//3
+                or set(_region_state["domains"]) != set(references)
+                or set(_region_state["domain_remaining"]) != set(references)
+                or not _region_state["refinable"] <= set(references)
+                or any(not 0 <= value <= options.legalization_candidates*64
+                       for value in _region_state["domain_remaining"].values())):
+            return None
     rules = tuple(r for r in board.relative_rules if any(t.reference in references for t in r.targets))
     derived = _anchored_candidate_rules(board, base)
     candidate_board = replace(board, relative_rules=(*board.relative_rules, *derived)) if derived else board
     domains = {}
     limit = max(2, options.legalization_candidates*4)
     refinable = False
-    for ref in references:
-        target = targets[ref]
-        obstacles = _local_obstacles(board, ref, base)
-        own_rules = tuple(r for r in rules if any(t.reference == ref for t in r.targets))
-        relative = _relative_candidates(candidate_board, ref, target, base, options)
-        general = (replace(target, position=point, rotation_degrees=angle)
-                   for point in _candidate_positions(board, target, options)
-                   for angle in _allowed_orientations(board, ref)) if allow_general else ()
-        candidates = _bounded_local_candidates(relative, options.legalization_candidates*64, general)
-        legal = []
-        seen = set()
-        for index, candidate in enumerate(candidates):
-            if index >= options.legalization_candidates*64:
-                break
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
-                    and _legal(candidate, obstacles, board, options)):
-                legal.append(candidate)
-        if not legal:
-            return None
-        narrow = (len(legal) <= options.legalization_candidates
-                  and any(r.kind is RelativePlacementKind.MAX_DISTANCE
-                          and all(t.pad is not None for t in r.targets) for r in own_rules))
-        refinable |= narrow
-        if fine and narrow:
-            # Quarter-grid poses can individually fit a tight row while missing
-            # the small shifts needed to fit together. Refine only narrow
-            # domains; expanding broad bulk-part domains adds no useful space.
-            neighbours = dict.fromkeys(legal)
-            step = min(options.grid_step_nm, nm_from_mm("0.1"))
-            for pose in legal:
-                for dx in (-step, 0, step):
-                    for dy in (-step, 0, step):
-                        neighbours.setdefault(replace(pose, position=Point(
-                            pose.position.x_nm+dx, pose.position.y_nm+dy)), None)
-            candidates = tuple(neighbours)
-            probe_limit = options.legalization_candidates*64
-            if len(candidates) > probe_limit:
-                candidates = tuple(candidates[round(i*(len(candidates)-1)/(probe_limit-1))]
-                                   for i in range(probe_limit))
-            legal = [pose for pose in candidates
-                     if _relative_penalty(board, {**base, ref: pose}, rules=own_rules) == 0
-                     and _legal(pose, obstacles, board, options)]
-        # Preserve candidates across the complete local range, including a
-        # second row; taking only the closest positions can erase the solution.
-        if len(legal) > limit:
-            legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
-        domains[ref] = tuple(legal)
+    region_refinable = set()
+    region_probe_remaining = {}
+    immutable_refs = set(_fixed_placements(board, targets, options)) | {
+        member.reference for cluster in board.rigid_clusters for member in cluster.members}
+    if _region_state is None:
+        for ref in references:
+            target = targets[ref]
+            obstacles = _local_obstacles(board, ref, base)
+            own_rules = tuple(r for r in rules if any(t.reference == ref for t in r.targets))
+            relative = _relative_candidates(candidate_board, ref, target, base, options)
+            general = (replace(target, position=point, rotation_degrees=angle)
+                       for point in _candidate_positions(board, target, options)
+                       for angle in _allowed_orientations(board, ref)) if allow_general else ()
+            candidates = _bounded_local_candidates(relative, options.legalization_candidates*64, general)
+            legal = []
+            seen = set()
+            probed = 0
+            for index, candidate in enumerate(candidates):
+                if index >= options.legalization_candidates*64:
+                    break
+                probed += 1
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
+                        and _legal(candidate, obstacles, board, options)):
+                    legal.append(candidate)
+            region_probe_remaining[ref] = options.legalization_candidates*64 - probed
+            if not legal:
+                return None
+            narrow = (len(legal) <= options.legalization_candidates
+                      and any(r.kind is RelativePlacementKind.MAX_DISTANCE
+                              and all(t.pad is not None for t in r.targets) for r in own_rules))
+            refinable |= narrow
+            rule = _rules(board).get(ref)
+            if (allow_general and rule is not None and rule.region is not None
+                    and not own_rules and len(legal) <= options.legalization_candidates
+                    and ref not in immutable_refs and region_probe_remaining[ref] > 0):
+                region_refinable.add(ref)
+            if fine and narrow:
+                # Quarter-grid poses can individually fit a tight row while missing
+                # the small shifts needed to fit together. Refine only narrow
+                # domains; expanding broad bulk-part domains adds no useful space.
+                neighbours = dict.fromkeys(legal)
+                step = min(options.grid_step_nm, nm_from_mm("0.1"))
+                for pose in legal:
+                    for dx in (-step, 0, step):
+                        for dy in (-step, 0, step):
+                            neighbours.setdefault(replace(pose, position=Point(
+                                pose.position.x_nm+dx, pose.position.y_nm+dy)), None)
+                candidates = tuple(neighbours)
+                probe_limit = options.legalization_candidates*64
+                if len(candidates) > probe_limit:
+                    candidates = tuple(candidates[round(i*(len(candidates)-1)/(probe_limit-1))]
+                                       for i in range(probe_limit))
+                legal = [pose for pose in candidates
+                         if _relative_penalty(board, {**base, ref: pose}, rules=own_rules) == 0
+                         and _legal(pose, obstacles, board, options)]
+            # Preserve candidates across the complete local range, including a
+            # second row; taking only the closest positions can erase the solution.
+            if len(legal) > limit:
+                legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
+            domains[ref] = tuple(legal)
+    else:
+        for ref in references:
+            legal = list(_region_state["domains"][ref])
+            if ref in _region_state["refinable"]:
+                # Reuse accepted coarse sites. Only new neighbor probes spend
+                # the unused original per-member domain allowance.
+                seen = set(legal)
+                neighbours = {}
+                step = min(options.grid_step_nm, nm_from_mm("0.1"))
+                for pose in legal:
+                    for dx in (-step, 0, step):
+                        for dy in (-step, 0, step):
+                            candidate = replace(pose, position=Point(
+                                pose.position.x_nm+dx, pose.position.y_nm+dy))
+                            if candidate not in seen:
+                                neighbours.setdefault(candidate, None)
+                candidates = tuple(neighbours)
+                available = _region_state["domain_remaining"][ref]
+                if len(candidates) > available:
+                    candidates = tuple(candidates[round(i*(len(candidates)-1)/max(1, available-1))]
+                                       for i in range(available))
+                obstacles = _local_obstacles(board, ref, base)
+                own_rules = tuple(r for r in rules if any(t.reference == ref for t in r.targets))
+                for candidate in candidates:
+                    _region_state["domain_remaining"][ref] -= 1
+                    if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
+                            and _legal(candidate, obstacles, board, options)):
+                        legal.append(candidate)
+            if len(legal) > limit:
+                legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
+            domains[ref] = tuple(legal)
     polygons = {ref: tuple(_placement_polygon(board, pose) for pose in poses)
                 for ref, poses in domains.items()}
-    remaining = options.legalization_candidates*options.exact_repair_candidates*64
-    heuristic_remaining = remaining//3
+    remaining = (options.legalization_candidates*options.exact_repair_candidates*64
+                 if _region_state is None else _region_state["search_remaining"])
+    heuristic_remaining = (remaining//3 if _region_state is None
+                           else _region_state["heuristic_remaining"])
     pair_rules = {}
     for rule in rules:
         pair = frozenset(t.reference for t in rule.targets)
@@ -1608,9 +1671,22 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
         return None
 
     result = solve({ref: tuple(range(len(poses))) for ref, poses in domains.items()}, dict(base))
+    if _region_state is not None:
+        _region_state["search_remaining"] = remaining
+        _region_state["heuristic_remaining"] = heuristic_remaining
+        return result
     if result is None and refinable and not fine:
+        # Preserve the pre-existing pad-MAX_DISTANCE fine behavior/contracts.
         return _pack_local_components(board, references, base, targets, options,
                                       allow_general=allow_general, fine=True)
+    if result is None and region_refinable and not fine and remaining > 0:
+        state = {"board": board, "references": tuple(references), "base": dict(base),
+                 "targets": dict(targets), "options": options, "allow_general": allow_general,
+                 "domains": domains, "refinable": region_refinable,
+                 "domain_remaining": region_probe_remaining,
+                 "search_remaining": remaining, "heuristic_remaining": heuristic_remaining}
+        return _pack_local_components(board, references, base, targets, options,
+                                      allow_general=allow_general, fine=True, _region_state=state)
     return result
 
 
