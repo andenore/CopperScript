@@ -243,10 +243,21 @@ class PackagePinDefinition:
     bonds: tuple[BondDefinition, ...] = ()
     connection_policy: ConnectionPolicy = ConnectionPolicy.NORMAL
     required_net_traits: frozenset[str] = frozenset()
+    # Manufacturer-permitted external power-output tie, scoped to this part
+    # instance. It never joins physical pads or permits omitting a contact.
+    parallel_power_group: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bonds", tuple(self.bonds))
         object.__setattr__(self, "required_net_traits", frozenset(self.required_net_traits))
+        if self.parallel_power_group is not None:
+            import re
+            if (not isinstance(self.parallel_power_group, str)
+                    or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", self.parallel_power_group) is None
+                    or self.profile is None
+                    or self.profile.domains != frozenset({SignalDomain.POWER})
+                    or self.profile.directions != frozenset({Direction.OUTPUT})):
+                raise ValueError("parallel_power_group requires a named explicit power-only output")
 
 
 @dataclass(frozen=True, slots=True)

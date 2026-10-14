@@ -205,6 +205,17 @@ Standalone parts declare `domains` and `directions`, with optional
 `passive`; drive modes are `push_pull`, `open_drain`, and `high_impedance`.
 Pins may use `connection = required`, `do_not_connect`, `optional`, or `normal`
 and may declare comma-separated `required_net_traits`.
+
+Power-only output pins may explicitly declare
+parallel_power_group = "CORE". Matching names permit a manufacturer-approved
+external tie only within one component instance. Other output groups, separate
+regulators and digital push-pull outputs still conflict. Declare this only from
+the applicable manufacturer's external connection contract; it is not evidence
+of internal package bonding. It does not join physical pads, omit either contact,
+or alter routing/DRC. Use connection = required when each contact is mandatory.
+The value is a quoted identifier; profileless, mixed-domain, input and
+bidirectional pins cannot use it.
+
 As an exception, `optional` or `do_not_connect` pins may omit their electrical
 profile to preserve a known physical pad whose function has not yet been
 verified. An unmodeled optional pin cannot be connected to any net: ERC reports

@@ -1088,6 +1088,7 @@ def _compile_part(
                     "absolute_max",
                     "connection",
                     "required_net_traits",
+                    "parallel_power_group",
                     "when",
                 },
                 declaration.location,
@@ -1119,6 +1120,13 @@ def _compile_part(
                 )
                 else None
             )
+            parallel_power_group = declaration.attributes.get("parallel_power_group")
+            if parallel_power_group is not None and (
+                    not isinstance(parallel_power_group, str)
+                    or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", parallel_power_group) is None
+                    or profile is None or profile.domains != frozenset({SignalDomain.POWER})
+                    or profile.directions != frozenset({Direction.OUTPUT})):
+                _error("CMP200", "parallel_power_group requires a named explicit power-only output", declaration.location)
             bond_condition = _condition(declaration.attributes.get("when"), declaration.location)
             compiled_bonds: list[BondDefinition] = []
             for bond in bonds:
@@ -1137,6 +1145,7 @@ def _compile_part(
                 profile=profile,
                 bonds=tuple(compiled_bonds),
                 connection_policy=policy,
+                parallel_power_group=parallel_power_group,
                 required_net_traits=frozenset(
                     _csv_names(
                         declaration.attributes.get("required_net_traits", ""),

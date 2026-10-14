@@ -411,6 +411,7 @@ def _check_output_conflicts(context: _Context) -> list[Diagnostic]:
                 selected_outputs.add(Endpoint(selection.component, chosen.pin))
     for net in context.board.nets:
         drivers: list[str] = []
+        driver_keys = set()
         for endpoint in net.endpoints:
             resolved = context.resolve_pin(endpoint)
             if resolved is not None:
@@ -421,7 +422,13 @@ def _check_output_conflicts(context: _Context) -> list[Diagnostic]:
                     or endpoint in selected_outputs
                 ):
                     drivers.append(str(endpoint))
-        if len(drivers) > 1:
+                    group = resolved[2].parallel_power_group
+                    # This permission concerns one component's declared power
+                    # output, not different regulators or digital push-pull pins.
+                    driver_keys.add((endpoint.component, "power-group", group)
+                        if group is not None and _is_power_output(profile)
+                        else (endpoint.component, "pin", endpoint.pin))
+        if len(driver_keys) > 1:
             diagnostics.append(
                 Diagnostic(
                     Severity.ERROR,
