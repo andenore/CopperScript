@@ -580,6 +580,12 @@ def package_placement_trials(
     owners = {pad.component for pad in baseline.pending_pads}
     owners.update(pad.component for net in board.nets if net.name in baseline.failed_critical_nets
                   for pad in net.pads)
+    # Fixed package endpoints can be fenced by movable semantic bypass feeds.
+    # Use only explicit source pin associations as dependency hints; normal
+    # whole-unit legality and complete fresh owner validation still apply.
+    dependency_owners = {link.capacitor.component for link in board.decoupling_links
+                         if link.target.component in owners}
+    owners.update(dependency_owners)
     # A rejected ordering can expose movable ordinary owners even when every
     # endpoint of the original failure is fixed. Keep its copper discarded,
     # but use the measured lost identities as bounded placement-search hints.
@@ -605,8 +611,23 @@ def package_placement_trials(
         record(ref, poses[ref], poses, ("rejected ownership ordering lost access to "
             + ", ".join(f"{pad.component}.{pad.pad}" for pad in sorted(pattern_pads)
                         if pad.component == ref),), "pattern_hint")
+    from .placement import transformed_pad_position
+    failed_pins = set(baseline.pending_pads)
+    failed_pins.update(p for n in board.nets if n.name in baseline.failed_critical_nets for p in n.pads)
+    def pin_point(pad):
+        pose=poses[pad.component]
+        lands=[p for p in board.footprints[pose.footprint].pads if p.number == pad.pad]
+        return transformed_pad_position(board,pose,pad.pad) if len(lands) == 1 else None
+    failure_points=[point for pad in sorted(failed_pins) if (point:=pin_point(pad)) is not None]
+    def dependency_distance(ref):
+        if ref not in dependency_owners:
+            return 0
+        targets=[point for link in board.decoupling_links if link.capacitor.component == ref
+                 and (point:=pin_point(link.target)) is not None]
+        return min(((a.x_nm-b.x_nm)**2+(a.y_nm-b.y_nm)**2
+                    for a in targets for b in failure_points),default=float('inf'))
     ranked = sorted(owners - fixed, key=lambda ref: (
-        -sum(pad.component == ref for pad in baseline.pending_pads),
+        -sum(pad.component == ref for pad in baseline.pending_pads), dependency_distance(ref),
         -len(board.footprints[poses[ref].footprint].pads), ref))
     # Interleave owners so one package does not consume every trial.
     proposals = {}

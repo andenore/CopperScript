@@ -621,3 +621,45 @@ def test_unreachable_coarse_status_does_not_disable_exact_pattern_trials():
     assert not result.ready  # existing area certification remains authoritative
     assert result.source==board and board.tracks==board.vias==()
     assert result.fanout.escaped_pads>=disabled.fanout.escaped_pads
+
+
+def test_fixed_package_can_trial_only_its_source_associated_movable_bypass():
+    from pcbir.physical import DecouplingLink
+    board,_,settings,_=fixture()
+    cap=board.footprints['two']
+    board=replace(board,placements=(*board.placements,Placement('C','two',Point.mm(8,12))),
+        nets=(replace(board.nets[0],pads=(*board.nets[0].pads,PadReference('C','1'))),
+              board.nets[1],PhysicalNet('GND',(PadReference('C','2'),))),
+        placement_rules=(replace(board.placement_rules[0],fixed_position=Point.mm(5,7)),),
+        decoupling_links=(DecouplingLink(PadReference('C','1'),PadReference('U','1'),
+            PadReference('C','2'),'A','GND'),))
+    baseline=access.preflight_package_access(board,route_global(board),settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    baseline=replace(baseline,fanout=replace(baseline.fanout,pending_pads=(PadReference('U','1'),)))
+    trials=list(access.package_placement_trials(baseline,PlacementPlannerOptions(),500000))
+    assert trials and all(ref=='C' for ref,_ in trials)
+    assert all(trial.placements[0]==board.placements[0] for _,trial in trials)
+    assert all(trial.decoupling_links==board.decoupling_links for _,trial in trials)
+    assert all(trial.nets==board.nets for _,trial in trials)
+    assert not list(access.package_placement_trials(baseline,
+        PlacementPlannerOptions(fixed_references={'C'}),500000))
+    assert baseline.source==board
+
+
+def test_bypass_trials_prioritize_target_pins_nearest_measured_failure():
+    from pcbir.physical import DecouplingLink
+    board,_,settings,_=fixture()
+    board=replace(board,placements=(*board.placements,
+        Placement('C_A_FAR','two',Point.mm(8,12)),Placement('C_Z_NEAR','two',Point.mm(11,12))),
+        nets=(replace(board.nets[0],pads=(*board.nets[0].pads,PadReference('C_Z_NEAR','1'))),
+              replace(board.nets[1],pads=(*board.nets[1].pads,PadReference('C_A_FAR','1'))),
+              PhysicalNet('GND',(PadReference('C_A_FAR','2'),PadReference('C_Z_NEAR','2')))),
+        placement_rules=(replace(board.placement_rules[0],fixed_position=Point.mm(5,7)),),
+        decoupling_links=tuple(DecouplingLink(PadReference(c,'1'),PadReference('U',pin),
+            PadReference(c,'2'),net,'GND') for c,pin,net in (('C_A_FAR','2','B'),('C_Z_NEAR','1','A'))))
+    baseline=access.preflight_package_access(board,route_global(board),settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    baseline=replace(baseline,fanout=replace(baseline.fanout,pending_pads=(PadReference('U','1'),)))
+    trials=list(access.package_placement_trials(baseline,PlacementPlannerOptions(),500000))
+    assert trials[0][0]=='C_Z_NEAR'
+    assert all(trial.placements[0]==board.placements[0] for _,trial in trials)
