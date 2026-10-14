@@ -127,7 +127,7 @@ def test_future_ground_via_metadata_does_not_grant_semantic_authority():
     values={name:getattr(base,name) for name in base.__dataclass_fields__};values['decoupling_vias']=(via,)
     future=FutureFanout(**values)
     tracks,vias,reason=verified_bypass_reservations(source,future)
-    assert tracks==vias==() and 'not supported' in reason
+    assert tracks==vias==() and 'fresh source witness' in reason
 
 
 def test_empty_semantic_declaration_does_not_infer_an_exemption_from_copper():

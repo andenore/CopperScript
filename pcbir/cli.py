@@ -1544,6 +1544,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "decoupling_pending": [{"capacitor": f"{pad.component}.{pad.pad}", "reason": reason}
                                             for pad, reason in result.fanout.decoupling_pending],
                     "protected_decoupling_track_count": len(result.fanout.decoupling_tracks),
+                    "protected_decoupling_via_count": len(result.fanout.decoupling_vias),
                     **({"surface_escaped_pads": [f"{pad.component}.{pad.pad}"
                                                  for pad in result.fanout.surface_accesses]}
                        if result.fanout.surface_accesses else {}),

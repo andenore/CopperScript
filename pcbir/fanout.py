@@ -84,6 +84,8 @@ class FanoutResult:
     decoupling_pending: tuple[tuple[PadReference, str], ...] = ()
     # Exact generated semantic feeds, separate from unrelated same-net launches.
     decoupling_tracks: tuple[TrackSegment, ...] = ()
+    # Exact generated semantic supply/return transitions, not arbitrary GND.
+    decoupling_vias: tuple[Via, ...] = ()
 
     @property
     def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
@@ -117,8 +119,11 @@ def route_fanout(
     if len(board.stackup.copper_layers) < 2:
         return FanoutResult(board, MappingProxyType({}), (), 0, 0)
     from .decoupling import route_decouplers
-    bypass = route_decouplers(board, only_nets=only_nets)
+    bypass = route_decouplers(board, only_nets=only_nets, fanout_options=options)
     board = bypass.board
+    from .package_access import _verified_bypass_links
+    bypass_nets = {link.net for link in board.decoupling_links}
+    protected_bypasses = _verified_bypass_links(board, bypass_nets) if bypass_nets else frozenset()
     clearance = RoutingClearanceIndex(board)
     net_by_pad = {pad: net.name for net in board.nets for pad in net.pads
                   if len(net.pads) >= 2}
@@ -314,11 +319,12 @@ def route_fanout(
     before = run_physical_drc(board)
     after = run_physical_drc(routed)
     before_count = {code: sum(item.code == code for item in before.findings) for code in fatal}
-    def failed_gate(findings):
-        return any(sum(item.code == code for item in findings) > before_count[code] for code in fatal)
+    def failed_gate(findings, candidate):
+        return (any(sum(item.code == code for item in findings) > before_count[code] for code in fatal)
+                or (bool(protected_bypasses) and not protected_bypasses <= _verified_bypass_links(candidate, bypass_nets)))
     # Pairwise assignment is a proposal, not a substitute for exact whole-board
     # materialization/native acceptance. A failed improvement retains greedy.
-    if assignment is not None and (set(accesses) != set(selected) or failed_gate(after.findings)):
+    if assignment is not None and (set(accesses) != set(selected) or failed_gate(after.findings, routed)):
         selected = greedy
         assignment = replace(assignment, native_accepted=False)
         routed, tracks, vias, accesses = materialize(selected)
@@ -330,14 +336,14 @@ def route_fanout(
          else "all initial candidates blocked by selected escapes") if reference not in accesses else "",
         sum(len(path) == 2 for path, _ in domains[reference]),
         refined_counts.get(reference, 0)) for reference in ordered_refs)
-    if failed_gate(after.findings):
-        return FanoutResult(board, MappingProxyType({}),
-                            tuple(item[1] for item in pads), len(bypass.created_tracks), 0,
-                            created_tracks=bypass.created_tracks, pin_analysis=tuple(
+    if failed_gate(after.findings, routed):
+        return FanoutResult(board, MappingProxyType(dict(bypass.accesses or {})),
+                            tuple(item[1] for item in pads), len(bypass.created_tracks), len(bypass.created_vias),
+                            created_tracks=bypass.created_tracks, created_vias=bypass.created_vias, pin_analysis=tuple(
                                 replace(item, selected_candidate_index=None,
-                                        diagnostic="whole fanout proposal rejected by native DRC")
+                                        diagnostic="whole fanout proposal rejected by physical or bypass witness gate")
                                 for item in analysis), assignment=assignment,
-                            decoupling_tracks=bypass.created_tracks,
+                            decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias,
                             decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending))
     def selected_surface(reference):
         path, via = domains[reference][selected[reference]]
@@ -349,13 +355,14 @@ def route_fanout(
     escapes = {reference: RoutingAccess(path[-1].end, surface[reference], path[0].start, path)
                for reference in accesses if selected_surface(reference)
                for path in (domains[reference][selected[reference]][0],)}
-    return FanoutResult(routed, MappingProxyType({reference: anchor for reference, anchor in accesses.items()
-                                                  if reference not in escapes}), tuple(pending),
-                        len(tracks) + len(bypass.created_tracks), len(vias), tuple(vias), tuple(analysis),
+    return FanoutResult(routed, MappingProxyType({**(bypass.accesses or {}),
+                        **{reference: anchor for reference, anchor in accesses.items() if reference not in escapes}}), tuple(pending),
+                        len(tracks) + len(bypass.created_tracks), len(vias) + len(bypass.created_vias),
+                        (*bypass.created_vias, *vias), tuple(analysis),
                         (*bypass.created_tracks, *tracks), assignment,
                         surface_accesses=MappingProxyType(escapes) if surface else None,
                         decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending),
-                        decoupling_tracks=bypass.created_tracks)
+                        decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias)
 
 
 def _surface_layer(board, net, rule, placement) -> CopperLayer | None:

@@ -60,7 +60,8 @@ def _ordinary_prefix(source: PhysicalBoard, reserved: FanoutResult | None):
             or replace(reserved.board, tracks=source.tracks, vias=source.vias) != source
             or reserved.added_track_count != len(reserved.created_tracks)
             or reserved.added_via_count != len(reserved.created_vias)
-            or Counter(reserved.decoupling_tracks) - Counter(reserved.created_tracks)):
+            or Counter(reserved.decoupling_tracks) - Counter(reserved.created_tracks)
+            or Counter(reserved.decoupling_vias) - Counter(reserved.created_vias)):
         return (), (), "stale ordinary ownership"
     # Match the critical router's fresh read-only semantic owner boundary.
     from .bypass_reservations import verified_bypass_reservations

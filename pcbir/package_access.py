@@ -577,21 +577,37 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
     if reason:
         return None, ordered, 0, 0, reason
     displaced = frozenset(ordered)
-    feed_counts = Counter(original.decoupling_tracks)
-    held_tracks = []
-    for track in original.created_tracks:
-        if feed_counts[track]:
-            if not regenerate_bypass or track.net not in displaced:
-                held_tracks.append(track)
-            feed_counts[track] -= 1
-        elif track.net not in displaced:
-            held_tracks.append(track)
-    tracks = tuple(held_tracks)
-    vias = tuple(v for v in original.created_vias if v.net not in displaced)
+    all_bypass_nets = {link.net for link in owner.decoupling_links}
+    paths, via_paths = {}, {}
+    required_bypass = (_verified_bypass_links(original.board, all_bypass_nets,
+        witness_paths=paths, witness_vias=via_paths) if regenerate_bypass else frozenset())
+    selected = {link for link in required_bypass if link.net in displaced}
+    # Shared return geometry stays held if any unselected association needs it.
+    # Only original generated occurrences can be released; source copper is
+    # outside this ledger, even when it participates in the same witness.
+    released_tracks = {t for link in selected for t in paths.get(link, ())}
+    released_vias = {v for link in selected for v in via_paths.get(link, ())}
+    released_tracks.difference_update(t for link in required_bypass-selected for t in paths.get(link, ()))
+    released_vias.difference_update(v for link in required_bypass-selected for v in via_paths.get(link, ()))
+    def held_occurrences(created, semantic, released):
+        counts = Counter(semantic)
+        retained, semantic_retained = [], []
+        for edge in created:
+            owned = bool(counts[edge])
+            if owned:
+                counts[edge] -= 1
+            if (owned and edge not in released) or (not owned and edge.net not in displaced):
+                retained.append(edge)
+                if owned:
+                    semantic_retained.append(edge)
+        return tuple(retained), tuple(semantic_retained)
+    tracks, retained_feed_tracks = held_occurrences(original.created_tracks,
+        original.decoupling_tracks, released_tracks)
+    vias, retained_feed_vias = held_occurrences(original.created_vias,
+        original.decoupling_vias, released_vias)
     held = replace(obstacles, tracks=(*obstacles.tracks, *tracks), vias=(*obstacles.vias, *vias))
-    required_bypass = _verified_bypass_links(original.board, displaced) if regenerate_bypass else frozenset()
     rebuilt = route_fanout(held, settings, only_nets=frozenset(displaced))
-    missing_bypass = required_bypass - _verified_bypass_links(rebuilt.board, displaced)
+    missing_bypass = required_bypass - _verified_bypass_links(rebuilt.board, all_bypass_nets)
     if missing_bypass:
         if failed_bypass_capacitors is not None:
             failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing_bypass})[:32])
@@ -614,8 +630,11 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
         pin_analysis=tuple(a for a in original.pin_analysis if names[a.pad] not in displaced) + rebuilt.pin_analysis,
         decoupling_pending=tuple(p for p in original.decoupling_pending if names[p[0]] not in displaced)
                            + rebuilt.decoupling_pending,
-        decoupling_tracks=(*(t for t in original.decoupling_tracks
-                             if not regenerate_bypass or t.net not in displaced), *rebuilt.decoupling_tracks))
+        decoupling_tracks=(*retained_feed_tracks, *rebuilt.decoupling_tracks),
+        decoupling_vias=(*retained_feed_vias, *rebuilt.decoupling_vias))
+    from .bypass_reservations import verified_bypass_reservations
+    if verified_bypass_reservations(owner, proposed)[2] is not None:
+        return None, ordered, len(tracks), len(vias), "lost_bypass_connection"
     return proposed, ordered, len(tracks), len(vias), "proposed"
 
 
@@ -626,7 +645,8 @@ def _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenera
             or original.board.vias != (*owner.vias, *original.created_vias)
             or replace(original.board, tracks=owner.tracks, vias=owner.vias) != owner):
         raise ValueError("partial ordinary ownership is stale")
-    if Counter(original.decoupling_tracks) - Counter(original.created_tracks):
+    if (Counter(original.decoupling_tracks) - Counter(original.created_tracks)
+            or Counter(original.decoupling_vias) - Counter(original.created_vias)):
         raise ValueError("partial ordinary semantic feed ownership is stale")
     names = {pad: net.name for net in owner.nets for pad in net.pads}
     rules = {rule.net: rule for rule in owner.net_routing_rules}
@@ -637,26 +657,37 @@ def _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenera
         via.net, via.position, via.size_nm, via.from_layer, via.to_layer, via.drill_nm))
     displaced.update(names[pad] for pad in original.pending_pads)
     ordered = tuple(sorted(displaced))
-    conflicting_feeds = {t.net for t in original.decoupling_tracks
-                         if not index.can_track(t.net, t.start, t.end, t.width_nm, t.layer)}
+    conflicting_tracks = {t for t in original.decoupling_tracks
+                          if not index.can_track(t.net, t.start, t.end, t.width_nm, t.layer)}
+    conflicting_vias = {v for v in original.decoupling_vias if not index.can_via(
+        v.net, v.position, v.size_nm, v.from_layer, v.to_layer, v.drill_nm)}
     if any(net in rules and rules[net].kind is not RouteKind.GENERAL for net in displaced):
         return ordered, "protected_ordinary_owner"
-    if conflicting_feeds:
+    if conflicting_tracks or conflicting_vias:
         if not regenerate_bypass:
             return ordered, "protected_ordinary_owner"
-        # Source/macro copper is outside created_tracks. Only independently
-        # verified source-associated generated feeds are eligible; ambiguous
-        # or unverified associations never grant permission to remove copper.
-        verified = _verified_bypass_links(original.board, conflicting_feeds)
-        if not conflicting_feeds <= {link.net for link in verified}:
+        paths, via_paths = {}, {}
+        verified = _verified_bypass_links(original.board,
+            {link.net for link in owner.decoupling_links}, witness_paths=paths, witness_vias=via_paths)
+        # A return-net conflict cannot release an unselected supply cohort.
+        # Exact witnesses, never a GND label or via membership alone, define
+        # which generated contributions are eligible within the owner budget.
+        if (not conflicting_tracks <= {t for link in verified for t in paths.get(link, ())}
+                or not conflicting_vias <= {v for link in verified for v in via_paths.get(link, ())}
+                or any(link.net not in displaced for link in verified
+                       if conflicting_tracks.intersection(paths.get(link, ()))
+                       or conflicting_vias.intersection(via_paths.get(link, ())))):
             return ordered, "protected_ordinary_owner"
     if len(displaced) > maximum_nets:
         return ordered, "partial_owner_budget_exhausted"
     return ordered, ""
 
 
-def _verified_bypass_links(board, only_nets, *, witness_paths=None):
-    """Read-only exact same-surface witnesses for explicit source associations.
+def _verified_bypass_links(board, only_nets, *, witness_paths=None, witness_vias=None):
+    """Fresh physical witnesses for explicit source bypass associations.
+
+    Legacy same-surface paths verify the feed only. Opposite-surface paths
+    require both supply and declared component-return joins through normal vias.
 
     Optional witness_paths receives original input track identities, never
     reconstructed or synthesized ownership. No routing, via shortcut or connected
@@ -671,6 +702,8 @@ def _verified_bypass_links(board, only_nets, *, witness_paths=None):
     from .hard_macros import macro_owned_pads
     if witness_paths is not None:
         witness_paths.clear()
+    if witness_vias is not None:
+        witness_vias.clear()
     poses = {p.reference:p for p in board.placements}
     rules = {r.net:r for r in board.net_routing_rules}
     index, owned, verified = RoutingClearanceIndex(board), macro_owned_pads(board), set()
@@ -683,7 +716,18 @@ def _verified_bypass_links(board, only_nets, *, witness_paths=None):
         target,cap=poses[link.target.component],poses[link.capacitor.component]
         lands=[p for ref,pose in ((link.target,target),(link.capacitor,cap))
                for p in board.footprints[pose.footprint].pads if p.number==ref.pad]
-        if cap.side is not target.side or len(lands)!=2 or any(p.kind is not PadKind.SMD for p in lands):
+        if len(lands)!=2 or any(p.kind is not PadKind.SMD for p in lands):
+            continue
+        if cap.side is not target.side:
+            from .decoupling_paths import verify_crosslayer_decoupling
+            measured = verify_crosslayer_decoupling(board, link, index=index)
+            if measured.witness is not None:
+                verified.add(link)
+                paths = (measured.witness.supply_path, measured.witness.return_path)
+                if witness_paths is not None:
+                    witness_paths[link] = tuple(dict.fromkeys(t for path in paths for t in path.tracks))
+                if witness_vias is not None:
+                    witness_vias[link] = tuple(dict.fromkeys(v for path in paths for v in path.vias))
             continue
         layer=CopperLayer.FRONT if target.side is BoardSide.FRONT else CopperLayer.BACK
         if layer not in routing_layers(board,link.net,rule):

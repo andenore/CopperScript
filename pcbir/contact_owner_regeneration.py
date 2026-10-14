@@ -8,6 +8,7 @@ from collections import Counter
 from dataclasses import replace
 from types import MappingProxyType
 
+from .bypass_reservations import verified_bypass_reservations
 from .drc import DrcSeverity, run_physical_drc
 from .fanout import FanoutOptions, FanoutResult, route_fanout
 from .hard_macros import validate_hard_macros
@@ -77,6 +78,8 @@ def regenerate_contact_owners(
             or replace(baseline.board, tracks=board.tracks, vias=board.vias) != board
             or Counter(baseline.decoupling_tracks) - Counter(baseline.created_tracks)):
         return None
+    if verified_bypass_reservations(board, baseline)[2] is not None:
+        return None
     try:
         validate_hard_macros(board)
         require_via_in_pad_arrays(board, "contact-owner proposal")
@@ -111,9 +114,17 @@ def regenerate_contact_owners(
     from .package_access import _verified_bypass_links
     names = {pad: net.name for net in board.nets for pad in net.pads}
     all_names = frozenset(net.name for net in board.nets)
-    required_bypass = _verified_bypass_links(baseline.board, all_names)
-    selected_feeds = {track.net for track in baseline.decoupling_tracks if track.net in selected}
-    if not selected_feeds <= {link.net for link in required_bypass}:
+    baseline_paths, baseline_via_paths = {}, {}
+    required_bypass = _verified_bypass_links(baseline.board, all_names,
+        witness_paths=baseline_paths, witness_vias=baseline_via_paths)
+    generated_tracks = frozenset(baseline.created_tracks)
+    generated_vias = frozenset(baseline.created_vias)
+    # A return owner shared with an unselected supply cohort cannot be released
+    # independently. Never enlarge the measured owner set to make it mutable.
+    if any(link.net not in selected and (
+            any(t in generated_tracks and t.net in selected for t in baseline_paths.get(link, ()))
+            or any(v in generated_vias and v.net in selected for v in baseline_via_paths.get(link, ())))
+           for link in required_bypass):
         return None
     kept_tracks = tuple(track for track in baseline.created_tracks if track.net not in selected)
     kept_vias = tuple(via for via in baseline.created_vias if via.net not in selected)
@@ -129,10 +140,36 @@ def regenerate_contact_owners(
     if (rebuilt.board.tracks != (*held.tracks, *rebuilt.created_tracks)
             or rebuilt.board.vias != (*held.vias, *rebuilt.created_vias)
             or replace(rebuilt.board, tracks=held.tracks, vias=held.vias) != held
-            or any(item.net not in selected for item in (*rebuilt.created_tracks, *rebuilt.created_vias))
             or Counter(rebuilt.decoupling_tracks) - Counter(rebuilt.created_tracks)):
         return None
-    if (not required_bypass <= _verified_bypass_links(rebuilt.board, all_names)
+    if verified_bypass_reservations(held, rebuilt)[2] is not None:
+        return None
+    rebuilt_paths, rebuilt_via_paths = {}, {}
+    current_bypass = _verified_bypass_links(rebuilt.board, all_names,
+        witness_paths=rebuilt_paths, witness_vias=rebuilt_via_paths)
+    declared_tracks = frozenset(rebuilt.decoupling_tracks)
+    declared_vias = frozenset(getattr(rebuilt, "decoupling_vias", ()))
+    returned_tracks = {t for link in current_bypass if link.net in selected
+                       for t in rebuilt_paths.get(link, ()) if t.net == link.return_net}
+    returned_vias = {v for link in current_bypass if link.net in selected
+                     for v in rebuilt_via_paths.get(link, ()) if v.net == link.return_net}
+    # Reconstructed generated edges of a selected association must retain their
+    # explicit semantic ownership, including its return vias. A complete path
+    # alone cannot silently turn a declared bypass edge into ordinary copper.
+    rebuilt_generated_tracks = frozenset(rebuilt.created_tracks)
+    rebuilt_generated_vias = frozenset(rebuilt.created_vias)
+    if any(link.net in selected and (
+            any(t in rebuilt_generated_tracks and t not in declared_tracks
+                for t in rebuilt_paths.get(link, ()))
+            or any(v in rebuilt_generated_vias and v not in declared_vias
+                   for v in rebuilt_via_paths.get(link, ())))
+           for link in current_bypass):
+        return None
+    if (any(t.net not in selected and (t not in declared_tracks or t not in returned_tracks)
+            for t in rebuilt.created_tracks)
+            or any(v.net not in selected and (v not in declared_vias or v not in returned_vias)
+                   for v in rebuilt.created_vias)
+            or not required_bypass <= current_bypass
             or _hard_findings(rebuilt.board) - before_hard):
         return None
     combined_tracks = (*kept_tracks, *rebuilt.created_tracks)
@@ -153,8 +190,11 @@ def regenerate_contact_owners(
         decoupling_pending=tuple(item for item in baseline.decoupling_pending if names.get(item[0]) not in selected)
                            + rebuilt.decoupling_pending,
         decoupling_tracks=tuple(track for track in baseline.decoupling_tracks if track.net not in selected)
-                          + rebuilt.decoupling_tracks)
-    if (not baseline.escaped_pads <= proposed.escaped_pads
+                          + rebuilt.decoupling_tracks,
+        decoupling_vias=tuple(via for via in getattr(baseline, "decoupling_vias", ()) if via.net not in selected)
+                        + getattr(rebuilt, "decoupling_vias", ()))
+    if (verified_bypass_reservations(board, proposed)[2] is not None
+            or not baseline.escaped_pads <= proposed.escaped_pads
             or not {item.pad for item in baseline.pin_analysis} <= {item.pad for item in proposed.pin_analysis}
             or not set(proposed.pending_pads) <= set(baseline.pending_pads)
             or not _valid_exits(rebuilt.board, proposed)
@@ -167,6 +207,13 @@ def regenerate_contact_owners(
     if (proposed.board.tracks[:len(board.tracks)] != board.tracks
             or proposed.board.vias[:len(board.vias)] != board.vias
             or Counter(kept_tracks) - Counter(proposed.created_tracks)
-            or Counter(kept_vias) - Counter(proposed.created_vias)):
+            or Counter(kept_vias) - Counter(proposed.created_vias)
+            or Counter(t for t in baseline.decoupling_tracks if t.net not in selected)
+               - Counter(proposed.decoupling_tracks)
+            or Counter(v for v in getattr(baseline, "decoupling_vias", ()) if v.net not in selected)
+               - Counter(getattr(proposed, "decoupling_vias", ()))
+            or any(proposed.accesses.get(pad) != value for pad, value in keep(baseline.accesses).items())
+            or any((proposed.surface_accesses or {}).get(pad) != value
+                   for pad, value in keep(baseline.surface_accesses).items())):
         return None
     return proposed
