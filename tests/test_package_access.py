@@ -44,7 +44,7 @@ def test_ordinary_exits_precede_critical_routes_and_survive_exact_acceptance(mon
         assert not source.tracks and not source.vias
         calls.append("exits")
         return real_fanout(source, settings)
-    def critical(source, route, *, reserved_accesses, on_progress=None):
+    def critical(source, route, *, reserved_accesses, on_progress=None, retained_critical=None, retained_accesses=None):
         assert calls == ["exits"]
         assert reserved_accesses.accesses and not reserved_accesses.pending_pads
         calls.append("critical")
@@ -353,7 +353,7 @@ def test_pattern_proposal_is_revalidated_and_rolls_back_atomically(monkeypatch, 
 def test_ready_preflight_does_not_pay_for_pattern_probes(monkeypatch):
     board, guides, settings, _ = fixture(critical=True)
     real = access.route_critical_nets
-    def critical(source, route, *, reserved_accesses, on_progress=None):
+    def critical(source, route, *, reserved_accesses, on_progress=None, retained_critical=None, retained_accesses=None):
         return real(source, route, reserved_accesses=reserved_accesses, on_progress=on_progress)
     monkeypatch.setattr(access, "route_critical_nets", critical)
     result = access.preflight_package_access(board, guides, settings)
@@ -448,7 +448,7 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
     def escape(source, options):
         proposals.append(source)
         return original if len(proposals) == 1 else alternative
-    def critical(source, route, *, reserved_accesses=None, pair_state_limit=None, on_progress=None):
+    def critical(source, route, *, reserved_accesses=None, pair_state_limit=None, on_progress=None, retained_critical=None, retained_accesses=None):
         searches.append((pair_state_limit, reserved_accesses))
         connected = (case == "easy" or case == "alternate" and reserved_accesses is not original
                      or case == "full_only" and pair_state_limit is None)
@@ -520,7 +520,7 @@ def test_pending_ordinary_exit_can_negotiate_even_when_critical_owner_already_pa
     real_critical = access.route_critical_nets
     calls = []
     critical_calls = []
-    def critical(source, route, *, reserved_accesses, on_progress=None):
+    def critical(source, route, *, reserved_accesses, on_progress=None, retained_critical=None, retained_accesses=None):
         # An already-successful specialized route seeds the proposal; only
         # baseline routing and final full revalidation need a critical search.
         critical_calls.append(reserved_accesses)

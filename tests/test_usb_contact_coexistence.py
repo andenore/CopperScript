@@ -154,6 +154,7 @@ def run_resolved_fixture(path, output, kicad_cli):
     from pcbir.detailed import route_detailed, DetailedRouterOptions
     from pcbir.drc import explicit_copper_connectivity, physical_board_digest, run_physical_drc, PhysicalDrcPolicy
     from pcbir.fanout import route_fanout, FanoutOptions
+    from pcbir.contact_owner_regeneration import regenerate_contact_owners
     from pcbir.plane_verify import verify_filled_planes, native_object_map
     path, output = Path(path), Path(output)
     output.mkdir(parents=True, exist_ok=False)
@@ -168,7 +169,7 @@ def run_resolved_fixture(path, output, kicad_cli):
     summary = {"fixture_sha256": sha256(path.read_bytes()).hexdigest(), "provenance": data["provenance"],
                "source_digest": physical_board_digest(board), "fabrication_ready": False,
                "compiler_modules": {name: sha256(Path(__import__(name, fromlist=["x"]).__file__).read_bytes()).hexdigest()
-                                    for name in ("pcbir.pair_terminals", "pcbir.critical", "pcbir.fanout", "pcbir.boundary_access", "pcbir.detailed")}}
+                                    for name in ("pcbir.pair_terminals", "pcbir.critical", "pcbir.fanout", "pcbir.boundary_access", "pcbir.detailed", "pcbir.contact_owner_regeneration")}}
     def save(stage):
         summary.update(stage=stage, elapsed_seconds=perf_counter()-started)
         (output/"result.json").write_text(json.dumps(summary, indent=2, default=str))
@@ -183,15 +184,19 @@ def run_resolved_fixture(path, output, kicad_cli):
     if not a and not b:
         save("clean_contact_failure")
         return False
-    probe = replace(board, tracks=(*board.tracks, *a, *b),
-                    vias=(*board.vias, *[v for pair in pairs for v in pair], *returns))
-    fanout = route_fanout(probe, settings, only_nets=ordinary_names)
+    fanout = regenerate_contact_owners(board, initial, (first.net, second.net),
+        (*a, *b), (*[v for pair in pairs for v in pair], *returns), settings,
+        maximum_owner_nets=data.get("maximum_owner_nets", 8))
+    if fanout is None:
+        save("contact_owner_regeneration_failure")
+        return False
+    summary["owner_regeneration"] = "exact_generated_identity_transaction"
     summary["escaped_pads_preserved"] = initial.escaped_pads <= fanout.escaped_pads
     if fanout.pending_pads or not summary["escaped_pads_preserved"]:
         save("ordinary_identity_failure")
         return False
-    rebased = replace(board, tracks=(*board.tracks, *fanout.created_tracks),
-                      vias=(*board.vias, *fanout.created_vias))
+    rebased = fanout.board
+    save("contact_owners_regenerated")
     summary["reassigned_digest"] = physical_board_digest(rebased)
     guides = route_global(board, GlobalRouterOptions(**data["global_options"]))
     summary["global_status"] = guides.status.value

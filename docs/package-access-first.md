@@ -100,11 +100,32 @@ owner orderings **before** moving components. Incomplete ordinary allocation
 can also use the already-successful critical/selected plane owners to seed a
 different ordinary pattern:
 
+A measured failure in paired local contact preparation can spend the first
+existing pattern slot on `contact_first`. Its disposable local pair branches
+identify intersecting generated ordinary owners by exact geometry identities.
+Only those net-owned fanout contributions are rebuilt around the branches;
+source copper, macros, required arrays and unrelated generated occurrences
+remain intact. Every former exit and verified source-associated bypass feed
+needs a fresh witness. The local branches are discarded before the complete
+critical/contact/boundary revalidation. A rejection leaves the incumbent
+unchanged, and at most one standard pattern trial remains. There is no third
+trial or board-specific selector. Search tiers separately report local contact
+search/state counts; these include rejected proposals and are not global
+connectivity evidence.
+
 1. Probe the specialized critical owners against the clean, macro-materialized
    placement without ordinary stubs. Keep their original layer, coupling,
    length, via and return-path profiles.
    When they already passed, strip only the verified ordinary reservation prefix
    and reuse their exact copper as the proposal seed, with a fresh native check.
+   A failed sibling does not require regenerating a successful single-ended
+   critical route. `retained_critical` and its original `retained_accesses`
+   prefix propose only unambiguous generated single-net contributions. Source,
+   guide and copper fingerprints, counts and ownership must agree; current
+   widths, layers, length/via budgets and exact connectivity/geometry are
+   checked again at the normal job turn. Accepted copper remains generated
+   critical ownership, never source or macro copper. Stale, paired/shared-return
+   or obstructed candidates fall back to the ordinary specialized search.
    This avoids a redundant pair search; changed proposals still receive full
    all-owner critical/plane revalidation before acceptance.
 2. When selected plane contacts or ordinary allocation failed, propose ordinary escapes against both
@@ -230,3 +251,12 @@ Compatibility accounting separates conservative disjoint-bound acceptances from
 exact overlapping-pair queries. Cached/broad-phase requests still count toward
 a separate total-work bound; exhausting either allowance rolls back atomically.
 No broad-phase speedup weakens copper, drill, layer or owner predicates.
+
+### Authored zone priority diagnostics
+
+Physical DRC reports `DRC-ZONE-PRIORITY` when equal-priority authored pours
+intersect or touch on a common layer, including a shared edge between same-net
+rectangles. The check preserves explicit boundaries and priorities and accounts
+for holes. It does not merge regions, infer priority, waive native findings, or
+establish filled continuity. Correct source composition and rerun native fill
+before using the changed geometry as new evidence.

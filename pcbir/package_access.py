@@ -79,6 +79,8 @@ class PackageSearchTier:
     expanded_states: int
     ready: bool
     selected: bool = False
+    local_contact_searches: int = 0
+    local_contact_expanded_states: int = 0
 
 
 @dataclass(slots=True)
@@ -87,11 +89,20 @@ class _SearchWork:
     critical_passes: int = 0
     pair_searches: int = 0
     expanded_states: int = 0
+    local_contact_searches: int = 0
+    local_contact_expanded_states: int = 0
+
+    def observe_local(self, preparation) -> None:
+        if preparation is not None:
+            self.local_contact_searches += preparation.searches
+            self.local_contact_expanded_states += preparation.expanded_states
 
     def observe(self, result: CriticalRoutingResult) -> None:
         self.critical_passes += 1
         self.pair_searches += sum(net.pair_searches for net in result.nets)
         self.expanded_states += sum(net.search_states for net in result.nets)
+        for net in result.nets:
+            self.observe_local(net.local_preparation)
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,12 +223,16 @@ def preflight_package_access(
             options, plane_options, on_progress, pair_state_limit=limit, search_work=work,
             search_tier=name)
         tier = PackageSearchTier(name, limit, work.critical_passes,
-                                 work.pair_searches, work.expanded_states, candidate.ready)
+                                 work.pair_searches, work.expanded_states, candidate.ready,
+                                 local_contact_searches=work.local_contact_searches,
+                                 local_contact_expanded_states=work.local_contact_expanded_states)
         tiers.append(tier)
         patterns.extend(candidate.pattern_trials)
         emit(on_progress, "package_search_tier", "finished", **{
             "name": name, "pair_state_limit": limit, "critical_passes": tier.critical_passes,
             "pair_searches": tier.pair_searches, "expanded_states": tier.expanded_states,
+            "local_contact_searches": tier.local_contact_searches,
+            "local_contact_expanded_states": tier.local_contact_expanded_states,
             "ready": candidate.ready})
         return candidate
 
@@ -305,6 +320,7 @@ def _negotiate_patterns(
     *, pair_state_limit: int | None = None,
     search_work: _SearchWork | None = None,
     search_tier: str = "full",
+    allow_contact_trial: bool = True,
 ) -> PackageAccessResult:
     """Use alternate owners as obstacles only while proposing ordinary exits.
 
@@ -318,6 +334,21 @@ def _negotiate_patterns(
     if (not options.maximum_pattern_trials or baseline.hard_findings
             or not (baseline.failed_critical_nets or plane_pending or ordinary_pending and other_owners)):
         return baseline
+    if allow_contact_trial and options.maximum_partial_owner_nets:
+        contact = _contact_pattern_trial(baseline, owner_board, fanout_options, options,
+                                         plane_options, on_progress, pair_state_limit,
+                                         search_work, search_tier)
+        if contact is not None:
+            remaining = options.maximum_pattern_trials - 1
+            if contact.ready or not remaining:
+                return contact
+            followup = _negotiate_patterns(replace(contact, pattern_trials=()), owner_board, fanout_options,
+                replace(options, maximum_pattern_trials=remaining), plane_options, on_progress,
+                pair_state_limit=pair_state_limit, search_work=search_work, search_tier=search_tier,
+                allow_contact_trial=False)
+            records = (*contact.pattern_trials, *followup.pattern_trials)
+            return replace(followup, pattern_trials=tuple(
+                replace(record, index=index) for index, record in enumerate(records, 1)))
     # An unreachable coarse planner must not disable exact source-terminal
     # ownership probes. These are disposable proposals, and the existing full
     # owner/pad/DRC revalidation and area-readiness gates still decide adoption.
@@ -345,7 +376,8 @@ def _negotiate_patterns(
                                                      list(tracks), list(vias), list(baseline.critical.nets)))
     else:
         probe = _critical_search(baseline.source, baseline.global_route, None,
-                                 on_progress, pair_state_limit, search_work)
+                                 on_progress, pair_state_limit, search_work,
+                                 retained_critical=baseline.critical, retained_accesses=baseline.fanout)
     emit(on_progress, "package_probe_drc", "started")
     probe_failed, probe_hard = _failures(baseline.source, probe)
     emit(on_progress, "package_probe_drc", "finished", hard_findings=probe_hard,
@@ -449,7 +481,8 @@ def _negotiate_patterns(
             seen.add(signature)
             verified = _critical_search(baseline.source, baseline.global_route, proposed,
                                         on_progress, pair_state_limit, search_work,
-                                        plane_options=plane_options if strategy == "plane_first" else None)
+                                        plane_options=plane_options if strategy == "plane_first" else None,
+                                        retained_critical=baseline.critical, retained_accesses=baseline.fanout)
             candidate = _access_result(baseline.source, baseline.global_route, proposed, verified, plane_options,
                                        options.boundary_options, on_progress)
             outcome = _improvement_outcome(accepted, candidate)
@@ -474,6 +507,57 @@ def _negotiate_patterns(
               and strategies[index + 1] != "plane_first" and options.maximum_partial_owner_nets):
             strategies[index + 1] = "partial_ordinary"
     return replace(accepted, pattern_trials=tuple(records))
+
+
+def _contact_pattern_trial(baseline, owner_board, fanout_options, options, plane_options,
+                           on_progress, pair_state_limit, search_work, search_tier):
+    """Spend one existing pattern slot on measured local contact competition.
+
+    The clean local branch is disposable. Only exact generated ordinary owners
+    can be reallocated; full current critical, planes and boundary gates still
+    decide adoption. No whole-board clean critical probe is purchased here.
+    """
+    selected = next((item for item in baseline.critical.nets
+        if not item.connected and len(item.nets) == 2 and item.local_preparation is not None
+        and item.local_preparation.status == "blocked"
+        and item.local_preparation.paired_topology_supported), None)
+    if selected is None:
+        return None
+    from .pair_terminals import PairTerminalPreparationStats, prepare_pair_terminals
+    from .contact_owner_regeneration import regenerate_contact_owners
+    rules = {rule.net: rule for rule in owner_board.net_routing_rules}
+    if any(name not in rules for name in selected.nets):
+        return None
+    first, second = (rules[name] for name in selected.nets)
+    if first.kind is not RouteKind.DIFFERENTIAL or second.kind is not RouteKind.DIFFERENTIAL:
+        return None
+    emit(on_progress, "package_pattern_trial", "started", index=1, strategy="contact_first",
+         search_tier=search_tier, nets=list(selected.nets))
+    report = PairTerminalPreparationStats()
+    _, a, b, pairs, returns = prepare_pair_terminals(owner_board, first, second, {}, report=report)
+    if search_work is not None:
+        search_work.observe_local(report)
+    proposed = None
+    if a and b:
+        proposed = regenerate_contact_owners(owner_board, baseline.fanout, selected.nets,
+            (*a, *b), (*[via for pair in pairs for via in pair], *returns), fanout_options,
+            maximum_owner_nets=options.maximum_partial_owner_nets)
+    candidate = None
+    outcome = "contact_probe_blocked" if not a or not b else "contact_owner_proposal_rejected"
+    if proposed is not None:
+        verified = _critical_search(baseline.source, baseline.global_route, proposed,
+            on_progress, pair_state_limit, search_work,
+            retained_critical=baseline.critical, retained_accesses=baseline.fanout)
+        candidate = _access_result(baseline.source, baseline.global_route, proposed, verified,
+            plane_options, options.boundary_options, on_progress)
+        outcome = _improvement_outcome(baseline, candidate)
+    accepted = candidate if outcome == "accepted" else baseline
+    record = PackagePatternTrial(1, "contact_first", tuple(sorted(accepted.pending_pads)),
+        tuple(sorted(accepted.failed_critical_nets)), outcome, candidate is not None, search_tier)
+    emit(on_progress, "package_pattern_trial", "finished", index=1, strategy="contact_first",
+         outcome=outcome, search_tier=search_tier,
+         local_contact_searches=report.searches, local_contact_expanded_states=report.expanded_states)
+    return replace(accepted, pattern_trials=(record,))
 
 
 def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets,
@@ -612,7 +696,9 @@ def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
                      fanout: FanoutResult | None, on_progress: ProgressCallback | None,
                      pair_state_limit: int | None,
                      search_work: _SearchWork | None, *,
-                     plane_options: PlaneStitchOptions | None = None) -> CriticalRoutingResult:
+                     plane_options: PlaneStitchOptions | None = None,
+                     retained_critical: CriticalRoutingResult | None = None,
+                     retained_accesses: FanoutResult | None = None) -> CriticalRoutingResult:
     emit(on_progress, "package_critical_search", "started", reserved_accesses=fanout is not None,
          pair_state_limit=pair_state_limit, plane_contacts_first=plane_options is not None)
     kwargs = {"on_progress": critical_progress(on_progress)}
@@ -622,6 +708,9 @@ def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
         kwargs["pair_state_limit"] = pair_state_limit
     if plane_options is not None:
         kwargs["plane_stitch_options"] = plane_options
+    if retained_critical is not None:
+        kwargs["retained_critical"] = retained_critical
+        kwargs["retained_accesses"] = retained_accesses
     result = route_critical_nets(board, guides, **kwargs)
     if search_work is not None:
         search_work.observe(result)

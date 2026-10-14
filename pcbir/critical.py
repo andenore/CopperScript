@@ -54,6 +54,7 @@ from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle
 from .critical_tuning import (MatchTuningMember, MatchTuningResult, MatchTuningUnit, TuningGroupOutcome, UnitTuner,
                               UnitTuning, bump_chamfers, bump_gain, bump_path, match_tuning_document)
 from .critical_group_tuning import GroupTuner
+from .pair_terminals import PairTerminalPreparation
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -61,8 +62,6 @@ class CriticalRoutingStatus(str, Enum):
     WARNING = "warning"
     FAILED = "failed"
 
-
-from .pair_terminals import PairTerminalPreparation
 
 @dataclass(frozen=True, slots=True)
 class CriticalNetResult:
@@ -319,6 +318,8 @@ def route_critical_nets(
     global_route: GlobalRoutingResult,
     *, on_progress: Callable[[str, tuple[str, ...], CriticalNetResult | None], None] | None = None,
     reserved_accesses: FanoutResult | None = None,
+    retained_critical: CriticalRoutingResult | None = None,
+    retained_accesses: FanoutResult | None = None,
     plane_stitch_options: PlaneStitchOptions | None = None,
     pair_state_limit: int | None = None,
     bundle_repair_limit: int = BUNDLE_REPAIR_LIMIT,
@@ -332,6 +333,11 @@ def route_critical_nets(
     Optional early plane contacts are freshly generated from source intent and
     validated ordinary reservations, never accepted as arbitrary input copper.
     They form a separate locked prefix, not ordinary fanout or filled evidence.
+
+    ``retained_critical`` proposes generated single-net contributions from a
+    prior result on the identical source. ``retained_accesses`` is that donor
+    result's original ordinary prefix, rather than the current reservations.
+    Stale, ambiguous or currently obstructed candidates fall back to routing.
 
     Groups are routed by priority, kind and name, except that the pairs of a
     bundle (same two components, kind and priority) are routed outermost
@@ -363,6 +369,8 @@ def route_critical_nets(
     as one bundle (``_tune_group``, plan R14), then topped up one by one.
     """
 
+    if retained_accesses is not None and retained_critical is None:
+        raise ValueError("retained ordinary prefix requires a critical donor")
     if pair_state_limit is not None and pair_state_limit <= 0:
         raise ValueError("critical pair aggregate state bound must be positive")
     if bundle_repair_limit < 0:
@@ -430,6 +438,14 @@ def route_critical_nets(
         plane_reservations = stitch_zone_pads(
             replace(board, tracks=tuple(tracks), vias=tuple(vias)), plane_stitch_options)
         tracks, vias = list(plane_reservations.board.tracks), list(plane_reservations.board.vias)
+    # A successful generated single may coexist with failed sibling groups.
+    # Donor ownership is checked against its original prefix; each candidate is
+    # freshly validated again at its job turn against the current reservations.
+    from .critical_reuse import prepare_single_critical_reuse, validate_single_critical_reuse
+    retained = (prepare_single_critical_reuse(board, global_route, retained_critical,
+                    reserved_accesses=retained_accesses).candidates
+                if retained_critical is not None else ())
+    retained_by_net = {candidate.net: candidate for candidate in retained}
     results: list[CriticalNetResult] = []
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
@@ -562,43 +578,50 @@ def route_critical_nets(
             coupled_pairs.add(frozenset((rule.net, partner_name)))
             net_tracks, net_vias = pair_tracks, pair_vias
         else:
-            result, net_tracks, net_vias = _route_single(
-                board, rule, routes.get(rule.net)
-            )
-            result, net_tracks, net_vias = _reject_reserved_plane_tracks(
-                board, result, net_tracks, net_vias, rules,
-            )
-            result, net_tracks, net_vias = _validate_candidate(
-                board, result, net_tracks, net_vias, tracks, vias,
-            )
-            result, net_tracks, net_vias = _improve_single_surface(
-                board, rule, routes.get(rule.net), result, net_tracks, net_vias, tracks, vias,
-            )
-            # Single-ended critical nets can reuse the exact octilinear maze
-            # engine. Pairs must NEVER be repaired as independent ordinary nets.
-            if (not result.connected and routes.get(rule.net) is not None
-                    and routes[rule.net].connected
-                    and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
-                         or len(routes[rule.net].accesses) == 2)):
-                repaired_single, net_tracks, net_vias = _route_single_exact(
-                    board, rule, global_route, tracks, vias,
+            reused = retained_by_net.get(rule.net)
+            accepted_reuse = None
+            if reused is not None:
+                accepted_reuse = validate_single_critical_reuse(board, reused, tracks, vias)
+            if accepted_reuse is not None and accepted_reuse[0].connected:
+                result, net_tracks, net_vias = accepted_reuse
+            else:
+                result, net_tracks, net_vias = _route_single(
+                    board, rule, routes.get(rule.net)
                 )
-                result = replace(repaired_single, local_candidate_attempts=result.local_candidate_attempts,
-                                 guide_length_nm=result.guide_length_nm)
-            elif (result.connected and result.strategy == "global_guide"
-                    and len(net_by_name[rule.net].pads) >= 3
-                    and rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}):
-                # A coarse-guide tree joining three or more terminals can be
-                # far from the shortest; keep the exact search's tree when it
-                # is shorter with no more vias.
-                exact, exact_tracks, exact_vias = _route_single_exact(
-                    board, rule, global_route, tracks, vias,
+                result, net_tracks, net_vias = _reject_reserved_plane_tracks(
+                    board, result, net_tracks, net_vias, rules,
                 )
-                if (exact.connected and len(exact_vias) <= len(net_vias)
-                        and exact.lengths_nm[0] < result.lengths_nm[0]):
-                    result, net_tracks, net_vias = replace(
-                        exact, local_candidate_attempts=result.local_candidate_attempts,
-                        guide_length_nm=result.guide_length_nm), exact_tracks, exact_vias
+                result, net_tracks, net_vias = _validate_candidate(
+                    board, result, net_tracks, net_vias, tracks, vias,
+                )
+                result, net_tracks, net_vias = _improve_single_surface(
+                    board, rule, routes.get(rule.net), result, net_tracks, net_vias, tracks, vias,
+                )
+                # Single-ended critical nets can reuse the exact octilinear maze
+                # engine. Pairs must NEVER be repaired as independent ordinary nets.
+                if (not result.connected and routes.get(rule.net) is not None
+                        and routes[rule.net].connected
+                        and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
+                             or len(routes[rule.net].accesses) == 2)):
+                    repaired_single, net_tracks, net_vias = _route_single_exact(
+                        board, rule, global_route, tracks, vias,
+                    )
+                    result = replace(repaired_single, local_candidate_attempts=result.local_candidate_attempts,
+                                     guide_length_nm=result.guide_length_nm)
+                elif (result.connected and result.strategy == "global_guide"
+                        and len(net_by_name[rule.net].pads) >= 3
+                        and rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}):
+                    # A coarse-guide tree joining three or more terminals can be
+                    # far from the shortest; keep the exact search's tree when it
+                    # is shorter with no more vias.
+                    exact, exact_tracks, exact_vias = _route_single_exact(
+                        board, rule, global_route, tracks, vias,
+                    )
+                    if (exact.connected and len(exact_vias) <= len(net_vias)
+                            and exact.lengths_nm[0] < result.lengths_nm[0]):
+                        result, net_tracks, net_vias = replace(
+                            exact, local_candidate_attempts=result.local_candidate_attempts,
+                            guide_length_nm=result.guide_length_nm), exact_tracks, exact_vias
         result_index[group] = len(results)
         results.append(result)
         committed.append((group, tuple(net_tracks), tuple(net_vias)))
