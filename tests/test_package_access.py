@@ -602,3 +602,22 @@ def test_pre_existing_footprint_finding_does_not_fail_package_reservations():
     assert result.status.value != "failed" and all(item.connected for item in result.nets)
     # Final verification still reports the footprint's own finding.
     assert "DRC-HOLE-CLEARANCE" in {f.code for f in run_physical_drc(result.board).findings}
+
+
+def test_unreachable_coarse_status_does_not_disable_exact_pattern_trials():
+    from pcbir.routing import GlobalRoutingStatus
+    board, guides, settings = pattern_trap()
+    failed_guides = replace(guides, status=GlobalRoutingStatus.UNREACHABLE)
+    disabled = access.preflight_package_access(board, failed_guides, settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    assert disabled.failed_critical_nets and not disabled.ready
+    result = access.preflight_package_access(board, failed_guides, settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=1))
+    assert len(result.pattern_trials)==1
+    assert result.pattern_trials[0].outcome=='accepted'
+    assert not result.failed_critical_nets
+    assert result.global_route.status is GlobalRoutingStatus.UNREACHABLE
+    assert result.global_route==failed_guides
+    assert not result.ready  # existing area certification remains authoritative
+    assert result.source==board and board.tracks==board.vias==()
+    assert result.fanout.escaped_pads>=disabled.fanout.escaped_pads

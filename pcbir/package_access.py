@@ -315,9 +315,11 @@ def _negotiate_patterns(
     ordinary_pending = bool(baseline.fanout.pending_pads or baseline.boundary and baseline.boundary.pending_pads)
     other_owners = bool(baseline.critical.nets or plane_options and baseline.source.zones)
     if (not options.maximum_pattern_trials or baseline.hard_findings
-            or baseline.global_route.status is not GlobalRoutingStatus.SUCCESS
             or not (baseline.failed_critical_nets or plane_pending or ordinary_pending and other_owners)):
         return baseline
+    # An unreachable coarse planner must not disable exact source-terminal
+    # ownership probes. These are disposable proposals, and the existing full
+    # owner/pad/DRC revalidation and area-readiness gates still decide adoption.
     # Already-successful critical copper can seed the proposal without a second
     # expensive pair search. Strip only the verified fanout prefix; ownership,
     # source copper and all critical geometry remain explicit. This reuse is a
