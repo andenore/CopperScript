@@ -7,7 +7,7 @@ Layer transitions and non-octilinear terminal rows deliberately fail closed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from heapq import heappop, heappush
 from itertools import product
@@ -78,6 +78,10 @@ class PairSearchStats:
     searches: int = 0
     expanded_states: int = 0
     candidates: int = 0
+    resumed_states: int = 0
+    resumed_portals: int = 0
+    # Private exact frontiers; never report, fingerprint or accepted copper.
+    _continuations: list = field(default_factory=list, repr=False, compare=False)
 
 
 def _normal(heading: int, offset: int) -> Point:
@@ -344,6 +348,8 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
         candidate = _search(escaped_board, RoutingClearanceIndex(escaped_board), first_rule.net,
                             second_rule.net, start, end, width, offset, clearance, layer,
                             pitch_nm, budget, stats)
+        from .pair_search_resume import register_pair_search
+        register_pair_search(stats, board, retain_frontier=maximum_total_states is not None)
         if candidate is not None:
             stats.candidates += 1
             a, b, expanded, spine = candidate
@@ -490,6 +496,18 @@ def _goal_paths(point: Point, end: Point, heading: int, inward: int,
 def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str, second_name: str,
             start: _Port, end: _Port, width: int, offset: int, clearance: int,
             layer: CopperLayer, pitch: int, budget: int, stats: PairSearchStats) -> _SpineSearchResult | None:
+    from .pair_search_resume import _Continuation, _advance
+    continuation = _Continuation(board, first_name, second_name, start, end, layer, pitch, stats.searches)
+    continuation.steps = _search_steps(board, index, first_name, second_name,
+        start, end, width, offset, clearance, layer, pitch, stats, continuation)
+    stats._continuations.append(continuation)
+    return _advance(continuation, budget)
+
+
+def _search_steps(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str, second_name: str,
+                  start: _Port, end: _Port, width: int, offset: int, clearance: int,
+                  layer: CopperLayer, pitch: int, stats: PairSearchStats, continuation):
+    """Yield after complete state expansions, retaining the exact A* frontier."""
     inward = (end.heading + 4) % 8
     initial = (start.center, start.heading)
     best = {initial: 0}
@@ -516,13 +534,16 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                 _tracks(second_name, lanes[1], width, layer, index.breakout), clearance)
         return legal_cache[key]
 
-    while queue and expanded < budget:
+    while queue:
         _, cost, _, state = heappop(queue)
         if cost != best.get(state):
             continue
         point, heading = state
         expanded += 1
         stats.expanded_states += 1
+        continuation.expanded_states = expanded
+        continuation.minimum_goal_distance_nm = min(continuation.minimum_goal_distance_nm,
+            hypot(point.x_nm-end.center.x_nm, point.y_nm-end.center.y_nm))
         if hypot(point.x_nm - end.center.x_nm, point.y_nm - end.center.y_nm) <= 4 * pitch:
             for tail in _goal_paths(point, end.center, heading, inward, pitch):
                 spine = []
@@ -540,12 +561,15 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                 a = _tracks(first_name, lanes[0], width, layer, index.breakout)
                 b = _tracks(second_name, lanes[1], width, layer, index.breakout)
                 if _legal(board, index, a, b, clearance):
-                    return _SpineSearchResult(a, b, expanded, points)
+                    continuation.active = False
+                    yield _SpineSearchResult(a, b, expanded, points)
+                    return
         for new in ((heading - 1) % 8, heading, (heading + 1) % 8):
             if state == initial and new != heading:
                 continue  # The first lane endpoints must meet the exact port.
             if not legal_step(point, heading, new, state == initial):
                 continue
+            continuation.legal_advances += 1
             dx, dy = _HEADS[new]
             target = Point(point.x_nm + dx * pitch, point.y_nm + dy * pitch)
             next_state = target, new
@@ -557,4 +581,6 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
             serial += 1
             heuristic = round(hypot(target.x_nm - end.center.x_nm, target.y_nm - end.center.y_nm))
             heappush(queue, (next_cost + heuristic, next_cost, serial, next_state))
-    return None
+        continuation.active = bool(queue)
+        yield None
+    continuation.active = False

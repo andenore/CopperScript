@@ -98,6 +98,8 @@ class CriticalNetResult:
     rejection_examples: tuple[str, ...] = ()
     # Runtime telemetry is immutable but outside routing identity/equality.
     local_preparation: PairTerminalPreparation | None = field(default=None, compare=False)
+    pair_resumed_states: int = 0
+    pair_resumed_portals: int = 0
 
 
 def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
@@ -126,6 +128,8 @@ def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
         "pair_state_limit": item.pair_state_limit,
         "pair_budget_exhausted": item.pair_budget_exhausted,
         "pair_searches": item.pair_searches,
+        "pair_resumed_states": item.pair_resumed_states,
+        "pair_resumed_portals": item.pair_resumed_portals,
         "local_candidate_attempts": item.local_candidate_attempts,
         "guide_length_nm": item.guide_length_nm,
         "pair_refinement_attempts": item.pair_refinement_attempts,
@@ -1404,6 +1408,26 @@ def _route_pair_group(
             searchers = ((paired_via_candidates, paired_candidates) if prefer_vias
                          else (paired_candidates, paired_via_candidates))
         rejected: list[tuple[str, str]] = []
+        def checked_candidate(candidate):
+            attempt, proposed_tracks, proposed_vias = _route_pair(
+                board, first, second, routes,
+                exact_tracks=((*first_branches, *candidate.first), (*second_branches, *candidate.second)),
+                exact_via_pairs=(*branch_via_pairs, *candidate.via_pairs),
+                exact_return_vias=(*branch_return_vias, *candidate.return_vias))
+            attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
+                board, attempt, proposed_tracks, proposed_vias, rules)
+            candidate_blockers = set()
+            attempt, proposed_tracks, proposed_vias = _validate_candidate(
+                board, attempt, proposed_tracks, proposed_vias, tracks, vias,
+                spacing_nets=candidate_blockers)
+            if attempt.connected:
+                if crossing is not None:
+                    attempt = replace(attempt, strategy="planned_crossing")
+                elif not candidate.via_pairs and not (first_branches or second_branches):
+                    attempt, proposed_tracks, proposed_vias = _improve_pair_spine(
+                        board, search_board, first, second, routes, candidate,
+                        attempt, proposed_tracks, proposed_vias, tracks, vias)
+            return attempt, proposed_tracks, proposed_vias, candidate_blockers
         for searcher in searchers:
             for pitch_nm in (1_000_000, 500_000, 250_000):
                 # A limited tier samples both families and all pitches,
@@ -1422,29 +1446,9 @@ def _route_pair_group(
                     search_board, first, second, routes[first.net], routes[second.net],
                     stats=stats, pitch_nm=pitch_nm, **limits,
                 ):
-                    attempt, proposed_tracks, proposed_vias = _route_pair(
-                        board, first, second, routes,
-                        exact_tracks=((*first_branches, *candidate.first), (*second_branches, *candidate.second)),
-                        exact_via_pairs=(*branch_via_pairs, *candidate.via_pairs),
-                        exact_return_vias=(*branch_return_vias, *candidate.return_vias),
-                    )
-                    attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
-                        board, attempt, proposed_tracks, proposed_vias, rules,
-                    )
-                    found = set()
-                    attempt, proposed_tracks, proposed_vias = _validate_candidate(
-                        board, attempt, proposed_tracks, proposed_vias, tracks, vias,
-                        spacing_nets=found,
-                    )
+                    attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
                     if attempt.connected:
                         result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
-                        if crossing is not None:
-                            result = replace(result, strategy="planned_crossing")
-                        elif not candidate.via_pairs and not (first_branches or second_branches):
-                            result, pair_tracks, pair_vias = _improve_pair_spine(
-                                board, search_board, first, second, routes, candidate,
-                                result, pair_tracks, pair_vias, tracks, vias,
-                            )
                         break
                     observe(attempt, found)
                     rejected.append(_rejection_gate(attempt.diagnostics))
@@ -1452,9 +1456,24 @@ def _route_pair_group(
                     break
             if result.connected:
                 break
+        if not result.connected and pair_state_limit is not None and stats.expanded_states < pair_state_limit:
+            # Sampling both families/pitches may leave a productive portal's
+            # exact frontier suspended at its slice. Continue that same owned
+            # search with unused aggregate states; no new portal/slot is added.
+            from .pair_search_resume import resume_pair_candidates
+            for candidate in resume_pair_candidates(stats, board=search_board,
+                                                     maximum_total_states=pair_state_limit):
+                attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
+                if attempt.connected:
+                    result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
+                    break
+                observe(attempt, found)
+                rejected.append(_rejection_gate(attempt.diagnostics))
         rejections, examples = _rejection_summary(rejected)
         result = replace(result, search_states=stats.expanded_states,
                          candidate_attempts=stats.candidates, pair_searches=stats.searches,
+                         pair_resumed_states=stats.resumed_states,
+                         pair_resumed_portals=stats.resumed_portals,
                          pair_search_order=order,
                          pair_state_limit=pair_state_limit,
                          pair_budget_exhausted=(pair_state_limit is not None

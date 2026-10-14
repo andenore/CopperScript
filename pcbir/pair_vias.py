@@ -266,6 +266,10 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             stats.searches += 1
             candidate = _search(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
                 start,end,width,offset,clearance,layer,pitch_nm,budget,stats)
+            from .pair_search_resume import register_pair_search
+            register_pair_search(stats, board, via_pairs=(a.vias, b.vias),
+                                 return_vias=(*a.returns, *b.returns),
+                                 retain_frontier=maximum_total_states is not None)
             if candidate is None:
                 continue
             p,q,expanded,_ = candidate
