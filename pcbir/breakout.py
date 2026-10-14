@@ -96,6 +96,10 @@ class BreakoutRegions:
                         shape.bounds.expanded(length)))
         self._lands = {net: tuple(items) for net, items in lands.items()}
         self._by_identity = {land.identity: land for items in self._lands.values() for land in items}
+        # Source lands are immutable for this index. A local-search edge is
+        # queried repeatedly for width, copper and drill checks; retain only
+        # its source-region identity, never mutable copper-clearance answers.
+        self._region_cache: dict[tuple[str, tuple[Point, ...]], str | None] = {}
 
     def __bool__(self) -> bool:
         return bool(self.declared)
@@ -117,6 +121,9 @@ class BreakoutRegions:
         if not lands:
             return None
         points = tuple(spine)
+        key = (net, points)
+        if key in self._region_cache:
+            return self._region_cache[key]
         best: tuple[Fraction, str] | None = None
         for land in lands:
             farthest = Fraction(0)
@@ -128,7 +135,11 @@ class BreakoutRegions:
             else:
                 if best is None or farthest < best[0]:
                     best = (farthest, land.identity)
-        return None if best is None else best[1]
+        result = None if best is None else best[1]
+        if len(self._region_cache) >= 8192:
+            self._region_cache.clear()
+        self._region_cache[key] = result
+        return result
 
     def split(self, net: str, start: Point, end: Point) -> tuple[tuple[Point, Point, str | None], ...]:
         """Cut one track centreline at the region boundaries of ``net``.
