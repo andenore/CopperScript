@@ -77,8 +77,10 @@ def test_fresh_verification_rejects_loss_of_previously_connected_bypass(monkeypa
             else: held.append(track)
         return replace(result,board=replace(result.board,tracks=tuple(held)))
     monkeypatch.setattr(access,'route_fanout',drop_feed)
-    result=_partial_ordinary_pattern(original,board,obstacle,settings,8,True)
+    failed=[]
+    result=_partial_ordinary_pattern(original,board,obstacle,settings,8,True,failed)
     assert result[0] is None and result[-1]=='lost_bypass_connection'
+    assert failed == [board.decoupling_links[0].capacitor]
     assert original.board==before and before.placements==board.placements
 
 
@@ -126,3 +128,30 @@ def test_regeneration_dispatch_shares_budget_and_revalidates_immutable_owners(tm
     assert result.source == board and result.board.placements == board.placements
     validate_hard_macros(result.board)
     require_via_in_pad_arrays(result.board, "ineligible partial fallback")
+
+
+from pcbir import route_global, ComponentPlacementRule
+from pcbir.package_access import PackageAccessOptions, PackagePatternTrial, package_placement_trials
+from pcbir.placement import PlacementPlannerOptions
+
+def test_measured_bypass_hint_requires_exact_source_pad_and_respects_fixed_pose():
+    board,original,obstacle,settings,names=bypass_fixture()
+    board=replace(board,net_routing_rules=())
+    baseline=preflight_package_access(board,route_global(board),settings,
+        options=PackageAccessOptions(maximum_pattern_trials=0,reserve_plane_contacts=False))
+    assert not baseline.pending_pads and not baseline.failed_critical_nets
+    assert tuple(package_placement_trials(baseline,PlacementPlannerOptions(),500000))==()
+    cap=board.decoupling_links[0].capacitor
+    record=PackagePatternTrial(1,'partial_bypass',(),(),'lost_bypass_connection',failed_bypass_capacitors=(cap,))
+    measured=replace(baseline,pattern_trials=(record,))
+    proposals=tuple(package_placement_trials(measured,PlacementPlannerOptions(),500000))
+    assert proposals and all(ref==cap.component for ref,_ in proposals)
+    assert measured.pending_pads==baseline.pending_pads  # rejected dependency is not a current failed pin
+    invalid=replace(record,failed_bypass_capacitors=(board.decoupling_links[0].return_pad,))
+    assert tuple(package_placement_trials(replace(baseline,pattern_trials=(invalid,)),PlacementPlannerOptions(),500000))==()
+    pose=next(p for p in board.placements if p.reference==cap.component)
+    fixed=replace(board,placement_rules=(*tuple(r for r in board.placement_rules if r.reference!=cap.component),
+        ComponentPlacementRule(cap.component,fixed_position=pose.position)))
+    constraints=[]
+    assert tuple(package_placement_trials(replace(measured,source=fixed),PlacementPlannerOptions(),500000,constraints=constraints))==()
+    assert any(c.reference==cap.component and c.kind=='fixed_owner' for c in constraints)

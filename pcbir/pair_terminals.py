@@ -5,14 +5,93 @@ records have no global grid node and never make a failed global guide connected.
 Short same-package branches are returned as disposable candidate copper; only
 the complete pair's ordinary atomic geometry/connectivity gates may adopt them.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, fields, replace
 from itertools import permutations
+from time import perf_counter
 from .physical import BoardSide, CopperLayer, PadReference, Point, TrackSegment, Via
 from .placement import transformed_pad_position
 from .routing import GlobalNetRoute
-from .routing_clearance import RoutingClearanceIndex
+from .routing_clearance import RoutingBlocker, RoutingClearanceIndex
 from .pin_escape import checked_access_path
 from .pin_access import local_access_path
+
+@dataclass(frozen=True, slots=True)
+class PairTerminalPreparation:
+    """Immutable local-work evidence; elapsed time is excluded from equality.
+
+    Maze counts cover only the coupled search. Reporting never certifies a
+    connected guide, creates ownership, or contributes to routing fingerprints.
+    """
+    status: str = "not_started"
+    reason: str = ""
+    elapsed_seconds: float = field(default=0.0, compare=False)
+    paired_topology_supported: bool = False
+    port_pairs: int = 0
+    searches: int = 0
+    expanded_states: int = 0
+    candidates: int = 0
+    tuning_rejections: int = 0
+    profile_rejections: int = 0
+    connectivity_rejections: int = 0
+    geometry_rejections: int = 0
+    track_count: int = 0
+    via_count: int = 0
+    blocking_nets: tuple[str, ...] = ()
+    blocking_objects: tuple[RoutingBlocker, ...] = ()
+    rejection_examples: tuple[str, ...] = ()
+
+@dataclass(slots=True)
+class PairTerminalPreparationStats:
+    """Local proposal telemetry; never a connected guide or copper owner.
+
+    ``expanded_states`` counts the coupled maze only. Port formation, local
+    surface access and matching also cost work, measured by ``elapsed_seconds``.
+    """
+    status: str = "not_started"
+    reason: str = ""
+    elapsed_seconds: float = 0.0
+    paired_topology_supported: bool = False
+    port_pairs: int = 0
+    searches: int = 0
+    expanded_states: int = 0
+    candidates: int = 0
+    tuning_rejections: int = 0
+    profile_rejections: int = 0
+    connectivity_rejections: int = 0
+    geometry_rejections: int = 0
+    track_count: int = 0
+    via_count: int = 0
+    blocking_nets: tuple[str, ...] = ()
+    blocking_objects: tuple[RoutingBlocker, ...] = ()
+    rejection_examples: tuple[str, ...] = ()
+
+    def snapshot(self) -> PairTerminalPreparation:
+        return PairTerminalPreparation(**{item.name: getattr(self, item.name)
+                                          for item in fields(PairTerminalPreparation)})
+
+    def record_blockers(self, index, tracks, vias):
+        found = {item.identity: item for item in self.blocking_objects}
+        for track in tracks:
+            for item in index.track_blocker_records(track):
+                found.setdefault(item.identity, item)
+                if len(found) >= 32:
+                    break
+            if len(found) >= 32:
+                break
+        if len(found) < 32:
+            for via in vias:
+                for item in index.via_blocker_records(via):
+                    found.setdefault(item.identity, item)
+                    if len(found) >= 32:
+                        break
+                if len(found) >= 32:
+                    break
+        self.blocking_objects = tuple(found.values())
+
+    def reject(self, reason, nets=()):
+        self.rejection_examples = tuple(dict.fromkeys((*self.rejection_examples, reason)))[:3]
+        self.blocking_nets = tuple(sorted(set(self.blocking_nets) | set(nets)))[:32]
+
 
 @dataclass(frozen=True, slots=True)
 class PairTerminal:
@@ -111,19 +190,34 @@ def _surface_pair_terminals(board, first, second, routes):
     return {**routes,first.net:normalized[0],second.net:normalized[1]},*all_branches
 
 
-def prepare_pair_terminals(board, first, second, routes):
-    """Return disposable branches and matched transitions, or unchanged guides."""
-    prepared, a, b = _surface_pair_terminals(board, first, second, routes)
-    if prepared is not None:
-        return prepared, a, b, (), ()
-    proposed = _paired_local_contacts(board, first, second)
-    if proposed is None:
-        return routes, (), (), (), ()
-    normalized, a, b, pairs, returns = proposed
-    return {**routes, **normalized}, a, b, pairs, returns
+def prepare_pair_terminals(board, first, second, routes, *, report=None):
+    """Return disposable branches; optional telemetry never changes acceptance."""
+    report = report if report is not None else PairTerminalPreparationStats()
+    started = perf_counter()
+    try:
+        prepared, a, b = _surface_pair_terminals(board, first, second, routes)
+        if prepared is not None:
+            report.status = "surface_contacts" if a or b else "source_terminals"
+            report.track_count = len(a) + len(b)
+            return prepared, a, b, (), ()
+        proposed = _paired_local_contacts(board, first, second, report=report)
+        if proposed is None:
+            report.status = "blocked" if report.paired_topology_supported else "unsupported"
+            report.reason = ("bounded local contact crossover has no accepted candidate"
+                             if report.paired_topology_supported else
+                             "local contact crossover topology or source contract unsupported")
+            return routes, (), (), (), ()
+        normalized, a, b, pairs, returns = proposed
+        report.status = "matched_contacts"
+        report.track_count = len(a) + len(b)
+        report.via_count = 2 * len(pairs) + len(returns)
+        return {**routes, **normalized}, a, b, pairs, returns
+    finally:
+        report.elapsed_seconds = perf_counter() - started
 
 
-def _paired_local_contacts(board, first, second):
+def _paired_local_contacts(board, first, second, *, report=None):
+    report = report if report is not None else PairTerminalPreparationStats()
     # One local duplicated-contact group per member, two contacts each, with
     # one remaining main endpoint. Broader trees stay explicitly unsupported.
     from .hard_macros import macro_owned_pads
@@ -148,6 +242,7 @@ def _paired_local_contacts(board, first, second):
         groups.append((grouped, contacts))
     if groups[0][1][0].pad.component != groups[1][1][0].pad.component:
         return None
+    report.paired_topology_supported = True
     local = [replace(g, connected=False, accesses=items[1], segments=(), vias=())
              for g, items in zip(guides, groups)]
     from .pair_search import paired_candidates, PairSearchStats
@@ -158,7 +253,9 @@ def _paired_local_contacts(board, first, second):
     for search in (paired_via_candidates, paired_candidates):
         for raw_candidate in search(board, first, second, *local, pitch_nm=250000,
                 maximum_searches=8, maximum_states=4000, maximum_total_states=16000, stats=stats):
-            for candidate in _matched_local_candidates(board, first, second, raw_candidate):
+            report.port_pairs, report.searches = stats.port_pairs, stats.searches
+            report.expanded_states, report.candidates = stats.expanded_states, stats.candidates
+            for candidate in _matched_local_candidates(board, first, second, raw_candidate, report=report):
                 # Tune the complete local pair against the unchanged source skew
                 # limit before checking its actual geometry. No provisional skew
                 # exemption: rejected tuning retains no branch copper.
@@ -168,6 +265,9 @@ def _paired_local_contacts(board, first, second):
                     exact_tracks=(candidate.first,candidate.second),
                     exact_via_pairs=candidate.via_pairs, exact_return_vias=candidate.return_vias)
                 if not metrics.connected:
+                    report.profile_rejections += 1
+                    for reason in metrics.diagnostics:
+                        report.reject(reason)
                     continue
                 branch_a = tuple(t for t in branch_tracks if t.net == first.net)
                 branch_b = tuple(t for t in branch_tracks if t.net == second.net)
@@ -176,20 +276,30 @@ def _paired_local_contacts(board, first, second):
                 graph = explicit_copper_connectivity(trial)
                 if not all(graph.net_connected(PhysicalNet(r.net, tuple(a.pad for a in g.accesses)))
                            for r,g in zip((first,second),local)):
+                    report.connectivity_rejections += 1
+                    report.reject("local contact copper does not connect every source contact")
                     continue
-                if any(f.severity.value == 'error' and f.code != 'DRC-OPEN-NET'
-                       for f in run_physical_drc(trial,
-                           policy=PhysicalDrcPolicy(require_completed_detailed_route=False)).findings):
+                findings = tuple(f for f in run_physical_drc(trial,
+                    policy=PhysicalDrcPolicy(require_completed_detailed_route=False)).findings
+                    if f.severity.value == 'error' and f.code != 'DRC-OPEN-NET')
+                if findings:
+                    report.geometry_rejections += 1
+                    report.record_blockers(RoutingClearanceIndex(board), branch_tracks, vias)
+                    for finding in findings:
+                        report.reject(f"{finding.code}: {finding.message}",
+                                      set(finding.nets) - {first.net, second.net})
                     continue
                 normalized = [replace(g, connected=False, accesses=tuple(
                     min(items,key=lambda a:str(a.pad)) for _,items in sorted(grouped.items())))
                     for g,(grouped,_) in zip(guides,groups)]
                 return ({first.net:normalized[0], second.net:normalized[1]},
                         branch_a, branch_b, candidate.via_pairs, candidate.return_vias)
+    report.port_pairs, report.searches = stats.port_pairs, stats.searches
+    report.expanded_states, report.candidates = stats.expanded_states, stats.candidates
     return None
 
 
-def _matched_local_candidates(board, first, second, candidate):
+def _matched_local_candidates(board, first, second, candidate, *, report=None):
     """At most two exact-clearance tuning proposals; matching limits unchanged."""
     from .critical import _track_length
     from .critical_tuning import UnitTuner
@@ -203,6 +313,9 @@ def _matched_local_candidates(board, first, second, candidate):
     shorter = 0 if lengths[0] < lengths[1] else 1
     rule = (first,second)[shorter]
     if rule.tuning_amplitude_limit_nm is None:
+        if report is not None:
+            report.tuning_rejections += 1
+            report.reject("local contact skew exceeds the source limit without a tuning amplitude contract")
         return
     vias = (*[v for pair in candidate.via_pairs for v in pair],*candidate.return_vias)
     obstacles = replace(board, tracks=(*board.tracks,*tracks[1-shorter]),
@@ -216,6 +329,9 @@ def _matched_local_candidates(board, first, second, candidate):
         amount += amount % 2
         plan = tuner.plan(amount)
         if plan.tracks is None:
+            if report is not None:
+                report.tuning_rejections += 1
+                report.reject(plan.reason)
             continue
         proposed = index.breakout.split_tracks(plan.tracks,rule.width_nm or board.rules.default_track_width_nm)
         yield replace(candidate,**{('first','second')[shorter]:proposed})

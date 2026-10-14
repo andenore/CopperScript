@@ -7,7 +7,7 @@ qualification concerns even when their geometric proxies are satisfied.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
 from enum import Enum
 from functools import partial
@@ -62,6 +62,8 @@ class CriticalRoutingStatus(str, Enum):
     FAILED = "failed"
 
 
+from .pair_terminals import PairTerminalPreparation
+
 @dataclass(frozen=True, slots=True)
 class CriticalNetResult:
     nets: tuple[str, ...]
@@ -95,6 +97,8 @@ class CriticalNetResult:
     # (most frequent first), plus at most three example messages.
     rejections: tuple[tuple[str, int], ...] = ()
     rejection_examples: tuple[str, ...] = ()
+    # Runtime telemetry is immutable but outside routing identity/equality.
+    local_preparation: PairTerminalPreparation | None = field(default=None, compare=False)
 
 
 def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
@@ -129,6 +133,7 @@ def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
         "pair_refinement_candidates": item.pair_refinement_candidates,
         "rejections": dict(item.rejections),
         "rejection_examples": list(item.rejection_examples),
+        "local_preparation": asdict(item.local_preparation) if item.local_preparation else None,
     }
 
 
@@ -1293,16 +1298,29 @@ def _route_pair_group(
 
     partner_name = partner_rule.net
     first, second = sorted((rule, partner_rule), key=lambda item: item.net)
-    from .pair_terminals import prepare_pair_terminals, terminal_partners
+    from .pair_terminals import PairTerminalPreparationStats, prepare_pair_terminals, terminal_partners
+    preparation = PairTerminalPreparationStats()
     routes, first_branches, second_branches, branch_via_pairs, branch_return_vias = prepare_pair_terminals(
-        replace(board, tracks=tuple(tracks), vias=tuple(vias)), first, second, routes)
+        replace(board, tracks=tuple(tracks), vias=tuple(vias)), first, second, routes, report=preparation)
+    evidence = preparation.snapshot() if preparation.status != "source_terminals" else None
+    def reported(outcome):
+        result, additions, transitions = outcome
+        if not result.connected and preparation.status in {"blocked", "unsupported"}:
+            if blockers is not None:
+                blockers.update(preparation.blocking_nets)
+            diagnostics = tuple(
+                "local pair-terminal preparation " + preparation.status + ": " + preparation.reason
+                if message == "coupled pair routing v0.1 requires two terminals per member" else message
+                for message in result.diagnostics)
+            result = replace(result, diagnostics=diagnostics)
+        return replace(result, local_preparation=evidence), additions, transitions
     found: set[str] = set()
     if nested is not None:
         accepted = _route_nested_exit(board, first, second, routes, rules, tracks, vias, nested)
         if accepted is not None:
             if turns is not None:
                 turns[nested.group] = accepted[0]
-            return accepted[1:]
+            return reported(accepted[1:])
     if crossing is None:
         result, pair_tracks, pair_vias = _route_pair(
             board, rule, partner_rule, routes
@@ -1321,7 +1339,7 @@ def _route_pair_group(
             (f"planned crossing is impossible: {crossing.reason}",) if crossing.layer is None else (),
             strategy="planned_crossing", pair_search_order="planned_crossing")
         if crossing.layer is None:
-            return result, pair_tracks, pair_vias
+            return reported((result, pair_tracks, pair_vias))
     guided = all(routes.get(name) is not None and routes[name].connected
                  for name in (rule.net, partner_name))
     if (not result.connected and guided and crossing is None and not (first_branches or second_branches)
@@ -1336,7 +1354,7 @@ def _route_pair_group(
         attempt, proposed_tracks, proposed_vias = _validate_candidate(
             board, attempt, proposed_tracks, proposed_vias, tracks, vias)
         if attempt.connected:
-            return attempt, proposed_tracks, proposed_vias
+            return reported((attempt, proposed_tracks, proposed_vias))
     if crossing is not None and not guided:
         result = replace(result, diagnostics=("both pair members require connected global guides",))
     supported = (routes.get(first.net) is not None and routes.get(second.net) is not None
@@ -1428,7 +1446,7 @@ def _route_pair_group(
                 f"{label}: {stats.searches} searches, {stats.expanded_states} states, "
                 f"{stats.candidates} candidates; none accepted"
                 + (f" (first-failing gates: {reasons})" if reasons else "")))
-    return result, pair_tracks, pair_vias
+    return reported((result, pair_tracks, pair_vias))
 
 
 # Plan R7: a nested exit that does not clear committed copper at its planned

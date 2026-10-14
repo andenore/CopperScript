@@ -66,6 +66,7 @@ class PackagePatternTrial:
     retained_track_count: int = 0
     retained_via_count: int = 0
     partial_skipped_reason: str = ""
+    failed_bypass_capacitors: tuple[PadReference, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,10 +414,11 @@ def _negotiate_patterns(
         else:
             obstacles = probe.board
         emit(on_progress, "package_pattern_fanout", "started", strategy=strategy)
+        failed_bypass_capacitors = []
         if strategy in {"partial_ordinary", "partial_bypass"}:
             proposed, displaced, retained_tracks, retained_vias, partial_outcome = _partial_ordinary_pattern(
                 baseline.fanout, owner_board, obstacles, fanout_options, options.maximum_partial_owner_nets,
-                strategy == "partial_bypass")
+                strategy == "partial_bypass", failed_bypass_capacitors)
         else:
             proposed = route_fanout(obstacles, fanout_options)
         emit(on_progress, "package_pattern_fanout", "finished", strategy=strategy,
@@ -426,9 +428,11 @@ def _negotiate_patterns(
         if proposed is None:
             records.append(PackagePatternTrial(len(records) + 1, strategy,
                 tuple(sorted(accepted.pending_pads)), tuple(sorted(accepted.failed_critical_nets)),
-                partial_outcome, search_tier=search_tier, displaced_nets=displaced))
+                partial_outcome, search_tier=search_tier, displaced_nets=displaced,
+                failed_bypass_capacitors=tuple(failed_bypass_capacitors)))
             emit(on_progress, "package_pattern_trial", "finished", index=len(records), strategy=strategy,
-                 outcome=partial_outcome, search_tier=search_tier)
+                 outcome=partial_outcome, search_tier=search_tier,
+                 failed_bypass_capacitors=[f"{p.component}.{p.pad}" for p in failed_bypass_capacitors])
             continue
         # Do not leak critical metadata/copper into ordinary ownership. Existing
         # macro copper belongs to the source, not to the proposed fanout pattern.
@@ -472,7 +476,8 @@ def _negotiate_patterns(
     return replace(accepted, pattern_trials=tuple(records))
 
 
-def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets, regenerate_bypass=False):
+def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets,
+                              regenerate_bypass=False, failed_bypass_capacitors=None):
     """Keep legal generated ownership exactly; rebuild only intersecting nets.
 
     The clean critical probe is a disposable obstacle, not committed copper.
@@ -502,7 +507,10 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
     held = replace(obstacles, tracks=(*obstacles.tracks, *tracks), vias=(*obstacles.vias, *vias))
     required_bypass = _verified_bypass_links(original.board, displaced) if regenerate_bypass else frozenset()
     rebuilt = route_fanout(held, settings, only_nets=frozenset(displaced))
-    if required_bypass - _verified_bypass_links(rebuilt.board, displaced):
+    missing_bypass = required_bypass - _verified_bypass_links(rebuilt.board, displaced)
+    if missing_bypass:
+        if failed_bypass_capacitors is not None:
+            failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing_bypass})[:32])
         return None, ordered, len(tracks), len(vias), "lost_bypass_connection"
     # Detect accidental owner/prefix replacement, including duplicate geometry.
     if (rebuilt.board.tracks != (*held.tracks, *rebuilt.created_tracks)
@@ -645,6 +653,13 @@ def package_placement_trials(
     dependency_owners = {link.capacitor.component for link in board.decoupling_links
                          if link.target.component in owners}
     owners.update(dependency_owners)
+    # Measured lost source-associated feeds are independent placement hints,
+    # never current pending pads or accepted copper. Check exact source pad
+    # identity again; unknown/ground/renamed non-associated pads add no owner.
+    source_bypass_pads = {link.capacitor for link in board.decoupling_links}
+    bypass_hints = {pad for trial in baseline.pattern_trials if trial.outcome == "lost_bypass_connection"
+                    for pad in trial.failed_bypass_capacitors if pad in source_bypass_pads}
+    owners.update(pad.component for pad in bypass_hints)
     # A rejected ordering can expose movable ordinary owners even when every
     # endpoint of the original failure is fixed. Keep its copper discarded,
     # but use the measured lost identities as bounded placement-search hints.
@@ -666,6 +681,10 @@ def package_placement_trials(
         record(ref, poses[ref], poses, (f"{ref}: " + (
             "temporary session lock fixes the complete pose" if ref in options.fixed_references
             else "source constraint fixes its position"),), "fixed_owner")
+    for ref in sorted({pad.component for pad in bypass_hints} - fixed):
+        record(ref, poses[ref], poses, ("rejected generated ownership lost the verified source bypass at "
+            + ", ".join(f"{pad.component}.{pad.pad}" for pad in sorted(bypass_hints)
+                        if pad.component == ref),), "bypass_dependency_hint")
     for ref in sorted(hinted - fixed):
         record(ref, poses[ref], poses, ("rejected ownership ordering lost access to "
             + ", ".join(f"{pad.component}.{pad.pad}" for pad in sorted(pattern_pads)
