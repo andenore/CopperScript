@@ -6,9 +6,10 @@ are searched together. This is not arbitrary 3-D maze routing or SI signoff.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections import Counter
+from dataclasses import dataclass, fields, replace
 from itertools import product
-from math import hypot
+from math import hypot, sqrt
 from typing import Callable, Iterator
 
 from .pair_search import (PairSearchCandidate, PairSearchStats, _Port, _HEADS,
@@ -86,12 +87,144 @@ def _signal_drills_outside_smd(board: PhysicalBoard, pair: tuple[Via, Via]) -> b
     return True
 
 
+def _circle_sites(first: Point, first_radius: int, second: Point,
+                  second_radius: int) -> tuple[tuple[float, float], ...]:
+    """Continuous intersections; rounded sites are only proposals, never proof."""
+    dx, dy = second.x_nm-first.x_nm, second.y_nm-first.y_nm
+    distance = hypot(dx, dy)
+    if (distance == 0 or distance > first_radius+second_radius
+            or distance < abs(first_radius-second_radius)):
+        return ()
+    along = (first_radius*first_radius-second_radius*second_radius
+             + distance*distance)/(2*distance)
+    height_squared = first_radius*first_radius-along*along
+    if height_squared < 0:
+        # Floating cancellation at a tangent must not authorize geometry.
+        if height_squared < -1:
+            return ()
+        height_squared = 0
+    height = sqrt(height_squared)
+    x, y = first.x_nm+along*dx/distance, first.y_nm+along*dy/distance
+    return ((x-height*dy/distance, y+height*dx/distance),
+            (x+height*dy/distance, y-height*dx/distance))
+
+
+def _via_separation(board: PhysicalBoard, returned: Via, signal: Via,
+                    clearance: int) -> int:
+    """Copper, drill-to-copper and drill spacing, using actual via sizes."""
+    hole = board.rules.minimum_hole_clearance_nm
+    return max(returned.size_nm//2+signal.size_nm//2+clearance,
+               returned.drill_nm//2+signal.drill_nm//2+hole,
+               returned.drill_nm//2+signal.size_nm//2+hole,
+               returned.size_nm//2+signal.drill_nm//2+hole)
+
+
+def _return_positions(board: PhysicalBoard, port: _Port, pair: tuple[Via, Via],
+                      first: NetRoutingRule, second: NetRoutingRule,
+                      net: str, limit: int) -> tuple[Point, ...]:
+    """Replace provably futile old slots with bounded actual circle/ring sites.
+
+    The original unique axial/lattice count is the allowance. Preserve every
+    old site inside both proximity disks and outside mandatory fabrication
+    exclusions. Derived sites spend only slots that could not satisfy those
+    scalar conditions. Net/region-specific clearance and exact all-layer
+    geometry remain the fresh index's responsibility.
+    """
+    dx, dy = _HEADS[port.heading]
+    legacy = []
+    for distance in (.8, 1, 1.25, 1.5, 2):
+        amount = nm_from_mm(distance)
+        for sign in (1, -1):
+            legacy.append(Point(port.center.x_nm+sign*dx*amount,
+                                port.center.y_nm+sign*dy*amount))
+    step = nm_from_mm(.125)
+    legacy.extend(Point(port.center.x_nm+x*step,port.center.y_nm+y*step)
+        for x,y in sorted(product(range(-16,17),repeat=2),key=lambda p:(
+            p[0]*p[0]+p[1]*p[1],-(p[0]*dx+p[1]*dy),p)) if x or y)
+    legacy = tuple(dict.fromkeys(legacy))
+    returned = replace(pair[0], net=net)
+    required = tuple(_via_separation(board, returned, signal,
+        board.rules.minimum_clearance_nm) for signal in pair)
+
+    def scalar_legal(position: Point) -> bool:
+        distances = tuple((position.x_nm-v.position.x_nm)**2
+                          +(position.y_nm-v.position.y_nm)**2 for v in pair)
+        return all(minimum*minimum <= distance <= limit*limit
+                   for minimum,distance in zip(required,distances))
+
+    retained = tuple(position for position in legacy if scalar_legal(position))
+    allowance = len(legacy)-len(retained)
+    if allowance == 0:
+        return retained
+    return_rule = next((r for r in board.net_routing_rules if r.net == net), None)
+    return_clearance = return_rule.clearance_nm or 0 if return_rule else 0
+    radii = []
+    for signal,rule in zip(pair,(first,second)):
+        minimum = _via_separation(board, returned, signal, max(
+            board.rules.minimum_clearance_nm, rule.clearance_nm or 0,
+            return_clearance))
+        radii.append(tuple(dict.fromkeys(radius for radius in (
+            (minimum+limit)//2, minimum+4, limit-4, minimum, limit)
+            if minimum <= radius <= limit)))
+    sites = []
+    for a,b in product(*radii):
+        sites.extend(_circle_sites(pair[0].position,a,pair[1].position,b))
+    # Circle tangencies along the actual pair axes also cover wide/unequal
+    # rings, rather than assuming the port's nominal heading or equal vias.
+    vx = pair[1].position.x_nm-pair[0].position.x_nm
+    vy = pair[1].position.y_nm-pair[0].position.y_nm
+    length = hypot(vx,vy)
+    if length:
+        axes = ((vx/length,vy/length),(-vy/length,vx/length))
+        for signal,ring in zip(pair,radii):
+            for radius,axis,sign in product(ring,axes,(1,-1)):
+                sites.append((signal.position.x_nm+sign*radius*axis[0],
+                              signal.position.y_nm+sign*radius*axis[1]))
+    derived = []
+    seen = set(retained)
+    # One-nanometre neighbours handle integer rounding at a true tangent;
+    # scalar and exact geometry checks still decide acceptance.
+    nudges = ((0,0),(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1))
+    for x,y in sites:
+        for nx,ny in nudges:
+            position = Point(round(x)+nx,round(y)+ny)
+            if position in seen or not scalar_legal(position):
+                continue
+            seen.add(position)
+            derived.append(position)
+            if len(derived) == allowance:
+                break
+        if len(derived) == allowance:
+            break
+    # Keep the established axial preferences, then exact boundary proposals,
+    # then every still-possible old lattice point. No new search allowance.
+    axial = set(legacy[:10])
+    return (*tuple(p for p in retained if p in axial), *derived,
+            *tuple(p for p in retained if p not in axial))
+
+
 def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
                 port: _Port, pair: tuple[Via, Via], first: NetRoutingRule,
                 second: NetRoutingRule, surface: CopperLayer,
                 layer: CopperLayer) -> tuple[Via, ...] | None:
     if not (first.require_return_vias or second.require_return_vias):
         return ()
+    span = physical_via_span(board,surface,layer)
+    if (span is None or tuple(v.net for v in pair) != (first.net,second.net)
+            or any((v.from_layer,v.to_layer,v.technology) != span
+                   or v.finish != "standard" for v in pair)
+            or any(surface not in routing_layers(board,r.net,r)
+                   or layer not in routing_layers(board,r.net,r)
+                   for r in (first,second))):
+        return None
+    # The caller may reserve additional collars/vias, but not use an index
+    # bound to old source, rules, placements or missing occurrence geometry.
+    if (any(getattr(index.board,f.name) != getattr(board,f.name)
+                for f in fields(board) if f.name not in {"tracks","vias"})
+            or not Counter(index.board.tracks) >= Counter(board.tracks)
+            or not Counter(index.board.vias) >= Counter(board.vias)
+            or not index.candidate_vias_clear(pair)):
+        return None
     if shared_reference_plane(board, first, second, (surface, layer),
                               tuple(via.position for via in pair)) is not None:
         return ()
@@ -102,30 +235,10 @@ def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
     if net not in {item.name for item in board.nets}:
         return None
     limit = min(rule.maximum_return_via_distance_nm for rule in requested)
-    dx, dy = _HEADS[port.heading]
-    # Symmetric forward/backward reference-via positions, not between the
-    # signal vias (which would collide). No hard-coded component coordinates.
-    positions = []
-    for distance in (.8, 1, 1.25, 1.5, 2):
-        amount = nm_from_mm(distance)
-        for sign in (1, -1):
-            positions.append(Point(port.center.x_nm + sign * dx * amount,
-                                   port.center.y_nm + sign * dy * amount))
-    # Forward/backward slots alone miss legal lateral reference sites between
-    # package lands. Try a bounded local lattice too; original distance and
-    # all-layer copper/drill constraints still apply to every candidate.
-    step = nm_from_mm(.125)
-    positions.extend(Point(port.center.x_nm+x*step,port.center.y_nm+y*step)
-        for x,y in sorted(product(range(-16,17),repeat=2),key=lambda p:(
-            p[0]*p[0]+p[1]*p[1],-(p[0]*dx+p[1]*dy),p)) if x or y)
-    for position in dict.fromkeys(positions):
-        if any(hypot(position.x_nm-v.position.x_nm,
-                     position.y_nm-v.position.y_nm) > limit for v in pair):
-            continue
+    for position in _return_positions(board,port,pair,first,second,net,limit):
         via = replace(pair[0], net=net, position=position)
         if (via_inside_board(board, position, via.size_nm)
-                and index.can_via(net, position, via.size_nm, via.from_layer,
-                                  via.to_layer, via.drill_nm, check_hole_copper=True)):
+                and index.candidate_vias_clear((*pair,via))):
             return (via,)
     return None
 
