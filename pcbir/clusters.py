@@ -105,6 +105,34 @@ def validate_cluster_bindings(board: PhysicalBoard) -> None:
                 raise ValueError("rigid cluster keepout uses a layer outside the stackup")
 
 
+def apply_fixed_cluster_poses(board: PhysicalBoard) -> PhysicalBoard:
+    """Reconstruct rigid members from a complete, source-fixed anchor pose.
+
+    Other fixed members must agree. Do not use declaration order to override
+    conflicting intent, or infer a frame from a partially fixed anchor.
+    """
+    if board.tracks or board.vias or board.zone_fills or board.materialized_macros:
+        raise ValueError("fixed cluster pose reconstruction requires an unrouted board")
+    rules = {r.reference: r for r in board.placement_rules}
+    poses = {p.reference: p for p in board.placements}
+    for cluster in board.rigid_clusters:
+        rule = rules.get(cluster.anchor.reference)
+        if (rule is None or rule.fixed_position is None or
+                rule.fixed_rotation_degrees is None or rule.side is None):
+            continue
+        anchor = replace(poses[cluster.anchor.reference], position=rule.fixed_position,
+                         rotation_degrees=rule.fixed_rotation_degrees, side=rule.side)
+        transformed = cluster_placements(board, cluster, anchor, poses)
+        for reference, pose in transformed.items():
+            member_rule = rules.get(reference)
+            if member_rule and ((member_rule.fixed_position is not None and pose.position != member_rule.fixed_position)
+                    or (member_rule.fixed_rotation_degrees is not None and pose.rotation_degrees != member_rule.fixed_rotation_degrees)
+                    or (member_rule.side is not None and pose.side != member_rule.side)):
+                raise ValueError(f"{cluster.name}: fixed anchor conflicts with fixed member {reference}")
+        poses.update(transformed)
+    return replace(board, placements=tuple(poses[p.reference] for p in board.placements))
+
+
 def cluster_placements(
     board: PhysicalBoard, cluster: RigidPlacementCluster, anchor: Placement,
     placements: Mapping[str, Placement] | None = None,

@@ -42,7 +42,8 @@ def document_session(source, reader, *, footprint_roots=(), layers=None, fab_pro
             board = apply_placement_templates(board, Path(templates), locked=True, offline=True)
         for macro in macros:
             board = apply_hard_macro_scene(board, Path(macro), locked=True, offline=True)
-        return board
+        from ..clusters import apply_fixed_cluster_poses
+        return apply_fixed_cluster_poses(board)
 
     board = build(design)
     manifest = find_manifest(source.parent)

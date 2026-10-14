@@ -121,8 +121,18 @@ and line endings. Source undo/redo must use the same edit transactions.
 Automatic placement is a preview, with explicit apply/discard. Applying poses
 does NOT create fixed constraints for every component. Movable poses are session
 seeds. Only deliberate locks are persistent design intent. Reopening a board
-may regenerate movable poses; exact reproducible poses require explicit locks
-or a separately specified future seed mechanism, not a hidden source of truth.
+may regenerate movable poses. After dragging or auto-placement, the top action
+**Review placement to save…** proposes position, rotation and side locks for
+the current layout. Inspect the source diff, then **Save reviewed changes**.
+This is an explicit decision to fix the layout: edit **Saved source locks** to
+move these components later. Rigid macros save their anchors only; their members
+and private copper remain immutable. Existing imported/attachment ownership is
+preserved, and ambiguous ownership is reported before saving. Invalid placement
+cannot be saved. Discarding a source review retains the placement draft.
+
+The **Placement unsaved** indicator compares the layout with source-derived
+poses. Saving an unrelated feature does not claim to save temporary placement;
+the indicator remains until placement is saved or the source is reloaded.
 
 ## Mechanical editing
 

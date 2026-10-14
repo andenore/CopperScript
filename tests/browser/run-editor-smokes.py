@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CASES = {
     "ui": ("examples/mechanical_editor_demo", "mechanical-editor-ui", True),
     "save": ("examples/mechanical_editor_demo", "mechanical-editor-save", True),
+    "layout-save": ("examples/mechanical_editor_demo", "mechanical-editor-layout-save", True),
     "placement": ("examples/mechanical_editor_demo", "mechanical-editor", False),
     "keyboard": ("examples/mechanical_editor_demo", "mechanical-editor-keyboard", True),
     "invalid": ("examples/mechanical_editor_demo", "mechanical-editor-invalid", True),

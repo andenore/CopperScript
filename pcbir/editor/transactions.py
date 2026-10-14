@@ -70,7 +70,8 @@ def seed_placements(board: PhysicalBoard, seeds: PhysicalBoard) -> PhysicalBoard
                         rotation_degrees=rule.fixed_rotation_degrees if rule.fixed_rotation_degrees is not None else p.rotation_degrees,
                         side=rule.side or p.side)
         poses.append(p)
-    return replace(board, placements=tuple(poses))
+    from ..clusters import apply_fixed_cluster_poses
+    return apply_fixed_cluster_poses(replace(board, placements=tuple(poses)))
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ class ReviewedSource:
     diff: str
     # One (kind, targets), or an atomic tuple of such scopes.
     constraint_scope: tuple | None = None
+    summary: str = ""
 
     @property
     def id(self):

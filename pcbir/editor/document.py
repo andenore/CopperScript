@@ -94,7 +94,7 @@ class DocumentHost:
         result["document_host"] = True
         result["can_source_undo"] = False
         result["can_source_redo"] = False
-        result["notice"] = "Reviewed source edits use VS Code document undo and Save. Temporary placement is not persisted."
+        result["notice"] = "Review placement to save the layout as source locks. Reviewed edits use VS Code document undo and Save."
         if result.get("document_kind", "board") != "board":
             return result
         from ..parser import parse

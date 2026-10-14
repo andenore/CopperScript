@@ -53,6 +53,7 @@ class EditorSession:
         from .overlay import electrical_digest
         identity = electrical_digest(workspace.identity) if workspace else None
         self.state = State(overlay.seed(board, self.source_revision, identity) if overlay else board)
+        self.source_poses = self._poses(board)
         self.revision = 0
         self.pending: State | None = None
         self.undo_stack: list[State] = []
@@ -68,6 +69,10 @@ class EditorSession:
         self.scene_board = None
         self.scene_locks = None
         self.scene_template = None
+
+    @staticmethod
+    def _poses(board):
+        return {p.reference: (p.position, p.rotation_degrees, p.side) for p in board.placements}
 
     def _check(self, revision):
         if type(revision) is not int or revision != self.revision:
@@ -121,6 +126,7 @@ class EditorSession:
             scene["power_nets"] = sorted({s.net for s in elaborate(self.workspace.identity).supplies})
         scene["scene_profile"] = {"ratsnest_recomputed_nets": self.ratsnest_cache.recomputed_nets}
         scene["source_writable"] = self.workspace is not None
+        scene["placement_unsaved"] = self._poses(state.board) != self.source_poses
         scene['preview_editable'] = state is self.pending and state.manual_preview
         scene['document_kind'] = 'board'
         from .features import source_features, feature_catalog
@@ -144,7 +150,8 @@ class EditorSession:
         scene["outputs_stale"] = self.outputs_stale
         scene["can_source_undo"] = bool(self.source_undo)
         scene["can_source_redo"] = bool(self.source_redo)
-        scene["source_review"] = ({"id": self.source_pending.id, "diff": self.source_pending.diff}
+        scene["source_review"] = ({"id": self.source_pending.id, "diff": self.source_pending.diff,
+                                   "summary": self.source_pending.summary}
                                   if self.source_pending else None)
         if self.workspace:
             scene["notice"] = "Source edits require diff review and explicit Save. Placement changes remain temporary unless locked into source. No manufacturing signoff."
@@ -230,6 +237,7 @@ class EditorSession:
                   "move_group": ("references", "dx_nm", "dy_nm"),
                   "lock": ("reference", "locked"), "apply": (), "discard": (), "undo": (), "redo": (),
                   "prepare_lock": ("reference", "x_nm", "y_nm", "rotation", "side", "locks"),
+                  "prepare_placement": (),
                   "prepare_mechanical": ("kind", "name", "shape", "parameters", "remove"),
                   "prepare_mechanical_batch": ("features",),
                   "review_feature": ("category", "kind", "name", "parameters"),
@@ -268,6 +276,7 @@ class EditorSession:
             self.source_revision = sha256(raw).hexdigest()
             self.source_raw = raw
             self.state = State(board)
+            self.source_poses = self._poses(board)
             self.pending = self.source_pending = None
             self.undo_stack.clear(); self.redo_stack.clear()
             self.source_undo.clear(); self.source_redo.clear()
@@ -280,7 +289,7 @@ class EditorSession:
             self.job.cancel("stale", "session edited; old placement cancelled")
         if self.source_pending and action not in {"save_source", "discard_source"}:
             raise EditorError("save or discard the source review before another operation")
-        if action in {"prepare_lock", "prepare_mechanical", "prepare_mechanical_batch", "review_feature", "review_features", "save_source", "discard_source", "undo_source", "redo_source"}:
+        if action in {"prepare_placement", "prepare_lock", "prepare_mechanical", "prepare_mechanical_batch", "review_feature", "review_features", "save_source", "discard_source", "undo_source", "redo_source"}:
             return self._source_operation(action, request)
         if action == "start_auto_place":
             self.pending = None
@@ -418,10 +427,12 @@ class EditorSession:
     def _source_operation(self, action, request):
         if self.workspace is None:
             raise EditorError("source workspace is read-only")
-        if self.pending:
+        if self.pending and action not in {"prepare_placement", "save_source", "discard_source"}:
             raise EditorError("apply or discard the placement preview before editing source")
         snapshot = SourceSnapshot(self.read_source(), str(self.source))
-        if action == 'review_features':
+        if action == 'prepare_placement':
+            self._review_placement(snapshot)
+        elif action == 'review_features':
             from .features import feature_batch
             raw, scope = feature_batch(snapshot, request['features'])
             self.source_pending = self.workspace.review(snapshot, raw, self.state.board,
@@ -527,10 +538,61 @@ class EditorSession:
             response["source_preview"] = response["scene"]["source_preview"]
         return response
 
+    def _review_placement(self, snapshot):
+        """Explicitly freeze the reviewed layout; applying a preview never does."""
+        board = (self.pending or self.state).board
+        poses = self._poses(board)
+        if poses == self.source_poses:
+            raise EditorError("no unsaved placement changes")
+        # Check against existing rules BEFORE creating locks. New locks must
+        # never turn an invalid candidate into apparently valid fixed intent.
+        from ..placement import placement_solution_is_legal
+        if not placement_solution_is_legal(board, {p.reference: p for p in board.placements}, self.options):
+            raise EditorError("placement cannot be saved: " + "; ".join(
+                placement_rejection_reasons(board, {p.reference: p for p in board.placements}, self.options)))
+        from ..compiler import compile_design_source
+        from ..elaborate import elaborate
+        from ..model import ConstraintKind
+        import json
+        design = compile_design_source(snapshot.text, snapshot.filename, locked=True, offline=True)
+        imported = {ref for c in elaborate(design.electrical).constraints
+                    if c.kind is ConstraintKind.FIXED_PLACEMENT
+                    and any(not origin.startswith(str(self.source) + ":") for origin in c.origins)
+                    for ref in c.targets}
+        attachments = json.loads(board.metadata.get("mechanical_attachment_owners", "{}"))
+        members = {m.reference for c in board.rigid_clusters for m in c.members}
+        anchors = {c.anchor.reference for c in board.rigid_clusters}
+        refs = frozenset(poses)
+        rules = {r.reference: r for r in board.placement_rules}
+        current = snapshot
+        saved_refs = []
+        for pose in board.placements:
+            reference = pose.reference
+            if reference in members and reference not in anchors:
+                continue  # One anchor preserves the whole immutable macro.
+            rule = rules.get(reference)
+            if rule and rule.fixed_position is not None and rule.fixed_rotation_degrees is not None and rule.side is not None:
+                continue
+            if reference in imported or reference in attachments:
+                raise EditorError(f"{reference}: pose is owned by an imported module or mechanical attachment; edit its binding before saving placement")
+            patch = fixed_placement_patch(current, reference, x_nm=pose.position.x_nm,
+                y_nm=pose.position.y_nm, rotation=pose.rotation_degrees, side=pose.side.value,
+                resolved_references=refs)
+            current = SourceSnapshot(patch.apply(current), snapshot.filename)
+            saved_refs.append(reference)
+        review = self.workspace.review(snapshot, current.raw, board, self.options)
+        # Reopening must reproduce every pose, including rigid members, without
+        # the session seeds used by ordinary feature reviews.
+        if self._poses(self.workspace.build(review.design)) != poses:
+            raise EditorError("saved source does not reproduce this layout; resolve placement ownership before saving")
+        self.source_pending = replace(review, summary=f"Save layout as position, rotation and side locks for {len(saved_refs)} placement units. To move them later, edit their Saved source locks. Routing and manufacturing outputs must be rebuilt.")
+
     def _saved(self, raw, board):
         from ..compiler import compile_design_source
         from .transactions import electrical_identity
-        self.workspace.identity = electrical_identity(compile_design_source(SourceSnapshot(raw).text, str(self.source), locked=True, offline=True).electrical)
+        design = compile_design_source(SourceSnapshot(raw).text, str(self.source), locked=True, offline=True)
+        self.workspace.identity = electrical_identity(design.electrical)
+        self.source_poses = self._poses(self.workspace.build(design))
         self.source_raw = raw
         self.source_revision = sha256(raw).hexdigest()
         self.state = State(replace(board, metadata={**board.metadata,

@@ -364,16 +364,18 @@ function updateControls() {
   const s = scene(), component = s?.components.find(c => c.reference===selected);
   const selectionCount=selectionSet().size, groupCount=expandedSelection().size;
   const sourceReview=!!accepted?.source_review;
+  const placementUnsaved=!!(preview || accepted)?.placement_unsaved;
+  const placementSave=!!accepted?.source_writable && placementUnsaved && (!preview || preview.placement_hard_legal);
   const editingPreview=!!preview?.preview_editable;
   const frozenPreview=!!preview && !editingPreview;
   const blocked = busy || !s || !!accepted?.source_stale || sourceReview;
   $("board-name").textContent=s?.board || "Loading board…";
-  $("notice").textContent=accepted ? "Temporary placement is session-only. Source changes require review and save." : "Loading source workspace…";
+  $("notice").textContent=accepted ? "Review and save source changes. Use Review placement to save the current layout as explicit source locks." : "Loading source workspace…";
   $("open-board").hidden=!vscodeHost;
   $("open-board").disabled=busy || !!preview || sourceReview;
   $("source-state").textContent=accepted?.source_stale ? "Source changed" : sourceReview ? "Review pending" :
-    !accepted ? "Loading" : accepted.source_writable ? "Source ready" : "Read only";
-  $("source-state").classList.toggle("pending",sourceReview);
+    !accepted ? "Loading" : accepted.source_writable ? placementUnsaved ? "Placement unsaved" : "Source ready" : "Read only";
+  $("source-state").classList.toggle("pending",sourceReview || placementUnsaved);
   $("source-state").classList.toggle("error",!!accepted?.source_stale);
   $("reference").value = selected;
   $("apply").disabled = !preview || blocked || !preview.placement_hard_legal; $("discard").disabled = !preview || blocked;
@@ -389,9 +391,12 @@ function updateControls() {
   if (job?.status==="running" && jobPoll===null) jobPoll=setTimeout(pollJob,250);
   $("reload").disabled = busy;
   $("reload-source").disabled=busy || !accepted?.source_writable;
-  $("save-source").disabled=busy || !sourceReview || !!accepted?.source_stale;
+  $("save-source").disabled=busy || (!sourceReview && !placementSave) || !!accepted?.source_stale || job?.status==="running";
+  $("save-source").textContent=sourceReview ? "Save reviewed changes" : placementUnsaved ? "Review placement to save…" : "Save";
   $("save-help").textContent=accepted?.source_stale ? "Source changed externally. Reload source before reviewing changes." :
-    sourceReview ? "Changes are reviewed but unsaved. Inspect the diff, then save or discard." :
+    sourceReview ? (accepted.source_review.summary || "Changes are reviewed but unsaved. Inspect the diff, then save or discard.") :
+    placementUnsaved ? preview && !preview.placement_hard_legal ? "Fix the invalid placement before saving. The draft remains editable." :
+    "Placement is unsaved. Review placement creates explicit position, rotation and side locks; inspect the diff, then Save." :
     accepted?.source_writable ? "Edit a feature in Properties or on the canvas, then review and save. Stage related changes to validate them together." :
     "This scene is read-only; open a .copper source board to save changes.";
   $("discard-source").disabled=busy || !sourceReview || !!accepted?.source_stale;
@@ -491,7 +496,7 @@ async function operation(action, fields={}, applyImmediately=false) {
         "Invalid temporary pose — adjust its position or rotation. " +(preview.placement_validation?.issues||[]).map(issue=>issue.message).join("; "),!preview.placement_hard_legal);}
     else {acceptScene(result.scene);sourcePreview=result.source_preview||sourcePreview;populate();
       status(accepted.source_review ? "Source preview — inspect the exact diff, then Save or Discard." :
-        action==="save_source" ? "Source saved. Temporary moves remain session-only. Rebuild routing, fills and manufacturing outputs." :
+        action==="save_source" ? "Source saved. " +(accepted.placement_unsaved ? "Placement remains unsaved; use Review placement to save it. " : "") +"Rebuild routing, fills and manufacturing outputs." :
         accepted.outputs_stale ? "Source/session updated. Route, fill and manufacturing outputs are stale; rebuild them." : "Temporary session updated. Source remains unchanged.");}
   } catch (error) {
     preview=null;sourcePreview=null;
@@ -654,7 +659,7 @@ $("prepare-lock").onclick=()=>operation("prepare_lock",{reference:selected,
   x_nm:Math.round(Number($("x").value)*1e6),y_nm:Math.round(Number($("y").value)*1e6),
   rotation:Number($("rotation").value),side:$("pose-side").value,
   locks:["position","rotation","side"].filter(k=>$(k+"-lock").checked)});
-$("save-source").onclick=()=>operation("save_source",{review_id:accepted.source_review.id});
+$("save-source").onclick=()=>accepted.source_review ? operation("save_source",{review_id:accepted.source_review.id}) : operation("prepare_placement");
 $("open-board").onclick=()=>api("/api/open-board").catch(e=>status(e.message,true));
 for (const [id,action] of [["discard-source","discard_source"],["undo-source","undo_source"],["redo-source","redo_source"]]) $(id).onclick=()=>operation(action);
 $("reload-source").onclick=()=>{if (confirm("Discard temporary placement, previews and history, and reload the current source?")) operation("reload_source");};

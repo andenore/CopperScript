@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from hashlib import sha256
-from math import isfinite
 
 from ..lexer import Token, TokenKind, tokenize
 from ..parser import parse
@@ -164,7 +163,7 @@ def _erase_tokens(tokens, span):
 
 def fixed_placement_patch(snapshot: SourceSnapshot, reference: str, *,
                           x_nm: int | None = None, y_nm: int | None = None,
-                          rotation: float | None = None, side: str | None = None,
+                          rotation: Decimal | int | float | None = None, side: str | None = None,
                           clear: tuple[str, ...] = (),
                           resolved_references: frozenset[str] = frozenset()) -> SourcePatch:
     """Update/add a single board-owned fixed placement without rewriting the file.
@@ -193,7 +192,7 @@ def fixed_placement_patch(snapshot: SourceSnapshot, reference: str, *,
                 raise SourceEditError("position must be integer nanometres within the editor range")
             values[name] = f"{format(Decimal(value) / Decimal(1000000), 'f')}mm"
     if rotation is not None:
-        if type(rotation) not in (int, float) or abs(rotation) > 3600 or not isfinite(rotation):
+        if type(rotation) not in (int, float, Decimal) or not Decimal(str(rotation)).is_finite() or abs(rotation) > 3600:
             raise SourceEditError("rotation must be finite degrees within the editor range")
         values["rotation"] = format(Decimal(str(rotation)), "f")
     if side is not None:
