@@ -237,7 +237,7 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
         if not _remaining_states(stats, maximum_states, maximum_total_states):
             break
         groups = tuple(_transitions(board, first, second, a.pad_position,
-            partners[a.pad.component].pad_position, a.pad.component, surface, layer, site_rank)
+            partners[a.pad].pad_position, a.pad.component, surface, layer, site_rank)
             for a, surface in zip(accesses, surfaces))
         combinations = sorted(((a,b) for a,b in product(*groups) if a.port.sign == -b.port.sign),
             key=lambda pair: (pair[0].port.preference+pair[1].port.preference,
@@ -246,7 +246,10 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
                 pair[0].port.center.x_nm, pair[0].port.center.y_nm,
                 pair[1].port.center.x_nm, pair[1].port.center.y_nm))
         stats.port_pairs += len(combinations)
-        for ordinal,(a,b) in enumerate(combinations[:maximum_searches],1):
+        searches_at_entry = stats.searches
+        for ordinal,(a,b) in enumerate(combinations[:128],1):
+            if stats.searches-searches_at_entry >= maximum_searches:
+                break
             budget = _remaining_states(stats, maximum_states, maximum_total_states)
             if not budget:
                 break

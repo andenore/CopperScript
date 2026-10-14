@@ -193,7 +193,10 @@ class RoutingClearanceIndex:
         every returned piece. Critical routing owns its coupled width profile.
         """
         if net not in self.breakout.ordinary:
-            return (TrackSegment(net, start, end, width_nm, layer),)
+            tracks = (TrackSegment(net, start, end, width_nm, layer),)
+            # Exact local/global terminal access uses the authored critical
+            # breakout widths too. Ordinary nets retain preferred-width trials.
+            return self.breakout.split_tracks(tracks, width_nm) if net in self.breakout.declared else tracks
         from .surface_path import _track_inside_board
 
         def fits(first: Point, second: Point) -> bool:
@@ -214,7 +217,7 @@ class RoutingClearanceIndex:
 
         Nets without breakout properties check the one ``width_nm`` track.
         """
-        if net not in self.breakout.ordinary:
+        if net not in self.breakout.declared:
             return self.can_track(net, start, end, width_nm, layer)
         return all(self.can_track(net, piece.start, piece.end, piece.width_nm, layer)
                    for piece in self.route_pieces(net, start, end, width_nm, layer))

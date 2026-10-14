@@ -349,6 +349,8 @@ def route_global(
         for net in board.nets if len(net.pads) >= 2 and net.name not in zone_nets and net.name not in owner_connected
         for pad in macro_routing_pads(board, net)
     }
+    from .global_terminals import register_terminal_capacity
+    graph, access_options = register_terminal_capacity(board, graph, access_options)
     capacities = {
         resource.identifier: resource.capacity
         for resource in graph.resources.values()
@@ -1078,7 +1080,9 @@ def _pin_access_candidates(
             break
     if not found:
         local_nodes = [item for item in nearby
-                       if graph.layers[item.layer_index] in direct_layers]
+                       if graph.layers[item.layer_index] in direct_layers
+                       and clearance.can_track(net, graph.point(item), graph.point(item),
+                           clearance.breakout.track_width_nm(net, clearance.breakout.region(net, (graph.point(item),)), width), graph.layers[item.layer_index])]
         for node in local_nodes[:max(4, options.pin_access_candidates)]:
             layer = graph.layers[node.layer_index]
             endpoint = graph.point(node)
@@ -1094,7 +1098,6 @@ def _pin_access_candidates(
     if (physical_pad.kind is PadKind.SMD and len(allowed_layers) > 1
             and (rule is None or rule.kind is not RouteKind.DIFFERENTIAL)
             and (rule is None or rule.max_vias != 0)):
-        bounds = placed_pad_shape(position, physical_pad, placement).bounds
         margin = board.rules.default_via_size_nm // 2 + board.rules.minimum_clearance_nm
         directions = ((1, 0), (-1, 0), (0, 1), (0, -1),
                       (1, 1), (1, -1), (-1, 1), (-1, -1))
@@ -1102,9 +1105,6 @@ def _pin_access_candidates(
                             options.escape_step_nm):
             for dx, dy in directions:
                 anchor = Point(position.x_nm + radius * dx, position.y_nm + radius * dy)
-                if (bounds.min_x - margin <= anchor.x_nm <= bounds.max_x + margin
-                        and bounds.min_y - margin <= anchor.y_nm <= bounds.max_y + margin):
-                    continue
                 if not _inside_outline_with_margin(anchor, board.outline.vertices, margin):
                     continue
                 if not clearance.can_route(net, position, anchor, width, side):
@@ -1114,7 +1114,8 @@ def _pin_access_candidates(
                         continue
                     span = physical_via_span(board, side, layer)
                     if span is None or not clearance.can_via(
-                        net, anchor, board.rules.default_via_size_nm, span[0], span[1]
+                        net, anchor, board.rules.default_via_size_nm, span[0], span[1],
+                        board.rules.default_via_drill_nm, check_hole_copper=True
                     ):
                         continue
                     nodes = [node for node in nearby if graph.layers[node.layer_index] is layer
@@ -1125,9 +1126,9 @@ def _pin_access_candidates(
                     node = min(nodes, key=lambda item: (
                         _node_distance_nm(graph.point(item), anchor), item,
                     ))
-                    identifier = _via_resource_id(graph, node, span[0], span[1])
-                    if identifier not in graph.via_sites or not graph.via_sites[identifier]:
-                        continue
+                    # This terminal transition is actual checked copper at
+                    # anchor, not a sampled coarse-grid crossing. It ends at
+                    # an existing legal node through its own exact lead-in.
                     endpoint = graph.point(node)
                     if anchor != endpoint and not clearance.can_route(
                         net, anchor, endpoint, width, layer,

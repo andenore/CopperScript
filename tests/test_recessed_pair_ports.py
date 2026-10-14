@@ -37,3 +37,15 @@ def test_pair_local_access_rejects_non_octilinear_shortcut():
     b=board_fixture(); ix=_PairAccessIndex(b)
     assert not ix.can_route('A',Point.mm(5,5.75),Point.mm(5.2,6.75),250000,CopperLayer.FRONT)
     assert ix.route_pieces('A',Point.mm(5,5.75),Point.mm(5,6.5),250000,CopperLayer.FRONT)[0].width_nm==120000
+
+
+def test_shared_pin_access_emits_declared_critical_neckdown_at_bga_gap():
+    b=board_fixture(); ix=RoutingClearanceIndex(b)
+    start,end=Point.mm(5,5.75),Point.mm(5,5.375)
+    assert not ix.can_track('A',start,end,250000,CopperLayer.FRONT)
+    assert ix.can_route('A',start,end,250000,CopperLayer.FRONT)
+    emitted=ix.route_pieces('A',start,end,250000,CopperLayer.FRONT)
+    assert emitted and all(t.width_nm==120000 for t in emitted)
+    assert all(ix.can_track(t.net,t.start,t.end,t.width_nm,t.layer) for t in emitted)
+    far=ix.route_pieces('A',Point.mm(9,9),Point.mm(10,9),250000,CopperLayer.FRONT)
+    assert all(t.width_nm==250000 for t in far)

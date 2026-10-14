@@ -1294,7 +1294,7 @@ def _route_pair_group(
     partner_name = partner_rule.net
     first, second = sorted((rule, partner_rule), key=lambda item: item.net)
     from .pair_terminals import prepare_pair_terminals, terminal_partners
-    routes, first_branches, second_branches = prepare_pair_terminals(
+    routes, first_branches, second_branches, branch_via_pairs, branch_return_vias = prepare_pair_terminals(
         replace(board, tracks=tuple(tracks), vias=tuple(vias)), first, second, routes)
     found: set[str] = set()
     if nested is not None:
@@ -1345,7 +1345,8 @@ def _route_pair_group(
     owned_terminals = macro_owned_pads(board)
     protected_ends = any(p in owned_terminals for n in board.nets if n.name in (first.net, second.net) for p in n.pads)
     if not result.connected and supported and (guided or not protected_ends):
-        search_board = replace(board, tracks=(*tracks, *first_branches, *second_branches), vias=tuple(vias))
+        search_board = replace(board, tracks=(*tracks, *first_branches, *second_branches),
+                               vias=(*vias, *[v for pair in branch_via_pairs for v in pair], *branch_return_vias))
         stats = PairSearchStats()
         if crossing is not None:
             assert crossing.layer is not None
@@ -1383,8 +1384,8 @@ def _route_pair_group(
                     attempt, proposed_tracks, proposed_vias = _route_pair(
                         board, first, second, routes,
                         exact_tracks=((*first_branches, *candidate.first), (*second_branches, *candidate.second)),
-                        exact_via_pairs=candidate.via_pairs,
-                        exact_return_vias=candidate.return_vias,
+                        exact_via_pairs=(*branch_via_pairs, *candidate.via_pairs),
+                        exact_return_vias=(*branch_return_vias, *candidate.return_vias),
                     )
                     attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
                         board, attempt, proposed_tracks, proposed_vias, rules,

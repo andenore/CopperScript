@@ -320,7 +320,7 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
     index = RoutingClearanceIndex(board)
     accesses = sorted(first_guide.accesses, key=lambda access: access.pad.component)
     groups = [_ports(board, index, first_rule.net, second_rule.net, access.pad_position,
-                     partners[access.pad.component].pad_position, access.pad.component,
+                     partners[access.pad].pad_position, access.pad.component,
                      width, offset, clearance, layer) for access in accesses]
     combinations = sorted([(a, b) for a, b in product(*groups) if a.sign == -b.sign],
                           key=lambda pair: (pair[0].preference + pair[1].preference,
@@ -329,7 +329,10 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                                             pair[0].center.x_nm, pair[0].center.y_nm,
                                             pair[1].center.x_nm, pair[1].center.y_nm))
     stats.port_pairs += len(combinations)
-    for search_index, (start, end) in enumerate(combinations[:maximum_searches], 1):
+    searches_at_entry = stats.searches
+    for search_index, (start, end) in enumerate(combinations[:128], 1):
+        if stats.searches-searches_at_entry >= maximum_searches:
+            break
         budget = _remaining_states(stats, maximum_states, maximum_total_states)
         if not budget:
             break
@@ -395,7 +398,7 @@ def nested_exit_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, sec
     index = RoutingClearanceIndex(board)
     ports = {access.pad.component: _ports(
         board, index, first_rule.net, second_rule.net, access.pad_position,
-        partners[access.pad.component].pad_position, access.pad.component,
+        partners[access.pad].pad_position, access.pad.component,
         width, offset, clearance, layer) for access in first_guide.accesses}
     start = next((port for port in ports[component] if port.heading == outward), None)
     end = next((port for name, items in ports.items() if name != component for port in items

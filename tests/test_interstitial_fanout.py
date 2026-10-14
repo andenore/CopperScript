@@ -87,3 +87,52 @@ def test_plane_launch_uses_exact_round_pad_interstice_without_via_in_pad():
     assert RoutingClearanceIndex(board).can_via('N5',via.position,via.size_nm,
         via.from_layer,via.to_layer,drill_nm=via.drill_nm)
     assert tracks[0].start==start and tracks[-1].end==via.position
+
+
+def test_global_terminal_can_use_exact_round_pad_port_without_sampled_grid_via():
+    from pcbir.routing import _build_graph,_pin_access_candidates,GlobalRouterOptions
+    b,pose,pad,start=fixture()
+    options=GlobalRouterOptions(tile_size_nm=2500000,escape_step_nm=125000,pin_access_candidates=16)
+    graph=_build_graph(b,options)
+    graph=replace(graph,via_sites={name:() for name in graph.via_sites},resources={key:r for key,r in graph.resources.items() if r.layer is not None})
+    ix=RoutingClearanceIndex(b)
+    accesses=_pin_access_candidates(b,graph,PadReference('U','5'),'N5',
+        (CopperLayer.FRONT,CopperLayer.BACK),None,ix,options)
+    launched=[a for a in accesses if a.via is not None]
+    assert launched
+    assert any(a.via.position==Point.mm('5.375','5.375') for a in launched)
+    for a in launched:
+        assert a.node in graph.legal_nodes and a.access_position==graph.point(a.node)
+        assert ix.can_via(a.via.net,a.via.position,a.via.size_nm,a.via.from_layer,
+            a.via.to_layer,a.via.drill_nm,check_hole_copper=True)
+        assert all(ix.can_track(t.net,t.start,t.end,t.width_nm,t.layer) for t in a.tracks)
+    assert b.tracks==b.vias==()
+
+
+def test_registered_terminal_slots_are_real_coexisting_and_budgeted(monkeypatch):
+    from pcbir.routing import _build_graph,_pin_access_candidates,GlobalRouterOptions
+    from pcbir.global_terminals import register_terminal_capacity
+    b,pose,pad,start=fixture()
+    options=GlobalRouterOptions(tile_size_nm=2500000,escape_step_nm=125000,pin_access_candidates=16)
+    graph=_build_graph(b,options)
+    graph=replace(graph,via_sites={name:() for name in graph.via_sites},resources={key:r for key,r in graph.resources.items() if r.layer is not None})
+    ix=RoutingClearanceIndex(b); ref=PadReference('U','5')
+    choices=_pin_access_candidates(b,graph,ref,'N5',(CopperLayer.FRONT,CopperLayer.BACK),None,ix,options)
+    result,held=register_terminal_capacity(b,graph,{('N5',ref):choices})
+    assert result.legal_nodes==graph.legal_nodes
+    assert any(a.via is not None for a in held['N5',ref])
+    pool=[]
+    for name,points in result.via_sites.items():
+        _,low,high,_,_=name.split(':')
+        for pos in points:
+            pool.append(Via('slot'+str(len(pool)),pos,450000,200000,result.layers[int(low)],result.layers[int(high)]))
+    assert ix.candidate_vias_clear(tuple(pool))
+    assert all(ix.can_via(v.net,v.position,v.size_nm,v.from_layer,v.to_layer,v.drill_nm,check_hole_copper=True) for v in pool)
+    for resource in result.resources.values():
+        if resource.layer is None:
+            assert resource.capacity==len(result.via_sites[resource.identifier])
+    monkeypatch.setattr('pcbir.global_terminals.MAX_TERMINAL_CAPACITY_PROPOSALS',0)
+    limited,filtered=register_terminal_capacity(b,graph,{('N5',ref):choices})
+    assert limited==graph
+    assert all(a.via is None for a in filtered['N5',ref])
+    assert b.tracks==b.vias==()
