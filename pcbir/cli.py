@@ -420,6 +420,8 @@ def _parser() -> argparse.ArgumentParser:
                                     help="explicit pinned immutable-copper macro scene (repeatable)")
         physical_parser.add_argument("--placement-templates", type=Path,
                                     help="explicit data-only, digest-bound physical template scene")
+    board_route_parser.add_argument("--placement-feedback-trials", default=24, type=_nonnegative_int,
+        help="maximum disposable global placement trials per feedback iteration (default: 24)")
     for router_parser in (global_route_parser, board_route_parser):
         router_parser.add_argument("--pin-access-step-mm", default="0.5", type=_positive_mm,
             help="computational pin-to-global-guide escape grid (default: 0.5 mm)")
@@ -673,7 +675,7 @@ def _apply_routing_profile(args, argv):
         "thorough": (4, 100000, 16, 32, 16, 12000),
     }
     flags = {item.split("=", 1)[0] for item in argv if item.startswith("--")}
-    names = ("passes", "search_budget", "pin_access_step_mm", "package_access_trials", "package_placement_probes",
+    names = ("passes", "search_budget", "pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
              "filled_copper_trials", "filled_copper_search_states")
     for name, value in zip(names, profiles[args.routing_profile]):
         if "--" + name.replace("_", "-") not in flags:
@@ -1207,6 +1209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 placement_options = _planner_options(args)
                 feedback_options = PlacementRoutingFeedbackOptions(
                     maximum_iterations=args.feedback_iterations,
+                    maximum_trials_per_iteration=args.placement_feedback_trials,
                     initial_movement_nm=router_options.tile_size_nm,
                     preferred_candidate_id=args.placement_candidate,
                 )
@@ -1375,7 +1378,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
-                    "passes", "search_budget", "pin_access_step_mm", "package_access_trials", "package_placement_probes",
+                    "passes", "search_budget", "pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
                     "filled_copper_search_states")},
