@@ -166,3 +166,20 @@ produced no native finding, with both 10 um and zero drawing strokes. Native
 reported gaps also depend on courtyard drawing stroke. Retain the exact
 Physical-IR placement/interior check; a native-only pass cannot waive it.
 No epsilon, negative clearance or drawing-geometry modification is introduced.
+
+## Footprint-owned through-drill obstacles
+
+Incremental placement treats accepted footprint NPTH/PTH drills as physical
+obstacles on both faces. Candidate and held drill owners are checked in both
+move directions against foreign courtyards and copper, using the same oval/
+round drill envelopes and board hole clearance as physical DRC. Courtyard
+nonpenetration retains the existing positive guard used for mechanical holes.
+Only accepted held poses supply peer geometry; unaccepted source seeds do not
+become obstacles. Fixed/rigid constraints and search allowances remain unchanged.
+
+Own NPTH copper checks honor the existing component-scoped hole rule. That rule,
+net labels and solder mask never waive a foreign component's drill clearance.
+Own PTH annuli and own courtyard are exempt from the foreign-obstacle test;
+other own-PTH land checks remain unchanged. Slot-process, native quantization,
+assembly and CAM qualification remain independent. Bounded caches retain only
+immutable footprint and exact transformed pose geometry, never legality answers.

@@ -508,8 +508,14 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
     from .geometry import RoundedConvexShape, shapes_clear
     from .mechanical import shape_in_outline, hole_shape
     from .clusters import cluster_edge_opening_rejections
+    from .placement_holes import footprint_holes_clear
     errors = list(cluster_edge_opening_rejections(board, placements))
     for ref, pose in sorted(placements.items()):
+        if not footprint_holes_clear(board, pose, {}):
+            errors.append(f"{ref}: own non-plated drill violates pad clearance")
+        for other_ref, other in sorted(placements.items()):
+            if other_ref < ref and not footprint_holes_clear(board, pose, {other_ref: other}):
+                errors.append(f"{ref} / {other_ref}: footprint drill violates courtyard or copper clearance")
         rule = _rules(board).get(ref)
         if ref in options.fixed_references and pose != original[ref]:
             errors.append(f"{ref}: temporary session lock fixes the complete pose")
@@ -2269,6 +2275,9 @@ def _legal(
             clearance,
         ):
             return False
+    from .placement_holes import footprint_holes_clear
+    if not footprint_holes_clear(board, candidate, placed):
+        return False
     edge_clearance = (rule.edge_clearance_nm if rule and rule.edge_clearance_nm is not None
                       else options.edge_clearance_nm)
     from .mechanical import shape_in_board
