@@ -63,8 +63,8 @@ def library_module(*, offline: bool):
     source = ROOT / "examples/full_vertical/board.copper"
     location = SourceLocation(str(source), 0, 1, 1)
     resolver = PackageResolver.for_source(source, location, locked=True, offline=offline)
-    if LIBRARY_MODULE in resolver.manifest.replacements:
-        raise ValueError("CI requires CopperLib through its URL, not a local replacement")
+    if LIBRARY_MODULE in resolver.manifest.replacements or LIBRARY_MODULE in resolver.manifest.remote_replacements:
+        raise ValueError("CI requires CopperLib through its URL, not a replacement")
     result = resolver.resolve(LIBRARY_MODULE, location)
     if not re.fullmatch(r"[0-9a-f]{40}", result.version):
         raise ValueError("CI requires CopperLib pinned by full Git commit in copper.mod")

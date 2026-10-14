@@ -144,7 +144,20 @@ replace github.com/vendor/copper-parts => ../copper-parts
 ```
 
 `require` selects a module version. `replace` is optional and redirects that
-module to a local directory, relative to `copper.mod`. `copper lock board.copper`
+module to a local directory, relative to `copper.mod`. A remote replacement
+names another GitHub/GitLab repository and its own tag or commit instead:
+
+```text
+require github.com/KiCad/kicad-footprints 7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd
+replace github.com/KiCad/kicad-footprints => gitlab.com/kicad/libraries/kicad-footprints 10.0.6
+```
+
+The module keeps its identity: imports, footprint bindings and macro member
+URLs still name `github.com/KiCad/kicad-footprints/...`, but the content comes
+from the replacement repository at its revision. The lock keeps the required
+version as the module key and records `replace:git:https://SOURCE.git@REVISION`
+as its source, so retargeting the replacement is a lock change even when the
+bytes are identical. `copper lock board.copper`
 writes the canonical `copper.lock` inventory. The lock contains a module digest
 and an individual SHA-256 and size for each consumable `.copper`, `.kicad_mod`,
 3D-model, JSON, and CSV asset. Local replacements are locked exactly like

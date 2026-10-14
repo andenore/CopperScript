@@ -39,6 +39,12 @@ supported by the package transport. Choose an explicit published tag or full
 commit SHA in `require`; the repository itself does not need to contain
 CopperScript source files.
 
+A `replace MODULE => SOURCE REVISION` directive fetches a module's content from
+another GitHub/GitLab repository without changing its identity. For example, a
+project can keep `github.com/KiCad/kicad-footprints` asset URLs while taking a
+KiCad release from `gitlab.com/kicad/libraries/kicad-footprints 10.0.6`; see the
+[language reference](language-reference.md) for the lock semantics.
+
 ## Exact module asset URLs
 
 Instead of a namespace binding, set an exact asset path in a part or component:
@@ -102,7 +108,7 @@ or previously cached digest can substitute for current dependency bytes.
 | Flag | Behavior |
 | --- | --- |
 | `--locked` | Require the declared dependency revision and complete file inventory to match `copper.lock`. Never rewrite the lock. Downloads remain allowed to refill missing cache entries. |
-| `--offline` | Prevent remote fetching. Required modules must already be cached or supplied through a local replacement. An unlocked offline operation may still create/update a lock. |
+| `--offline` | Prevent remote fetching. Required modules must already be cached (including a remote replacement's source revision) or supplied through a local replacement. An unlocked offline operation may still create/update a lock. |
 
 A lockfile alone does not contain the geometry. Prepare the cache before using
 both flags. The editor already uses both flags, so prepare the project with
