@@ -1393,6 +1393,17 @@ def _exact_repair(
     # Prefer actual blockers and local companions to an unrelated insertion tail.
     blockers: dict[str, int] = {}
     probes = _relative_candidates(board, failed, targets[failed], placed, options)
+    rule = _rules(board).get(failed)
+    if rule is not None and rule.region is not None:
+        # Named-region-only components have no relative proposals. Discover
+        # their actual held blockers from the same ordinary regional domain
+        # used by legalization, rather than selecting an unrelated tail.
+        # Bound supplemental raw probes as well as the unchanged accepted
+        # blocker-probe allowance; relative proposals retain their preference.
+        general = (replace(targets[failed], position=point, rotation_degrees=angle)
+                   for point in _candidate_positions(board, targets[failed], options)
+                   for angle in _allowed_orientations(board, failed))
+        probes = chain(probes, islice(general, options.exact_repair_candidates))
     checked = 0
     for candidate in probes:
         if not _legal(candidate, fixed, board, options):
