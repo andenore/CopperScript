@@ -496,6 +496,7 @@ def _compile_board(
         _error("CMP024", "ports may only be declared inside a module", document.location)
     instances = _validate_instances(body, declarations, modules)
     _validate_hole_clearance_targets(document, body, instances, modules)
+    _validate_courtyard_gap_targets(document, body, instances, modules)
     for net in body.nets:
         for endpoint in net.endpoints:
             if endpoint.component == "port":
@@ -541,6 +542,7 @@ def _compile_module(
         _error("CMP072", "power states may only be declared on a board", document.location)
     instances = _validate_instances(body, declarations, modules)
     _validate_hole_clearance_targets(document, body, instances, modules)
+    _validate_courtyard_gap_targets(document, body, instances, modules)
     if body.physical_macros:
         from .elaborate import elaborate
         resolve_macro_bindings(elaborate(replace(body, module_instances=instances, module_definitions=modules)))
@@ -1698,6 +1700,9 @@ def _constraint(declaration: ConstraintDecl) -> Constraint:
         _validate_length_match(declaration, parameters)
     elif kind is ConstraintKind.HOLE_CLEARANCE:
         _validate_hole_clearance(declaration, parameters)
+    elif kind is ConstraintKind.COURTYARD_GAP or (
+            kind is ConstraintKind.PLACEMENT_REGION and "courtyard_gap" in parameters):
+        _validate_courtyard_gap(declaration, parameters, mode)
     try:
         return Constraint(
             kind=kind,
@@ -1797,6 +1802,44 @@ def _validate_length_match(declaration: ConstraintDecl, parameters: Mapping[str,
     if "max_skew" not in parameters:
         _error("CMP111", "length_match requires 'max_skew'", location)
     _positive_length(parameters, "max_skew", "length_match", location)
+
+
+def _validate_courtyard_gap(declaration: ConstraintDecl, parameters: Mapping[str, object],
+                           mode: ConstraintMode) -> None:
+    """Located validation of explicit hard additional courtyard spacing."""
+    if mode not in {ConstraintMode.REQUIRE, ConstraintMode.EXTERNAL}:
+        _error("CMP123", "courtyard_gap is a hard minimum; mode must be require or external",
+               declaration.location)
+    if not declaration.targets or any("." in target for target in declaration.targets):
+        _error("CMP123", "courtyard_gap requires component targets, not pins", declaration.location)
+    standalone = declaration.kind == ConstraintKind.COURTYARD_GAP.value
+    name = "additional" if standalone else "courtyard_gap"
+    if standalone and set(parameters) != {name}:
+        _error("CMP123", "courtyard_gap requires only the 'additional' parameter", declaration.location)
+    value = parameters.get(name)
+    if not isinstance(value, Length):
+        _error("CMP123", f"courtyard_gap parameter {name!r} must be a nonnegative length",
+               declaration.location)
+    nanometres = value.in_unit("mm") * 1_000_000
+    if (not nanometres.is_finite() or nanometres < 0
+            or nanometres != nanometres.to_integral_value()):
+        _error("CMP123", f"courtyard_gap parameter {name!r} must be nonnegative exact integer nanometres",
+               declaration.location)
+
+
+def _validate_courtyard_gap_targets(document: Document, body: Board,
+                                   instances: tuple[ModuleInstance, ...],
+                                   modules: Mapping[str, ModuleDefinition]) -> None:
+    for declaration in document.declarations:
+        if not isinstance(declaration, ConstraintDecl) or not (
+                declaration.kind == ConstraintKind.COURTYARD_GAP.value
+                or declaration.kind == ConstraintKind.PLACEMENT_REGION.value
+                and "courtyard_gap" in declaration.parameters):
+            continue
+        for target in declaration.targets:
+            if not _component_path_exists(target, body.components, instances, modules):
+                _error("CMP123", f"courtyard_gap target {target!r} is not a component",
+                       declaration.location)
 
 
 def _validate_hole_clearance(declaration: ConstraintDecl, parameters: Mapping[str, object]) -> None:

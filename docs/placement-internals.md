@@ -135,3 +135,34 @@ through a fixed anchor exhausts its bounded search, split independently
 constrained movable groups and retry the existing local repacker. Preserve fixed
 anchors, rigid geometry and every relative rule. A failed search never permits a
 constraint relaxation.
+
+## Authored additional courtyard gaps
+
+The ordinary fallback is 0.5 mm beyond the footprint courtyard. A source
+`courtyard_gap` hard constraint can specify a nonnegative additional minimum
+for selected members. Pair clearance is the larger of each member's authored
+minimum or its fallback when unannotated. An unannotated neighbor therefore
+keeps the default. Inside a shared audited rigid cluster, its internal contract
+replaces the fallback; explicit member minima can tighten that contract.
+
+The shared physical resolver controls legality, analytical separation, fine
+search support edges, region contact proposals, pair forward checking and
+decoupling search extents. Search and repair allowances remain unchanged.
+Default source checking, physical DRC and native export use the same member
+policy. Local helpers may still accept a caller-specific fallback; a pose-only
+helper result does not alter the original board's default DRC policy.
+
+Zero additional clearance allows boundary-only contact while requiring disjoint
+courtyard interiors. Nonrectangular simple rings use exact integer triangulation
+and strict projection tests; no epsilon or negative clearance is used. This
+pair-only test leaves existing macro, keepout and assembly boundary predicates
+unchanged. Copper,
+pad, mask, paste and assembly/process requirements remain independent.
+
+Native courtyard rules reproduce the resolved pair floors, but native geometry
+is a complementary gate. KiCad 10.0.6 sampled controls matched the expected
+policy cases, while a 1 um courtyard-interior overlap at zero additional gap
+produced no native finding, with both 10 um and zero drawing strokes. Native
+reported gaps also depend on courtyard drawing stroke. Retain the exact
+Physical-IR placement/interior check; a native-only pass cannot waive it.
+No epsilon, negative clearance or drawing-geometry modification is introduced.

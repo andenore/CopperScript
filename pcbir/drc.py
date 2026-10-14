@@ -269,6 +269,10 @@ def run_physical_drc(
     ):
         findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR, "component placement violates board, keepout, or courtyard legality"))
     coverage.append(DrcCoverage("placement_legality", DrcCoverageStatus.EXECUTED, True))
+    coverage.append(DrcCoverage("courtyard_gap",
+        DrcCoverageStatus.EXECUTED if any(rule.additional_courtyard_gap_nm is not None
+                                        for rule in board.placement_rules)
+        else DrcCoverageStatus.NOT_APPLICABLE, True))
     _check_track_rules(board, findings, relaxations)
     coverage.append(DrcCoverage("track_width_and_budgets", DrcCoverageStatus.EXECUTED, True))
     _check_differential_rules(board, findings)

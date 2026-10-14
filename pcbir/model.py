@@ -196,6 +196,7 @@ class ConstraintKind(str, Enum):
     MAX_DISTANCE = "max_distance"
     MIN_DISTANCE = "min_distance"
     PLACEMENT_REGION = "placement_region"
+    COURTYARD_GAP = "courtyard_gap"
     FIXED_PLACEMENT = "fixed_placement"
     ALLOWED_ORIENTATIONS = "allowed_orientations"
     ALIGN = "align"

@@ -11,7 +11,8 @@ from types import MappingProxyType
 from typing import Mapping, TYPE_CHECKING
 
 from .physical import (BoardSide, CopperLayer, DecouplingLink, PadKind, PadReference,
-                       PhysicalBoard, Point, RouteKind, TrackSegment, Via, nm_from_mm)
+                       PhysicalBoard, Point, RouteKind, TrackSegment, Via, nm_from_mm,
+                       component_pair_courtyard_gap_nm)
 
 if TYPE_CHECKING:
     from .decoupling_paths import DecouplingCrossLayerWitness
@@ -263,7 +264,9 @@ def improve_decoupling_placement(board, placements, options):
         # A small off-grid search spans local courtyard edges while allowing
         # orientation of the feed land toward the protected IC pad.
         radius = max(target_fp.body_size.width_nm, target_fp.body_size.height_nm) + \
-                 max(cap_fp.body_size.width_nm, cap_fp.body_size.height_nm) + options.component_clearance_nm
+                 max(cap_fp.body_size.width_nm, cap_fp.body_size.height_nm) + \
+                 component_pair_courtyard_gap_nm(board, reference, target.reference,
+                                                fallback_nm=options.component_clearance_nm)
         step = max(nm_from_mm("0.1"), radius // 24)
         candidates = [current]
         rule = next((r for r in board.placement_rules if r.reference == reference), None)

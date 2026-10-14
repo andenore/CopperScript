@@ -752,7 +752,7 @@ constraint routing(USB_DP) {
 }
 ```
 
-Known constraint kinds are `max_distance`, `min_distance`,
+Known constraint kinds are `max_distance`, `min_distance`, `courtyard_gap`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
 `placement_group`, `keepout`, `routing`, `copper_zone`, `via_in_pad`,
 `length_match`, `hole_clearance`, and `note`. Coordinates and rectangle dimensions
@@ -762,6 +762,36 @@ including 45-degree increments; unconstrained components still default to
 0, 90, 180, or 270 degrees. Use `allowed_orientations` when a diagonal
 placement is acceptable for assembly and interface alignment. `note` remains
 metadata and has no placement effect.
+
+`courtyard_gap` declares a hard additional gap between audited component
+courtyards. It does not shrink the courtyard or change copper, pad, mask,
+paste, routing-access or assembly-process checks:
+
+```copper
+constraint courtyard_gap(C1, C2) { additional = 0.1 mm; }
+```
+
+Targets must be components, including module-qualified component paths, rather
+than pins. `additional` must be a nonnegative length exactly representable in
+integer nanometres. Zero permits no additional gap; courtyard interiors still
+must not overlap. Only hard `require` (the default) and `external` modes are
+supported; this declaration is not a preferred/rework spacing objective.
+`placement_region` may include `courtyard_gap = 0.1 mm;` as shorthand for the
+same member policy. Repeated declarations combine by maximum, independently
+of declaration order, and an absent field never erases an explicit value.
+
+Each ordinary same-side pair uses the maximum of its two member gaps. A member
+without an explicit policy retains the ordinary 0.5 mm default, so annotating
+one member does not relax its unannotated neighbour. An audited rigid cluster's
+internal-clearance contract replaces the generic fallback inside that cluster;
+explicit member gaps can only tighten that contract. Source fixed poses,
+orientations, sides, regions and immutable macro geometry remain authoritative.
+Planner APIs retain their explicit caller fallback behavior for unannotated
+members. Changing source policy changes the physical intent and invalidates
+evidence bound to the earlier inputs. A declared dense prototype gap is a
+design choice, not a guarantee of vendor, assembler, CAM or electrical
+qualification; selected parts and manufacturing processes require separate
+checks.
 
 All constraints accept the ownership metadata `id`, `mode`, `consumers`, and
 `verifier`. Modes are `require`, `target`, `prefer`, `assume`, and `external`.

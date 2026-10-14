@@ -32,6 +32,8 @@ from .physical import (
     BoardOutline,
     BoardSide,
     ComponentPlacementRule,
+    component_pair_courtyard_gap_nm,
+    DEFAULT_ADDITIONAL_COURTYARD_GAP_NM,
     CopperKeepout,
     CopperLayer,
     Nanometres,
@@ -58,7 +60,7 @@ from .physical import (
 class PlacementPlannerOptions:
     grid_step_nm: Nanometres = nm_from_mm("1")
     edge_clearance_nm: Nanometres = nm_from_mm("2")
-    component_clearance_nm: Nanometres = nm_from_mm("0.5")
+    component_clearance_nm: Nanometres = DEFAULT_ADDITIONAL_COURTYARD_GAP_NM
     congestion_bin_nm: Nanometres = nm_from_mm("5")
     analytical_iterations: int = 40
     analytical_step_mm: float = 0.08
@@ -927,7 +929,8 @@ def _analytical_place(
                 right_width, right_height = _half_extents_mm(board, source[right])
                 dx = coordinates[left][0] - coordinates[right][0]
                 dy = coordinates[left][1] - coordinates[right][1]
-                clearance = options.component_clearance_nm / 1_000_000
+                clearance = component_pair_courtyard_gap_nm(
+                    board, left, right, fallback_nm=options.component_clearance_nm) / 1_000_000
                 limit_x = left_width + right_width + clearance
                 limit_y = left_height + right_height + clearance
                 overlap_x = limit_x - abs(dx)
@@ -1327,7 +1330,9 @@ def _relative_candidates(
                         if other.side is not placement.side:
                             continue
                         bounds = _point_bounds(_placement_polygon(board, other))
-                        gap = options.component_clearance_nm
+                        gap = component_pair_courtyard_gap_nm(
+                            board, placement.reference, other.reference,
+                            fallback_nm=options.component_clearance_nm)
                         edges_x = (bounds[0]-gap-own_bounds[2], bounds[2]+gap-own_bounds[0])
                         edges_y = (bounds[1]-gap-own_bounds[3], bounds[3]+gap-own_bounds[1])
                         # Distant objects cannot bound this local neighbourhood.
@@ -1482,7 +1487,6 @@ def _courtyard_contact_candidates(board, target, anchors, options, *, excluded, 
         return ()
     region = next(item for item in board.regions if item.name == rule.region)
     x0, y0, x1, y1 = _outline_bounds(region.outline)
-    gap = options.component_clearance_nm
     seen = set(excluded)
     result = {}
     # The caller supplies finite source/base/member tuples. Deduplicate poses
@@ -1495,10 +1499,18 @@ def _courtyard_contact_candidates(board, target, anchors, options, *, excluded, 
                 or anchor.side is not target.side):
             continue
         box = _point_bounds(_placement_polygon(board, anchor))
+        # A removed member's own pose is a proposal support anchor, not a
+        # collision pair. Preserve that bounded source geometry without asking
+        # the distinct-component resolver to give self-contact authority.
+        gap = (rule.additional_courtyard_gap_nm
+               if anchor.reference == target.reference and rule.additional_courtyard_gap_nm is not None
+               else options.component_clearance_nm if anchor.reference == target.reference
+               else component_pair_courtyard_gap_nm(board, target.reference, anchor.reference,
+                                                     fallback_nm=options.component_clearance_nm))
         if (box[2]+gap < x0 or box[0]-gap > x1
                 or box[3]+gap < y0 or box[1]-gap > y1):
             continue
-        local.append((anchor, box))
+        local.append((anchor, box, gap))
     local.sort(key=lambda item: (
         abs(item[0].position.x_nm-target.position.x_nm)
         + abs(item[0].position.y_nm-target.position.y_nm), item[1], item[0].rotation_degrees))
@@ -1528,7 +1540,7 @@ def _courtyard_contact_candidates(board, target, anchors, options, *, excluded, 
             for y in region_ys:
                 if add(angle, x, y, allowed):
                     return finish()
-        for anchor, (ax0, ay0, ax1, ay1) in local:
+        for anchor, (ax0, ay0, ax1, ay1), gap in local:
             xs = tuple(dict.fromkeys((target.position.x_nm,
                 (ax0+ax1-lx-rx)//2, ax0-lx, ax1-rx, *region_xs)))
             ys = tuple(dict.fromkeys((target.position.y_nm,
@@ -1717,7 +1729,9 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
     @lru_cache(maxsize=8192)
     def clash(left, i, right, j):
         return (domains[left][i].side is domains[right][j].side
-                and _polygons_too_close(polygons[left][i], polygons[right][j], options.component_clearance_nm)
+                and _courtyards_too_close(polygons[left][i], polygons[right][j],
+                    component_pair_courtyard_gap_nm(board, left, right,
+                                                   fallback_nm=options.component_clearance_nm))
                 or _relative_penalty(board, {left: domains[left][i], right: domains[right][j]},
                                      rules=pair_rules.get(frozenset((left, right)), ())) > 0)
 
@@ -2246,14 +2260,10 @@ def _legal(
         if other.side is not candidate.side:
             continue
         other_polygon = _placement_polygon(board, other)
-        clearance = options.component_clearance_nm
-        for cluster in board.rigid_clusters:
-            members = {item.reference for item in cluster.members}
-            if (candidate.reference in members and other.reference in members
-                    and cluster.internal_clearance_nm is not None):
-                clearance = cluster.internal_clearance_nm
-                break
-        if _polygons_too_close(
+        clearance = component_pair_courtyard_gap_nm(
+            board, candidate.reference, other.reference,
+            fallback_nm=options.component_clearance_nm)
+        if _courtyards_too_close(
             polygon,
             other_polygon,
             clearance,
@@ -2428,6 +2438,64 @@ def _polygons_too_close(
         for start, end in _edges(other)
     )
     return minimum < clearance
+
+
+def _courtyards_too_close(first: tuple[Point, ...], second: tuple[Point, ...], clearance: int) -> bool:
+    """Extra courtyard gaps use interior-only overlap at exactly zero.
+
+    Keepout, macro and assembly predicates deliberately retain their historical
+    boundary protection through _polygons_too_close; this is only a pair policy.
+    """
+    if clearance != 0:
+        return _polygons_too_close(first, second, clearance)
+    first_box, second_box = _point_bounds(first), _point_bounds(second)
+    if (first_box[2] <= second_box[0] or second_box[2] <= first_box[0]
+            or first_box[3] <= second_box[1] or second_box[3] <= first_box[1]):
+        return False
+    return _polygon_interiors_overlap(first, second)
+
+
+@lru_cache(maxsize=8192)
+def _courtyard_triangles(polygon: tuple[Point, ...]):
+    from .geometry import polygon_triangles
+    from .mechanical import validated_ring
+    return polygon_triangles(validated_ring(polygon))
+
+
+def _polygon_interiors_overlap(first: tuple[Point, ...], second: tuple[Point, ...]) -> bool:
+    """Positive-area overlap; boundary-only contact is legal at zero extra gap.
+
+    Partition simple rings using the shared integer ear clipper. Strict integer
+    projections on each triangle edge normal distinguish contact from overlap
+    without an epsilon, including concave rings and identical boundaries.
+    Untriangulatable or degenerate input remains conservatively conflicting.
+    """
+    try:
+        parts = (_courtyard_triangles(first), _courtyard_triangles(second))
+    except ValueError:
+        return True
+    for triangles in parts:
+        for triangle in triangles:
+            a, b, c = triangle
+            if (b.x_nm-a.x_nm)*(c.y_nm-a.y_nm) == (b.y_nm-a.y_nm)*(c.x_nm-a.x_nm):
+                return True
+    for left in parts[0]:
+        for right in parts[1]:
+            separated = False
+            for polygon in (left, right):
+                for a, b in _edges(polygon):
+                    nx, ny = b.y_nm-a.y_nm, a.x_nm-b.x_nm
+                    left_projection = tuple(p.x_nm*nx+p.y_nm*ny for p in left)
+                    right_projection = tuple(p.x_nm*nx+p.y_nm*ny for p in right)
+                    if (max(left_projection) <= min(right_projection)
+                            or max(right_projection) <= min(left_projection)):
+                        separated = True
+                        break
+                if separated:
+                    break
+            if not separated:
+                return True
+    return False
 
 
 @lru_cache(maxsize=8192)

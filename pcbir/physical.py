@@ -15,12 +15,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Mapping
 from .pad_connections import InternalPadGroup, validate_internal_pad_groups
+from ._cache import IdentityKey
 
 
 Nanometres = int
+DEFAULT_ADDITIONAL_COURTYARD_GAP_NM: Nanometres = 500_000
 
 
 def nm_from_mm(value: int | float | str | Decimal) -> Nanometres:
@@ -990,12 +993,19 @@ class ComponentPlacementRule:
     priority: int = 0
     # Explicit physical edge-mounted exception, never a copper DRC waiver.
     edge_clearance_nm: Nanometres | None = None
+    # Additional gap outside the audited footprint courtyard, not copper clearance.
+    additional_courtyard_gap_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         if not self.reference:
             raise ValueError("component placement rule requires a reference")
         if self.edge_clearance_nm is not None and self.edge_clearance_nm <= 0:
             raise ValueError("component edge clearance must be positive")
+        if self.additional_courtyard_gap_nm is not None and (
+            type(self.additional_courtyard_gap_nm) is not int
+            or self.additional_courtyard_gap_nm < 0
+        ):
+            raise ValueError("additional courtyard gap must be nonnegative integer nanometres")
         orientations = tuple(
             sorted({Decimal(str(value)) % Decimal(360) for value in self.allowed_orientations})
         )
@@ -1994,6 +2004,51 @@ class PhysicalBoard:
             if rule.clearance_nm > self.rules.minimum_hole_clearance_nm:
                 raise ValueError(f"hole clearance for {rule.reference!r} may only relax (not exceed) "
                                  "the board minimum hole clearance")
+
+
+@lru_cache(maxsize=128)
+def _courtyard_gap_policy(board_key: IdentityKey):
+    """Bounded immutable source-policy snapshot, never a pose legality cache."""
+    board = board_key.value
+    known = frozenset(pose.reference for pose in board.placements)
+    explicit = MappingProxyType({rule.reference: rule.additional_courtyard_gap_nm
+                                 for rule in board.placement_rules})
+    internal = {}
+    for cluster in board.rigid_clusters:
+        if cluster.internal_clearance_nm is None:
+            continue
+        members = tuple(member.reference for member in cluster.members)
+        for i, first in enumerate(members):
+            for second in members[i + 1:]:
+                pair = frozenset((first, second))
+                internal[pair] = max(internal.get(pair, 0), cluster.internal_clearance_nm)
+    return known, explicit, MappingProxyType(internal)
+
+
+def component_pair_courtyard_gap_nm(
+    board: PhysicalBoard,
+    first_reference: str,
+    second_reference: str,
+    *,
+    fallback_nm: Nanometres = DEFAULT_ADDITIONAL_COURTYARD_GAP_NM,
+) -> Nanometres:
+    """Resolve a hard extra courtyard gap; never change courtyard or copper geometry.
+
+    Each ordinary member contributes its explicit source floor or the caller's
+    fallback. An audited same-cluster internal contract replaces that fallback,
+    while explicit member floors can only tighten the internal contract.
+    """
+    if type(fallback_nm) is not int or fallback_nm < 0:
+        raise ValueError("courtyard gap fallback must be nonnegative integer nanometres")
+    known, explicit, internal = _courtyard_gap_policy(IdentityKey(board))
+    if first_reference == second_reference or not {first_reference, second_reference} <= known:
+        raise ValueError("courtyard gap requires two distinct physical components")
+    first, second = explicit.get(first_reference), explicit.get(second_reference)
+    internal_gap = internal.get(frozenset((first_reference, second_reference)))
+    if internal_gap is not None:
+        return max(internal_gap, first if first is not None else 0, second if second is not None else 0)
+    return max(first if first is not None else fallback_nm,
+               second if second is not None else fallback_nm)
 
 
 def _via_span_depth(stackup: Stackup, first: CopperLayer, second: CopperLayer) -> int:
