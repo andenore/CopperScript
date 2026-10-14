@@ -1429,7 +1429,8 @@ def _exact_repair(
                                                   -blockers.get(ref, 0), -order[ref], ref))
     repair = [failed, *neighbours[:options.exact_repair_limit-1]]
     base = {ref: item for ref, item in placed.items() if ref not in repair}
-    return _pack_local_components(board, repair, base, targets, options, allow_general=True)
+    return _pack_local_components(board, repair, base, targets, options, allow_general=True,
+                                  _contact_anchors=tuple(placed[ref] for ref in repair if ref in placed))
 
 
 def _anchored_candidate_rules(board, anchors):
@@ -1465,7 +1466,92 @@ def _anchored_candidate_rules(board, anchors):
                  if hops > 1 and target.reference not in anchors)
 
 
-def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False, _region_state=None):
+def _courtyard_contact_candidates(board, target, anchors, options, *, excluded, limit):
+    """Bounded support-edge sites; the complete source gate stays authoritative."""
+    if limit <= 0:
+        return ()
+    source = {pose.reference: pose for pose in board.placements}
+    original = source.get(target.reference)
+    if (original is None or original.footprint != target.footprint
+            or target.reference in _fixed_placements(board, {target.reference: target}, options)
+            or any(member.reference == target.reference
+                   for cluster in board.rigid_clusters for member in cluster.members)):
+        return ()
+    rule = _rules(board).get(target.reference)
+    if rule is None or rule.region is None:
+        return ()
+    region = next(item for item in board.regions if item.name == rule.region)
+    x0, y0, x1, y1 = _outline_bounds(region.outline)
+    gap = options.component_clearance_nm
+    seen = set(excluded)
+    result = {}
+    # The caller supplies finite source/base/member tuples. Deduplicate poses
+    # before their bounded linear support combinations; no Cartesian product
+    # of component domains is constructed here.
+    local = []
+    for anchor in dict.fromkeys(anchors):
+        owner = source.get(anchor.reference)
+        if (owner is None or owner.footprint != anchor.footprint
+                or anchor.side is not target.side):
+            continue
+        box = _point_bounds(_placement_polygon(board, anchor))
+        if (box[2]+gap < x0 or box[0]-gap > x1
+                or box[3]+gap < y0 or box[1]-gap > y1):
+            continue
+        local.append((anchor, box))
+    local.sort(key=lambda item: (
+        abs(item[0].position.x_nm-target.position.x_nm)
+        + abs(item[0].position.y_nm-target.position.y_nm), item[1], item[0].rotation_degrees))
+
+    def finish():
+        return tuple(sorted(result, key=lambda pose: (
+            abs(pose.position.x_nm-target.position.x_nm)
+            + abs(pose.position.y_nm-target.position.y_nm),
+            pose.position.y_nm, pose.position.x_nm, pose.rotation_degrees)))
+
+    def add(angle, x, y, allowed):
+        if allowed[0] <= x <= allowed[2] and allowed[1] <= y <= allowed[3]:
+            candidate = replace(target, position=Point(x, y), rotation_degrees=angle)
+            if candidate not in seen:
+                result.setdefault(candidate, None)
+        return len(result) >= limit
+
+    for angle in _allowed_orientations(board, target.reference):
+        origin = replace(target, position=Point(0, 0), rotation_degrees=angle)
+        lx, ly, rx, ry = _point_bounds(_placement_polygon(board, origin))
+        allowed = (x0-lx, y0-ly, x1-rx, y1-ry)
+        if allowed[0] > allowed[2] or allowed[1] > allowed[3]:
+            continue
+        region_xs = (allowed[0], (allowed[0]+allowed[2])//2, allowed[2])
+        region_ys = (allowed[1], (allowed[1]+allowed[3])//2, allowed[3])
+        for x in region_xs:
+            for y in region_ys:
+                if add(angle, x, y, allowed):
+                    return finish()
+        for anchor, (ax0, ay0, ax1, ay1) in local:
+            xs = tuple(dict.fromkeys((target.position.x_nm,
+                (ax0+ax1-lx-rx)//2, ax0-lx, ax1-rx, *region_xs)))
+            ys = tuple(dict.fromkeys((target.position.y_nm,
+                (ay0+ay1-ly-ry)//2, ay0-ly, ay1-ry, *region_ys)))
+            for x in (ax0-gap-rx, ax1+gap-lx):
+                for y in ys:
+                    if add(angle, x, y, allowed):
+                        return finish()
+            for y in (ay0-gap-ry, ay1+gap-ly):
+                for x in xs:
+                    if add(angle, x, y, allowed):
+                        return finish()
+            # Conservative nm rounding for corner support; _legal still
+            # checks the true polygon, source side, edge and held geometry.
+            diagonal = ceil(gap/hypot(1, 1))
+            for x in (ax0-rx-diagonal, ax1-lx+diagonal):
+                for y in (ay0-ry-diagonal, ay1-ly+diagonal):
+                    if add(angle, x, y, allowed):
+                        return finish()
+    return finish()
+
+
+def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False, _region_state=None, _contact_anchors=()):
     """One bounded domain search for anchored companions and local repair.
 
     Domains contain individually legal poses; courtyard forward checking removes
@@ -1481,6 +1567,7 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
                 or _region_state["targets"] != targets
                 or _region_state["options"] != options
                 or _region_state["allow_general"] != allow_general
+                or _region_state.get("contact_anchors", ()) != tuple(_contact_anchors)
                 or not 0 < _region_state["search_remaining"] <= options.legalization_candidates*options.exact_repair_candidates*64
                 or not 0 <= _region_state["heuristic_remaining"] <= options.legalization_candidates*options.exact_repair_candidates*64//3
                 or set(_region_state["domains"]) != set(references)
@@ -1499,6 +1586,15 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
     region_probe_remaining = {}
     immutable_refs = set(_fixed_placements(board, targets, options)) | {
         member.reference for cluster in board.rigid_clusters for member in cluster.members}
+    source_poses = {pose.reference: pose for pose in board.placements}
+    held_seeds = tuple(pose for pose in _contact_anchors
+        if pose.reference in references and pose.reference not in immutable_refs
+        and pose.reference in targets and pose.reference in source_poses
+        and pose.footprint == targets[pose.reference].footprint == source_poses[pose.reference].footprint
+        and pose.side is targets[pose.reference].side
+        and pose.rotation_degrees in _allowed_orientations(board, pose.reference)
+        and _legal(pose, base, board, options))
+    anchors = (*base.values(), *(targets[ref] for ref in references), *held_seeds)
     if _region_state is None:
         for ref in references:
             target = targets[ref]
@@ -1522,6 +1618,17 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
                 if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
                         and _legal(candidate, obstacles, board, options)):
                     legal.append(candidate)
+            ordinary_count = len(legal)
+            rule = _rules(board).get(ref)
+            if (not fine and allow_general and rule is not None and rule.region is not None
+                    and not own_rules and ref not in immutable_refs and ordinary_count < limit):
+                contacts = _courtyard_contact_candidates(board, target, anchors, options,
+                    excluded=seen, limit=options.legalization_candidates*64-probed)
+                for candidate in contacts:
+                    probed += 1
+                    if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
+                            and _legal(candidate, obstacles, board, options)):
+                        legal.append(candidate)
             region_probe_remaining[ref] = options.legalization_candidates*64 - probed
             if not legal:
                 return None
@@ -1556,7 +1663,13 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
             # Preserve candidates across the complete local range, including a
             # second row; taking only the closest positions can erase the solution.
             if len(legal) > limit:
-                legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
+                if not fine and ordinary_count < limit:
+                    contacts = legal[ordinary_count:]
+                    slots = limit-ordinary_count
+                    legal = legal[:ordinary_count] + [
+                        contacts[round(i*(len(contacts)-1)/max(1, slots-1))] for i in range(slots)]
+                else:
+                    legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
             domains[ref] = tuple(legal)
     else:
         for ref in references:
@@ -1678,15 +1791,17 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
     if result is None and refinable and not fine:
         # Preserve the pre-existing pad-MAX_DISTANCE fine behavior/contracts.
         return _pack_local_components(board, references, base, targets, options,
-                                      allow_general=allow_general, fine=True)
+                                      allow_general=allow_general, fine=True, _contact_anchors=_contact_anchors)
     if result is None and region_refinable and not fine and remaining > 0:
         state = {"board": board, "references": tuple(references), "base": dict(base),
                  "targets": dict(targets), "options": options, "allow_general": allow_general,
+                 "contact_anchors": tuple(_contact_anchors),
                  "domains": domains, "refinable": region_refinable,
                  "domain_remaining": region_probe_remaining,
                  "search_remaining": remaining, "heuristic_remaining": heuristic_remaining}
         return _pack_local_components(board, references, base, targets, options,
-                                      allow_general=allow_general, fine=True, _region_state=state)
+                                      allow_general=allow_general, fine=True, _region_state=state,
+                                      _contact_anchors=_contact_anchors)
     return result
 
 

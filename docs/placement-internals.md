@@ -91,6 +91,43 @@ complete legality, escape-spacing and placement score gates improve the
 incumbent. Package/critical preflight remains required; a shorter span does not
 establish impedance or EMC performance.
 
+## Named-region local packing
+
+Initial local packing can supplement ordinary candidates for a mutable component
+with a named region and no relative rules. Support-edge proposals use its actual
+transformed courtyard, the ordinary component gap, and same-side held or member
+target courtyards. They include edge alignments and conservative corner sites;
+the region bounding box is only a proposal filter. The complete legality gate
+still checks the actual region polygon, board edge, side, allowed rotation,
+keepouts, macro copper and held geometry. Fixed and rigid members gain no new
+motion. Components without a named region retain their existing candidate path.
+
+Legal ordinary sites remain in their original order. Contact sites fill only
+unused retained-domain slots; no contacts are added when the ordinary domain
+already fills that cap. Each probe, including duplicate ordinary proposals,
+spends the original per-member raw allowance. Default options provide 6,144 raw
+probes and 384 retained sites per member, 172,032 local search checks and the
+existing one-third heuristic allowance. These derive from planner options and
+are computational limits, not fabrication or electrical requirements. Source
+clearance, region size and repair-member limits are unchanged.
+
+A repair may supply a finite tuple of its removed members' current held poses
+as proposal seeds. Validate source reference, footprint, side, allowed rotation,
+mutable membership and legality against the current held base. Such poses help
+suggest sites; they do not become immutable obstacles or authorize releasing
+any held-base geometry. Domains are freshly built for the current source,
+targets and held base. Private regional fine continuation binds that exact
+context, including the proposal tuple, and uses only residual search/heuristic
+checks and unused original member probes. Zero residual prevents continuation.
+
+The existing pad-associated maximum-distance fine path retains its prior
+behavior and allowances. A mixed pack entering that legacy recursion rebuilds
+its domains; initial contact sites of other region-only members are not carried
+into that path. Mixed-pack closure is therefore not established by this change.
+A bounded placement failure is not evidence of continuous-domain infeasibility,
+and legal packing does not establish escape, routing, SI or manufacturing
+qualification.
+
 ## Exhausted fixed-anchor packs
 
 Keep whole-group packing when it succeeds. Only after an oversized group joined

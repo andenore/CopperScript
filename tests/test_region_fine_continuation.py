@@ -20,6 +20,8 @@ def alias(prefix):
 def observed_pack(monkeypatch,mutation=None):
     import pcbir.placement as module
     real=module._pack_local_components
+    # Test residual continuation independently of initial contact-site discovery.
+    monkeypatch.setattr(module,"_courtyard_contact_candidates",lambda *a,**k: ())
     events=[]
     def observe(*args,**kwargs):
         state=kwargs.get("_region_state")
@@ -77,9 +79,13 @@ def test_zero_heuristic_residual_can_use_remaining_search_without_reset(monkeypa
     assert events[0]["before_heuristic"]==events[0]["after_heuristic"]==0
 
 
-def test_stale_scene_or_held_base_cannot_reuse_cached_domains(monkeypatch):
+@pytest.mark.parametrize("changed",("scene","contact_tuple"))
+def test_stale_scene_or_held_base_cannot_reuse_cached_domains(changed,monkeypatch):
     b,o,targets=alias("stale")
-    pack,events=observed_pack(monkeypatch,lambda s:s.update(board=replace(b,name="other")))
+    def change(state):
+        if changed=="scene":state["board"]=replace(b,name="other")
+        else:state["contact_anchors"]=(next(iter(targets.values())),)
+    pack,events=observed_pack(monkeypatch,change)
     assert pack(b,list(targets),{},targets,o,allow_general=True) is None
     assert events[0]["after_domain"]==events[0]["before_domain"]
 
