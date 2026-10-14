@@ -62,18 +62,20 @@ def _ordinary_prefix(source: PhysicalBoard, reserved: FanoutResult | None):
             or reserved.added_via_count != len(reserved.created_vias)
             or Counter(reserved.decoupling_tracks) - Counter(reserved.created_tracks)):
         return (), (), "stale ordinary ownership"
-    # Match the critical router's ownership boundary: deferred-zone semantic
-    # feeds are an exception only when independently regenerated from source.
-    from .decoupling import route_decouplers
+    # Match the critical router's fresh read-only semantic owner boundary.
+    from .bypass_reservations import verified_bypass_reservations
+    bypass_tracks, bypass_vias, reason = verified_bypass_reservations(source, reserved)
+    if reason is not None:
+        return (), (), reason
     from .zone_geometry import distribution_zone_nets
     protected = {r.net for r in source.net_routing_rules if r.kind is not RouteKind.GENERAL}
     regional = {z.net for z in source.zones if z.reserve_routing}
     protected.update(distribution_zone_nets(source) - regional)
-    feeds = Counter(route_decouplers(source).created_tracks) if source.decoupling_links else Counter()
+    feeds = Counter((*bypass_tracks, *bypass_vias))
     for item in (*reserved.created_tracks, *reserved.created_vias):
         if item.net not in protected:
             continue
-        if isinstance(item, TrackSegment) and feeds[item]:
+        if feeds[item]:
             feeds[item] -= 1
         else:
             return (), (), "ordinary prefix contains nonordinary owner"

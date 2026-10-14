@@ -7,6 +7,7 @@ qualification concerns even when their geometric proxies are satisfied.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
 from enum import Enum
@@ -399,15 +400,21 @@ def route_critical_nets(
         regional_nets = {zone.net for zone in board.zones if zone.reserve_routing}
         from .zone_geometry import distribution_zone_nets
         protected.update(distribution_zone_nets(board) - regional_nets)
-        # Ordinary local bypass paths may belong to a deferred distribution
-        # rail. Accept only the source-associated, exactly regenerated surface
-        # prefix; this never grants arbitrary zone/critical copper ownership.
-        from .decoupling import route_decouplers
-        bypass_tracks = route_decouplers(board).created_tracks if board.decoupling_links else ()
-        if any(item.net in protected for item in (*reserved_accesses.created_tracks,
-                                                  *reserved_accesses.created_vias)
-               if item not in bypass_tracks):
-            raise ValueError("ordinary package-access reservations cannot contain critical or zone copper")
+        # Recognize actual declared source-associated copper read-only.
+        # Admission is not another bypass generation/search phase. Exact source,
+        # occurrence ownership and fresh witnesses remain mandatory.
+        from .bypass_reservations import verified_bypass_reservations
+        bypass_tracks, bypass_vias, reason = verified_bypass_reservations(board, reserved_accesses)
+        if reason is not None:
+            raise ValueError(f"invalid package-access bypass reservations: {reason}")
+        exemptions = Counter((*bypass_tracks, *bypass_vias))
+        for item in (*reserved_accesses.created_tracks, *reserved_accesses.created_vias):
+            if item.net not in protected:
+                continue
+            if exemptions[item]:
+                exemptions[item] -= 1
+            else:
+                raise ValueError("ordinary package-access reservations cannot contain critical or zone copper")
         def hard(checked: PhysicalBoard) -> tuple:
             return tuple(finding for finding in run_physical_drc(checked).findings
                          if finding.severity is DrcSeverity.ERROR
