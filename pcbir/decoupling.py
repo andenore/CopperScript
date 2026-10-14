@@ -139,7 +139,21 @@ def improve_decoupling_placement(board, placements, options):
     fixed = _fixed_placements(board, poses, options)
     fixed.update({r: poses[r] for c in board.rigid_clusters for r in (m.reference for m in c.members)})
     moved = 0
+    # Preserve earlier exact feeds instead of re-running their bounded mazes
+    # for every later capacitor. A candidate still checks the complete retained
+    # feed prefix against its fresh posed pad/copper index before acceptance.
+    reservation = route_decouplers(materialize_hard_macros(replace(board,
+        placements=tuple(poses.values()), decoupling_links=())))
     for link_index, link in enumerate(board.decoupling_links):
+        if link_index:
+            prior = route_decouplers(replace(reservation.board,
+                placements=tuple(poses.values()),
+                decoupling_links=(board.decoupling_links[link_index - 1],)))
+            reservation = replace(prior,
+                board=replace(prior.board, decoupling_links=board.decoupling_links),
+                created_tracks=(*reservation.created_tracks, *prior.created_tracks),
+                connected_pads=reservation.connected_pads | prior.connected_pads,
+                pending=(*reservation.pending, *prior.pending))
         reference = link.capacitor.component
         if reference in fixed:
             continue
@@ -178,8 +192,6 @@ def improve_decoupling_placement(board, placements, options):
         # Earlier bypasses are physical reservations, including fixed caps.
         # Independently accessible poses can otherwise compete for the same
         # corridor and fail as soon as the complete set is actually routed.
-        reservation = route_decouplers(materialize_hard_macros(replace(board,
-            placements=tuple(poses.values()), decoupling_links=board.decoupling_links[:link_index])))
         reserved = reservation.board
         def direct_access(candidate):
             if not ordinary:
