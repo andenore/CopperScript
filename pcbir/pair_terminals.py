@@ -70,7 +70,8 @@ def prepare_pair_terminals(board, first, second, routes):
     if any(g is None for g in guides): return routes,(),()
     all_branches=[]
     normalized=[]
-    index=RoutingClearanceIndex(board)
+    from .pair_search import _PairAccessIndex
+    index=_PairAccessIndex(board)
     for rule,guide in zip((first,second),guides):
         groups={}
         for a in guide.accesses: groups.setdefault(a.pad.component,[]).append(a)

@@ -51,6 +51,19 @@ class PairSearchCandidate:
     return_vias: tuple[Via, ...] = ()
 
 
+class _PairAccessIndex(RoutingClearanceIndex):
+    """Local pair paths emit exactly the differential profile's width pieces."""
+    def route_pieces(self, net, start, end, width_nm, layer):
+        return self.breakout.split_tracks((TrackSegment(net, start, end, width_nm, layer),), width_nm)
+
+    def can_route(self, net, start, end, width_nm, layer):
+        dx, dy = end.x_nm-start.x_nm, end.y_nm-start.y_nm
+        if dx and dy and abs(dx) != abs(dy):
+            return False
+        return all(self.can_track(net, t.start, t.end, t.width_nm, layer)
+                   for t in self.route_pieces(net, start, end, width_nm, layer))
+
+
 class _SpineSearchResult(NamedTuple):
     first: tuple[TrackSegment, ...]
     second: tuple[TrackSegment, ...]
@@ -154,8 +167,12 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
     middle = Point((first.x_nm + second.x_nm) // 2, (first.y_nm + second.y_nm) // 2)
     placement = next(item for item in board.placements if item.reference == component)
     outward = Point(middle.x_nm - placement.position.x_nm, middle.y_nm - placement.position.y_nm)
-    headings = ((separation - 2) % 8, (separation + 2) % 8)
-    headings = tuple(sorted(headings, key=lambda h: (
+    preferred = {(separation - 2) % 8, (separation + 2) % 8}
+    # Side-by-side internal lands can need an oblique or staggered outward
+    # collar. Sample all eight orientations, retaining the historical normal
+    # exits first. Every complete collar still passes exact copper checks.
+    headings = tuple(sorted(range(8), key=lambda h: (
+        h not in preferred,
         -(_HEADS[h][0] * outward.x_nm + _HEADS[h][1] * outward.y_nm), h)))
     ports = []
     for preference, heading in enumerate(headings):
@@ -177,6 +194,46 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                 if _legal(board, index, first_tracks, second_tracks, clearance):
                     ports.append(_Port(center, heading, sign, first_tracks, second_tracks, preference))
                     break
+    if not ports and index.breakout.pair(first_name, second_name):
+        # Finite local alternative for recessed paired lands. A short final
+        # segment fixes the joint search orientation; both lead-ins are exact
+        # source-to-port copper, checked together before a port is offered.
+        from .pin_access import local_access_path
+        for preference, heading in enumerate(headings):
+            if heading % 2:  # four cardinal portal orientations
+                continue
+            dx, dy = _HEADS[heading]
+            normal = _normal(heading, offset)
+            dot = ((first.x_nm-second.x_nm)*normal.x_nm
+                   + (first.y_nm-second.y_nm)*normal.y_nm)
+            signs = (1,) if dot > 0 else (-1,) if dot < 0 else (1, -1)
+            for sign, length in product(signs, (1, 1.5, 2, 3, 4)):
+                if sum(p.heading == heading for p in ports) >= 2:
+                    break
+                distance = nm_from_mm(length)
+                center = Point(middle.x_nm+dx*distance, middle.y_nm+dy*distance)
+                targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
+                approaches = tuple(Point(p.x_nm-dx*125000, p.y_nm-dy*125000) for p in targets)
+                tails = (_tracks(first_name, (approaches[0], targets[0]), width, layer, index.breakout),
+                         _tracks(second_name, (approaches[1], targets[1]), width, layer, index.breakout))
+                if not _legal(board, index, *tails, clearance):
+                    continue
+                for order in ((0, 1), (1, 0)):
+                    reserved = _PairAccessIndex(replace(board, tracks=(*board.tracks, *tails[0], *tails[1])))
+                    paths = [None, None]
+                    for member in order:
+                        path = local_access_path(board, reserved,
+                            (first_name, second_name)[member], (first, second)[member],
+                            approaches[member], layer, width, step_nm=25000,
+                            detour_nm=500000, maximum_states=2400)
+                        if path is None:
+                            break
+                        paths[member] = (*path, *tails[member])
+                        for track in path:
+                            reserved.add_track(track, locked=True)
+                    if all(p is not None for p in paths) and _legal(board, index, *paths, clearance):
+                        ports.append(_Port(center, heading, sign, *paths, preference))
+                        break
     return tuple(ports)
 
 
