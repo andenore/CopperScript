@@ -1413,6 +1413,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "placement_probe_scope": "local ordinary exits, selected plane contacts and boundary access; excludes generated critical copper and native filled connectivity",
                     "placement_stop_reason": access.placement_stop_reason,
                     "placement_constraints": [asdict(item) for item in access.placement_constraints],
+                    "coupled_placement_attempts": [asdict(item) for item in access.coupled_placement_attempts],
+                    "placement_probe_slots_spent": access.placement_probe_slots_spent,
                     "placement_constraint_scope": "at most 32 sampled rejected proposals; not an impossibility proof",
                     "placement_probes": [{**asdict(probe), **{
                         key: [f"{p.component}.{p.pad}" for p in getattr(probe, key)]

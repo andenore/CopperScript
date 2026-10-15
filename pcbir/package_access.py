@@ -27,6 +27,7 @@ from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .routing import (GlobalRouterOptions, GlobalRoutingResult, GlobalRoutingStatus,
                       _placement_fingerprint, route_global)
 from .progress import ProgressCallback, critical_progress, emit
+from .package_placement_repair import CoupledPlacementAttempt, CoupledPlacementState
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +162,8 @@ class PackageAccessResult:
     placement_probes: tuple[PackagePlacementProbe, ...] = ()
     placement_stop_reason: str | None = None
     placement_constraints: tuple[PackagePlacementConstraint, ...] = ()
+    coupled_placement_attempts: tuple[CoupledPlacementAttempt, ...] = ()
+    placement_probe_slots_spent: int = 0
 
     @property
     def board(self) -> PhysicalBoard:
@@ -927,6 +930,7 @@ def _package_owner_cohorts(ranked, direct_owners, links, bypass_hints, ordinary_
 def package_placement_trials(
     baseline: PackageAccessResult, options: PlacementPlannerOptions, movement_nm: int,
     *, constraints: list[PackagePlacementConstraint] | None = None,
+    _coupled_state: CoupledPlacementState | None = None,
 ) -> Iterator[tuple[str, PhysicalBoard]]:
     """Move failing owners/critical endpoints as legal whole units, never copper.
 
@@ -1031,6 +1035,10 @@ def package_placement_trials(
         candidates[4:4] = [replace(current, rotation_degrees=angle) for angle in angles
                            if angle != current.rotation_degrees]
         proposals[reference] = candidates
+    if _coupled_state is not None:
+        coupled = _coupled_state.prepass(baseline, ranked, proposals, options)
+        if coupled is not None:
+            yield coupled
     def legal_trials(references):
         for index in range(max((len(items) for items in proposals.values()), default=0)):
             for reference in references:
@@ -1093,6 +1101,7 @@ def improve_package_access(
     records = []
     probes: list[PackagePlacementProbe] = []
     constraints: list[PackagePlacementConstraint] = []
+    coupled = CoupledPlacementState()
     moves = 0
     seen = {_placement_fingerprint(baseline.source)}
     if plane_options is None and options.reserve_plane_contacts and baseline.source.zones:
@@ -1103,7 +1112,7 @@ def improve_package_access(
         attempted = False
         for reference, trial, probe_index in _ranked_placement_trials(
                 accepted, fanout_options, options, placement_options, plane_options,
-                seen, probes, on_progress, constraints):
+                seen, probes, on_progress, constraints, _coupled_state=coupled):
             signature = _placement_fingerprint(trial)
             if signature in seen:
                 continue
@@ -1146,10 +1155,12 @@ def improve_package_access(
         stop_reason = "trial_budget_exhausted"
     emit(on_progress, "package_placement_feedback", "finished", reason=stop_reason,
          trials=len(records), probes=len(probes), probe_limit=options.maximum_placement_probes,
+         placement_probe_slots_spent=len(probes)+coupled.failed_slots, coupled_claimed=coupled.claimed,
          accepted_moves=moves)
     return replace(accepted, trials=tuple(records), accepted_moves=moves,
                    placement_probes=tuple(probes), placement_stop_reason=stop_reason,
-                   placement_constraints=tuple(constraints))
+                   placement_constraints=tuple(constraints), coupled_placement_attempts=tuple(coupled.attempts),
+                   placement_probe_slots_spent=len(probes)+coupled.failed_slots)
 
 
 def _ranked_placement_trials(
@@ -1158,6 +1169,7 @@ def _ranked_placement_trials(
     plane_options: PlaneStitchOptions | None, seen: set[str],
     records: list[PackagePlacementProbe], on_progress: ProgressCallback | None,
     constraints: list[PackagePlacementConstraint] | None = None,
+    *, _coupled_state: CoupledPlacementState | None = None,
 ) -> Iterator[tuple[str, PhysicalBoard, int | None]]:
     """Rank a bounded legal look-ahead; unprobed moves retain generator order.
 
@@ -1165,13 +1177,20 @@ def _ranked_placement_trials(
     critical, ordinary, plane and boundary preflight before it can be accepted.
     The probe budget is shared across accepted moves, not restarted per move.
     """
-    remaining = max(0, options.maximum_placement_probes - len(records))
+    def spent():
+        return len(records) + (_coupled_state.failed_slots if _coupled_state is not None else 0)
+    remaining = max(0, options.maximum_placement_probes - spent())
+    if _coupled_state is not None:
+        _coupled_state.available_slots = remaining
+        _coupled_state.next_probe_index = spent() + 1
+    kwargs = {"_coupled_state": _coupled_state} if _coupled_state is not None else {}
     trials = iter(package_placement_trials(baseline, placement_options, options.movement_nm,
-                                         constraints=constraints))
+                                         constraints=constraints, **kwargs))
     sampled = []
     local_seen = set(seen)
     emit(on_progress, "package_placement_ranking", "started", remaining_probes=remaining)
-    while len(sampled) < remaining:
+    buffered = None
+    while spent() < options.maximum_placement_probes:
         try:
             reference, trial = next(trials)
         except StopIteration:
@@ -1179,11 +1198,17 @@ def _ranked_placement_trials(
         signature = _placement_fingerprint(trial)
         if signature in local_seen:
             continue
+        if spent() >= options.maximum_placement_probes:
+            buffered = (reference, trial)
+            break
         local_seen.add(signature)
-        emit(on_progress, "package_placement_probe", "started", index=len(records) + 1,
+        index = spent() + 1
+        if _coupled_state is not None and signature == _coupled_state.reserved_fingerprint:
+            index = _coupled_state.reserved_probe_index
+        emit(on_progress, "package_placement_probe", "started", index=index,
              reference=reference, placement_fingerprint=signature)
         probe = _placement_access_probe(baseline, reference, trial, fanout_options,
-            placement_options, plane_options, options.boundary_options, len(records) + 1)
+            placement_options, plane_options, options.boundary_options, index)
         records.append(probe)
         sampled.append((probe.rank, len(sampled), reference, trial, probe.index))
         emit(on_progress, "package_placement_probe", "finished", index=probe.index,
@@ -1192,9 +1217,12 @@ def _ranked_placement_trials(
              plane_pending=len(probe.plane_pending_pads),
              boundary_pending=len(probe.boundary_pending_pads), hard_findings=probe.hard_findings)
     emit(on_progress, "package_placement_ranking", "finished", probes=len(sampled),
-         total_probes=len(records), probe_limit=options.maximum_placement_probes)
+         total_probes=len(records), probe_limit=options.maximum_placement_probes,
+         placement_probe_slots_spent=spent())
     for _, _, reference, trial, index in sorted(sampled, key=lambda item: item[:2]):
         yield reference, trial, index
+    if buffered is not None:
+        yield buffered[0], buffered[1], None
     for reference, trial in trials:
         yield reference, trial, None
 

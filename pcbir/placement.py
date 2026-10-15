@@ -1612,13 +1612,23 @@ def _courtyard_contact_candidates(board, target, anchors, options, *, excluded, 
     return finish()
 
 
-def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False, _region_state=None, _contact_anchors=()):
+def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False, _region_state=None, _contact_anchors=(), _work=None):
     """One bounded domain search for anchored companions and local repair.
 
     Domains contain individually legal poses; courtyard forward checking removes
     obvious conflicts, while every selected pose still passes the complete gate.
     This changes flexible positions, never rigid membership or source locks.
     """
+    if _work is not None:
+        _work.setdefault("domain_probes", {})
+        _work.setdefault("retained_domains", {})
+        _work.setdefault("search_operations", 0)
+        _work.setdefault("heuristic_checks", 0)
+        _work["operator_calls"] = _work.get("operator_calls", 0) + 1
+        _work["limits"] = {"raw_per_member": options.legalization_candidates*64,
+            "retained_per_member": options.legalization_candidates*4,
+            "search": options.legalization_candidates*options.exact_repair_candidates*64,
+            "heuristic": options.legalization_candidates*options.exact_repair_candidates*64//3}
     if _region_state is not None:
         # Private continuation is bound to this exact immutable scene/base and
         # target set. It carries residual resources, never a new phase budget.
@@ -1691,7 +1701,12 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
                             and _legal(candidate, obstacles, board, options)):
                         legal.append(candidate)
             region_probe_remaining[ref] = options.legalization_candidates*64 - probed
+            if _work is not None:
+                _work["domain_probes"][ref] = _work["domain_probes"].get(ref, 0) + probed
             if not legal:
+                if _work is not None:
+                    _work["outcome"] = "empty_domain"
+                    _work["empty_domain"] = ref
                 return None
             narrow = (len(legal) <= options.legalization_candidates
                       and any(r.kind is RelativePlacementKind.MAX_DISTANCE
@@ -1757,12 +1772,16 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
                 own_rules = tuple(r for r in rules if any(t.reference == ref for t in r.targets))
                 for candidate in candidates:
                     _region_state["domain_remaining"][ref] -= 1
+                    if _work is not None:
+                        _work["domain_probes"][ref] = _work["domain_probes"].get(ref, 0) + 1
                     if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
                             and _legal(candidate, obstacles, board, options)):
                         legal.append(candidate)
             if len(legal) > limit:
                 legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
             domains[ref] = tuple(legal)
+    if _work is not None:
+        _work["retained_domains"].update({ref: len(poses) for ref, poses in domains.items()})
     polygons = {ref: tuple(_placement_polygon(board, pose) for pose in poses)
                 for ref, poses in domains.items()}
     remaining = (options.legalization_candidates*options.exact_repair_candidates*64
@@ -1846,7 +1865,14 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
                     return result
         return None
 
+    initial_remaining, initial_heuristic = remaining, heuristic_remaining
     result = solve({ref: tuple(range(len(poses))) for ref, poses in domains.items()}, dict(base))
+    if _work is not None:
+        _work["search_operations"] += initial_remaining-remaining
+        _work["heuristic_checks"] += initial_heuristic-heuristic_remaining
+        _work["search_remaining"] = remaining
+        _work["heuristic_remaining"] = heuristic_remaining
+        _work["outcome"] = "candidate" if result is not None else ("search_exhausted" if remaining == 0 else "domain_search_failed")
     if _region_state is not None:
         _region_state["search_remaining"] = remaining
         _region_state["heuristic_remaining"] = heuristic_remaining
@@ -1854,7 +1880,7 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
     if result is None and refinable and not fine:
         # Preserve the pre-existing pad-MAX_DISTANCE fine behavior/contracts.
         return _pack_local_components(board, references, base, targets, options,
-                                      allow_general=allow_general, fine=True, _contact_anchors=_contact_anchors)
+                                      allow_general=allow_general, fine=True, _contact_anchors=_contact_anchors, _work=_work)
     if result is None and region_refinable and not fine and remaining > 0:
         state = {"board": board, "references": tuple(references), "base": dict(base),
                  "targets": dict(targets), "options": options, "allow_general": allow_general,
@@ -1864,7 +1890,7 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
                  "search_remaining": remaining, "heuristic_remaining": heuristic_remaining}
         return _pack_local_components(board, references, base, targets, options,
                                       allow_general=allow_general, fine=True, _region_state=state,
-                                      _contact_anchors=_contact_anchors)
+                                      _contact_anchors=_contact_anchors, _work=_work)
     return result
 
 

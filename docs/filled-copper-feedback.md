@@ -349,3 +349,32 @@ candidate objects. A successful private proposal restores untouched fragments,
 freshly checks source widths, anchors, skew and full held geometry, and still
 passes the normal outer candidate gates. This adds no via or electrical allowance
 and does not establish consumer USB routing or signal-integrity qualification.
+
+Package-placement feedback may borrow one existing probe slot for one coupled
+placement proposal before ordinary legal-move lookahead. Its bounded source-pad
+projection hint uses exact transformed land identities and side labels; at the
+default 28-owner/28-root limit it evaluates at most 1,568 shape pairs and 3,136
+shape predicates. Projection overlap/proximity is a selection heuristic, not
+copper clearance, a verified via blocker or exit feasibility. Ambiguous lands
+or associations decline. Only mutable singleton named-region owners/neighbors
+are supported; fixed/session locks, rigid/macro membership, relative rules and
+via-array ownership remain protected.
+
+The requested existing move stays anchored in BASE. One unchanged local pack
+call may move its directly colliding eligible neighbors, with at most 28 shared
+neighbor probes across requests and the existing six-member limit. A single
+irreversible token persists across accepted rounds; unsupported/failed claims
+spend their borrowed probe slot too. Successful geometry uses that same slot
+for the ordinary access probe. This adds no probe/trial slot or budget reset.
+Reports distinguish spent slots, normal probes, source-hint predicates and
+actual pack domain/search work. Domain-probe counters do not count every inner
+geometry predicate. Default local limits remain 6,144 raw proposals/384 retained
+poses per neighbor, 172,032 search operations and the separate 57,344 heuristic
+checks; named-region continuation uses only residual resources.
+
+Every positive retains original source fields, the requested pose and all
+unselected poses, then passes complete original-source placement legality and
+the normal fresh global/preflight/ownership gates with full rollback on failure.
+Numeric options, regions, courtyards, copper rules and electrical requirements
+are not relaxed. This generic placement adapter has no normal CopperProbe
+adoption or whole-board/electrical qualification claim.
