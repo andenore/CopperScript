@@ -12,11 +12,12 @@ from typing import Mapping, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .decoupling_paths import DecouplingCrossLayerWitness
+    from .fanout_bypass_completion import LateBypassCompletionReport
 
 from .drc import placed_pad_shape, run_physical_drc
 from .geometry import RoundedConvexShape, shapes_clear, point_in_polygon, point_segment_distance_at_least
 from .physical import (
-    BoardSide, CopperLayer, FootprintPad, PadKind, PadReference, PhysicalBoard,
+    BoardSide, CopperLayer, DecouplingLink, FootprintPad, PadKind, PadReference, PhysicalBoard,
     Placement, Point, RouteKind, TrackSegment, Via, nm_from_mm,
 )
 from .placement import transformed_local_point
@@ -90,6 +91,8 @@ class FanoutResult:
     # Exact generated semantic supply/return transitions, not arbitrary GND.
     decoupling_vias: tuple[Via, ...] = ()
     decoupling_witnesses: tuple[DecouplingCrossLayerWitness, ...] = ()
+    decoupling_pending_links: tuple[tuple[DecouplingLink, str], ...] = ()
+    late_bypass: LateBypassCompletionReport | None = None
 
     @property
     def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
@@ -351,6 +354,7 @@ def route_fanout(
                                 for item in analysis), assignment=assignment,
                             decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias,
                             decoupling_witnesses=bypass.admitted_path_witnesses,
+                            decoupling_pending_links=bypass.pending,
                             decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending))
     def selected_surface(reference):
         path, via = domains[reference][selected[reference]]
@@ -366,7 +370,7 @@ def route_fanout(
     admitted, reason = refresh_crosslayer_witnesses(routed,bypass.admitted_path_witnesses)
     if reason:
         raise ValueError("fanout lost an original admitted bypass path: " + reason)
-    return FanoutResult(routed, MappingProxyType({**(bypass.accesses or {}),
+    result = FanoutResult(routed, MappingProxyType({**(bypass.accesses or {}),
                         **{reference: anchor for reference, anchor in accesses.items() if reference not in escapes}}), tuple(pending),
                         len(tracks) + len(bypass.created_tracks), len(vias) + len(bypass.created_vias),
                         (*bypass.created_vias, *vias), tuple(analysis),
@@ -374,7 +378,9 @@ def route_fanout(
                         surface_accesses=MappingProxyType(escapes) if surface else None,
                         decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending),
                         decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias,
-                        decoupling_witnesses=admitted)
+                        decoupling_witnesses=admitted,decoupling_pending_links=bypass.pending)
+    from .fanout_bypass_completion import complete_late_bypasses
+    return complete_late_bypasses(result,bypass.pending,options,only_nets=only_nets)
 
 
 def _surface_layer(board, net, rule, placement) -> CopperLayer | None:

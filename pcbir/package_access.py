@@ -712,6 +712,9 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
         pin_analysis=tuple(a for a in original.pin_analysis if names[a.pad] not in displaced) + rebuilt.pin_analysis,
         decoupling_pending=tuple(p for p in original.decoupling_pending if names[p[0]] not in displaced)
                            + rebuilt.decoupling_pending,
+        decoupling_pending_links=tuple(p for p in original.decoupling_pending_links if p[0].net not in displaced)
+                                 + rebuilt.decoupling_pending_links,
+        late_bypass=rebuilt.late_bypass,
         decoupling_tracks=(*retained_feed_tracks, *rebuilt.decoupling_tracks),
         decoupling_vias=(*retained_feed_vias, *rebuilt.decoupling_vias))
     from .decoupling_paths import refresh_crosslayer_witnesses

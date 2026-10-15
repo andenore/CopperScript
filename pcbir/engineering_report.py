@@ -96,6 +96,14 @@ def summarize_report(report, *, issue_limit=8, report_path=None, report_digest=N
                                i["stage"], i["code"], str(i["subject"])))
     # Retain counts before truncation. Full reports and native evidence stay available.
     counts = dict(sorted(Counter(i["stage"] for i in issues).items()))
+    late = report.get("fanout", {}).get("late_bypass_completion") or {}
+    late_summary = ({"status": late.get("status"), "passes": late.get("passes"),
+                     "maximum_passes": late.get("maximum_passes"),
+                     "selected": len(late.get("selected_links", [])),
+                     "completed": len(late.get("completed_links", [])),
+                     "remaining": len(late.get("remaining_links", [])),
+                     "added_tracks": late.get("added_tracks"), "added_vias": late.get("added_vias"),
+                     "reason": late.get("reason", "")} if late else None)
     return {"schema": "copperscript-engineering-summary/v0.1",
         "report_schema": schema, "report_path": str(report_path) if report_path else None,
         "report_sha256": report_digest, "board_digest": requirements.get("board_digest") or quality.get("board_digest") or token_digest,
@@ -109,7 +117,8 @@ def summarize_report(report, *, issue_limit=8, report_path=None, report_digest=N
                    "report_digest": native.get("report_digest") if native else None},
         "quality": {k: quality.get(k) for k in ("track_count", "via_count", "track_length_nm")},
         "decoupling": {"total": len(quality.get("decoupling", [])),
-                       "surface_connected": sum(r.get("surface_connected", False) for r in quality.get("decoupling", []))},
+                       "surface_connected": sum(r.get("surface_connected", False) for r in quality.get("decoupling", [])),
+                       "late_completion": late_summary},
         "issue_count": len(issues), "issue_counts_by_stage": counts,
         "native_reconciled_explicit_findings": reconciled,
         "issues": issues[:issue_limit], "omitted_issue_count": max(0, len(issues)-issue_limit),
@@ -128,6 +137,12 @@ def summary_lines(summary):
         lines.append(f"Native fill resolves {summary['native_reconciled_explicit_findings']} deferred explicit-copper observations")
     if d["total"]:
         lines.append(f"Bypasses: {d['surface_connected']}/{d['total']} verified surface connections")
+    late = d.get("late_completion")
+    if late and (late.get("passes") or late.get("status") == "rejected"):
+        lines.append(f"Late bypass pass: {late['status']}; {late['passes']}/{late['maximum_passes']} passes; "
+                     f"{late['completed']}/{late['selected']} associations completed; {late['remaining']} pending")
+        if late.get("reason"):
+            lines.append("  " + late["reason"])
     for row in summary["issues"]:
         origin = f" ({', '.join(row['origins'])})" if row["origins"] else ""
         lines.append(f"  {row['code']} [{row['subject']}]{origin}: {row['detail']}")

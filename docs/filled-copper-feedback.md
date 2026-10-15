@@ -398,3 +398,24 @@ verified launch, no legal cheap tail, and the fanout maze option. Exact complete
 paths, protected owners, created-edge coverage and final physical gates remain
 mandatory. This helper requires existing source copper; it alone does not prove
 the standard fanout sequence or a consumer board has closed.
+
+
+After ordinary fanout passes its materialization gate, one explicit late bypass
+completion pass may retry only its original pending opposite-face source links,
+intersected with the original net filter. It requires newly generated ordinary
+copper and never repeats a completion round or reroutes ordinary/critical/area
+copper. Existing per-link proposer bounds remain authoritative. The pass and
+selected/completed/remaining link counts, generated counts and rollback reason
+are recorded; compact reports expose the result separately from routing closure.
+
+Every late candidate retains the full early-semantic and ordinary occurrence
+prefix and source fields. Original via/surface handoffs, verified associations,
+admitted path witnesses, source budgets and physical gates are freshly checked.
+A rejected late candidate alone is rolled back. Only newly appended late objects
+join the semantic owner ledger; reused ordinary source paths/vias retain their
+original owners. Pending obligations use complete declared link identities;
+source validation still permits only one explicit association per capacitor.
+Existing handoffs are not replaced and a newly measured semantic port never
+invents an ordinary-domain candidate index. These physical joins and bounded
+completion reports do not establish electrical, RF, power or fabrication release
+qualification.

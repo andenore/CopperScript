@@ -161,3 +161,28 @@ def test_disabled_budget_and_stale_ownership_do_not_run_a_trial(tmp_path, monkey
     assert regenerate_contact_owners(board, baseline, group, tracks, (), settings, maximum_owner_nets=0) is None
     stale = replace(baseline, created_vias=baseline.created_vias[:-1])
     assert regenerate_contact_owners(board, stale, group, tracks, (), settings, maximum_owner_nets=8) is None
+
+
+@pytest.mark.parametrize('feed',(False,True))
+def test_regeneration_keeps_latest_scoped_late_report_and_exact_pending_ids(tmp_path,monkeypatch,feed):
+    from pcbir.fanout_bypass_completion import LateBypassCompletionReport
+    board,baseline,group,tracks,settings,ordinary=fixture(tmp_path,feed=feed)
+    old=LateBypassCompletionReport(status='completed',passes=1,added_tracks=99,
+                                   reason='old whole-fanout stage')
+    old_pending=tuple((link,'old selected-owner stage') for link in board.decoupling_links if link.net==ordinary)
+    baseline=replace(baseline,late_bypass=old,decoupling_pending_links=old_pending)
+    real=regeneration.route_fanout;rebuilt_results=[]
+    current=LateBypassCompletionReport(status='not_needed',reason='latest selected-owner stage')
+    def rebuilt(*a,**k):
+        result=replace(real(*a,**k),late_bypass=current)
+        rebuilt_results.append(result)
+        return result
+    monkeypatch.setattr(regeneration,'route_fanout',rebuilt)
+    result=regenerate_contact_owners(board,baseline,group,tracks,(),settings,maximum_owner_nets=8)
+    assert result is not None and len(rebuilt_results)==1
+    assert result.late_bypass is current and result.late_bypass is not baseline.late_bypass
+    assert result.decoupling_pending_links==rebuilt_results[0].decoupling_pending_links
+    assert baseline.late_bypass is old and baseline.decoupling_pending_links==old_pending
+    assert result.escaped_pads>=baseline.escaped_pads
+    if feed:
+        assert old_pending and _verified_bypass_links(baseline.board,{ordinary})<=_verified_bypass_links(result.board,{ordinary})

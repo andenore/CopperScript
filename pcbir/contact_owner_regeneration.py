@@ -191,6 +191,9 @@ def regenerate_contact_owners(
                      + rebuilt.pin_analysis,
         decoupling_pending=tuple(item for item in baseline.decoupling_pending if names.get(item[0]) not in selected)
                            + rebuilt.decoupling_pending,
+        decoupling_pending_links=tuple(item for item in baseline.decoupling_pending_links if item[0].net not in selected)
+                                 + rebuilt.decoupling_pending_links,
+        late_bypass=rebuilt.late_bypass,  # Latest scoped route_fanout provenance, never baseline counts.
         decoupling_tracks=tuple(track for track in baseline.decoupling_tracks if track.net not in selected)
                           + rebuilt.decoupling_tracks,
         decoupling_vias=tuple(via for via in getattr(baseline, "decoupling_vias", ()) if via.net not in selected)

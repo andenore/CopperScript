@@ -1548,6 +1548,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
                     "decoupling_pending": [{"capacitor": f"{pad.component}.{pad.pad}", "reason": reason}
                                             for pad, reason in result.fanout.decoupling_pending],
+                    "late_bypass_completion": asdict(result.fanout.late_bypass) if result.fanout.late_bypass else None,
+                    "decoupling_pending_links": [{"capacitor": f"{link.capacitor.component}.{link.capacitor.pad}",
+                        "target": f"{link.target.component}.{link.target.pad}", "net": link.net,
+                        "return_pad": f"{link.return_pad.component}.{link.return_pad.pad}",
+                        "return_net": link.return_net, "reason": reason}
+                        for link,reason in result.fanout.decoupling_pending_links],
                     "protected_decoupling_track_count": len(result.fanout.decoupling_tracks),
                     "protected_decoupling_via_count": len(result.fanout.decoupling_vias),
                     **({"surface_escaped_pads": [f"{pad.component}.{pad.pad}"
