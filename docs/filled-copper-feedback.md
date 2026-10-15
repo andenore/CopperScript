@@ -324,3 +324,12 @@ exact native object mapping and fresh connectivity, not inferred object identity
 Missing tools and exhausted budgets remain unresolved evidence, not proof of
 impossibility. A closing benchmark establishes routing only; CAM, electrical,
 RF/power, assembly and prototype approval retain their separate gates.
+
+Global terminal entrance selection screens legal direct stems for incident graph
+resources on allowed layers before deciding whether its existing bounded local
+fallback is needed. The fallback targets existing nodes with allowed resources;
+its candidate/state/step/detour bounds and all exact copper predicates stay the
+same. If no better checked path is found, original isolated choices remain
+available for later checked terminal-via alias registration. Incident degree
+alone proves neither target connectivity nor physical route feasibility; this
+does not refine the coarse graph's lane-capacity model.

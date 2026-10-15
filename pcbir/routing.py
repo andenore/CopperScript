@@ -1144,9 +1144,20 @@ def _pin_access_candidates(
         found.append(PinAccess(pad, position, node, endpoint, layer, tracks))
         if len(found) >= options.pin_access_candidates:
             break
+    # A legal local stem is not a usable graph entrance when its node has
+    # no resource on this net's allowed layers. Prefer existing graph exits
+    # before deciding whether the original bounded local fallback is needed.
+    allowed_indexes = {graph.layers.index(layer) for layer in allowed_layers}
+
+    def has_graph_exit(node):
+        return bool(_neighbors(graph, node, allowed_indexes))
+
+    stranded = [access for access in found if not has_graph_exit(access.node)]
+    found = [access for access in found if has_graph_exit(access.node)]
     if not found:
         local_nodes = [item for item in nearby
                        if graph.layers[item.layer_index] in direct_layers
+                       and has_graph_exit(item)
                        and clearance.can_track(net, graph.point(item), graph.point(item),
                            clearance.breakout.track_width_nm(net, clearance.breakout.region(net, (graph.point(item),)), width), graph.layers[item.layer_index])]
         for node in local_nodes[:max(4, options.pin_access_candidates)]:
@@ -1161,6 +1172,11 @@ def _pin_access_candidates(
                 found.append(PinAccess(pad, position, node, endpoint, layer, tracks))
             if len(found) >= options.pin_access_candidates:
                 break
+    if not found:
+        # Registration may later add a checked terminal-via alias. Preserve
+        # the original choices when no better exact local bridge was found;
+        # degree alone never authorizes copper or changes graph capacity.
+        found = stranded
     if (physical_pad.kind is PadKind.SMD and len(allowed_layers) > 1
             and (rule is None or rule.kind is not RouteKind.DIFFERENTIAL)
             and (rule is None or rule.max_vias != 0)):
