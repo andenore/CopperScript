@@ -885,6 +885,30 @@ def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
     return result
 
 
+def _source_capacitor_pin_distance(board, reference, failure_points):
+    """Source terminal-center proximity hint only; never clearance authority."""
+    from .physical import PadKind
+    from .placement import transformed_pad_position
+    links = [link for link in board.decoupling_links
+             if link.capacitor.component == reference]
+    if len(links) != 1 or not failure_points:
+        return None
+    poses = {pose.reference: pose for pose in board.placements}
+    pose = poses.get(reference)
+    footprint = board.footprints.get(pose.footprint) if pose is not None else None
+    if footprint is None:
+        return None
+    positions = []
+    for terminal in (links[0].capacitor, links[0].return_pad):
+        lands = [pad for pad in footprint.pads if pad.number == terminal.pad]
+        if (terminal.component != reference or len(lands) != 1
+                or lands[0].kind not in {PadKind.SMD, PadKind.THROUGH_HOLE}):
+            return None
+        positions.append(transformed_pad_position(board, pose, terminal.pad))
+    return min((a.x_nm-b.x_nm)**2 + (a.y_nm-b.y_nm)**2
+               for a in positions for b in failure_points)
+
+
 def _package_owner_cohorts(ranked, direct_owners, links, bypass_hints, ordinary_hints):
     """Interleave source targets using their exact declared bypass association.
 
@@ -976,6 +1000,21 @@ def package_placement_trials(
     ranked = sorted(owners - fixed, key=lambda ref: (
         -sum(pad.component == ref for pad in baseline.pending_pads), dependency_distance(ref),
         -len(board.footprints[poses[ref].footprint].pads), ref))
+    # Preserve every existing primary tier. Unknown terminal identity leaves
+    # its entire tied tier in the original order rather than gaining priority.
+    tiers = {}
+    for ref in ranked:
+        key = (-sum(pad.component == ref for pad in baseline.pending_pads),
+               dependency_distance(ref), -len(board.footprints[poses[ref].footprint].pads))
+        tiers.setdefault(key, []).append(ref)
+    ranked = []
+    for refs in tiers.values():
+        hints = {ref: _source_capacitor_pin_distance(board, ref, failure_points)
+                 if ref in dependency_owners and ref not in direct_owners else None
+                 for ref in refs}
+        if all(value is not None for value in hints.values()):
+            refs.sort(key=lambda ref: (hints[ref], ref))
+        ranked.extend(refs)
     # Build the existing finite per-owner proposal lists once.
     proposals = {}
     for reference in ranked:

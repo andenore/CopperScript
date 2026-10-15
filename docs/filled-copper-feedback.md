@@ -148,7 +148,11 @@ Placement look-ahead alternates legal proposals between failing source
 components. Bypass capacitors associated with the same target share one
 cohort, so many dependencies of one package do not consume every early
 probe. Existing owner ranking and move choices are retained within each
-cohort; probe, trial and legality bounds are unchanged. Exhausted cohorts
+cohort; probe, trial and legality bounds are unchanged. Inside an otherwise
+tied dependency tier, exact current source capacitor-terminal positions may
+break the reference-name tie by distance to existing failed pins. This is a
+proximity hint, never measured blocker or clearance authority. A tier with an
+unsupported terminal identity retains its original order. Exhausted cohorts
 drop out without granting additional moves or acceptance authority.
 
 These reuse the actual placement legality predicates, including fixed companions,
