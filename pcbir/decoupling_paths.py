@@ -368,6 +368,7 @@ def refresh_crosslayer_witnesses(board, witnesses, *, index=None, replacing_link
 
 
 def _connections(board, first, second, net, options, launch_limit, site_limit):
+    from .track_containment import track_is_contained
     a,b=_land(board,first),_land(board,second)
     if a is None or b is None or a[2].layer is b[2].layer:
         return
@@ -399,7 +400,7 @@ def _connections(board, first, second, net, options, launch_limit, site_limit):
         selected=via or existing
         if selected is None or not _normal_via(board,index,selected):
             continue
-        tracks=tuple(t for t in path if t not in board.tracks)
+        tracks=tuple(t for t in path if not track_is_contained(t, board.tracks))
         added_vias=(via,) if via is not None and via not in board.vias else ()
         try:
             launched=replace(board,tracks=(*board.tracks,*tracks),vias=(*board.vias,*added_vias))
@@ -407,7 +408,7 @@ def _connections(board, first, second, net, options, launch_limit, site_limit):
             continue
         fresh=RoutingClearanceIndex(launched)
         for tail in checked_access_paths(launched,fresh,net,selected.position,b[2].position,width,b[2].layer):
-            additions=tuple(t for t in tail if t not in launched.tracks)
+            additions=tuple(t for t in tail if not track_is_contained(t, launched.tracks))
             try:
                 candidate=replace(launched,tracks=(*launched.tracks,*additions))
             except ValueError:
@@ -452,9 +453,15 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
     if not targets:
         return DecouplingPathResult(board,reason="no_declared_target_return_pad",supply_path=existing.supply_path)
     options=fanout_options or FanoutOptions()
-    cap=_land(board,link.return_pad)[2].position
-    targets=tuple(sorted((p for p in targets if _land(board,p)),key=lambda p:(
-        (_land(board,p)[2].position.x_nm-cap.x_nm)**2+(_land(board,p)[2].position.y_nm-cap.y_nm)**2,p)))[:maximum_return_candidates]
+    if existing.return_path is not None:
+        # The fresh complete half is already an observed path, not another
+        # target search. Distance truncation must not discard its explicit end.
+        # Initial verification also constrains this end to return_target.
+        targets=(existing.return_path.end,)
+    else:
+        cap=_land(board,link.return_pad)[2].position
+        targets=tuple(sorted((p for p in targets if _land(board,p)),key=lambda p:(
+            (_land(board,p)[2].position.x_nm-cap.x_nm)**2+(_land(board,p)[2].position.y_nm-cap.y_nm)**2,p)))[:maximum_return_candidates]
     baseline={f.fingerprint for f in run_physical_drc(board).findings
               if f.severity is DrcSeverity.ERROR and f.code not in {"DRC-OPEN-NET","DRC-ROUTE-INCOMPLETE"}}
     supplies=(board,) if existing.supply_path is not None else _connections(

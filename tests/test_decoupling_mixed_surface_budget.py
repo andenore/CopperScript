@@ -1,20 +1,21 @@
 """Later local feeds cannot invalidate previously accepted complete owners."""
 from collections import Counter
 from dataclasses import replace
+from math import hypot
 
 import pytest
 
 from pcbir.bypass_reservations import verified_bypass_reservations
 from pcbir.decoupling import route_decouplers
 from pcbir.decoupling_paths import validate_crosslayer_witness
-from pcbir.drc import physical_board_digest
+from pcbir.drc import physical_board_digest, run_physical_drc
 from pcbir.fanout import route_fanout
 from pcbir.package_access import _verified_bypass_links
-from pcbir.physical import BoardSide, PadReference, Placement, Point
+from pcbir.physical import BoardSide, CopperLayer, PadReference, Placement, Point
 from test_decoupling_crosslayer_paths import fixture
 
 
-def mixed(*,renamed=False,reversed_order=False):
+def mixed(*,renamed=False,reversed_order=False,supply_max_length_nm=10_000_000):
     board,back=fixture(renamed=renamed)
     ref="FRONT_BRANCH" if renamed else "CF"
     front=replace(back,capacitor=PadReference(ref,"1"),return_pad=PadReference(ref,"2"))
@@ -23,7 +24,7 @@ def mixed(*,renamed=False,reversed_order=False):
         nets=tuple(replace(n,pads=(*n.pads,front.capacitor if n.name==back.net else front.return_pad))
                    for n in board.nets),
         decoupling_links=(front,back) if reversed_order else (back,front),
-        net_routing_rules=tuple(replace(r,max_length_nm=10_000_000) if r.net==back.net else r
+        net_routing_rules=tuple(replace(r,max_length_nm=supply_max_length_nm) if r.net==back.net else r
                                 for r in board.net_routing_rules))
     return board,back,front
 
@@ -31,8 +32,18 @@ def mixed(*,renamed=False,reversed_order=False):
 @pytest.mark.parametrize("renamed",[False,True])
 @pytest.mark.parametrize("reversed_order",[False,True])
 def test_mixed_surface_batch_rejects_only_later_budget_overflow(renamed,reversed_order):
-    board,back,front=mixed(renamed=renamed,reversed_order=reversed_order)
+    # First feeds measure5.5/7.5mm. The10mm fixture now permits a valid9.914214mm
+    # shared front-first network;8mm still keeps either first feed legal while
+    # forcing only the later association to remain pending.
+    board,back,front=mixed(renamed=renamed,reversed_order=reversed_order,
+                           supply_max_length_nm=8_000_000)
     first,later=board.decoupling_links
+    first_only=route_decouplers(replace(board,decoupling_links=(first,)))
+    assert not first_only.pending
+    first_length=sum(round(hypot(t.end.x_nm-t.start.x_nm,t.end.y_nm-t.start.y_nm))
+                     for t in first_only.board.tracks if t.net==back.net)
+    assert first_length==(7_500_000 if reversed_order else 5_500_000)
+    assert first_length<8_000_000
     result=route_decouplers(board)
     assert len(result.pending)==1 and result.pending[0][0]==later
     assert "budget" in result.pending[0][1] or "candidates_exhausted" in result.pending[0][1]
@@ -46,6 +57,34 @@ def test_mixed_surface_batch_rejects_only_later_budget_overflow(renamed,reversed
     fanout=route_fanout(board)
     assert len(fanout.decoupling_pending)==1
     assert verified_bypass_reservations(board,fanout)[2] is None
+    assert board.tracks==board.vias==()
+
+
+@pytest.mark.parametrize('renamed',[False,True])
+def test_front_first_shared_launch_completes_both_within_original_ten_mm_budget(renamed):
+    board,back,front=mixed(renamed=renamed,reversed_order=True)
+    result=route_decouplers(board)
+    assert not result.pending and _verified_bypass_links(result.board,{back.net})=={back,front}
+    held_front=tuple(t for t in result.created_tracks if t.net==back.net and t.layer is CopperLayer.FRONT)
+    assert len(held_front)==1
+    held=held_front[0]
+    assert round(hypot(held.end.x_nm-held.start.x_nm,held.end.y_nm-held.start.y_nm))==7_500_000
+    witness=next(w for w in result.admitted_path_witnesses if w.link==back)
+    # The new cross-layer feed shares a strict subsegment of the ORIGINAL
+    # earlier7.5mm front feed; no redundant2.5mm launch becomes a new owner.
+    assert any(step.edge is held and {step.start.position,step.end.position}!={held.start,held.end}
+               for step in witness.supply_path.steps)
+    assert any(t is held for t in result.board.tracks)
+    total=sum(round(hypot(t.end.x_nm-t.start.x_nm,t.end.y_nm-t.start.y_nm))
+              for t in result.board.tracks if t.net==back.net)
+    assert total==9_914_214
+    assert total<=next(r.max_length_nm for r in board.net_routing_rules if r.net==back.net)==10_000_000
+    assert all(validate_crosslayer_witness(result.board,w)=='' for w in result.admitted_path_witnesses)
+    assert all(w.board_digest==physical_board_digest(result.board) for w in result.supply_return_witnesses)
+    assert not [f for f in run_physical_drc(result.board).findings if f.severity.value=='error'
+                and f.code not in {'DRC-OPEN-NET','DRC-ROUTE-INCOMPLETE'}]
+    fanout=route_fanout(board)
+    assert not fanout.decoupling_pending and verified_bypass_reservations(board,fanout)[2] is None
     assert board.tracks==board.vias==()
 
 

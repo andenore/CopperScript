@@ -193,7 +193,15 @@ Paths must be node-simple, although consecutive subsegments may use the same
 original track. New proposal copper must occur on its complete supply/return
 paths before adoption, within the existing proposal allowance; unsupported
 contributions remain pending. Legacy contributions without records still require
-fresh canonical-path coverage. Partial/contact regeneration includes original
+fresh canonical-path coverage. A freshly verified complete return half keeps its
+explicit target while the missing supply half is generated; distance-based target
+truncation applies only when no return half exists. An explicitly selected target
+remains binding, and the combined proposal still requires fresh validation.
+Connection generation omits a new straight segment only when both endpoints lie
+exactly on one held segment of the same net, layer and width. It preserves the held
+segment and its ownership; partial overlap or a union of separate segments does
+not satisfy this narrow containment check. Proposal and path-search bounds remain
+unchanged. Partial/contact regeneration includes original
 paths when protecting shared owners and freshly validates its merged ledger.
 Disposable partial probes retain their actual copper/fills but generate new
 witnesses under the owner's source metadata from the start. All other source
