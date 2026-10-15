@@ -443,3 +443,10 @@ At equal feed length, the decoupler placer prefers its supply-to-return axis
 pointing outward from the target pin. This tie break avoids tangential bodies
 occupying adjacent package exits; explicit orientations, placement domains and
 fixed poses remain authoritative. It is not a decoupling impedance qualification.
+
+Full ordinary pattern proposals use the same authoritative source frame as
+partial proposals: disposable routing metadata is normalized before generating
+bypass witnesses, while actual probe copper/fills remain obstacles. After probe
+copper is stripped, original witness paths and exact generated ownership are
+freshly admitted. Borrowed disposable return copper rejects the proposal within
+its existing trial slot; it does not abort routing or become ordinary ownership.

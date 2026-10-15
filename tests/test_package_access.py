@@ -470,6 +470,11 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
             fan = replace(fan, accesses={})
         return replace(template, source=source, global_route=route, fanout=fan, critical=critical,
                        failed_critical_nets=failed)
+    # This scheduler fixture deliberately supplies synthetic, mismatched
+    # geometry. Isolate the full-pattern proposal boundary as well; real source
+    # and witness admission are covered by test_full_probe_source_context.
+    monkeypatch.setattr(access, "_full_ordinary_pattern",
+                        lambda owner, probe, settings: (escape(probe, settings), "proposed"))
     monkeypatch.setattr(access, "route_fanout", escape)
     monkeypatch.setattr(access, "route_critical_nets", critical)
     monkeypatch.setattr(access, "_access_result", evaluate)

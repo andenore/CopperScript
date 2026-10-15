@@ -477,7 +477,7 @@ def _negotiate_patterns(
                 baseline.fanout, owner_board, obstacles, fanout_options, options.maximum_partial_owner_nets,
                 strategy == "partial_bypass", failed_bypass_capacitors)
         else:
-            proposed = route_fanout(obstacles, fanout_options)
+            proposed, partial_outcome = _full_ordinary_pattern(owner_board, obstacles, fanout_options)
         emit(on_progress, "package_pattern_fanout", "finished", strategy=strategy,
              escaped=len(proposed.accesses) if proposed else 0,
              pending=len(proposed.pending_pads) if proposed else 0,
@@ -638,6 +638,31 @@ def _ordinary_probe_frame(owner, obstacles):
             or obstacles.vias[:len(owner.vias)] != owner.vias):
         return None
     return replace(obstacles, metadata=owner.metadata)
+
+
+def _full_ordinary_pattern(owner, obstacles, settings):
+    """Generate against disposable copper, then admit only owned contributions.
+
+    Temporary routing metadata must not become the source context of newly
+    generated witnesses. A path that borrows disposable copper must fail fresh
+    admission after that copper is removed, without aborting the whole pipeline.
+    """
+    frame = _ordinary_probe_frame(owner, obstacles)
+    if frame is None:
+        return None, "stale_probe_source_intent"
+    proposed = route_fanout(frame, settings)
+    proposed = replace(proposed, board=replace(owner,
+        tracks=(*owner.tracks, *proposed.created_tracks),
+        vias=(*owner.vias, *proposed.created_vias)))
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    witnesses, reason = refresh_crosslayer_witnesses(proposed.board, proposed.decoupling_witnesses)
+    if reason:
+        return None, "stale_bypass_witness"
+    proposed = replace(proposed, decoupling_witnesses=witnesses)
+    from .bypass_reservations import verified_bypass_reservations
+    if verified_bypass_reservations(owner, proposed)[2] is not None:
+        return None, "lost_bypass_connection"
+    return proposed, "proposed"
 
 
 def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets,
