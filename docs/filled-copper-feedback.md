@@ -386,3 +386,15 @@ unrepresented layers are preferred within each launch. Distinct surface graph
 entrances remain separate. This selection performs no geometry queries, adds no
 candidate or capacity, and is not an exhaustive escape search. Fresh terminal
 capacity registration, negotiated routing and all physical gates still apply.
+
+Opposite-face bypass proposals may reuse existing normal through-vias only after
+recognizing an exact, legal copper path from the actual declared source pad.
+Installed-component internal connections do not establish this path. Existing
+sites are examined within the finite fanout radius and site count, and consume
+the same launch allowance before fresh launches. One proposal transaction
+shares at most four local tail searches (100 um steps, 1 mm detour, 4000 states
+each) across supply, return and return targets. These require an already
+verified launch, no legal cheap tail, and the fanout maze option. Exact complete
+paths, protected owners, created-edge coverage and final physical gates remain
+mandatory. This helper requires existing source copper; it alone does not prove
+the standard fanout sequence or a consumer board has closed.

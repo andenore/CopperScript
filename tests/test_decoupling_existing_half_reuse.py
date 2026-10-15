@@ -44,9 +44,9 @@ def hard_findings(board):
 def observe_connections(monkeypatch):
     actual=paths._connections
     calls=[]
-    def observe(board,start,end,net,options,launch_limit,site_limit):
+    def observe(board,start,end,net,options,launch_limit,site_limit,**kwargs):
         calls.append((start,end,net,launch_limit,site_limit))
-        return actual(board,start,end,net,options,launch_limit,site_limit)
+        return actual(board,start,end,net,options,launch_limit,site_limit,**kwargs)
     monkeypatch.setattr(paths,'_connections',observe)
     return calls
 

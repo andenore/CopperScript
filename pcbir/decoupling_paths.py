@@ -19,7 +19,8 @@ from .drc import DrcSeverity, physical_board_digest, run_physical_drc
 from .fanout import FanoutOptions, _candidates, _legal_choices, _two_leg_candidates
 from .hard_macros import macro_owned_pads
 from .pad_via_arrays import require_via_in_pad_arrays
-from .pin_escape import checked_access_paths
+from .pin_escape import checked_access_paths, _verified_land_path
+from .pin_access import local_access_path
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers
@@ -367,8 +368,36 @@ def refresh_crosslayer_witnesses(board, witnesses, *, index=None, replacing_link
     return tuple(replace(witness, board_digest=digest) for witness in retained), None
 
 
-def _connections(board, first, second, net, options, launch_limit, site_limit):
+@dataclass(slots=True)
+class _ConnectionWork:
+    # One allowance per outer transaction, shared by every lazy connection
+    # generator, supply, return and return target. Never a new source maze.
+    local_paths: int = 0
+
+
+def _existing_launches(board, a, b, net, width, index, options, site_limit):
+    """Observe exact original-edge source paths; never infer a package join."""
+    radius = options.maximum_radius_nm
+    sites = sorted((v for v in board.vias if v.net == net
+                    and (v.position.x_nm-a[2].position.x_nm)**2
+                    + (v.position.y_nm-a[2].position.y_nm)**2 <= radius**2),
+                   key=lambda v: ((v.position.x_nm-b[2].position.x_nm)**2
+                                  + (v.position.y_nm-b[2].position.y_nm)**2,
+                                  v.position.x_nm, v.position.y_nm))
+    for via in islice(sites, site_limit):
+        if not _normal_via(board, index, via):
+            continue
+        # verified_fanout_path deliberately expands internal-pad groups; this
+        # explicit supply/return contract requires the exact source terminal.
+        path = _verified_land_path(board, a[1], a[0], net, via.position, index,
+                                   target_layer=b[2].layer, required_width_nm=width)
+        if path is not None and all(_track_ok(board, index, t, net) for t in path):
+            yield path, via
+
+
+def _connections(board, first, second, net, options, launch_limit, site_limit, *, work=None):
     from .track_containment import track_is_contained
+    work = work if work is not None else _ConnectionWork()
     a,b=_land(board,first),_land(board,second)
     if a is None or b is None or a[2].layer is b[2].layer:
         return
@@ -380,35 +409,54 @@ def _connections(board, first, second, net, options, launch_limit, site_limit):
     if span is None or {span[0],span[1]} != {board.stackup.copper_layers[0],board.stackup.copper_layers[-1]}:
         return
     index=RoutingClearanceIndex(board)
-    settings=(options,replace(options,step_nm=options.refinement_step_nm))
-    launches=[]
-    for config in settings:
-        endpoints=islice(_candidates(a[2].position,a[0].position,config,
-                                    diagonal_normal=a[0].rotation_degrees%90==45),site_limit)
-        launches.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],endpoints))
-        if len(launches)>=launch_limit:
-            break
-        if config.two_leg_escapes:
-            launches.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],
-                islice(_two_leg_candidates(a[2].position,a[0].position,config),site_limit),multiple_orders=True))
-        if len(launches)>=launch_limit:
-            break
     width=rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
-    for path,via in tuple(dict.fromkeys(launches))[:launch_limit]:
-        existing=next((v for v in board.vias if v.net==net and v.position==path[-1].end
-                       and _normal_via(board,index,v)),None)
-        selected=via or existing
-        if selected is None or not _normal_via(board,index,selected):
-            continue
-        tracks=tuple(t for t in path if not track_is_contained(t, board.tracks))
-        added_vias=(via,) if via is not None and via not in board.vias else ()
+
+    def launches():
+        admitted=0
+        for path,via in _existing_launches(board, a, b, net, width, index, options, site_limit):
+            admitted+=1
+            yield path,via,True
+            if admitted>=launch_limit:
+                return
+        # Existing launches spend the SAME finite slots before ordinary
+        # candidates; no extra launch or complete-proposal allowance is added.
+        remaining=launch_limit-admitted
+        settings=(options,replace(options,step_nm=options.refinement_step_nm))
+        fresh=[]
+        for config in settings:
+            endpoints=islice(_candidates(a[2].position,a[0].position,config,
+                                        diagonal_normal=a[0].rotation_degrees%90==45),site_limit)
+            fresh.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],endpoints))
+            if len(fresh)>=remaining:
+                break
+            if config.two_leg_escapes:
+                fresh.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],
+                    islice(_two_leg_candidates(a[2].position,a[0].position,config),site_limit),multiple_orders=True))
+            if len(fresh)>=remaining:
+                break
+        for path,via in tuple(dict.fromkeys(fresh))[:remaining]:
+            existing=next((v for v in board.vias if v.net==net and v.position==path[-1].end
+                           and _normal_via(board,index,v)),None)
+            selected=via or existing
+            if selected is not None and _normal_via(board,index,selected):
+                yield path,selected,False
+
+    for path,selected,reused in launches():
+        tracks=tuple(dict.fromkeys(t for t in path if not track_is_contained(t, board.tracks)))
+        added_vias=(selected,) if selected not in board.vias else ()
         try:
             launched=replace(board,tracks=(*board.tracks,*tracks),vias=(*board.vias,*added_vias))
         except ValueError:
             continue
         fresh=RoutingClearanceIndex(launched)
-        for tail in checked_access_paths(launched,fresh,net,selected.position,b[2].position,width,b[2].layer):
-            additions=tuple(t for t in tail if not track_is_contained(t, launched.tracks))
+        tails=tuple(checked_access_paths(launched,fresh,net,selected.position,b[2].position,width,b[2].layer))
+        if not tails and reused and options.maze_escapes and work.local_paths < 4:
+            work.local_paths+=1
+            tail=local_access_path(launched,fresh,net,selected.position,b[2].position,b[2].layer,width,
+                                   step_nm=100_000,detour_nm=1_000_000,maximum_states=4000)
+            tails=() if tail is None else (tail,)
+        for tail in tails:
+            additions=tuple(dict.fromkeys(t for t in tail if not track_is_contained(t, launched.tracks)))
             try:
                 candidate=replace(launched,tracks=(*launched.tracks,*additions))
             except ValueError:
@@ -425,6 +473,11 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
     """Atomically propose normal-through supply and explicit-pad return routes.
 
     Candidate counts/radius are computational bounds, never electrical limits.
+    Existing same-net vias examined per connection are capped by the site bound;
+    verified reuse spends the existing launch slots before new launches. One
+    shared transaction permits at most four local 100 um/1 mm/4000-state tails,
+    only for verified existing launches after cheap tails fail and when the
+    fanout maze option is enabled. Source paths are recognized, never searched.
     Rejection returns the original board and no adopted generated copper.
     """
     if min(maximum_launch_candidates,maximum_return_candidates,maximum_site_candidates,
@@ -464,15 +517,16 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
             (_land(board,p)[2].position.x_nm-cap.x_nm)**2+(_land(board,p)[2].position.y_nm-cap.y_nm)**2,p)))[:maximum_return_candidates]
     baseline={f.fingerprint for f in run_physical_drc(board).findings
               if f.severity is DrcSeverity.ERROR and f.code not in {"DRC-OPEN-NET","DRC-ROUTE-INCOMPLETE"}}
+    work=_ConnectionWork()
     supplies=(board,) if existing.supply_path is not None else _connections(
-        board,link.target,link.capacitor,link.net,options,maximum_launch_candidates,maximum_site_candidates)
+        board,link.target,link.capacitor,link.net,options,maximum_launch_candidates,maximum_site_candidates,work=work)
     attempted=0
     uncovered=False
     for supplied in supplies:
         for target in targets:
             returns=((supplied,) if existing.return_path is not None and existing.return_path.end==target
                      else _connections(supplied,target,link.return_pad,link.return_net,
-                                       options,maximum_launch_candidates,maximum_site_candidates))
+                                       options,maximum_launch_candidates,maximum_site_candidates,work=work))
             for candidate in returns:
                 attempted+=1
                 fresh=RoutingClearanceIndex(candidate)
