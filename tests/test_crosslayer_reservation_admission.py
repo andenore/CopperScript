@@ -161,7 +161,7 @@ def test_selected_supply_may_create_only_its_exact_declared_return_without_extra
                  and t.layer is CopperLayer.FRONT)
     baseline = replace(full, board=replace(board, tracks=(track,), vias=(via,)),
         created_tracks=(track,), created_vias=(via,), added_track_count=1, added_via_count=1,
-        decoupling_tracks=(), decoupling_vias=(), accesses={link.target:via.position},
+        decoupling_tracks=(), decoupling_vias=(), decoupling_witnesses=(), accesses={link.target:via.position},
         surface_accesses={}, pin_analysis=(),
         pending_pads=tuple(p for net in board.nets for p in net.pads if p != link.target),
         decoupling_pending=((link.capacitor, 'unrouted association'),))

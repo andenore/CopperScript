@@ -116,7 +116,8 @@ def regenerate_contact_owners(
     all_names = frozenset(net.name for net in board.nets)
     baseline_paths, baseline_via_paths = {}, {}
     required_bypass = _verified_bypass_links(baseline.board, all_names,
-        witness_paths=baseline_paths, witness_vias=baseline_via_paths)
+        witness_paths=baseline_paths, witness_vias=baseline_via_paths,
+        admitted_witnesses=baseline.decoupling_witnesses)
     generated_tracks = frozenset(baseline.created_tracks)
     generated_vias = frozenset(baseline.created_vias)
     # A return owner shared with an unselected supply cohort cannot be released
@@ -146,7 +147,8 @@ def regenerate_contact_owners(
         return None
     rebuilt_paths, rebuilt_via_paths = {}, {}
     current_bypass = _verified_bypass_links(rebuilt.board, all_names,
-        witness_paths=rebuilt_paths, witness_vias=rebuilt_via_paths)
+        witness_paths=rebuilt_paths, witness_vias=rebuilt_via_paths,
+        admitted_witnesses=rebuilt.decoupling_witnesses)
     declared_tracks = frozenset(rebuilt.decoupling_tracks)
     declared_vias = frozenset(getattr(rebuilt, "decoupling_vias", ()))
     returned_tracks = {t for link in current_bypass if link.net in selected
@@ -193,6 +195,16 @@ def regenerate_contact_owners(
                           + rebuilt.decoupling_tracks,
         decoupling_vias=tuple(via for via in getattr(baseline, "decoupling_vias", ()) if via.net not in selected)
                         + getattr(rebuilt, "decoupling_vias", ()))
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    replacing = frozenset(link for link in required_bypass if link.net in selected)
+    inherited, reason = refresh_crosslayer_witnesses(proposed.board,baseline.decoupling_witnesses,
+                                                    replacing_links=replacing)
+    if reason:
+        return None
+    merged, reason = refresh_crosslayer_witnesses(proposed.board,(*inherited,*rebuilt.decoupling_witnesses))
+    if reason:
+        return None
+    proposed = replace(proposed,decoupling_witnesses=merged)
     if (verified_bypass_reservations(board, proposed)[2] is not None
             or not baseline.escaped_pads <= proposed.escaped_pads
             or not {item.pad for item in baseline.pin_analysis} <= {item.pad for item in proposed.pin_analysis}

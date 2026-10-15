@@ -84,6 +84,8 @@ def repair_placement_trial(
     if incident & protected:
         return fallback("critical endpoint moved")
     if initial.fanout is not None:
+        if initial.fanout.decoupling_witnesses:
+            return fallback("original bypass source context requires full preflight")
         if initial.fanout.boundary_accesses or initial.fanout.surface_accesses:
             # Moving even an unrelated pad/keepout can invalidate the owned
             # collar path. Full preflight rebuilds paths and source evidence;
@@ -159,7 +161,8 @@ def repair_placement_trial(
             metadata={**trial.metadata, "global_routing_fingerprint": global_route.routing_fingerprint}),
             created_tracks=fan_tracks, created_vias=fan_vias, added_track_count=len(fan_tracks),
             added_via_count=len(fan_vias), pin_analysis=(), assignment=None,
-            decoupling_tracks=tuple((Counter(fans.decoupling_tracks) & Counter(fan_tracks)).elements()))
+            decoupling_tracks=tuple((Counter(fans.decoupling_tracks) & Counter(fan_tracks)).elements()),
+            decoupling_vias=tuple((Counter(fans.decoupling_vias) & Counter(fan_vias)).elements()))
         critical = replace(critical, reserved_track_count=len(fan_tracks), reserved_via_count=len(fan_vias))
     access = (replace(initial.package_access, source=trial, global_route=global_route,
         fanout=access_fanout, critical=critical, plane_stitch=early,

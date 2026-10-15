@@ -185,6 +185,23 @@ and permitted ordinary through-vias witness these paths; zone intent, pad groups
 via labels and connected flags do not. The witness establishes physical joins,
 not component-internal return behavior, decoupling impedance or electrical loop
 qualification. Unsupported source/process/length/via budgets stay pending.
+The generated contribution retains its original complete path witnesses in
+`FanoutResult.decoupling_witnesses`. Admission freshly checks those exact edges,
+both terminals, source context, current clearances and whole-net budgets; a later
+canonical path choice cannot discard ownership of a still-valid adopted path.
+Paths must be node-simple, although consecutive subsegments may use the same
+original track. New proposal copper must occur on its complete supply/return
+paths before adoption, within the existing proposal allowance; unsupported
+contributions remain pending. Legacy contributions without records still require
+fresh canonical-path coverage. Partial/contact regeneration includes original
+paths when protecting shared owners and freshly validates its merged ledger.
+Disposable partial probes retain their actual copper/fills but generate new
+witnesses under the owner's source metadata from the start. All other source
+fields and the exact ordered source copper prefix must match before generation;
+this does not rebind a witness created under another context.
+Changed placement context requires full preflight rather than relabelling an old
+path. `DecouplingRouteResult.supply_return_witnesses` remains the final canonical
+snapshot; `admitted_path_witnesses` separately records adopted original paths.
 Placement retains exact shared/generated/source copper while testing disposable
 poses, freshly rechecks all prior association identities at the new poses, and
 rolls back if normal regeneration loses any identity. Public placement output

@@ -283,6 +283,22 @@ def validate_crosslayer_witness(board, witness, *, index=None):
     """
     if index is not None and index.board is not board:
         return "stale_clearance_index"
+    if (not isinstance(witness, DecouplingCrossLayerWitness)
+            or not isinstance(witness.link, DecouplingLink)
+            or not isinstance(witness.return_target, PadReference)
+            or any(not isinstance(path, DecouplingCopperPath)
+                   or not isinstance(path.start, PadReference)
+                   or not isinstance(path.end, PadReference)
+                   or not isinstance(path.net, str)
+                   or not isinstance(path.steps, tuple)
+                   or any(not isinstance(step, DecouplingPathStep)
+                          or any(not isinstance(node, DecouplingPathNode)
+                                 or not isinstance(node.position, Point)
+                                 or not isinstance(node.layer, CopperLayer)
+                                 for node in (step.start, step.end))
+                          for step in path.steps)
+                   for path in (witness.supply_path, witness.return_path))):
+        return "untyped_admitted_bypass_witness"
     if witness.context_digest != _context(board) or _source_reason(board,witness.link):
         return "stale_witness_context"
     link=witness.link
@@ -299,9 +315,12 @@ def validate_crosslayer_witness(board, witness, *, index=None):
         if first is None or last is None or not path.steps:
             return "witness_land_absent"
         cursor=first[2]
+        visited={cursor}
         for step in path.steps:
             if step.start != cursor:
                 return "witness_path_discontinuous"
+            if step.end in visited:
+                return "witness_path_cycle"
             edge=step.edge
             if isinstance(edge,TrackSegment):
                 if (not any(edge is item for item in board.tracks) or not _track_ok(board,index,edge,path.net)
@@ -318,9 +337,34 @@ def validate_crosslayer_witness(board, witness, *, index=None):
             else:
                 return "witness_unknown_edge"
             cursor=step.end
+            visited.add(cursor)
         if cursor != last[2]:
             return "witness_terminal_moved"
     return ""
+
+
+def refresh_crosslayer_witnesses(board, witnesses, *, index=None, replacing_links=frozenset()):
+    """Fresh same-path validation; never waive the original source context.
+
+    Return immutable original-edge witnesses bound to the current copper
+    digest, or no witnesses and an explicit reason. This never searches or
+    creates copper. Empty legacy ledgers require no index or digest work.
+    """
+    if not isinstance(witnesses, tuple) or any(not isinstance(w, DecouplingCrossLayerWitness) for w in witnesses):
+        return (), "untyped_admitted_bypass_witness"
+    if not witnesses:
+        return (), None
+    index = RoutingClearanceIndex(board) if index is None else index
+    retained=[]
+    for witness in witnesses:
+        reason = validate_crosslayer_witness(board, witness, index=index)
+        if reason:
+            if witness.link in replacing_links:
+                continue  # This exact association is rebuilt by the caller.
+            return (), reason
+        retained.append(witness)
+    digest = physical_board_digest(board)
+    return tuple(replace(witness, board_digest=digest) for witness in retained), None
 
 
 def _connections(board, first, second, net, options, launch_limit, site_limit):
@@ -416,6 +460,7 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
     supplies=(board,) if existing.supply_path is not None else _connections(
         board,link.target,link.capacitor,link.net,options,maximum_launch_candidates,maximum_site_candidates)
     attempted=0
+    uncovered=False
     for supplied in supplies:
         for target in targets:
             returns=((supplied,) if existing.return_path is not None and existing.return_path.end==target
@@ -429,7 +474,15 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                 if measured.witness is not None and not any(validate_crosslayer_witness(candidate,w,index=fresh) for w in protected):
                     created_tracks=candidate.tracks[len(board.tracks):]
                     created_vias=candidate.vias[len(board.vias):]
-                    exact=(all(_track_ok(candidate,fresh,t,t.net) for t in created_tracks)
+                    covered_tracks={id(step.edge) for path in (measured.supply_path,measured.return_path)
+                                    for step in path.steps if isinstance(step.edge,TrackSegment)}
+                    covered_vias={id(step.edge) for path in (measured.supply_path,measured.return_path)
+                                  for step in path.steps if isinstance(step.edge,Via)}
+                    coverage=(all(id(t) in covered_tracks for t in created_tracks)
+                              and all(id(v) in covered_vias for v in created_vias))
+                    uncovered |= not coverage
+                    exact=(coverage
+                           and all(_track_ok(candidate,fresh,t,t.net) for t in created_tracks)
                            and all(_normal_via(candidate,fresh,v) for v in created_vias))
                     if exact:
                         errors={f.fingerprint for f in run_physical_drc(candidate).findings
@@ -437,7 +490,7 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                         if not errors-baseline:
                             return replace(measured,created_tracks=created_tracks,created_vias=created_vias)
                 if attempted>=maximum_proposals:
-                    return DecouplingPathResult(board,reason="bounded_complete_proposals_exhausted",
+                    return DecouplingPathResult(board,reason=("unwitnessed_generated_bypass_copper" if uncovered else "bounded_complete_proposals_exhausted"),
                                                 supply_path=existing.supply_path,return_path=existing.return_path)
-    return DecouplingPathResult(board,reason="bounded_supply_return_candidates_exhausted",
+    return DecouplingPathResult(board,reason=("unwitnessed_generated_bypass_copper" if uncovered else "bounded_supply_return_candidates_exhausted"),
                                 supply_path=existing.supply_path,return_path=existing.return_path)

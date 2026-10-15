@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .decoupling_paths import DecouplingCrossLayerWitness
 
 from .drc import placed_pad_shape, run_physical_drc
 from .geometry import RoundedConvexShape, shapes_clear, point_in_polygon, point_segment_distance_at_least
@@ -86,6 +89,7 @@ class FanoutResult:
     decoupling_tracks: tuple[TrackSegment, ...] = ()
     # Exact generated semantic supply/return transitions, not arbitrary GND.
     decoupling_vias: tuple[Via, ...] = ()
+    decoupling_witnesses: tuple[DecouplingCrossLayerWitness, ...] = ()
 
     @property
     def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
@@ -320,8 +324,10 @@ def route_fanout(
     after = run_physical_drc(routed)
     before_count = {code: sum(item.code == code for item in before.findings) for code in fatal}
     def failed_gate(findings, candidate):
+        from .decoupling_paths import refresh_crosslayer_witnesses
         return (any(sum(item.code == code for item in findings) > before_count[code] for code in fatal)
-                or (bool(protected_bypasses) and not protected_bypasses <= _verified_bypass_links(candidate, bypass_nets)))
+                or (bool(protected_bypasses) and not protected_bypasses <= _verified_bypass_links(candidate, bypass_nets))
+                or bool(refresh_crosslayer_witnesses(candidate,bypass.admitted_path_witnesses)[1]))
     # Pairwise assignment is a proposal, not a substitute for exact whole-board
     # materialization/native acceptance. A failed improvement retains greedy.
     if assignment is not None and (set(accesses) != set(selected) or failed_gate(after.findings, routed)):
@@ -344,6 +350,7 @@ def route_fanout(
                                         diagnostic="whole fanout proposal rejected by physical or bypass witness gate")
                                 for item in analysis), assignment=assignment,
                             decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias,
+                            decoupling_witnesses=bypass.admitted_path_witnesses,
                             decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending))
     def selected_surface(reference):
         path, via = domains[reference][selected[reference]]
@@ -355,6 +362,10 @@ def route_fanout(
     escapes = {reference: RoutingAccess(path[-1].end, surface[reference], path[0].start, path)
                for reference in accesses if selected_surface(reference)
                for path in (domains[reference][selected[reference]][0],)}
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    admitted, reason = refresh_crosslayer_witnesses(routed,bypass.admitted_path_witnesses)
+    if reason:
+        raise ValueError("fanout lost an original admitted bypass path: " + reason)
     return FanoutResult(routed, MappingProxyType({**(bypass.accesses or {}),
                         **{reference: anchor for reference, anchor in accesses.items() if reference not in escapes}}), tuple(pending),
                         len(tracks) + len(bypass.created_tracks), len(vias) + len(bypass.created_vias),
@@ -362,7 +373,8 @@ def route_fanout(
                         (*bypass.created_tracks, *tracks), assignment,
                         surface_accesses=MappingProxyType(escapes) if surface else None,
                         decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending),
-                        decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias)
+                        decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias,
+                        decoupling_witnesses=admitted)
 
 
 def _surface_layer(board, net, rule, placement) -> CopperLayer | None:

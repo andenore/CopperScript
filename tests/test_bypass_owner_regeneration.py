@@ -61,6 +61,7 @@ def test_unverified_source_link_cannot_release_a_generated_feed():
     # Geometry alone is not a semantic dependency; removed association rejects.
     board=replace(board,decoupling_links=())
     original=replace(original,board=replace(original.board,decoupling_links=()))
+    obstacle=replace(obstacle,decoupling_links=())
     result=_partial_ordinary_pattern(original,board,obstacle,settings,8,True)
     assert result[0] is None and result[-1]=='protected_ordinary_owner'
 

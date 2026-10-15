@@ -7,7 +7,7 @@ This is transactional pattern negotiation, not an exhaustive joint optimizer.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from collections import Counter
 from types import MappingProxyType
 from typing import Iterator
@@ -560,6 +560,21 @@ def _contact_pattern_trial(baseline, owner_board, fanout_options, options, plane
     return replace(accepted, pattern_trials=(record,))
 
 
+def _ordinary_probe_frame(owner, obstacles):
+    """Bind disposable copper to authoritative source intent before routing.
+
+    Probe routing metadata is output, never an alternate source context. Copper
+    and fills remain actual obstacles; every other source field and immutable
+    ordered copper occurrence must match the owner.
+    """
+    if (any(getattr(obstacles, field.name) != getattr(owner, field.name)
+            for field in fields(owner) if field.name not in {"tracks", "vias", "zone_fills", "metadata"})
+            or obstacles.tracks[:len(owner.tracks)] != owner.tracks
+            or obstacles.vias[:len(owner.vias)] != owner.vias):
+        return None
+    return replace(obstacles, metadata=owner.metadata)
+
+
 def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets,
                               regenerate_bypass=False, failed_bypass_capacitors=None):
     """Keep legal generated ownership exactly; rebuild only intersecting nets.
@@ -576,11 +591,13 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
     ordered, reason = _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenerate_bypass)
     if reason:
         return None, ordered, 0, 0, reason
+    obstacles = _ordinary_probe_frame(owner, obstacles)
     displaced = frozenset(ordered)
     all_bypass_nets = {link.net for link in owner.decoupling_links}
     paths, via_paths = {}, {}
     required_bypass = (_verified_bypass_links(original.board, all_bypass_nets,
-        witness_paths=paths, witness_vias=via_paths) if regenerate_bypass else frozenset())
+        witness_paths=paths, witness_vias=via_paths, admitted_witnesses=original.decoupling_witnesses)
+        if regenerate_bypass else frozenset())
     selected = {link for link in required_bypass if link.net in displaced}
     # Shared return geometry stays held if any unselected association needs it.
     # Only original generated occurrences can be released; source copper is
@@ -632,6 +649,15 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
                            + rebuilt.decoupling_pending,
         decoupling_tracks=(*retained_feed_tracks, *rebuilt.decoupling_tracks),
         decoupling_vias=(*retained_feed_vias, *rebuilt.decoupling_vias))
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    inherited, reason = refresh_crosslayer_witnesses(proposed.board,original.decoupling_witnesses,
+                                                    replacing_links=selected)
+    if reason:
+        return None, ordered, len(tracks), len(vias), "stale_bypass_witness"
+    merged, reason = refresh_crosslayer_witnesses(proposed.board,(*inherited,*rebuilt.decoupling_witnesses))
+    if reason:
+        return None, ordered, len(tracks), len(vias), "stale_bypass_witness"
+    proposed = replace(proposed,decoupling_witnesses=merged)
     from .bypass_reservations import verified_bypass_reservations
     if verified_bypass_reservations(owner, proposed)[2] is not None:
         return None, ordered, len(tracks), len(vias), "lost_bypass_connection"
@@ -648,6 +674,12 @@ def _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenera
     if (Counter(original.decoupling_tracks) - Counter(original.created_tracks)
             or Counter(original.decoupling_vias) - Counter(original.created_vias)):
         raise ValueError("partial ordinary semantic feed ownership is stale")
+    obstacles = _ordinary_probe_frame(owner, obstacles)
+    if obstacles is None:
+        return (), "stale_probe_source_intent"
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    if refresh_crosslayer_witnesses(original.board,original.decoupling_witnesses)[1]:
+        return (), "stale_bypass_witness"
     names = {pad: net.name for net in owner.nets for pad in net.pads}
     rules = {rule.net: rule for rule in owner.net_routing_rules}
     index = RoutingClearanceIndex(obstacles)
@@ -668,7 +700,8 @@ def _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenera
             return ordered, "protected_ordinary_owner"
         paths, via_paths = {}, {}
         verified = _verified_bypass_links(original.board,
-            {link.net for link in owner.decoupling_links}, witness_paths=paths, witness_vias=via_paths)
+            {link.net for link in owner.decoupling_links}, witness_paths=paths, witness_vias=via_paths,
+            admitted_witnesses=original.decoupling_witnesses)
         # A return-net conflict cannot release an unselected supply cohort.
         # Exact witnesses, never a GND label or via membership alone, define
         # which generated contributions are eligible within the owner budget.
@@ -683,7 +716,7 @@ def _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenera
     return ordered, ""
 
 
-def _verified_bypass_links(board, only_nets, *, witness_paths=None, witness_vias=None):
+def _verified_bypass_links(board, only_nets, *, witness_paths=None, witness_vias=None, admitted_witnesses=()):
     """Fresh physical witnesses for explicit source bypass associations.
 
     Legacy same-surface paths verify the feed only. Opposite-surface paths
@@ -740,6 +773,24 @@ def _verified_bypass_links(board, only_nets, *, witness_paths=None, witness_vias
             verified.add(link)
             if witness_paths is not None:
                 witness_paths[link] = path
+    if admitted_witnesses:
+        from .decoupling_paths import refresh_crosslayer_witnesses
+        admitted, reason = refresh_crosslayer_witnesses(board,admitted_witnesses,index=index)
+        if reason:
+            if witness_paths is not None:
+                witness_paths.clear()
+            if witness_vias is not None:
+                witness_vias.clear()
+            return frozenset()
+        for witness in admitted:
+            if witness.link not in verified:
+                continue
+            if witness_paths is not None:
+                witness_paths[witness.link] = tuple(dict.fromkeys((*witness_paths.get(witness.link,()),
+                    *(t for path in (witness.supply_path,witness.return_path) for t in path.tracks))))
+            if witness_vias is not None:
+                witness_vias[witness.link] = tuple(dict.fromkeys((*witness_vias.get(witness.link,()),
+                    *(v for path in (witness.supply_path,witness.return_path) for v in path.vias))))
     return frozenset(verified)
 
 

@@ -27,6 +27,8 @@ class DecouplingRouteResult:
     created_vias: tuple[Via, ...] = ()
     supply_return_witnesses: tuple[DecouplingCrossLayerWitness, ...] = ()
     accesses: Mapping[PadReference, Point] | None = None
+    # Original complete paths at adoption, separately freshly bound at return.
+    admitted_path_witnesses: tuple[DecouplingCrossLayerWitness, ...] = ()
 
 
 def _surface_candidates(board, index, link, target, cap, width, layer):
@@ -81,12 +83,14 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None):
     from .routing_layers import routing_layers
     from .route_quality import escape_paths_cross
     from .package_access import _verified_bypass_links
-    from .decoupling_paths import _budget_reason, verify_crosslayer_decoupling
+    from .decoupling_paths import (_budget_reason, verify_crosslayer_decoupling,
+                                  refresh_crosslayer_witnesses)
     poses = {p.reference: p for p in board.placements}
     owned = macro_owned_pads(board)
     rules = {r.net: r for r in board.net_routing_rules}
     index = RoutingClearanceIndex(board)
     tracks, vias, successful, pending, witnesses, accesses = [], [], set(), [], [], {}
+    admitted_witnesses = []
     all_bypass_nets = {link.net for link in board.decoupling_links}
     verified = _verified_bypass_links(board, all_bypass_nets)
     def admission(candidate, link):
@@ -96,6 +100,8 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None):
         current = _verified_bypass_links(candidate, all_bypass_nets)
         if not (verified | {link}) <= current:
             return None, "would_lose_verified_bypass_association"
+        if admitted_witnesses and refresh_crosslayer_witnesses(candidate,tuple(admitted_witnesses))[1]:
+            return None, "would_lose_admitted_bypass_path"
         return current, ""
     for link in board.decoupling_links:
         if only_nets is not None and link.net not in only_nets:
@@ -124,6 +130,7 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None):
             verified = admitted
             witness = measured.witness
             witnesses.append((link, witness.return_target))
+            admitted_witnesses.append(witness)
             successful.update((link.target, link.capacitor, link.return_pad, witness.return_target))
             for track in measured.created_tracks:
                 tracks.append(track)
@@ -185,16 +192,20 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None):
             index.add_track(track, locked=True)
     result_board = replace(board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias)) if tracks or vias else board
     final_witnesses = ()
-    if witnesses:
+    if witnesses or admitted_witnesses:
         fresh_index = RoutingClearanceIndex(result_board)
         final_witnesses = tuple(verify_crosslayer_decoupling(result_board, link,
                                 return_target=target, index=fresh_index).witness
                                 for link, target in witnesses)
     if any(witness is None for witness in final_witnesses):
         raise ValueError("decoupling batch lost an admitted complete association")
+    original_witnesses, reason = refresh_crosslayer_witnesses(result_board,tuple(admitted_witnesses),
+        index=fresh_index if admitted_witnesses else None)
+    if reason:
+        raise ValueError("decoupling batch lost an original admitted path: " + reason)
     return DecouplingRouteResult(result_board, tuple(tracks), frozenset(successful), tuple(pending),
                                  created_vias=tuple(vias), supply_return_witnesses=final_witnesses,
-                                 accesses=MappingProxyType(accesses))
+                                 accesses=MappingProxyType(accesses), admitted_path_witnesses=original_witnesses)
 
 
 def improve_decoupling_placement(board, placements, options):
