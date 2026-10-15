@@ -7,13 +7,14 @@ detailed routers are the only stages that may turn these objects into physical
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
 from heapq import heappop, heappush
 import json
 from math import ceil
 from typing import Iterable, Mapping
+from types import MappingProxyType
 
 from .drc import placed_pad_shape
 from .geometry import RoundedConvexShape, point_in_polygon, point_segment_distance_squared
@@ -311,8 +312,56 @@ class _Graph:
     preferred_headings: Mapping[CopperLayer, str]
     demand_lanes: int = 0
 
+    _points: tuple[tuple[Point, ...], ...] = field(init=False, repr=False, compare=False)
+    _step_cache: dict[
+        tuple[GridNode, int, int, int],
+        tuple[tuple[GridNode, _Resource, str, int], ...],
+    ] = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # These are immutable graph snapshots, including terminal alias edges
+        # and refined capacities. Replacement always starts fresh derived data.
+        for name in ("layers", "xs", "ys"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+        object.__setattr__(self, "legal_nodes", frozenset(self.legal_nodes))
+        object.__setattr__(self, "resources", MappingProxyType(dict(self.resources)))
+        object.__setattr__(self, "via_sites", MappingProxyType({
+            identifier: tuple(sites) for identifier, sites in self.via_sites.items()}))
+        object.__setattr__(self, "layer_ranks", MappingProxyType(dict(self.layer_ranks)))
+        object.__setattr__(self, "preferred_headings", MappingProxyType(dict(self.preferred_headings)))
+        object.__setattr__(self, "_points", tuple(
+            tuple(Point(x, y) for y in self.ys) for x in self.xs))
+
     def point(self, node: GridNode) -> Point:
-        return Point(self.xs[node.x_index], self.ys[node.y_index])
+        # Cartesian indexing preserves the original tuple semantics, including
+        # negative indices and errors; coordinates do not depend on layer.
+        return self._points[node.x_index][node.y_index]
+
+    def search_steps(
+        self, node: GridNode, options: GlobalRouterOptions,
+    ) -> tuple[tuple[GridNode, _Resource, str, int], ...]:
+        """Exact static costs/edges only; never congestion or path answers."""
+        key = (node, options.via_cost, options.layer_preference_cost,
+               options.direction_preference_cost)
+        cached = self._step_cache.get(key)
+        if cached is not None:
+            return cached
+        # Keep planar order followed by ascending via layers. Per-search layer
+        # filtering occurs before every dynamic gate, just as in _neighbors.
+        steps = []
+        for other in _neighbors(self, node, set(range(len(self.layers)))):
+            resource = self.resources[_edge_key(node, other)]
+            direction = _direction(node, other)
+            base = (options.via_cost * COST_UNIT if direction == "v"
+                    else length_cost(self.point(node), self.point(other)))
+            steps.append((other, resource, direction,
+                          base + _preference_cost(self, node, other, options)))
+        result = tuple(steps)
+        # One graph-sized allowance across ALL cost variants. On saturation,
+        # new variants compute normally rather than growing retained state.
+        if node in self.legal_nodes and len(self._step_cache) < len(self.legal_nodes):
+            self._step_cache[key] = result
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,7 +754,8 @@ def _search(
         state = (start, "", 0)
         best[state] = 0
         previous[state] = None
-        heappush(queue, (_heuristic(graph, start, target), 0, _heuristic(graph, start, target), start, "", 0, serial))
+        heuristic = _heuristic(graph, start, target)
+        heappush(queue, (heuristic, 0, heuristic, start, "", 0, serial))
         serial += 1
     final: tuple[GridNode, str, int] | None = None
     while queue:
@@ -716,21 +766,18 @@ def _search(
         if node == target:
             final = state
             break
-        for neighbor in _neighbors(graph, node, allowed_indexes):
-            resource = graph.resources[_edge_key(node, neighbor)]
+        for neighbor, resource, next_direction, static_cost in graph.search_steps(node, options):
+            if neighbor.layer_index not in allowed_indexes:
+                continue
             if resource.identifier in blocked_resources:
                 continue
-            next_direction = _direction(node, neighbor)
             next_vias = vias_used + (next_direction == "v") if track_vias else 0
             if remaining_vias is not None and next_vias > remaining_vias:
                 continue
-            base = (options.via_cost * COST_UNIT if next_direction == "v"
-                    else length_cost(graph.point(node), graph.point(neighbor)))
             bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
             resource_demand = demand if resource.layer is not None else 1
             overflow = max(0, usage[resource.identifier] + resource_demand - resource.capacity)
-            preference = _preference_cost(graph, node, neighbor, options)
-            step = (base + preference + COST_UNIT * (bend + present * overflow
+            step = (static_cost + COST_UNIT * (bend + present * overflow
                     + options.history_penalty * history[resource.identifier]))
             candidate_cost = cost + step
             candidate = (neighbor, next_direction, next_vias)

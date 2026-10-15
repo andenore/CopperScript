@@ -65,6 +65,26 @@ class BreakoutLand:
         return self.distance_squared(point) is not None
 
 
+def _nearest_region(lands: Iterable[BreakoutLand], points: tuple[Point, ...]) -> str | None:
+    """Pure source-land membership; exact nearest distance, then first tie."""
+    best: tuple[Fraction, str] | None = None
+    for land in lands:
+        farthest = Fraction(0)
+        for point in points:
+            distance = land.distance_squared(point)
+            if distance is None:
+                break
+            farthest = max(farthest, distance)
+        else:
+            if best is None or farthest < best[0]:
+                best = (farthest, land.identity)
+                # Squared distances cannot be negative. The first zero is
+                # already the strict first-tie minimum of every later land.
+                if farthest == 0:
+                    break
+    return None if best is None else best[1]
+
+
 class BreakoutRegions:
     """Terminal-land regions of every net whose rule declares ``breakout_length``."""
 
@@ -124,18 +144,7 @@ class BreakoutRegions:
         key = (net, points)
         if key in self._region_cache:
             return self._region_cache[key]
-        best: tuple[Fraction, str] | None = None
-        for land in lands:
-            farthest = Fraction(0)
-            for point in points:
-                distance = land.distance_squared(point)
-                if distance is None:
-                    break
-                farthest = max(farthest, distance)
-            else:
-                if best is None or farthest < best[0]:
-                    best = (farthest, land.identity)
-        result = None if best is None else best[1]
+        result = _nearest_region(lands, points)
         if len(self._region_cache) >= 8192:
             self._region_cache.clear()
         self._region_cache[key] = result

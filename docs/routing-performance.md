@@ -358,3 +358,60 @@ results and final-copper quality alongside uninstrumented time and work counts.
 Profiling alone must not change artifact bytes. Routing changes may select
 different legal geometry; fewer states or a shorter runtime cannot excuse
 newly failed routes. Open work is in [optimization backlog](routing-optimization-todo.md).
+
+
+## Global capacity-graph static calculations
+
+Each global graph owns an immutable snapshot of its axes, legal nodes,
+resources/capacities, terminal alias edges, via sites and layer preferences.
+Construction copies caller-owned maps. Terminal registration and via-capacity
+refinement create replacement snapshots; all derived data starts empty on the
+replacement. Private derived fields do not change the constructor, equality,
+representation, route reports or fingerprints. The graph is internal and is
+not a serialized public routing artifact.
+
+Cartesian Points are constructed once per graph, with the original tuple-index
+semantics. Lazy outgoing-step entries retain exact original neighbor order,
+resource identity, direction and planar/via plus layer/direction preference
+cost. Their key includes the node and all three static cost options. At most
+`len(legal_nodes)` entries are retained across every cost variant; when full,
+new variants compute normally. Point storage is bounded by the finite Cartesian
+axes, and step storage by that entry cap and the graph's finite degree.
+
+Every search freshly filters allowed layers and blocked resources and reads
+current demand, usage, congestion history, present/history penalties, bends and
+remaining via allowance. Heap keys, deterministic serials, comparisons, state
+space, ordering and iteration/search limits are unchanged. No path, failure,
+mutable congestion answer or acceptance decision is memoized.
+
+The differential suite retains the original A* function and checks exact paths,
+heap events, complete route JSON/fingerprints, changed congestion/cost options,
+layer/via constraints, terminal aliases and refined/replaced graphs. Separate
+synthetic uninstrumented timings can measure recomputation savings; they do
+not establish a source-board speedup, electrical/routing closure or native
+qualification. Cache container sizes are not process peak-memory measurements.
+
+
+## Immutable pad and breakout-owner templates
+
+Clearance indexes share only immutable original pad geometry and source-land
+membership. An eight-entry template cache retains strong identity keys for all
+placements, named footprints, nets, stack, board rules, routing rules and bin
+size. A separate 512-entry cache retains transformed footprint geometry. New
+source epochs rebuild template ownership, including effects of a moved other
+land. The pure nearest-region predicate stops at the first exact zero squared
+distance, preserving the original nearest-distance and first-tie result.
+
+Each index owns fresh object, hole and bin containers. Current breakout query
+caches, zones, keepouts, macro reservations, NPTHs, tracks, vias and mutable
+additions remain local and are checked under current policies. Neither a
+clearance answer nor an accepted routing witness is cached. Original order,
+unconnected lands and plated drill geometry remain intact.
+
+The constructor-only comparison used actual 159-component geometry with 615
+copper pads, four copper-only snapshots per batch and five alternating pairs.
+It compared the original constructor AND original breakout implementation with
+the candidate, checking exact index state, pad owners and clearance queries.
+The measured medians were 1.005159 s and 0.034161 s. This repeated-source fixture
+measures construction reuse; concurrent load was recorded, and it is not a
+whole-board speedup or a routing, native, RF, power or manufacturing result.
