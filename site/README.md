@@ -31,7 +31,9 @@ python -m http.server 8000 --bind 127.0.0.1 --directory site
 ```
 
 Open `http://127.0.0.1:8000/`. Check both a wide and a narrow viewport and the
-four board-view links. The site also works without JavaScript: the views open
+five board-view links, including the combined six-layer view with fills hidden.
+Package pads are highlighted gold in the surface, placement and combined views.
+The full-size SVG link follows the selected view. The site also works without JavaScript: the views open
 their SVG files, the quick-start text remains selectable and FAQs use native
 details elements. Stop the server with Ctrl+C.
 
@@ -102,7 +104,7 @@ feedback; search-enabled LLM answers are a useful spot check, not a stable score
 
 ## Maintain the recorded showcase
 
-The six tracker asset files and `snapshot.json` are byte-for-byte copies from
+The five tracker SVGs, two IR excerpts, `rendering.json` and `snapshot.json` are byte-for-byte copies from
 CopperAssetTracker's `docs/showcase/`. The current illustrations represent the
 `promo-reroute-20261013` fresh source-matched routing review, not a released
 board. Its snapshot binds the exact exported PCB, source, native DRC, route
@@ -111,6 +113,16 @@ ignored, 13 electrical-requirement checks remain blocked, independent CAM was
 not run for this review. No new manufacturing export is claimed, and
 supplier/assembly review is incomplete. `qualified_release` stays
 false. The site links to current board status separately.
+
+Surface pad geometry is plotted separately by KiCad and overlaid in gold so
+ground-connected lands remain visible against a fill. The placement image also
+includes those native pads. The combined view shows all six copper layers,
+tracks, vias and package outlines, hiding zones and solid copper fill graphics
+only in a temporary plotting copy. Overlapping reference/value labels are hidden
+in placement and combined views. `rendering.json` records the layers, hidden
+geometry counts and hashes of the preserved native pads/tracks. The input PCB,
+route and DRC evidence are unchanged. See the tracker's figure-refresh guide for
+the exact retained-candidate workflow; historical source status is preserved.
 
 Refresh from a regenerated, source-matched tracker showcase:
 

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / "site"
 BASE_URL = "https://andenore.github.io/CopperScript/"
 SNAPSHOT_ASSETS = (
-    "routing-top.svg", "routing-inner.svg", "routing-bottom.svg", "placement.svg",
+    "routing-top.svg", "routing-inner.svg", "routing-bottom.svg", "routing-all.svg", "placement.svg", "rendering.json",
     "electrical-ir.excerpt.json", "physical-ir.excerpt.json",
 )
 
@@ -105,6 +105,13 @@ def check_site(site: Path = SITE) -> list[str]:
             actual = hashlib.sha256(path.read_bytes()).hexdigest()
             if actual != snapshot["rendered_assets"][name]:
                 errors.append(f"{name}: bytes do not match the recorded showcase snapshot")
+        rendering = json.loads((site / "assets/rendering.json").read_text(encoding="utf-8"))
+        if rendering["pcb_sha256"] != snapshot["pcb_sha256"]:
+            errors.append("Rendering metadata describes a different PCB")
+        if rendering["all_layers"] != snapshot["copper_layers"] or rendering["views"]["routing-all.svg"]["copper_fills"]:
+            errors.append("Combined board view must show the full copper stack with fills hidden")
+        if rendering["native_geometry"]["footprints"] != snapshot["component_count"] or rendering["native_geometry"]["pads"] <= 0:
+            errors.append("Rendering metadata is missing the recorded footprints/pads")
         for path in (site / "assets").glob("*.svg"):
             ET.parse(path)
         for path in (site / "assets").glob("*.json"):

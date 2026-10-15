@@ -1,0 +1,88 @@
+{
+  "all_layers": [
+    "F.Cu",
+    "In1.Cu",
+    "In2.Cu",
+    "In3.Cu",
+    "In4.Cu",
+    "B.Cu"
+  ],
+  "hidden_copper_graphics_in_all_layers": 9,
+  "hidden_zones_in_all_layers": 34,
+  "kicad_version": "10.0.6",
+  "native_geometry": {
+    "footprints": 97,
+    "pads": 641,
+    "pads_sha256": "07f75564f1fa1f7548ea9740e622566aface0f85d139439bf8e1066da03e3ee4",
+    "tracks_and_vias": 1308,
+    "tracks_and_vias_sha256": "f6ef588c86d0908c36a21b7179ee812233c37b543630ae2c6d74402628c9ba63"
+  },
+  "package_labels_hidden": [
+    "placement.svg",
+    "routing-all.svg"
+  ],
+  "pad_color": "#D9A441",
+  "pcb_sha256": "935320e5d9e65f1438de27f233fec3428af5fcd1e74ccaa69167fe74261f31a8",
+  "views": {
+    "placement.svg": {
+      "copper_fills": false,
+      "highlighted_pad_layers": [
+        "F.Cu"
+      ],
+      "layers": [
+        "F.Fab",
+        "F.CrtYd",
+        "Edge.Cuts"
+      ]
+    },
+    "routing-all.svg": {
+      "copper_fills": false,
+      "highlighted_pad_layers": [
+        "B.Cu",
+        "F.Cu"
+      ],
+      "layers": [
+        "F.Cu",
+        "In1.Cu",
+        "In2.Cu",
+        "In3.Cu",
+        "In4.Cu",
+        "B.Cu",
+        "F.SilkS",
+        "B.SilkS",
+        "F.Fab",
+        "B.Fab",
+        "Edge.Cuts"
+      ]
+    },
+    "routing-bottom.svg": {
+      "copper_fills": true,
+      "highlighted_pad_layers": [
+        "B.Cu"
+      ],
+      "layers": [
+        "B.Cu",
+        "Edge.Cuts"
+      ]
+    },
+    "routing-inner.svg": {
+      "copper_fills": true,
+      "highlighted_pad_layers": [],
+      "layers": [
+        "In2.Cu",
+        "Edge.Cuts"
+      ]
+    },
+    "routing-top.svg": {
+      "copper_fills": true,
+      "highlighted_pad_layers": [
+        "F.Cu"
+      ],
+      "layers": [
+        "F.Cu",
+        "F.SilkS",
+        "Edge.Cuts"
+      ]
+    }
+  }
+}

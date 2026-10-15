@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 
 ASSETS = (
-    "routing-top.svg", "routing-inner.svg", "routing-bottom.svg", "placement.svg",
+    "routing-top.svg", "routing-inner.svg", "routing-bottom.svg", "routing-all.svg", "placement.svg", "rendering.json",
     "electrical-ir.excerpt.json", "physical-ir.excerpt.json",
 )
 
