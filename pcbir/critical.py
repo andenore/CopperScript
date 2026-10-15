@@ -1357,7 +1357,8 @@ def _route_pair_group(
             return reported(accepted[1:])
     if crossing is None:
         result, pair_tracks, pair_vias = _route_pair(
-            board, rule, partner_rule, routes
+            board, rule, partner_rule, routes,
+            tuning_board=replace(board, tracks=tuple(tracks), vias=tuple(vias))
         )
         result, pair_tracks, pair_vias = _reject_reserved_plane_tracks(
             board, result, pair_tracks, pair_vias, rules,
@@ -1382,7 +1383,8 @@ def _route_pair_group(
         # Try one whole-pair proposal that retains those actual lead-ins rather
         # than inventing a rectangular stub from each original pad centre.
         attempt, proposed_tracks, proposed_vias = _route_pair(
-            board, first, second, routes, prefer_access_tracks=True)
+            board, first, second, routes, prefer_access_tracks=True,
+            tuning_board=replace(board, tracks=tuple(tracks), vias=tuple(vias)))
         attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
             board, attempt, proposed_tracks, proposed_vias, rules)
         attempt, proposed_tracks, proposed_vias = _validate_candidate(
@@ -1420,7 +1422,8 @@ def _route_pair_group(
                 board, first, second, routes,
                 exact_tracks=((*first_branches, *candidate.first), (*second_branches, *candidate.second)),
                 exact_via_pairs=(*branch_via_pairs, *candidate.via_pairs),
-                exact_return_vias=(*branch_return_vias, *candidate.return_vias))
+                exact_return_vias=(*branch_return_vias, *candidate.return_vias),
+                tuning_board=search_board)
             attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
                 board, attempt, proposed_tracks, proposed_vias, rules)
             candidate_blockers = set()
@@ -1540,7 +1543,8 @@ def _route_nested_exit(
         nested.component, nested.direction, nested.travel, turns, NESTED_CHAMFER_STEP_NM)
     for turn, chamfer, candidate in islice(candidates, NESTED_CANDIDATE_LIMIT):
         attempt, pair_tracks, pair_vias = _route_pair(
-            board, first, second, routes, exact_tracks=(candidate.first, candidate.second))
+            board, first, second, routes, exact_tracks=(candidate.first, candidate.second),
+            tuning_board=search_board)
         if attempt.connected and attempt.tuned_length_nm and not _legal(
                 search_board, index, tuple(t for t in pair_tracks if t.net == first.net),
                 tuple(t for t in pair_tracks if t.net != first.net), clearance):
@@ -1667,7 +1671,8 @@ def _improve_pair_spine(
                or t.layer not in routing_layers(board, rule.net, rule)
                for rule, lane in zip((first, second), lanes) for t in lane):
             continue
-        proposed, tracks, vias = _route_pair(board, first, second, routes, exact_tracks=lanes)
+        proposed, tracks, vias = _route_pair(board, first, second, routes, exact_tracks=lanes,
+                                             tuning_board=search_board)
         proposed, tracks, vias = _reject_reserved_plane_tracks(
             board, proposed, tracks, vias, {first.net: first, second.net: second},
         )
@@ -1968,6 +1973,7 @@ def _route_pair(
     exact_via_pairs: tuple[tuple[Via, Via], ...] = (),
     exact_return_vias: tuple[Via, ...] = (),
     prefer_access_tracks: bool = False,
+    tuning_board: PhysicalBoard | None = None,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     first_name, second_name = sorted((first_rule.net, second_rule.net))
     first = first_rule if first_rule.net == first_name else second_rule
@@ -2097,6 +2103,25 @@ def _route_pair(
                                       if value is not None)
                                   if first.tuning_amplitude_limit_nm is not None or second.tuning_amplitude_limit_nm is not None
                                   else 0, _BREAKOUT_TUNING_MARGIN_NM if breakout else 0)
+    if (max_skew is not None and not tuned_length and tuning_board is not None
+            and (exact_tracks is not None or not guide.vias)):
+        from .pair_tuning_spans import tune_virtual_pair_spans
+        # Current source/held prefix is explicit. Guide/via/access anchors and
+        # lead-in junctions cannot become artificial straight-run joins.
+        nodes = tuple((route.net, access.layer, point)
+            for route in (guide, partner_guide) for access in route.accesses
+            for point in (access.pad_position, access.access_position,
+                          *(p for t in access.tracks for p in (t.start,t.end))))
+        tuned_length = tune_virtual_pair_spans(
+            first_tracks, second_tracks, max_skew,
+            min(value for value in (first.tuning_amplitude_limit_nm,
+                                    second.tuning_amplitude_limit_nm) if value is not None)
+                if first.tuning_amplitude_limit_nm is not None
+                or second.tuning_amplitude_limit_nm is not None else 0,
+            _BREAKOUT_TUNING_MARGIN_NM if breakout else 0,
+            source=board, held=tuning_board, protected_nodes=nodes,
+            proposed_vias=(*[v for pair in exact_via_pairs for v in pair], *exact_return_vias),
+            tuner=_tune_pair)
     if tuned_length and breakout:
         # Cut the new serpentine bumps too; a 45-degree corner piece cut at a
         # region boundary may round a nanometre differently, which the margin

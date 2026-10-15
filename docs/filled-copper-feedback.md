@@ -333,3 +333,15 @@ same. If no better checked path is found, original isolated choices remain
 available for later checked terminal-via alias registration. Incident degree
 alone proves neither target connectivity nor physical route feasibility; this
 does not refine the coarse graph's lane-capacity model.
+
+Differential tuning retains the legacy bounded attempt first. Only a zero-addition,
+overskew result with an explicit complete held context may try one additional
+call to that same bounded tuner using private virtual spans. Only adjacent,
+forward, axis-aligned segments of equal net/layer/width in one source breakout
+region may merge. Source/held occurrences, finite-width copper contacts, pads,
+vias, branches and explicit access nodes retain their authority; unsupported
+or native-fill contexts decline. An unsuccessful attempt preserves the original
+candidate objects. A successful private proposal restores untouched fragments,
+freshly checks source widths, anchors, skew and full held geometry, and still
+passes the normal outer candidate gates. This adds no via or electrical allowance
+and does not establish consumer USB routing or signal-integrity qualification.
