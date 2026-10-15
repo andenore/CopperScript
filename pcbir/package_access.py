@@ -925,7 +925,8 @@ def improve_package_access(
             attempted = True
             emit(on_progress, "package_access_trial", "started",
                  index=len(records) + 1, reference=reference, placement_probe_index=probe_index)
-            guides = route_global(trial, global_options)
+            guides = route_global(trial, global_options,
+                **({"on_progress": on_progress} if on_progress is not None else {}))
             candidate = None
             outcome = "global_failed"
             if guides.status is GlobalRoutingStatus.SUCCESS:

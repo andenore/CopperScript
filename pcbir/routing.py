@@ -43,6 +43,7 @@ from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
 from .routing_costs import COST_UNIT, length_cost, preference_cost
+from .progress import ProgressCallback, emit
 
 
 class GlobalRoutingStatus(str, Enum):
@@ -375,13 +376,20 @@ class _Attempt:
 def route_global(
     board: PhysicalBoard,
     options: GlobalRouterOptions | None = None,
+    *, on_progress: ProgressCallback | None = None,
 ) -> GlobalRoutingResult:
     """Route all multi-terminal nets into deterministic multilayer guides."""
 
     options = options or GlobalRouterOptions()
+    emit(on_progress, "global_route", "started", maximum_iterations=options.maximum_iterations)
     from .hard_macros import macro_source, materialize_hard_macros, macro_routing_pads
     board = materialize_hard_macros(macro_source(board))
+    emit(on_progress, "global_graph", "started")
     graph = _build_graph(board, options)
+    if on_progress is not None:
+        emit(on_progress, "global_graph", "finished", node_count=len(graph.legal_nodes),
+             resource_count=len(graph.resources))
+    emit(on_progress, "global_pin_access", "started")
     rules = {rule.net: rule for rule in board.net_routing_rules}
     clearance = RoutingClearanceIndex(board)
     from .zone_geometry import distribution_zone_nets
@@ -400,6 +408,8 @@ def route_global(
     }
     from .global_terminals import register_terminal_capacity
     graph, access_options = register_terminal_capacity(board, graph, access_options)
+    if on_progress is not None:
+        emit(on_progress, "global_pin_access", "finished", terminal_count=len(access_options))
     capacities = {
         resource.identifier: resource.capacity
         for resource in graph.resources.values()
@@ -411,6 +421,8 @@ def route_global(
     refined_via_resources: set[str] = set()
     for iteration in range(1, options.maximum_iterations + 1):
         completed_iterations = iteration
+        emit(on_progress, "global_iteration", "started", iteration=iteration,
+             maximum_iterations=options.maximum_iterations)
         attempt = _route_iteration(board, graph, rules, access_options,
                                    history, present, options, iteration)
         refined = _refine_overflowed_via_sites(
@@ -421,8 +433,12 @@ def route_global(
             attempt = _attempt(board, graph, rules, attempt.routes, options, iteration)
             if best is not None:
                 best = _attempt(board, graph, rules, best.routes, options, best.metrics.iterations)
-        if best is None or attempt.metrics.quality_vector < best.metrics.quality_vector:
+        improved = best is None or attempt.metrics.quality_vector < best.metrics.quality_vector
+        if improved:
             best = attempt
+        emit(on_progress, "global_iteration", "finished", iteration=iteration,
+             maximum_iterations=options.maximum_iterations, unrouted_net_count=attempt.metrics.unrouted_net_count,
+             total_overflow=attempt.metrics.total_overflow, improved=improved)
         if (
             attempt.metrics.unrouted_net_count == 0
             and attempt.metrics.total_overflow == 0
@@ -463,7 +479,7 @@ def route_global(
     routing_fingerprint = _routing_fingerprint(
         placement_fingerprint, best.routes, metrics, options
     )
-    return GlobalRoutingResult(
+    result = GlobalRoutingResult(
         status,
         best.routes,
         hotspots,
@@ -471,6 +487,9 @@ def route_global(
         placement_fingerprint,
         routing_fingerprint,
     )
+    emit(on_progress, "global_route", "finished", status=status.value, iterations=completed_iterations,
+         unrouted_net_count=metrics.unrouted_net_count, total_overflow=metrics.total_overflow)
+    return result
 
 
 def _route_iteration(

@@ -138,7 +138,7 @@ def test_ready_pipeline_materializes_owned_layer_anchors_before_area(monkeypatch
     from pcbir.pin_escape import RoutingAccess, verified_routing_access
     from pcbir.routing_clearance import RoutingClearanceIndex
     board, guides, settings, _ = fixture()
-    monkeypatch.setattr(flow, "optimize_placement_for_routing", lambda *_:
+    monkeypatch.setattr(flow, "optimize_placement_for_routing", lambda *_, **kwargs:
         PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
     real = flow.route_detailed
     calls, events = [], []

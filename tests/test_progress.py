@@ -53,6 +53,8 @@ def test_pipeline_progress_leaves_every_result_and_fingerprint_identical():
         on_progress=lambda phase, event, details: events.append((phase, event, details)))
     assert observed == plain
     phases = [(phase, event) for phase, event, _ in events]
+    assert phases.index(('placement_candidates', 'finished')) < phases.index(('global_graph', 'started'))
+    assert phases.index(('placement_global_certification', 'finished')) < phases.index(('placement_global', 'finished'))
     assert phases.index(('ordinary_package_exits', 'finished')) < phases.index(('ordinary_area', 'started'))
     assert phases[-1] == ('land_closure_native_drc', 'finished')
     assert next(d for p, e, d in events if p == 'package_access' and e == 'finished')['ready']
@@ -169,6 +171,7 @@ def test_cli_progress_is_opt_in_and_does_not_change_exports(tmp_path, capsys):
     observed_exit = main([*command, '--progress', '--report', str(observed_report), '-o', str(observed_pcb)])
     output = capsys.readouterr().out
     assert 'PROGRESS ' in output and '"phase": "export"' in output
+    assert '"phase": "placement_seed"' in output and '"phase": "global_iteration"' in output
     assert plain_exit == observed_exit
     assert plain_report.read_bytes() == observed_report.read_bytes()
     assert plain_pcb.read_bytes() == observed_pcb.read_bytes()

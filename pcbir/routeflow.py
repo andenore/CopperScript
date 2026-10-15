@@ -7,6 +7,7 @@ from enum import Enum
 
 from .physical import PhysicalBoard, Placement, Point, nm_from_mm
 from .clusters import move_placement_unit
+from .progress import ProgressCallback, emit, placement_progress
 from .placement import (
     PlacementCandidate,
     PlacementPlannerOptions,
@@ -76,6 +77,7 @@ def optimize_placement_for_routing(
     placement_options: PlacementPlannerOptions | None = None,
     router_options: GlobalRouterOptions | None = None,
     feedback_options: PlacementRoutingFeedbackOptions | None = None,
+    *, on_progress: ProgressCallback | None = None,
 ) -> PlacementRoutingResult:
     """Place, fully global-route, and transactionally relieve congestion."""
 
@@ -84,9 +86,11 @@ def optimize_placement_for_routing(
     feedback_options = feedback_options or PlacementRoutingFeedbackOptions(
         initial_movement_nm=router_options.tile_size_nm
     )
-    candidates = generate_placement_candidates(board, placement_options)
+    progress_kwargs = {"on_progress": on_progress} if on_progress is not None else {}
+    candidates = generate_placement_candidates(board, placement_options,
+        **({"progress": placement_progress(on_progress)} if on_progress is not None else {}))
     evaluated = [
-        _evaluate_candidate(board, candidate, router_options)
+        _evaluate_candidate(board, candidate, router_options, **progress_kwargs)
         for candidate in candidates
     ]
     if feedback_options.preferred_candidate_id is not None:
@@ -124,7 +128,10 @@ def optimize_placement_for_routing(
             placement_options,
             movement,
         ):
-            trial_route = route_global(trial_board, router_options)
+            emit(on_progress, "placement_global_trial", "started", iteration=iteration, trial=trials + 1)
+            trial_route = route_global(trial_board, router_options, **progress_kwargs)
+            emit(on_progress, "placement_global_trial", "finished", iteration=iteration, trial=trials + 1,
+                 global_status=trial_route.status.value)
             trials += 1
             score = _route_score(trial_route)
             if score < current_score and (
@@ -159,7 +166,10 @@ def optimize_placement_for_routing(
         if stagnation >= feedback_options.stagnation_limit:
             break
 
-    certified = route_global(accepted_board, router_options)
+    emit(on_progress, "placement_global_certification", "started", candidate=candidate.candidate_id)
+    certified = route_global(accepted_board, router_options, **progress_kwargs)
+    emit(on_progress, "placement_global_certification", "finished", candidate=candidate.candidate_id,
+         global_status=certified.status.value)
     full_route_certified = certified.status is GlobalRoutingStatus.SUCCESS
     return PlacementRoutingResult(
         FeedbackStatus.PASS if full_route_certified else FeedbackStatus.WARNING,
@@ -176,9 +186,15 @@ def _evaluate_candidate(
     board: PhysicalBoard,
     candidate: PlacementCandidate,
     router_options: GlobalRouterOptions,
+    *, on_progress: ProgressCallback | None = None,
 ) -> tuple[PlacementCandidate, PhysicalBoard, GlobalRoutingResult]:
     placed = replace(board, placements=candidate.placements)
-    return candidate, placed, route_global(placed, router_options)
+    emit(on_progress, "placement_candidate_global", "started", candidate=candidate.candidate_id, seed=candidate.seed)
+    routed = route_global(placed, router_options,
+                          **({"on_progress": on_progress} if on_progress is not None else {}))
+    emit(on_progress, "placement_candidate_global", "finished", candidate=candidate.candidate_id,
+         seed=candidate.seed, global_status=routed.status.value)
+    return candidate, placed, routed
 
 
 def _route_score(route: GlobalRoutingResult) -> tuple[int, ...]:

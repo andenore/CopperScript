@@ -265,6 +265,24 @@ plain log uses a clearly labelled final-report lower bound instead of inventing
 zero work. General-area expanded maze states and peak memory are not yet recorded
 by this tool; paired critical searches do report their expanded states.
 
+### Placement and global progress
+
+Normal `route-board --progress` forwards the existing placement seed stages
+through `on_progress`, using zero-based seed indices and the configured
+seed count. A bounded legalization failure is reported as a failed seed stage;
+the final `placement_candidates` event reports the total, not another seed.
+The existing refinement stage includes decoupling work and does not expose its
+internal steps.
+
+Global routing emits sparse graph/access setup and iteration start/finish
+events, inside candidate, feedback-trial and final-certification boundaries.
+Iterations report existing attempt overflow/unrouted counts and best-score
+improvement; final route status describes global guides. These operational
+events are not exact-copper closure or engineering qualification. They add no
+heartbeat, inner-search events, solver work or timing code. Interrupted work
+has no invented finish event. With no callback, results, ordering and budgets
+are unchanged; existing raw placement/editor callbacks remain compatible.
+
 ### Per-net area progress
 
 With `--progress`, detailed routing emits `detailed_pass` and `detailed_net`
