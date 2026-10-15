@@ -315,8 +315,16 @@ def improve_decoupling_placement(board, placements, options):
             # This is a ranking hint: obstructed/central pins may still fall back.
             outside = bool(nx or ny) and (outward <= 0 or
                 2*outward*outward < (dx*dx+dy*dy)*(nx*nx+ny*ny))
+            # Among equally short feeds, point the supply end toward the IC
+            # and the return end away. Tangential two-terminal bodies otherwise
+            # win arbitrary XY/angle ties and occupy neighbouring pad exits.
+            end_on = (False, 0)
+            if pose.side is target.side and link.return_pad is not None:
+                end = transformed_pad_position(board, pose, link.return_pad.pad)
+                ax, ay = end.x_nm-terminal.x_nm, end.y_nm-terminal.y_nm
+                end_on = (ax*dx+ay*dy <= 0, abs(ax*dy-ay*dx))
             return (pose.side is not target.side,
-                    outside, dx*dx+dy*dy,
+                    outside, dx*dx+dy*dy, end_on,
                     pose.position.x_nm, pose.position.y_nm, pose.rotation_degrees)
         routing_rule = next((r for r in board.net_routing_rules if r.net == link.net), None)
         # All initially verified feeds and earlier pending feeds are physical

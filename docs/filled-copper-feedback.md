@@ -427,3 +427,19 @@ direct shortcut and each maze edge reject non-45-degree diagonals before any
 clearance query. Horizontal/vertical edges, original grid/domain, state bounds
 and source clearances remain unchanged; rejected edges do not purchase extra
 search allowance. Exact existing package-exit verification remains authoritative.
+
+### Geometry-derived short package escapes
+
+Ordinary fanout and opposite-side bypass search try up to four adjacent square
+cell centres for circular SMD lands before long outward rays. Cells come from
+actual footprint pad positions, including rotation and back-side mirroring;
+there is no package-name or board-name selector and no assumed ball pitch.
+Bypass sites consume the existing candidate budget. These are ordinary through-
+via proposals: exact pad/annulus/drill exclusions, layer rules, fixed ownership,
+verified feeds and whole-candidate acceptance still apply. Reference-board
+measurements belong to the independently versioned part library.
+
+At equal feed length, the decoupler placer prefers its supply-to-return axis
+pointing outward from the target pin. This tie break avoids tangential bodies
+occupying adjacent package exits; explicit orientations, placement domains and
+fixed poses remain authoritative. It is not a decoupling impedance qualification.

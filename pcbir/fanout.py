@@ -18,7 +18,7 @@ from .drc import placed_pad_shape, run_physical_drc
 from .geometry import RoundedConvexShape, shapes_clear, point_in_polygon, point_segment_distance_at_least
 from .physical import (
     BoardSide, CopperLayer, DecouplingLink, FootprintPad, PadKind, PadReference, PhysicalBoard,
-    Placement, Point, RouteKind, TrackSegment, Via, nm_from_mm,
+    Placement, Point, RouteKind, TrackSegment, Via, PadShape, nm_from_mm,
 )
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
@@ -211,9 +211,7 @@ def route_fanout(
         choices = []
         for _, _, position, placement, pad in pin_by_ref[reference]:
             sites = (_two_leg_candidates(position, placement.position, candidate_options) if elbows else
-                     _candidates(position, placement.position, candidate_options, diagonal_normal=True)
-                     if placement.rotation_degrees % 90 == 45 else
-                     _candidates(position, placement.position, candidate_options))
+                     _package_candidates(board, placement, pad, candidate_options))
             choices.extend(_legal_choices(board, index, net_by_pad[reference], position,
                 placement, pad, sites, multiple_orders=multiple_orders, outline=outline))
         return tuple(dict.fromkeys(choices))
@@ -493,6 +491,50 @@ def _reserve(board, clearance, tracks, vias, candidate: EscapeCandidate) -> bool
         vias.append(via)
         clearance.add_via(via, locked=True)
     return True
+
+
+
+def _interstitial_sites(board, placement, pad, options):
+    """At most four cell centres from actual circular-land geometry.
+
+    A complete local square cell is required; no pitch or package name is
+    assumed. These are proposals only. Ordinary annulus/drill, all-layer pad
+    exclusions, source budgets and path checks still apply in _legal_choices.
+    """
+    if pad.kind is not PadKind.SMD or pad.shape is not PadShape.CIRCLE:
+        return ()
+    points = {p.position for p in board.footprints[placement.footprint].pads
+              if p.kind is PadKind.SMD and p.shape is PadShape.CIRCLE}
+    x, y = pad.position.x_nm, pad.position.y_nm
+    sites = []
+    for sx, sy in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+        dx = min((sx*(p.x_nm-x) for p in points if p.y_nm == y
+                  and sx*(p.x_nm-x) > 0), default=0)
+        dy = min((sy*(p.y_nm-y) for p in points if p.x_nm == x
+                  and sy*(p.y_nm-y) > 0), default=0)
+        if (not dx or dx != dy or dx > options.maximum_neighbor_distance_nm
+                or dx*dx > 2*options.maximum_radius_nm**2
+                or Point(x+sx*dx, y+sy*dy) not in points):
+            continue
+        sites.append(transformed_local_point(placement, Point(x+sx*(dx//2), y+sy*(dy//2))))
+    start = transformed_local_point(placement, pad.position)
+    return tuple(sorted(set(sites), key=lambda p: (
+        -((p.x_nm-start.x_nm)*(start.x_nm-placement.position.x_nm)
+          +(p.y_nm-start.y_nm)*(start.y_nm-placement.position.y_nm)), p.x_nm, p.y_nm)))
+
+
+def _package_candidates(board, placement, pad, options):
+    # Put the short diagonal dogbones before long outward rays. The shared
+    # caller's site limit includes these candidates, including for bypasses.
+    sites = _interstitial_sites(board, placement, pad, options)
+    yield from sites
+    start = transformed_local_point(placement, pad.position)
+    rays = (_candidates(start, placement.position, options, diagonal_normal=True)
+            if placement.rotation_degrees % 90 == 45 else
+            _candidates(start, placement.position, options))
+    for point in rays:
+        if point not in sites:
+            yield point
 
 
 def _candidates(position: Point, center: Point, options: FanoutOptions, *, diagonal_normal=False):

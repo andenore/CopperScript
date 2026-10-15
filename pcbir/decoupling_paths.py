@@ -16,7 +16,7 @@ from .physical import (BoardSide, CopperLayer, DecouplingLink, PadKind,
                        PadReference, PhysicalBoard, Point, RouteKind,
                        TrackSegment, Via, ViaKind)
 from .drc import DrcSeverity, physical_board_digest, run_physical_drc
-from .fanout import FanoutOptions, _candidates, _legal_choices, _two_leg_candidates
+from .fanout import FanoutOptions, _package_candidates, _legal_choices, _two_leg_candidates
 from .hard_macros import macro_owned_pads
 from .pad_via_arrays import require_via_in_pad_arrays
 from .pin_escape import checked_access_paths, _verified_land_path
@@ -424,8 +424,7 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
         settings=(options,replace(options,step_nm=options.refinement_step_nm))
         fresh=[]
         for config in settings:
-            endpoints=islice(_candidates(a[2].position,a[0].position,config,
-                                        diagonal_normal=a[0].rotation_degrees%90==45),site_limit)
+            endpoints=islice(_package_candidates(board,a[0],a[1],config),site_limit)
             fresh.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],endpoints))
             if len(fresh)>=remaining:
                 break

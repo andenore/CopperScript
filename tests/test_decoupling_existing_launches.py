@@ -51,7 +51,7 @@ def test_only_exact_valid_original_source_launch_can_be_reused(monkeypatch,fault
     elif fault=='illegal_via':source=replace(source,vias=(replace(source.vias[0],position=Point.mm(9,8)),source.vias[1]))
     elif fault=='narrow_source':source=replace(source,tracks=(replace(source.tracks[0],width_nm=100000),*source.tracks[1:]))
     options=FanoutOptions(maximum_radius_nm=1000000) if fault=='outside_radius' else FanoutOptions()
-    monkeypatch.setattr(paths,'_candidates',lambda *a,**k:iter(()));monkeypatch.setattr(paths,'_two_leg_candidates',lambda *a,**k:iter(()))
+    monkeypatch.setattr(paths,'_package_candidates',lambda *a,**k:iter(()));monkeypatch.setattr(paths,'_two_leg_candidates',lambda *a,**k:iter(()))
     assert not tuple(paths._connections(source,link.target,link.capacitor,link.net,options,1,64))
 
 def test_site_bound_counts_existing_candidates_before_geometry(monkeypatch):
@@ -59,7 +59,7 @@ def test_site_bound_counts_existing_candidates_before_geometry(monkeypatch):
     # A nearer but disconnected same-net via consumes the sole examined slot.
     decoy=replace(source.vias[0],position=Point.mm(11.5,9))
     source=replace(source,vias=(decoy,*source.vias),net_routing_rules=tuple(replace(r,max_vias=2) if r.net==link.net else r for r in source.net_routing_rules))
-    monkeypatch.setattr(paths,'_candidates',lambda *a,**k:iter(()));monkeypatch.setattr(paths,'_two_leg_candidates',lambda *a,**k:iter(()))
+    monkeypatch.setattr(paths,'_package_candidates',lambda *a,**k:iter(()));monkeypatch.setattr(paths,'_two_leg_candidates',lambda *a,**k:iter(()))
     options=FanoutOptions()
     assert not tuple(paths._connections(source,link.target,link.capacitor,link.net,options,1,1))
     assert tuple(paths._connections(source,link.target,link.capacitor,link.net,options,1,2))
