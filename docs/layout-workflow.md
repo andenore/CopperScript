@@ -150,3 +150,12 @@ with seed, reference, accepted count and reason; empty evidence is omitted from
 JSON. An all-failed result preserves the diagnostic context, never a partial
 placement. Seed retries retain every source constraint and existing search bound
 and do not establish physical access or engineering qualification.
+
+
+The three planning commands accept `--placement-grid-mm` to choose the existing
+positive placement sampling step. The default stays 1 mm. Finer sampling can
+represent more positions inside dense source regions; it does not change the
+authored courtyard gap, fixed or rigid intent, source geometry, routing limits,
+or the bounded legalization/repair allowances. It can increase preprocessing
+work and does not guarantee a complete placement or physical access. Commands
+and options must be retained with the resulting evidence.

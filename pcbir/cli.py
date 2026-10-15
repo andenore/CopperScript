@@ -407,6 +407,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument("--candidates", type=int, default=1)
     for placement_parser in (layout_parser, global_route_parser, board_route_parser):
+        placement_parser.add_argument("--placement-grid-mm", default="1", type=_positive_mm,
+            help="positive placement sampling grid in mm (default: 1); source geometry and search limits remain authoritative")
         placement_parser.add_argument("--escape-margin-mm", default="0.5",
             help="soft placement margin per demanding package side (not DRC clearance)")
         placement_parser.add_argument("--escape-transit-lanes", type=int, default=1,
@@ -661,6 +663,7 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
 
 def _planner_options(args) -> PlacementPlannerOptions:
     return PlacementPlannerOptions(candidate_count=args.candidates,
+        grid_step_nm=nm_from_mm(args.placement_grid_mm),
         escape_margin_nm=nm_from_mm(args.escape_margin_mm),
         escape_transit_lanes=args.escape_transit_lanes,
         power_domain_weight=args.power_domain_weight)
