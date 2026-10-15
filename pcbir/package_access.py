@@ -823,6 +823,21 @@ def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
     return result
 
 
+def _package_owner_cohorts(ranked, direct_owners, links, bypass_hints, ordinary_hints):
+    """Interleave source targets using their exact declared bypass association.
+
+    PhysicalBoard requires one explicit target association per capacitor.
+    Direct failed endpoints and measured ordinary hints retain their own group.
+    """
+    targets = {link.capacitor.component: link.target.component for link in links
+               if link.target.component in direct_owners or link.capacitor in bypass_hints}
+    groups = {}
+    for ref in ranked:
+        target = ref if ref in direct_owners or ref in ordinary_hints else targets.get(ref, ref)
+        groups.setdefault(target, []).append(ref)
+    return tuple(tuple(refs) for refs in groups.values())
+
+
 def package_placement_trials(
     baseline: PackageAccessResult, options: PlacementPlannerOptions, movement_nm: int,
     *, constraints: list[PackagePlacementConstraint] | None = None,
@@ -838,6 +853,7 @@ def package_placement_trials(
     owners = {pad.component for pad in baseline.pending_pads}
     owners.update(pad.component for net in board.nets if net.name in baseline.failed_critical_nets
                   for pad in net.pads)
+    direct_owners = frozenset(owners)
     # Fixed package endpoints can be fenced by movable semantic bypass feeds.
     # Use only explicit source pin associations as dependency hints; normal
     # whole-unit legality and complete fresh owner validation still apply.
@@ -898,7 +914,7 @@ def package_placement_trials(
     ranked = sorted(owners - fixed, key=lambda ref: (
         -sum(pad.component == ref for pad in baseline.pending_pads), dependency_distance(ref),
         -len(board.footprints[poses[ref].footprint].pads), ref))
-    # Interleave owners so one package does not consume every trial.
+    # Build the existing finite per-owner proposal lists once.
     proposals = {}
     for reference in ranked:
         current = poses[reference]
@@ -914,21 +930,39 @@ def package_placement_trials(
         candidates[4:4] = [replace(current, rotation_degrees=angle) for angle in angles
                            if angle != current.rotation_degrees]
         proposals[reference] = candidates
-    for index in range(max((len(items) for items in proposals.values()), default=0)):
-        for reference in ranked:
-            if index >= len(proposals[reference]):
-                continue
+    def legal_trials(references):
+        for index in range(max((len(items) for items in proposals.values()), default=0)):
+            for reference in references:
+                if index >= len(proposals[reference]):
+                    continue
+                try:
+                    trial = move_placement_unit(board, poses, reference, proposals[reference][index])
+                except ValueError:
+                    record(reference, proposals[reference][index], poses,
+                           ("rigid placement unit cannot represent the proposed pose",))
+                    continue
+                if placement_solution_is_legal(board, trial, options):
+                    yield reference, replace(board, placements=tuple(trial[pose.reference] for pose in board.placements))
+                elif constraints is not None and len(constraints) < 32:
+                    record(reference, proposals[reference][index], trial,
+                           placement_rejection_reasons(board, trial, options))
+
+    # A source package may own many distinct bypass capacitors. Fairness is
+    # between failed source targets, after all normal whole-unit legal gates,
+    # rather than between references that happen to rank close to one target.
+    active = [iter(legal_trials(refs)) for refs in _package_owner_cohorts(
+        ranked, direct_owners, board.decoupling_links, bypass_hints, hinted)]
+    while active:
+        remaining = []
+        for trials in active:
             try:
-                trial = move_placement_unit(board, poses, reference, proposals[reference][index])
-            except ValueError:
-                record(reference, proposals[reference][index], poses,
-                       ("rigid placement unit cannot represent the proposed pose",))
+                trial = next(trials)
+            except StopIteration:
                 continue
-            if placement_solution_is_legal(board, trial, options):
-                yield reference, replace(board, placements=tuple(trial[pose.reference] for pose in board.placements))
-            elif constraints is not None and len(constraints) < 32:
-                record(reference, proposals[reference][index], trial,
-                       placement_rejection_reasons(board, trial, options))
+            yield trial
+            remaining.append(trials)
+        active = remaining
+
 
 
 def improve_package_access(

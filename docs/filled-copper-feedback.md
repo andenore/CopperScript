@@ -144,6 +144,13 @@ Rejected ordering trials can also supply `pattern_hint` context: measured lost
 ordinary identities identify eligible placement owners when original endpoints
 are fixed. Discarded candidate copper is never adopted, and every hint still
 passes source/session placement legality and fresh all-owner acceptance.
+Placement look-ahead alternates legal proposals between failing source
+components. Bypass capacitors associated with the same target share one
+cohort, so many dependencies of one package do not consume every early
+probe. Existing owner ranking and move choices are retained within each
+cohort; probe, trial and legality bounds are unchanged. Exhausted cohorts
+drop out without granting additional moves or acceptance authority.
+
 These reuse the actual placement legality predicates, including fixed companions,
 named regions, keepouts, mechanics, rigid groups and relative constraints. They
 do not claim an orientation domain or a sampled region is an impossibility proof.
