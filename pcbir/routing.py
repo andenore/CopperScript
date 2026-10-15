@@ -1317,11 +1317,40 @@ def _pin_access_candidates(
                 ))
             if len(found) >= options.pin_access_candidates:
                 break
-    return tuple(sorted(found, key=lambda item: (
+    return _bounded_access_choices(found, options.pin_access_candidates)
+
+
+def _bounded_access_choices(found: list[PinAccess], limit: int) -> tuple[PinAccess, ...]:
+    """Retain distinct physical launches before more aliases of one via.
+
+    The input pool has already passed the ordinary finite generation and exact
+    geometry checks. Different signal-layer aliases of the same through-via
+    share a physical bottleneck; they must not hide a generated alternative
+    hole when the returned candidate allowance is small. Surface entrances
+    retain their individual graph-node choices. No candidate is regenerated,
+    checked, registered or assigned capacity by this selection step.
+    """
+    ranked = sorted(found, key=lambda item: (
         item.estimated_cost_nm, item.node, item.via is not None,
         item.via.position.x_nm if item.via else 0,
         item.via.position.y_nm if item.via else 0,
-    ))[:options.pin_access_candidates])
+    ))
+    cohorts: dict[object, list[PinAccess]] = {}
+    for access in ranked:
+        key = ('via', access.via) if access.via is not None else ('surface', access.node)
+        cohorts.setdefault(key, []).append(access)
+    result: list[PinAccess] = []
+    layers: set[CopperLayer] = set()
+    for depth in range(max((len(group) for group in cohorts.values()), default=0)):
+        for group in cohorts.values():
+            if group:
+                # Cover an unrepresented legal layer from this existing launch.
+                index = min(range(len(group)), key=lambda i: (group[i].layer in layers, i))
+                result.append(group.pop(index))
+                layers.add(result[-1].layer)
+                if len(result) >= limit:
+                    return tuple(result)
+    return tuple(result)
 
 
 def _node_distance_nm(first: Point, second: Point) -> int:

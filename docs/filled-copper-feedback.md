@@ -378,3 +378,11 @@ the normal fresh global/preflight/ownership gates with full rollback on failure.
 Numeric options, regions, courtyards, copper rules and electrical requirements
 are not relaxed. This generic placement adapter has no normal CopperProbe
 adoption or whole-board/electrical qualification claim.
+
+Global terminal access retention uses the same finite generated pool and
+configured candidate count. Physical through-via launches receive one retained
+slot each before additional signal-layer aliases of the same hole; available
+unrepresented layers are preferred within each launch. Distinct surface graph
+entrances remain separate. This selection performs no geometry queries, adds no
+candidate or capacity, and is not an exhaustive escape search. Fresh terminal
+capacity registration, negotiated routing and all physical gates still apply.
