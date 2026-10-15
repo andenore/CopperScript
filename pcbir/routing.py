@@ -602,6 +602,60 @@ def _attempt(
     )
 
 
+def _resource_congestion_cost(
+    resource: _Resource, demand: int, usage: Mapping[str, int],
+    history: Mapping[str, int], present: int, options: GlobalRouterOptions,
+) -> int:
+    """The same negotiated penalty for path edges and terminal transitions."""
+    overflow = max(0, usage[resource.identifier] + demand - resource.capacity)
+    return COST_UNIT * (present * overflow
+                        + options.history_penalty * history[resource.identifier])
+
+
+def _terminal_via_cost(
+    graph: _Graph, candidate: PinAccess, accesses: list[PinAccess],
+    route_resources: Mapping[str, _Resource],
+    path: tuple[tuple[GridNode, GridNode], ...],
+    usage: Mapping[str, int], history: Mapping[str, int], present: int,
+    options: GlobalRouterOptions,
+) -> int | None:
+    """Charge a new registered terminal hole, once per physical site/net.
+
+    Terminal vias are appended after the graph path, so the path's cost cannot
+    account for them. Existing same-net sites and candidate-path sites follow
+    the exact (resource ID, position) multiplicity of _route_resource_demands.
+    Missing registration is unsupported, never an invented capacity witness.
+    """
+    via = candidate.via
+    if via is None:
+        return 0
+    try:
+        low, high = sorted((graph.layers.index(via.from_layer), graph.layers.index(via.to_layer)))
+    except ValueError:
+        return None
+    identifier = _via_resource_id(graph, candidate.node, via.from_layer, via.to_layer)
+    first = GridNode(low, candidate.node.x_index, candidate.node.y_index)
+    second = GridNode(high, candidate.node.x_index, candidate.node.y_index)
+    resource = graph.resources.get(_edge_key(first, second))
+    if (resource is None or resource.layer is not None or resource.identifier != identifier
+            or via.position not in graph.via_sites.get(identifier, ())):
+        return None
+    positions = {
+        access.via.position for access in accesses if access.via is not None
+        and _via_resource_id(graph, access.node, access.via.from_layer, access.via.to_layer) == identifier
+    }
+    positions.update(graph.point(item.first) for item in route_resources.values()
+                     if item.layer is None and item.identifier == identifier)
+    positions.update(graph.point(graph.resources[_edge_key(a, b)].first)
+                     for a, b in path
+                     if graph.resources[_edge_key(a, b)].identifier == identifier
+                     and graph.resources[_edge_key(a, b)].layer is None)
+    if via.position in positions:
+        return 0
+    return _resource_congestion_cost(
+        resource, len(positions) + 1, usage, history, present, options)
+
+
 def _route_net(
     board: PhysicalBoard,
     graph: _Graph,
@@ -662,13 +716,18 @@ def _route_net(
                     (options.via_cost * COST_UNIT if a.layer_index != b.layer_index
                      else length_cost(graph.point(a), graph.point(b)))
                     + _preference_cost(graph, a, b, options)
-                    + COST_UNIT * present * max(0, usage[graph.resources[_edge_key(a, b)].identifier]
-                                    + (demand if a.layer_index == b.layer_index else 1)
-                                    - graph.resources[_edge_key(a, b)].capacity)
-                    + COST_UNIT * options.history_penalty * history[graph.resources[_edge_key(a, b)].identifier]
+                    + _resource_congestion_cost(
+                        graph.resources[_edge_key(a, b)],
+                        demand if a.layer_index == b.layer_index else 1,
+                        usage, history, present, options)
                     for a, b in path
                 )
-                found.append((path_cost + 10 * candidate.estimated_cost_nm,
+                terminal_cost = _terminal_via_cost(
+                    graph, candidate, accesses, route_resources, path,
+                    usage, history, present, options)
+                if terminal_cost is None:
+                    continue
+                found.append((path_cost + 10 * candidate.estimated_cost_nm + terminal_cost,
                               candidate, path))
         if not found:
             return GlobalNetRoute(
@@ -795,9 +854,8 @@ def _search(
                 continue
             bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
             resource_demand = demand if resource.layer is not None else 1
-            overflow = max(0, usage[resource.identifier] + resource_demand - resource.capacity)
-            step = (static_cost + COST_UNIT * (bend + present * overflow
-                    + options.history_penalty * history[resource.identifier]))
+            step = (static_cost + COST_UNIT * bend + _resource_congestion_cost(
+                resource, resource_demand, usage, history, present, options))
             candidate_cost = cost + step
             candidate = (neighbor, next_direction, next_vias)
             if candidate_cost >= best.get(candidate, 1 << 60):
