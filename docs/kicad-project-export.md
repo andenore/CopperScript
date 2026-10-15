@@ -69,6 +69,13 @@ library rather than unrelated installed library versions.
   independent KiCad tests check rotated front/back instances, relocated projects
   with spaces in their paths and actual keepout enforcement.
 
+Project export writes the authored drilled-hole spacing to KiCad's
+`min_hole_to_hole` setting. KiCad treats `min_hole_clearance` as a separate
+copper-to-hole setting; its established export behavior is retained.
+These keys are distinct in [KiCad's setting definitions](https://docs.kicad.org/doxygen/board__design__settings_8cpp_source.html).
+Changing project rules invalidates prior native evidence even when the
+board copper bytes are identical.
+
 The full-vertical six-layer **unrouted placement** was checked with KiCad
 10.0.6: zero non-connectivity violations, including zero library findings;
 204 unconnected items remain expected until routing is completed.

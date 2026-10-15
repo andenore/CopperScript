@@ -395,7 +395,9 @@ GOLDEN_BOARD_DIGEST = "e81641e915f7bb4c2d432820c42f6713050039262c0bd94782b64cdd5
 # Broadening via-hole checks renamed the coverage entry to via_hole_to_copper;
 # independent HEAD comparison found only that name and its report/token digests changed.
 GOLDEN_REPORT_SHA256 = "afcab4d1d64c868dd3ae72f3167908ec229da37f235e4efec0e46350ccca7ece"
-GOLDEN_KICAD_EXPORT_DIGEST = "4e0b7cc01ae5fc67bd9f3b84e3566e0f6b406b994f0e78b6bec1de3b592cbd4e"
+# Export now also binds the authored drill-to-drill spacing to its native key;
+# exact before/after artifacts differ only by that project setting.
+GOLDEN_KICAD_EXPORT_DIGEST = "e250fe232d315ecfbcbb8a4e9ecba509b4036a825860515bdef7bce6c65bc39c"
 
 
 def test_unscoped_board_retains_geometry_and_current_report_export_contract() -> None:

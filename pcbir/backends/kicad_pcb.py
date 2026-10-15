@@ -240,6 +240,8 @@ def _render_project(board: PhysicalBoard) -> str:
                     # implicit 0.5 mm project default.
                     "min_copper_edge_clearance": clearance,
                     "min_hole_clearance": hole_clearance,
+                    # Drill-to-drill spacing has its own native setting.
+                    "min_hole_to_hole": hole_clearance,
                     "min_track_width": minimum_track_width,
                     **({
                         "min_via_diameter": 0.30,
