@@ -419,3 +419,11 @@ Existing handoffs are not replaced and a newly measured semantic port never
 invents an ordinary-domain candidate index. These physical joins and bounded
 completion reports do not establish electrical, RF, power or fabrication release
 qualification.
+
+
+Local pin-access routing retains the eight-direction geometry contract even when
+exact endpoint coordinates divide computational grid intervals unequally. The
+direct shortcut and each maze edge reject non-45-degree diagonals before any
+clearance query. Horizontal/vertical edges, original grid/domain, state bounds
+and source clearances remain unchanged; rejected edges do not purchase extra
+search allowance. Exact existing package-exit verification remains authoritative.

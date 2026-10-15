@@ -101,6 +101,12 @@ def _legal_segment(
 ) -> bool:
     if start == end:
         return True
+    dx, dy = abs(end.x_nm-start.x_nm), abs(end.y_nm-start.y_nm)
+    # Endpoint coordinates split grid intervals unequally. Adjacent x/y
+    # indices do not imply a physical 45-degree step. The direct shortcut
+    # obeys the same eight-direction contract as every maze edge.
+    if dx and dy and dx != dy:
+        return False
     midpoint = Point((start.x_nm + end.x_nm) // 2,
                      (start.y_nm + end.y_nm) // 2)
     # An ordinary breakout net may neck down next to its lands (plan R1).
