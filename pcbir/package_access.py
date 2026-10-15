@@ -321,6 +321,7 @@ def _negotiate_patterns(
     search_work: _SearchWork | None = None,
     search_tier: str = "full",
     allow_contact_trial: bool = True,
+    allow_surface_trial: bool = True,
 ) -> PackageAccessResult:
     """Use alternate owners as obstacles only while proposing ordinary exits.
 
@@ -331,8 +332,13 @@ def _negotiate_patterns(
     plane_pending = bool(baseline.plane_stitch and baseline.plane_stitch.pending_pads)
     ordinary_pending = bool(baseline.fanout.pending_pads or baseline.boundary and baseline.boundary.pending_pads)
     other_owners = bool(baseline.critical.nets or plane_options and baseline.source.zones)
+    from .surface_bypass_coexistence import constrained_surface_roots
+    surface_case = bool(allow_surface_trial and options.maximum_partial_owner_nets
+        and baseline.fanout.decoupling_tracks
+        and constrained_surface_roots(owner_board, baseline.fanout))
     if (not options.maximum_pattern_trials or baseline.hard_findings
-            or not (baseline.failed_critical_nets or plane_pending or ordinary_pending and other_owners)):
+            or not (baseline.failed_critical_nets or plane_pending or ordinary_pending and other_owners
+                    or surface_case)):
         return baseline
     if allow_contact_trial and options.maximum_partial_owner_nets:
         contact = _contact_pattern_trial(baseline, owner_board, fanout_options, options,
@@ -345,10 +351,26 @@ def _negotiate_patterns(
             followup = _negotiate_patterns(replace(contact, pattern_trials=()), owner_board, fanout_options,
                 replace(options, maximum_pattern_trials=remaining), plane_options, on_progress,
                 pair_state_limit=pair_state_limit, search_work=search_work, search_tier=search_tier,
-                allow_contact_trial=False)
+                allow_contact_trial=False, allow_surface_trial=allow_surface_trial)
             records = (*contact.pattern_trials, *followup.pattern_trials)
             return replace(followup, pattern_trials=tuple(
                 replace(record, index=index) for index, record in enumerate(records, 1)))
+    if surface_case:
+        # This spends ONE existing pattern slot before a clean critical probe.
+        # The helper does one joint assignment and exact-link feed generation;
+        # it neither changes poses nor calls full fanout per alternative.
+        surface = _surface_bypass_pattern_trial(baseline, owner_board, fanout_options, options,
+            plane_options, on_progress, pair_state_limit, search_work, search_tier)
+        remaining = options.maximum_pattern_trials - 1
+        if surface.ready or not remaining:
+            return surface
+        followup = _negotiate_patterns(replace(surface, pattern_trials=()), owner_board, fanout_options,
+            replace(options, maximum_pattern_trials=remaining), plane_options, on_progress,
+            pair_state_limit=pair_state_limit, search_work=search_work, search_tier=search_tier,
+            allow_contact_trial=False, allow_surface_trial=False)
+        records = (*surface.pattern_trials, *followup.pattern_trials)
+        return replace(followup, pattern_trials=tuple(
+            replace(record, index=index) for index, record in enumerate(records, 1)))
     # An unreachable coarse planner must not disable exact source-terminal
     # ownership probes. These are disposable proposals, and the existing full
     # owner/pad/DRC revalidation and area-readiness gates still decide adoption.
@@ -507,6 +529,46 @@ def _negotiate_patterns(
               and strategies[index + 1] != "plane_first" and options.maximum_partial_owner_nets):
             strategies[index + 1] = "partial_ordinary"
     return replace(accepted, pattern_trials=tuple(records))
+
+
+def _surface_bypass_pattern_trial(baseline, owner_board, fanout_options, options, plane_options,
+                                  on_progress, pair_state_limit, search_work, search_tier):
+    """Fresh full-owner admission of one no-pose exact-association proposal."""
+    from .surface_bypass_coexistence import propose_surface_bypass
+    emit(on_progress, "package_pattern_trial", "started", index=1,
+         strategy="surface_bypass_first", search_tier=search_tier)
+    preparation = propose_surface_bypass(owner_board, baseline.fanout, options.boundary_options,
+                                         obstacles=baseline.board, fanout_options=fanout_options)
+    candidate = None
+    outcome = preparation.reason
+    if preparation.fanout is not None:
+        verified = _critical_search(baseline.source, baseline.global_route, preparation.fanout,
+            on_progress, pair_state_limit, search_work,
+            retained_critical=baseline.critical, retained_accesses=baseline.fanout)
+        candidate = _access_result(baseline.source, baseline.global_route, preparation.fanout,
+            verified, plane_options, options.boundary_options, on_progress)
+        outcome = _improvement_outcome(baseline, candidate)
+        # No unrelated critical/plane occurrence was released by this proposal.
+        # Their normal owners must freshly revalidate and retain the originals;
+        # equal counts, equal net labels or a new route do not replace authority.
+        old_tracks = baseline.board.tracks[len(baseline.fanout.board.tracks):]
+        old_vias = baseline.board.vias[len(baseline.fanout.board.vias):]
+        if (Counter(map(id, old_tracks)) - Counter(map(id, candidate.board.tracks))
+                or Counter(map(id, old_vias)) - Counter(map(id, candidate.board.vias))):
+            outcome = "unrelated_owner_not_retained"
+    accepted = candidate if outcome == "accepted" else baseline
+    selected = preparation.link
+    record = PackagePatternTrial(1, "surface_bypass_first", tuple(sorted(accepted.pending_pads)),
+        tuple(sorted(accepted.failed_critical_nets)), outcome, candidate is not None, search_tier,
+        displaced_nets=(selected.net,) if selected is not None else (),
+        retained_track_count=preparation.retained_track_count,
+        retained_via_count=preparation.retained_via_count,
+        partial_skipped_reason=preparation.reason if preparation.fanout is None else "",
+        failed_bypass_capacitors=(selected.capacitor,) if selected is not None
+            and preparation.reason == "selected_surface_feed_regeneration_failed" else ())
+    emit(on_progress, "package_pattern_trial", "finished", index=1,
+         strategy="surface_bypass_first", outcome=outcome, search_tier=search_tier)
+    return replace(accepted, pattern_trials=(record,))
 
 
 def _contact_pattern_trial(baseline, owner_board, fanout_options, options, plane_options,

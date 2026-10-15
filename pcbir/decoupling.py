@@ -63,7 +63,7 @@ def _surface_candidates(board, index, link, target, cap, width, layer):
                 yield (*prefix, *tail)
 
 
-def route_decouplers(board, *, only_nets=None, fanout_options=None):
+def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=None):
     """Reserve explicit bypass feeds before ordinary package exits.
 
     Existing same-surface supply paths retain their original semantics.
@@ -72,7 +72,20 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None):
     This proves physical joins, not electrical return/loop qualification.
     Critical-profile nets remain under their specialized router's ownership.
     Unsupported or blocked associations are returned explicitly, never hidden.
+
+    Optional only_links is an exact immutable subset of the ORIGINAL source
+    DecouplingLinks. It intersects only_nets without deleting sibling source
+    declarations or weakening the all-original-association admission ledger.
+    With no filter, historical routing order and result semantics are unchanged.
     """
+    if only_links is not None:
+        if not isinstance(only_links, frozenset) or any(not isinstance(link, DecouplingLink)
+                                                       for link in only_links):
+            raise TypeError("decoupling link selection must be a frozenset of DecouplingLinks")
+        if not only_links <= frozenset(board.decoupling_links):
+            raise ValueError("decoupling link selection contains an undeclared source association")
+        if not only_links:
+            return DecouplingRouteResult(board, (), frozenset(), (), accesses=MappingProxyType({}))
     if not board.decoupling_links:
         return DecouplingRouteResult(board, (), frozenset(), (), accesses=MappingProxyType({}))
     from .placement import transformed_pad_position
@@ -104,6 +117,8 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None):
             return None, "would_lose_admitted_bypass_path"
         return current, ""
     for link in board.decoupling_links:
+        if only_links is not None and link not in only_links:
+            continue
         if only_nets is not None and link.net not in only_nets:
             continue
         if link.target in owned or link.capacitor in owned:

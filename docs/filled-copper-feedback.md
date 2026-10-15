@@ -180,6 +180,18 @@ why that bounded fallback was selected. `fanout.protected_decoupling_track_count
 and `fanout.protected_decoupling_via_count` describe generated semantic ownership
 at that stage, not final filled connectivity.
 
+A no-pose surface/bypass proposal may spend one existing pattern slot when a
+freshly measured generated supply feed blocks an ordinary surface-only package
+cohort. It builds one bounded domain batch, releases only one declared
+association's exclusive original supply-track occurrences, jointly allocates
+all cohort exits and regenerates that exact feed. Shared paths, all vias,
+unselected associations, source copper, macros and required arrays remain held.
+Every original cross-layer witness and established exit is freshly checked;
+the complete critical/contact/boundary gates and exact unrelated-owner
+retention still decide adoption. Unsupported source/fill/ownership contexts
+decline without contribution. Same-face supply continuity does not establish
+return-loop qualification or complete end-to-end signal routing.
+
 The placer validates later bypass moves with rigid phase locks bound to their
 current legalized/refined poses. Source-fixed constraints and the final legality
 gate against the original source and actual caller session locks remain intact.
