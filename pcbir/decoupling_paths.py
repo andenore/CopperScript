@@ -10,6 +10,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from itertools import islice
+from functools import lru_cache
+from ._cache import IdentityKey
 from math import hypot
 
 from .physical import (BoardSide, CopperLayer, DecouplingLink, PadKind,
@@ -88,6 +90,14 @@ class DecouplingPathResult:
 
 
 def _context(board):
+    return _cached_context(IdentityKey(board))
+
+
+@lru_cache(maxsize=8)
+def _cached_context(key):
+    # PhysicalBoard owns immutable tuples/read-only copies of all source maps.
+    # Retain exact identities, never a lossy geometry/version approximation.
+    board = key.value
     if board.materialized_macros:
         from .hard_macros import macro_source, resolved_macro_geometry
         from .pad_via_arrays import via_in_pad_array_vias
@@ -105,6 +115,15 @@ def _context(board):
     else:
         source = board
     return physical_board_digest(replace(source, tracks=(), vias=(), zone_fills=()))
+
+
+def _board_digest(board):
+    return _cached_board_digest(IdentityKey(board))
+
+
+@lru_cache(maxsize=8)
+def _cached_board_digest(key):
+    return physical_board_digest(key.value)
 
 
 def _land(board, reference):
@@ -273,7 +292,7 @@ def verify_crosslayer_decoupling(board, link, *, return_target=None,
         return DecouplingPathResult(board, supply_path=supply,
             reason=_budget_reason(board,link.return_net) or ("return_path_absent" if targets else "no_declared_target_return_pad"))
     witness = DecouplingCrossLayerWitness(link,supply,returned.end,returned,
-                                         _context(board),physical_board_digest(board))
+                                         _context(board),_board_digest(board))
     return DecouplingPathResult(board,witness=witness,supply_path=supply,return_path=returned)
 
 
@@ -364,7 +383,7 @@ def refresh_crosslayer_witnesses(board, witnesses, *, index=None, replacing_link
                 continue  # This exact association is rebuilt by the caller.
             return (), reason
         retained.append(witness)
-    digest = physical_board_digest(board)
+    digest = _board_digest(board)
     return tuple(replace(witness, board_digest=digest) for witness in retained), None
 
 
@@ -373,6 +392,7 @@ class _ConnectionWork:
     # One allowance per outer transaction, shared by every lazy connection
     # generator, supply, return and return target. Never a new source maze.
     local_paths: int = 0
+    inner_bridges: int = 0
 
 
 def _existing_launches(board, a, b, net, width, index, options, site_limit):
@@ -393,6 +413,56 @@ def _existing_launches(board, a, b, net, width, index, options, site_limit):
                                    target_layer=b[2].layer, required_width_nm=width)
         if path is not None and all(_track_ok(board, index, t, net) for t in path):
             yield path, via
+
+
+
+def _inner_connections(board, selected, destination, net, width, options, site_limit, work):
+    """Bounded explicit two-via alternatives when the destination surface blocks.
+
+    Eight destination-launch trials are shared by the entire supply/return
+    transaction. Declared areas only rank layers; they never stand in for copper.
+    Both short surface feeds and the inner trace remain original witnessed edges.
+    """
+    from .track_containment import track_is_contained
+    allowed = routing_layers(board, net, _rule(board, net))
+    inner = [layer for layer in allowed if layer not in
+             (board.stackup.copper_layers[0], board.stackup.copper_layers[-1])]
+    if not inner or work.inner_bridges >= 8:
+        return
+    preferred = {layer for zone in board.zones if zone.net == net for layer in zone.layers}
+    inner.sort(key=lambda layer: (layer not in preferred, board.stackup.copper_layers.index(layer)))
+    index = RoutingClearanceIndex(board)
+    config = replace(options, step_nm=options.refinement_step_nm)
+    endpoints = islice(_package_candidates(board, destination[0], destination[1], config), site_limit)
+    choices = _legal_choices(board, index, net, destination[2].position,
+                            destination[0], destination[1], endpoints)
+    for tail, proposed in choices:
+        if work.inner_bridges >= 8:
+            return
+        endpoint = tail[-1].end
+        via = proposed or next((v for v in board.vias if v.net == net and v.position == endpoint), None)
+        if via is None or via.position == selected.position or not _normal_via(board, index, via):
+            continue
+        work.inner_bridges += 1
+        additions = tuple(t for t in tail if not track_is_contained(t, board.tracks))
+        candidate = replace(board, tracks=(*board.tracks, *additions),
+                            vias=board.vias if via in board.vias else (*board.vias, via))
+        if _budget_reason(candidate, net):
+            continue
+        fresh = RoutingClearanceIndex(candidate)
+        for layer in inner:
+            paths = tuple(checked_access_paths(candidate, fresh, net, selected.position,
+                                               via.position, width, layer))
+            if not paths and options.maze_escapes and work.local_paths < 4:
+                work.local_paths += 1
+                path = local_access_path(candidate, fresh, net, selected.position, via.position,
+                    layer, width, step_nm=100_000, detour_nm=1_000_000, maximum_states=4000)
+                paths = () if path is None else (path,)
+            for path in paths:
+                tracks = tuple(t for t in path if not track_is_contained(t, candidate.tracks))
+                joined = replace(candidate, tracks=(*candidate.tracks, *tracks))
+                if not _budget_reason(joined, net):
+                    yield joined
 
 
 def _connections(board, first, second, net, options, launch_limit, site_limit, *, work=None):
@@ -462,6 +532,9 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
                 continue
             if not _budget_reason(candidate,net):
                 yield candidate
+        if not tails:
+            yield from _inner_connections(launched, selected, b, net, width,
+                                          options, site_limit, work)
 
 
 def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
@@ -475,8 +548,10 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
     Existing same-net vias examined per connection are capped by the site bound;
     verified reuse spends the existing launch slots before new launches. One
     shared transaction permits at most four local 100 um/1 mm/4000-state tails,
-    only for verified existing launches after cheap tails fail and when the
-    fanout maze option is enabled. Source paths are recognized, never searched.
+    for verified existing launches or bounded inner bridges after cheap paths
+    fail and when the fanout maze option is enabled. Up to eight destination
+    launch trials can bridge a blocked surface on permitted inner layers using
+    two ordinary through vias. Source paths are recognized, never searched.
     Rejection returns the original board and no adopted generated copper.
     """
     if min(maximum_launch_candidates,maximum_return_candidates,maximum_site_candidates,
@@ -527,6 +602,9 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                      else _connections(supplied,target,link.return_pad,link.return_net,
                                        options,maximum_launch_candidates,maximum_site_candidates,work=work))
             for candidate in returns:
+                if attempted>=maximum_proposals:
+                    return DecouplingPathResult(board,reason="bounded_complete_proposals_exhausted",
+                                                supply_path=existing.supply_path,return_path=existing.return_path)
                 attempted+=1
                 fresh=RoutingClearanceIndex(candidate)
                 measured=verify_crosslayer_decoupling(candidate,link,return_target=target,
@@ -541,6 +619,32 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                     coverage=(all(id(t) in covered_tracks for t in created_tracks)
                               and all(id(v) in covered_vias for v in created_vias))
                     uncovered |= not coverage
+                    if not coverage:
+                        # Only this uncommitted proposal's suffix is mutable.
+                        # Source copper includes immutable macros, required arrays
+                        # and previously admitted exits/witnesses: retain every
+                        # original object, including unused source branches.
+                        if (any(a is not b for a,b in zip(board.tracks, candidate.tracks))
+                                or any(a is not b for a,b in zip(board.vias, candidate.vias))
+                                or len(candidate.tracks) < len(board.tracks)
+                                or len(candidate.vias) < len(board.vias)):
+                            continue
+                        created_tracks=tuple(t for t in created_tracks if id(t) in covered_tracks)
+                        created_vias=tuple(v for v in created_vias if id(v) in covered_vias)
+                        candidate=replace(candidate, tracks=(*board.tracks,*created_tracks),
+                                          vias=(*board.vias,*created_vias))
+                        fresh=RoutingClearanceIndex(candidate)
+                        measured=verify_crosslayer_decoupling(candidate,link,return_target=target,
+                            maximum_path_states=maximum_path_states,index=fresh)
+                        if (measured.witness is None
+                                or any(validate_crosslayer_witness(candidate,w,index=fresh) for w in protected)):
+                            continue
+                        covered_tracks={id(step.edge) for path in (measured.supply_path,measured.return_path)
+                                        for step in path.steps if isinstance(step.edge,TrackSegment)}
+                        covered_vias={id(step.edge) for path in (measured.supply_path,measured.return_path)
+                                      for step in path.steps if isinstance(step.edge,Via)}
+                        coverage=(all(id(t) in covered_tracks for t in created_tracks)
+                                  and all(id(v) in covered_vias for v in created_vias))
                     exact=(coverage
                            and all(_track_ok(candidate,fresh,t,t.net) for t in created_tracks)
                            and all(_normal_via(candidate,fresh,v) for v in created_vias))

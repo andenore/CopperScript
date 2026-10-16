@@ -462,3 +462,16 @@ These observations do not replace local bypass path witnesses, waive routing gat
 or qualify high-frequency loop impedance. They are a diagnostic foundation for
 plane-assisted routing; the preliminary package-access stage still requires its
 existing explicit local supply/return paths.
+
+
+Opposite-surface bypass proposals can use a bounded inner-layer bridge with
+two ordinary through-vias when direct surface tails are blocked and the source
+permits those layers and via counts. All eight destination-launch trials share
+the existing complete-transaction allowance; four bounded local maze tails are
+shared by supply and return. Both explicit terminal paths must still validate.
+Before admission, an unused branch may be removed only from the current
+proposal's generated suffix. Every input track/via object, including immutable
+macros, required arrays and previously admitted partial exits, stays intact.
+The trimmed candidate receives a fresh clearance index, both complete path
+witnesses, protected-witness checks and physical DRC. A failed trim rolls back.
+Native fill observations remain separate from this explicit-path admission.

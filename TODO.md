@@ -30,6 +30,9 @@ Choose only the relevant focused record for detailed acceptance criteria:
 
 ## Additional routing and asset scope
 
+- [ ] Add a separate power/ground copper-area planning stage shared by placement
+  and routing; see [the stage requirements](docs/routing-backlog.md#separate-powerground-copper-area-planning-stage).
+
 - [ ] Add explicit source layer roles/dedicated-plane semantics beyond coverage
   inference, preserving existing zone/stitching/per-pad controls.
 - [x] Add hierarchical module-to-macro frontend selection following the

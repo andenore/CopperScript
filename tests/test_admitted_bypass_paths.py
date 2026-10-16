@@ -78,20 +78,23 @@ def test_every_adopted_new_edge_is_covered_or_contribution_remains_pending(dual,
     assert {id(v) for v in result.decoupling_vias}<={id(v) for ps in vias.values() for v in ps}
 
 
-def test_unsupported_first_complete_proposal_stays_atomic_with_original_lower_bound():
+def test_first_complete_proposal_prunes_only_its_unwitnessed_suffix():
     from pcbir.decoupling_paths import propose_crosslayer_decoupling
+    from pcbir.physical import Via
     source=shared_board(dual=True)
     first,second=source.decoupling_links
     initial=propose_crosslayer_decoupling(source,first)
     assert initial.witness is not None
-    rejected=propose_crosslayer_decoupling(initial.board,second,maximum_proposals=1)
-    assert rejected.reason=='unwitnessed_generated_bypass_copper'
-    assert rejected.board is initial.board and not rejected.created_tracks and not rejected.created_vias
-    assert validate_crosslayer_witness(initial.board,initial.witness)==''
-    # The existing default allowance can find a supported next candidate.
-    accepted=propose_crosslayer_decoupling(initial.board,second)
+    accepted=propose_crosslayer_decoupling(initial.board,second,maximum_proposals=1)
     assert accepted.witness is not None
+    assert all(a is b for a,b in zip(initial.board.tracks,accepted.board.tracks))
+    assert all(a is b for a,b in zip(initial.board.vias,accepted.board.vias))
+    assert len(accepted.board.tracks)>=len(initial.board.tracks)
+    assert len(accepted.board.vias)>=len(initial.board.vias)
+    assert validate_crosslayer_witness(accepted.board,initial.witness)==''
+    assert validate_crosslayer_witness(accepted.board,accepted.witness)==''
     assert {id(t) for t in accepted.created_tracks}<=edges((accepted.witness,),TrackSegment)
+    assert {id(v) for v in accepted.created_vias}<=edges((accepted.witness,),Via)
 
 
 @pytest.mark.parametrize('fault',('pose','edge_copy','missing_via','budget','floating','half_path','untyped',
