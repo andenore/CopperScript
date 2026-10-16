@@ -13,7 +13,7 @@ from hashlib import sha256
 from heapq import heappop, heappush
 import json
 from math import ceil
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 from types import MappingProxyType
 
 from .drc import placed_pad_shape
@@ -542,7 +542,8 @@ def _route_iteration(
         routes.append(route)
         if not route.connected:
             continue
-        for identifier, amount in _route_resource_demands(route, demand).items():
+        for identifier, amount in _route_resource_demands(
+                route, demand, local_demand=_planar_demand(board, rules.get(route.net), options)).items():
             usage[identifier] += amount
     return _attempt(board, graph, rules, tuple(routes), options, iteration)
 
@@ -562,7 +563,8 @@ def _attempt(
         if not route.connected:
             continue
         demand = _net_demand(board, rules.get(route.net), options)
-        for identifier, amount in _route_resource_demands(route, demand).items():
+        for identifier, amount in _route_resource_demands(
+                route, demand, local_demand=_planar_demand(board, rules.get(route.net), options)).items():
             usage[identifier] += amount
             contributors[identifier].append(route.net)
     capacities = {
@@ -670,6 +672,7 @@ def _route_net(
     options: GlobalRouterOptions,
 ) -> GlobalNetRoute:
     allowed = routing_layers(board, net, rule)
+    local_demand = _planar_demand(board, rule, options, default=demand)
     from .zone_geometry import ZoneRoutingReservations
     reservations = ZoneRoutingReservations(board)
     width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
@@ -710,6 +713,7 @@ def _route_net(
             path = _search(
                 graph, tree_nodes, candidate.node, allowed, demand, usage,
                 history, present, options, allowance, blocked_resources=blocked_resources,
+                **({"planar_demand": local_demand} if local_demand is not None else {}),
             )
             if path is not None:
                 path_cost = sum(
@@ -718,7 +722,8 @@ def _route_net(
                     + _preference_cost(graph, a, b, options)
                     + _resource_congestion_cost(
                         graph.resources[_edge_key(a, b)],
-                        demand if a.layer_index == b.layer_index else 1,
+                        (local_demand(graph.point(a), graph.point(b))
+                         if local_demand is not None else demand) if a.layer_index == b.layer_index else 1,
                         usage, history, present, options)
                     for a, b in path
                 )
@@ -817,6 +822,7 @@ def _search(
     options: GlobalRouterOptions,
     remaining_vias: int | None,
     *, blocked_resources: frozenset[str] = frozenset(),
+    planar_demand: Callable[[Point, Point], int] | None = None,
 ) -> tuple[tuple[GridNode, GridNode], ...] | None:
     allowed_indexes = {graph.layers.index(layer) for layer in allowed_layers}
     queue: list[tuple[int, int, int, GridNode, str, int, int]] = []
@@ -853,7 +859,9 @@ def _search(
             if remaining_vias is not None and next_vias > remaining_vias:
                 continue
             bend = options.bend_cost if direction and direction != next_direction and "v" not in {direction, next_direction} else 0
-            resource_demand = demand if resource.layer is not None else 1
+            resource_demand = ((planar_demand(graph.point(node), graph.point(neighbor))
+                                if planar_demand is not None else demand)
+                               if resource.layer is not None else 1)
             step = (static_cost + COST_UNIT * bend + _resource_congestion_cost(
                 resource, resource_demand, usage, history, present, options))
             candidate_cost = cost + step
@@ -1402,16 +1410,47 @@ def _net_order(net: str, rule: NetRoutingRule | None) -> tuple[int, int, str]:
     return hardness, -(rule.priority if rule else 0), net
 
 
-def _route_resource_demands(route: GlobalNetRoute, planar_demand: int) -> dict[str, int]:
+def _route_resource_demands(
+    route: GlobalNetRoute, planar_demand: int, *,
+    local_demand: Callable[[Point, Point], int] | None = None,
+) -> dict[str, int]:
     """Trace width consumes lanes; each distinct via position consumes one site.
 
     Physical-span IDs merge logical layer transitions through the same hole.
     Separate terminal escape vias in one tile still consume separate sites.
     """
-    result = {segment.resource_id: planar_demand for segment in route.segments}
+    result = {segment.resource_id: (local_demand(segment.start, segment.end)
+               if local_demand is not None else planar_demand) for segment in route.segments}
     for identifier, _position in {(via.resource_id, via.position) for via in route.vias}:
         result[identifier] = result.get(identifier, 0) + 1
     return dict(sorted(result.items()))
+
+
+def _planar_demand(board, rule, options, *, default=None):
+    """Ordinary source-declared neck-down demand on a complete coarse edge.
+
+    This is capacity guidance only, never emitted copper or a width waiver.
+    Both ends must lie in one exact shared breakout region; boundary-crossing
+    edges keep the full width. Clearance and physical via-site demand are
+    unchanged. Specialized profiles remain under their existing planners.
+    """
+    if (rule is None or rule.kind is not RouteKind.GENERAL
+            or rule.breakout_length_nm is None or rule.breakout_width_nm is None):
+        return None
+    default = _net_demand(board, rule, options) if default is None else default
+    clearance = rule.clearance_nm or board.rules.minimum_clearance_nm
+    pitch = board.rules.default_track_width_nm + board.rules.minimum_clearance_nm
+    narrow = max(1, (rule.breakout_width_nm + clearance + pitch - 1) // pitch)
+    if narrow >= default:
+        return None
+    from functools import lru_cache
+    from .breakout import BreakoutRegions
+    regions = BreakoutRegions(board)
+
+    @lru_cache(maxsize=16384)
+    def demand(start, end):
+        return narrow if regions.region(rule.net, (start, end)) is not None else default
+    return demand
 
 
 def _net_demand(

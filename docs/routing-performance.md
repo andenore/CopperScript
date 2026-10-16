@@ -433,3 +433,24 @@ the candidate, checking exact index state, pad owners and clearance queries.
 The measured medians were 1.005159 s and 0.034161 s. This repeated-source fixture
 measures construction reuse; concurrent load was recorded, and it is not a
 whole-board speedup or a routing, native, RF, power or manufacturing result.
+
+
+## Ordinary breakout capacity
+
+Global search, target selection, negotiated resource use and final overflow
+metrics use the same source-declared ordinary breakout width for an edge whose
+entire centreline is inside one shared terminal-land breakout region. An edge
+crossing that boundary retains its normal full-width demand. A narrower width
+on another net, or separate regions containing only the two endpoints, does
+not grant a reduced demand. Declared clearance remains unchanged; specialized
+profiles keep their existing capacity policy. Distinct physical via-site
+multiplicity is unaffected.
+
+This avoids a false capacity overflow or needless detour when a source already
+allows an ordinary neck-down beside a fine-pitch package. It does not emit a
+trace, relax any source width, bypass detailed/native checks, or certify a
+whole-board route. Only immutable source-region membership is cached within
+the net's demand evaluator, with a 16,384-edge bound; mutable usage and history
+are read on every search step. Nets without an effective width reduction keep
+the existing fast path. Regressions include renamed fixtures, boundary-crossing
+edges, declared clearance and unchanged physical-copper rules.
