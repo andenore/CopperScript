@@ -77,6 +77,11 @@ def test_a_hemmed_pair_is_tuned_while_its_neighbour_is_unrouted(monkeypatch) -> 
 def test_tuning_that_blocks_a_later_pair_is_removed_before_any_rip_up(monkeypatch) -> None:
     # LANE_A has no slack toward LANE_C here: LANE_B's bumps would block it.
     board = _bundle(("-1.0", "0", "2.2"), ("-1.0", "0", "1.0"))
+    # Improved pair search can otherwise take a long path around the tuned
+    # neighbour. Bound this fixture's allowed length so the intended blocked
+    # route must exercise tuning rollback; do not disable the better search.
+    board = replace(board, net_routing_rules=tuple(
+        replace(rule, max_length_nm=nm_from_mm(14)) for rule in board.net_routing_rules))
     guides = route_global(board)
     changed = []
     original = critical._tune_bundle_pairs
