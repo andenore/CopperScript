@@ -154,3 +154,11 @@ may have a shorter final approach, so a negative hint never deletes a port.
 The original port inventory, combinations cap, search slots and aggregate
 state budgets remain unchanged; complete escaped-board checks still gate
 every candidate.
+
+
+When legacy skew tuning creates a spacing violation, exact pair admission can
+try at most two existing clearance-aware tuning proposals. These operate on
+the complete disposable group, including duplicate-contact branches, with
+all earlier owners retained as obstacles. Source contacts, reserved layers,
+length/skew, via counts and physical clearance are validated afresh. Rejected
+proposals leave no copper behind; this adds no maze searches or search states.

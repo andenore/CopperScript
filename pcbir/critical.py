@@ -1418,18 +1418,44 @@ def _route_pair_group(
                          else (paired_candidates, paired_via_candidates))
         rejected: list[tuple[str, str]] = []
         def checked_candidate(candidate):
-            attempt, proposed_tracks, proposed_vias = _route_pair(
-                board, first, second, routes,
-                exact_tracks=((*first_branches, *candidate.first), (*second_branches, *candidate.second)),
-                exact_via_pairs=(*branch_via_pairs, *candidate.via_pairs),
-                exact_return_vias=(*branch_return_vias, *candidate.return_vias),
-                tuning_board=search_board)
-            attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
-                board, attempt, proposed_tracks, proposed_vias, rules)
+            complete = replace(candidate,
+                first=(*first_branches, *candidate.first),
+                second=(*second_branches, *candidate.second),
+                via_pairs=(*branch_via_pairs, *candidate.via_pairs),
+                return_vias=(*branch_return_vias, *candidate.return_vias))
             candidate_blockers = set()
-            attempt, proposed_tracks, proposed_vias = _validate_candidate(
-                board, attempt, proposed_tracks, proposed_vias, tracks, vias,
-                spacing_nets=candidate_blockers)
+            def admit(proposal):
+                attempt, proposed_tracks, proposed_vias = _route_pair(
+                    board, first, second, routes,
+                    exact_tracks=(proposal.first, proposal.second),
+                    exact_via_pairs=proposal.via_pairs,
+                    exact_return_vias=proposal.return_vias,
+                    tuning_board=search_board)
+                attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
+                    board, attempt, proposed_tracks, proposed_vias, rules)
+                return _validate_candidate(board, attempt, proposed_tracks,
+                    proposed_vias, tracks, vias, spacing_nets=candidate_blockers)
+            attempt, proposed_tracks, proposed_vias = admit(complete)
+            if (not attempt.connected and attempt.tuned_length_nm > 0
+                    and _rejection_gate(attempt.diagnostics)[0] in _SPACING_GATES):
+                # The legacy geometric skew bump may hit a foreign land.
+                # Retry at most two existing clearance-aware tuning proposals
+                # on the complete generated group, including local branches.
+                # Prior owners remain obstacles; every source contact, via,
+                # length and physical gate is checked again before adoption.
+                from .pair_terminals import _matched_local_candidates
+                held = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+                for tuned in _matched_local_candidates(held, first, second, complete):
+                    if tuned is complete:
+                        continue
+                    revised, revised_tracks, revised_vias = admit(tuned)
+                    if not revised.connected:
+                        continue
+                    added = (_track_length(tuned.first) + _track_length(tuned.second)
+                             - _track_length(complete.first) - _track_length(complete.second))
+                    attempt = replace(revised, tuned_length_nm=revised.tuned_length_nm + added)
+                    proposed_tracks, proposed_vias = revised_tracks, revised_vias
+                    break
             if attempt.connected:
                 if crossing is not None:
                     attempt = replace(attempt, strategy="planned_crossing")
