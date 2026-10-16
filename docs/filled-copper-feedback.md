@@ -484,3 +484,9 @@ keeps the existing retained-port and joint-search bounds. Breakout regions,
 normal trace profiles, source keepouts, ordinary drill clearance, return-via
 requirements and final length/skew gates remain unchanged. Legal launch sites
 alone do not establish simultaneous or end-to-end pair connectivity.
+
+Inner bypass bridges consider verified existing destination feeds before new
+via sites, within the same shared eight-launch budget. Both terminal-to-via
+paths must use original copper edges; unconnected same-net vias are not feeds.
+Existing objects survive both admission and rollback, and repeated sites do
+not consume additional bridge trials.

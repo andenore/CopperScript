@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass, replace
 from decimal import Decimal
-from itertools import islice
+from itertools import chain, islice
 from functools import lru_cache
 from ._cache import IdentityKey
 from math import hypot
@@ -416,7 +416,7 @@ def _existing_launches(board, a, b, net, width, index, options, site_limit):
 
 
 
-def _inner_connections(board, selected, destination, net, width, options, site_limit, work):
+def _inner_connections(board, selected, origin, destination, net, width, options, site_limit, work):
     """Bounded explicit two-via alternatives when the destination surface blocks.
 
     Eight destination-launch trials are shared by the entire supply/return
@@ -434,15 +434,24 @@ def _inner_connections(board, selected, destination, net, width, options, site_l
     index = RoutingClearanceIndex(board)
     config = replace(options, step_nm=options.refinement_step_nm)
     endpoints = islice(_package_candidates(board, destination[0], destination[1], config), site_limit)
-    choices = _legal_choices(board, index, net, destination[2].position,
-                            destination[0], destination[1], endpoints)
+    # Existing destination launches consume the same shared eight trials.
+    # Require an exact original-edge path from that terminal to the via;
+    # same-net vias and declared areas alone provide no connectivity evidence.
+    existing = _existing_launches(board, destination, origin, net, width,
+                                  index, options, site_limit)
+    fresh_choices = _legal_choices(board, index, net, destination[2].position,
+                                  destination[0], destination[1], endpoints)
+    choices = chain(existing, fresh_choices)
+    seen = set()
     for tail, proposed in choices:
         if work.inner_bridges >= 8:
             return
         endpoint = tail[-1].end
         via = proposed or next((v for v in board.vias if v.net == net and v.position == endpoint), None)
-        if via is None or via.position == selected.position or not _normal_via(board, index, via):
+        if (via is None or via.position == selected.position or via.position in seen
+                or not _normal_via(board, index, via)):
             continue
+        seen.add(via.position)
         work.inner_bridges += 1
         additions = tuple(t for t in tail if not track_is_contained(t, board.tracks))
         candidate = replace(board, tracks=(*board.tracks, *additions),
@@ -533,7 +542,7 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
             if not _budget_reason(candidate,net):
                 yield candidate
         if not tails:
-            yield from _inner_connections(launched, selected, b, net, width,
+            yield from _inner_connections(launched, selected, a, b, net, width,
                                           options, site_limit, work)
 
 
