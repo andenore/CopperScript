@@ -449,7 +449,9 @@ partial proposals: disposable routing metadata is normalized before generating
 bypass witnesses, while actual probe copper/fills remain obstacles. After probe
 copper is stripped, original witness paths and exact generated ownership are
 freshly admitted. Borrowed disposable return copper rejects the proposal within
-its existing trial slot; it does not abort routing or become ordinary ownership.
+its existing trial slot unless a typed plane-contact proposal explicitly transfers
+its exact generated edges under the complete-witness rules below. Unowned copper
+never becomes ordinary ownership merely because its net label matches.
 
 ## Per-association post-fill observations
 
@@ -508,3 +510,20 @@ and clearance-index identities, the complete ordered insertion ledger and all
 index routing rules. Added obstacles or changed rules invalidate reuse. Path
 graphs, endpoint selection, state bounds and complete witnesses are rebuilt;
 no changed trial inherits a previous board's clearance proof.
+
+
+Already verified bypasses on general supply nets whose authored priority exceeds
+every critical-net priority can retain their exact generated ownership through
+clean critical probes. Original admitted paths and fresh canonical paths must
+survive selection and rebasing; stale sources or missing occurrences reject the
+trial. This uses the existing pattern/search allowance, not a new repair loop.
+
+Full ordinary proposals may transfer contacts from a typed plane-stitch proposal
+only when the exact source prefix, ordered occurrences, generated suffix and
+counts validate. A contact must lie on a complete explicit bypass supply/return
+witness; copied source copper and unused contacts cannot transfer. After all
+other probe copper is stripped, original witnesses, ordinary exits and complete
+bypass reservations are revalidated. Failure retains the complete incumbent.
+Zone outlines, same-net labels and native fill observations do not substitute
+for these explicit paths. Required arrays and immutable macro/source copper
+retain their original ownership.

@@ -328,9 +328,10 @@ def _negotiate_patterns(
 ) -> PackageAccessResult:
     """Use alternate owners as obstacles only while proposing ordinary exits.
 
-    Probe copper is never committed. Only fanout-owned stubs are rebased onto
-    the original macro-materialized source; critical profiles and plane contacts
-    are then rebuilt against those stubs. Failed trials retain the full incumbent.
+    Only exact ordinary ownership is rebased onto the macro-materialized source.
+    Explicit higher-priority bypass reservations survive clean probes. Freshly
+    witnessed plane contacts may transfer from a typed proposal into bypass
+    ownership; other probe copper is discarded. Failed trials keep the incumbent.
     """
     plane_pending = bool(baseline.plane_stitch and baseline.plane_stitch.pending_pads)
     ordinary_pending = bool(baseline.fanout.pending_pads or baseline.boundary and baseline.boundary.pending_pads)
@@ -381,9 +382,11 @@ def _negotiate_patterns(
     # expensive pair search. Strip only the verified fanout prefix; ownership,
     # source copper and all critical geometry remain explicit. This reuse is a
     # proposal optimization, never a substitute for final owner revalidation.
+    from .priority_bypass import priority_bypass_reservations
+    priority_bypasses = priority_bypass_reservations(owner_board, baseline.fanout)
     prefix_tracks = (*owner_board.tracks, *baseline.fanout.created_tracks)
     prefix_vias = (*owner_board.vias, *baseline.fanout.created_vias)
-    reuse = (not baseline.failed_critical_nets
+    reuse = (priority_bypasses is None and not baseline.failed_critical_nets
              and not baseline.critical.plane_reservation_track_count
              and not baseline.critical.plane_reservation_via_count
              and baseline.critical.status is not CriticalRoutingStatus.FAILED
@@ -400,7 +403,7 @@ def _negotiate_patterns(
             routing_fingerprint=_critical_fingerprint(baseline.global_route.routing_fingerprint,
                                                      list(tracks), list(vias), list(baseline.critical.nets)))
     else:
-        probe = _critical_search(baseline.source, baseline.global_route, None,
+        probe = _critical_search(baseline.source, baseline.global_route, priority_bypasses,
                                  on_progress, pair_state_limit, search_work,
                                  retained_critical=baseline.critical, retained_accesses=baseline.fanout)
     emit(on_progress, "package_probe_drc", "started")
@@ -449,11 +452,14 @@ def _negotiate_patterns(
                      search_tier=search_tier)
                 continue
         displaced, retained_tracks, retained_vias = (), 0, 0
+        plane_contacts = None
+        from .plane_bypass_transfer import PlaneContactProposal
         emit(on_progress, "package_pattern_trial", "started", index=len(records) + 1, strategy=strategy,
              search_tier=search_tier)
         if strategy == "critical_and_plane_first":
             emit(on_progress, "package_plane_stitch", "started", purpose="proposal_obstacles")
             stitched = stitch_zone_pads(probe.board, plane_options)
+            plane_contacts = PlaneContactProposal(probe.board, stitched)
             emit(on_progress, "package_plane_stitch", "finished", purpose="proposal_obstacles",
                  pending=len(stitched.pending_pads))
             obstacles = stitched.board
@@ -464,7 +470,9 @@ def _negotiate_patterns(
                 strategies[1] = "plane_first"
         elif strategy == "plane_first":
             emit(on_progress, "package_plane_stitch", "started", purpose="plane_first_proposal")
-            stitched = stitch_zone_pads(owner_board, plane_options)
+            plane_seed = priority_bypasses.board if priority_bypasses else owner_board
+            stitched = stitch_zone_pads(plane_seed, plane_options)
+            plane_contacts = PlaneContactProposal(plane_seed, stitched)
             emit(on_progress, "package_plane_stitch", "finished", purpose="plane_first_proposal",
                  pending=len(stitched.pending_pads))
             obstacles = stitched.board
@@ -477,7 +485,13 @@ def _negotiate_patterns(
                 baseline.fanout, owner_board, obstacles, fanout_options, options.maximum_partial_owner_nets,
                 strategy == "partial_bypass", failed_bypass_capacitors)
         else:
-            proposed, partial_outcome = _full_ordinary_pattern(owner_board, obstacles, fanout_options)
+            retained_kwargs = {"retained": priority_bypasses} if priority_bypasses is not None else {}
+            if plane_contacts is not None:
+                retained_kwargs["plane_contacts"] = plane_contacts
+            proposed, partial_outcome = _full_ordinary_pattern(owner_board, obstacles, fanout_options,
+                                                                **retained_kwargs)
+            if priority_bypasses is not None:
+                retained_tracks, retained_vias = len(priority_bypasses.created_tracks), len(priority_bypasses.created_vias)
         emit(on_progress, "package_pattern_fanout", "finished", strategy=strategy,
              escaped=len(proposed.accesses) if proposed else 0,
              pending=len(proposed.pending_pads) if proposed else 0,
@@ -640,25 +654,36 @@ def _ordinary_probe_frame(owner, obstacles):
     return replace(obstacles, metadata=owner.metadata)
 
 
-def _full_ordinary_pattern(owner, obstacles, settings):
+def _full_ordinary_pattern(owner, obstacles, settings, *, retained=None, plane_contacts=None):
     """Generate against disposable copper, then admit only owned contributions.
 
     Temporary routing metadata must not become the source context of newly
-    generated witnesses. A path that borrows disposable copper must fail fresh
-    admission after that copper is removed, without aborting the whole pipeline.
+    generated witnesses. Typed plane proposals can transfer exact contact edges
+    used by complete bypass witnesses. Remaining disposable copper is removed;
+    dependent paths must fail fresh admission without aborting the pipeline.
     """
     frame = _ordinary_probe_frame(owner, obstacles)
     if frame is None:
         return None, "stale_probe_source_intent"
     proposed = route_fanout(frame, settings)
-    proposed = replace(proposed, board=replace(owner,
-        tracks=(*owner.tracks, *proposed.created_tracks),
-        vias=(*owner.vias, *proposed.created_vias)))
+    if plane_contacts is not None:
+        from .plane_bypass_transfer import transfer_witnessed_plane_contacts
+        proposed = transfer_witnessed_plane_contacts(owner, frame, proposed, plane_contacts)
+        if proposed is None:
+            return None, "invalid_plane_contact_ownership"
+    from .priority_bypass import merge_retained_bypasses
+    proposed = merge_retained_bypasses(owner, frame, proposed, retained)
+    if proposed is None:
+        return None, "lost_priority_bypass_ownership"
     from .decoupling_paths import refresh_crosslayer_witnesses
     witnesses, reason = refresh_crosslayer_witnesses(proposed.board, proposed.decoupling_witnesses)
     if reason:
         return None, "stale_bypass_witness"
     proposed = replace(proposed, decoupling_witnesses=witnesses)
+    if plane_contacts is not None:
+        from .contact_owner_regeneration import _valid_exits
+        if not _valid_exits(proposed.board, proposed):
+            return None, "lost_ordinary_access"
     from .bypass_reservations import verified_bypass_reservations
     if verified_bypass_reservations(owner, proposed)[2] is not None:
         return None, "lost_bypass_connection"
