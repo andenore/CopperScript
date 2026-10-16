@@ -16,7 +16,7 @@ from math import hypot
 
 from .physical import (BoardSide, CopperLayer, DecouplingLink, PadKind,
                        PadReference, PhysicalBoard, Point, RouteKind,
-                       TrackSegment, Via, ViaKind)
+                       TrackSegment, Via, ViaKind, PadShape)
 from .drc import DrcSeverity, physical_board_digest, run_physical_drc
 from .fanout import FanoutOptions, _package_candidates, _legal_choices, _two_leg_candidates
 from .hard_macros import macro_owned_pads
@@ -405,7 +405,7 @@ def refresh_crosslayer_witnesses(board, witnesses, *, index=None, replacing_link
 @dataclass(slots=True)
 class _ConnectionWork:
     # One allowance per outer transaction, shared by every lazy connection
-    # generator, supply, return and return target. Never a new source maze.
+    # generator, supply, return and return target. No extra state allowance.
     local_paths: int = 0
     inner_bridges: int = 0
 
@@ -448,6 +448,43 @@ def _local_launch_sites(board, placement, pad, options, site_limit):
     ranked = sorted(sites, key=lambda point:
         (point.x_nm-start.x_nm)**2 + (point.y_nm-start.y_nm)**2)
     yield from ranked[:site_limit]
+
+
+def _cell_maze_launches(board, origin, net, width, options, site_limit, index, work):
+    """Blocked circular-array exits can reach actual farther four-land cells.
+
+    Only after all ordinary source launches fail. At most site_limit nearest
+    land origins contribute four cells each; at most site_limit cells receive
+    exact via checks. Maze attempts share the existing four local-path slots.
+    Existing source copper, pad geometry and package identity are never changed.
+    """
+    from .fanout import _interstitial_sites
+    if not options.maze_escapes or origin[1].shape is not PadShape.CIRCLE:
+        return
+    start = origin[2].position
+    def distance(point):
+        return (point.x_nm-start.x_nm)**2 + (point.y_nm-start.y_nm)**2
+    pads = sorted((pad for pad in board.footprints[origin[0].footprint].pads
+                   if pad.kind is PadKind.SMD and pad.shape is PadShape.CIRCLE),
+                  key=lambda pad: (distance(transformed_local_point(origin[0],pad.position)),
+                                   pad.position.x_nm,pad.position.y_nm))[:site_limit]
+    sites = {point for pad in pads for point in _interstitial_sites(board,origin[0],pad,options)
+             if distance(point) <= options.maximum_radius_nm**2}
+    sites = sorted(sites,key=lambda point: (distance(point),point.x_nm,point.y_nm))[:site_limit]
+    span = physical_via_span(board,board.stackup.copper_layers[0],board.stackup.copper_layers[-1])
+    if span is None:
+        return
+    for point in sites:
+        if work.local_paths >= 4:
+            return
+        via = Via(net,point,board.rules.default_via_size_nm,board.rules.default_via_drill_nm,*span)
+        if any(v.position == point for v in board.vias) or not _normal_via(board,index,via):
+            continue
+        work.local_paths += 1
+        path = local_access_path(board,index,net,start,point,origin[2].layer,width,
+            step_nm=100_000,detour_nm=1_000_000,maximum_states=4000)
+        if path:
+            yield path,via
 
 
 def _inner_connections(board, selected, origin, destination, net, width, options, site_limit, work):
@@ -552,7 +589,12 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
                            and _normal_via(board,index,v)),None)
             selected=via or existing
             if selected is not None and _normal_via(board,index,selected):
+                admitted += 1
                 yield path,selected,False
+        if not admitted:
+            for path,via in islice(_cell_maze_launches(board,a,net,width,options,
+                                      site_limit,index,work),launch_limit):
+                yield path,via,False
 
     for path,selected,reused in launches():
         tracks=tuple(dict.fromkeys(t for t in path if not track_is_contained(t, board.tracks)))
@@ -595,7 +637,9 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
     for verified existing launches or bounded inner bridges after cheap paths
     fail and when the fanout maze option is enabled. Up to eight destination
     launch trials can bridge a blocked surface on permitted inner layers using
-    two ordinary through vias. Source paths are recognized, never searched.
+    two ordinary through vias. If every ordinary launch is absent, circular
+    arrays may spend remaining local-path slots reaching farther actual
+    four-land cells. Original source paths remain unchanged and recognized.
     Rejection returns the original board and no adopted generated copper.
     """
     if min(maximum_launch_candidates,maximum_return_candidates,maximum_site_candidates,

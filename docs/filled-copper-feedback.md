@@ -392,12 +392,18 @@ recognizing an exact, legal copper path from the actual declared source pad.
 Installed-component internal connections do not establish this path. Existing
 sites are examined within the finite fanout radius and site count, and consume
 the same launch allowance before fresh launches. One proposal transaction
-shares at most four local tail searches (100 um steps, 1 mm detour, 4000 states
-each) across supply, return and return targets. These require an already
-verified launch, no legal cheap tail, and the fanout maze option. Exact complete
-paths, protected owners, created-edge coverage and final physical gates remain
-mandatory. This helper requires existing source copper; it alone does not prove
-the standard fanout sequence or a consumer board has closed.
+shares at most four local searches (100 um steps, 1 mm detour, 4000 states
+each) across supply, return and return targets. Existing-launch tails and
+bounded inner bridges share this allowance. When every ordinary source launch
+is absent and the fanout maze option is enabled, a circular array may use
+remaining slots to reach farther actual four-land cells. At most the site cap
+of nearest land origins contributes four cells each; at most the site cap of
+nearby cells receives exact via checks, and accepted launches remain within
+the original launch cap. Incomplete cells confer no access. Original source
+tracks/vias are preserved; every complete supply/return path, protected owner,
+created-edge coverage and physical gate is checked before adoption. A legal
+local candidate alone does not establish standard-pipeline or board closure.
+
 
 
 After ordinary fanout passes its materialization gate, one explicit late bypass
