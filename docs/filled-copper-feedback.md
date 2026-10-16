@@ -589,3 +589,17 @@ maze states or complete-proposal budget. Analytic inventory materialization
 is bounded to eight times the site cap plus four package-derived sites.
 All old paths, original-edge ownership and complete supply/return gates remain
 mandatory; a rejected proposal contributes no copper.
+
+
+### New bypass proposal tails
+
+A complete bypass witness can traverse only a subsegment of a generated track.
+Before adopting a cross-layer proposal, discard its wholly unused new tracks
+and vias and clip new track endpoints to their witnessed outer step span.
+Otherwise an unused extension can survive the ownership check and become a
+native dangling-track finding. This operation is confined to the uncommitted
+proposal suffix; every input/source occurrence, including a partially used
+shared feed, remains identical. Rebuild the candidate and freshly validate
+the complete supply/return paths, all protected original witnesses, full
+new-edge coverage and whole-board DRC. A failed revalidation rejects the
+proposal. No accepted owner is trimmed retroactively.

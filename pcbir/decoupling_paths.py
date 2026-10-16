@@ -631,6 +631,33 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
                                           options, site_limit, work)
 
 
+def _witnessed_proposal_tracks(tracks, measured):
+    """Trim only new proposal tails outside the exact witnessed step span.
+
+    Input/source edges are never passed here. A fresh complete-path validation
+    follows any change, before the proposal can acquire ownership.
+    """
+    used = defaultdict(set)
+    for path in (measured.supply_path, measured.return_path):
+        for step in path.steps:
+            if isinstance(step.edge, TrackSegment):
+                used[id(step.edge)].update((step.start.position, step.end.position))
+    result = []
+    for track in tracks:
+        points = used.get(id(track))
+        if not points:
+            continue
+        dx, dy = track.end.x_nm-track.start.x_nm, track.end.y_nm-track.start.y_nm
+        ordered = sorted(points, key=lambda point:
+            (point.x_nm-track.start.x_nm)*dx + (point.y_nm-track.start.y_nm)*dy)
+        first, last = ordered[0], ordered[-1]
+        if first == last:
+            continue
+        result.append(track if first == track.start and last == track.end else
+                      replace(track, start=first, end=last))
+    return tuple(result)
+
+
 def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                                  maximum_launch_candidates=8, maximum_return_candidates=8,
                                  maximum_site_candidates=64, maximum_proposals=64,
@@ -710,11 +737,10 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                 if measured.witness is not None and not any(validate_crosslayer_witness(candidate,w,index=fresh) for w in protected):
                     created_tracks=candidate.tracks[len(board.tracks):]
                     created_vias=candidate.vias[len(board.vias):]
-                    covered_tracks={id(step.edge) for path in (measured.supply_path,measured.return_path)
-                                    for step in path.steps if isinstance(step.edge,TrackSegment)}
+                    witnessed_tracks=_witnessed_proposal_tracks(created_tracks,measured)
                     covered_vias={id(step.edge) for path in (measured.supply_path,measured.return_path)
                                   for step in path.steps if isinstance(step.edge,Via)}
-                    coverage=(all(id(t) in covered_tracks for t in created_tracks)
+                    coverage=(witnessed_tracks == created_tracks
                               and all(id(v) in covered_vias for v in created_vias))
                     uncovered |= not coverage
                     if not coverage:
@@ -727,7 +753,7 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                                 or len(candidate.tracks) < len(board.tracks)
                                 or len(candidate.vias) < len(board.vias)):
                             continue
-                        created_tracks=tuple(t for t in created_tracks if id(t) in covered_tracks)
+                        created_tracks=witnessed_tracks
                         created_vias=tuple(v for v in created_vias if id(v) in covered_vias)
                         candidate=replace(candidate, tracks=(*board.tracks,*created_tracks),
                                           vias=(*board.vias,*created_vias))
@@ -737,11 +763,10 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                         if (measured.witness is None
                                 or any(validate_crosslayer_witness(candidate,w,index=fresh) for w in protected)):
                             continue
-                        covered_tracks={id(step.edge) for path in (measured.supply_path,measured.return_path)
-                                        for step in path.steps if isinstance(step.edge,TrackSegment)}
+                        witnessed_tracks=_witnessed_proposal_tracks(created_tracks,measured)
                         covered_vias={id(step.edge) for path in (measured.supply_path,measured.return_path)
                                       for step in path.steps if isinstance(step.edge,Via)}
-                        coverage=(all(id(t) in covered_tracks for t in created_tracks)
+                        coverage=(witnessed_tracks == created_tracks
                                   and all(id(v) in covered_vias for v in created_vias))
                     exact=(coverage
                            and all(_track_ok(candidate,fresh,t,t.net) for t in created_tracks)

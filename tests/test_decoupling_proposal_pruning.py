@@ -71,3 +71,36 @@ def test_complete_proposal_keeps_fresh_baseline_and_candidate_drc(monkeypatch):
     assert result.witness is not None
     assert len(calls) >= 2 and calls[0] is board and calls[-1] is result.board
     assert sum(candidate is board for candidate in calls) == 1
+
+
+@pytest.mark.parametrize("reverse_edge", (False, True))
+def test_only_used_span_of_new_witness_track_is_adopted(monkeypatch, reverse_edge):
+    board, link = fixture()
+    original = paths._connections
+    extended = []
+    def candidates(current, first, second, net, *args, **kwargs):
+        for candidate in original(current, first, second, net, *args, **kwargs):
+            if net == link.return_net:
+                endpoint = paths._land(candidate, link.return_pad)[2].position
+                target = next(t for t in candidate.tracks[len(current.tracks):]
+                              if t.end == endpoint and t.layer is CopperLayer.BACK)
+                dx = (target.end.x_nm > target.start.x_nm)-(target.end.x_nm < target.start.x_nm)
+                dy = (target.end.y_nm > target.start.y_nm)-(target.end.y_nm < target.start.y_nm)
+                beyond = Point(endpoint.x_nm+500000*dx, endpoint.y_nm+500000*dy)
+                extra = replace(target, end=beyond)
+                if reverse_edge:
+                    extra = replace(extra, start=extra.end, end=extra.start)
+                extended.append(extra)
+                candidate = replace(candidate, tracks=tuple(extra if t is target else t
+                                                             for t in candidate.tracks))
+            yield candidate
+    monkeypatch.setattr(paths, "_connections", candidates)
+    result = paths.propose_crosslayer_decoupling(board, link)
+    assert result.witness is not None, result.reason
+    assert extended and all(t not in result.board.tracks for t in extended)
+    for track in result.created_tracks:
+        points = {node.position for path in (result.supply_path, result.return_path)
+                  for step in path.steps if step.edge is track for node in (step.start, step.end)}
+        assert track.start in points and track.end in points
+    assert paths.validate_crosslayer_witness(result.board, result.witness) == ""
+    assert result.board.placements is board.placements
