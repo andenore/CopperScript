@@ -358,6 +358,25 @@ def _pair_profile(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule:
     return width, offset, clearance, layer, partners
 
 
+def _departure_preferences(board, groups, first, second, width, offset,
+                           clearance, layer, pitch):
+    """Rank clear onward collars first without pruning short goal approaches.
+
+    A full-pitch departure is mandatory at the start, but not at the goal:
+    its last approach may be shorter. Use this bounded geometric lookahead
+    only as a preference and retain every existing port combination. The
+    caller still checks the complete escaped board before spending a slot.
+    """
+    preferences = {}
+    for group in groups:
+        for port in group:
+            escaped = replace(board, tracks=(*board.tracks, *port.first, *port.second))
+            preferences[id(port)] = int(not _can_depart(escaped,
+                RoutingClearanceIndex(escaped), first, second, port,
+                width, offset, clearance, layer, pitch))
+    return preferences
+
+
 def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule: NetRoutingRule,
                       first_guide: GlobalNetRoute, second_guide: GlobalNetRoute, *,
                       maximum_searches: int = 8, maximum_states: int = 30_000,
@@ -381,8 +400,11 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
     groups = [_ports(board, index, first_rule.net, second_rule.net, access.pad_position,
                      partners[access.pad].pad_position, access.pad.component,
                      width, offset, clearance, layer) for access in accesses]
+    onward = _departure_preferences(board, groups, first_rule.net, second_rule.net,
+                                    width, offset, clearance, layer, pitch_nm)
     combinations = sorted([(a, b) for a, b in product(*groups) if a.sign == -b.sign],
-                          key=lambda pair: (pair[0].preference + pair[1].preference,
+                          key=lambda pair: (onward[id(pair[0])] + onward[id(pair[1])],
+                                            pair[0].preference + pair[1].preference,
                                             hypot(pair[0].center.x_nm - pair[1].center.x_nm,
                                                   pair[0].center.y_nm - pair[1].center.y_nm),
                                             pair[0].center.x_nm, pair[0].center.y_nm,

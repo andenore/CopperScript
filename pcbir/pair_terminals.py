@@ -36,6 +36,19 @@ def terminal_copper_layers(board, reference):
     return frozenset()
 
 
+def _main_contact(board, rule, terminals):
+    """Prefer a joined contact that offers more legal main-route layers.
+
+    Every local contact still needs its freshly checked branch. This only
+    chooses the main endpoint after those contacts are joined; it cannot
+    remove a source terminal or grant a layer through an imagined via.
+    """
+    from .routing_layers import routing_layers
+    allowed = set(routing_layers(board, rule.net, rule))
+    return min(terminals, key=lambda a:(
+        -len(terminal_copper_layers(board, a.pad).intersection(allowed)), str(a.pad)))
+
+
 @dataclass(frozen=True, slots=True)
 class PairTerminalPreparation:
     """Immutable local-work evidence; elapsed time is excluded from equality.
@@ -186,7 +199,7 @@ def _surface_pair_terminals(board, first, second, routes):
         anchors=[]
         branches=[]
         for component,terminals in sorted(groups.items()):
-            anchor=min(terminals,key=lambda a:str(a.pad))
+            anchor=_main_contact(board, rule, terminals)
             anchors.append(anchor)
             for other in sorted(terminals,key=lambda a:str(a.pad)):
                 if other is anchor: continue
@@ -311,8 +324,8 @@ def _paired_local_contacts(board, first, second, *, report=None):
                                       set(finding.nets) - {first.net, second.net})
                     continue
                 normalized = [replace(g, connected=False, accesses=tuple(
-                    min(items,key=lambda a:str(a.pad)) for _,items in sorted(grouped.items())))
-                    for g,(grouped,_) in zip(guides,groups)]
+                    _main_contact(board, rule, items) for _,items in sorted(grouped.items())))
+                    for rule,g,(grouped,_) in zip((first,second),guides,groups)]
                 return ({first.net:normalized[0], second.net:normalized[1]},
                         branch_a, branch_b, candidate.via_pairs, candidate.return_vias)
     report.port_pairs, report.searches = stats.port_pairs, stats.searches

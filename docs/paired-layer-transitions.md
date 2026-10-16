@@ -139,3 +139,18 @@ aggregate state budgets, return-via obligations and fresh owner validation
 remain unchanged. Missing, ambiguous, aperture and unplated contacts grant no
 electrical access. This is geometric contact support, not connector-launch or
 plated-barrel signal-integrity qualification.
+
+
+Joined duplicate contacts prefer the terminal with the largest intersection
+of actual copper contact layers and source-permitted routing layers. All
+contacts still require fresh local branch connectivity; failed main searches
+roll back those branches. Equivalent single-layer contacts keep deterministic
+identity ordering. No source pad is omitted.
+
+The same-layer pair family ranks both endpoint collars by a checked forward
+pitch before existing geometric preferences. This avoids exhausting the
+bounded maze allowance on a goal still buried among package pads. The goal
+may have a shorter final approach, so a negative hint never deletes a port.
+The original port inventory, combinations cap, search slots and aggregate
+state budgets remain unchanged; complete escaped-board checks still gate
+every candidate.
