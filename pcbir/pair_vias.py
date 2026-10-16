@@ -34,6 +34,7 @@ class _Transition:
     returns: tuple[Via, ...]
     # Caller's site preference (lower first); 0 unless a site rank is given.
     rank: int = 0
+    outer: bool = False
 
 
 def transition_spacing(board: PhysicalBoard, first: NetRoutingRule,
@@ -247,6 +248,7 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                  first_position: Point, second_position: Point, component: str,
                  surface: CopperLayer, layer: CopperLayer,
                  site_rank: Callable[[tuple[Via, ...]], int | None] | None = None,
+                 *, include_outer: bool = False,
                  ) -> tuple[_Transition, ...]:
     span = physical_via_span(board, surface, layer)
     if span is None:
@@ -260,13 +262,14 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                   component, width, (transition_spacing(board, first, second)+1)//2,
                   clearance, surface)
     results = []
-    # Short collars retain priority. If all are rejected by actual transition
-    # geometry, try four bounded longer collars beyond a back-side pad bank.
+    # Local callers retain short-collar-first fallback. Joint channel search
+    # also samples four outer collars beyond an opposite-side pad bank, even
+    # when legal short collars exist but lead into isolated routing pockets.
     # These remain explicit source-profiled tracks, not wider breakout regions.
     # No local maze allowance is added by this fallback.
     for family in range(2):
         if family:
-            if results:
+            if results and not include_outer:
                 break
             wide = _ports(board, index, first.net, second.net, first_position, second_position,
                           component, width, (transition_spacing(board, first, second)+1)//2,
@@ -295,21 +298,64 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                                 width, offset, clearance, layer):
                 results.append(_Transition(replace(inner,
                     first=(*collar.first, *inner.first), second=(*collar.second, *inner.second),
-                    preference=collar.preference+inner.preference), pair, returns, rank))
+                    preference=collar.preference+inner.preference), pair, returns, rank, bool(family)))
     # Preserve orientation diversity, then short collars; domain bound is
     # independent of maze expansion and never mutates previously locked copper.
     ordered = sorted(results, key=lambda t: (t.rank, t.port.preference,
         sum(hypot(s.end.x_nm-s.start.x_nm, s.end.y_nm-s.start.y_nm)
             for s in (*t.port.first, *t.port.second)), t.port.center.x_nm,
         t.port.center.y_nm))
-    counts = {}
-    retained = []
+    domains = {}
     for item in ordered:
-        key = item.port.heading, item.port.sign
-        if counts.get(key, 0) < 16:
-            retained.append(item)
-            counts[key] = counts.get(key, 0) + 1
-    return tuple(retained)
+        domains.setdefault((item.port.heading, item.port.sign), {False: [], True: []})[item.outer].append(item)
+    selected = set()
+    for families in domains.values():
+        # The same 16 slots per heading/sign cover both short and outer sites.
+        # An absent family lends its slots to the other; no domain grows.
+        for item in _interleave((families[False], families[True]), 16):
+            selected.add(id(item))
+    return tuple(item for item in ordered if id(item) in selected)
+
+
+def _interleave(groups, limit):
+    """Stable family diversity inside an existing finite candidate allowance."""
+    iterators = [iter(group) for group in groups]
+    emitted = 0
+    while iterators and emitted < limit:
+        remaining = []
+        for iterator in iterators:
+            item = next(iterator, None)
+            if item is None:
+                continue
+            yield item
+            emitted += 1
+            if emitted == limit:
+                return
+            remaining.append(iterator)
+        iterators = remaining
+
+
+def _facing_turns(first, second):
+    def turns(port, target):
+        dx, dy = target.center.x_nm-port.center.x_nm, target.center.y_nm-port.center.y_nm
+        desired = max(range(8), key=lambda h: (_HEADS[h][0]*dx+_HEADS[h][1]*dy)/hypot(*_HEADS[h]))
+        return min((port.heading-desired) % 8, (desired-port.heading) % 8)
+    return turns(first, second)+turns(second, first)
+
+
+def _transition_pairs(groups):
+    families = {(False, False): [], (True, True): [], (False, True): [], (True, False): []}
+    for a, b in product(*groups):
+        if a.port.sign == -b.port.sign:
+            families[a.outer, b.outer].append((a, b))
+    def rank(pair):
+        a, b = pair
+        return (a.rank+b.rank, _facing_turns(a.port, b.port),
+                a.port.preference+b.port.preference,
+                hypot(a.port.center.x_nm-b.port.center.x_nm, a.port.center.y_nm-b.port.center.y_nm),
+                a.port.center.x_nm, a.port.center.y_nm, b.port.center.x_nm, b.port.center.y_nm)
+    ordered = tuple(sorted(group, key=rank) for group in families.values())
+    return sum(map(len, ordered)), tuple(_interleave(ordered, 128))
 
 
 def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: NetRoutingRule,
@@ -361,15 +407,11 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
         if not _remaining_states(stats, maximum_states, maximum_total_states):
             break
         groups = tuple(_transitions(board, first, second, a.pad_position,
-            partners[a.pad].pad_position, a.pad.component, surface, layer, site_rank)
+            partners[a.pad].pad_position, a.pad.component, surface, layer, site_rank,
+            include_outer=True)
             for a, surface in zip(accesses, surfaces))
-        combinations = sorted(((a,b) for a,b in product(*groups) if a.port.sign == -b.port.sign),
-            key=lambda pair: (pair[0].port.preference+pair[1].port.preference,
-                hypot(pair[0].port.center.x_nm-pair[1].port.center.x_nm,
-                      pair[0].port.center.y_nm-pair[1].port.center.y_nm),
-                pair[0].port.center.x_nm, pair[0].port.center.y_nm,
-                pair[1].port.center.x_nm, pair[1].port.center.y_nm))
-        stats.port_pairs += len(combinations)
+        total_pairs, combinations = _transition_pairs(groups)
+        stats.port_pairs += total_pairs
         searches_at_entry = stats.searches
         for ordinal,(a,b) in enumerate(combinations[:128],1):
             if stats.searches-searches_at_entry >= maximum_searches:

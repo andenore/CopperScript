@@ -478,10 +478,11 @@ The trimmed candidate receives a fresh clearance index, both complete path
 witnesses, protected-witness checks and physical DRC. A failed trim rolls back.
 Native fill observations remain separate from this explicit-path admission.
 
-Paired through-via preparation first tries the established short collars. If
-none produces a legal complete surface/via/return/other-layer transition, it
+Local paired through-via preparation first tries the established short collars.
+If none produces a legal complete surface/via/return/other-layer transition, it
 tries four longer collar distances (4 mm, 4.5 mm, 5 mm and 6 mm) to reach beyond
-opposite-side component banks. This fallback adds no local maze allowance and
+opposite-side component banks. Joint channel search samples both families, as
+described below. This preparation adds no local maze allowance and
 keeps the existing retained-port and joint-search bounds. Breakout regions,
 normal trace profiles, source keepouts, ordinary drill clearance, return-via
 requirements and final length/skew gates remain unchanged. Legal launch sites
@@ -546,3 +547,14 @@ completion. No ordinary owner is moved or rerouted. Complete incumbent paths,
 ports, source budgets, exact suffix ownership and physical DRC are rechecked;
 rejection returns the entire rebased incumbent. Per-link search limits remain
 unchanged and there is no recursive or repeated retry after that pass.
+
+
+Collinear paired lands may use either transverse lane order; both complete
+collars are checked against exact geometry. Joint paired-via search retains
+short and outer collar families inside the same 16-port heading/sign domains,
+128 candidate combinations and per-tier maze limits. Short/short, outer/outer
+and mixed endpoint families share those slots. Within each family, source site
+rank and target-facing headings precede collar preference and distance. This
+allows an outer escape when a locally legal short collar is trapped behind
+opposite-layer copper. Local terminal preparation keeps its short-first fallback.
+No signal polarity, layer permission, width, skew, return or via gate changes.

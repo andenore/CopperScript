@@ -223,8 +223,8 @@ def test_easy_via_pair_is_still_exactly_accepted_with_initial_cap(monkeypatch):
                 if f.severity.value == 'error' and f.code != 'DRC-ROUTE-INCOMPLETE']
 
 
-@pytest.mark.parametrize('initial', (60, 6000))
-def test_actual_package_preflight_resumes_or_falls_back_under_its_cap(monkeypatch, initial):
+@pytest.mark.parametrize('initial', (1, 60, 6000))
+def test_actual_package_preflight_uses_feasible_portal_or_falls_back_under_its_cap(monkeypatch, initial):
     from pcbir import PackageAccessOptions, preflight_package_access
     from pcbir.fanout import FanoutOptions
     # Suppress futile surface search only in this retained top-wall fixture;
@@ -236,12 +236,12 @@ def test_actual_package_preflight_resumes_or_falls_back_under_its_cap(monkeypatc
                                          initial_pair_state_limit=initial))
     assert result.ready and not result.hard_findings
     pair = result.critical.nets[0]
-    if initial == 6000:
+    if initial >= 60:
+        # Target-facing/family coverage now finds a legal portal before the
+        # old continuation was needed. Keep the actual aggregate cap strict.
         assert len(result.search_tiers) == 1
         assert result.search_tiers[0].ready and result.search_tiers[0].selected
         assert pair.pair_state_limit == initial and pair.search_states <= initial
-        assert pair.pair_resumed_states > 0 and pair.pair_resumed_portals > 0
-        assert pair.pair_searches == 6
     else:
         assert len(result.search_tiers) == 2
         assert not result.search_tiers[0].ready and result.search_tiers[1].ready
