@@ -476,3 +476,20 @@ was byte-identical (77 findings and 347 breakout records). One paired timing
 measured 5.36 s before and 3.35 s after the spacing optimization. This is a
 snapshot measurement, not a whole-route speed guarantee. Existing running
 jobs remain pinned to their original compiler.
+
+
+## Compact fresh bypass launches
+
+Fresh bypass launches now compare both existing bounded geometric sampling
+tiers before spending the finite launch slots. Their score is new launch
+Manhattan length plus remaining distance to the destination land, followed
+by new launch length and deterministic coordinates. Existing contained
+source tracks add no new length to that score. This is a local ranking
+heuristic, not a shortest-path or electrical loop-quality proof.
+
+Exact verified existing launches still consume their original slots first.
+Each radial/two-leg sampling pass retains the site cap, and launch,
+complete-proposal, shared local-path and inner-bridge allowances are unchanged.
+The fine tier is considered even when coarse rays already fill the slots;
+this may do more geometric sampling within the established maximum bounds.
+All complete-path, source-prefix, whole-net budget and fresh DRC gates remain.

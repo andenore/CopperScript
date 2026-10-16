@@ -577,14 +577,22 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
             endpoints = (_local_launch_sites(board,a[0],a[1],config,site_limit) if refinement
                          else islice(_package_candidates(board,a[0],a[1],config),site_limit))
             fresh.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],endpoints))
-            if len(fresh)>=remaining:
-                break
             if config.two_leg_escapes:
                 fresh.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],
                     islice(_two_leg_candidates(a[2].position,a[0].position,config),site_limit),multiple_orders=True))
-            if len(fresh)>=remaining:
-                break
-        for path,via in tuple(dict.fromkeys(fresh))[:remaining]:
+        # Coarse rays must not fill every launch slot before shorter refined
+        # sites are considered. Both existing bounded sampling tiers compete
+        # for the same slots; exact source launches keep their prior ownership.
+        def compact_score(choice):
+            path, via = choice
+            endpoint = path[-1].end
+            # Existing source feed segments add no copper or whole-net length.
+            # Charging them again can hide the only budget-feasible shared exit.
+            length = sum(abs(t.end.x_nm-t.start.x_nm)+abs(t.end.y_nm-t.start.y_nm)
+                         for t in path if not track_is_contained(t, board.tracks))
+            remaining_distance = abs(endpoint.x_nm-b[2].position.x_nm)+abs(endpoint.y_nm-b[2].position.y_nm)
+            return length+remaining_distance, length, endpoint.x_nm, endpoint.y_nm
+        for path,via in sorted(dict.fromkeys(fresh),key=compact_score)[:remaining]:
             existing=next((v for v in board.vias if v.net==net and v.position==path[-1].end
                            and _normal_via(board,index,v)),None)
             selected=via or existing
