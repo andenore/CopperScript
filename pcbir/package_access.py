@@ -291,6 +291,17 @@ def _access_result(
     return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard, boundary=boundary)
 
 
+def _missing_bypass_links(source, before, after):
+    """Fresh ordinary-owner predicate; later critical copper cannot repair it."""
+    names = {link.net for link in source.decoupling_links}
+    if not names:
+        return frozenset()
+    return (_verified_bypass_links(before.board, names,
+                admitted_witnesses=before.decoupling_witnesses)
+            - _verified_bypass_links(after.board, names,
+                admitted_witnesses=after.decoupling_witnesses))
+
+
 def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccessResult,
                          *, allow_equal: bool = False, failed_bypass_capacitors=None) -> str:
     required = {item.pad for item in baseline.fanout.pin_analysis}
@@ -316,17 +327,11 @@ def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccess
     # Equal pad-exit identities cannot prove a retained pin-associated feed.
     # The ordinary owner must still own complete local bypass paths before
     # critical/contact prefixes can be accepted or a placement can replace it.
-    names = {link.net for link in baseline.source.decoupling_links}
-    if names:
-        before = _verified_bypass_links(baseline.fanout.board, names,
-            admitted_witnesses=baseline.fanout.decoupling_witnesses)
-        after = _verified_bypass_links(candidate.fanout.board, names,
-            admitted_witnesses=candidate.fanout.decoupling_witnesses)
-        missing = before - after
-        if missing:
-            if failed_bypass_capacitors is not None:
-                failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing})[:32])
-            return "lost_bypass_connection"
+    missing = _missing_bypass_links(baseline.source, baseline.fanout, candidate.fanout)
+    if missing:
+        if failed_bypass_capacitors is not None:
+            failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing})[:32])
+        return "lost_bypass_connection"
     return "accepted"
 
 
@@ -530,6 +535,12 @@ def _negotiate_patterns(
             outcome = "unchanged_pattern"
         elif not accepted.fanout.escaped_pads <= proposed.escaped_pads:
             outcome = "lost_ordinary_access"
+        elif missing := _missing_bypass_links(baseline.source, accepted.fanout, proposed):
+            # This owner-only acceptance condition cannot be changed by the
+            # subsequent critical/contact rebuild. Reject before spending that
+            # search, retaining its ordinary pattern slot and exact loss hints.
+            outcome = "lost_bypass_connection"
+            failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing})[:32])
         else:
             seen.add(signature)
             verified = _critical_search(baseline.source, baseline.global_route, proposed,
@@ -553,7 +564,8 @@ def _negotiate_patterns(
             displaced, retained_tracks, retained_vias, partial_skipped_reason,
             failed_bypass_capacitors=tuple(failed_bypass_capacitors)))
         emit(on_progress, "package_pattern_trial", "finished", index=len(records), strategy=strategy,
-             outcome=outcome, search_tier=search_tier)
+             outcome=outcome, search_tier=search_tier,
+             failed_bypass_capacitors=[f"{p.component}.{p.pad}" for p in failed_bypass_capacitors])
         if outcome == "accepted":
             accepted = candidate
             if accepted.ready:

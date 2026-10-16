@@ -288,3 +288,13 @@ promote surface-feed checks to completed ground loops. Native fill assessment
 must continue to report open returns and unsupported return targets, including
 devices without a declared ground terminal. Electrical loop quality remains a
 separate engineering obligation.
+
+
+After rebasing an alternate ordinary pattern onto its exact source, compare
+fresh local bypass identities before rebuilding critical/contact owners. A
+missing feed or declared return already makes that pattern inadmissible: later
+owners cannot change the ordinary-only predicate. The failed pattern still
+spends its existing slot and reports up to 32 exact capacitor identities for
+placement feedback. It neither purchases a replacement trial nor changes the
+incumbent. Surviving candidates retain the full all-owner validation and final
+bypass-preservation gate; early success is not an acceptance certificate.
