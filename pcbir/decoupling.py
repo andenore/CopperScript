@@ -300,7 +300,7 @@ def improve_decoupling_placement(board, placements, options):
         candidates = [current]
         rule = next((r for r in board.placement_rules if r.reference == reference), None)
         sides = ((rule.side,) if rule and rule.side is not None
-                 else tuple(dict.fromkeys((target.side, current.side))))
+                 else tuple(dict.fromkeys((target.side, current.side, BoardSide.FRONT, BoardSide.BACK))))
         for side in sides:
             for angle in _allowed_orientations(board, reference):
                 origin = replace(current, position=Point(0, 0), rotation_degrees=angle, side=side)
@@ -395,7 +395,15 @@ def improve_decoupling_placement(board, placements, options):
         current_access = direct_access(current)
         others = {r: p for r, p in poses.items() if r != reference}
         access_trials = 0
-        for candidate in sorted(candidates, key=rank):
+        ordered = sorted(candidates, key=rank)
+        if not current_access and len(sides) > 1:
+            # An unrestricted pending association must not spend its entire
+            # 64-pose allowance on the target face. Interleave the existing
+            # ranked domains; explicit side rules still have one domain.
+            domains = [[p for p in ordered if p.side is side] for side in sides]
+            ordered = [domain[i] for i in range(max(map(len, domains)))
+                       for domain in domains if i < len(domain)]
+        for candidate in ordered:
             if current_access and rank(candidate) >= rank(current):
                 break
             if _legal(candidate, others, board, options):

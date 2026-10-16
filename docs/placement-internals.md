@@ -202,3 +202,14 @@ seed, failed reference, accepted count and reason, including failures after a
 successful seed. The report omits this field when empty. When all attempts fail,
 the final error retains all bounded reasons and the deepest accepted-count
 message (earliest seed on a tie). Finite attempts never prove infeasibility.
+
+
+## Unrestricted bypass sides
+
+For a pending movable bypass with no authored side restriction, refinement
+enumerates both board faces even when the target and incumbent are on the
+same face. Ranked side domains are interleaved within the existing 64 legal
+pose checks, so one face cannot consume every trial. An already accessible
+incumbent keeps the ordinary ranking preference. Explicit side, fixed pose,
+assembly and macro constraints remain hard; opposite-face admission requires
+fresh supply and return paths and full regeneration before adoption.
