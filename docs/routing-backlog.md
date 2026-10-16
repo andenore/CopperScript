@@ -65,3 +65,12 @@ and [placement](placement-internals.md). Board qualification stays in consumers.
   Test split islands, necks, antipads, signal reference discontinuities, competing
   rails, unavailable tools and renamed geometries. Generic algorithms belong in
   CopperScript; board-specific supply policy and evidence remain in consumers.
+
+
+The separate copper-area planner contract must include partial-zone fixtures:
+a regulator/source outside a local supply island, disconnected same-net islands,
+and a filtered downstream domain. Declaring a local zone must not silently make
+outside terminals unroutable by deferring the entire net without a feed/contact
+route mechanism. Require exact source-to-filled-fragment connectivity and local
+bypass-loop obligations separately. Keep these fixtures and the bounded contact
+contract distinct from implementing the entire planner.

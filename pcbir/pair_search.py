@@ -183,9 +183,13 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
     ports = []
     for preference, heading in enumerate(headings):
         normal = _normal(heading, offset)
-        sign = 1 if ((first.x_nm - second.x_nm) * normal.x_nm
-                     + (first.y_nm - second.y_nm) * normal.y_nm) > 0 else -1
-        for length in lengths:
+        dot = ((first.x_nm - second.x_nm) * normal.x_nm
+               + (first.y_nm - second.y_nm) * normal.y_nm)
+        # Collinear lands have no imposed transverse order at this heading.
+        # Either lane assignment can be physically legal; keep the historical
+        # negative choice first, then check the other exact complete collar.
+        signs = (1,) if dot > 0 else (-1,) if dot < 0 else (-1, 1)
+        for sign, length in product(signs, lengths):
             step = nm_from_mm(length)
             dx, dy = _HEADS[heading]
             center = Point(middle.x_nm + dx * step, middle.y_nm + dy * step)
