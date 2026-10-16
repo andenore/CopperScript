@@ -208,3 +208,21 @@ def test_renaming_and_reversal_preserve_success_and_determinism():
     renamed_parts=tuple([replace(t,net=names[t.net]) for t in x] for x in parts)
     other=attempt(renamed,renamed_parts)
     assert other[0]==first[0]
+
+
+@pytest.mark.parametrize("layer", [CopperLayer.FRONT, CopperLayer.BACK])
+def test_unordered_edges_ending_at_previous_start_are_not_merged(layer):
+    board,_ = fixture()
+    board=replace(board,placements=(),nets=(),net_routing_rules=())
+    # A legal corner supplied in reverse list order. The second edge ends at
+    # the first edge's start, but is not a forward continuation of that edge.
+    first=[TrackSegment("A",Point.mm(10,5),Point.mm(11,5),W,layer),
+           TrackSegment("A",Point.mm(10,4),Point.mm(10,5),W,layer)]
+    second=[TrackSegment("B",Point.mm(5,10),Point.mm(20,10),W,layer)]
+    before=tuple(first),tuple(second)
+    def unexpected(*args):
+        raise AssertionError("no collinear span exists to tune")
+    assert tune_virtual_pair_spans(first,second,SKEW,AMP,32,
+        source=board,held=board,tuner=unexpected)==0
+    assert_unchanged(before[0],first)
+    assert_unchanged(before[1],second)

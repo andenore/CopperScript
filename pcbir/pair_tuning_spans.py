@@ -156,18 +156,20 @@ def tune_virtual_pair_spans(
         if groups:
             members,span = groups[-1]
             join = (t.net,t.layer,t.start)
-            merged = replace(span,end=t.end)
             forward = ((span.end.x_nm-span.start.x_nm)*(t.end.x_nm-t.start.x_nm)
                        + (span.end.y_nm-span.start.y_nm)*(t.end.y_nm-t.start.y_nm)) > 0
             if (i not in locked and not any(j in locked for j,_ in members)
                     and span.net == t.net and span.layer is t.layer and span.width_nm == t.width_nm
                     and span.end == t.start and join not in protected and degree[join] == 2
                     and forward and (span.start.x_nm == span.end.x_nm == t.end.x_nm
-                                     or span.start.y_nm == span.end.y_nm == t.end.y_nm)
-                    and token(span) == token(t) == token(merged)
-                    and regions.split_tracks((merged,),merged.width_nm) == (merged,)):
-                groups[-1] = ((*members,(i,t)),merged)
-                continue
+                                     or span.start.y_nm == span.end.y_nm == t.end.y_nm)):
+                # Construct only after proving a nonzero forward continuation.
+                # Candidate list order need not follow electrical path order.
+                merged = replace(span,end=t.end)
+                if (token(span) == token(t) == token(merged)
+                        and regions.split_tracks((merged,),merged.width_nm) == (merged,)):
+                    groups[-1] = ((*members,(i,t)),merged)
+                    continue
         groups.append((((i,t),),t))
     if not any(len(members)>1 for members,_ in groups):
         return 0

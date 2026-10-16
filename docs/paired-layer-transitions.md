@@ -162,3 +162,10 @@ the complete disposable group, including duplicate-contact branches, with
 all earlier owners retained as obstacles. Source contacts, reserved layers,
 length/skew, via counts and physical clearance are validated afresh. Rejected
 proposals leave no copper behind; this adds no maze searches or search states.
+
+
+Virtual tuning spans validate compatible net/layer/width, forward direction,
+shared unprotected endpoint and collinearity before constructing a merged
+track. Candidate list order is not electrical traversal order; a later edge
+can end at an earlier edge's start without forming a legal forward span.
+Rejected joins preserve the exact original occurrences and all outer gates.
