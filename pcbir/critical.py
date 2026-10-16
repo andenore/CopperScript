@@ -7,7 +7,8 @@ qualification concerns even when their geometric proxies are satisfied.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections import Counter
+from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
 from enum import Enum
 from functools import partial
@@ -54,6 +55,7 @@ from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle
 from .critical_tuning import (MatchTuningMember, MatchTuningResult, MatchTuningUnit, TuningGroupOutcome, UnitTuner,
                               UnitTuning, bump_chamfers, bump_gain, bump_path, match_tuning_document)
 from .critical_group_tuning import GroupTuner
+from .pair_terminals import PairTerminalPreparation
 
 
 class CriticalRoutingStatus(str, Enum):
@@ -95,6 +97,10 @@ class CriticalNetResult:
     # (most frequent first), plus at most three example messages.
     rejections: tuple[tuple[str, int], ...] = ()
     rejection_examples: tuple[str, ...] = ()
+    # Runtime telemetry is immutable but outside routing identity/equality.
+    local_preparation: PairTerminalPreparation | None = field(default=None, compare=False)
+    pair_resumed_states: int = 0
+    pair_resumed_portals: int = 0
 
 
 def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
@@ -123,12 +129,15 @@ def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
         "pair_state_limit": item.pair_state_limit,
         "pair_budget_exhausted": item.pair_budget_exhausted,
         "pair_searches": item.pair_searches,
+        "pair_resumed_states": item.pair_resumed_states,
+        "pair_resumed_portals": item.pair_resumed_portals,
         "local_candidate_attempts": item.local_candidate_attempts,
         "guide_length_nm": item.guide_length_nm,
         "pair_refinement_attempts": item.pair_refinement_attempts,
         "pair_refinement_candidates": item.pair_refinement_candidates,
         "rejections": dict(item.rejections),
         "rejection_examples": list(item.rejection_examples),
+        "local_preparation": asdict(item.local_preparation) if item.local_preparation else None,
     }
 
 
@@ -314,6 +323,8 @@ def route_critical_nets(
     global_route: GlobalRoutingResult,
     *, on_progress: Callable[[str, tuple[str, ...], CriticalNetResult | None], None] | None = None,
     reserved_accesses: FanoutResult | None = None,
+    retained_critical: CriticalRoutingResult | None = None,
+    retained_accesses: FanoutResult | None = None,
     plane_stitch_options: PlaneStitchOptions | None = None,
     pair_state_limit: int | None = None,
     bundle_repair_limit: int = BUNDLE_REPAIR_LIMIT,
@@ -327,6 +338,11 @@ def route_critical_nets(
     Optional early plane contacts are freshly generated from source intent and
     validated ordinary reservations, never accepted as arbitrary input copper.
     They form a separate locked prefix, not ordinary fanout or filled evidence.
+
+    ``retained_critical`` proposes generated single-net contributions from a
+    prior result on the identical source. ``retained_accesses`` is that donor
+    result's original ordinary prefix, rather than the current reservations.
+    Stale, ambiguous or currently obstructed candidates fall back to routing.
 
     Groups are routed by priority, kind and name, except that the pairs of a
     bundle (same two components, kind and priority) are routed outermost
@@ -358,6 +374,8 @@ def route_critical_nets(
     as one bundle (``_tune_group``, plan R14), then topped up one by one.
     """
 
+    if retained_accesses is not None and retained_critical is None:
+        raise ValueError("retained ordinary prefix requires a critical donor")
     if pair_state_limit is not None and pair_state_limit <= 0:
         raise ValueError("critical pair aggregate state bound must be positive")
     if bundle_repair_limit < 0:
@@ -382,15 +400,21 @@ def route_critical_nets(
         regional_nets = {zone.net for zone in board.zones if zone.reserve_routing}
         from .zone_geometry import distribution_zone_nets
         protected.update(distribution_zone_nets(board) - regional_nets)
-        # Ordinary local bypass paths may belong to a deferred distribution
-        # rail. Accept only the source-associated, exactly regenerated surface
-        # prefix; this never grants arbitrary zone/critical copper ownership.
-        from .decoupling import route_decouplers
-        bypass_tracks = route_decouplers(board).created_tracks if board.decoupling_links else ()
-        if any(item.net in protected for item in (*reserved_accesses.created_tracks,
-                                                  *reserved_accesses.created_vias)
-               if item not in bypass_tracks):
-            raise ValueError("ordinary package-access reservations cannot contain critical or zone copper")
+        # Recognize actual declared source-associated copper read-only.
+        # Admission is not another bypass generation/search phase. Exact source,
+        # occurrence ownership and fresh witnesses remain mandatory.
+        from .bypass_reservations import verified_bypass_reservations
+        bypass_tracks, bypass_vias, reason = verified_bypass_reservations(board, reserved_accesses)
+        if reason is not None:
+            raise ValueError(f"invalid package-access bypass reservations: {reason}")
+        exemptions = Counter((*bypass_tracks, *bypass_vias))
+        for item in (*reserved_accesses.created_tracks, *reserved_accesses.created_vias):
+            if item.net not in protected:
+                continue
+            if exemptions[item]:
+                exemptions[item] -= 1
+            else:
+                raise ValueError("ordinary package-access reservations cannot contain critical or zone copper")
         def hard(checked: PhysicalBoard) -> tuple:
             return tuple(finding for finding in run_physical_drc(checked).findings
                          if finding.severity is DrcSeverity.ERROR
@@ -425,6 +449,14 @@ def route_critical_nets(
         plane_reservations = stitch_zone_pads(
             replace(board, tracks=tuple(tracks), vias=tuple(vias)), plane_stitch_options)
         tracks, vias = list(plane_reservations.board.tracks), list(plane_reservations.board.vias)
+    # A successful generated single may coexist with failed sibling groups.
+    # Donor ownership is checked against its original prefix; each candidate is
+    # freshly validated again at its job turn against the current reservations.
+    from .critical_reuse import prepare_single_critical_reuse, validate_single_critical_reuse
+    retained = (prepare_single_critical_reuse(board, global_route, retained_critical,
+                    reserved_accesses=retained_accesses).candidates
+                if retained_critical is not None else ())
+    retained_by_net = {candidate.net: candidate for candidate in retained}
     results: list[CriticalNetResult] = []
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
@@ -557,43 +589,50 @@ def route_critical_nets(
             coupled_pairs.add(frozenset((rule.net, partner_name)))
             net_tracks, net_vias = pair_tracks, pair_vias
         else:
-            result, net_tracks, net_vias = _route_single(
-                board, rule, routes.get(rule.net)
-            )
-            result, net_tracks, net_vias = _reject_reserved_plane_tracks(
-                board, result, net_tracks, net_vias, rules,
-            )
-            result, net_tracks, net_vias = _validate_candidate(
-                board, result, net_tracks, net_vias, tracks, vias,
-            )
-            result, net_tracks, net_vias = _improve_single_surface(
-                board, rule, routes.get(rule.net), result, net_tracks, net_vias, tracks, vias,
-            )
-            # Single-ended critical nets can reuse the exact octilinear maze
-            # engine. Pairs must NEVER be repaired as independent ordinary nets.
-            if (not result.connected and routes.get(rule.net) is not None
-                    and routes[rule.net].connected
-                    and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
-                         or len(routes[rule.net].accesses) == 2)):
-                repaired_single, net_tracks, net_vias = _route_single_exact(
-                    board, rule, global_route, tracks, vias,
+            reused = retained_by_net.get(rule.net)
+            accepted_reuse = None
+            if reused is not None:
+                accepted_reuse = validate_single_critical_reuse(board, reused, tracks, vias)
+            if accepted_reuse is not None and accepted_reuse[0].connected:
+                result, net_tracks, net_vias = accepted_reuse
+            else:
+                result, net_tracks, net_vias = _route_single(
+                    board, rule, routes.get(rule.net)
                 )
-                result = replace(repaired_single, local_candidate_attempts=result.local_candidate_attempts,
-                                 guide_length_nm=result.guide_length_nm)
-            elif (result.connected and result.strategy == "global_guide"
-                    and len(net_by_name[rule.net].pads) >= 3
-                    and rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}):
-                # A coarse-guide tree joining three or more terminals can be
-                # far from the shortest; keep the exact search's tree when it
-                # is shorter with no more vias.
-                exact, exact_tracks, exact_vias = _route_single_exact(
-                    board, rule, global_route, tracks, vias,
+                result, net_tracks, net_vias = _reject_reserved_plane_tracks(
+                    board, result, net_tracks, net_vias, rules,
                 )
-                if (exact.connected and len(exact_vias) <= len(net_vias)
-                        and exact.lengths_nm[0] < result.lengths_nm[0]):
-                    result, net_tracks, net_vias = replace(
-                        exact, local_candidate_attempts=result.local_candidate_attempts,
-                        guide_length_nm=result.guide_length_nm), exact_tracks, exact_vias
+                result, net_tracks, net_vias = _validate_candidate(
+                    board, result, net_tracks, net_vias, tracks, vias,
+                )
+                result, net_tracks, net_vias = _improve_single_surface(
+                    board, rule, routes.get(rule.net), result, net_tracks, net_vias, tracks, vias,
+                )
+                # Single-ended critical nets can reuse the exact octilinear maze
+                # engine. Pairs must NEVER be repaired as independent ordinary nets.
+                if (not result.connected and routes.get(rule.net) is not None
+                        and routes[rule.net].connected
+                        and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
+                             or len(routes[rule.net].accesses) == 2)):
+                    repaired_single, net_tracks, net_vias = _route_single_exact(
+                        board, rule, global_route, tracks, vias,
+                    )
+                    result = replace(repaired_single, local_candidate_attempts=result.local_candidate_attempts,
+                                     guide_length_nm=result.guide_length_nm)
+                elif (result.connected and result.strategy == "global_guide"
+                        and len(net_by_name[rule.net].pads) >= 3
+                        and rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}):
+                    # A coarse-guide tree joining three or more terminals can be
+                    # far from the shortest; keep the exact search's tree when it
+                    # is shorter with no more vias.
+                    exact, exact_tracks, exact_vias = _route_single_exact(
+                        board, rule, global_route, tracks, vias,
+                    )
+                    if (exact.connected and len(exact_vias) <= len(net_vias)
+                            and exact.lengths_nm[0] < result.lengths_nm[0]):
+                        result, net_tracks, net_vias = replace(
+                            exact, local_candidate_attempts=result.local_candidate_attempts,
+                            guide_length_nm=result.guide_length_nm), exact_tracks, exact_vias
         result_index[group] = len(results)
         results.append(result)
         committed.append((group, tuple(net_tracks), tuple(net_vias)))
@@ -1293,16 +1332,33 @@ def _route_pair_group(
 
     partner_name = partner_rule.net
     first, second = sorted((rule, partner_rule), key=lambda item: item.net)
+    from .pair_terminals import PairTerminalPreparationStats, prepare_pair_terminals, terminal_partners
+    preparation = PairTerminalPreparationStats()
+    routes, first_branches, second_branches, branch_via_pairs, branch_return_vias = prepare_pair_terminals(
+        replace(board, tracks=tuple(tracks), vias=tuple(vias)), first, second, routes, report=preparation)
+    evidence = preparation.snapshot() if preparation.status != "source_terminals" else None
+    def reported(outcome):
+        result, additions, transitions = outcome
+        if not result.connected and preparation.status in {"blocked", "unsupported"}:
+            if blockers is not None:
+                blockers.update(preparation.blocking_nets)
+            diagnostics = tuple(
+                "local pair-terminal preparation " + preparation.status + ": " + preparation.reason
+                if message == "coupled pair routing v0.1 requires two terminals per member" else message
+                for message in result.diagnostics)
+            result = replace(result, diagnostics=diagnostics)
+        return replace(result, local_preparation=evidence), additions, transitions
     found: set[str] = set()
     if nested is not None:
         accepted = _route_nested_exit(board, first, second, routes, rules, tracks, vias, nested)
         if accepted is not None:
             if turns is not None:
                 turns[nested.group] = accepted[0]
-            return accepted[1:]
+            return reported(accepted[1:])
     if crossing is None:
         result, pair_tracks, pair_vias = _route_pair(
-            board, rule, partner_rule, routes
+            board, rule, partner_rule, routes,
+            tuning_board=replace(board, tracks=tuple(tracks), vias=tuple(vias))
         )
         result, pair_tracks, pair_vias = _reject_reserved_plane_tracks(
             board, result, pair_tracks, pair_vias, rules,
@@ -1318,13 +1374,33 @@ def _route_pair_group(
             (f"planned crossing is impossible: {crossing.reason}",) if crossing.layer is None else (),
             strategy="planned_crossing", pair_search_order="planned_crossing")
         if crossing.layer is None:
-            return result, pair_tracks, pair_vias
+            return reported((result, pair_tracks, pair_vias))
     guided = all(routes.get(name) is not None and routes[name].connected
                  for name in (rule.net, partner_name))
+    if (not result.connected and guided and crossing is None and not (first_branches or second_branches)
+            and any(a.tracks for name in (first.net, second.net) for a in routes[name].accesses)):
+        # A coarse guide may already carry a checked multi-leg package exit.
+        # Try one whole-pair proposal that retains those actual lead-ins rather
+        # than inventing a rectangular stub from each original pad centre.
+        attempt, proposed_tracks, proposed_vias = _route_pair(
+            board, first, second, routes, prefer_access_tracks=True,
+            tuning_board=replace(board, tracks=tuple(tracks), vias=tuple(vias)))
+        attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
+            board, attempt, proposed_tracks, proposed_vias, rules)
+        attempt, proposed_tracks, proposed_vias = _validate_candidate(
+            board, attempt, proposed_tracks, proposed_vias, tracks, vias)
+        if attempt.connected:
+            return reported((attempt, proposed_tracks, proposed_vias))
     if crossing is not None and not guided:
         result = replace(result, diagnostics=("both pair members require connected global guides",))
-    if not result.connected and guided:
-        search_board = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+    supported = (routes.get(first.net) is not None and routes.get(second.net) is not None
+                 and terminal_partners(routes[first.net], routes[second.net]) is not None)
+    from .hard_macros import macro_owned_pads
+    owned_terminals = macro_owned_pads(board)
+    protected_ends = any(p in owned_terminals for n in board.nets if n.name in (first.net, second.net) for p in n.pads)
+    if not result.connected and supported and (guided or not protected_ends):
+        search_board = replace(board, tracks=(*tracks, *first_branches, *second_branches),
+                               vias=(*vias, *[v for pair in branch_via_pairs for v in pair], *branch_return_vias))
         stats = PairSearchStats()
         if crossing is not None:
             assert crossing.layer is not None
@@ -1341,6 +1417,53 @@ def _route_pair_group(
             searchers = ((paired_via_candidates, paired_candidates) if prefer_vias
                          else (paired_candidates, paired_via_candidates))
         rejected: list[tuple[str, str]] = []
+        def checked_candidate(candidate):
+            complete = replace(candidate,
+                first=(*first_branches, *candidate.first),
+                second=(*second_branches, *candidate.second),
+                via_pairs=(*branch_via_pairs, *candidate.via_pairs),
+                return_vias=(*branch_return_vias, *candidate.return_vias))
+            candidate_blockers = set()
+            def admit(proposal):
+                attempt, proposed_tracks, proposed_vias = _route_pair(
+                    board, first, second, routes,
+                    exact_tracks=(proposal.first, proposal.second),
+                    exact_via_pairs=proposal.via_pairs,
+                    exact_return_vias=proposal.return_vias,
+                    tuning_board=search_board)
+                attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
+                    board, attempt, proposed_tracks, proposed_vias, rules)
+                return _validate_candidate(board, attempt, proposed_tracks,
+                    proposed_vias, tracks, vias, spacing_nets=candidate_blockers)
+            attempt, proposed_tracks, proposed_vias = admit(complete)
+            if (not attempt.connected and attempt.tuned_length_nm > 0
+                    and _rejection_gate(attempt.diagnostics)[0] in _SPACING_GATES):
+                # The legacy geometric skew bump may hit a foreign land.
+                # Retry at most two existing clearance-aware tuning proposals
+                # on the complete generated group, including local branches.
+                # Prior owners remain obstacles; every source contact, via,
+                # length and physical gate is checked again before adoption.
+                from .pair_terminals import _matched_local_candidates
+                held = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+                for tuned in _matched_local_candidates(held, first, second, complete):
+                    if tuned is complete:
+                        continue
+                    revised, revised_tracks, revised_vias = admit(tuned)
+                    if not revised.connected:
+                        continue
+                    added = (_track_length(tuned.first) + _track_length(tuned.second)
+                             - _track_length(complete.first) - _track_length(complete.second))
+                    attempt = replace(revised, tuned_length_nm=revised.tuned_length_nm + added)
+                    proposed_tracks, proposed_vias = revised_tracks, revised_vias
+                    break
+            if attempt.connected:
+                if crossing is not None:
+                    attempt = replace(attempt, strategy="planned_crossing")
+                elif not candidate.via_pairs and not (first_branches or second_branches):
+                    attempt, proposed_tracks, proposed_vias = _improve_pair_spine(
+                        board, search_board, first, second, routes, candidate,
+                        attempt, proposed_tracks, proposed_vias, tracks, vias)
+            return attempt, proposed_tracks, proposed_vias, candidate_blockers
         for searcher in searchers:
             for pitch_nm in (1_000_000, 500_000, 250_000):
                 # A limited tier samples both families and all pitches,
@@ -1359,29 +1482,9 @@ def _route_pair_group(
                     search_board, first, second, routes[first.net], routes[second.net],
                     stats=stats, pitch_nm=pitch_nm, **limits,
                 ):
-                    attempt, proposed_tracks, proposed_vias = _route_pair(
-                        board, first, second, routes,
-                        exact_tracks=(candidate.first, candidate.second),
-                        exact_via_pairs=candidate.via_pairs,
-                        exact_return_vias=candidate.return_vias,
-                    )
-                    attempt, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
-                        board, attempt, proposed_tracks, proposed_vias, rules,
-                    )
-                    found = set()
-                    attempt, proposed_tracks, proposed_vias = _validate_candidate(
-                        board, attempt, proposed_tracks, proposed_vias, tracks, vias,
-                        spacing_nets=found,
-                    )
+                    attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
                     if attempt.connected:
                         result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
-                        if crossing is not None:
-                            result = replace(result, strategy="planned_crossing")
-                        elif not candidate.via_pairs:
-                            result, pair_tracks, pair_vias = _improve_pair_spine(
-                                board, search_board, first, second, routes, candidate,
-                                result, pair_tracks, pair_vias, tracks, vias,
-                            )
                         break
                     observe(attempt, found)
                     rejected.append(_rejection_gate(attempt.diagnostics))
@@ -1389,9 +1492,24 @@ def _route_pair_group(
                     break
             if result.connected:
                 break
+        if not result.connected and pair_state_limit is not None and stats.expanded_states < pair_state_limit:
+            # Sampling both families/pitches may leave a productive portal's
+            # exact frontier suspended at its slice. Continue that same owned
+            # search with unused aggregate states; no new portal/slot is added.
+            from .pair_search_resume import resume_pair_candidates
+            for candidate in resume_pair_candidates(stats, board=search_board,
+                                                     maximum_total_states=pair_state_limit):
+                attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
+                if attempt.connected:
+                    result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
+                    break
+                observe(attempt, found)
+                rejected.append(_rejection_gate(attempt.diagnostics))
         rejections, examples = _rejection_summary(rejected)
         result = replace(result, search_states=stats.expanded_states,
                          candidate_attempts=stats.candidates, pair_searches=stats.searches,
+                         pair_resumed_states=stats.resumed_states,
+                         pair_resumed_portals=stats.resumed_portals,
                          pair_search_order=order,
                          pair_state_limit=pair_state_limit,
                          pair_budget_exhausted=(pair_state_limit is not None
@@ -1406,7 +1524,7 @@ def _route_pair_group(
                 f"{label}: {stats.searches} searches, {stats.expanded_states} states, "
                 f"{stats.candidates} candidates; none accepted"
                 + (f" (first-failing gates: {reasons})" if reasons else "")))
-    return result, pair_tracks, pair_vias
+    return reported((result, pair_tracks, pair_vias))
 
 
 # Plan R7: a nested exit that does not clear committed copper at its planned
@@ -1451,7 +1569,8 @@ def _route_nested_exit(
         nested.component, nested.direction, nested.travel, turns, NESTED_CHAMFER_STEP_NM)
     for turn, chamfer, candidate in islice(candidates, NESTED_CANDIDATE_LIMIT):
         attempt, pair_tracks, pair_vias = _route_pair(
-            board, first, second, routes, exact_tracks=(candidate.first, candidate.second))
+            board, first, second, routes, exact_tracks=(candidate.first, candidate.second),
+            tuning_board=search_board)
         if attempt.connected and attempt.tuned_length_nm and not _legal(
                 search_board, index, tuple(t for t in pair_tracks if t.net == first.net),
                 tuple(t for t in pair_tracks if t.net != first.net), clearance):
@@ -1578,7 +1697,8 @@ def _improve_pair_spine(
                or t.layer not in routing_layers(board, rule.net, rule)
                for rule, lane in zip((first, second), lanes) for t in lane):
             continue
-        proposed, tracks, vias = _route_pair(board, first, second, routes, exact_tracks=lanes)
+        proposed, tracks, vias = _route_pair(board, first, second, routes, exact_tracks=lanes,
+                                             tuning_board=search_board)
         proposed, tracks, vias = _reject_reserved_plane_tracks(
             board, proposed, tracks, vias, {first.net: first, second.net: second},
         )
@@ -1878,13 +1998,15 @@ def _route_pair(
     *, exact_tracks: tuple[tuple[TrackSegment, ...], tuple[TrackSegment, ...]] | None = None,
     exact_via_pairs: tuple[tuple[Via, Via], ...] = (),
     exact_return_vias: tuple[Via, ...] = (),
+    prefer_access_tracks: bool = False,
+    tuning_board: PhysicalBoard | None = None,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     first_name, second_name = sorted((first_rule.net, second_rule.net))
     first = first_rule if first_rule.net == first_name else second_rule
     second = second_rule if first is first_rule else first_rule
     guide = routes.get(first.net)
     partner_guide = routes.get(second.net)
-    if guide is None or partner_guide is None or not guide.connected or not partner_guide.connected:
+    if guide is None or partner_guide is None or (exact_tracks is None and (not guide.connected or not partner_guide.connected)):
         return (
             CriticalNetResult(
                 (first.net, second.net),
@@ -1930,7 +2052,7 @@ def _route_pair(
             (),
         )
     offset = (first_width + gap) // 2
-    aligned = _aligned_pair_paths(guide, partner_guide, offset) if exact_tracks is None else ([], [])
+    aligned = (None if prefer_access_tracks else _aligned_pair_paths(guide, partner_guide, offset)) if exact_tracks is None else ([], [])
     if aligned is None and (not guide.segments or not partner_guide.segments):
         # Terminals inside one global tile give a connected guide without
         # segments, so the offset fallback has nothing to follow. Reject the
@@ -1979,12 +2101,12 @@ def _route_pair(
         first_tracks, second_tracks = list(exact_tracks[0]), list(exact_tracks[1])
     if aligned is None:
         first_tracks.extend(
-            _pair_pin_stubs(first.net, guide, first_width, positive, 1, first_width + gap)
+            _pair_pin_stubs(first.net, guide, first_width, positive, 1, first_width + gap, board=board, retain_access_tracks=prefer_access_tracks)
         )
         second_tracks.extend(
             _pair_pin_stubs(
                 second.net, partner_guide, second_width, negative, 0,
-                first_width + gap,
+                first_width + gap, board=board, retain_access_tracks=prefer_access_tracks,
             )
         )
     breakout = BreakoutRegions(board)
@@ -2007,6 +2129,25 @@ def _route_pair(
                                       if value is not None)
                                   if first.tuning_amplitude_limit_nm is not None or second.tuning_amplitude_limit_nm is not None
                                   else 0, _BREAKOUT_TUNING_MARGIN_NM if breakout else 0)
+    if (max_skew is not None and not tuned_length and tuning_board is not None
+            and (exact_tracks is not None or not guide.vias)):
+        from .pair_tuning_spans import tune_virtual_pair_spans
+        # Current source/held prefix is explicit. Guide/via/access anchors and
+        # lead-in junctions cannot become artificial straight-run joins.
+        nodes = tuple((route.net, access.layer, point)
+            for route in (guide, partner_guide) for access in route.accesses
+            for point in (access.pad_position, access.access_position,
+                          *(p for t in access.tracks for p in (t.start,t.end))))
+        tuned_length = tune_virtual_pair_spans(
+            first_tracks, second_tracks, max_skew,
+            min(value for value in (first.tuning_amplitude_limit_nm,
+                                    second.tuning_amplitude_limit_nm) if value is not None)
+                if first.tuning_amplitude_limit_nm is not None
+                or second.tuning_amplitude_limit_nm is not None else 0,
+            _BREAKOUT_TUNING_MARGIN_NM if breakout else 0,
+            source=board, held=tuning_board, protected_nodes=nodes,
+            proposed_vias=(*[v for pair in exact_via_pairs for v in pair], *exact_return_vias),
+            tuner=_tune_pair)
     if tuned_length and breakout:
         # Cut the new serpentine bumps too; a 45-degree corner piece cut at a
         # region boundary may round a nanometre differently, which the margin
@@ -2611,6 +2752,7 @@ def _pair_pin_stubs(
     paths: list[tuple[CopperLayer, Point, Point]],
     lane_index: int,
     lane_pitch: int,
+    *, board: PhysicalBoard | None = None, retain_access_tracks: bool = False,
 ) -> tuple[TrackSegment, ...]:
     endpoints = [
         (layer, point)
@@ -2622,18 +2764,27 @@ def _pair_pin_stubs(
     ys = [point.y_nm for _, point in endpoints]
     horizontal = max(xs) - min(xs) >= max(ys) - min(ys)
     for access in guide.accesses:
+        anchor = access.access_position if retain_access_tracks and access.tracks else access.pad_position
+        if retain_access_tracks and access.tracks:
+            result.extend(access.tracks)
         layer, point = min(
             endpoints,
             key=lambda item: (
-                abs(item[1].x_nm - access.pad_position.x_nm)
-                + abs(item[1].y_nm - access.pad_position.y_nm),
+                abs(item[1].x_nm - anchor.x_nm)
+                + abs(item[1].y_nm - anchor.y_nm),
                 str(item[0]),
                 item[1].x_nm,
                 item[1].y_nm,
             ),
         )
-        if access.pad_position == point:
+        if anchor == point:
             continue
+        if board is not None and retain_access_tracks:
+            from .pin_escape import checked_access_path
+            tail = checked_access_path(board, RoutingClearanceIndex(board), net, anchor, point, width, layer)
+            if tail is not None:
+                result.extend(tail)
+                continue
         escape = (lane_index + 1) * max(lane_pitch, width)
         if horizontal:
             outside = (
@@ -2642,8 +2793,8 @@ def _pair_pin_stubs(
                 else max(xs) + escape
             )
             corners = (
-                access.pad_position,
-                Point(outside, access.pad_position.y_nm),
+                anchor,
+                Point(outside, anchor.y_nm),
                 Point(outside, point.y_nm),
                 point,
             )
@@ -2654,8 +2805,8 @@ def _pair_pin_stubs(
                 else max(ys) + escape
             )
             corners = (
-                access.pad_position,
-                Point(access.pad_position.x_nm, outside),
+                anchor,
+                Point(anchor.x_nm, outside),
                 Point(point.x_nm, outside),
                 point,
             )

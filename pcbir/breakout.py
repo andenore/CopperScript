@@ -34,6 +34,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
+
+from ._cache import IdentityKey
 from typing import Iterable
 
 from .geometry import Bounds, RoundedConvexShape, shape_distance_squared
@@ -63,6 +66,38 @@ class BreakoutLand:
 
     def contains(self, point: Point) -> bool:
         return self.distance_squared(point) is not None
+
+
+def _nearest_region(lands: Iterable[BreakoutLand], points: tuple[Point, ...]) -> str | None:
+    """Pure source-land membership; exact nearest distance, then first tie."""
+    best: tuple[Fraction, str] | None = None
+    for land in lands:
+        farthest = Fraction(0)
+        for point in points:
+            distance = land.distance_squared(point)
+            if distance is None:
+                break
+            farthest = max(farthest, distance)
+        else:
+            if best is None or farthest < best[0]:
+                best = (farthest, land.identity)
+                # Squared distances cannot be negative. The first zero is
+                # already the strict first-tie minimum of every later land.
+                if farthest == 0:
+                    break
+    return None if best is None else best[1]
+
+
+@lru_cache(maxsize=4)
+def _source_region_cache(placements, footprints, nets, rules, routing_rules, stackup):
+    """Bounded membership memo shared only by one complete immutable source epoch.
+
+    Identity keys hold their inputs strongly. Copper, fills, indexes and dynamic
+    clearance answers never enter this cache. Each epoch retains at most 8192
+    source-land queries; a changed pose, assignment, footprint or policy starts
+    a separate epoch even if its region happens to have equal geometry.
+    """
+    return {}
 
 
 class BreakoutRegions:
@@ -96,6 +131,14 @@ class BreakoutRegions:
                         shape.bounds.expanded(length)))
         self._lands = {net: tuple(items) for net, items in lands.items()}
         self._by_identity = {land.identity: land for items in self._lands.values() for land in items}
+        # Copper-only trial boards repeatedly rebuild this index. Membership
+        # depends on immutable source lands, not any added or removed copper.
+        self._region_cache: dict[tuple[str, tuple[Point, ...]], str | None] = (
+            _source_region_cache(IdentityKey(board.placements),
+                tuple((name, IdentityKey(footprint)) for name, footprint in board.footprints.items()),
+                IdentityKey(board.nets), IdentityKey(board.rules),
+                IdentityKey(board.net_routing_rules), IdentityKey(board.stackup))
+            if self.declared else {})
 
     def __bool__(self) -> bool:
         return bool(self.declared)
@@ -117,18 +160,14 @@ class BreakoutRegions:
         if not lands:
             return None
         points = tuple(spine)
-        best: tuple[Fraction, str] | None = None
-        for land in lands:
-            farthest = Fraction(0)
-            for point in points:
-                distance = land.distance_squared(point)
-                if distance is None:
-                    break
-                farthest = max(farthest, distance)
-            else:
-                if best is None or farthest < best[0]:
-                    best = (farthest, land.identity)
-        return None if best is None else best[1]
+        key = (net, points)
+        if key in self._region_cache:
+            return self._region_cache[key]
+        result = _nearest_region(lands, points)
+        if len(self._region_cache) >= 8192:
+            self._region_cache.clear()
+        self._region_cache[key] = result
+        return result
 
     def split(self, net: str, start: Point, end: Point) -> tuple[tuple[Point, Point, str | None], ...]:
         """Cut one track centreline at the region boundaries of ``net``.

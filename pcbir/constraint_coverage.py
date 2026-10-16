@@ -71,11 +71,13 @@ def normalize_constraints(constraints: tuple[object, ...]) -> tuple[NormalizedCo
         zone = kind == "copper_zone"
         via_in_pad = kind == "via_in_pad"
         hole_clearance = kind == "hole_clearance"
+        courtyard_gap = kind == "courtyard_gap"
         copper = zone or via_in_pad or hole_clearance
         default_consumers = (
             ("physicalizer", "plane_stitch", "physical_drc") if via_in_pad
             else ("physicalizer", "kicad_zone_refill", "physical_drc") if zone
             else ("physicalizer", "physical_drc", "kicad_rules") if hole_clearance
+            else ("physicalizer", "placement", "physical_drc", "kicad_rules") if courtyard_gap
             else ("physical_drc",) if length_match
             else ("critical_router", "physical_drc") if routing
             else ("placement", "physical_drc")
@@ -92,6 +94,7 @@ def normalize_constraints(constraints: tuple[object, ...]) -> tuple[NormalizedCo
                 constraint.verifier or (
                     "DRC-VIA-PAD-OVERLAP" if via_in_pad else "KICAD-ZONE-FILL" if zone
                     else "DRC-HOLE-CLEARANCE" if hole_clearance
+                    else "DRC-PLACEMENT" if courtyard_gap
                     else "DRC-LENGTH-MATCH" if length_match else "DRC-ROUTING" if routing else "DRC-PLACEMENT"
                 ),
             )

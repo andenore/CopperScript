@@ -196,6 +196,7 @@ class ConstraintKind(str, Enum):
     MAX_DISTANCE = "max_distance"
     MIN_DISTANCE = "min_distance"
     PLACEMENT_REGION = "placement_region"
+    COURTYARD_GAP = "courtyard_gap"
     FIXED_PLACEMENT = "fixed_placement"
     ALLOWED_ORIENTATIONS = "allowed_orientations"
     ALIGN = "align"
@@ -243,10 +244,21 @@ class PackagePinDefinition:
     bonds: tuple[BondDefinition, ...] = ()
     connection_policy: ConnectionPolicy = ConnectionPolicy.NORMAL
     required_net_traits: frozenset[str] = frozenset()
+    # Manufacturer-permitted external power-output tie, scoped to this part
+    # instance. It never joins physical pads or permits omitting a contact.
+    parallel_power_group: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bonds", tuple(self.bonds))
         object.__setattr__(self, "required_net_traits", frozenset(self.required_net_traits))
+        if self.parallel_power_group is not None:
+            import re
+            if (not isinstance(self.parallel_power_group, str)
+                    or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", self.parallel_power_group) is None
+                    or self.profile is None
+                    or self.profile.domains != frozenset({SignalDomain.POWER})
+                    or self.profile.directions != frozenset({Direction.OUTPUT})):
+                raise ValueError("parallel_power_group requires a named explicit power-only output")
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,6 +401,7 @@ class PartDefinition:
     source: SourceReference | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
     internal_pad_groups: tuple[InternalPadGroup, ...] = ()
+    dc_power_path: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Defensive copies keep an otherwise frozen IR from being mutated via a
@@ -396,6 +409,18 @@ class PartDefinition:
         if not isinstance(self.assembled, bool):
             raise ValueError("part assembled must be a boolean")
         object.__setattr__(self, "pins", MappingProxyType(dict(self.pins)))
+        path = tuple(self.dc_power_path)
+        if path:
+            if len(path) != 2 or len(set(path)) != 2 or any(name not in self.pins for name in path):
+                raise ValueError("dc_power_path requires two distinct declared pin names")
+            if self.device is not None or any(
+                    self.pins[name].profile is None
+                    or self.pins[name].profile.domains != frozenset((SignalDomain.POWER,))
+                    or self.pins[name].profile.directions != frozenset((Direction.PASSIVE,))
+                    or self.pins[name].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
+                    for name in path):
+                raise ValueError("dc_power_path requires standalone passive power-only pins")
+        object.__setattr__(self, "dc_power_path", path)
         object.__setattr__(self, "internal_pad_groups", validate_internal_pad_groups(
             self.internal_pad_groups, {pin.number for pin in self.pins.values()}))
         object.__setattr__(self, "traits", frozenset(self.traits))

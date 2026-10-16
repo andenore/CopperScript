@@ -265,6 +265,24 @@ plain log uses a clearly labelled final-report lower bound instead of inventing
 zero work. General-area expanded maze states and peak memory are not yet recorded
 by this tool; paired critical searches do report their expanded states.
 
+### Placement and global progress
+
+Normal `route-board --progress` forwards the existing placement seed stages
+through `on_progress`, using zero-based seed indices and the configured
+seed count. A bounded legalization failure is reported as a failed seed stage;
+the final `placement_candidates` event reports the total, not another seed.
+The existing refinement stage includes decoupling work and does not expose its
+internal steps.
+
+Global routing emits sparse graph/access setup and iteration start/finish
+events, inside candidate, feedback-trial and final-certification boundaries.
+Iterations report existing attempt overflow/unrouted counts and best-score
+improvement; final route status describes global guides. These operational
+events are not exact-copper closure or engineering qualification. They add no
+heartbeat, inner-search events, solver work or timing code. Interrupted work
+has no invented finish event. With no callback, results, ordering and budgets
+are unchanged; existing raw placement/editor callbacks remain compatible.
+
 ### Per-net area progress
 
 With `--progress`, detailed routing emits `detailed_pass` and `detailed_net`
@@ -358,3 +376,136 @@ results and final-copper quality alongside uninstrumented time and work counts.
 Profiling alone must not change artifact bytes. Routing changes may select
 different legal geometry; fewer states or a shorter runtime cannot excuse
 newly failed routes. Open work is in [optimization backlog](routing-optimization-todo.md).
+
+
+## Global capacity-graph static calculations
+
+Each global graph owns an immutable snapshot of its axes, legal nodes,
+resources/capacities, terminal alias edges, via sites and layer preferences.
+Construction copies caller-owned maps. Terminal registration and via-capacity
+refinement create replacement snapshots; all derived data starts empty on the
+replacement. Private derived fields do not change the constructor, equality,
+representation, route reports or fingerprints. The graph is internal and is
+not a serialized public routing artifact.
+
+Cartesian Points are constructed once per graph, with the original tuple-index
+semantics. Lazy outgoing-step entries retain exact original neighbor order,
+resource identity, direction and planar/via plus layer/direction preference
+cost. Their key includes the node and all three static cost options. At most
+`len(legal_nodes)` entries are retained across every cost variant; when full,
+new variants compute normally. Point storage is bounded by the finite Cartesian
+axes, and step storage by that entry cap and the graph's finite degree.
+
+Every search freshly filters allowed layers and blocked resources and reads
+current demand, usage, congestion history, present/history penalties, bends and
+remaining via allowance. Heap keys, deterministic serials, comparisons, state
+space, ordering and iteration/search limits are unchanged. No path, failure,
+mutable congestion answer or acceptance decision is memoized.
+
+The differential suite retains the original A* function and checks exact paths,
+heap events, complete route JSON/fingerprints, changed congestion/cost options,
+layer/via constraints, terminal aliases and refined/replaced graphs. Separate
+synthetic uninstrumented timings can measure recomputation savings; they do
+not establish a source-board speedup, electrical/routing closure or native
+qualification. Cache container sizes are not process peak-memory measurements.
+
+
+## Immutable pad and breakout-owner templates
+
+Clearance indexes share only immutable original pad geometry and source-land
+membership. An eight-entry template cache retains strong identity keys for all
+placements, named footprints, nets, stack, board rules, routing rules and bin
+size. A separate 512-entry cache retains transformed footprint geometry. New
+source epochs rebuild template ownership, including effects of a moved other
+land. The pure nearest-region predicate stops at the first exact zero squared
+distance, preserving the original nearest-distance and first-tie result.
+
+Each index owns fresh object, hole and bin containers. Current breakout query
+caches, zones, keepouts, macro reservations, NPTHs, tracks, vias and mutable
+additions remain local and are checked under current policies. Neither a
+clearance answer nor an accepted routing witness is cached. Original order,
+unconnected lands and plated drill geometry remain intact.
+
+The constructor-only comparison used actual 159-component geometry with 615
+copper pads, four copper-only snapshots per batch and five alternating pairs.
+It compared the original constructor AND original breakout implementation with
+the candidate, checking exact index state, pad owners and clearance queries.
+The measured medians were 1.005159 s and 0.034161 s. This repeated-source fixture
+measures construction reuse; concurrent load was recorded, and it is not a
+whole-board speedup or a routing, native, RF, power or manufacturing result.
+
+
+## Ordinary breakout capacity
+
+Global search, target selection, negotiated resource use and final overflow
+metrics use the same source-declared ordinary breakout width for an edge whose
+entire centreline is inside one shared terminal-land breakout region. An edge
+crossing that boundary retains its normal full-width demand. A narrower width
+on another net, or separate regions containing only the two endpoints, does
+not grant a reduced demand. Declared clearance remains unchanged; specialized
+profiles keep their existing capacity policy. Distinct physical via-site
+multiplicity is unaffected.
+
+This avoids a false capacity overflow or needless detour when a source already
+allows an ordinary neck-down beside a fine-pitch package. It does not emit a
+trace, relax any source width, bypass detailed/native checks, or certify a
+whole-board route. Only immutable source-region membership is cached within
+the net's demand evaluator, with a 16,384-edge bound; mutable usage and history
+are read on every search step. Nets without an effective width reduction keep
+the existing fast path. Regressions include renamed fixtures, boundary-crossing
+edges, declared clearance and unchanged physical-copper rules.
+
+
+## Lazy breakout measurements and bypass baseline DRC
+
+Copper-spacing checks first test the normal, unrelaxed spacing before
+measuring a rational distance for a breakout-relaxation record. Pairs that
+already meet normal spacing cannot produce such a record. Near pairs retain
+the same exact predicates, measured values, ordering and report fields,
+including half-nanometre width thresholds.
+
+Cross-layer bypass proposals defer their immutable input's full DRC until a
+complete supply/return witness passes exact geometry checks. An unsuccessful
+search adopts no copper and needs no baseline comparison. Every potentially
+accepted proposal still compares fresh full candidate DRC with fresh full
+input DRC; no report cache or stale-board evidence is introduced. The
+baseline is evaluated at most once inside that immutable transaction.
+
+On an 892-track/79-via CopperProbe diagnostic snapshot, the complete DRC JSON
+was byte-identical (77 findings and 347 breakout records). One paired timing
+measured 5.36 s before and 3.35 s after the spacing optimization. This is a
+snapshot measurement, not a whole-route speed guarantee. Existing running
+jobs remain pinned to their original compiler.
+
+
+## Compact fresh bypass launches
+
+Fresh bypass launches now compare both existing bounded geometric sampling
+tiers before spending the finite launch slots. Their score is new launch
+Manhattan length plus remaining distance to the destination land, followed
+by new launch length and deterministic coordinates. Existing contained
+source tracks add no new length to that score. This is a local ranking
+heuristic, not a shortest-path or electrical loop-quality proof.
+
+Exact verified existing launches still consume their original slots first.
+Each radial/two-leg sampling pass retains the site cap, and launch,
+complete-proposal, shared local-path and inner-bridge allowances are unchanged.
+The fine tier is considered even when coarse rays already fill the slots;
+this may do more geometric sampling within the established maximum bounds.
+All complete-path, source-prefix, whole-net budget and fresh DRC gates remain.
+
+
+### Breakout membership across copper-only trial indexes
+
+Breakout-region membership now shares a bounded memo across clearance indexes
+with the same complete immutable source epoch: placement tuple, exact footprint
+objects, net assignments, board rules, routing rules and stackup. The cache keeps
+four source epochs with at most 8192 queries each. Strong identity keys prevent
+identity reuse. A changed source field starts a new epoch; added/removed copper
+still receives fresh spatial indexing and exact clearance checks. No board,
+generated copper, fill, clearance result or routing acceptance is cached.
+
+On one 414-track/69-via consumer control, eight repeated index builds and region
+queries took 1.65 s before and 0.15 s after. The membership result digest and
+complete physical DRC report were identical. This isolates repeated source
+membership work, not complete-route performance or any engineering acceptance.

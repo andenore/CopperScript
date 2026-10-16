@@ -13,6 +13,19 @@ def emit(callback: ProgressCallback | None, phase: str, event: str, **details: o
         callback(phase, event, details)
 
 
+def placement_progress(callback: ProgressCallback | None):
+    """Adapt existing raw placement stages without changing their contract."""
+    if callback is None:
+        return None
+    def observe(stage, seed, seed_count):
+        if stage == "finished":
+            emit(callback, "placement_candidates", "finished", seed_count=seed_count)
+        else:
+            emit(callback, "placement_seed", "failed" if stage == "legalization_failed" else "stage",
+                 stage=stage, seed=seed, seed_count=seed_count)
+    return observe
+
+
 def critical_progress(callback: ProgressCallback | None):
     if callback is None:
         return None

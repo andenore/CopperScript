@@ -13,9 +13,11 @@ from typing import Iterable, Iterator
 from hashlib import sha256
 from enum import Enum
 from decimal import Decimal
+from functools import lru_cache
 import json
 
-from .breakout import BreakoutRegions
+from ._cache import IdentityKey
+from .breakout import BreakoutLand, BreakoutRegions, _nearest_region
 from .drc import non_plated_holes, placed_pad_shape
 from .geometry import Bounds, RoundedConvexShape, shapes_clear
 from .physical import (
@@ -65,6 +67,78 @@ class _DrilledHole:
     locked: bool
     reusable: bool = False
     span: tuple[CopperLayer, CopperLayer] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PadIndexTemplate:
+    objects: tuple[_CopperObject, ...]
+    holes: tuple[_DrilledHole, ...]
+    bins: tuple[tuple[tuple[CopperLayer, int, int], tuple[int, ...]], ...]
+
+
+@lru_cache(maxsize=512)
+def _posed_pad_geometry(footprint_key: IdentityKey, pose_key: IdentityKey):
+    """Only immutable original land geometry, with no rules or clearance result."""
+    footprint, pose = footprint_key.value, pose_key.value
+    return tuple((index, pad, position, placed_pad_shape(position, pad, pose))
+                 for index, pad in enumerate(footprint.pads)
+                 if pad.kind not in {PadKind.NON_PLATED_THROUGH_HOLE, PadKind.APERTURE}
+                 for position in (transformed_local_point(pose, pad.position),))
+
+
+@lru_cache(maxsize=8)
+def _pad_index_template(poses_key: IdentityKey, footprints, nets_key: IdentityKey,
+                        stackup_key: IdentityKey, rules_key: IdentityKey,
+                        routing_rules_key: IdentityKey, bin_size_nm: int):
+    """Immutable pad broad phase shared by copper-only board replacements.
+
+    Identity keys hold their immutable inputs strongly, including complete
+    source policy epochs. No board, mutable index, clearance answer, generated
+    copper, zone or macro reservation is cached here. Breakout-owner strings
+    are immutable source geometry under this complete source epoch, never
+    answers to dynamic copper-clearance queries.
+    """
+    assigned = {pad: net.name for net in nets_key.value for pad in net.pads}
+    footprint_map = dict(footprints)
+    objects, holes, bins = [], [], {}
+    lengths = {rule.net: rule.breakout_length_nm for rule in routing_rules_key.value
+               if rule.breakout_length_nm is not None}
+    lands = {}
+    for pose in sorted(poses_key.value, key=lambda item: item.reference):
+        footprint_key = footprint_map[pose.footprint]
+        footprint = footprint_key.value
+        for pad_index, pad, position, shape in _posed_pad_geometry(footprint_key, IdentityKey(pose)):
+            reference = PadReference(pose.reference, pad.number)
+            net = assigned.get(reference, f"<unconnected:{pose.reference}.{pad.number}:{pad_index}>")
+            layers = ((CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK,)
+                      if pad.kind is PadKind.SMD else stackup_key.value.copper_layers)
+            if pad.kind is PadKind.THROUGH_HOLE and pad.drill is not None:
+                holes.append(_DrilledHole(net, position,
+                    max(pad.drill.width_nm, pad.drill.height_nm) // 2, True))
+            identity = len(objects)
+            objects.append(_CopperObject(net, tuple(layers), shape, footprint.clearance_nm or 0,
+                                         is_pad=True, pad_reference=reference))
+            if reference in assigned and net in lengths:
+                length = lengths[net]
+                lands.setdefault(net, []).append(BreakoutLand(
+                    f"pad:{pose.reference}.{pad.number}:{pad_index}", net, shape,
+                    length, shape.bounds.expanded(length)))
+            bounds = shape.bounds
+            for layer in layers:
+                for x in range(bounds.min_x // bin_size_nm, bounds.max_x // bin_size_nm + 1):
+                    for y in range(bounds.min_y // bin_size_nm, bounds.max_y // bin_size_nm + 1):
+                        bins.setdefault((layer, x, y), []).append(identity)
+    owned = tuple(replace(item, breakout_land=_nearest_region(lands.get(item.net, ()), item.shape.spine))
+                  if item.net in lengths else item for item in objects)
+    return _PadIndexTemplate(owned, tuple(holes),
+                             tuple((key, tuple(ids)) for key, ids in bins.items()))
+
+
+def _pad_template_for(board: PhysicalBoard, bin_size_nm: int) -> _PadIndexTemplate:
+    return _pad_index_template(IdentityKey(board.placements),
+        tuple((name, IdentityKey(footprint)) for name, footprint in board.footprints.items()),
+        IdentityKey(board.nets), IdentityKey(board.stackup), IdentityKey(board.rules),
+        IdentityKey(board.net_routing_rules), bin_size_nm)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,32 +214,13 @@ class RoutingClearanceIndex:
             *(rule.pair_gap_nm or 0 for rule in self.rules.values()
               if rule.breakout_length_nm is not None),
         )
-        assigned = {pad: net.name for net in board.nets for pad in net.pads}
-        for placement in sorted(board.placements, key=lambda item: item.reference):
-            footprint = board.footprints[placement.footprint]
-            for pad_index, pad in enumerate(footprint.pads):
-                if pad.kind in {PadKind.NON_PLATED_THROUGH_HOLE, PadKind.APERTURE}:
-                    continue
-                net = assigned.get(
-                    PadReference(placement.reference, pad.number),
-                    f"<unconnected:{placement.reference}.{pad.number}:{pad_index}>",
-                )
-                layers = (
-                    (CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK,)
-                    if pad.kind is PadKind.SMD else board.stackup.copper_layers
-                )
-                position = transformed_local_point(placement, pad.position)
-                if pad.kind is PadKind.THROUGH_HOLE and pad.drill is not None:
-                    self._holes.append(_DrilledHole(
-                        net, position, max(pad.drill.width_nm, pad.drill.height_nm) // 2,
-                        True,
-                    ))
-                self._add(_CopperObject(
-                    net, tuple(layers), placed_pad_shape(position, pad, placement),
-                    footprint.clearance_nm or 0,
-                    is_pad=True,
-                    pad_reference=PadReference(placement.reference,pad.number),
-                ))
+        template = _pad_template_for(board, bin_size_nm)
+        # The cached template is immutable. Each index owns fresh containers;
+        # Source breakout-owner strings belong to that complete source epoch;
+        # dynamic breakout queries and all mutable reservations remain local.
+        self._objects = list(template.objects)
+        self._holes = list(template.holes)
+        self._bins = {key: list(ids) for key, ids in template.bins}
         for _, hole in non_plated_holes(board):
             self._add(_CopperObject(
                 "<non-plated-hole>", tuple(board.stackup.copper_layers), hole,
@@ -193,7 +248,10 @@ class RoutingClearanceIndex:
         every returned piece. Critical routing owns its coupled width profile.
         """
         if net not in self.breakout.ordinary:
-            return (TrackSegment(net, start, end, width_nm, layer),)
+            tracks = (TrackSegment(net, start, end, width_nm, layer),)
+            # Exact local/global terminal access uses the authored critical
+            # breakout widths too. Ordinary nets retain preferred-width trials.
+            return self.breakout.split_tracks(tracks, width_nm) if net in self.breakout.declared else tracks
         from .surface_path import _track_inside_board
 
         def fits(first: Point, second: Point) -> bool:
@@ -214,7 +272,7 @@ class RoutingClearanceIndex:
 
         Nets without breakout properties check the one ``width_nm`` track.
         """
-        if net not in self.breakout.ordinary:
+        if net not in self.breakout.declared:
             return self.can_track(net, start, end, width_nm, layer)
         return all(self.can_track(net, piece.start, piece.end, piece.width_nm, layer)
                    for piece in self.route_pieces(net, start, end, width_nm, layer))

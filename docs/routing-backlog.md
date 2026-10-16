@@ -45,3 +45,32 @@ and [placement](placement-internals.md). Board qualification stays in consumers.
   ripping separately from implemented failing-tree branch checkpoints.
 - [ ] Extend geometry-bound final-copper return/impedance/current checks and broader
   native acceptance cases. Routing closure never substitutes for CAM or hardware.
+
+## Separate power/ground copper-area planning stage
+
+- [ ] Add an explicit bounded planning stage that couples placement and routing
+  through proposed power and ground areas. Run initial domain planning after
+  coarse placement and before package access/detail routing, and feed infeasible
+  pad access and corridor conflicts back to placement.
+  Inputs include source rail/domain boundaries, stackup/reference layer roles,
+  fixed poses/macros, pin-associated bypasses, fabrication constraints, current
+  obligations, sensitive-node exclusions and critical signal corridor demand.
+  Outputs include owned rail partitions, ground regions, short local supply and
+  return connections/vias, reserved signal corridors and unresolved constraints.
+  Use actual fresh native-filled fragments to validate continuity: source zone
+  outlines and net names alone never establish a connection. Keep DC continuity,
+  local high-frequency return-loop quality and engineering qualification separate.
+  Preserve immutable geometry, required via multiplicity and verified exits;
+  invalidate stale evidence and completely roll back rejected alternatives.
+  Test split islands, necks, antipads, signal reference discontinuities, competing
+  rails, unavailable tools and renamed geometries. Generic algorithms belong in
+  CopperScript; board-specific supply policy and evidence remain in consumers.
+
+
+The separate copper-area planner contract must include partial-zone fixtures:
+a regulator/source outside a local supply island, disconnected same-net islands,
+and a filtered downstream domain. Declaring a local zone must not silently make
+outside terminals unroutable by deferring the entire net without a feed/contact
+route mechanism. Require exact source-to-filled-fragment connectivity and local
+bypass-loop obligations separately. Keep these fixtures and the bounded contact
+contract distinct from implementing the entire planner.

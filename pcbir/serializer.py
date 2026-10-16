@@ -276,6 +276,8 @@ def _part_to_dict(part: PartDefinition) -> dict[str, object]:
                 ],
                 "connection_policy": pin.connection_policy.value,
                 "required_net_traits": sorted(pin.required_net_traits),
+                **({"parallel_power_group": pin.parallel_power_group}
+                   if pin.parallel_power_group is not None else {}),
             }
             for pin in part.pins.values()
         ],

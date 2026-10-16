@@ -74,10 +74,13 @@ def _blocked_middle_board(**options) -> PhysicalBoard:
     pair is unrouted; below fits between the obstacle and the bottom pair.
     """
     centres = ("-1.0", "0", "2.0")
-    return _bundle_board(_rows(centres, "0.5"), _rows(centres, "0.4"), (
+    board = _bundle_board(_rows(centres, "0.5"), _rows(centres, "0.4"), (
         _keepout("wall-above-top-lane", "10", "0", "20", "8.55"),
         _keepout("middle-lane-obstacle", "14", "9.7", "16", "10.8"),
     ), **options)
+    # This ordering case tests congestion on one copper surface.
+    return replace(board, net_routing_rules=tuple(replace(
+        r, allowed_layers=(CopperLayer.FRONT,), max_vias=0) for r in board.net_routing_rules))
 
 
 def _repair_board(connector_centres, walls, obstacle) -> PhysicalBoard:
@@ -204,7 +207,7 @@ def test_a_squeezed_pair_without_spacing_findings_rips_up_its_nearest_neighbour(
     # blocker. Its physically nearest routed pair is ripped up instead.
     board = _bundle_board(_rows(("-1.0", "0", "1.0"), "0.5"), _rows(("-1.2", "0", "1.2"), "0.4"))
     board = replace(board, net_routing_rules=tuple(replace(
-        rule, width_nm=nm_from_mm("0.14"), pair_gap_nm=nm_from_mm("0.26"), clearance_nm=nm_from_mm("0.52"),
+        rule, allowed_layers=(CopperLayer.FRONT,), max_vias=0, width_nm=nm_from_mm("0.14"), pair_gap_nm=nm_from_mm("0.26"), clearance_nm=nm_from_mm("0.52"),
         breakout_length_nm=nm_from_mm("2"), breakout_clearance_nm=nm_from_mm("0.1"),
         breakout_gap_nm=nm_from_mm("0.2")) for rule in board.net_routing_rules))
     guides = route_global(board)

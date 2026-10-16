@@ -44,7 +44,7 @@ def test_ordinary_exits_precede_critical_routes_and_survive_exact_acceptance(mon
         assert not source.tracks and not source.vias
         calls.append("exits")
         return real_fanout(source, settings)
-    def critical(source, route, *, reserved_accesses, on_progress=None):
+    def critical(source, route, *, reserved_accesses, on_progress=None, retained_critical=None, retained_accesses=None):
         assert calls == ["exits"]
         assert reserved_accesses.accesses and not reserved_accesses.pending_pads
         calls.append("critical")
@@ -138,7 +138,7 @@ def test_ready_pipeline_materializes_owned_layer_anchors_before_area(monkeypatch
     from pcbir.pin_escape import RoutingAccess, verified_routing_access
     from pcbir.routing_clearance import RoutingClearanceIndex
     board, guides, settings, _ = fixture()
-    monkeypatch.setattr(flow, "optimize_placement_for_routing", lambda *_:
+    monkeypatch.setattr(flow, "optimize_placement_for_routing", lambda *_, **kwargs:
         PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
     real = flow.route_detailed
     calls, events = [], []
@@ -353,7 +353,7 @@ def test_pattern_proposal_is_revalidated_and_rolls_back_atomically(monkeypatch, 
 def test_ready_preflight_does_not_pay_for_pattern_probes(monkeypatch):
     board, guides, settings, _ = fixture(critical=True)
     real = access.route_critical_nets
-    def critical(source, route, *, reserved_accesses, on_progress=None):
+    def critical(source, route, *, reserved_accesses, on_progress=None, retained_critical=None, retained_accesses=None):
         return real(source, route, reserved_accesses=reserved_accesses, on_progress=on_progress)
     monkeypatch.setattr(access, "route_critical_nets", critical)
     result = access.preflight_package_access(board, guides, settings)
@@ -448,7 +448,7 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
     def escape(source, options):
         proposals.append(source)
         return original if len(proposals) == 1 else alternative
-    def critical(source, route, *, reserved_accesses=None, pair_state_limit=None, on_progress=None):
+    def critical(source, route, *, reserved_accesses=None, pair_state_limit=None, on_progress=None, retained_critical=None, retained_accesses=None):
         searches.append((pair_state_limit, reserved_accesses))
         connected = (case == "easy" or case == "alternate" and reserved_accesses is not original
                      or case == "full_only" and pair_state_limit is None)
@@ -470,6 +470,11 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
             fan = replace(fan, accesses={})
         return replace(template, source=source, global_route=route, fanout=fan, critical=critical,
                        failed_critical_nets=failed)
+    # This scheduler fixture deliberately supplies synthetic, mismatched
+    # geometry. Isolate the full-pattern proposal boundary as well; real source
+    # and witness admission are covered by test_full_probe_source_context.
+    monkeypatch.setattr(access, "_full_ordinary_pattern",
+                        lambda owner, probe, settings: (escape(probe, settings), "proposed"))
     monkeypatch.setattr(access, "route_fanout", escape)
     monkeypatch.setattr(access, "route_critical_nets", critical)
     monkeypatch.setattr(access, "_access_result", evaluate)
@@ -520,7 +525,7 @@ def test_pending_ordinary_exit_can_negotiate_even_when_critical_owner_already_pa
     real_critical = access.route_critical_nets
     calls = []
     critical_calls = []
-    def critical(source, route, *, reserved_accesses, on_progress=None):
+    def critical(source, route, *, reserved_accesses, on_progress=None, retained_critical=None, retained_accesses=None):
         # An already-successful specialized route seeds the proposal; only
         # baseline routing and final full revalidation need a critical search.
         critical_calls.append(reserved_accesses)
@@ -602,3 +607,64 @@ def test_pre_existing_footprint_finding_does_not_fail_package_reservations():
     assert result.status.value != "failed" and all(item.connected for item in result.nets)
     # Final verification still reports the footprint's own finding.
     assert "DRC-HOLE-CLEARANCE" in {f.code for f in run_physical_drc(result.board).findings}
+
+
+def test_unreachable_coarse_status_does_not_disable_exact_pattern_trials():
+    from pcbir.routing import GlobalRoutingStatus
+    board, guides, settings = pattern_trap()
+    failed_guides = replace(guides, status=GlobalRoutingStatus.UNREACHABLE)
+    disabled = access.preflight_package_access(board, failed_guides, settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    assert disabled.failed_critical_nets and not disabled.ready
+    result = access.preflight_package_access(board, failed_guides, settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=1))
+    assert len(result.pattern_trials)==1
+    assert result.pattern_trials[0].outcome=='accepted'
+    assert not result.failed_critical_nets
+    assert result.global_route.status is GlobalRoutingStatus.UNREACHABLE
+    assert result.global_route==failed_guides
+    assert not result.ready  # existing area certification remains authoritative
+    assert result.source==board and board.tracks==board.vias==()
+    assert result.fanout.escaped_pads>=disabled.fanout.escaped_pads
+
+
+def test_fixed_package_can_trial_only_its_source_associated_movable_bypass():
+    from pcbir.physical import DecouplingLink
+    board,_,settings,_=fixture()
+    cap=board.footprints['two']
+    board=replace(board,placements=(*board.placements,Placement('C','two',Point.mm(8,12))),
+        nets=(replace(board.nets[0],pads=(*board.nets[0].pads,PadReference('C','1'))),
+              board.nets[1],PhysicalNet('GND',(PadReference('C','2'),))),
+        placement_rules=(replace(board.placement_rules[0],fixed_position=Point.mm(5,7)),),
+        decoupling_links=(DecouplingLink(PadReference('C','1'),PadReference('U','1'),
+            PadReference('C','2'),'A','GND'),))
+    baseline=access.preflight_package_access(board,route_global(board),settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    baseline=replace(baseline,fanout=replace(baseline.fanout,pending_pads=(PadReference('U','1'),)))
+    trials=list(access.package_placement_trials(baseline,PlacementPlannerOptions(),500000))
+    assert trials and all(ref=='C' for ref,_ in trials)
+    assert all(trial.placements[0]==board.placements[0] for _,trial in trials)
+    assert all(trial.decoupling_links==board.decoupling_links for _,trial in trials)
+    assert all(trial.nets==board.nets for _,trial in trials)
+    assert not list(access.package_placement_trials(baseline,
+        PlacementPlannerOptions(fixed_references={'C'}),500000))
+    assert baseline.source==board
+
+
+def test_bypass_trials_prioritize_target_pins_nearest_measured_failure():
+    from pcbir.physical import DecouplingLink
+    board,_,settings,_=fixture()
+    board=replace(board,placements=(*board.placements,
+        Placement('C_A_FAR','two',Point.mm(8,12)),Placement('C_Z_NEAR','two',Point.mm(11,12))),
+        nets=(replace(board.nets[0],pads=(*board.nets[0].pads,PadReference('C_Z_NEAR','1'))),
+              replace(board.nets[1],pads=(*board.nets[1].pads,PadReference('C_A_FAR','1'))),
+              PhysicalNet('GND',(PadReference('C_A_FAR','2'),PadReference('C_Z_NEAR','2')))),
+        placement_rules=(replace(board.placement_rules[0],fixed_position=Point.mm(5,7)),),
+        decoupling_links=tuple(DecouplingLink(PadReference(c,'1'),PadReference('U',pin),
+            PadReference(c,'2'),net,'GND') for c,pin,net in (('C_A_FAR','2','B'),('C_Z_NEAR','1','A'))))
+    baseline=access.preflight_package_access(board,route_global(board),settings,
+        options=access.PackageAccessOptions(maximum_pattern_trials=0))
+    baseline=replace(baseline,fanout=replace(baseline.fanout,pending_pads=(PadReference('U','1'),)))
+    trials=list(access.package_placement_trials(baseline,PlacementPlannerOptions(),500000))
+    assert trials[0][0]=='C_Z_NEAR'
+    assert all(trial.placements[0]==board.placements[0] for _,trial in trials)

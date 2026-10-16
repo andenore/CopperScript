@@ -44,8 +44,15 @@ def _rational_decisions(monkeypatch):
 
 
 @pytest.mark.parametrize("seed", (12, 441, 925, 1024))
-def test_complete_drc_reports_match_eager_rational_decisions(monkeypatch, seed):
+@pytest.mark.parametrize("breakout", (False, True))
+def test_complete_drc_reports_match_eager_rational_decisions(monkeypatch, seed, breakout):
     board = _board(seed)
+    if breakout:
+        board = replace(board, net_routing_rules=tuple(
+            NetRoutingRule(net.name, clearance_nm=600001,
+                breakout_length_nm=30_000_000,
+                breakout_clearance_nm=board.rules.minimum_clearance_nm)
+            for net in board.nets))
     optimized = drc.run_physical_drc(board)
     assert any(finding.code == "DRC-SHORT" for finding in optimized.findings)
     assert any(finding.code == "DRC-CLEARANCE" for finding in optimized.findings)
@@ -74,7 +81,8 @@ def test_odd_width_track_track_and_track_via_thresholds(distance, violation):
                    for item in findings)
 
 
-def test_passing_copper_pairs_need_no_rational_measurement(monkeypatch):
+@pytest.mark.parametrize("breakout", (False, True))
+def test_passing_copper_pairs_need_no_rational_measurement(monkeypatch, breakout):
     board = _board(12)
     board = replace(board, tracks=(
         TrackSegment("A", Point.mm(2, 2), Point.mm(4, 2), 250001, CopperLayer.FRONT),
@@ -83,11 +91,22 @@ def test_passing_copper_pairs_need_no_rational_measurement(monkeypatch):
         placements=tuple(replace(p, position=Point.mm(8 + i * 3, 16))
                          for i, p in enumerate(board.placements)))
 
+    if breakout:
+        # All these separated objects sit in declared local regions. Passing
+        # the normal spacing needs no exact distance just to decide whether
+        # to report a breakout relaxation.
+        board = replace(board, net_routing_rules=tuple(
+            NetRoutingRule(net.name, clearance_nm=300001,
+                breakout_length_nm=30_000_000,
+                breakout_clearance_nm=board.rules.minimum_clearance_nm)
+            for net in board.nets))
+
     def forbidden(*args, **kwargs):
         raise AssertionError("passing copper pairs must not measure rational distances")
 
     for name in ("point_segment_distance_squared", "segment_distance_squared", "shape_distance_squared"):
         monkeypatch.setattr(drc, name, forbidden)
     findings = []
-    drc._check_copper_spacing(board, findings)
-    assert findings == []
+    relaxations = []
+    drc._check_copper_spacing(board, findings, relaxations)
+    assert findings == [] and relaxations == []

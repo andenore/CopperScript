@@ -53,7 +53,20 @@ def test_library_is_unique_canonical_and_never_mutates_ir():
     name = Path(libraries[0].name).stem
     assert manifest.artifacts[0].content.count(f'(footprint "CopperScript:{name}"') == 2
     renamed = KiCadPcbBackend().generate(replace(board, name="AnotherBoard"))
-    assert renamed.artifacts[3:] == manifest.artifacts[3:]
+    library_assets = lambda result: tuple(item for item in result.artifacts[3:]
+        if not item.name.endswith(".kicad_dru"))
+    assert library_assets(renamed) == library_assets(manifest)
+    rules = [item for item in manifest.artifacts if item.name.endswith(".kicad_dru")]
+    renamed_rules = [item for item in renamed.artifacts if item.name.endswith(".kicad_dru")]
+    assert len(rules) == len(renamed_rules) == 1
+    assert rules[0].content == renamed_rules[0].content
+    assert '(constraint courtyard_clearance (min 0.5mm))' in rules[0].content
+    from pcbir.physical import ComponentPlacementRule
+    authored = replace(board, placement_rules=tuple(ComponentPlacementRule(p.reference,
+        additional_courtyard_gap_nm=100000) for p in board.placements))
+    authored_rules = next(item for item in KiCadPcbBackend().generate(authored).artifacts
+        if item.name.endswith(".kicad_dru"))
+    assert '(constraint courtyard_clearance (min 0.1mm))' in authored_rules.content
 
 
 def test_content_addressing_handles_namespace_sanitization_and_geometry_changes():

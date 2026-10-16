@@ -8,13 +8,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .decoupling_paths import DecouplingCrossLayerWitness
+    from .fanout_bypass_completion import LateBypassCompletionReport
+    from .released_exit_retry import ReleasedExitRetryReport
 
 from .drc import placed_pad_shape, run_physical_drc
-from .geometry import point_in_polygon, point_segment_distance_at_least
+from .geometry import RoundedConvexShape, shapes_clear, point_in_polygon, point_segment_distance_at_least
 from .physical import (
-    BoardSide, CopperLayer, FootprintPad, PadKind, PadReference, PhysicalBoard,
-    Placement, Point, RouteKind, TrackSegment, Via, nm_from_mm,
+    BoardSide, CopperLayer, DecouplingLink, FootprintPad, PadKind, PadReference, PhysicalBoard,
+    Placement, Point, RouteKind, TrackSegment, Via, PadShape, nm_from_mm,
 )
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
@@ -84,6 +89,12 @@ class FanoutResult:
     decoupling_pending: tuple[tuple[PadReference, str], ...] = ()
     # Exact generated semantic feeds, separate from unrelated same-net launches.
     decoupling_tracks: tuple[TrackSegment, ...] = ()
+    # Exact generated semantic supply/return transitions, not arbitrary GND.
+    decoupling_vias: tuple[Via, ...] = ()
+    decoupling_witnesses: tuple[DecouplingCrossLayerWitness, ...] = ()
+    decoupling_pending_links: tuple[tuple[DecouplingLink, str], ...] = ()
+    late_bypass: LateBypassCompletionReport | None = None
+    released_exit_retry: ReleasedExitRetryReport | None = None
 
     @property
     def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
@@ -117,8 +128,11 @@ def route_fanout(
     if len(board.stackup.copper_layers) < 2:
         return FanoutResult(board, MappingProxyType({}), (), 0, 0)
     from .decoupling import route_decouplers
-    bypass = route_decouplers(board, only_nets=only_nets)
+    bypass = route_decouplers(board, only_nets=only_nets, fanout_options=options)
     board = bypass.board
+    from .package_access import _verified_bypass_links
+    bypass_nets = {link.net for link in board.decoupling_links}
+    protected_bypasses = _verified_bypass_links(board, bypass_nets) if bypass_nets else frozenset()
     clearance = RoutingClearanceIndex(board)
     net_by_pad = {pad: net.name for net in board.nets for pad in net.pads
                   if len(net.pads) >= 2}
@@ -199,9 +213,7 @@ def route_fanout(
         choices = []
         for _, _, position, placement, pad in pin_by_ref[reference]:
             sites = (_two_leg_candidates(position, placement.position, candidate_options) if elbows else
-                     _candidates(position, placement.position, candidate_options, diagonal_normal=True)
-                     if placement.rotation_degrees % 90 == 45 else
-                     _candidates(position, placement.position, candidate_options))
+                     _package_candidates(board, placement, pad, candidate_options))
             choices.extend(_legal_choices(board, index, net_by_pad[reference], position,
                 placement, pad, sites, multiple_orders=multiple_orders, outline=outline))
         return tuple(dict.fromkeys(choices))
@@ -314,11 +326,14 @@ def route_fanout(
     before = run_physical_drc(board)
     after = run_physical_drc(routed)
     before_count = {code: sum(item.code == code for item in before.findings) for code in fatal}
-    def failed_gate(findings):
-        return any(sum(item.code == code for item in findings) > before_count[code] for code in fatal)
+    def failed_gate(findings, candidate):
+        from .decoupling_paths import refresh_crosslayer_witnesses
+        return (any(sum(item.code == code for item in findings) > before_count[code] for code in fatal)
+                or (bool(protected_bypasses) and not protected_bypasses <= _verified_bypass_links(candidate, bypass_nets))
+                or bool(refresh_crosslayer_witnesses(candidate,bypass.admitted_path_witnesses)[1]))
     # Pairwise assignment is a proposal, not a substitute for exact whole-board
     # materialization/native acceptance. A failed improvement retains greedy.
-    if assignment is not None and (set(accesses) != set(selected) or failed_gate(after.findings)):
+    if assignment is not None and (set(accesses) != set(selected) or failed_gate(after.findings, routed)):
         selected = greedy
         assignment = replace(assignment, native_accepted=False)
         routed, tracks, vias, accesses = materialize(selected)
@@ -330,14 +345,16 @@ def route_fanout(
          else "all initial candidates blocked by selected escapes") if reference not in accesses else "",
         sum(len(path) == 2 for path, _ in domains[reference]),
         refined_counts.get(reference, 0)) for reference in ordered_refs)
-    if failed_gate(after.findings):
-        return FanoutResult(board, MappingProxyType({}),
-                            tuple(item[1] for item in pads), len(bypass.created_tracks), 0,
-                            created_tracks=bypass.created_tracks, pin_analysis=tuple(
+    if failed_gate(after.findings, routed):
+        return FanoutResult(board, MappingProxyType(dict(bypass.accesses or {})),
+                            tuple(item[1] for item in pads), len(bypass.created_tracks), len(bypass.created_vias),
+                            created_tracks=bypass.created_tracks, created_vias=bypass.created_vias, pin_analysis=tuple(
                                 replace(item, selected_candidate_index=None,
-                                        diagnostic="whole fanout proposal rejected by native DRC")
+                                        diagnostic="whole fanout proposal rejected by physical or bypass witness gate")
                                 for item in analysis), assignment=assignment,
-                            decoupling_tracks=bypass.created_tracks,
+                            decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias,
+                            decoupling_witnesses=bypass.admitted_path_witnesses,
+                            decoupling_pending_links=bypass.pending,
                             decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending))
     def selected_surface(reference):
         path, via = domains[reference][selected[reference]]
@@ -349,13 +366,21 @@ def route_fanout(
     escapes = {reference: RoutingAccess(path[-1].end, surface[reference], path[0].start, path)
                for reference in accesses if selected_surface(reference)
                for path in (domains[reference][selected[reference]][0],)}
-    return FanoutResult(routed, MappingProxyType({reference: anchor for reference, anchor in accesses.items()
-                                                  if reference not in escapes}), tuple(pending),
-                        len(tracks) + len(bypass.created_tracks), len(vias), tuple(vias), tuple(analysis),
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    admitted, reason = refresh_crosslayer_witnesses(routed,bypass.admitted_path_witnesses)
+    if reason:
+        raise ValueError("fanout lost an original admitted bypass path: " + reason)
+    result = FanoutResult(routed, MappingProxyType({**(bypass.accesses or {}),
+                        **{reference: anchor for reference, anchor in accesses.items() if reference not in escapes}}), tuple(pending),
+                        len(tracks) + len(bypass.created_tracks), len(vias) + len(bypass.created_vias),
+                        (*bypass.created_vias, *vias), tuple(analysis),
                         (*bypass.created_tracks, *tracks), assignment,
                         surface_accesses=MappingProxyType(escapes) if surface else None,
                         decoupling_pending=tuple((link.capacitor, reason) for link, reason in bypass.pending),
-                        decoupling_tracks=bypass.created_tracks)
+                        decoupling_tracks=bypass.created_tracks, decoupling_vias=bypass.created_vias,
+                        decoupling_witnesses=admitted,decoupling_pending_links=bypass.pending)
+    from .fanout_bypass_completion import complete_late_bypasses
+    return complete_late_bypasses(result,bypass.pending,options,only_nets=only_nets)
 
 
 def _surface_layer(board, net, rule, placement) -> CopperLayer | None:
@@ -390,15 +415,16 @@ def _maze_choices(board, clearance, net, pins, options) -> tuple[EscapeCandidate
         span = physical_via_span(board, side, next(layer for layer in allowed if layer is not side))
         if span is None:
             continue
-        bounds = placed_pad_shape(position, pad, placement).bounds
+        pad_shape = placed_pad_shape(position, pad, placement)
         result = surface_path_to_via(
             board, clearance, net, position, width, side,
             step_nm=options.refinement_step_nm, radius_nm=options.maximum_radius_nm,
             via_size_nm=size, via_drill_nm=drill, via_layers=span[:2],
             state_budget=options.maze_state_budget,
-            accept_via=lambda p: not (
-                bounds.min_x - size // 2 <= p.x_nm <= bounds.max_x + size // 2
-                and bounds.min_y - size // 2 <= p.y_nm <= bounds.max_y + size // 2),
+            accept_via=lambda p: shapes_clear(RoundedConvexShape((p,), size // 2), pad_shape, 1),
+            # The shared via predicate excludes exact pad copper on every
+            # crossed layer, including same-net/unassigned pads. A rectangular
+            # pad bound would wrongly exclude circular-land interstices.
         )
         if result is not None:
             path, endpoint = result
@@ -421,15 +447,13 @@ def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: 
         return ()
     width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
     size, drill = board.rules.default_via_size_nm, board.rules.default_via_drill_nm
-    bounds = placed_pad_shape(position, pad, placement).bounds
     choices = []
     for endpoint in endpoints:
         margin = size // 2 + board.rules.minimum_clearance_nm
         if not outline.admits(endpoint, margin):
             continue
-        if (bounds.min_x - size // 2 <= endpoint.x_nm <= bounds.max_x + size // 2
-                and bounds.min_y - size // 2 <= endpoint.y_nm <= bounds.max_y + size // 2):
-            continue  # No unqualified ordinary via-in-pad process.
+        # can_via checks the complete annulus against exact placed pad shapes;
+        # do not reject a circular-pad corner gap by its rectangular bounds.
         coincident = tuple(v for v in board.vias if v.position == endpoint)
         existing = next((v for v in coincident if v.net == net
                          and (v.from_layer, v.to_layer) == span[:2]), None)
@@ -469,6 +493,50 @@ def _reserve(board, clearance, tracks, vias, candidate: EscapeCandidate) -> bool
         vias.append(via)
         clearance.add_via(via, locked=True)
     return True
+
+
+
+def _interstitial_sites(board, placement, pad, options):
+    """At most four cell centres from actual circular-land geometry.
+
+    A complete local square cell is required; no pitch or package name is
+    assumed. These are proposals only. Ordinary annulus/drill, all-layer pad
+    exclusions, source budgets and path checks still apply in _legal_choices.
+    """
+    if pad.kind is not PadKind.SMD or pad.shape is not PadShape.CIRCLE:
+        return ()
+    points = {p.position for p in board.footprints[placement.footprint].pads
+              if p.kind is PadKind.SMD and p.shape is PadShape.CIRCLE}
+    x, y = pad.position.x_nm, pad.position.y_nm
+    sites = []
+    for sx, sy in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+        dx = min((sx*(p.x_nm-x) for p in points if p.y_nm == y
+                  and sx*(p.x_nm-x) > 0), default=0)
+        dy = min((sy*(p.y_nm-y) for p in points if p.x_nm == x
+                  and sy*(p.y_nm-y) > 0), default=0)
+        if (not dx or dx != dy or dx > options.maximum_neighbor_distance_nm
+                or dx*dx > 2*options.maximum_radius_nm**2
+                or Point(x+sx*dx, y+sy*dy) not in points):
+            continue
+        sites.append(transformed_local_point(placement, Point(x+sx*(dx//2), y+sy*(dy//2))))
+    start = transformed_local_point(placement, pad.position)
+    return tuple(sorted(set(sites), key=lambda p: (
+        -((p.x_nm-start.x_nm)*(start.x_nm-placement.position.x_nm)
+          +(p.y_nm-start.y_nm)*(start.y_nm-placement.position.y_nm)), p.x_nm, p.y_nm)))
+
+
+def _package_candidates(board, placement, pad, options):
+    # Put the short diagonal dogbones before long outward rays. The shared
+    # caller's site limit includes these candidates, including for bypasses.
+    sites = _interstitial_sites(board, placement, pad, options)
+    yield from sites
+    start = transformed_local_point(placement, pad.position)
+    rays = (_candidates(start, placement.position, options, diagonal_normal=True)
+            if placement.rotation_degrees % 90 == 45 else
+            _candidates(start, placement.position, options))
+    for point in rays:
+        if point not in sites:
+            yield point
 
 
 def _candidates(position: Point, center: Point, options: FanoutOptions, *, diagonal_normal=False):

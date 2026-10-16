@@ -218,6 +218,17 @@ Standalone parts declare `domains` and `directions`, with optional
 `passive`; drive modes are `push_pull`, `open_drain`, and `high_impedance`.
 Pins may use `connection = required`, `do_not_connect`, `optional`, or `normal`
 and may declare comma-separated `required_net_traits`.
+
+Power-only output pins may explicitly declare
+parallel_power_group = "CORE". Matching names permit a manufacturer-approved
+external tie only within one component instance. Other output groups, separate
+regulators and digital push-pull outputs still conflict. Declare this only from
+the applicable manufacturer's external connection contract; it is not evidence
+of internal package bonding. It does not join physical pads, omit either contact,
+or alter routing/DRC. Use connection = required when each contact is mandatory.
+The value is a quoted identifier; profileless, mixed-domain, input and
+bidirectional pins cannot use it.
+
 As an exception, `optional` or `do_not_connect` pins may omit their electrical
 profile to preserve a known physical pad whose function has not yet been
 verified. An unmodeled optional pin cannot be connected to any net: ERC reports
@@ -658,6 +669,16 @@ supply GND {
 The supply name is also its net name unless `net = OTHER_NET;` is specified.
 `external = true` marks a rail established outside the modeled board.
 
+A standalone passive part can explicitly declare `dc_power_path = "P1,P2";`
+between two passive, power-only pins. ERC follows this path only from an existing
+source and only when the part is assembled and both ends connect unambiguously.
+An unpowered loop cannot create a source. This describes the intended DC feed
+through a ferrite or similar component; it does not merge nets, bond PCB lands,
+assign an ideal-inductor model, or prove voltage drop, current, bias impedance,
+inrush or resonance. Declare each downstream supply's nominal voltage separately.
+Assembly-lock population changes need their own engineering validation; basic
+source ERC does not load the assembly lock.
+
 ## I²C interfaces
 
 Interfaces add protocol intent without duplicating net connectivity.
@@ -754,7 +775,7 @@ constraint routing(USB_DP) {
 }
 ```
 
-Known constraint kinds are `max_distance`, `min_distance`,
+Known constraint kinds are `max_distance`, `min_distance`, `courtyard_gap`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
 `placement_group`, `keepout`, `routing`, `copper_zone`, `via_in_pad`,
 `length_match`, `hole_clearance`, and `note`. Coordinates and rectangle dimensions
@@ -764,6 +785,36 @@ including 45-degree increments; unconstrained components still default to
 0, 90, 180, or 270 degrees. Use `allowed_orientations` when a diagonal
 placement is acceptable for assembly and interface alignment. `note` remains
 metadata and has no placement effect.
+
+`courtyard_gap` declares a hard additional gap between audited component
+courtyards. It does not shrink the courtyard or change copper, pad, mask,
+paste, routing-access or assembly-process checks:
+
+```copper
+constraint courtyard_gap(C1, C2) { additional = 0.1 mm; }
+```
+
+Targets must be components, including module-qualified component paths, rather
+than pins. `additional` must be a nonnegative length exactly representable in
+integer nanometres. Zero permits no additional gap; courtyard interiors still
+must not overlap. Only hard `require` (the default) and `external` modes are
+supported; this declaration is not a preferred/rework spacing objective.
+`placement_region` may include `courtyard_gap = 0.1 mm;` as shorthand for the
+same member policy. Repeated declarations combine by maximum, independently
+of declaration order, and an absent field never erases an explicit value.
+
+Each ordinary same-side pair uses the maximum of its two member gaps. A member
+without an explicit policy retains the ordinary 0.5 mm default, so annotating
+one member does not relax its unannotated neighbour. An audited rigid cluster's
+internal-clearance contract replaces the generic fallback inside that cluster;
+explicit member gaps can only tighten that contract. Source fixed poses,
+orientations, sides, regions and immutable macro geometry remain authoritative.
+Planner APIs retain their explicit caller fallback behavior for unannotated
+members. Changing source policy changes the physical intent and invalidates
+evidence bound to the earlier inputs. A declared dense prototype gap is a
+design choice, not a guarantee of vendor, assembler, CAM or electrical
+qualification; selected parts and manufacturing processes require separate
+checks.
 
 All constraints accept the ownership metadata `id`, `mode`, `consumers`, and
 `verifier`. Modes are `require`, `target`, `prefer`, `assume`, and `external`.

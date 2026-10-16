@@ -32,6 +32,8 @@ from .physical import (
     BoardOutline,
     BoardSide,
     ComponentPlacementRule,
+    component_pair_courtyard_gap_nm,
+    DEFAULT_ADDITIONAL_COURTYARD_GAP_NM,
     CopperKeepout,
     CopperLayer,
     Nanometres,
@@ -58,7 +60,7 @@ from .physical import (
 class PlacementPlannerOptions:
     grid_step_nm: Nanometres = nm_from_mm("1")
     edge_clearance_nm: Nanometres = nm_from_mm("2")
-    component_clearance_nm: Nanometres = nm_from_mm("0.5")
+    component_clearance_nm: Nanometres = DEFAULT_ADDITIONAL_COURTYARD_GAP_NM
     congestion_bin_nm: Nanometres = nm_from_mm("5")
     analytical_iterations: int = 40
     analytical_step_mm: float = 0.08
@@ -157,6 +159,16 @@ class PlacementCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class PlacementSeedFailure:
+    """Discarded bounded attempt, never a partial placement certificate."""
+
+    seed: int
+    failed_reference: str
+    accepted_count: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class PlacementStatistics:
     analytical_iterations: int
     exact_repair_count: int
@@ -164,10 +176,23 @@ class PlacementStatistics:
     refinement_move_count: int
     refinement_swap_count: int
     routing_feedback_passes: int
+    failed_seed_attempts: tuple[PlacementSeedFailure, ...] = ()
 
 
 class PlacementAlgorithmError(ValueError):
-    pass
+    def __init__(self, message, *, failed_seed_attempts=()):
+        super().__init__(message)
+        self.failed_seed_attempts = tuple(failed_seed_attempts)
+
+
+class _BoundedLegalizationFailure(PlacementAlgorithmError):
+    """Only exhausted mutable legalization can discard one planned seed."""
+
+    def __init__(self, message, *, failed_reference, accepted_placements):
+        super().__init__(message)
+        self.failed_reference = failed_reference
+        self.accepted_placements = tuple(accepted_placements[ref]
+            for ref in sorted(accepted_placements))
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +256,7 @@ def generate_placement_candidates(
         raise PlacementAlgorithmError("; ".join(conflicts))
     attempts: list[PlacementCandidate] = []
     closest_rejected = None
+    failed_seed_attempts: list[PlacementSeedFailure] = []
     spacing = _escape_model(board, options)
     seeds = max(2, options.candidate_count)
     for seed in range(seeds):
@@ -243,9 +269,16 @@ def generate_placement_candidates(
         continuous, seeded_original, phase_options = _place_rigid_clusters(
             board, continuous, placements, options
         )
-        legalized, exact_repairs = _legalize(
-            board, continuous, seeded_original, phase_options, seed
-        )
+        try:
+            legalized, exact_repairs = _legalize(
+                board, continuous, seeded_original, phase_options, seed
+            )
+        except _BoundedLegalizationFailure as exc:
+            failed_seed_attempts.append(PlacementSeedFailure(seed,
+                exc.failed_reference, len(exc.accepted_placements), str(exc)))
+            if progress:
+                progress("legalization_failed", seed, seeds)
+            continue
         legalized, relative_before = _repair_relative_constraints(
             board, legalized, phase_options, spacing
         )
@@ -292,10 +325,21 @@ def generate_placement_candidates(
         )
     if not attempts:
         details = _local_failure_details(board, closest_rejected[1], options) if closest_rejected else ""
-        raise PlacementAlgorithmError(
-            "no legal placement candidate satisfies all represented physical constraints"
-            + (f"; {details}" if details else "")
-        )
+        message = "no legal placement candidate satisfies all represented physical constraints"
+        if details:
+            message += f"; {details}"
+        if failed_seed_attempts:
+            best_failure = min(failed_seed_attempts,
+                key=lambda failure: (-failure.accepted_count, failure.seed))
+            message += f"; {best_failure.reason}; bounded seed attempts: " + "; ".join(
+                f"seed {failure.seed}: {failure.failed_reference} after {failure.accepted_count} accepted placements"
+                for failure in failed_seed_attempts)
+        raise PlacementAlgorithmError(message,
+            failed_seed_attempts=tuple(failed_seed_attempts))
+    if failed_seed_attempts:
+        failures = tuple(failed_seed_attempts)
+        attempts = [replace(candidate, statistics=replace(candidate.statistics,
+            failed_seed_attempts=failures)) for candidate in attempts]
     frontier = [
         candidate
         for candidate in attempts
@@ -506,8 +550,14 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
     from .geometry import RoundedConvexShape, shapes_clear
     from .mechanical import shape_in_outline, hole_shape
     from .clusters import cluster_edge_opening_rejections
+    from .placement_holes import footprint_holes_clear
     errors = list(cluster_edge_opening_rejections(board, placements))
     for ref, pose in sorted(placements.items()):
+        if not footprint_holes_clear(board, pose, {}):
+            errors.append(f"{ref}: own non-plated drill violates pad clearance")
+        for other_ref, other in sorted(placements.items()):
+            if other_ref < ref and not footprint_holes_clear(board, pose, {other_ref: other}):
+                errors.append(f"{ref} / {other_ref}: footprint drill violates courtyard or copper clearance")
         rule = _rules(board).get(ref)
         if ref in options.fixed_references and pose != original[ref]:
             errors.append(f"{ref}: temporary session lock fixes the complete pose")
@@ -927,7 +977,8 @@ def _analytical_place(
                 right_width, right_height = _half_extents_mm(board, source[right])
                 dx = coordinates[left][0] - coordinates[right][0]
                 dy = coordinates[left][1] - coordinates[right][1]
-                clearance = options.component_clearance_nm / 1_000_000
+                clearance = component_pair_courtyard_gap_nm(
+                    board, left, right, fallback_nm=options.component_clearance_nm) / 1_000_000
                 limit_x = left_width + right_width + clearance
                 limit_y = left_height + right_height + clearance
                 overlap_x = limit_x - abs(dx)
@@ -1146,9 +1197,10 @@ def _legalize(
             )
             if repaired is None:
                 if choice is None:
-                    raise PlacementAlgorithmError(
+                    raise _BoundedLegalizationFailure(
                         f"cannot legalize component {reference!r} within the local repair budget; "
-                        + _local_failure_details(board, {**placed, reference: targets[reference]}, options)
+                        + _local_failure_details(board, {**placed, reference: targets[reference]}, options),
+                        failed_reference=reference, accepted_placements=placed,
                     )
                 placed[reference] = choice
             else:
@@ -1327,7 +1379,9 @@ def _relative_candidates(
                         if other.side is not placement.side:
                             continue
                         bounds = _point_bounds(_placement_polygon(board, other))
-                        gap = options.component_clearance_nm
+                        gap = component_pair_courtyard_gap_nm(
+                            board, placement.reference, other.reference,
+                            fallback_nm=options.component_clearance_nm)
                         edges_x = (bounds[0]-gap-own_bounds[2], bounds[2]+gap-own_bounds[0])
                         edges_y = (bounds[1]-gap-own_bounds[3], bounds[3]+gap-own_bounds[1])
                         # Distant objects cannot bound this local neighbourhood.
@@ -1393,6 +1447,26 @@ def _exact_repair(
     # Prefer actual blockers and local companions to an unrelated insertion tail.
     blockers: dict[str, int] = {}
     probes = _relative_candidates(board, failed, targets[failed], placed, options)
+    rule = _rules(board).get(failed)
+    if rule is not None and rule.region is not None:
+        # Named-region-only components have no relative proposals. Discover
+        # their actual held blockers from the same ordinary regional domain
+        # used by legalization, rather than selecting an unrelated tail.
+        # Bound supplemental raw probes as well as the unchanged accepted
+        # blocker-probe allowance; relative proposals retain their preference.
+        positions = _candidate_positions(board, targets[failed], options)
+        angles = _allowed_orientations(board, failed)
+        count = len(positions) * len(angles)
+        sample_count = min(options.exact_repair_candidates, count)
+        # A nearest-prefix samples only a few centers and can miss the held
+        # blockers at the other end of the same hard region. Spread the same
+        # raw probe allowance over the complete finite ordinary domain.
+        indices = (round(i * (count - 1) / max(1, sample_count - 1))
+                   for i in range(sample_count))
+        general = (replace(targets[failed], position=positions[index // len(angles)],
+                           rotation_degrees=angles[index % len(angles)])
+                   for index in indices)
+        probes = chain(probes, general)
     checked = 0
     for candidate in probes:
         if not _legal(candidate, fixed, board, options):
@@ -1409,7 +1483,8 @@ def _exact_repair(
                                                   -blockers.get(ref, 0), -order[ref], ref))
     repair = [failed, *neighbours[:options.exact_repair_limit-1]]
     base = {ref: item for ref, item in placed.items() if ref not in repair}
-    return _pack_local_components(board, repair, base, targets, options, allow_general=True)
+    return _pack_local_components(board, repair, base, targets, options, allow_general=True,
+                                  _contact_anchors=tuple(placed[ref] for ref in repair if ref in placed))
 
 
 def _anchored_candidate_rules(board, anchors):
@@ -1445,73 +1520,274 @@ def _anchored_candidate_rules(board, anchors):
                  if hops > 1 and target.reference not in anchors)
 
 
-def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False):
+def _courtyard_contact_candidates(board, target, anchors, options, *, excluded, limit):
+    """Bounded support-edge sites; the complete source gate stays authoritative."""
+    if limit <= 0:
+        return ()
+    source = {pose.reference: pose for pose in board.placements}
+    original = source.get(target.reference)
+    if (original is None or original.footprint != target.footprint
+            or target.reference in _fixed_placements(board, {target.reference: target}, options)
+            or any(member.reference == target.reference
+                   for cluster in board.rigid_clusters for member in cluster.members)):
+        return ()
+    rule = _rules(board).get(target.reference)
+    if rule is None or rule.region is None:
+        return ()
+    region = next(item for item in board.regions if item.name == rule.region)
+    x0, y0, x1, y1 = _outline_bounds(region.outline)
+    seen = set(excluded)
+    result = {}
+    # The caller supplies finite source/base/member tuples. Deduplicate poses
+    # before their bounded linear support combinations; no Cartesian product
+    # of component domains is constructed here.
+    local = []
+    for anchor in dict.fromkeys(anchors):
+        owner = source.get(anchor.reference)
+        if (owner is None or owner.footprint != anchor.footprint
+                or anchor.side is not target.side):
+            continue
+        box = _point_bounds(_placement_polygon(board, anchor))
+        # A removed member's own pose is a proposal support anchor, not a
+        # collision pair. Preserve that bounded source geometry without asking
+        # the distinct-component resolver to give self-contact authority.
+        gap = (rule.additional_courtyard_gap_nm
+               if anchor.reference == target.reference and rule.additional_courtyard_gap_nm is not None
+               else options.component_clearance_nm if anchor.reference == target.reference
+               else component_pair_courtyard_gap_nm(board, target.reference, anchor.reference,
+                                                     fallback_nm=options.component_clearance_nm))
+        if (box[2]+gap < x0 or box[0]-gap > x1
+                or box[3]+gap < y0 or box[1]-gap > y1):
+            continue
+        local.append((anchor, box, gap))
+    local.sort(key=lambda item: (
+        abs(item[0].position.x_nm-target.position.x_nm)
+        + abs(item[0].position.y_nm-target.position.y_nm), item[1], item[0].rotation_degrees))
+
+    def finish():
+        return tuple(sorted(result, key=lambda pose: (
+            abs(pose.position.x_nm-target.position.x_nm)
+            + abs(pose.position.y_nm-target.position.y_nm),
+            pose.position.y_nm, pose.position.x_nm, pose.rotation_degrees)))
+
+    def add(angle, x, y, allowed):
+        if allowed[0] <= x <= allowed[2] and allowed[1] <= y <= allowed[3]:
+            candidate = replace(target, position=Point(x, y), rotation_degrees=angle)
+            if candidate not in seen:
+                result.setdefault(candidate, None)
+        return len(result) >= limit
+
+    for angle in _allowed_orientations(board, target.reference):
+        origin = replace(target, position=Point(0, 0), rotation_degrees=angle)
+        lx, ly, rx, ry = _point_bounds(_placement_polygon(board, origin))
+        allowed = (x0-lx, y0-ly, x1-rx, y1-ry)
+        if allowed[0] > allowed[2] or allowed[1] > allowed[3]:
+            continue
+        region_xs = (allowed[0], (allowed[0]+allowed[2])//2, allowed[2])
+        region_ys = (allowed[1], (allowed[1]+allowed[3])//2, allowed[3])
+        for x in region_xs:
+            for y in region_ys:
+                if add(angle, x, y, allowed):
+                    return finish()
+        for anchor, (ax0, ay0, ax1, ay1), gap in local:
+            xs = tuple(dict.fromkeys((target.position.x_nm,
+                (ax0+ax1-lx-rx)//2, ax0-lx, ax1-rx, *region_xs)))
+            ys = tuple(dict.fromkeys((target.position.y_nm,
+                (ay0+ay1-ly-ry)//2, ay0-ly, ay1-ry, *region_ys)))
+            for x in (ax0-gap-rx, ax1+gap-lx):
+                for y in ys:
+                    if add(angle, x, y, allowed):
+                        return finish()
+            for y in (ay0-gap-ry, ay1+gap-ly):
+                for x in xs:
+                    if add(angle, x, y, allowed):
+                        return finish()
+            # Conservative nm rounding for corner support; _legal still
+            # checks the true polygon, source side, edge and held geometry.
+            diagonal = ceil(gap/hypot(1, 1))
+            for x in (ax0-rx-diagonal, ax1-lx+diagonal):
+                for y in (ay0-ry-diagonal, ay1-ly+diagonal):
+                    if add(angle, x, y, allowed):
+                        return finish()
+    return finish()
+
+
+def _pack_local_components(board, references, base, targets, options, *, allow_general, fine=False, _region_state=None, _contact_anchors=(), _work=None):
     """One bounded domain search for anchored companions and local repair.
 
     Domains contain individually legal poses; courtyard forward checking removes
     obvious conflicts, while every selected pose still passes the complete gate.
     This changes flexible positions, never rigid membership or source locks.
     """
+    if _work is not None:
+        _work.setdefault("domain_probes", {})
+        _work.setdefault("retained_domains", {})
+        _work.setdefault("search_operations", 0)
+        _work.setdefault("heuristic_checks", 0)
+        _work["operator_calls"] = _work.get("operator_calls", 0) + 1
+        _work["limits"] = {"raw_per_member": options.legalization_candidates*64,
+            "retained_per_member": options.legalization_candidates*4,
+            "search": options.legalization_candidates*options.exact_repair_candidates*64,
+            "heuristic": options.legalization_candidates*options.exact_repair_candidates*64//3}
+    if _region_state is not None:
+        # Private continuation is bound to this exact immutable scene/base and
+        # target set. It carries residual resources, never a new phase budget.
+        if (_region_state["board"] is not board
+                or _region_state["references"] != tuple(references)
+                or _region_state["base"] != base
+                or _region_state["targets"] != targets
+                or _region_state["options"] != options
+                or _region_state["allow_general"] != allow_general
+                or _region_state.get("contact_anchors", ()) != tuple(_contact_anchors)
+                or not 0 < _region_state["search_remaining"] <= options.legalization_candidates*options.exact_repair_candidates*64
+                or not 0 <= _region_state["heuristic_remaining"] <= options.legalization_candidates*options.exact_repair_candidates*64//3
+                or set(_region_state["domains"]) != set(references)
+                or set(_region_state["domain_remaining"]) != set(references)
+                or not _region_state["refinable"] <= set(references)
+                or any(not 0 <= value <= options.legalization_candidates*64
+                       for value in _region_state["domain_remaining"].values())):
+            return None
     rules = tuple(r for r in board.relative_rules if any(t.reference in references for t in r.targets))
     derived = _anchored_candidate_rules(board, base)
     candidate_board = replace(board, relative_rules=(*board.relative_rules, *derived)) if derived else board
     domains = {}
     limit = max(2, options.legalization_candidates*4)
     refinable = False
-    for ref in references:
-        target = targets[ref]
-        obstacles = _local_obstacles(board, ref, base)
-        own_rules = tuple(r for r in rules if any(t.reference == ref for t in r.targets))
-        relative = _relative_candidates(candidate_board, ref, target, base, options)
-        general = (replace(target, position=point, rotation_degrees=angle)
-                   for point in _candidate_positions(board, target, options)
-                   for angle in _allowed_orientations(board, ref)) if allow_general else ()
-        candidates = _bounded_local_candidates(relative, options.legalization_candidates*64, general)
-        legal = []
-        seen = set()
-        for index, candidate in enumerate(candidates):
-            if index >= options.legalization_candidates*64:
-                break
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
-                    and _legal(candidate, obstacles, board, options)):
-                legal.append(candidate)
-        if not legal:
-            return None
-        narrow = (len(legal) <= options.legalization_candidates
-                  and any(r.kind is RelativePlacementKind.MAX_DISTANCE
-                          and all(t.pad is not None for t in r.targets) for r in own_rules))
-        refinable |= narrow
-        if fine and narrow:
-            # Quarter-grid poses can individually fit a tight row while missing
-            # the small shifts needed to fit together. Refine only narrow
-            # domains; expanding broad bulk-part domains adds no useful space.
-            neighbours = dict.fromkeys(legal)
-            step = min(options.grid_step_nm, nm_from_mm("0.1"))
-            for pose in legal:
-                for dx in (-step, 0, step):
-                    for dy in (-step, 0, step):
-                        neighbours.setdefault(replace(pose, position=Point(
-                            pose.position.x_nm+dx, pose.position.y_nm+dy)), None)
-            candidates = tuple(neighbours)
-            probe_limit = options.legalization_candidates*64
-            if len(candidates) > probe_limit:
-                candidates = tuple(candidates[round(i*(len(candidates)-1)/(probe_limit-1))]
-                                   for i in range(probe_limit))
-            legal = [pose for pose in candidates
-                     if _relative_penalty(board, {**base, ref: pose}, rules=own_rules) == 0
-                     and _legal(pose, obstacles, board, options)]
-        # Preserve candidates across the complete local range, including a
-        # second row; taking only the closest positions can erase the solution.
-        if len(legal) > limit:
-            legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
-        domains[ref] = tuple(legal)
+    region_refinable = set()
+    region_probe_remaining = {}
+    immutable_refs = set(_fixed_placements(board, targets, options)) | {
+        member.reference for cluster in board.rigid_clusters for member in cluster.members}
+    source_poses = {pose.reference: pose for pose in board.placements}
+    held_seeds = tuple(pose for pose in _contact_anchors
+        if pose.reference in references and pose.reference not in immutable_refs
+        and pose.reference in targets and pose.reference in source_poses
+        and pose.footprint == targets[pose.reference].footprint == source_poses[pose.reference].footprint
+        and pose.side is targets[pose.reference].side
+        and pose.rotation_degrees in _allowed_orientations(board, pose.reference)
+        and _legal(pose, base, board, options))
+    anchors = (*base.values(), *(targets[ref] for ref in references), *held_seeds)
+    if _region_state is None:
+        for ref in references:
+            target = targets[ref]
+            obstacles = _local_obstacles(board, ref, base)
+            own_rules = tuple(r for r in rules if any(t.reference == ref for t in r.targets))
+            relative = _relative_candidates(candidate_board, ref, target, base, options)
+            general = (replace(target, position=point, rotation_degrees=angle)
+                       for point in _candidate_positions(board, target, options)
+                       for angle in _allowed_orientations(board, ref)) if allow_general else ()
+            candidates = _bounded_local_candidates(relative, options.legalization_candidates*64, general)
+            legal = []
+            seen = set()
+            probed = 0
+            for index, candidate in enumerate(candidates):
+                if index >= options.legalization_candidates*64:
+                    break
+                probed += 1
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
+                        and _legal(candidate, obstacles, board, options)):
+                    legal.append(candidate)
+            ordinary_count = len(legal)
+            rule = _rules(board).get(ref)
+            if (not fine and allow_general and rule is not None and rule.region is not None
+                    and not own_rules and ref not in immutable_refs and ordinary_count < limit):
+                contacts = _courtyard_contact_candidates(board, target, anchors, options,
+                    excluded=seen, limit=options.legalization_candidates*64-probed)
+                for candidate in contacts:
+                    probed += 1
+                    if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
+                            and _legal(candidate, obstacles, board, options)):
+                        legal.append(candidate)
+            region_probe_remaining[ref] = options.legalization_candidates*64 - probed
+            if _work is not None:
+                _work["domain_probes"][ref] = _work["domain_probes"].get(ref, 0) + probed
+            if not legal:
+                if _work is not None:
+                    _work["outcome"] = "empty_domain"
+                    _work["empty_domain"] = ref
+                return None
+            narrow = (len(legal) <= options.legalization_candidates
+                      and any(r.kind is RelativePlacementKind.MAX_DISTANCE
+                              and all(t.pad is not None for t in r.targets) for r in own_rules))
+            refinable |= narrow
+            rule = _rules(board).get(ref)
+            if (allow_general and rule is not None and rule.region is not None
+                    and not own_rules and len(legal) <= options.legalization_candidates
+                    and ref not in immutable_refs and region_probe_remaining[ref] > 0):
+                region_refinable.add(ref)
+            if fine and narrow:
+                # Quarter-grid poses can individually fit a tight row while missing
+                # the small shifts needed to fit together. Refine only narrow
+                # domains; expanding broad bulk-part domains adds no useful space.
+                neighbours = dict.fromkeys(legal)
+                step = min(options.grid_step_nm, nm_from_mm("0.1"))
+                for pose in legal:
+                    for dx in (-step, 0, step):
+                        for dy in (-step, 0, step):
+                            neighbours.setdefault(replace(pose, position=Point(
+                                pose.position.x_nm+dx, pose.position.y_nm+dy)), None)
+                candidates = tuple(neighbours)
+                probe_limit = options.legalization_candidates*64
+                if len(candidates) > probe_limit:
+                    candidates = tuple(candidates[round(i*(len(candidates)-1)/(probe_limit-1))]
+                                       for i in range(probe_limit))
+                legal = [pose for pose in candidates
+                         if _relative_penalty(board, {**base, ref: pose}, rules=own_rules) == 0
+                         and _legal(pose, obstacles, board, options)]
+            # Preserve candidates across the complete local range, including a
+            # second row; taking only the closest positions can erase the solution.
+            if len(legal) > limit:
+                if not fine and ordinary_count < limit:
+                    contacts = legal[ordinary_count:]
+                    slots = limit-ordinary_count
+                    legal = legal[:ordinary_count] + [
+                        contacts[round(i*(len(contacts)-1)/max(1, slots-1))] for i in range(slots)]
+                else:
+                    legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
+            domains[ref] = tuple(legal)
+    else:
+        for ref in references:
+            legal = list(_region_state["domains"][ref])
+            if ref in _region_state["refinable"]:
+                # Reuse accepted coarse sites. Only new neighbor probes spend
+                # the unused original per-member domain allowance.
+                seen = set(legal)
+                neighbours = {}
+                step = min(options.grid_step_nm, nm_from_mm("0.1"))
+                for pose in legal:
+                    for dx in (-step, 0, step):
+                        for dy in (-step, 0, step):
+                            candidate = replace(pose, position=Point(
+                                pose.position.x_nm+dx, pose.position.y_nm+dy))
+                            if candidate not in seen:
+                                neighbours.setdefault(candidate, None)
+                candidates = tuple(neighbours)
+                available = _region_state["domain_remaining"][ref]
+                if len(candidates) > available:
+                    candidates = tuple(candidates[round(i*(len(candidates)-1)/max(1, available-1))]
+                                       for i in range(available))
+                obstacles = _local_obstacles(board, ref, base)
+                own_rules = tuple(r for r in rules if any(t.reference == ref for t in r.targets))
+                for candidate in candidates:
+                    _region_state["domain_remaining"][ref] -= 1
+                    if _work is not None:
+                        _work["domain_probes"][ref] = _work["domain_probes"].get(ref, 0) + 1
+                    if (_relative_penalty(board, {**base, ref: candidate}, rules=own_rules) == 0
+                            and _legal(candidate, obstacles, board, options)):
+                        legal.append(candidate)
+            if len(legal) > limit:
+                legal = [legal[round(i*(len(legal)-1)/(limit-1))] for i in range(limit)]
+            domains[ref] = tuple(legal)
+    if _work is not None:
+        _work["retained_domains"].update({ref: len(poses) for ref, poses in domains.items()})
     polygons = {ref: tuple(_placement_polygon(board, pose) for pose in poses)
                 for ref, poses in domains.items()}
-    remaining = options.legalization_candidates*options.exact_repair_candidates*64
-    heuristic_remaining = remaining//3
+    remaining = (options.legalization_candidates*options.exact_repair_candidates*64
+                 if _region_state is None else _region_state["search_remaining"])
+    heuristic_remaining = (remaining//3 if _region_state is None
+                           else _region_state["heuristic_remaining"])
     pair_rules = {}
     for rule in rules:
         pair = frozenset(t.reference for t in rule.targets)
@@ -1521,7 +1797,9 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
     @lru_cache(maxsize=8192)
     def clash(left, i, right, j):
         return (domains[left][i].side is domains[right][j].side
-                and _polygons_too_close(polygons[left][i], polygons[right][j], options.component_clearance_nm)
+                and _courtyards_too_close(polygons[left][i], polygons[right][j],
+                    component_pair_courtyard_gap_nm(board, left, right,
+                                                   fallback_nm=options.component_clearance_nm))
                 or _relative_penalty(board, {left: domains[left][i], right: domains[right][j]},
                                      rules=pair_rules.get(frozenset((left, right)), ())) > 0)
 
@@ -1587,10 +1865,32 @@ def _pack_local_components(board, references, base, targets, options, *, allow_g
                     return result
         return None
 
+    initial_remaining, initial_heuristic = remaining, heuristic_remaining
     result = solve({ref: tuple(range(len(poses))) for ref, poses in domains.items()}, dict(base))
+    if _work is not None:
+        _work["search_operations"] += initial_remaining-remaining
+        _work["heuristic_checks"] += initial_heuristic-heuristic_remaining
+        _work["search_remaining"] = remaining
+        _work["heuristic_remaining"] = heuristic_remaining
+        _work["outcome"] = "candidate" if result is not None else ("search_exhausted" if remaining == 0 else "domain_search_failed")
+    if _region_state is not None:
+        _region_state["search_remaining"] = remaining
+        _region_state["heuristic_remaining"] = heuristic_remaining
+        return result
     if result is None and refinable and not fine:
+        # Preserve the pre-existing pad-MAX_DISTANCE fine behavior/contracts.
         return _pack_local_components(board, references, base, targets, options,
-                                      allow_general=allow_general, fine=True)
+                                      allow_general=allow_general, fine=True, _contact_anchors=_contact_anchors, _work=_work)
+    if result is None and region_refinable and not fine and remaining > 0:
+        state = {"board": board, "references": tuple(references), "base": dict(base),
+                 "targets": dict(targets), "options": options, "allow_general": allow_general,
+                 "contact_anchors": tuple(_contact_anchors),
+                 "domains": domains, "refinable": region_refinable,
+                 "domain_remaining": region_probe_remaining,
+                 "search_remaining": remaining, "heuristic_remaining": heuristic_remaining}
+        return _pack_local_components(board, references, base, targets, options,
+                                      allow_general=allow_general, fine=True, _region_state=state,
+                                      _contact_anchors=_contact_anchors, _work=_work)
     return result
 
 
@@ -1883,24 +2183,54 @@ def _candidate_positions(
     )
     last_x = max_x - edge - max_half_width
     last_y = max_y - edge - max_half_height
-    if first_x > last_x or first_y > last_y:
-        return ()
     points = (
         Point(x, y)
         for y in range(first_y, last_y + 1, options.grid_step_nm)
         for x in range(first_x, last_x + 1, options.grid_step_nm)
     )
-    return tuple(
-        sorted(
-            points,
-            key=lambda point: (
-                abs(point.x_nm - placement.position.x_nm)
-                + abs(point.y_nm - placement.position.y_nm),
-                point.y_nm,
-                point.x_nm,
-            ),
+    coarse = tuple(sorted(points, key=lambda point: (
+        abs(point.x_nm - placement.position.x_nm)
+        + abs(point.y_nm - placement.position.y_nm),
+        point.y_nm, point.x_nm,
+    )))
+    if rule is None or rule.region is None:
+        return coarse
+
+    # Small hard regions can have a legal continuous center domain between
+    # lattice sites, or only for a non-square orientation. Keep every existing
+    # lattice proposal in its original order; spend only unused ordinary
+    # legalization allowance on exact boundary/midpoint/target centers.
+    orientations = _allowed_orientations(board, placement.reference)
+    allowance = max(0, options.legalization_candidates // len(orientations) - len(coarse))
+    if not allowance:
+        return coarse
+    seen = set(coarse)
+    extra = []
+    for orientation in orientations:
+        half_width, half_height = _half_extents(
+            board, replace(placement, rotation_degrees=orientation))
+        low_x, high_x = min_x + edge + half_width, max_x - edge - half_width
+        low_y, high_y = min_y + edge + half_height, max_y - edge - half_height
+        if low_x > high_x or low_y > high_y:
+            continue
+        xs = ((low_x + high_x) // 2, low_x, high_x)
+        ys = ((low_y + high_y) // 2, low_y, high_y)
+        proposals = chain(
+            (Point(min(max(placement.position.x_nm, low_x), high_x),
+                   min(max(placement.position.y_nm, low_y), high_y)),),
+            (Point(x, y) for y in ys for x in xs),
         )
-    )
+        for point in proposals:
+            if point in seen:
+                continue
+            seen.add(point)
+            extra.append(point)
+            if len(extra) == allowance:
+                return coarse + tuple(extra)
+    # Region polygons, independent board edges, side, fixed intent and all
+    # held geometry remain the caller's unchanged _legal decision.
+    return coarse + tuple(extra)
+
 
 
 @lru_cache(maxsize=256)
@@ -2005,19 +2335,18 @@ def _legal(
         if other.side is not candidate.side:
             continue
         other_polygon = _placement_polygon(board, other)
-        clearance = options.component_clearance_nm
-        for cluster in board.rigid_clusters:
-            members = {item.reference for item in cluster.members}
-            if (candidate.reference in members and other.reference in members
-                    and cluster.internal_clearance_nm is not None):
-                clearance = cluster.internal_clearance_nm
-                break
-        if _polygons_too_close(
+        clearance = component_pair_courtyard_gap_nm(
+            board, candidate.reference, other.reference,
+            fallback_nm=options.component_clearance_nm)
+        if _courtyards_too_close(
             polygon,
             other_polygon,
             clearance,
         ):
             return False
+    from .placement_holes import footprint_holes_clear
+    if not footprint_holes_clear(board, candidate, placed):
+        return False
     edge_clearance = (rule.edge_clearance_nm if rule and rule.edge_clearance_nm is not None
                       else options.edge_clearance_nm)
     from .mechanical import shape_in_board
@@ -2187,6 +2516,64 @@ def _polygons_too_close(
         for start, end in _edges(other)
     )
     return minimum < clearance
+
+
+def _courtyards_too_close(first: tuple[Point, ...], second: tuple[Point, ...], clearance: int) -> bool:
+    """Extra courtyard gaps use interior-only overlap at exactly zero.
+
+    Keepout, macro and assembly predicates deliberately retain their historical
+    boundary protection through _polygons_too_close; this is only a pair policy.
+    """
+    if clearance != 0:
+        return _polygons_too_close(first, second, clearance)
+    first_box, second_box = _point_bounds(first), _point_bounds(second)
+    if (first_box[2] <= second_box[0] or second_box[2] <= first_box[0]
+            or first_box[3] <= second_box[1] or second_box[3] <= first_box[1]):
+        return False
+    return _polygon_interiors_overlap(first, second)
+
+
+@lru_cache(maxsize=8192)
+def _courtyard_triangles(polygon: tuple[Point, ...]):
+    from .geometry import polygon_triangles
+    from .mechanical import validated_ring
+    return polygon_triangles(validated_ring(polygon))
+
+
+def _polygon_interiors_overlap(first: tuple[Point, ...], second: tuple[Point, ...]) -> bool:
+    """Positive-area overlap; boundary-only contact is legal at zero extra gap.
+
+    Partition simple rings using the shared integer ear clipper. Strict integer
+    projections on each triangle edge normal distinguish contact from overlap
+    without an epsilon, including concave rings and identical boundaries.
+    Untriangulatable or degenerate input remains conservatively conflicting.
+    """
+    try:
+        parts = (_courtyard_triangles(first), _courtyard_triangles(second))
+    except ValueError:
+        return True
+    for triangles in parts:
+        for triangle in triangles:
+            a, b, c = triangle
+            if (b.x_nm-a.x_nm)*(c.y_nm-a.y_nm) == (b.y_nm-a.y_nm)*(c.x_nm-a.x_nm):
+                return True
+    for left in parts[0]:
+        for right in parts[1]:
+            separated = False
+            for polygon in (left, right):
+                for a, b in _edges(polygon):
+                    nx, ny = b.y_nm-a.y_nm, a.x_nm-b.x_nm
+                    left_projection = tuple(p.x_nm*nx+p.y_nm*ny for p in left)
+                    right_projection = tuple(p.x_nm*nx+p.y_nm*ny for p in right)
+                    if (max(left_projection) <= min(right_projection)
+                            or max(right_projection) <= min(left_projection)):
+                        separated = True
+                        break
+                if separated:
+                    break
+            if not separated:
+                return True
+    return False
 
 
 @lru_cache(maxsize=8192)

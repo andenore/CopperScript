@@ -411,6 +411,7 @@ def _check_output_conflicts(context: _Context) -> list[Diagnostic]:
                 selected_outputs.add(Endpoint(selection.component, chosen.pin))
     for net in context.board.nets:
         drivers: list[str] = []
+        driver_keys = set()
         for endpoint in net.endpoints:
             resolved = context.resolve_pin(endpoint)
             if resolved is not None:
@@ -421,7 +422,13 @@ def _check_output_conflicts(context: _Context) -> list[Diagnostic]:
                     or endpoint in selected_outputs
                 ):
                     drivers.append(str(endpoint))
-        if len(drivers) > 1:
+                    group = resolved[2].parallel_power_group
+                    # This permission concerns one component's declared power
+                    # output, not different regulators or digital push-pull pins.
+                    driver_keys.add((endpoint.component, "power-group", group)
+                        if group is not None and _is_power_output(profile)
+                        else (endpoint.component, "pin", endpoint.pin))
+        if len(driver_keys) > 1:
             diagnostics.append(
                 Diagnostic(
                     Severity.ERROR,
@@ -616,6 +623,31 @@ def _check_power_inputs(context: _Context) -> list[Diagnostic]:
             if (resolved := context.resolve_pin(endpoint)) is not None
         ):
             powered_nets.add(net.name)
+
+    # Explicit passive DC transfer is reachability, never a net merge or a
+    # voltage/current/AC guarantee. A source-free cycle creates no power.
+    links = []
+    for component in context.board.components:
+        part = context.board.library.get(component.part)
+        if part is None or not part.assembled or not part.dc_power_path:
+            continue
+        ends = [context.pin_to_nets.get(Endpoint(component.ref, name), [])
+                for name in part.dc_power_path]
+        if all(len(names) == 1 for names in ends):
+            links.append((ends[0][0], ends[1][0]))
+    pending = list(links)
+    while pending:
+        remaining = []
+        progress = False
+        for a, b in pending:
+            if a in powered_nets or b in powered_nets:
+                powered_nets.update((a, b))
+                progress = True
+            else:
+                remaining.append((a, b))
+        if not progress:
+            break
+        pending = remaining
 
     for component in context.board.components:
         part = context.board.library.get(component.part)

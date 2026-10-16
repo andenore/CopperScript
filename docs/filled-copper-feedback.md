@@ -144,6 +144,17 @@ Rejected ordering trials can also supply `pattern_hint` context: measured lost
 ordinary identities identify eligible placement owners when original endpoints
 are fixed. Discarded candidate copper is never adopted, and every hint still
 passes source/session placement legality and fresh all-owner acceptance.
+Placement look-ahead alternates legal proposals between failing source
+components. Bypass capacitors associated with the same target share one
+cohort, so many dependencies of one package do not consume every early
+probe. Existing owner ranking and move choices are retained within each
+cohort; probe, trial and legality bounds are unchanged. Inside an otherwise
+tied dependency tier, exact current source capacitor-terminal positions may
+break the reference-name tie by distance to existing failed pins. This is a
+proximity hint, never measured blocker or clearance authority. A tier with an
+unsupported terminal identity retains its original order. Exhausted cohorts
+drop out without granting additional moves or acceptance authority.
+
 These reuse the actual placement legality predicates, including fixed companions,
 named regions, keepouts, mechanics, rigid groups and relative constraints. They
 do not claim an orientation domain or a sampled region is an impossibility proof.
@@ -153,7 +164,11 @@ can try `partial_ordinary`: keep generated escape copper that remains legal
 against the disposable critical probe, and rebuild only intersecting ordinary
 nets around it. Release is net-granular so shared same-net stubs are not assigned
 to guessed pad owners. Source/macro copper, required arrays and semantic
-decoupling feed tracks cannot be released. Unrelated escapes on the same supply
+decoupling supply/return tracks and vias stay protected by default. Explicit
+bypass regeneration may release only freshly witnessed generated contributions
+within the measured owner budget; every prior association must be independently
+verified again. A return-net conflict cannot release an unselected supply cohort.
+Shared, source and immutable contributions remain held. Unrelated escapes on the same supply
 net remain eligible; protection follows actual generated copper, not a blanket
 net label. Occurrence-counted ownership and the same
 fresh critical/contact/boundary acceptance gates protect the combined result.
@@ -166,13 +181,63 @@ that Tracker routes.
 Cheap eligibility rejection does not suppress the established critical-only
 second ordering after a plane/critical proposal; `partial_skipped_reason` records
 why that bounded fallback was selected. `fanout.protected_decoupling_track_count`
-describes semantic-feed ownership at that stage, not final filled connectivity.
+and `fanout.protected_decoupling_via_count` describe generated semantic ownership
+at that stage, not final filled connectivity.
+
+A no-pose surface/bypass proposal may spend one existing pattern slot when a
+freshly measured generated supply feed blocks an ordinary surface-only package
+cohort. It builds one bounded domain batch, releases only one declared
+association's exclusive original supply-track occurrences, jointly allocates
+all cohort exits and regenerates that exact feed. Shared paths, all vias,
+unselected associations, source copper, macros and required arrays remain held.
+Every original cross-layer witness and established exit is freshly checked;
+the complete critical/contact/boundary gates and exact unrelated-owner
+retention still decide adoption. Unsupported source/fill/ownership contexts
+decline without contribution. Same-face supply continuity does not establish
+return-loop qualification or complete end-to-end signal routing.
 
 The placer validates later bypass moves with rigid phase locks bound to their
 current legalized/refined poses. Source-fixed constraints and the final legality
 gate against the original source and actual caller session locks remain intact.
 This prevents temporary macro locks from silently blocking semantic capacitor
 placement; it does not unlock a fixed capacitor or rigid companion.
+
+Opposite-surface bypasses require complete explicit supply and declared return-net
+joins to physical terminals on the target component. Only current original tracks
+and permitted ordinary through-vias witness these paths; zone intent, pad groups,
+via labels and connected flags do not. The witness establishes physical joins,
+not component-internal return behavior, decoupling impedance or electrical loop
+qualification. Unsupported source/process/length/via budgets stay pending.
+The generated contribution retains its original complete path witnesses in
+`FanoutResult.decoupling_witnesses`. Admission freshly checks those exact edges,
+both terminals, source context, current clearances and whole-net budgets; a later
+canonical path choice cannot discard ownership of a still-valid adopted path.
+Paths must be node-simple, although consecutive subsegments may use the same
+original track. New proposal copper must occur on its complete supply/return
+paths before adoption, within the existing proposal allowance; unsupported
+contributions remain pending. Legacy contributions without records still require
+fresh canonical-path coverage. A freshly verified complete return half keeps its
+explicit target while the missing supply half is generated; distance-based target
+truncation applies only when no return half exists. An explicitly selected target
+remains binding, and the combined proposal still requires fresh validation.
+Connection generation omits a new straight segment only when both endpoints lie
+exactly on one held segment of the same net, layer and width. It preserves the held
+segment and its ownership; partial overlap or a union of separate segments does
+not satisfy this narrow containment check. Proposal and path-search bounds remain
+unchanged. Partial/contact regeneration includes original
+paths when protecting shared owners and freshly validates its merged ledger.
+Disposable partial probes retain their actual copper/fills but generate new
+witnesses under the owner's source metadata from the start. All other source
+fields and the exact ordered source copper prefix must match before generation;
+this does not rebind a witness created under another context.
+Changed placement context requires full preflight rather than relabelling an old
+path. `DecouplingRouteResult.supply_return_witnesses` remains the final canonical
+snapshot; `admitted_path_witnesses` separately records adopted original paths.
+Placement retains exact shared/generated/source copper while testing disposable
+poses, freshly rechecks all prior association identities at the new poses, and
+rolls back if normal regeneration loses any identity. Public placement output
+remains unrouted; it does not promote generated bypasses into immutable macros.
+
 
 `detailed.repair_trials` records exact blockers, immutable flags, snapshot digest,
 displaced nets, rerouting order/search counts and whether the merged pass was
@@ -263,3 +328,278 @@ exact native object mapping and fresh connectivity, not inferred object identity
 Missing tools and exhausted budgets remain unresolved evidence, not proof of
 impossibility. A closing benchmark establishes routing only; CAM, electrical,
 RF/power, assembly and prototype approval retain their separate gates.
+
+Global terminal entrance selection screens legal direct stems for incident graph
+resources on allowed layers before deciding whether its existing bounded local
+fallback is needed. The fallback targets existing nodes with allowed resources;
+its candidate/state/step/detour bounds and all exact copper predicates stay the
+same. If no better checked path is found, original isolated choices remain
+available for later checked terminal-via alias registration. Incident degree
+alone proves neither target connectivity nor physical route feasibility; this
+does not refine the coarse graph's lane-capacity model.
+
+Differential tuning retains the legacy bounded attempt first. Only a zero-addition,
+overskew result with an explicit complete held context may try one additional
+call to that same bounded tuner using private virtual spans. Only adjacent,
+forward, axis-aligned segments of equal net/layer/width in one source breakout
+region may merge. Source/held occurrences, finite-width copper contacts, pads,
+vias, branches and explicit access nodes retain their authority; unsupported
+or native-fill contexts decline. An unsuccessful attempt preserves the original
+candidate objects. A successful private proposal restores untouched fragments,
+freshly checks source widths, anchors, skew and full held geometry, and still
+passes the normal outer candidate gates. This adds no via or electrical allowance
+and does not establish consumer USB routing or signal-integrity qualification.
+
+Package-placement feedback may borrow one existing probe slot for one coupled
+placement proposal before ordinary legal-move lookahead. Its bounded source-pad
+projection hint uses exact transformed land identities and side labels; at the
+default 28-owner/28-root limit it evaluates at most 1,568 shape pairs and 3,136
+shape predicates. Projection overlap/proximity is a selection heuristic, not
+copper clearance, a verified via blocker or exit feasibility. Ambiguous lands
+or associations decline. Only mutable singleton named-region owners/neighbors
+are supported; fixed/session locks, rigid/macro membership, relative rules and
+via-array ownership remain protected.
+
+The requested existing move stays anchored in BASE. One unchanged local pack
+call may move its directly colliding eligible neighbors, with at most 28 shared
+neighbor probes across requests and the existing six-member limit. A single
+irreversible token persists across accepted rounds; unsupported/failed claims
+spend their borrowed probe slot too. Successful geometry uses that same slot
+for the ordinary access probe. This adds no probe/trial slot or budget reset.
+Reports distinguish spent slots, normal probes, source-hint predicates and
+actual pack domain/search work. Domain-probe counters do not count every inner
+geometry predicate. Default local limits remain 6,144 raw proposals/384 retained
+poses per neighbor, 172,032 search operations and the separate 57,344 heuristic
+checks; named-region continuation uses only residual resources.
+
+Every positive retains original source fields, the requested pose and all
+unselected poses, then passes complete original-source placement legality and
+the normal fresh global/preflight/ownership gates with full rollback on failure.
+Numeric options, regions, courtyards, copper rules and electrical requirements
+are not relaxed. This generic placement adapter has no normal CopperProbe
+adoption or whole-board/electrical qualification claim.
+
+Global terminal access retention uses the same finite generated pool and
+configured candidate count. Physical through-via launches receive one retained
+slot each before additional signal-layer aliases of the same hole; available
+unrepresented layers are preferred within each launch. Distinct surface graph
+entrances remain separate. This selection performs no geometry queries, adds no
+candidate or capacity, and is not an exhaustive escape search. Fresh terminal
+capacity registration, negotiated routing and all physical gates still apply.
+
+Opposite-face bypass proposals may reuse existing normal through-vias only after
+recognizing an exact, legal copper path from the actual declared source pad.
+Installed-component internal connections do not establish this path. Existing
+sites are examined within the finite fanout radius and site count, and consume
+the same launch allowance before fresh launches. One proposal transaction
+shares at most four local searches (100 um steps, 1 mm detour, 4000 states
+each) across supply, return and return targets. Existing-launch tails and
+bounded inner bridges share this allowance. When every ordinary source launch
+is absent and the fanout maze option is enabled, a circular array may use
+remaining slots to reach farther actual four-land cells. At most the site cap
+of nearest land origins contributes four cells each; at most the site cap of
+nearby cells receives exact via checks, and accepted launches remain within
+the original launch cap. Incomplete cells confer no access. Original source
+tracks/vias are preserved; every complete supply/return path, protected owner,
+created-edge coverage and physical gate is checked before adoption. A legal
+local candidate alone does not establish standard-pipeline or board closure.
+
+
+
+After ordinary fanout passes its materialization gate, one explicit late bypass
+completion pass may retry only its original pending opposite-face source links,
+intersected with the original net filter. It requires newly generated ordinary
+copper and never repeats a completion round or reroutes ordinary/critical/area
+copper. Existing per-link proposer bounds remain authoritative. The pass and
+selected/completed/remaining link counts, generated counts and rollback reason
+are recorded; compact reports expose the result separately from routing closure.
+
+Every late candidate retains the full early-semantic and ordinary occurrence
+prefix and source fields. Original via/surface handoffs, verified associations,
+admitted path witnesses, source budgets and physical gates are freshly checked.
+A rejected late candidate alone is rolled back. Only newly appended late objects
+join the semantic owner ledger; reused ordinary source paths/vias retain their
+original owners. Pending obligations use complete declared link identities;
+source validation still permits only one explicit association per capacitor.
+Existing handoffs are not replaced and a newly measured semantic port never
+invents an ordinary-domain candidate index. These physical joins and bounded
+completion reports do not establish electrical, RF, power or fabrication release
+qualification.
+
+
+Local pin-access routing retains the eight-direction geometry contract even when
+exact endpoint coordinates divide computational grid intervals unequally. The
+direct shortcut and each maze edge reject non-45-degree diagonals before any
+clearance query. Horizontal/vertical edges, original grid/domain, state bounds
+and source clearances remain unchanged; rejected edges do not purchase extra
+search allowance. Exact existing package-exit verification remains authoritative.
+
+### Geometry-derived short package escapes
+
+Ordinary fanout and opposite-side bypass search try up to four adjacent square
+cell centres for circular SMD lands before long outward rays. Cells come from
+actual footprint pad positions, including rotation and back-side mirroring;
+there is no package-name or board-name selector and no assumed ball pitch.
+Bypass sites consume the existing candidate budget. These are ordinary through-
+via proposals: exact pad/annulus/drill exclusions, layer rules, fixed ownership,
+verified feeds and whole-candidate acceptance still apply. Reference-board
+measurements belong to the independently versioned part library.
+
+At equal feed length, the decoupler placer prefers its supply-to-return axis
+pointing outward from the target pin. This tie break avoids tangential bodies
+occupying adjacent package exits; explicit orientations, placement domains and
+fixed poses remain authoritative. It is not a decoupling impedance qualification.
+
+Full ordinary pattern proposals use the same authoritative source frame as
+partial proposals: disposable routing metadata is normalized before generating
+bypass witnesses, while actual probe copper/fills remain obstacles. After probe
+copper is stripped, original witness paths and exact generated ownership are
+freshly admitted. Borrowed disposable return copper rejects the proposal within
+its existing trial slot unless a typed plane-contact proposal explicitly transfers
+its exact generated edges under the complete-witness rules below. Unowned copper
+never becomes ordinary ownership merely because its net label matches.
+
+## Per-association post-fill observations
+
+Native plane verification reports `decoupling_assessments` for each declared bypass.
+It uses the existing positive-area filled-fragment contact grouping and exact
+source/export binding to observe supply and target-component return continuity.
+Split fragments, missing return terminals, ambiguous pads, stale exports, unknown
+native objects and unavailable geometry remain open or explicitly unsupported.
+These observations do not replace local bypass path witnesses, waive routing gates,
+or qualify high-frequency loop impedance. They are a diagnostic foundation for
+plane-assisted routing; the preliminary package-access stage still requires its
+existing explicit local supply/return paths.
+
+
+Opposite-surface bypass proposals can use a bounded inner-layer bridge with
+two ordinary through-vias when direct surface tails are blocked and the source
+permits those layers and via counts. All eight destination-launch trials share
+the existing complete-transaction allowance; four bounded local maze tails are
+shared by supply and return. Both explicit terminal paths must still validate.
+Before admission, an unused branch may be removed only from the current
+proposal's generated suffix. Every input track/via object, including immutable
+macros, required arrays and previously admitted partial exits, stays intact.
+The trimmed candidate receives a fresh clearance index, both complete path
+witnesses, protected-witness checks and physical DRC. A failed trim rolls back.
+Native fill observations remain separate from this explicit-path admission.
+
+Local paired through-via preparation first tries the established short collars.
+If none produces a legal complete surface/via/return/other-layer transition, it
+tries four longer collar distances (4 mm, 4.5 mm, 5 mm and 6 mm) to reach beyond
+opposite-side component banks. Joint channel search samples both families, as
+described below. This preparation adds no local maze allowance and
+keeps the existing retained-port and joint-search bounds. Breakout regions,
+normal trace profiles, source keepouts, ordinary drill clearance, return-via
+requirements and final length/skew gates remain unchanged. Legal launch sites
+alone do not establish simultaneous or end-to-end pair connectivity.
+
+Inner bypass bridges consider verified existing destination feeds before new
+via sites, within the same shared eight-launch budget. Both terminal-to-via
+paths must use original copper edges; unconnected same-net vias are not feeds.
+Existing objects survive both admission and rollback, and repeated sites do
+not consume additional bridge trials.
+
+Bypass preparation honors descending source supply-net routing priority, with
+stable source order for ties. Exact link/net filters retain the full source
+inventory and all protected paths. This permits an authored constrained local
+regulator output to reserve its explicit path before broader power distribution;
+priority does not relax geometry, ownership, path or native verification gates.
+
+Explicit bypass reuse may follow existing legal straight plane-contact edges
+at arbitrary angles. This is an opt-in to the exact land-path observer; ordinary
+fanout keeps its orthogonal/45-degree policy. Width, clearance, through-via
+geometry, exact source association and complete supply/return witnesses remain
+mandatory. No new arbitrary-angle search or component-internal join is inferred.
+
+Repeated edge observations use a bounded 32-entry cache keyed by exact board
+and clearance-index identities, the complete ordered insertion ledger and all
+index routing rules. Added obstacles or changed rules invalidate reuse. Path
+graphs, endpoint selection, state bounds and complete witnesses are rebuilt;
+no changed trial inherits a previous board's clearance proof.
+
+
+Already verified bypasses on general supply nets whose authored priority exceeds
+every critical-net priority can retain their exact generated ownership through
+clean critical probes. Original admitted paths and fresh canonical paths must
+survive selection and rebasing; stale sources or missing occurrences reject the
+trial. This uses the existing pattern/search allowance, not a new repair loop.
+
+Full ordinary proposals may transfer contacts from a typed plane-stitch proposal
+only when the exact source prefix, ordered occurrences, generated suffix and
+counts validate. A contact must lie on a complete explicit bypass supply/return
+witness; copied source copper and unused contacts cannot transfer. After all
+other probe copper is stripped, original witnesses, ordinary exits and complete
+bypass reservations are revalidated. Failure retains the complete incumbent.
+Zone outlines, same-net labels and native fill observations do not substitute
+for these explicit paths. Required arrays and immutable macro/source copper
+retain their original ownership.
+
+
+Paired surface and via searches check the exact mandatory first spine step
+against the fully escaped board before spending a maze slot. A legal collar
+whose departure is obstructed cannot start that search at that pitch. The
+existing 128-combination, search-count and expanded-state limits remain; this
+check adds no lookahead search or geometry exemption. Endpoint approaches and
+complete candidates still pass the ordinary profile and DRC gates.
+
+
+After a typed plane-contact proposal releases unused exact generated contact
+occurrences, the rebased ordinary proposal may use one existing late-bypass
+completion pass on its original pending opposite-face associations. A new pass
+requires an actual obstacle release; an unchanged frame does not retry. The
+report identifies `released_plane_contacts` separately from ordinary-launch
+completion. No ordinary owner is moved or rerouted. Complete incumbent paths,
+ports, source budgets, exact suffix ownership and physical DRC are rechecked;
+rejection returns the entire rebased incumbent. Per-link search limits remain
+unchanged and there is no recursive or repeated retry after that pass.
+
+
+Collinear paired lands may use either transverse lane order; both complete
+collars are checked against exact geometry. Joint paired-via search retains
+short and outer collar families inside the same 16-port heading/sign domains,
+128 candidate combinations and per-tier maze limits. Short/short, outer/outer
+and mixed endpoint families share those slots. Within each family, source site
+rank and target-facing headings precede collar preference and distance. This
+allows an outer escape when a locally legal short collar is trapped behind
+opposite-layer copper. Local terminal preparation keeps its short-first fallback.
+No signal polarity, layer permission, width, skew, return or via gate changes.
+
+
+### Ordinary exits after disposable contact release
+
+When a typed full-ordinary proposal actually releases unused plane contacts,
+package access may spend one bounded ordinary-fanout pass on its original
+pending general, non-bypass nets. Existing via/surface/boundary handoffs and
+every source, macro, array and generated occurrence remain held in order.
+Only appended copper may be admitted, with fresh exit/bypass, source-budget
+and hard-geometry checks. No improvement or any rejection restores the entire
+incumbent. This does not iterate until closure or raise the fanout search limits.
+The route report records `fanout.released_exit_retry`; regenerated owners clear
+that earlier telemetry. Complete critical/plane/boundary admission and native
+whole-board verification remain required.
+
+
+Cross-surface bypass refinement ranks the existing analytic launch sites by
+local distance before its unchanged per-terminal site cap. Coarse outward
+launch order remains unchanged. Inner-bridge destination refinement uses the
+same local ranking. This prevents a long blocked outward ray consuming the
+entire local allowance; it introduces no new site family, launch slots,
+maze states or complete-proposal budget. Analytic inventory materialization
+is bounded to eight times the site cap plus four package-derived sites.
+All old paths, original-edge ownership and complete supply/return gates remain
+mandatory; a rejected proposal contributes no copper.
+
+
+### New bypass proposal tails
+
+A complete bypass witness can traverse only a subsegment of a generated track.
+Before adopting a cross-layer proposal, discard its wholly unused new tracks
+and vias and clip new track endpoints to their witnessed outer step span.
+Otherwise an unused extension can survive the ownership check and become a
+native dangling-track finding. This operation is confined to the uncommitted
+proposal suffix; every input/source occurrence, including a partially used
+shared feed, remains identical. Rebuild the candidate and freshly validate
+the complete supply/return paths, all protected original witnesses, full
+new-edge coverage and whole-board DRC. A failed revalidation rejects the
+proposal. No accepted owner is trimmed retroactively.

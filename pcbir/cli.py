@@ -409,6 +409,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument("--candidates", type=int, default=1)
     for placement_parser in (layout_parser, global_route_parser, board_route_parser):
+        placement_parser.add_argument("--placement-grid-mm", default="1", type=_positive_mm,
+            help="positive placement sampling grid in mm (default: 1); source geometry and search limits remain authoritative")
         placement_parser.add_argument("--escape-margin-mm", default="0.5",
             help="soft placement margin per demanding package side (not DRC clearance)")
         placement_parser.add_argument("--escape-transit-lanes", type=int, default=1,
@@ -422,6 +424,11 @@ def _parser() -> argparse.ArgumentParser:
                                     help="explicit pinned immutable-copper macro scene (repeatable)")
         physical_parser.add_argument("--placement-templates", type=Path,
                                     help="explicit data-only, digest-bound physical template scene")
+    board_route_parser.add_argument("--placement-feedback-trials", default=24, type=_nonnegative_int,
+        help="maximum disposable global placement trials per feedback iteration (default: 24)")
+    for router_parser in (global_route_parser, board_route_parser):
+        router_parser.add_argument("--pin-access-step-mm", default="0.5", type=_positive_mm,
+            help="computational pin-to-global-guide escape grid (default: 0.5 mm)")
     board_route_parser.add_argument(
         "--placement-candidate", help="select a named legal candidate, e.g. candidate-01",
     )
@@ -658,6 +665,7 @@ def _add_resolution_options(parser: argparse.ArgumentParser) -> None:
 
 def _planner_options(args) -> PlacementPlannerOptions:
     return PlacementPlannerOptions(candidate_count=args.candidates,
+        grid_step_nm=nm_from_mm(args.placement_grid_mm),
         escape_margin_nm=nm_from_mm(args.escape_margin_mm),
         escape_transit_lanes=args.escape_transit_lanes,
         power_domain_weight=args.power_domain_weight)
@@ -674,7 +682,7 @@ def _apply_routing_profile(args, argv):
     flags = {item.split("=", 1)[0] for item in argv if item.startswith("--")}
     names = ("passes", "search_budget", "package_access_trials", "package_placement_probes",
              "filled_copper_trials", "filled_copper_search_states")
-    for name, value in zip(names, profiles[args.routing_profile]):
+    for name, value in zip(names, profiles[args.routing_profile], strict=True):
         if "--" + name.replace("_", "-") not in flags:
             setattr(args, name, value)
 
@@ -1150,6 +1158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
+                    escape_step_nm=nm_from_mm(args.pin_access_step_mm),
                     maximum_iterations=args.router_iterations,
                     layer_preference_cost=max(0, args.layer_preference_cost // 2),
                     direction_preference_cost=max(0, args.direction_preference_cost // 2),
@@ -1160,6 +1169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 placement_options = _planner_options(args)
                 feedback_options = PlacementRoutingFeedbackOptions(
                     maximum_iterations=args.feedback_iterations,
+                    maximum_trials_per_iteration=args.placement_feedback_trials,
                     initial_movement_nm=router_options.tile_size_nm,
                     preferred_candidate_id=args.placement_candidate,
                 )
@@ -1328,7 +1338,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
-                    "passes", "search_budget", "package_access_trials", "package_placement_probes",
+                    "passes", "search_budget", "pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
                     "filled_copper_search_states")},
@@ -1360,6 +1370,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "placement_probe_scope": "local ordinary exits, selected plane contacts and boundary access; excludes generated critical copper and native filled connectivity",
                     "placement_stop_reason": access.placement_stop_reason,
                     "placement_constraints": [asdict(item) for item in access.placement_constraints],
+                    "coupled_placement_attempts": [asdict(item) for item in access.coupled_placement_attempts],
+                    "placement_probe_slots_spent": access.placement_probe_slots_spent,
                     "placement_constraint_scope": "at most 32 sampled rejected proposals; not an impossibility proof",
                     "placement_probes": [{**asdict(probe), **{
                         key: [f"{p.component}.{p.pad}" for p in getattr(probe, key)]
@@ -1493,7 +1505,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
                     "decoupling_pending": [{"capacitor": f"{pad.component}.{pad.pad}", "reason": reason}
                                             for pad, reason in result.fanout.decoupling_pending],
+                    "late_bypass_completion": asdict(result.fanout.late_bypass) if result.fanout.late_bypass else None,
+                    "released_exit_retry": asdict(result.fanout.released_exit_retry) if result.fanout.released_exit_retry else None,
+                    "decoupling_pending_links": [{"capacitor": f"{link.capacitor.component}.{link.capacitor.pad}",
+                        "target": f"{link.target.component}.{link.target.pad}", "net": link.net,
+                        "return_pad": f"{link.return_pad.component}.{link.return_pad.pad}",
+                        "return_net": link.return_net, "reason": reason}
+                        for link,reason in result.fanout.decoupling_pending_links],
                     "protected_decoupling_track_count": len(result.fanout.decoupling_tracks),
+                    "protected_decoupling_via_count": len(result.fanout.decoupling_vias),
                     **({"surface_escaped_pads": [f"{pad.component}.{pad.pad}"
                                                  for pad in result.fanout.surface_accesses]}
                        if result.fanout.surface_accesses else {}),
@@ -1665,6 +1685,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     physical_board = resolved_physicalize(design, resolver, physical_options)
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
+                    escape_step_nm=nm_from_mm(args.pin_access_step_mm),
                     maximum_iterations=args.router_iterations,
                 )
                 if args.placement_templates:

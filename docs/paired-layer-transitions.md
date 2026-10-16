@@ -46,14 +46,19 @@ independently. The sequence is:
    tries lateral sites; all original distance/copper/drill constraints apply.
 5. Taper back to the declared trace pitch on another jointly allowed signal
    layer and search both lanes along one heading-aware octilinear spine.
-6. Repeat the matched transition at the other end. Check the complete pair,
+6. Repeat the matched transition at the other end when it is on another layer. Check the complete pair,
    returns, native contacts, every physical via layer, original budgets and
    prior reservations atomically before accepting any copper.
 
-Two signal vias per member are required for this topology. Zero/one-via
-budgets and surface-only profiles fail closed. Dedicated plane layers are
-excluded by the existing routing policy. Target layers are tried in the
-existing plane-adjacency preference order. Terminal domains retain at most
+Same-face terminals require two signal transitions per member for an other-layer
+middle route; a zero/one-via budget still rejects that topology. Opposite-face
+terminals may instead use either terminal surface as their common middle layer:
+one end has a legal direct collar and the other has one matched transition.
+One-via budgets then work without inventing a second via pair. A third signal
+layer still requires two transitions. Only emitted transitions receive return
+vias and site ranking; direct collars never claim a layer change. Dedicated
+plane layers remain excluded. Fewer required transitions are preferred, then
+the existing plane-adjacency order. Terminal domains retain at most
 16 alternatives per heading/member-order combination to avoid eliminating
 all reverse-heading alternatives with a single sorted truncation. At most
 eight compatible terminal-pattern combinations per target layer are searched
@@ -65,7 +70,7 @@ transitions whose vias lie in a breakout region and tries the pair's reserved
 corridor first (`site_rank`). Without those arguments the proposer is
 unchanged.
 
-Search/report provenance records both signal-via pairs explicitly. The
+Search/report provenance records every emitted signal-via pair explicitly. The
 critical owner verifies matched dimensions, spans and widened spacing, equal
 member via counts, return-via distance, measured coupling/skew/uncoupled length
 and fresh native DRC. Ordinary routing cannot replace this copper. Existing
@@ -106,3 +111,61 @@ Regression tests cover a top-layer wall crossed on In2, required return vias,
 determinism, through-span emission, exact native connectivity, constrained
 budgets/layers, blocked transitions, 45-degree terminal rows, own-land drill
 exclusion and atomic rejection of corrupted proposals.
+
+
+Opposite-face regression fixtures cover both terminal orders, required returns,
+one-via budget acceptance, zero-via/absent-layer/blocked-return rejection,
+renamed endpoints, exact resumed transition ownership and the aggregate state
+limit. This topology does not qualify layer-specific impedance or via stubs.
+
+
+For end-on cardinal terminal rows, a failed direct collar slot can try three
+analytic wide-and-tapered departures. Each starts transversely to clear the
+companion land, turns outward, then tapers to the declared pair pitch. Only
+one exact legal collar may occupy the original heading/lane/length slot;
+port counts, search budgets and acceptance gates are unchanged. Rotation,
+foreign-obstacle and insufficient-length fixtures cover this fallback.
+
+
+### Plated terminal contacts
+
+Exact pair search derives access from the unique physical pad rather than its
+coarse guide layer or component mounting side. A plated through-hole contact
+can join any permitted physical copper layer directly; a surface land can join
+only its actual face. The same-layer family uses the first common contact
+layer. Other bounded transition families charge vias only at ends that lack
+direct copper on the selected middle layer. Existing per-layer search and
+aggregate state budgets, return-via obligations and fresh owner validation
+remain unchanged. Missing, ambiguous, aperture and unplated contacts grant no
+electrical access. This is geometric contact support, not connector-launch or
+plated-barrel signal-integrity qualification.
+
+
+Joined duplicate contacts prefer the terminal with the largest intersection
+of actual copper contact layers and source-permitted routing layers. All
+contacts still require fresh local branch connectivity; failed main searches
+roll back those branches. Equivalent single-layer contacts keep deterministic
+identity ordering. No source pad is omitted.
+
+The same-layer pair family ranks both endpoint collars by a checked forward
+pitch before existing geometric preferences. This avoids exhausting the
+bounded maze allowance on a goal still buried among package pads. The goal
+may have a shorter final approach, so a negative hint never deletes a port.
+The original port inventory, combinations cap, search slots and aggregate
+state budgets remain unchanged; complete escaped-board checks still gate
+every candidate.
+
+
+When legacy skew tuning creates a spacing violation, exact pair admission can
+try at most two existing clearance-aware tuning proposals. These operate on
+the complete disposable group, including duplicate-contact branches, with
+all earlier owners retained as obstacles. Source contacts, reserved layers,
+length/skew, via counts and physical clearance are validated afresh. Rejected
+proposals leave no copper behind; this adds no maze searches or search states.
+
+
+Virtual tuning spans validate compatible net/layer/width, forward direction,
+shared unprotected endpoint and collinearity before constructing a merged
+track. Candidate list order is not electrical traversal order; a later edge
+can end at an earlier edge's start without forming a legal forward span.
+Rejected joins preserve the exact original occurrences and all outer gates.

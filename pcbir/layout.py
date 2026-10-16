@@ -108,6 +108,9 @@ class LayoutReport:
                             "refinement_move_count": candidate.statistics.refinement_move_count,
                             "refinement_swap_count": candidate.statistics.refinement_swap_count,
                             "routing_feedback_passes": candidate.statistics.routing_feedback_passes,
+                            **({"failed_seed_attempts": [asdict(failure)
+                                for failure in candidate.statistics.failed_seed_attempts]}
+                               if candidate.statistics.failed_seed_attempts else {}),
                         },
                     }
                     for candidate in self.candidates

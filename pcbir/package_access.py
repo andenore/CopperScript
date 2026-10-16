@@ -7,7 +7,7 @@ This is transactional pattern negotiation, not an exhaustive joint optimizer.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from collections import Counter
 from types import MappingProxyType
 from typing import Iterator
@@ -27,6 +27,7 @@ from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .routing import (GlobalRouterOptions, GlobalRoutingResult, GlobalRoutingStatus,
                       _placement_fingerprint, route_global)
 from .progress import ProgressCallback, critical_progress, emit
+from .package_placement_repair import CoupledPlacementAttempt, CoupledPlacementState
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,7 @@ class PackagePatternTrial:
     retained_track_count: int = 0
     retained_via_count: int = 0
     partial_skipped_reason: str = ""
+    failed_bypass_capacitors: tuple[PadReference, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,8 @@ class PackageSearchTier:
     expanded_states: int
     ready: bool
     selected: bool = False
+    local_contact_searches: int = 0
+    local_contact_expanded_states: int = 0
 
 
 @dataclass(slots=True)
@@ -86,11 +90,20 @@ class _SearchWork:
     critical_passes: int = 0
     pair_searches: int = 0
     expanded_states: int = 0
+    local_contact_searches: int = 0
+    local_contact_expanded_states: int = 0
+
+    def observe_local(self, preparation) -> None:
+        if preparation is not None:
+            self.local_contact_searches += preparation.searches
+            self.local_contact_expanded_states += preparation.expanded_states
 
     def observe(self, result: CriticalRoutingResult) -> None:
         self.critical_passes += 1
         self.pair_searches += sum(net.pair_searches for net in result.nets)
         self.expanded_states += sum(net.search_states for net in result.nets)
+        for net in result.nets:
+            self.observe_local(net.local_preparation)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +162,8 @@ class PackageAccessResult:
     placement_probes: tuple[PackagePlacementProbe, ...] = ()
     placement_stop_reason: str | None = None
     placement_constraints: tuple[PackagePlacementConstraint, ...] = ()
+    coupled_placement_attempts: tuple[CoupledPlacementAttempt, ...] = ()
+    placement_probe_slots_spent: int = 0
 
     @property
     def board(self) -> PhysicalBoard:
@@ -211,12 +226,16 @@ def preflight_package_access(
             options, plane_options, on_progress, pair_state_limit=limit, search_work=work,
             search_tier=name)
         tier = PackageSearchTier(name, limit, work.critical_passes,
-                                 work.pair_searches, work.expanded_states, candidate.ready)
+                                 work.pair_searches, work.expanded_states, candidate.ready,
+                                 local_contact_searches=work.local_contact_searches,
+                                 local_contact_expanded_states=work.local_contact_expanded_states)
         tiers.append(tier)
         patterns.extend(candidate.pattern_trials)
         emit(on_progress, "package_search_tier", "finished", **{
             "name": name, "pair_state_limit": limit, "critical_passes": tier.critical_passes,
             "pair_searches": tier.pair_searches, "expanded_states": tier.expanded_states,
+            "local_contact_searches": tier.local_contact_searches,
+            "local_contact_expanded_states": tier.local_contact_expanded_states,
             "ready": candidate.ready})
         return candidate
 
@@ -272,8 +291,19 @@ def _access_result(
     return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard, boundary=boundary)
 
 
+def _missing_bypass_links(source, before, after):
+    """Fresh ordinary-owner predicate; later critical copper cannot repair it."""
+    names = {link.net for link in source.decoupling_links}
+    if not names:
+        return frozenset()
+    return (_verified_bypass_links(before.board, names,
+                admitted_witnesses=before.decoupling_witnesses)
+            - _verified_bypass_links(after.board, names,
+                admitted_witnesses=after.decoupling_witnesses))
+
+
 def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccessResult,
-                         *, allow_equal: bool = False) -> str:
+                         *, allow_equal: bool = False, failed_bypass_capacitors=None) -> str:
     required = {item.pad for item in baseline.fanout.pin_analysis}
     tested = {item.pad for item in candidate.fanout.pin_analysis}
     if candidate.hard_findings:
@@ -294,6 +324,14 @@ def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccess
             and (allow_equal or candidate.pending_pads < baseline.pending_pads
                  or candidate.failed_critical_nets < baseline.failed_critical_nets)):
         return "access_not_improved"
+    # Equal pad-exit identities cannot prove a retained pin-associated feed.
+    # The ordinary owner must still own complete local bypass paths before
+    # critical/contact prefixes can be accepted or a placement can replace it.
+    missing = _missing_bypass_links(baseline.source, baseline.fanout, candidate.fanout)
+    if missing:
+        if failed_bypass_capacitors is not None:
+            failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing})[:32])
+        return "lost_bypass_connection"
     return "accepted"
 
 
@@ -304,27 +342,70 @@ def _negotiate_patterns(
     *, pair_state_limit: int | None = None,
     search_work: _SearchWork | None = None,
     search_tier: str = "full",
+    allow_contact_trial: bool = True,
+    allow_surface_trial: bool = True,
 ) -> PackageAccessResult:
     """Use alternate owners as obstacles only while proposing ordinary exits.
 
-    Probe copper is never committed. Only fanout-owned stubs are rebased onto
-    the original macro-materialized source; critical profiles and plane contacts
-    are then rebuilt against those stubs. Failed trials retain the full incumbent.
+    Only exact ordinary ownership is rebased onto the macro-materialized source.
+    Explicit higher-priority bypass reservations survive clean probes. Freshly
+    witnessed plane contacts may transfer from a typed proposal into bypass
+    ownership; other probe copper is discarded. Failed trials keep the incumbent.
     """
     plane_pending = bool(baseline.plane_stitch and baseline.plane_stitch.pending_pads)
     ordinary_pending = bool(baseline.fanout.pending_pads or baseline.boundary and baseline.boundary.pending_pads)
     other_owners = bool(baseline.critical.nets or plane_options and baseline.source.zones)
+    from .surface_bypass_coexistence import constrained_surface_roots
+    surface_case = bool(allow_surface_trial and options.maximum_partial_owner_nets
+        and baseline.fanout.decoupling_tracks
+        and constrained_surface_roots(owner_board, baseline.fanout))
     if (not options.maximum_pattern_trials or baseline.hard_findings
-            or baseline.global_route.status is not GlobalRoutingStatus.SUCCESS
-            or not (baseline.failed_critical_nets or plane_pending or ordinary_pending and other_owners)):
+            or not (baseline.failed_critical_nets or plane_pending or ordinary_pending and other_owners
+                    or surface_case)):
         return baseline
+    if allow_contact_trial and options.maximum_partial_owner_nets:
+        contact = _contact_pattern_trial(baseline, owner_board, fanout_options, options,
+                                         plane_options, on_progress, pair_state_limit,
+                                         search_work, search_tier)
+        if contact is not None:
+            remaining = options.maximum_pattern_trials - 1
+            if contact.ready or not remaining:
+                return contact
+            followup = _negotiate_patterns(replace(contact, pattern_trials=()), owner_board, fanout_options,
+                replace(options, maximum_pattern_trials=remaining), plane_options, on_progress,
+                pair_state_limit=pair_state_limit, search_work=search_work, search_tier=search_tier,
+                allow_contact_trial=False, allow_surface_trial=allow_surface_trial)
+            records = (*contact.pattern_trials, *followup.pattern_trials)
+            return replace(followup, pattern_trials=tuple(
+                replace(record, index=index) for index, record in enumerate(records, 1)))
+    if surface_case:
+        # This spends ONE existing pattern slot before a clean critical probe.
+        # The helper does one joint assignment and exact-link feed generation;
+        # it neither changes poses nor calls full fanout per alternative.
+        surface = _surface_bypass_pattern_trial(baseline, owner_board, fanout_options, options,
+            plane_options, on_progress, pair_state_limit, search_work, search_tier)
+        remaining = options.maximum_pattern_trials - 1
+        if surface.ready or not remaining:
+            return surface
+        followup = _negotiate_patterns(replace(surface, pattern_trials=()), owner_board, fanout_options,
+            replace(options, maximum_pattern_trials=remaining), plane_options, on_progress,
+            pair_state_limit=pair_state_limit, search_work=search_work, search_tier=search_tier,
+            allow_contact_trial=False, allow_surface_trial=False)
+        records = (*surface.pattern_trials, *followup.pattern_trials)
+        return replace(followup, pattern_trials=tuple(
+            replace(record, index=index) for index, record in enumerate(records, 1)))
+    # An unreachable coarse planner must not disable exact source-terminal
+    # ownership probes. These are disposable proposals, and the existing full
+    # owner/pad/DRC revalidation and area-readiness gates still decide adoption.
     # Already-successful critical copper can seed the proposal without a second
     # expensive pair search. Strip only the verified fanout prefix; ownership,
     # source copper and all critical geometry remain explicit. This reuse is a
     # proposal optimization, never a substitute for final owner revalidation.
+    from .priority_bypass import priority_bypass_reservations
+    priority_bypasses = priority_bypass_reservations(owner_board, baseline.fanout)
     prefix_tracks = (*owner_board.tracks, *baseline.fanout.created_tracks)
     prefix_vias = (*owner_board.vias, *baseline.fanout.created_vias)
-    reuse = (not baseline.failed_critical_nets
+    reuse = (priority_bypasses is None and not baseline.failed_critical_nets
              and not baseline.critical.plane_reservation_track_count
              and not baseline.critical.plane_reservation_via_count
              and baseline.critical.status is not CriticalRoutingStatus.FAILED
@@ -341,8 +422,9 @@ def _negotiate_patterns(
             routing_fingerprint=_critical_fingerprint(baseline.global_route.routing_fingerprint,
                                                      list(tracks), list(vias), list(baseline.critical.nets)))
     else:
-        probe = _critical_search(baseline.source, baseline.global_route, None,
-                                 on_progress, pair_state_limit, search_work)
+        probe = _critical_search(baseline.source, baseline.global_route, priority_bypasses,
+                                 on_progress, pair_state_limit, search_work,
+                                 retained_critical=baseline.critical, retained_accesses=baseline.fanout)
     emit(on_progress, "package_probe_drc", "started")
     probe_failed, probe_hard = _failures(baseline.source, probe)
     emit(on_progress, "package_probe_drc", "finished", hard_findings=probe_hard,
@@ -370,6 +452,11 @@ def _negotiate_patterns(
         if strategy == "partial_ordinary":
             _, partial_skipped_reason = _partial_ordinary_release(
                 baseline.fanout, owner_board, probe.board, options.maximum_partial_owner_nets)
+            if partial_skipped_reason == "protected_ordinary_owner":
+                _, bypass_reason = _partial_ordinary_release(
+                    baseline.fanout, owner_board, probe.board, options.maximum_partial_owner_nets, True)
+                if not bypass_reason:
+                    strategy, partial_skipped_reason = "partial_bypass", ""
             if partial_skipped_reason and records[-1].strategy != "critical_first":
                 # Cheap eligibility failure must not suppress the established
                 # critical-only fallback after a plane-first proposal. No third
@@ -384,11 +471,14 @@ def _negotiate_patterns(
                      search_tier=search_tier)
                 continue
         displaced, retained_tracks, retained_vias = (), 0, 0
+        plane_contacts = None
+        from .plane_bypass_transfer import PlaneContactProposal
         emit(on_progress, "package_pattern_trial", "started", index=len(records) + 1, strategy=strategy,
              search_tier=search_tier)
         if strategy == "critical_and_plane_first":
             emit(on_progress, "package_plane_stitch", "started", purpose="proposal_obstacles")
             stitched = stitch_zone_pads(probe.board, plane_options)
+            plane_contacts = PlaneContactProposal(probe.board, stitched)
             emit(on_progress, "package_plane_stitch", "finished", purpose="proposal_obstacles",
                  pending=len(stitched.pending_pads))
             obstacles = stitched.board
@@ -399,18 +489,28 @@ def _negotiate_patterns(
                 strategies[1] = "plane_first"
         elif strategy == "plane_first":
             emit(on_progress, "package_plane_stitch", "started", purpose="plane_first_proposal")
-            stitched = stitch_zone_pads(owner_board, plane_options)
+            plane_seed = priority_bypasses.board if priority_bypasses else owner_board
+            stitched = stitch_zone_pads(plane_seed, plane_options)
+            plane_contacts = PlaneContactProposal(plane_seed, stitched)
             emit(on_progress, "package_plane_stitch", "finished", purpose="plane_first_proposal",
                  pending=len(stitched.pending_pads))
             obstacles = stitched.board
         else:
             obstacles = probe.board
         emit(on_progress, "package_pattern_fanout", "started", strategy=strategy)
-        if strategy == "partial_ordinary":
+        failed_bypass_capacitors = []
+        if strategy in {"partial_ordinary", "partial_bypass"}:
             proposed, displaced, retained_tracks, retained_vias, partial_outcome = _partial_ordinary_pattern(
-                baseline.fanout, owner_board, obstacles, fanout_options, options.maximum_partial_owner_nets)
+                baseline.fanout, owner_board, obstacles, fanout_options, options.maximum_partial_owner_nets,
+                strategy == "partial_bypass", failed_bypass_capacitors)
         else:
-            proposed = route_fanout(obstacles, fanout_options)
+            retained_kwargs = {"retained": priority_bypasses} if priority_bypasses is not None else {}
+            if plane_contacts is not None:
+                retained_kwargs["plane_contacts"] = plane_contacts
+            proposed, partial_outcome = _full_ordinary_pattern(owner_board, obstacles, fanout_options,
+                                                                **retained_kwargs)
+            if priority_bypasses is not None:
+                retained_tracks, retained_vias = len(priority_bypasses.created_tracks), len(priority_bypasses.created_vias)
         emit(on_progress, "package_pattern_fanout", "finished", strategy=strategy,
              escaped=len(proposed.accesses) if proposed else 0,
              pending=len(proposed.pending_pads) if proposed else 0,
@@ -418,9 +518,11 @@ def _negotiate_patterns(
         if proposed is None:
             records.append(PackagePatternTrial(len(records) + 1, strategy,
                 tuple(sorted(accepted.pending_pads)), tuple(sorted(accepted.failed_critical_nets)),
-                partial_outcome, search_tier=search_tier, displaced_nets=displaced))
+                partial_outcome, search_tier=search_tier, displaced_nets=displaced,
+                failed_bypass_capacitors=tuple(failed_bypass_capacitors)))
             emit(on_progress, "package_pattern_trial", "finished", index=len(records), strategy=strategy,
-                 outcome=partial_outcome, search_tier=search_tier)
+                 outcome=partial_outcome, search_tier=search_tier,
+                 failed_bypass_capacitors=[f"{p.component}.{p.pad}" for p in failed_bypass_capacitors])
             continue
         # Do not leak critical metadata/copper into ordinary ownership. Existing
         # macro copper belongs to the source, not to the proposed fanout pattern.
@@ -433,14 +535,22 @@ def _negotiate_patterns(
             outcome = "unchanged_pattern"
         elif not accepted.fanout.escaped_pads <= proposed.escaped_pads:
             outcome = "lost_ordinary_access"
+        elif missing := _missing_bypass_links(baseline.source, accepted.fanout, proposed):
+            # This owner-only acceptance condition cannot be changed by the
+            # subsequent critical/contact rebuild. Reject before spending that
+            # search, retaining its ordinary pattern slot and exact loss hints.
+            outcome = "lost_bypass_connection"
+            failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing})[:32])
         else:
             seen.add(signature)
             verified = _critical_search(baseline.source, baseline.global_route, proposed,
                                         on_progress, pair_state_limit, search_work,
-                                        plane_options=plane_options if strategy == "plane_first" else None)
+                                        plane_options=plane_options if strategy == "plane_first" else None,
+                                        retained_critical=baseline.critical, retained_accesses=baseline.fanout)
             candidate = _access_result(baseline.source, baseline.global_route, proposed, verified, plane_options,
                                        options.boundary_options, on_progress)
-            outcome = _improvement_outcome(accepted, candidate)
+            outcome = _improvement_outcome(accepted, candidate,
+                                           failed_bypass_capacitors=failed_bypass_capacitors)
             if (include_planes and candidate.plane_stitch is not None
                     and candidate.plane_stitch.pending_pads and len(strategies) > 1):
                 # A contact may be feasible in the probe yet lost when critical
@@ -451,9 +561,11 @@ def _negotiate_patterns(
             tuple(sorted(candidate.pending_pads if candidate else
                          accepted.pending_pads | frozenset(proposed.pending_pads))),
             tuple(sorted(evidence.failed_critical_nets)), outcome, candidate is not None, search_tier,
-            displaced, retained_tracks, retained_vias, partial_skipped_reason))
+            displaced, retained_tracks, retained_vias, partial_skipped_reason,
+            failed_bypass_capacitors=tuple(failed_bypass_capacitors)))
         emit(on_progress, "package_pattern_trial", "finished", index=len(records), strategy=strategy,
-             outcome=outcome, search_tier=search_tier)
+             outcome=outcome, search_tier=search_tier,
+             failed_bypass_capacitors=[f"{p.component}.{p.pad}" for p in failed_bypass_capacitors])
         if outcome == "accepted":
             accepted = candidate
             if accepted.ready:
@@ -464,32 +576,217 @@ def _negotiate_patterns(
     return replace(accepted, pattern_trials=tuple(records))
 
 
-def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets):
+def _surface_bypass_pattern_trial(baseline, owner_board, fanout_options, options, plane_options,
+                                  on_progress, pair_state_limit, search_work, search_tier):
+    """Fresh full-owner admission of one no-pose exact-association proposal."""
+    from .surface_bypass_coexistence import propose_surface_bypass
+    emit(on_progress, "package_pattern_trial", "started", index=1,
+         strategy="surface_bypass_first", search_tier=search_tier)
+    preparation = propose_surface_bypass(owner_board, baseline.fanout, options.boundary_options,
+                                         obstacles=baseline.board, fanout_options=fanout_options)
+    candidate = None
+    outcome = preparation.reason
+    if preparation.fanout is not None:
+        verified = _critical_search(baseline.source, baseline.global_route, preparation.fanout,
+            on_progress, pair_state_limit, search_work,
+            retained_critical=baseline.critical, retained_accesses=baseline.fanout)
+        candidate = _access_result(baseline.source, baseline.global_route, preparation.fanout,
+            verified, plane_options, options.boundary_options, on_progress)
+        outcome = _improvement_outcome(baseline, candidate)
+        # No unrelated critical/plane occurrence was released by this proposal.
+        # Their normal owners must freshly revalidate and retain the originals;
+        # equal counts, equal net labels or a new route do not replace authority.
+        old_tracks = baseline.board.tracks[len(baseline.fanout.board.tracks):]
+        old_vias = baseline.board.vias[len(baseline.fanout.board.vias):]
+        if (Counter(map(id, old_tracks)) - Counter(map(id, candidate.board.tracks))
+                or Counter(map(id, old_vias)) - Counter(map(id, candidate.board.vias))):
+            outcome = "unrelated_owner_not_retained"
+    accepted = candidate if outcome == "accepted" else baseline
+    selected = preparation.link
+    record = PackagePatternTrial(1, "surface_bypass_first", tuple(sorted(accepted.pending_pads)),
+        tuple(sorted(accepted.failed_critical_nets)), outcome, candidate is not None, search_tier,
+        displaced_nets=(selected.net,) if selected is not None else (),
+        retained_track_count=preparation.retained_track_count,
+        retained_via_count=preparation.retained_via_count,
+        partial_skipped_reason=preparation.reason if preparation.fanout is None else "",
+        failed_bypass_capacitors=(selected.capacitor,) if selected is not None
+            and preparation.reason == "selected_surface_feed_regeneration_failed" else ())
+    emit(on_progress, "package_pattern_trial", "finished", index=1,
+         strategy="surface_bypass_first", outcome=outcome, search_tier=search_tier)
+    return replace(accepted, pattern_trials=(record,))
+
+
+def _contact_pattern_trial(baseline, owner_board, fanout_options, options, plane_options,
+                           on_progress, pair_state_limit, search_work, search_tier):
+    """Spend one existing pattern slot on measured local contact competition.
+
+    The clean local branch is disposable. Only exact generated ordinary owners
+    can be reallocated; full current critical, planes and boundary gates still
+    decide adoption. No whole-board clean critical probe is purchased here.
+    """
+    selected = next((item for item in baseline.critical.nets
+        if not item.connected and len(item.nets) == 2 and item.local_preparation is not None
+        and item.local_preparation.status == "blocked"
+        and item.local_preparation.paired_topology_supported), None)
+    if selected is None:
+        return None
+    from .pair_terminals import PairTerminalPreparationStats, prepare_pair_terminals
+    from .contact_owner_regeneration import regenerate_contact_owners
+    rules = {rule.net: rule for rule in owner_board.net_routing_rules}
+    if any(name not in rules for name in selected.nets):
+        return None
+    first, second = (rules[name] for name in selected.nets)
+    if first.kind is not RouteKind.DIFFERENTIAL or second.kind is not RouteKind.DIFFERENTIAL:
+        return None
+    emit(on_progress, "package_pattern_trial", "started", index=1, strategy="contact_first",
+         search_tier=search_tier, nets=list(selected.nets))
+    report = PairTerminalPreparationStats()
+    _, a, b, pairs, returns = prepare_pair_terminals(owner_board, first, second, {}, report=report)
+    if search_work is not None:
+        search_work.observe_local(report)
+    proposed = None
+    if a and b:
+        proposed = regenerate_contact_owners(owner_board, baseline.fanout, selected.nets,
+            (*a, *b), (*[via for pair in pairs for via in pair], *returns), fanout_options,
+            maximum_owner_nets=options.maximum_partial_owner_nets)
+    candidate = None
+    outcome = "contact_probe_blocked" if not a or not b else "contact_owner_proposal_rejected"
+    if proposed is not None:
+        verified = _critical_search(baseline.source, baseline.global_route, proposed,
+            on_progress, pair_state_limit, search_work,
+            retained_critical=baseline.critical, retained_accesses=baseline.fanout)
+        candidate = _access_result(baseline.source, baseline.global_route, proposed, verified,
+            plane_options, options.boundary_options, on_progress)
+        outcome = _improvement_outcome(baseline, candidate)
+    accepted = candidate if outcome == "accepted" else baseline
+    record = PackagePatternTrial(1, "contact_first", tuple(sorted(accepted.pending_pads)),
+        tuple(sorted(accepted.failed_critical_nets)), outcome, candidate is not None, search_tier)
+    emit(on_progress, "package_pattern_trial", "finished", index=1, strategy="contact_first",
+         outcome=outcome, search_tier=search_tier,
+         local_contact_searches=report.searches, local_contact_expanded_states=report.expanded_states)
+    return replace(accepted, pattern_trials=(record,))
+
+
+def _ordinary_probe_frame(owner, obstacles):
+    """Bind disposable copper to authoritative source intent before routing.
+
+    Probe routing metadata is output, never an alternate source context. Copper
+    and fills remain actual obstacles; every other source field and immutable
+    ordered copper occurrence must match the owner.
+    """
+    if (any(getattr(obstacles, field.name) != getattr(owner, field.name)
+            for field in fields(owner) if field.name not in {"tracks", "vias", "zone_fills", "metadata"})
+            or obstacles.tracks[:len(owner.tracks)] != owner.tracks
+            or obstacles.vias[:len(owner.vias)] != owner.vias):
+        return None
+    return replace(obstacles, metadata=owner.metadata)
+
+
+def _full_ordinary_pattern(owner, obstacles, settings, *, retained=None, plane_contacts=None):
+    """Generate against disposable copper, then admit only owned contributions.
+
+    Temporary routing metadata must not become the source context of newly
+    generated witnesses. Typed plane proposals can transfer exact contact edges
+    used by complete bypass witnesses. Remaining disposable copper is removed;
+    dependent paths must fail fresh admission without aborting the pipeline.
+    """
+    frame = _ordinary_probe_frame(owner, obstacles)
+    if frame is None:
+        return None, "stale_probe_source_intent"
+    proposed = route_fanout(frame, settings)
+    if plane_contacts is not None:
+        from .plane_bypass_transfer import transfer_witnessed_plane_contacts
+        proposed = transfer_witnessed_plane_contacts(owner, frame, proposed, plane_contacts)
+        if proposed is None:
+            return None, "invalid_plane_contact_ownership"
+    from .priority_bypass import merge_retained_bypasses
+    proposed = merge_retained_bypasses(owner, frame, proposed, retained)
+    if proposed is None:
+        return None, "lost_priority_bypass_ownership"
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    witnesses, reason = refresh_crosslayer_witnesses(proposed.board, proposed.decoupling_witnesses)
+    if reason:
+        return None, "stale_bypass_witness"
+    proposed = replace(proposed, decoupling_witnesses=witnesses)
+    if plane_contacts is not None:
+        from .contact_owner_regeneration import _valid_exits
+        if not _valid_exits(proposed.board, proposed):
+            return None, "lost_ordinary_access"
+        # The typed contact suffix was validated before rebasing. Only an
+        # actual release of its unused exact occurrences creates a new local
+        # obstacle context. Spend one existing late-completion pass on the
+        # original pending links; do not reroute any held ordinary owner.
+        contact_tracks = plane_contacts.result.board.tracks[len(plane_contacts.source.tracks):]
+        contact_vias = plane_contacts.result.board.vias[len(plane_contacts.source.vias):]
+        released = (any(not any(t is held for held in proposed.board.tracks) for t in contact_tracks)
+                    or any(not any(v is held for held in proposed.board.vias) for v in contact_vias))
+        if released and proposed.decoupling_pending_links:
+            from .fanout_bypass_completion import complete_late_bypasses
+            proposed = complete_late_bypasses(proposed, proposed.decoupling_pending_links,
+                                             settings, trigger="released_plane_contacts")
+        if released and proposed.pending_pads:
+            from .released_exit_retry import complete_released_contact_exits
+            proposed = complete_released_contact_exits(owner, proposed, settings)
+    from .bypass_reservations import verified_bypass_reservations
+    if verified_bypass_reservations(owner, proposed)[2] is not None:
+        return None, "lost_bypass_connection"
+    return proposed, "proposed"
+
+
+def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets,
+                              regenerate_bypass=False, failed_bypass_capacitors=None):
     """Keep legal generated ownership exactly; rebuild only intersecting nets.
 
     The clean critical probe is a disposable obstacle, not committed copper.
     Net-granular release avoids guessing ownership of shared same-net stubs.
     Source/macro/array copper is never in this removable contribution. Semantic
-    decoupling feeds are also protected. Final critical/contact/boundary checks
+    feeds remain protected by default; the explicit regeneration trial requires
+    every previously verified source association to be independently witnessed
+    again against the complete proposal. Final critical/contact/boundary checks
     still rebuild every owner against the combined ordinary contribution.
     """
     names = {pad: net.name for net in owner.nets for pad in net.pads}
-    ordered, reason = _partial_ordinary_release(original, owner, obstacles, maximum_nets)
+    ordered, reason = _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenerate_bypass)
     if reason:
         return None, ordered, 0, 0, reason
+    obstacles = _ordinary_probe_frame(owner, obstacles)
     displaced = frozenset(ordered)
-    feed_counts = Counter(original.decoupling_tracks)
-    held_tracks = []
-    for track in original.created_tracks:
-        if feed_counts[track]:
-            held_tracks.append(track)
-            feed_counts[track] -= 1
-        elif track.net not in displaced:
-            held_tracks.append(track)
-    tracks = tuple(held_tracks)
-    vias = tuple(v for v in original.created_vias if v.net not in displaced)
+    all_bypass_nets = {link.net for link in owner.decoupling_links}
+    paths, via_paths = {}, {}
+    required_bypass = (_verified_bypass_links(original.board, all_bypass_nets,
+        witness_paths=paths, witness_vias=via_paths, admitted_witnesses=original.decoupling_witnesses)
+        if regenerate_bypass else frozenset())
+    selected = {link for link in required_bypass if link.net in displaced}
+    # Shared return geometry stays held if any unselected association needs it.
+    # Only original generated occurrences can be released; source copper is
+    # outside this ledger, even when it participates in the same witness.
+    released_tracks = {t for link in selected for t in paths.get(link, ())}
+    released_vias = {v for link in selected for v in via_paths.get(link, ())}
+    released_tracks.difference_update(t for link in required_bypass-selected for t in paths.get(link, ()))
+    released_vias.difference_update(v for link in required_bypass-selected for v in via_paths.get(link, ()))
+    def held_occurrences(created, semantic, released):
+        counts = Counter(semantic)
+        retained, semantic_retained = [], []
+        for edge in created:
+            owned = bool(counts[edge])
+            if owned:
+                counts[edge] -= 1
+            if (owned and edge not in released) or (not owned and edge.net not in displaced):
+                retained.append(edge)
+                if owned:
+                    semantic_retained.append(edge)
+        return tuple(retained), tuple(semantic_retained)
+    tracks, retained_feed_tracks = held_occurrences(original.created_tracks,
+        original.decoupling_tracks, released_tracks)
+    vias, retained_feed_vias = held_occurrences(original.created_vias,
+        original.decoupling_vias, released_vias)
     held = replace(obstacles, tracks=(*obstacles.tracks, *tracks), vias=(*obstacles.vias, *vias))
     rebuilt = route_fanout(held, settings, only_nets=frozenset(displaced))
+    missing_bypass = required_bypass - _verified_bypass_links(rebuilt.board, all_bypass_nets)
+    if missing_bypass:
+        if failed_bypass_capacitors is not None:
+            failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing_bypass})[:32])
+        return None, ordered, len(tracks), len(vias), "lost_bypass_connection"
     # Detect accidental owner/prefix replacement, including duplicate geometry.
     if (rebuilt.board.tracks != (*held.tracks, *rebuilt.created_tracks)
             or rebuilt.board.vias != (*held.vias, *rebuilt.created_vias)):
@@ -508,19 +805,42 @@ def _partial_ordinary_pattern(original, owner, obstacles, settings, maximum_nets
         pin_analysis=tuple(a for a in original.pin_analysis if names[a.pad] not in displaced) + rebuilt.pin_analysis,
         decoupling_pending=tuple(p for p in original.decoupling_pending if names[p[0]] not in displaced)
                            + rebuilt.decoupling_pending,
-        decoupling_tracks=(*original.decoupling_tracks, *rebuilt.decoupling_tracks))
+        decoupling_pending_links=tuple(p for p in original.decoupling_pending_links if p[0].net not in displaced)
+                                 + rebuilt.decoupling_pending_links,
+        late_bypass=rebuilt.late_bypass,
+        decoupling_tracks=(*retained_feed_tracks, *rebuilt.decoupling_tracks),
+        decoupling_vias=(*retained_feed_vias, *rebuilt.decoupling_vias))
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    inherited, reason = refresh_crosslayer_witnesses(proposed.board,original.decoupling_witnesses,
+                                                    replacing_links=selected)
+    if reason:
+        return None, ordered, len(tracks), len(vias), "stale_bypass_witness"
+    merged, reason = refresh_crosslayer_witnesses(proposed.board,(*inherited,*rebuilt.decoupling_witnesses))
+    if reason:
+        return None, ordered, len(tracks), len(vias), "stale_bypass_witness"
+    proposed = replace(proposed,decoupling_witnesses=merged)
+    from .bypass_reservations import verified_bypass_reservations
+    if verified_bypass_reservations(owner, proposed)[2] is not None:
+        return None, ordered, len(tracks), len(vias), "lost_bypass_connection"
     return proposed, ordered, len(tracks), len(vias), "proposed"
 
 
-def _partial_ordinary_release(original, owner, obstacles, maximum_nets):
+def _partial_ordinary_release(original, owner, obstacles, maximum_nets, regenerate_bypass=False):
     """Cheap exact eligibility, shared by dispatch and the actual proposal."""
     from .routing_clearance import RoutingClearanceIndex
     if (original.board.tracks != (*owner.tracks, *original.created_tracks)
             or original.board.vias != (*owner.vias, *original.created_vias)
             or replace(original.board, tracks=owner.tracks, vias=owner.vias) != owner):
         raise ValueError("partial ordinary ownership is stale")
-    if Counter(original.decoupling_tracks) - Counter(original.created_tracks):
+    if (Counter(original.decoupling_tracks) - Counter(original.created_tracks)
+            or Counter(original.decoupling_vias) - Counter(original.created_vias)):
         raise ValueError("partial ordinary semantic feed ownership is stale")
+    obstacles = _ordinary_probe_frame(owner, obstacles)
+    if obstacles is None:
+        return (), "stale_probe_source_intent"
+    from .decoupling_paths import refresh_crosslayer_witnesses
+    if refresh_crosslayer_witnesses(original.board,original.decoupling_witnesses)[1]:
+        return (), "stale_bypass_witness"
     names = {pad: net.name for net in owner.nets for pad in net.pads}
     rules = {rule.net: rule for rule in owner.net_routing_rules}
     index = RoutingClearanceIndex(obstacles)
@@ -530,20 +850,118 @@ def _partial_ordinary_release(original, owner, obstacles, maximum_nets):
         via.net, via.position, via.size_nm, via.from_layer, via.to_layer, via.drill_nm))
     displaced.update(names[pad] for pad in original.pending_pads)
     ordered = tuple(sorted(displaced))
-    if any(not index.can_track(t.net, t.start, t.end, t.width_nm, t.layer)
-           for t in original.decoupling_tracks) or any(
-            net in rules and rules[net].kind is not RouteKind.GENERAL for net in displaced):
+    conflicting_tracks = {t for t in original.decoupling_tracks
+                          if not index.can_track(t.net, t.start, t.end, t.width_nm, t.layer)}
+    conflicting_vias = {v for v in original.decoupling_vias if not index.can_via(
+        v.net, v.position, v.size_nm, v.from_layer, v.to_layer, v.drill_nm)}
+    if any(net in rules and rules[net].kind is not RouteKind.GENERAL for net in displaced):
         return ordered, "protected_ordinary_owner"
+    if conflicting_tracks or conflicting_vias:
+        if not regenerate_bypass:
+            return ordered, "protected_ordinary_owner"
+        paths, via_paths = {}, {}
+        verified = _verified_bypass_links(original.board,
+            {link.net for link in owner.decoupling_links}, witness_paths=paths, witness_vias=via_paths,
+            admitted_witnesses=original.decoupling_witnesses)
+        # A return-net conflict cannot release an unselected supply cohort.
+        # Exact witnesses, never a GND label or via membership alone, define
+        # which generated contributions are eligible within the owner budget.
+        if (not conflicting_tracks <= {t for link in verified for t in paths.get(link, ())}
+                or not conflicting_vias <= {v for link in verified for v in via_paths.get(link, ())}
+                or any(link.net not in displaced for link in verified
+                       if conflicting_tracks.intersection(paths.get(link, ()))
+                       or conflicting_vias.intersection(via_paths.get(link, ())))):
+            return ordered, "protected_ordinary_owner"
     if len(displaced) > maximum_nets:
         return ordered, "partial_owner_budget_exhausted"
     return ordered, ""
+
+
+def _verified_bypass_links(board, only_nets, *, witness_paths=None, witness_vias=None, admitted_witnesses=()):
+    """Fresh physical witnesses for explicit source bypass associations.
+
+    Legacy same-surface paths verify the feed only. Opposite-surface paths
+    require both supply and declared component-return joins through normal vias.
+
+    Optional witness_paths receives original input track identities, never
+    reconstructed or synthesized ownership. No routing, via shortcut or connected
+    flag is used as evidence. Actual
+    preferred/breakout widths, every foreign land and all source copper apply.
+    """
+    from .routing_clearance import RoutingClearanceIndex
+    from .pin_escape import _verified_land_path
+    from .placement import transformed_pad_position
+    from .physical import BoardSide, CopperLayer, PadKind
+    from .routing_layers import routing_layers
+    from .hard_macros import macro_owned_pads
+    if witness_paths is not None:
+        witness_paths.clear()
+    if witness_vias is not None:
+        witness_vias.clear()
+    poses = {p.reference:p for p in board.placements}
+    rules = {r.net:r for r in board.net_routing_rules}
+    index, owned, verified = RoutingClearanceIndex(board), macro_owned_pads(board), set()
+    for link in board.decoupling_links:
+        if link.net not in only_nets or link.target in owned or link.capacitor in owned:
+            continue
+        rule=rules.get(link.net)
+        if rule is not None and rule.kind is not RouteKind.GENERAL:
+            continue
+        target,cap=poses[link.target.component],poses[link.capacitor.component]
+        lands=[p for ref,pose in ((link.target,target),(link.capacitor,cap))
+               for p in board.footprints[pose.footprint].pads if p.number==ref.pad]
+        if len(lands)!=2 or any(p.kind is not PadKind.SMD for p in lands):
+            continue
+        if cap.side is not target.side:
+            from .decoupling_paths import verify_crosslayer_decoupling
+            measured = verify_crosslayer_decoupling(board, link, index=index)
+            if measured.witness is not None:
+                verified.add(link)
+                paths = (measured.witness.supply_path, measured.witness.return_path)
+                if witness_paths is not None:
+                    witness_paths[link] = tuple(dict.fromkeys(t for path in paths for t in path.tracks))
+                if witness_vias is not None:
+                    witness_vias[link] = tuple(dict.fromkeys(v for path in paths for v in path.vias))
+            continue
+        layer=CopperLayer.FRONT if target.side is BoardSide.FRONT else CopperLayer.BACK
+        if layer not in routing_layers(board,link.net,rule):
+            continue
+        end=transformed_pad_position(board,cap,link.capacitor.pad)
+        width=rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
+        path = _verified_land_path(board,lands[0],target,link.net,end,index,require_via=False,
+                                   target_layer=layer,required_width_nm=width)
+        if path is not None:
+            verified.add(link)
+            if witness_paths is not None:
+                witness_paths[link] = path
+    if admitted_witnesses:
+        from .decoupling_paths import refresh_crosslayer_witnesses
+        admitted, reason = refresh_crosslayer_witnesses(board,admitted_witnesses,index=index)
+        if reason:
+            if witness_paths is not None:
+                witness_paths.clear()
+            if witness_vias is not None:
+                witness_vias.clear()
+            return frozenset()
+        for witness in admitted:
+            if witness.link not in verified:
+                continue
+            if witness_paths is not None:
+                witness_paths[witness.link] = tuple(dict.fromkeys((*witness_paths.get(witness.link,()),
+                    *(t for path in (witness.supply_path,witness.return_path) for t in path.tracks))))
+            if witness_vias is not None:
+                witness_vias[witness.link] = tuple(dict.fromkeys((*witness_vias.get(witness.link,()),
+                    *(v for path in (witness.supply_path,witness.return_path) for v in path.vias))))
+    return frozenset(verified)
 
 
 def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
                      fanout: FanoutResult | None, on_progress: ProgressCallback | None,
                      pair_state_limit: int | None,
                      search_work: _SearchWork | None, *,
-                     plane_options: PlaneStitchOptions | None = None) -> CriticalRoutingResult:
+                     plane_options: PlaneStitchOptions | None = None,
+                     retained_critical: CriticalRoutingResult | None = None,
+                     retained_accesses: FanoutResult | None = None) -> CriticalRoutingResult:
     emit(on_progress, "package_critical_search", "started", reserved_accesses=fanout is not None,
          pair_state_limit=pair_state_limit, plane_contacts_first=plane_options is not None)
     kwargs = {"on_progress": critical_progress(on_progress)}
@@ -553,6 +971,9 @@ def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
         kwargs["pair_state_limit"] = pair_state_limit
     if plane_options is not None:
         kwargs["plane_stitch_options"] = plane_options
+    if retained_critical is not None:
+        kwargs["retained_critical"] = retained_critical
+        kwargs["retained_accesses"] = retained_accesses
     result = route_critical_nets(board, guides, **kwargs)
     if search_work is not None:
         search_work.observe(result)
@@ -563,9 +984,49 @@ def _critical_search(board: PhysicalBoard, guides: GlobalRoutingResult,
     return result
 
 
+def _source_capacitor_pin_distance(board, reference, failure_points):
+    """Source terminal-center proximity hint only; never clearance authority."""
+    from .physical import PadKind
+    from .placement import transformed_pad_position
+    links = [link for link in board.decoupling_links
+             if link.capacitor.component == reference]
+    if len(links) != 1 or not failure_points:
+        return None
+    poses = {pose.reference: pose for pose in board.placements}
+    pose = poses.get(reference)
+    footprint = board.footprints.get(pose.footprint) if pose is not None else None
+    if footprint is None:
+        return None
+    positions = []
+    for terminal in (links[0].capacitor, links[0].return_pad):
+        lands = [pad for pad in footprint.pads if pad.number == terminal.pad]
+        if (terminal.component != reference or len(lands) != 1
+                or lands[0].kind not in {PadKind.SMD, PadKind.THROUGH_HOLE}):
+            return None
+        positions.append(transformed_pad_position(board, pose, terminal.pad))
+    return min((a.x_nm-b.x_nm)**2 + (a.y_nm-b.y_nm)**2
+               for a in positions for b in failure_points)
+
+
+def _package_owner_cohorts(ranked, direct_owners, links, bypass_hints, ordinary_hints):
+    """Interleave source targets using their exact declared bypass association.
+
+    PhysicalBoard requires one explicit target association per capacitor.
+    Direct failed endpoints and measured ordinary hints retain their own group.
+    """
+    targets = {link.capacitor.component: link.target.component for link in links
+               if link.target.component in direct_owners or link.capacitor in bypass_hints}
+    groups = {}
+    for ref in ranked:
+        target = ref if ref in direct_owners or ref in ordinary_hints else targets.get(ref, ref)
+        groups.setdefault(target, []).append(ref)
+    return tuple(tuple(refs) for refs in groups.values())
+
+
 def package_placement_trials(
     baseline: PackageAccessResult, options: PlacementPlannerOptions, movement_nm: int,
     *, constraints: list[PackagePlacementConstraint] | None = None,
+    _coupled_state: CoupledPlacementState | None = None,
 ) -> Iterator[tuple[str, PhysicalBoard]]:
     """Move failing owners/critical endpoints as legal whole units, never copper.
 
@@ -578,6 +1039,20 @@ def package_placement_trials(
     owners = {pad.component for pad in baseline.pending_pads}
     owners.update(pad.component for net in board.nets if net.name in baseline.failed_critical_nets
                   for pad in net.pads)
+    direct_owners = frozenset(owners)
+    # Fixed package endpoints can be fenced by movable semantic bypass feeds.
+    # Use only explicit source pin associations as dependency hints; normal
+    # whole-unit legality and complete fresh owner validation still apply.
+    dependency_owners = {link.capacitor.component for link in board.decoupling_links
+                         if link.target.component in owners}
+    owners.update(dependency_owners)
+    # Measured lost source-associated feeds are independent placement hints,
+    # never current pending pads or accepted copper. Check exact source pad
+    # identity again; unknown/ground/renamed non-associated pads add no owner.
+    source_bypass_pads = {link.capacitor for link in board.decoupling_links}
+    bypass_hints = {pad for trial in baseline.pattern_trials if trial.outcome == "lost_bypass_connection"
+                    for pad in trial.failed_bypass_capacitors if pad in source_bypass_pads}
+    owners.update(pad.component for pad in bypass_hints)
     # A rejected ordering can expose movable ordinary owners even when every
     # endpoint of the original failure is fixed. Keep its copper discarded,
     # but use the measured lost identities as bounded placement-search hints.
@@ -599,14 +1074,48 @@ def package_placement_trials(
         record(ref, poses[ref], poses, (f"{ref}: " + (
             "temporary session lock fixes the complete pose" if ref in options.fixed_references
             else "source constraint fixes its position"),), "fixed_owner")
+    for ref in sorted({pad.component for pad in bypass_hints} - fixed):
+        record(ref, poses[ref], poses, ("rejected generated ownership lost the verified source bypass at "
+            + ", ".join(f"{pad.component}.{pad.pad}" for pad in sorted(bypass_hints)
+                        if pad.component == ref),), "bypass_dependency_hint")
     for ref in sorted(hinted - fixed):
         record(ref, poses[ref], poses, ("rejected ownership ordering lost access to "
             + ", ".join(f"{pad.component}.{pad.pad}" for pad in sorted(pattern_pads)
                         if pad.component == ref),), "pattern_hint")
+    from .placement import transformed_pad_position
+    failed_pins = set(baseline.pending_pads)
+    failed_pins.update(p for n in board.nets if n.name in baseline.failed_critical_nets for p in n.pads)
+    def pin_point(pad):
+        pose=poses[pad.component]
+        lands=[p for p in board.footprints[pose.footprint].pads if p.number == pad.pad]
+        return transformed_pad_position(board,pose,pad.pad) if len(lands) == 1 else None
+    failure_points=[point for pad in sorted(failed_pins) if (point:=pin_point(pad)) is not None]
+    def dependency_distance(ref):
+        if ref not in dependency_owners:
+            return 0
+        targets=[point for link in board.decoupling_links if link.capacitor.component == ref
+                 and (point:=pin_point(link.target)) is not None]
+        return min(((a.x_nm-b.x_nm)**2+(a.y_nm-b.y_nm)**2
+                    for a in targets for b in failure_points),default=float('inf'))
     ranked = sorted(owners - fixed, key=lambda ref: (
-        -sum(pad.component == ref for pad in baseline.pending_pads),
+        -sum(pad.component == ref for pad in baseline.pending_pads), dependency_distance(ref),
         -len(board.footprints[poses[ref].footprint].pads), ref))
-    # Interleave owners so one package does not consume every trial.
+    # Preserve every existing primary tier. Unknown terminal identity leaves
+    # its entire tied tier in the original order rather than gaining priority.
+    tiers = {}
+    for ref in ranked:
+        key = (-sum(pad.component == ref for pad in baseline.pending_pads),
+               dependency_distance(ref), -len(board.footprints[poses[ref].footprint].pads))
+        tiers.setdefault(key, []).append(ref)
+    ranked = []
+    for refs in tiers.values():
+        hints = {ref: _source_capacitor_pin_distance(board, ref, failure_points)
+                 if ref in dependency_owners and ref not in direct_owners else None
+                 for ref in refs}
+        if all(value is not None for value in hints.values()):
+            refs.sort(key=lambda ref: (hints[ref], ref))
+        ranked.extend(refs)
+    # Build the existing finite per-owner proposal lists once.
     proposals = {}
     for reference in ranked:
         current = poses[reference]
@@ -622,21 +1131,43 @@ def package_placement_trials(
         candidates[4:4] = [replace(current, rotation_degrees=angle) for angle in angles
                            if angle != current.rotation_degrees]
         proposals[reference] = candidates
-    for index in range(max((len(items) for items in proposals.values()), default=0)):
-        for reference in ranked:
-            if index >= len(proposals[reference]):
-                continue
+    if _coupled_state is not None:
+        coupled = _coupled_state.prepass(baseline, ranked, proposals, options)
+        if coupled is not None:
+            yield coupled
+    def legal_trials(references):
+        for index in range(max((len(items) for items in proposals.values()), default=0)):
+            for reference in references:
+                if index >= len(proposals[reference]):
+                    continue
+                try:
+                    trial = move_placement_unit(board, poses, reference, proposals[reference][index])
+                except ValueError:
+                    record(reference, proposals[reference][index], poses,
+                           ("rigid placement unit cannot represent the proposed pose",))
+                    continue
+                if placement_solution_is_legal(board, trial, options):
+                    yield reference, replace(board, placements=tuple(trial[pose.reference] for pose in board.placements))
+                elif constraints is not None and len(constraints) < 32:
+                    record(reference, proposals[reference][index], trial,
+                           placement_rejection_reasons(board, trial, options))
+
+    # A source package may own many distinct bypass capacitors. Fairness is
+    # between failed source targets, after all normal whole-unit legal gates,
+    # rather than between references that happen to rank close to one target.
+    active = [iter(legal_trials(refs)) for refs in _package_owner_cohorts(
+        ranked, direct_owners, board.decoupling_links, bypass_hints, hinted)]
+    while active:
+        remaining = []
+        for trials in active:
             try:
-                trial = move_placement_unit(board, poses, reference, proposals[reference][index])
-            except ValueError:
-                record(reference, proposals[reference][index], poses,
-                       ("rigid placement unit cannot represent the proposed pose",))
+                trial = next(trials)
+            except StopIteration:
                 continue
-            if placement_solution_is_legal(board, trial, options):
-                yield reference, replace(board, placements=tuple(trial[pose.reference] for pose in board.placements))
-            elif constraints is not None and len(constraints) < 32:
-                record(reference, proposals[reference][index], trial,
-                       placement_rejection_reasons(board, trial, options))
+            yield trial
+            remaining.append(trials)
+        active = remaining
+
 
 
 def improve_package_access(
@@ -666,6 +1197,7 @@ def improve_package_access(
     records = []
     probes: list[PackagePlacementProbe] = []
     constraints: list[PackagePlacementConstraint] = []
+    coupled = CoupledPlacementState()
     moves = 0
     seen = {_placement_fingerprint(baseline.source)}
     if plane_options is None and options.reserve_plane_contacts and baseline.source.zones:
@@ -676,7 +1208,7 @@ def improve_package_access(
         attempted = False
         for reference, trial, probe_index in _ranked_placement_trials(
                 accepted, fanout_options, options, placement_options, plane_options,
-                seen, probes, on_progress, constraints):
+                seen, probes, on_progress, constraints, _coupled_state=coupled):
             signature = _placement_fingerprint(trial)
             if signature in seen:
                 continue
@@ -684,7 +1216,8 @@ def improve_package_access(
             attempted = True
             emit(on_progress, "package_access_trial", "started",
                  index=len(records) + 1, reference=reference, placement_probe_index=probe_index)
-            guides = route_global(trial, global_options)
+            guides = route_global(trial, global_options,
+                **({"on_progress": on_progress} if on_progress is not None else {}))
             candidate = None
             outcome = "global_failed"
             if guides.status is GlobalRoutingStatus.SUCCESS:
@@ -718,10 +1251,12 @@ def improve_package_access(
         stop_reason = "trial_budget_exhausted"
     emit(on_progress, "package_placement_feedback", "finished", reason=stop_reason,
          trials=len(records), probes=len(probes), probe_limit=options.maximum_placement_probes,
+         placement_probe_slots_spent=len(probes)+coupled.failed_slots, coupled_claimed=coupled.claimed,
          accepted_moves=moves)
     return replace(accepted, trials=tuple(records), accepted_moves=moves,
                    placement_probes=tuple(probes), placement_stop_reason=stop_reason,
-                   placement_constraints=tuple(constraints))
+                   placement_constraints=tuple(constraints), coupled_placement_attempts=tuple(coupled.attempts),
+                   placement_probe_slots_spent=len(probes)+coupled.failed_slots)
 
 
 def _ranked_placement_trials(
@@ -730,6 +1265,7 @@ def _ranked_placement_trials(
     plane_options: PlaneStitchOptions | None, seen: set[str],
     records: list[PackagePlacementProbe], on_progress: ProgressCallback | None,
     constraints: list[PackagePlacementConstraint] | None = None,
+    *, _coupled_state: CoupledPlacementState | None = None,
 ) -> Iterator[tuple[str, PhysicalBoard, int | None]]:
     """Rank a bounded legal look-ahead; unprobed moves retain generator order.
 
@@ -737,13 +1273,20 @@ def _ranked_placement_trials(
     critical, ordinary, plane and boundary preflight before it can be accepted.
     The probe budget is shared across accepted moves, not restarted per move.
     """
-    remaining = max(0, options.maximum_placement_probes - len(records))
+    def spent():
+        return len(records) + (_coupled_state.failed_slots if _coupled_state is not None else 0)
+    remaining = max(0, options.maximum_placement_probes - spent())
+    if _coupled_state is not None:
+        _coupled_state.available_slots = remaining
+        _coupled_state.next_probe_index = spent() + 1
+    kwargs = {"_coupled_state": _coupled_state} if _coupled_state is not None else {}
     trials = iter(package_placement_trials(baseline, placement_options, options.movement_nm,
-                                         constraints=constraints))
+                                         constraints=constraints, **kwargs))
     sampled = []
     local_seen = set(seen)
     emit(on_progress, "package_placement_ranking", "started", remaining_probes=remaining)
-    while len(sampled) < remaining:
+    buffered = None
+    while spent() < options.maximum_placement_probes:
         try:
             reference, trial = next(trials)
         except StopIteration:
@@ -751,11 +1294,17 @@ def _ranked_placement_trials(
         signature = _placement_fingerprint(trial)
         if signature in local_seen:
             continue
+        if spent() >= options.maximum_placement_probes:
+            buffered = (reference, trial)
+            break
         local_seen.add(signature)
-        emit(on_progress, "package_placement_probe", "started", index=len(records) + 1,
+        index = spent() + 1
+        if _coupled_state is not None and signature == _coupled_state.reserved_fingerprint:
+            index = _coupled_state.reserved_probe_index
+        emit(on_progress, "package_placement_probe", "started", index=index,
              reference=reference, placement_fingerprint=signature)
         probe = _placement_access_probe(baseline, reference, trial, fanout_options,
-            placement_options, plane_options, options.boundary_options, len(records) + 1)
+            placement_options, plane_options, options.boundary_options, index)
         records.append(probe)
         sampled.append((probe.rank, len(sampled), reference, trial, probe.index))
         emit(on_progress, "package_placement_probe", "finished", index=probe.index,
@@ -764,9 +1313,12 @@ def _ranked_placement_trials(
              plane_pending=len(probe.plane_pending_pads),
              boundary_pending=len(probe.boundary_pending_pads), hard_findings=probe.hard_findings)
     emit(on_progress, "package_placement_ranking", "finished", probes=len(sampled),
-         total_probes=len(records), probe_limit=options.maximum_placement_probes)
+         total_probes=len(records), probe_limit=options.maximum_placement_probes,
+         placement_probe_slots_spent=spent())
     for _, _, reference, trial, index in sorted(sampled, key=lambda item: item[:2]):
         yield reference, trial, index
+    if buffered is not None:
+        yield buffered[0], buffered[1], None
     for reference, trial in trials:
         yield reference, trial, None
 

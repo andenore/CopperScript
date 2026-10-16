@@ -82,7 +82,8 @@ def run_routing_pipeline(
         raise ValueError("routing placement feedback bounds are invalid")
     emit(on_progress, "placement_global", "started")
     placement = optimize_placement_for_routing(
-        board, placement_options, global_options, feedback_options
+        board, placement_options, global_options, feedback_options,
+        **({"on_progress": on_progress} if on_progress is not None else {})
     )
     emit(on_progress, "placement_global", "finished", candidate=placement.placement_candidate,
          global_status=placement.global_route.status.value)
@@ -176,7 +177,8 @@ def run_routing_pipeline(
         ):
             trials_run += 1
             emit(on_progress, "detailed_placement_trial", "started", index=trials_run)
-            trial_global = route_global(trial_board, global_options)
+            trial_global = route_global(trial_board, global_options,
+                **({"on_progress": on_progress} if on_progress is not None else {}))
             if trial_global.status is not GlobalRoutingStatus.SUCCESS:
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="global_failed")

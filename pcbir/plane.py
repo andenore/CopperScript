@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Iterator
 
 from .drc import placed_pad_shape
+from .geometry import RoundedConvexShape, shapes_clear
 from .physical import (
     BoardSide,
     CopperKeepout,
@@ -413,7 +414,7 @@ def _stitch_land(
         )
         if tail is not None:
             return tail
-    pad_bounds = placed_pad_shape(position, pad, placement).bounds
+    pad_shape = placed_pad_shape(position, pad, placement)
     legal_via_targets: list[Point] = []
     for candidate in _candidate_points(position, options):
         distance_x = abs(candidate.x_nm - position.x_nm)
@@ -429,10 +430,7 @@ def _stitch_land(
             continue
         # Through-via-in-pad needs a separately qualified filled/capped
         # assembly process; this prototype always escapes the land.
-        if (
-            pad_bounds.min_x - via_size // 2 <= candidate.x_nm <= pad_bounds.max_x + via_size // 2
-            and pad_bounds.min_y - via_size // 2 <= candidate.y_nm <= pad_bounds.max_y + via_size // 2
-        ):
+        if not shapes_clear(RoundedConvexShape((candidate,), via_size // 2), pad_shape, 1):
             continue
         coincident = tuple(item for item in committed_vias if item.position == candidate)
         existing = next((item for item in coincident
@@ -482,12 +480,7 @@ def _stitch_land(
         accept_via=lambda candidate: (
             candidate not in occupied
             and any(_point_in_zone(candidate, zone.outline) for zone in zones)
-            and not (
-                pad_bounds.min_x - via_size // 2 <= candidate.x_nm
-                <= pad_bounds.max_x + via_size // 2
-                and pad_bounds.min_y - via_size // 2 <= candidate.y_nm
-                <= pad_bounds.max_y + via_size // 2
-            )
+            and shapes_clear(RoundedConvexShape((candidate,), via_size // 2), pad_shape, 1)
         ),
     )
     if maze is not None:

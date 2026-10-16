@@ -28,7 +28,8 @@ _PLACEMENT_PARAMETERS = {
     "align": {"axis", "tolerance", "weight"},
     "fixed_placement": {"x", "y", "rotation", "side", "edge_clearance", "priority"},
     "allowed_orientations": {"values"},
-    "placement_region": {"name", "x", "y", "width", "height", "side"},
+    "placement_region": {"name", "x", "y", "width", "height", "side", "courtyard_gap"},
+    "courtyard_gap": {"additional"},
     "keepout": {"name", "x", "y", "width", "height", "side", "maximum_height"},
 }
 
@@ -51,7 +52,8 @@ def _lower(flat, constraint, board):
 def _placement(constraint, lowered, board):
     from .geometry import RoundedConvexShape
     from .mechanical import shape_in_outline, shape_in_board
-    from .placement import _placement_polygon, _keepout_blocks, transformed_pad_position
+    from .placement import _placement_polygon, _keepout_blocks, transformed_pad_position, _courtyards_too_close
+    from .physical import component_pair_courtyard_gap_nm
     from .mechanical_assembly import body_in_material
     regions, keepouts, rules, relative = lowered[:4]
     poses = {p.reference: p for p in board.placements}
@@ -103,6 +105,29 @@ def _placement(constraint, lowered, board):
             if (region.side is not None and pose.side is not region.side) or not shape_in_outline(
                     RoundedConvexShape(_placement_polygon(board, pose)), region.outline):
                 violations.append(f"{rule.reference}: footprint leaves declared placement region/side")
+    declared_gaps = {rule.reference: rule.additional_courtyard_gap_nm for rule in rules
+                     if rule.additional_courtyard_gap_nm is not None}
+    final_gaps = {rule.reference: rule.additional_courtyard_gap_nm for rule in board.placement_rules}
+    for ref, gap in declared_gaps.items():
+        current = final_gaps.get(ref)
+        if current is None:
+            return "blocked", f"{ref}: declared courtyard member floor is absent", measurements
+        if current < gap:
+            violations.append(f"{ref}: final courtyard member floor is weaker than declared")
+    checked = set()
+    for ref in sorted(declared_gaps):
+        for other in sorted(poses):
+            pair = tuple(sorted((ref, other)))
+            if ref == other or pair in checked or poses[ref].side is not poses[other].side:
+                continue
+            checked.add(pair)
+            required = component_pair_courtyard_gap_nm(board, ref, other)
+            valid = not _courtyards_too_close(_placement_polygon(board, poses[ref]),
+                                           _placement_polygon(board, poses[other]), required)
+            measurements.append({"property": "additional_courtyard_gap", "references": list(pair),
+                                 "limit_nm": required, "passed": valid})
+            if not valid:
+                violations.append(f"{ref}/{other}: effective courtyard pair policy is violated")
     for keepout in keepouts:
         for pose in board.placements:
             if _keepout_blocks(board, keepout, pose, _placement_polygon(board, pose)):

@@ -702,11 +702,29 @@ def _lower_physical_constraints(
             continue  # net groups lower separately; see _lower_match_groups
         if constraint.kind is ConstraintKind.HOLE_CLEARANCE:
             continue  # needs footprint geometry; see _lower_hole_clearances
+        if (constraint.kind is ConstraintKind.COURTYARD_GAP
+                or constraint.kind is ConstraintKind.PLACEMENT_REGION
+                and "courtyard_gap" in constraint.parameters):
+            if constraint.mode.value not in {"require", "external"}:
+                raise ValueError("courtyard_gap is a hard minimum; mode must be require or external")
         lowered_targets = targets(constraint.targets)
         if lowered_targets is None:
+            if (constraint.kind is ConstraintKind.COURTYARD_GAP
+                    or constraint.kind is ConstraintKind.PLACEMENT_REGION
+                    and "courtyard_gap" in constraint.parameters):
+                raise ValueError("courtyard_gap target did not resolve to a physical component")
             continue
         parameters = constraint.parameters
-        if constraint.kind in {ConstraintKind.MAX_DISTANCE, ConstraintKind.MIN_DISTANCE}:
+        if constraint.kind is ConstraintKind.COURTYARD_GAP:
+            if not lowered_targets or any(target.pad is not None for target in lowered_targets):
+                raise ValueError("courtyard_gap requires component targets, not pins")
+            if set(parameters) != {"additional"}:
+                raise ValueError("courtyard_gap requires only the 'additional' parameter")
+            gap = _courtyard_gap_length(parameters, "additional")
+            for target in lowered_targets:
+                rules[target.reference] = _merge_rule(rules.get(target.reference), target.reference,
+                                                     additional_courtyard_gap_nm=gap)
+        elif constraint.kind in {ConstraintKind.MAX_DISTANCE, ConstraintKind.MIN_DISTANCE}:
             distance = _constraint_length(parameters, "distance")
             relative.append(
                 RelativePlacementRule(
@@ -726,6 +744,10 @@ def _lower_physical_constraints(
                 )
             )
         elif constraint.kind is ConstraintKind.PLACEMENT_REGION:
+            gap = (_courtyard_gap_length(parameters, "courtyard_gap")
+                   if "courtyard_gap" in parameters else None)
+            if gap is not None and (not lowered_targets or any(target.pad is not None for target in lowered_targets)):
+                raise ValueError("placement_region courtyard_gap requires component targets, not pins")
             name = str(parameters.get("name", f"region:{index}"))
             region = PlacementRegion(
                 name,
@@ -742,7 +764,8 @@ def _lower_physical_constraints(
             regions.append(region)
             for target in lowered_targets:
                 rules[target.reference] = _merge_rule(
-                    rules.get(target.reference), target.reference, region=name
+                    rules.get(target.reference), target.reference, region=name, side=region.side,
+                    additional_courtyard_gap_nm=gap,
                 )
         elif constraint.kind is ConstraintKind.KEEPOUT:
             keepouts.append(
@@ -1000,6 +1023,13 @@ def _merge_rule(
     reference: str,
     **changes: object,
 ) -> ComponentPlacementRule:
+    if existing is not None and "additional_courtyard_gap_nm" in changes:
+        value = changes["additional_courtyard_gap_nm"]
+        previous = existing.additional_courtyard_gap_nm
+        if value is None:
+            changes.pop("additional_courtyard_gap_nm")
+        elif previous is not None:
+            changes["additional_courtyard_gap_nm"] = max(previous, value)
     if existing is not None:
         for key in ("fixed_position", "fixed_rotation_degrees", "side"):
             if key in changes and getattr(existing, key) is not None:
@@ -1015,6 +1045,17 @@ def _constraint_length(parameters: Mapping[str, object], name: str) -> int:
     if not isinstance(value, Length):
         raise ValueError(f"placement constraint parameter {name!r} must be a length")
     return int(value.in_unit("mm") * Decimal(1_000_000))
+
+
+def _courtyard_gap_length(parameters: Mapping[str, object], name: str) -> int:
+    value = parameters.get(name)
+    if not isinstance(value, Length):
+        raise ValueError(f"courtyard_gap parameter {name!r} must be a nonnegative length")
+    nanometres = value.in_unit("mm") * Decimal(1_000_000)
+    if (not nanometres.is_finite() or nanometres < 0
+            or nanometres != nanometres.to_integral_value()):
+        raise ValueError(f"courtyard_gap parameter {name!r} must be nonnegative exact integer nanometres")
+    return int(nanometres)
 
 
 def _constraint_int(parameters: Mapping[str, object], name: str, default: int) -> int:

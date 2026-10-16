@@ -7,7 +7,7 @@ Layer transitions and non-octilinear terminal rows deliberately fail closed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from heapq import heappop, heappush
 from itertools import product
@@ -51,6 +51,19 @@ class PairSearchCandidate:
     return_vias: tuple[Via, ...] = ()
 
 
+class _PairAccessIndex(RoutingClearanceIndex):
+    """Local pair paths emit exactly the differential profile's width pieces."""
+    def route_pieces(self, net, start, end, width_nm, layer):
+        return self.breakout.split_tracks((TrackSegment(net, start, end, width_nm, layer),), width_nm)
+
+    def can_route(self, net, start, end, width_nm, layer):
+        dx, dy = end.x_nm-start.x_nm, end.y_nm-start.y_nm
+        if dx and dy and abs(dx) != abs(dy):
+            return False
+        return all(self.can_track(net, t.start, t.end, t.width_nm, layer)
+                   for t in self.route_pieces(net, start, end, width_nm, layer))
+
+
 class _SpineSearchResult(NamedTuple):
     first: tuple[TrackSegment, ...]
     second: tuple[TrackSegment, ...]
@@ -65,6 +78,10 @@ class PairSearchStats:
     searches: int = 0
     expanded_states: int = 0
     candidates: int = 0
+    resumed_states: int = 0
+    resumed_portals: int = 0
+    # Private exact frontiers; never report, fingerprint or accepted copper.
+    _continuations: list = field(default_factory=list, repr=False, compare=False)
 
 
 def _normal(heading: int, offset: int) -> Point:
@@ -145,28 +162,76 @@ def _legal(board: PhysicalBoard, index: RoutingClearanceIndex,
                for a in first for b in second if a.layer is b.layer)
 
 
+def _collinear_fork(first, second, center, heading, sign, offset, expansion=1):
+    """One analytic wide-and-tapered collar for end-on cardinal lands.
+
+    The direct narrow collar can pass too close to the other land. Depart
+    transversely, turn 45 degrees, clear the farther land, then taper to the
+    requested port pitch. Exact source width/gap and obstacle checks are still
+    required. This replaces a failed slot; it adds no port or maze allowance.
+    """
+    if heading % 2:
+        return None
+    dx, dy = _HEADS[heading]
+    nx, ny = -dy, dx
+    if (first.x_nm-second.x_nm)*nx+(first.y_nm-second.y_nm)*ny:
+        return None
+    middle = Point((first.x_nm+second.x_nm)//2, (first.y_nm+second.y_nm)//2)
+    spread = ceil(expansion * max(2*offset, ceil(hypot(first.x_nm-second.x_nm, first.y_nm-second.y_nm)/2)))
+    far = max((point.x_nm-middle.x_nm)*dx+(point.y_nm-middle.y_nm)*dy
+              for point in (first, second))
+    wide_distance = far+spread+2*offset
+    narrow_distance = wide_distance+spread-offset
+    distance = (center.x_nm-middle.x_nm)*dx+(center.y_nm-middle.y_nm)*dy
+    if distance <= narrow_distance:
+        return None
+    paths = []
+    for point, lane in ((first, sign), (second, -sign)):
+        wide = Point(middle.x_nm+dx*wide_distance+nx*lane*spread,
+                     middle.y_nm+dy*wide_distance+ny*lane*spread)
+        narrow = Point(middle.x_nm+dx*narrow_distance+nx*lane*offset,
+                       middle.y_nm+dy*narrow_distance+ny*lane*offset)
+        lead = spread // 2
+        paths.append((point, Point(point.x_nm+nx*lane*lead, point.y_nm+ny*lane*lead),
+                      Point(point.x_nm+dx*(spread-lead)+nx*lane*spread,
+                            point.y_nm+dy*(spread-lead)+ny*lane*spread),
+                      wide, narrow, Point(center.x_nm+nx*lane*offset, center.y_nm+ny*lane*offset)))
+    return tuple(paths)
+
+
 def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
            second_name: str, first: Point, second: Point, component: str,
-           width: int, offset: int, clearance: int, layer: CopperLayer) -> tuple[_Port, ...]:
+           width: int, offset: int, clearance: int, layer: CopperLayer, *,
+           lengths: tuple[float, ...] = _PORT_LENGTHS,
+           allow_local_fallback: bool = True) -> tuple[_Port, ...]:
     separation = _heading(second, first)
     if separation is None:
         return ()
     middle = Point((first.x_nm + second.x_nm) // 2, (first.y_nm + second.y_nm) // 2)
     placement = next(item for item in board.placements if item.reference == component)
     outward = Point(middle.x_nm - placement.position.x_nm, middle.y_nm - placement.position.y_nm)
-    headings = ((separation - 2) % 8, (separation + 2) % 8)
-    headings = tuple(sorted(headings, key=lambda h: (
+    preferred = {(separation - 2) % 8, (separation + 2) % 8}
+    # Side-by-side internal lands can need an oblique or staggered outward
+    # collar. Sample all eight orientations, retaining the historical normal
+    # exits first. Every complete collar still passes exact copper checks.
+    headings = tuple(sorted(range(8), key=lambda h: (
+        h not in preferred,
         -(_HEADS[h][0] * outward.x_nm + _HEADS[h][1] * outward.y_nm), h)))
     ports = []
     for preference, heading in enumerate(headings):
         normal = _normal(heading, offset)
-        sign = 1 if ((first.x_nm - second.x_nm) * normal.x_nm
-                     + (first.y_nm - second.y_nm) * normal.y_nm) > 0 else -1
-        for length in _PORT_LENGTHS:
+        dot = ((first.x_nm - second.x_nm) * normal.x_nm
+               + (first.y_nm - second.y_nm) * normal.y_nm)
+        # Collinear lands have no imposed transverse order at this heading.
+        # Either lane assignment can be physically legal; keep the historical
+        # negative choice first, then check the other exact complete collar.
+        signs = (1,) if dot > 0 else (-1,) if dot < 0 else (-1, 1)
+        for sign, length in product(signs, lengths):
             step = nm_from_mm(length)
             dx, dy = _HEADS[heading]
             center = Point(middle.x_nm + dx * step, middle.y_nm + dy * step)
             targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
+            admitted = False
             for a, b in product(_paths(first, targets[0]), _paths(second, targets[1])):
                 # Fanout must reach the pair port in its stated orientation.
                 if (_heading(a[-2], a[-1]) != heading
@@ -176,7 +241,60 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                                                _tracks(second_name, b, width, layer, index.breakout))
                 if _legal(board, index, first_tracks, second_tracks, clearance):
                     ports.append(_Port(center, heading, sign, first_tracks, second_tracks, preference))
+                    admitted = True
                     break
+            if not admitted and dot == 0:
+                # Three analytic widths, at most one accepted collar in this
+                # existing slot. The initial transverse lead clears square
+                # companion lands before the diagonal outward departure.
+                for expansion in (1, 1.5, 2):
+                    fork = _collinear_fork(first, second, center, heading, sign, offset, expansion)
+                    if fork is not None:
+                        a, b = (_tracks(first_name, fork[0], width, layer, index.breakout),
+                                _tracks(second_name, fork[1], width, layer, index.breakout))
+                        if _legal(board, index, a, b, clearance):
+                            ports.append(_Port(center, heading, sign, a, b, preference))
+                            break
+    if not ports and allow_local_fallback and index.breakout.pair(first_name, second_name):
+        # Finite local alternative for recessed paired lands. A short final
+        # segment fixes the joint search orientation; both lead-ins are exact
+        # source-to-port copper, checked together before a port is offered.
+        from .pin_access import local_access_path
+        for preference, heading in enumerate(headings):
+            if heading % 2:  # four cardinal portal orientations
+                continue
+            dx, dy = _HEADS[heading]
+            normal = _normal(heading, offset)
+            dot = ((first.x_nm-second.x_nm)*normal.x_nm
+                   + (first.y_nm-second.y_nm)*normal.y_nm)
+            signs = (1,) if dot > 0 else (-1,) if dot < 0 else (1, -1)
+            for sign, length in product(signs, (1, 1.5, 2, 3, 4)):
+                if sum(p.heading == heading for p in ports) >= 2:
+                    break
+                distance = nm_from_mm(length)
+                center = Point(middle.x_nm+dx*distance, middle.y_nm+dy*distance)
+                targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
+                approaches = tuple(Point(p.x_nm-dx*125000, p.y_nm-dy*125000) for p in targets)
+                tails = (_tracks(first_name, (approaches[0], targets[0]), width, layer, index.breakout),
+                         _tracks(second_name, (approaches[1], targets[1]), width, layer, index.breakout))
+                if not _legal(board, index, *tails, clearance):
+                    continue
+                for order in ((0, 1), (1, 0)):
+                    reserved = _PairAccessIndex(replace(board, tracks=(*board.tracks, *tails[0], *tails[1])))
+                    paths = [None, None]
+                    for member in order:
+                        path = local_access_path(board, reserved,
+                            (first_name, second_name)[member], (first, second)[member],
+                            approaches[member], layer, width, step_nm=25000,
+                            detour_nm=500000, maximum_states=2400)
+                        if path is None:
+                            break
+                        paths[member] = (*path, *tails[member])
+                        for track in path:
+                            reserved.add_track(track, locked=True)
+                    if all(p is not None for p in paths) and _legal(board, index, *paths, clearance):
+                        ports.append(_Port(center, heading, sign, *paths, preference))
+                        break
     return tuple(ports)
 
 
@@ -220,25 +338,43 @@ def _pair_profile(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule:
         return None
     if len(first_guide.accesses) != 2 or len(second_guide.accesses) != 2:
         return None
-    partners = {access.pad.component: access for access in second_guide.accesses}
-    if len(partners) != 2 or set(partners) != {access.pad.component for access in first_guide.accesses}:
+    from .pair_terminals import terminal_partners
+    partners = terminal_partners(first_guide, second_guide)
+    if partners is None:
         return None
-    # A guide's access layer can be reached only through its tentative via.
-    # Surface-only alternatives start on actual pad-side copper, not an inner
-    # grid layer mistaken for a physical terminal contact.
-    placements = {p.reference:p for p in board.placements}
-    layers = {CopperLayer.FRONT if placements[access.pad.component].side is BoardSide.FRONT
-              else CopperLayer.BACK for access in first_guide.accesses}
-    if len(layers) != 1:
+    from .pair_terminals import terminal_copper_layers
+    layers = set(routing_layers(board, first_rule.net, first_rule)).intersection(
+        routing_layers(board, second_rule.net, second_rule))
+    for access in (*first_guide.accesses, *second_guide.accesses):
+        layers.intersection_update(terminal_copper_layers(board, access.pad))
+    if not layers:
         return None
-    layer = next(iter(layers))
-    if layer not in set(routing_layers(board, first_rule.net, first_rule)).intersection(
-        routing_layers(board, second_rule.net, second_rule)):
-        return None
+    # Keep a single bounded same-layer family. Other legal contact layers
+    # can be considered by the transition search without inventing vias.
+    layer = min(layers, key=board.stackup.copper_layers.index)
     offset = (width + gap + 1) // 2
     clearance = max(board.rules.minimum_clearance_nm, first_rule.clearance_nm or 0,
                     second_rule.clearance_nm or 0)
     return width, offset, clearance, layer, partners
+
+
+def _departure_preferences(board, groups, first, second, width, offset,
+                           clearance, layer, pitch):
+    """Rank clear onward collars first without pruning short goal approaches.
+
+    A full-pitch departure is mandatory at the start, but not at the goal:
+    its last approach may be shorter. Use this bounded geometric lookahead
+    only as a preference and retain every existing port combination. The
+    caller still checks the complete escaped board before spending a slot.
+    """
+    preferences = {}
+    for group in groups:
+        for port in group:
+            escaped = replace(board, tracks=(*board.tracks, *port.first, *port.second))
+            preferences[id(port)] = int(not _can_depart(escaped,
+                RoutingClearanceIndex(escaped), first, second, port,
+                width, offset, clearance, layer, pitch))
+    return preferences
 
 
 def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule: NetRoutingRule,
@@ -262,16 +398,22 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
     index = RoutingClearanceIndex(board)
     accesses = sorted(first_guide.accesses, key=lambda access: access.pad.component)
     groups = [_ports(board, index, first_rule.net, second_rule.net, access.pad_position,
-                     partners[access.pad.component].pad_position, access.pad.component,
+                     partners[access.pad].pad_position, access.pad.component,
                      width, offset, clearance, layer) for access in accesses]
+    onward = _departure_preferences(board, groups, first_rule.net, second_rule.net,
+                                    width, offset, clearance, layer, pitch_nm)
     combinations = sorted([(a, b) for a, b in product(*groups) if a.sign == -b.sign],
-                          key=lambda pair: (pair[0].preference + pair[1].preference,
+                          key=lambda pair: (onward[id(pair[0])] + onward[id(pair[1])],
+                                            pair[0].preference + pair[1].preference,
                                             hypot(pair[0].center.x_nm - pair[1].center.x_nm,
                                                   pair[0].center.y_nm - pair[1].center.y_nm),
                                             pair[0].center.x_nm, pair[0].center.y_nm,
                                             pair[1].center.x_nm, pair[1].center.y_nm))
     stats.port_pairs += len(combinations)
-    for search_index, (start, end) in enumerate(combinations[:maximum_searches], 1):
+    searches_at_entry = stats.searches
+    for search_index, (start, end) in enumerate(combinations[:128], 1):
+        if stats.searches-searches_at_entry >= maximum_searches:
+            break
         budget = _remaining_states(stats, maximum_states, maximum_total_states)
         if not budget:
             break
@@ -279,10 +421,16 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
         if not _legal(board, index, (*start.first, *end.first), (*start.second, *end.second), clearance):
             continue
         escaped_board = replace(board, tracks=(*board.tracks, *escaped))
+        escaped_index = RoutingClearanceIndex(escaped_board)
+        if not _can_depart(escaped_board, escaped_index, first_rule.net, second_rule.net,
+                           start, width, offset, clearance, layer, pitch_nm):
+            continue
         stats.searches += 1
-        candidate = _search(escaped_board, RoutingClearanceIndex(escaped_board), first_rule.net,
+        candidate = _search(escaped_board, escaped_index, first_rule.net,
                             second_rule.net, start, end, width, offset, clearance, layer,
                             pitch_nm, budget, stats)
+        from .pair_search_resume import register_pair_search
+        register_pair_search(stats, board, retain_frontier=maximum_total_states is not None)
         if candidate is not None:
             stats.candidates += 1
             a, b, expanded, spine = candidate
@@ -337,7 +485,7 @@ def nested_exit_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, sec
     index = RoutingClearanceIndex(board)
     ports = {access.pad.component: _ports(
         board, index, first_rule.net, second_rule.net, access.pad_position,
-        partners[access.pad.component].pad_position, access.pad.component,
+        partners[access.pad].pad_position, access.pad.component,
         width, offset, clearance, layer) for access in first_guide.accesses}
     start = next((port for port in ports[component] if port.heading == outward), None)
     end = next((port for name, items in ports.items() if name != component for port in items
@@ -426,9 +574,37 @@ def _goal_paths(point: Point, end: Point, heading: int, inward: int,
                 yield (point, first, *path, end)
 
 
+def _can_depart(board, index, first_name, second_name, port, width, offset,
+                clearance, layer, pitch):
+    """Reject an impossible mandatory first step before spending a maze slot.
+
+    The spine search requires its first step to follow the exact port heading
+    for one pitch. This checks that same emitted geometry against the complete
+    escaped board. It adds no paths, lookahead states or acceptance exemption.
+    """
+    dx, dy = _HEADS[port.heading]
+    ahead = Point(port.center.x_nm + dx * pitch, port.center.y_nm + dy * pitch)
+    lanes = _lane_paths((port.center, ahead), port.heading, port.heading, offset, port.sign)
+    return lanes is not None and _legal(board, index,
+        _tracks(first_name, lanes[0], width, layer, index.breakout),
+        _tracks(second_name, lanes[1], width, layer, index.breakout), clearance)
+
+
 def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str, second_name: str,
             start: _Port, end: _Port, width: int, offset: int, clearance: int,
             layer: CopperLayer, pitch: int, budget: int, stats: PairSearchStats) -> _SpineSearchResult | None:
+    from .pair_search_resume import _Continuation, _advance
+    continuation = _Continuation(board, first_name, second_name, start, end, layer, pitch, stats.searches)
+    continuation.steps = _search_steps(board, index, first_name, second_name,
+        start, end, width, offset, clearance, layer, pitch, stats, continuation)
+    stats._continuations.append(continuation)
+    return _advance(continuation, budget)
+
+
+def _search_steps(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str, second_name: str,
+                  start: _Port, end: _Port, width: int, offset: int, clearance: int,
+                  layer: CopperLayer, pitch: int, stats: PairSearchStats, continuation):
+    """Yield after complete state expansions, retaining the exact A* frontier."""
     inward = (end.heading + 4) % 8
     initial = (start.center, start.heading)
     best = {initial: 0}
@@ -455,13 +631,16 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                 _tracks(second_name, lanes[1], width, layer, index.breakout), clearance)
         return legal_cache[key]
 
-    while queue and expanded < budget:
+    while queue:
         _, cost, _, state = heappop(queue)
         if cost != best.get(state):
             continue
         point, heading = state
         expanded += 1
         stats.expanded_states += 1
+        continuation.expanded_states = expanded
+        continuation.minimum_goal_distance_nm = min(continuation.minimum_goal_distance_nm,
+            hypot(point.x_nm-end.center.x_nm, point.y_nm-end.center.y_nm))
         if hypot(point.x_nm - end.center.x_nm, point.y_nm - end.center.y_nm) <= 4 * pitch:
             for tail in _goal_paths(point, end.center, heading, inward, pitch):
                 spine = []
@@ -479,12 +658,15 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                 a = _tracks(first_name, lanes[0], width, layer, index.breakout)
                 b = _tracks(second_name, lanes[1], width, layer, index.breakout)
                 if _legal(board, index, a, b, clearance):
-                    return _SpineSearchResult(a, b, expanded, points)
+                    continuation.active = False
+                    yield _SpineSearchResult(a, b, expanded, points)
+                    return
         for new in ((heading - 1) % 8, heading, (heading + 1) % 8):
             if state == initial and new != heading:
                 continue  # The first lane endpoints must meet the exact port.
             if not legal_step(point, heading, new, state == initial):
                 continue
+            continuation.legal_advances += 1
             dx, dy = _HEADS[new]
             target = Point(point.x_nm + dx * pitch, point.y_nm + dy * pitch)
             next_state = target, new
@@ -496,4 +678,6 @@ def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
             serial += 1
             heuristic = round(hypot(target.x_nm - end.center.x_nm, target.y_nm - end.center.y_nm))
             heappush(queue, (next_cost + heuristic, next_cost, serial, next_state))
-    return None
+        continuation.active = bool(queue)
+        yield None
+    continuation.active = False
