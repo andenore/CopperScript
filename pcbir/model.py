@@ -401,6 +401,7 @@ class PartDefinition:
     source: SourceReference | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
     internal_pad_groups: tuple[InternalPadGroup, ...] = ()
+    dc_power_path: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Defensive copies keep an otherwise frozen IR from being mutated via a
@@ -408,6 +409,18 @@ class PartDefinition:
         if not isinstance(self.assembled, bool):
             raise ValueError("part assembled must be a boolean")
         object.__setattr__(self, "pins", MappingProxyType(dict(self.pins)))
+        path = tuple(self.dc_power_path)
+        if path:
+            if len(path) != 2 or len(set(path)) != 2 or any(name not in self.pins for name in path):
+                raise ValueError("dc_power_path requires two distinct declared pin names")
+            if self.device is not None or any(
+                    self.pins[name].profile is None
+                    or self.pins[name].profile.domains != frozenset((SignalDomain.POWER,))
+                    or self.pins[name].profile.directions != frozenset((Direction.PASSIVE,))
+                    or self.pins[name].connection_policy is ConnectionPolicy.DO_NOT_CONNECT
+                    for name in path):
+                raise ValueError("dc_power_path requires standalone passive power-only pins")
+        object.__setattr__(self, "dc_power_path", path)
         object.__setattr__(self, "internal_pad_groups", validate_internal_pad_groups(
             self.internal_pad_groups, {pin.number for pin in self.pins.values()}))
         object.__setattr__(self, "traits", frozenset(self.traits))

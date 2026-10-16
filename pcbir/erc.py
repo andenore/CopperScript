@@ -624,6 +624,31 @@ def _check_power_inputs(context: _Context) -> list[Diagnostic]:
         ):
             powered_nets.add(net.name)
 
+    # Explicit passive DC transfer is reachability, never a net merge or a
+    # voltage/current/AC guarantee. A source-free cycle creates no power.
+    links = []
+    for component in context.board.components:
+        part = context.board.library.get(component.part)
+        if part is None or not part.assembled or not part.dc_power_path:
+            continue
+        ends = [context.pin_to_nets.get(Endpoint(component.ref, name), [])
+                for name in part.dc_power_path]
+        if all(len(names) == 1 for names in ends):
+            links.append((ends[0][0], ends[1][0]))
+    pending = list(links)
+    while pending:
+        remaining = []
+        progress = False
+        for a, b in pending:
+            if a in powered_nets or b in powered_nets:
+                powered_nets.update((a, b))
+                progress = True
+            else:
+                remaining.append((a, b))
+        if not progress:
+            break
+        pending = remaining
+
     for component in context.board.components:
         part = context.board.library.get(component.part)
         if part is None:

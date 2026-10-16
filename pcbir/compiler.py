@@ -1174,6 +1174,7 @@ def _compile_part(
             "source_url",
             "source_checksum",
             "internal_pad_groups",
+            "dc_power_path",
         },
         document.location,
     )
@@ -1237,6 +1238,12 @@ def _compile_part(
         groups = validate_internal_pad_groups(groups, pin_numbers)
     except ValueError as exc:
         _error("CMP088", str(exc), document.location)
+    dc_path = tuple(_csv_names(properties.get("dc_power_path", ""), "dc_power_path", document.location))
+    if dc_path:
+        try:
+            PartDefinition(qualified_name, pins, device=resolved_device, dc_power_path=dc_path)
+        except ValueError as exc:
+            _error("CMP201", str(exc), document.location)
     return PartDefinition(
         name=qualified_name,
         pins=pins,
@@ -1248,6 +1255,7 @@ def _compile_part(
         device=resolved_device,
         source=_source_reference(properties, document.location),
         internal_pad_groups=groups,
+        dc_power_path=dc_path,
     )
 
 

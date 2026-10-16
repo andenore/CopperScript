@@ -656,6 +656,16 @@ supply GND {
 The supply name is also its net name unless `net = OTHER_NET;` is specified.
 `external = true` marks a rail established outside the modeled board.
 
+A standalone passive part can explicitly declare `dc_power_path = "P1,P2";`
+between two passive, power-only pins. ERC follows this path only from an existing
+source and only when the part is assembled and both ends connect unambiguously.
+An unpowered loop cannot create a source. This describes the intended DC feed
+through a ferrite or similar component; it does not merge nets, bond PCB lands,
+assign an ideal-inductor model, or prove voltage drop, current, bias impedance,
+inrush or resonance. Declare each downstream supply's nominal voltage separately.
+Assembly-lock population changes need their own engineering validation; basic
+source ERC does not load the assembly lock.
+
 ## I²C interfaces
 
 Interfaces add protocol intent without duplicating net connectivity.
