@@ -677,8 +677,10 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
         cap=_land(board,link.return_pad)[2].position
         targets=tuple(sorted((p for p in targets if _land(board,p)),key=lambda p:(
             (_land(board,p)[2].position.x_nm-cap.x_nm)**2+(_land(board,p)[2].position.y_nm-cap.y_nm)**2,p)))[:maximum_return_candidates]
-    baseline={f.fingerprint for f in run_physical_drc(board).findings
-              if f.severity is DrcSeverity.ERROR and f.code not in {"DRC-OPEN-NET","DRC-ROUTE-INCOMPLETE"}}
+    # Incomplete searches cannot adopt copper. Defer the immutable baseline's
+    # full DRC until a complete, witnessed, exact-clearance proposal exists.
+    # Successful proposals still compare fresh complete reports below.
+    baseline=None
     work=_ConnectionWork()
     supplies=(board,) if existing.supply_path is not None else _connections(
         board,link.target,link.capacitor,link.net,options,maximum_launch_candidates,maximum_site_candidates,work=work)
@@ -737,6 +739,9 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                            and all(_track_ok(candidate,fresh,t,t.net) for t in created_tracks)
                            and all(_normal_via(candidate,fresh,v) for v in created_vias))
                     if exact:
+                        if baseline is None:
+                            baseline={f.fingerprint for f in run_physical_drc(board).findings
+                                      if f.severity is DrcSeverity.ERROR and f.code not in {"DRC-OPEN-NET","DRC-ROUTE-INCOMPLETE"}}
                         errors={f.fingerprint for f in run_physical_drc(candidate).findings
                                 if f.severity is DrcSeverity.ERROR and f.code not in {"DRC-OPEN-NET","DRC-ROUTE-INCOMPLETE"}}
                         if not errors-baseline:

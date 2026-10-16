@@ -38,3 +38,36 @@ def test_failed_return_does_not_adopt_or_prune_any_source_geometry():
     result=paths.propose_crosslayer_decoupling(board,link)
     assert result.board is board and not result.witness
     assert not result.created_tracks and not result.created_vias
+
+
+@pytest.mark.parametrize("blocked_half", ("supply", "return"))
+def test_incomplete_proposal_needs_no_whole_board_drc(monkeypatch, blocked_half):
+    board, link = fixture()
+    blocked = link.net if blocked_half == "supply" else link.return_net
+    board = replace(board, net_routing_rules=tuple(
+        replace(rule, max_vias=0) if rule.net == blocked else rule
+        for rule in board.net_routing_rules))
+    calls = []
+    original = paths.run_physical_drc
+    def check(candidate):
+        calls.append(candidate)
+        return original(candidate)
+    monkeypatch.setattr(paths, "run_physical_drc", check)
+    result = paths.propose_crosslayer_decoupling(board, link)
+    assert result.board is board and result.witness is None
+    assert not result.created_tracks and not result.created_vias
+    assert calls == []
+
+
+def test_complete_proposal_keeps_fresh_baseline_and_candidate_drc(monkeypatch):
+    board, link = fixture()
+    calls = []
+    original = paths.run_physical_drc
+    def check(candidate):
+        calls.append(candidate)
+        return original(candidate)
+    monkeypatch.setattr(paths, "run_physical_drc", check)
+    result = paths.propose_crosslayer_decoupling(board, link)
+    assert result.witness is not None
+    assert len(calls) >= 2 and calls[0] is board and calls[-1] is result.board
+    assert sum(candidate is board for candidate in calls) == 1

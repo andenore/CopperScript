@@ -454,3 +454,25 @@ the net's demand evaluator, with a 16,384-edge bound; mutable usage and history
 are read on every search step. Nets without an effective width reduction keep
 the existing fast path. Regressions include renamed fixtures, boundary-crossing
 edges, declared clearance and unchanged physical-copper rules.
+
+
+## Lazy breakout measurements and bypass baseline DRC
+
+Copper-spacing checks first test the normal, unrelaxed spacing before
+measuring a rational distance for a breakout-relaxation record. Pairs that
+already meet normal spacing cannot produce such a record. Near pairs retain
+the same exact predicates, measured values, ordering and report fields,
+including half-nanometre width thresholds.
+
+Cross-layer bypass proposals defer their immutable input's full DRC until a
+complete supply/return witness passes exact geometry checks. An unsuccessful
+search adopts no copper and needs no baseline comparison. Every potentially
+accepted proposal still compares fresh full candidate DRC with fresh full
+input DRC; no report cache or stale-board evidence is introduced. The
+baseline is evaluated at most once inside that immutable transaction.
+
+On an 892-track/79-via CopperProbe diagnostic snapshot, the complete DRC JSON
+was byte-identical (77 findings and 347 breakout records). One paired timing
+measured 5.36 s before and 3.35 s after the spacing optimization. This is a
+snapshot measurement, not a whole-route speed guarantee. Existing running
+jobs remain pinned to their original compiler.

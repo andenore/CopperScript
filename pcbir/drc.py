@@ -800,6 +800,9 @@ def _check_board_edge(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
 def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                           relaxations: list[DrcBreakoutRelaxation] | None = None) -> None:
     spacing = _BreakoutSpacing(board, relaxations)
+    # Passing the unrelaxed spacing needs no measured distance or relaxation
+    # record. Use the same exact decision predicates before constructing a
+    # rational measurement; near pairs keep their existing report semantics.
     tracks = list(enumerate(board.tracks))
     track_lands = [spacing.land(track.net, (track.start, track.end)) for track in board.tracks]
     via_lands = [spacing.land(via.net, (via.position,)) for via in board.vias]
@@ -813,7 +816,9 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                 distance_squared = segment_distance_squared(left.start, left.end, right.start, right.end)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
                 findings.append(_finding(code, DrcSeverity.ERROR, f"tracks {left_index} and {right_index} violate {spacing.subject(left.net, right.net)}", objects=(f"track:{left_index}", f"track:{right_index}"), nets=tuple(sorted((left.net, right.net))), layers=(left.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
-            elif clearance < normal:
+            elif (clearance < normal and not segment_distance_at_least(
+                    left.start, left.end, right.start, right.end,
+                    left.width_nm + right.width_nm + 2 * normal, denominator=2)):
                 spacing.note(segment_distance_squared(left.start, left.end, right.start, right.end),
                              left.width_nm + right.width_nm, normal, clearance,
                              (f"track:{left_index}", f"track:{right_index}"),
@@ -829,7 +834,9 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                 distance_squared = point_segment_distance_squared(via.position, track.start, track.end)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
                 findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and via {via_index} violate {spacing.subject(track.net, via.net)}", objects=(f"track:{track_index}", f"via:{via_index}"), nets=tuple(sorted((track.net, via.net))), layers=(track.layer.value,), required_nm=(required_twice + 1) // 2, measured_nm=_fraction_sqrt_floor(distance_squared)))
-            elif clearance < normal:
+            elif (clearance < normal and not point_segment_distance_at_least(
+                    via.position, track.start, track.end,
+                    track.width_nm + via.size_nm + 2 * normal, denominator=2)):
                 spacing.note(point_segment_distance_squared(via.position, track.start, track.end),
                              track.width_nm + via.size_nm, normal, clearance,
                              (f"track:{track_index}", f"via:{via_index}"),
@@ -879,7 +886,7 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                 distance_squared = shape_distance_squared(track_shape, pad.shape)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
                 findings.append(_finding(code, DrcSeverity.ERROR, f"track {track_index} and {pad.identity} violate {spacing.subject(track.net, pad.net)}", objects=(f"track:{track_index}", pad.identity), nets=tuple(sorted((track.net, pad.net))), layers=(track.layer.value,), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
-            elif clearance < normal:
+            elif clearance < normal and not shapes_clear(track_shape, pad.shape, normal):
                 spacing.note(shape_distance_squared(track_shape, pad.shape),
                              2 * (track_shape.radius_nm + pad.shape.radius_nm), normal, clearance,
                              (f"track:{track_index}", pad.identity),
@@ -907,7 +914,7 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                 distance_squared = shape_distance_squared(via_shape, pad.shape)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
                 findings.append(_finding(code, DrcSeverity.ERROR, f"via {via_index} and {pad.identity} violate {spacing.subject(via.net, pad.net)}", objects=(f"via:{via_index}", pad.identity), nets=tuple(sorted((via.net, pad.net))), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
-            elif clearance < normal:
+            elif clearance < normal and not shapes_clear(via_shape, pad.shape, normal):
                 spacing.note(shape_distance_squared(via_shape, pad.shape),
                              2 * (via_shape.radius_nm + pad.shape.radius_nm), normal, clearance,
                              (f"via:{via_index}", pad.identity),
@@ -932,7 +939,7 @@ def _check_copper_spacing(board: PhysicalBoard, findings: list[DrcFinding],
                 distance_squared = shape_distance_squared(left.shape, right.shape)
                 code = "DRC-SHORT" if distance_squared == 0 else "DRC-CLEARANCE"
                 findings.append(_finding(code, DrcSeverity.ERROR, f"{left.identity} and {right.identity} violate {spacing.subject(left.net, right.net)}", objects=(left.identity, right.identity), nets=tuple(sorted((left.net, right.net))), layers=tuple(sorted(layer.value for layer in set(left.layers).intersection(right.layers))), required_nm=required, measured_nm=_fraction_sqrt_floor(distance_squared)))
-            elif clearance < normal:
+            elif clearance < normal and not shapes_clear(left.shape, right.shape, normal):
                 spacing.note(shape_distance_squared(left.shape, right.shape),
                              2 * (left.shape.radius_nm + right.shape.radius_nm), normal, clearance,
                              (left.identity, right.identity),
