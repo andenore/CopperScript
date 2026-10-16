@@ -76,7 +76,8 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=N
     Optional only_links is an exact immutable subset of the ORIGINAL source
     DecouplingLinks. It intersects only_nets without deleting sibling source
     declarations or weakening the all-original-association admission ledger.
-    With no filter, historical routing order and result semantics are unchanged.
+    Higher authored supply-net priority reserves its bypasses first; equal
+    priorities retain source declaration order. Filters do not alter inventory.
     """
     if only_links is not None:
         if not isinstance(only_links, frozenset) or any(not isinstance(link, DecouplingLink)
@@ -116,7 +117,9 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=N
         if admitted_witnesses and refresh_crosslayer_witnesses(candidate,tuple(admitted_witnesses))[1]:
             return None, "would_lose_admitted_bypass_path"
         return current, ""
-    for link in board.decoupling_links:
+    ordered_links = sorted(board.decoupling_links,
+                           key=lambda link: -(rules[link.net].priority if link.net in rules else 0))
+    for link in ordered_links:
         if only_links is not None and link not in only_links:
             continue
         if only_nets is not None and link.net not in only_nets:

@@ -490,3 +490,9 @@ via sites, within the same shared eight-launch budget. Both terminal-to-via
 paths must use original copper edges; unconnected same-net vias are not feeds.
 Existing objects survive both admission and rollback, and repeated sites do
 not consume additional bridge trials.
+
+Bypass preparation honors descending source supply-net routing priority, with
+stable source order for ties. Exact link/net filters retain the full source
+inventory and all protected paths. This permits an authored constrained local
+regulator output to reserve its explicit path before broader power distribution;
+priority does not relax geometry, ownership, path or native verification gates.
