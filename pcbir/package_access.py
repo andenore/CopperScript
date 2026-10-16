@@ -292,7 +292,7 @@ def _access_result(
 
 
 def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccessResult,
-                         *, allow_equal: bool = False) -> str:
+                         *, allow_equal: bool = False, failed_bypass_capacitors=None) -> str:
     required = {item.pad for item in baseline.fanout.pin_analysis}
     tested = {item.pad for item in candidate.fanout.pin_analysis}
     if candidate.hard_findings:
@@ -313,6 +313,20 @@ def _improvement_outcome(baseline: PackageAccessResult, candidate: PackageAccess
             and (allow_equal or candidate.pending_pads < baseline.pending_pads
                  or candidate.failed_critical_nets < baseline.failed_critical_nets)):
         return "access_not_improved"
+    # Equal pad-exit identities cannot prove a retained pin-associated feed.
+    # The ordinary owner must still own complete local bypass paths before
+    # critical/contact prefixes can be accepted or a placement can replace it.
+    names = {link.net for link in baseline.source.decoupling_links}
+    if names:
+        before = _verified_bypass_links(baseline.fanout.board, names,
+            admitted_witnesses=baseline.fanout.decoupling_witnesses)
+        after = _verified_bypass_links(candidate.fanout.board, names,
+            admitted_witnesses=candidate.fanout.decoupling_witnesses)
+        missing = before - after
+        if missing:
+            if failed_bypass_capacitors is not None:
+                failed_bypass_capacitors.extend(sorted({link.capacitor for link in missing})[:32])
+            return "lost_bypass_connection"
     return "accepted"
 
 
@@ -524,7 +538,8 @@ def _negotiate_patterns(
                                         retained_critical=baseline.critical, retained_accesses=baseline.fanout)
             candidate = _access_result(baseline.source, baseline.global_route, proposed, verified, plane_options,
                                        options.boundary_options, on_progress)
-            outcome = _improvement_outcome(accepted, candidate)
+            outcome = _improvement_outcome(accepted, candidate,
+                                           failed_bypass_capacitors=failed_bypass_capacitors)
             if (include_planes and candidate.plane_stitch is not None
                     and candidate.plane_stitch.pending_pads and len(strategies) > 1):
                 # A contact may be feasible in the probe yet lost when critical
@@ -535,7 +550,8 @@ def _negotiate_patterns(
             tuple(sorted(candidate.pending_pads if candidate else
                          accepted.pending_pads | frozenset(proposed.pending_pads))),
             tuple(sorted(evidence.failed_critical_nets)), outcome, candidate is not None, search_tier,
-            displaced, retained_tracks, retained_vias, partial_skipped_reason))
+            displaced, retained_tracks, retained_vias, partial_skipped_reason,
+            failed_bypass_capacitors=tuple(failed_bypass_capacitors)))
         emit(on_progress, "package_pattern_trial", "finished", index=len(records), strategy=strategy,
              outcome=outcome, search_tier=search_tier)
         if outcome == "accepted":

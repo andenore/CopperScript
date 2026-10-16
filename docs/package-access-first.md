@@ -270,3 +270,12 @@ selects a possible coupled pose experiment; it never admits a critical route or
 overrides a fixed source pose. Shape-pair, predicate, neighbor, probe and full
 trial limits remain unchanged, and complete fresh preflight still decides
 whether the entire placement transaction can replace the incumbent.
+
+
+Package-pattern and placement acceptance also freshly compare complete
+pin-associated bypass identities in the old and proposed ordinary owners.
+Equal escaped-pad counts or a smaller critical-failure set cannot substitute
+for the supply/return path obligation. A lost previously verified association
+rejects the complete transaction. Rejected pattern records retain up to 32
+exact source capacitor-pad identities for bounded placement dependency hints;
+they do not transfer copper, spend another routing trial or authorize a move.
