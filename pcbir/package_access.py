@@ -696,6 +696,9 @@ def _full_ordinary_pattern(owner, obstacles, settings, *, retained=None, plane_c
             from .fanout_bypass_completion import complete_late_bypasses
             proposed = complete_late_bypasses(proposed, proposed.decoupling_pending_links,
                                              settings, trigger="released_plane_contacts")
+        if released and proposed.pending_pads:
+            from .released_exit_retry import complete_released_contact_exits
+            proposed = complete_released_contact_exits(owner, proposed, settings)
     from .bypass_reservations import verified_bypass_reservations
     if verified_bypass_reservations(owner, proposed)[2] is not None:
         return None, "lost_bypass_connection"

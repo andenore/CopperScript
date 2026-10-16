@@ -1549,6 +1549,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "decoupling_pending": [{"capacitor": f"{pad.component}.{pad.pad}", "reason": reason}
                                             for pad, reason in result.fanout.decoupling_pending],
                     "late_bypass_completion": asdict(result.fanout.late_bypass) if result.fanout.late_bypass else None,
+                    "released_exit_retry": asdict(result.fanout.released_exit_retry) if result.fanout.released_exit_retry else None,
                     "decoupling_pending_links": [{"capacitor": f"{link.capacitor.component}.{link.capacitor.pad}",
                         "target": f"{link.target.component}.{link.target.pad}", "net": link.net,
                         "return_pad": f"{link.return_pad.component}.{link.return_pad.pad}",

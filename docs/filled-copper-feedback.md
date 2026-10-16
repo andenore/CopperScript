@@ -558,3 +558,17 @@ rank and target-facing headings precede collar preference and distance. This
 allows an outer escape when a locally legal short collar is trapped behind
 opposite-layer copper. Local terminal preparation keeps its short-first fallback.
 No signal polarity, layer permission, width, skew, return or via gate changes.
+
+
+### Ordinary exits after disposable contact release
+
+When a typed full-ordinary proposal actually releases unused plane contacts,
+package access may spend one bounded ordinary-fanout pass on its original
+pending general, non-bypass nets. Existing via/surface/boundary handoffs and
+every source, macro, array and generated occurrence remain held in order.
+Only appended copper may be admitted, with fresh exit/bypass, source-budget
+and hard-geometry checks. No improvement or any rejection restores the entire
+incumbent. This does not iterate until closure or raise the fanout search limits.
+The route report records `fanout.released_exit_retry`; regenerated owners clear
+that earlier telemetry. Complete critical/plane/boundary admission and native
+whole-board verification remain required.
