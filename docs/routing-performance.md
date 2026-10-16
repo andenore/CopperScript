@@ -493,3 +493,19 @@ complete-proposal, shared local-path and inner-bridge allowances are unchanged.
 The fine tier is considered even when coarse rays already fill the slots;
 this may do more geometric sampling within the established maximum bounds.
 All complete-path, source-prefix, whole-net budget and fresh DRC gates remain.
+
+
+### Breakout membership across copper-only trial indexes
+
+Breakout-region membership now shares a bounded memo across clearance indexes
+with the same complete immutable source epoch: placement tuple, exact footprint
+objects, net assignments, board rules, routing rules and stackup. The cache keeps
+four source epochs with at most 8192 queries each. Strong identity keys prevent
+identity reuse. A changed source field starts a new epoch; added/removed copper
+still receives fresh spatial indexing and exact clearance checks. No board,
+generated copper, fill, clearance result or routing acceptance is cached.
+
+On one 414-track/69-via consumer control, eight repeated index builds and region
+queries took 1.65 s before and 0.15 s after. The membership result digest and
+complete physical DRC report were identical. This isolates repeated source
+membership work, not complete-route performance or any engineering acceptance.

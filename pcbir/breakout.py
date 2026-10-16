@@ -34,6 +34,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
+
+from ._cache import IdentityKey
 from typing import Iterable
 
 from .geometry import Bounds, RoundedConvexShape, shape_distance_squared
@@ -85,6 +88,18 @@ def _nearest_region(lands: Iterable[BreakoutLand], points: tuple[Point, ...]) ->
     return None if best is None else best[1]
 
 
+@lru_cache(maxsize=4)
+def _source_region_cache(placements, footprints, nets, rules, routing_rules, stackup):
+    """Bounded membership memo shared only by one complete immutable source epoch.
+
+    Identity keys hold their inputs strongly. Copper, fills, indexes and dynamic
+    clearance answers never enter this cache. Each epoch retains at most 8192
+    source-land queries; a changed pose, assignment, footprint or policy starts
+    a separate epoch even if its region happens to have equal geometry.
+    """
+    return {}
+
+
 class BreakoutRegions:
     """Terminal-land regions of every net whose rule declares ``breakout_length``."""
 
@@ -116,10 +131,14 @@ class BreakoutRegions:
                         shape.bounds.expanded(length)))
         self._lands = {net: tuple(items) for net, items in lands.items()}
         self._by_identity = {land.identity: land for items in self._lands.values() for land in items}
-        # Source lands are immutable for this index. A local-search edge is
-        # queried repeatedly for width, copper and drill checks; retain only
-        # its source-region identity, never mutable copper-clearance answers.
-        self._region_cache: dict[tuple[str, tuple[Point, ...]], str | None] = {}
+        # Copper-only trial boards repeatedly rebuild this index. Membership
+        # depends on immutable source lands, not any added or removed copper.
+        self._region_cache: dict[tuple[str, tuple[Point, ...]], str | None] = (
+            _source_region_cache(IdentityKey(board.placements),
+                tuple((name, IdentityKey(footprint)) for name, footprint in board.footprints.items()),
+                IdentityKey(board.nets), IdentityKey(board.rules),
+                IdentityKey(board.net_routing_rules), IdentityKey(board.stackup))
+            if self.declared else {})
 
     def __bool__(self) -> bool:
         return bool(self.declared)
