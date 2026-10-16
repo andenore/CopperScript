@@ -678,9 +678,9 @@ def _apply_routing_profile(args, argv):
         "thorough": (4, 100000, 16, 32, 16, 12000),
     }
     flags = {item.split("=", 1)[0] for item in argv if item.startswith("--")}
-    names = ("passes", "search_budget", "pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
+    names = ("passes", "search_budget", "package_access_trials", "package_placement_probes",
              "filled_copper_trials", "filled_copper_search_states")
-    for name, value in zip(names, profiles[args.routing_profile]):
+    for name, value in zip(names, profiles[args.routing_profile], strict=True):
         if "--" + name.replace("_", "-") not in flags:
             setattr(args, name, value)
 

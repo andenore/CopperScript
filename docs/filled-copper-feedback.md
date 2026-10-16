@@ -450,3 +450,15 @@ bypass witnesses, while actual probe copper/fills remain obstacles. After probe
 copper is stripped, original witness paths and exact generated ownership are
 freshly admitted. Borrowed disposable return copper rejects the proposal within
 its existing trial slot; it does not abort routing or become ordinary ownership.
+
+## Per-association post-fill observations
+
+Native plane verification reports `decoupling_assessments` for each declared bypass.
+It uses the existing positive-area filled-fragment contact grouping and exact
+source/export binding to observe supply and target-component return continuity.
+Split fragments, missing return terminals, ambiguous pads, stale exports, unknown
+native objects and unavailable geometry remain open or explicitly unsupported.
+These observations do not replace local bypass path witnesses, waive routing gates,
+or qualify high-frequency loop impedance. They are a diagnostic foundation for
+plane-assisted routing; the preliminary package-access stage still requires its
+existing explicit local supply/return paths.

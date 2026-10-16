@@ -19,13 +19,17 @@ def test_profiles_are_bounded_and_explicit_options_win():
                          ("thorough", (4,100000,16,32,16,12000))):
         argv = ["route-board", "board.copper", "--routing-profile", name]
         args = _parser().parse_args(argv)
+        unprofiled = (args.pin_access_step_mm, args.placement_feedback_trials)
         _apply_routing_profile(args, argv)
+        assert (args.pin_access_step_mm, args.placement_feedback_trials) == unprofiled
         assert tuple(getattr(args, field) for field in (
             "passes", "search_budget", "package_access_trials", "package_placement_probes",
             "filled_copper_trials", "filled_copper_search_states")) == limits
         argv += ["--package-access-trials=0", "--filled-copper-trials", "0", "--passes", "7"]
         args = _parser().parse_args(argv)
+        unprofiled = (args.pin_access_step_mm, args.placement_feedback_trials)
         _apply_routing_profile(args, argv)
+        assert (args.pin_access_step_mm, args.placement_feedback_trials) == unprofiled
         assert args.package_access_trials == args.filled_copper_trials == 0 and args.passes == 7
 
 
@@ -36,6 +40,8 @@ def test_standard_cli_refills_repairs_or_saves_explicit_tool_failure(tmp_path, m
         pytest.skip("native CLI required")
     source = tmp_path / "board.copper"
     source.write_text('''board NativeFeedback {
+        // This tiny routing fixture has no area reserved for product branding.
+        silkscreen { branding { enabled = false; } }
         use library "tiny";
         component R1: RESISTOR { footprint="Fixture:Divider"; }
         component R2: RESISTOR { footprint="Fixture:Terminal"; }

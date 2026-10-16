@@ -19,6 +19,7 @@ import tempfile
 from .backends import KiCadPcbBackend
 from .backends.kicad_project import kicad_export_digest, write_kicad_project
 from .drc import physical_board_digest
+from .decoupling_fill import DecouplingFillAssessment
 from .manufacturing import CommandRunner, _subprocess_runner
 from .physical import BoardSide, CopperLayer, PadKind, PhysicalBoard, RouteKind, TrackSegment
 
@@ -129,6 +130,7 @@ class PlaneVerification:
     native_findings: tuple[NativeFinding, ...] = ()
     artifact_directory: str | None = None
     filled_regions: tuple[NativeFilledRegion, ...] = ()
+    decoupling_assessments: tuple[DecouplingFillAssessment, ...] = ()
 
     def matches(self, board: PhysicalBoard) -> bool:
         """Reject evidence reused after any source-board geometry change."""
@@ -168,6 +170,7 @@ class PlaneVerification:
             "native_findings": [asdict(item) for item in self.native_findings],
             "artifact_directory": self.artifact_directory,
             "filled_regions": [asdict(item) for item in self.filled_regions],
+            "decoupling_assessments": [asdict(item) for item in self.decoupling_assessments],
         }, indent=2, sort_keys=True) + "\n"
 
 
@@ -264,7 +267,7 @@ def verify_filled_planes(
             filled_regions = _filled_regions(pcb_path.read_text(encoding="utf-8"), objects) if board.zones else ()
         except (ValueError, TypeError, IndexError, ArithmeticError) as exc:
             raise RuntimeError("unsupported or malformed native filled polygons") from exc
-        return PlaneVerification(
+        evidence = PlaneVerification(
             not findings,
             physical_board_digest(board), export_digest,
             sha256(pcb_path.read_bytes()).hexdigest(),
@@ -273,6 +276,8 @@ def verify_filled_planes(
             tuple(mapped), str(stage.resolve()) if artifact_directory is not None else None,
             filled_regions,
         )
+        from .decoupling_fill import assess_decoupling_fill
+        return replace(evidence, decoupling_assessments=assess_decoupling_fill(board, evidence))
 
 
 def remove_native_dangling_tracks(
