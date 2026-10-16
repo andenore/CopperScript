@@ -411,18 +411,22 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
     accesses = sorted(first_guide.accesses, key=lambda a: a.pad.component)
     if partners is None:
         return
-    placements = {p.reference:p for p in board.placements}
-    surfaces = tuple(CopperLayer.FRONT if placements[a.pad.component].side is BoardSide.FRONT
-                     else CopperLayer.BACK for a in accesses)
+    from .pair_terminals import terminal_copper_layers
+    domains = tuple(terminal_copper_layers(board, a.pad).intersection(
+        terminal_copper_layers(board, partners[a.pad].pad)) for a in accesses)
     allowed = set(routing_layers(board, first.net, first)) & set(routing_layers(board, second.net, second))
-    if any(surface not in allowed for surface in surfaces):
+    domains = tuple(domain.intersection(allowed) for domain in domains)
+    if any(not domain for domain in domains):
         return
     ranks, _ = signal_layer_preferences(board)
-    target_layers = allowed-set(surfaces) if len(set(surfaces)) == 1 else allowed
+    common = set.intersection(*(set(domain) for domain in domains))
+    # The primary same-layer search owns the first common contact layer.
+    # Remaining layers include direct PTH contacts as zero-transition ends.
+    target_layers = allowed - ({min(common, key=board.stackup.copper_layers.index)} if common else set())
     targets = sorted((layer for layer in target_layers
-        if all(rule.max_vias is None or rule.max_vias >= sum(surface is not layer for surface in surfaces)
+        if all(rule.max_vias is None or rule.max_vias >= sum(layer not in domain for domain in domains)
                for rule in (first, second))),
-        key=lambda layer: (sum(surface is not layer for surface in surfaces), ranks[layer],
+        key=lambda layer: (sum(layer not in domain for domain in domains), ranks[layer],
                            board.stackup.copper_layers.index(layer)))
     if layers is not None:
         targets = [layer for layer in targets if layer in layers]
@@ -431,6 +435,8 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
     for layer in targets:
         if not _remaining_states(stats, maximum_states, maximum_total_states):
             break
+        surfaces = tuple(layer if layer in domain else min(domain, key=board.stackup.copper_layers.index)
+                         for domain in domains)
         groups = tuple(_transitions(board, first, second, a.pad_position,
             partners[a.pad].pad_position, a.pad.component, surface, layer, site_rank,
             include_outer=True)

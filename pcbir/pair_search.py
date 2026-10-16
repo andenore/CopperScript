@@ -342,18 +342,16 @@ def _pair_profile(board: PhysicalBoard, first_rule: NetRoutingRule, second_rule:
     partners = terminal_partners(first_guide, second_guide)
     if partners is None:
         return None
-    # A guide's access layer can be reached only through its tentative via.
-    # Surface-only alternatives start on actual pad-side copper, not an inner
-    # grid layer mistaken for a physical terminal contact.
-    placements = {p.reference:p for p in board.placements}
-    layers = {CopperLayer.FRONT if placements[access.pad.component].side is BoardSide.FRONT
-              else CopperLayer.BACK for access in (*first_guide.accesses, *second_guide.accesses)}
-    if len(layers) != 1:
+    from .pair_terminals import terminal_copper_layers
+    layers = set(routing_layers(board, first_rule.net, first_rule)).intersection(
+        routing_layers(board, second_rule.net, second_rule))
+    for access in (*first_guide.accesses, *second_guide.accesses):
+        layers.intersection_update(terminal_copper_layers(board, access.pad))
+    if not layers:
         return None
-    layer = next(iter(layers))
-    if layer not in set(routing_layers(board, first_rule.net, first_rule)).intersection(
-        routing_layers(board, second_rule.net, second_rule)):
-        return None
+    # Keep a single bounded same-layer family. Other legal contact layers
+    # can be considered by the transition search without inventing vias.
+    layer = min(layers, key=board.stackup.copper_layers.index)
     offset = (width + gap + 1) // 2
     clearance = max(board.rules.minimum_clearance_nm, first_rule.clearance_nm or 0,
                     second_rule.clearance_nm or 0)

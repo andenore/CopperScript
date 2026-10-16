@@ -125,3 +125,17 @@ companion land, turns outward, then tapers to the declared pair pitch. Only
 one exact legal collar may occupy the original heading/lane/length slot;
 port counts, search budgets and acceptance gates are unchanged. Rotation,
 foreign-obstacle and insufficient-length fixtures cover this fallback.
+
+
+### Plated terminal contacts
+
+Exact pair search derives access from the unique physical pad rather than its
+coarse guide layer or component mounting side. A plated through-hole contact
+can join any permitted physical copper layer directly; a surface land can join
+only its actual face. The same-layer family uses the first common contact
+layer. Other bounded transition families charge vias only at ends that lack
+direct copper on the selected middle layer. Existing per-layer search and
+aggregate state budgets, return-via obligations and fresh owner validation
+remain unchanged. Missing, ambiguous, aperture and unplated contacts grant no
+electrical access. This is geometric contact support, not connector-launch or
+plated-barrel signal-integrity qualification.

@@ -8,12 +8,33 @@ the complete pair's ordinary atomic geometry/connectivity gates may adopt them.
 from dataclasses import dataclass, field, fields, replace
 from itertools import permutations
 from time import perf_counter
-from .physical import BoardSide, CopperLayer, PadReference, Point, TrackSegment, Via
+from .physical import BoardSide, CopperLayer, PadKind, PadReference, Point, TrackSegment, Via
 from .placement import transformed_pad_position
 from .routing import GlobalNetRoute
 from .routing_clearance import RoutingBlocker, RoutingClearanceIndex
 from .pin_escape import checked_access_path
 from .pin_access import local_access_path
+
+def terminal_copper_layers(board, reference):
+    """Actual unique contact layers; a guide's tentative via grants no access.
+
+    Plated lands contact every physical copper layer. Ambiguous multi-land
+    numbers, missing references, apertures and unplated holes fail closed.
+    Track policy is intersected separately by the caller.
+    """
+    pose = next((p for p in board.placements if p.reference == reference.component), None)
+    if pose is None:
+        return frozenset()
+    pads = [p for p in board.footprints[pose.footprint].pads if p.number == reference.pad]
+    if len(pads) != 1:
+        return frozenset()
+    pad = pads[0]
+    if pad.kind is PadKind.THROUGH_HOLE:
+        return frozenset(board.stackup.copper_layers)
+    if pad.kind is PadKind.SMD:
+        return frozenset((CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK,))
+    return frozenset()
+
 
 @dataclass(frozen=True, slots=True)
 class PairTerminalPreparation:
