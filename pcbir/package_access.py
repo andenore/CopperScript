@@ -684,6 +684,18 @@ def _full_ordinary_pattern(owner, obstacles, settings, *, retained=None, plane_c
         from .contact_owner_regeneration import _valid_exits
         if not _valid_exits(proposed.board, proposed):
             return None, "lost_ordinary_access"
+        # The typed contact suffix was validated before rebasing. Only an
+        # actual release of its unused exact occurrences creates a new local
+        # obstacle context. Spend one existing late-completion pass on the
+        # original pending links; do not reroute any held ordinary owner.
+        contact_tracks = plane_contacts.result.board.tracks[len(plane_contacts.source.tracks):]
+        contact_vias = plane_contacts.result.board.vias[len(plane_contacts.source.vias):]
+        released = (any(not any(t is held for held in proposed.board.tracks) for t in contact_tracks)
+                    or any(not any(v is held for held in proposed.board.vias) for v in contact_vias))
+        if released and proposed.decoupling_pending_links:
+            from .fanout_bypass_completion import complete_late_bypasses
+            proposed = complete_late_bypasses(proposed, proposed.decoupling_pending_links,
+                                             settings, trigger="released_plane_contacts")
     from .bypass_reservations import verified_bypass_reservations
     if verified_bypass_reservations(owner, proposed)[2] is not None:
         return None, "lost_bypass_connection"

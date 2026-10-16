@@ -535,3 +535,14 @@ whose departure is obstructed cannot start that search at that pitch. The
 existing 128-combination, search-count and expanded-state limits remain; this
 check adds no lookahead search or geometry exemption. Endpoint approaches and
 complete candidates still pass the ordinary profile and DRC gates.
+
+
+After a typed plane-contact proposal releases unused exact generated contact
+occurrences, the rebased ordinary proposal may use one existing late-bypass
+completion pass on its original pending opposite-face associations. A new pass
+requires an actual obstacle release; an unchanged frame does not retry. The
+report identifies `released_plane_contacts` separately from ordinary-launch
+completion. No ordinary owner is moved or rerouted. Complete incumbent paths,
+ports, source budgets, exact suffix ownership and physical DRC are rechecked;
+rejection returns the entire rebased incumbent. Per-link search limits remain
+unchanged and there is no recursive or repeated retry after that pass.

@@ -22,6 +22,7 @@ class LateBypassCompletionReport:
     added_tracks: int = 0
     added_vias: int = 0
     reason: str = ""
+    trigger: str = "ordinary_launches"
 
 
 def _hard(board):
@@ -39,12 +40,15 @@ def _ports_valid(board, accesses, surfaces, boundaries, index):
                     for ports in (surfaces or {},boundaries or {}) for pad,anchor in ports.items()))
 
 
-def complete_late_bypasses(incumbent, original_pending, options, *, only_nets=None):
+def complete_late_bypasses(incumbent, original_pending, options, *, only_nets=None,
+                           trigger="ordinary_launches"):
     """One pass over exact early pending opposite-face source links, no rounds.
 
     Per-link launch/site/proposal limits stay with route_decouplers and its
     public proposer. No source, area, critical, placement or ordinary reroute.
     """
+    if trigger not in {"ordinary_launches", "released_plane_contacts"}:
+        raise ValueError("unknown late bypass trigger")
     from .decoupling import route_decouplers
     from .decoupling_paths import (_budget_reason, _normal_via, _track_ok,
                                    refresh_crosslayer_witnesses)
@@ -57,7 +61,7 @@ def complete_late_bypasses(incumbent, original_pending, options, *, only_nets=No
     selected=tuple(dict.fromkeys(link for link,_ in original_pending
         if poses[link.capacitor.component].side is not poses[link.target.component].side
         and (only_nets is None or link.net in only_nets)))
-    report=LateBypassCompletionReport(selected_links=selected,remaining_links=selected)
+    report=LateBypassCompletionReport(selected_links=selected,remaining_links=selected,trigger=trigger)
     def reject(reason):
         return replace(incumbent,late_bypass=replace(report,status="rejected",reason=reason))
     if not selected:
