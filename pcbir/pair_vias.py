@@ -30,7 +30,7 @@ from .return_paths import shared_reference_plane
 @dataclass(frozen=True, slots=True)
 class _Transition:
     port: _Port
-    vias: tuple[Via, Via]
+    vias: tuple[Via, ...]
     returns: tuple[Via, ...]
     # Caller's site preference (lower first); 0 unless a site rank is given.
     rank: int = 0
@@ -250,6 +250,27 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                  site_rank: Callable[[tuple[Via, ...]], int | None] | None = None,
                  *, include_outer: bool = False,
                  ) -> tuple[_Transition, ...]:
+    if surface is layer:
+        # An opposite-face pair may use this terminal's own signal layer as
+        # its middle layer. Keep a direct legal collar and charge no transition.
+        width = first.width_nm or board.rules.default_track_width_nm
+        offset = (width + first.pair_gap_nm + 1) // 2
+        clearance = max(board.rules.minimum_clearance_nm, first.clearance_nm or 0,
+                        second.clearance_nm or 0)
+        index = RoutingClearanceIndex(board)
+        results = []
+        for family in range(2 if include_outer else 1):
+            extra = ({"lengths": (4, 4.5, 5, 6), "allow_local_fallback": False}
+                     if family else {})
+            results.extend(_Transition(port, (), (), outer=bool(family)) for port in
+                _ports(board, index, first.net, second.net, first_position, second_position,
+                       component, width, offset, clearance, surface, **extra))
+        domains = {}
+        for item in results:
+            domains.setdefault((item.port.heading, item.port.sign), {False: [], True: []})[item.outer].append(item)
+        selected = {id(item) for families in domains.values()
+                    for item in _interleave((families[False], families[True]), 16)}
+        return tuple(item for item in results if id(item) in selected)
     span = physical_via_span(board, surface, layer)
     if span is None:
         return ()
@@ -367,7 +388,7 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
                           layers: tuple[CopperLayer, ...] | None = None,
                           site_rank: Callable[[tuple[Via, ...]], int | None] | None = None,
                           ) -> Iterator[PairSearchCandidate]:
-    """Propose two matched transitions/member; owner checks DRC and profiles.
+    """Propose matched terminal transitions; owner checks DRC and profiles.
 
     ``layers`` restricts the layer between the transitions (a planned
     crossing, plan R5). ``site_rank`` receives each transition's signal and
@@ -383,7 +404,6 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
     width = first.width_nm or board.rules.default_track_width_nm
     if ((second.width_nm or board.rules.default_track_width_nm) != width
             or first.pair_gap_nm is None or second.pair_gap_nm != first.pair_gap_nm
-            or any(rule.max_vias is not None and rule.max_vias < 2 for rule in (first, second))
             or len(first_guide.accesses) != 2 or len(second_guide.accesses) != 2):
         return
     from .pair_terminals import terminal_partners
@@ -398,7 +418,12 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
     if any(surface not in allowed for surface in surfaces):
         return
     ranks, _ = signal_layer_preferences(board)
-    targets = sorted(allowed-set(surfaces), key=lambda layer: (ranks[layer], board.stackup.copper_layers.index(layer)))
+    target_layers = allowed-set(surfaces) if len(set(surfaces)) == 1 else allowed
+    targets = sorted((layer for layer in target_layers
+        if all(rule.max_vias is None or rule.max_vias >= sum(surface is not layer for surface in surfaces)
+               for rule in (first, second))),
+        key=lambda layer: (sum(surface is not layer for surface in surfaces), ranks[layer],
+                           board.stackup.copper_layers.index(layer)))
     if layers is not None:
         targets = [layer for layer in targets if layer in layers]
     clearance = max(board.rules.minimum_clearance_nm, first.clearance_nm or 0, second.clearance_nm or 0)
@@ -437,7 +462,8 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             candidate = _search(escaped, escaped_index, first.net, second.net,
                 start,end,width,offset,clearance,layer,pitch_nm,budget,stats)
             from .pair_search_resume import register_pair_search
-            register_pair_search(stats, board, via_pairs=(a.vias, b.vias),
+            via_pairs = tuple(pair for pair in (a.vias, b.vias) if pair)
+            register_pair_search(stats, board, via_pairs=via_pairs,
                                  return_vias=(*a.returns, *b.returns),
                                  retain_frontier=maximum_total_states is not None)
             if candidate is None:
@@ -447,4 +473,4 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             yield PairSearchCandidate(
                 (*start.first,*p,*(replace(t,start=t.end,end=t.start) for t in reversed(end.first))),
                 (*start.second,*q,*(replace(t,start=t.end,end=t.start) for t in reversed(end.second))),
-                expanded,ordinal,via_pairs=(a.vias,b.vias),return_vias=(*a.returns,*b.returns))
+                expanded,ordinal,via_pairs=via_pairs,return_vias=(*a.returns,*b.returns))

@@ -46,14 +46,19 @@ independently. The sequence is:
    tries lateral sites; all original distance/copper/drill constraints apply.
 5. Taper back to the declared trace pitch on another jointly allowed signal
    layer and search both lanes along one heading-aware octilinear spine.
-6. Repeat the matched transition at the other end. Check the complete pair,
+6. Repeat the matched transition at the other end when it is on another layer. Check the complete pair,
    returns, native contacts, every physical via layer, original budgets and
    prior reservations atomically before accepting any copper.
 
-Two signal vias per member are required for this topology. Zero/one-via
-budgets and surface-only profiles fail closed. Dedicated plane layers are
-excluded by the existing routing policy. Target layers are tried in the
-existing plane-adjacency preference order. Terminal domains retain at most
+Same-face terminals require two signal transitions per member for an other-layer
+middle route; a zero/one-via budget still rejects that topology. Opposite-face
+terminals may instead use either terminal surface as their common middle layer:
+one end has a legal direct collar and the other has one matched transition.
+One-via budgets then work without inventing a second via pair. A third signal
+layer still requires two transitions. Only emitted transitions receive return
+vias and site ranking; direct collars never claim a layer change. Dedicated
+plane layers remain excluded. Fewer required transitions are preferred, then
+the existing plane-adjacency order. Terminal domains retain at most
 16 alternatives per heading/member-order combination to avoid eliminating
 all reverse-heading alternatives with a single sorted truncation. At most
 eight compatible terminal-pattern combinations per target layer are searched
@@ -65,7 +70,7 @@ transitions whose vias lie in a breakout region and tries the pair's reserved
 corridor first (`site_rank`). Without those arguments the proposer is
 unchanged.
 
-Search/report provenance records both signal-via pairs explicitly. The
+Search/report provenance records every emitted signal-via pair explicitly. The
 critical owner verifies matched dimensions, spans and widened spacing, equal
 member via counts, return-via distance, measured coupling/skew/uncoupled length
 and fresh native DRC. Ordinary routing cannot replace this copper. Existing
@@ -106,3 +111,9 @@ Regression tests cover a top-layer wall crossed on In2, required return vias,
 determinism, through-span emission, exact native connectivity, constrained
 budgets/layers, blocked transitions, 45-degree terminal rows, own-land drill
 exclusion and atomic rejection of corrupted proposals.
+
+
+Opposite-face regression fixtures cover both terminal orders, required returns,
+one-via budget acceptance, zero-via/absent-layer/blocked-return rejection,
+renamed endpoints, exact resumed transition ownership and the aggregate state
+limit. This topology does not qualify layer-specific impedance or via stubs.
