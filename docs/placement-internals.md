@@ -213,3 +213,10 @@ pose checks, so one face cannot consume every trial. An already accessible
 incumbent keeps the ordinary ranking preference. Explicit side, fixed pose,
 assembly and macro constraints remain hard; opposite-face admission requires
 fresh supply and return paths and full regeneration before adoption.
+
+
+Bypass pose refinement skips its disposable baseline routing when every
+associated capacitor is fixed by source/session constraints, rigid membership
+or a required via array. Unrouted-source and macro materialization checks still
+run first. This is a no-move optimization, not bypass-connectivity evidence;
+the standard package-access and native routing gates remain unchanged.

@@ -264,6 +264,11 @@ def improve_decoupling_placement(board, placements, options):
     # this complete baseline once, then retain its exact generated prefix while
     # incrementally adding pending feeds. Successful labels alone are not proof.
     frame = materialize_hard_macros(replace(board, placements=tuple(poses.values())))
+    if all(link.capacitor.component in fixed for link in board.decoupling_links):
+        # This phase only proposes poses. With no movable capacitor, a full
+        # disposable routing pass cannot change its result. Source/macro
+        # validation above and subsequent package routing remain mandatory.
+        return placements, 0
     reservation = route_decouplers(frame)
     baseline_nets = {link.net for link in board.decoupling_links}
     witnesses, via_witnesses = {}, {}
