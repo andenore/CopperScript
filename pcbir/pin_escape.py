@@ -154,7 +154,8 @@ def verified_fanout_path(
 
 
 def _verified_land_path(board, terminal, placement, net, anchor, clearance, *,
-                        require_via=True, target_layer=None, required_width_nm=None):
+                        require_via=True, target_layer=None, required_width_nm=None,
+                        allow_arbitrary_angles=False):
     start = transformed_local_point(placement, terminal.position)
     vias = tuple(v for v in board.vias if v.net == net and v.position == anchor
                  and v.from_layer in board.stackup.copper_layers
@@ -181,7 +182,7 @@ def _verified_land_path(board, terminal, placement, net, anchor, clearance, *,
             # A land path of an ordinary breakout net may neck down (plan R1).
             required = (clearance.breakout.required_width_nm(track, required_width_nm)
                         if required_width_nm else 0)
-            if ((track.start.x_nm == track.end.x_nm or track.start.y_nm == track.end.y_nm
+            if ((allow_arbitrary_angles or track.start.x_nm == track.end.x_nm or track.start.y_nm == track.end.y_nm
                  or abs(track.start.x_nm-track.end.x_nm) == abs(track.start.y_nm-track.end.y_nm))
                     and track.width_nm >= max(board.rules.minimum_track_width_nm, required)
                     and _track_inside_board(board, track.start, track.end, track.width_nm)

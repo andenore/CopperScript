@@ -223,6 +223,22 @@ def _track_ok(board, index, track, net):
             and index.can_track(net, track.start, track.end, track.width_nm, track.layer))
 
 
+def _path_edges(board, net, index):
+    # Reuse only exact source/index identities and the complete ordered mutable
+    # insertion ledger. Appending a foreign obstacle or changing an index rule
+    # must invalidate the observations. Paths and their bounds are never cached.
+    return _cached_path_edges(IdentityKey(board), IdentityKey(index),
+                              index.additions(), tuple(index.rules.items()), net)
+
+
+@lru_cache(maxsize=32)
+def _cached_path_edges(board_key, index_key, additions, rules, net):
+    board, index = board_key.value, index_key.value
+    tracks = tuple(t for t in board.tracks if _track_ok(board, index, t, net))
+    vias = tuple(v for v in board.vias if v.net == net and _normal_via(board, index, v))
+    return tracks, vias
+
+
 def _find_path(board, start, ends, net, index, maximum_states):
     origin = _land(board, start)
     terminals = {land[2]: ref for ref in ends if (land := _land(board, ref)) is not None}
@@ -233,8 +249,7 @@ def _find_path(board, start, ends, net, index, maximum_states):
     if first.layer not in allowed:
         return None
     terminals = {node: ref for node,ref in terminals.items() if node.layer in allowed}
-    tracks = tuple(t for t in board.tracks if _track_ok(board, index, t, net))
-    vias = tuple(v for v in board.vias if v.net == net and _normal_via(board, index, v))
+    tracks, vias = _path_edges(board, net, index)
     points = {first.position, *(n.position for n in terminals),
               *(p for t in tracks for p in (t.start,t.end)), *(v.position for v in vias)}
     graph = defaultdict(list)
@@ -410,7 +425,8 @@ def _existing_launches(board, a, b, net, width, index, options, site_limit):
         # verified_fanout_path deliberately expands internal-pad groups; this
         # explicit supply/return contract requires the exact source terminal.
         path = _verified_land_path(board, a[1], a[0], net, via.position, index,
-                                   target_layer=b[2].layer, required_width_nm=width)
+                                   target_layer=b[2].layer, required_width_nm=width,
+                                   allow_arbitrary_angles=True)
         if path is not None and all(_track_ok(board, index, t, net) for t in path):
             yield path, via
 

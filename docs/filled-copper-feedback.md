@@ -496,3 +496,15 @@ stable source order for ties. Exact link/net filters retain the full source
 inventory and all protected paths. This permits an authored constrained local
 regulator output to reserve its explicit path before broader power distribution;
 priority does not relax geometry, ownership, path or native verification gates.
+
+Explicit bypass reuse may follow existing legal straight plane-contact edges
+at arbitrary angles. This is an opt-in to the exact land-path observer; ordinary
+fanout keeps its orthogonal/45-degree policy. Width, clearance, through-via
+geometry, exact source association and complete supply/return witnesses remain
+mandatory. No new arbitrary-angle search or component-internal join is inferred.
+
+Repeated edge observations use a bounded 32-entry cache keyed by exact board
+and clearance-index identities, the complete ordered insertion ledger and all
+index routing rules. Added obstacles or changed rules invalidate reuse. Path
+graphs, endpoint selection, state bounds and complete witnesses are rebuilt;
+no changed trial inherits a previous board's clearance proof.
