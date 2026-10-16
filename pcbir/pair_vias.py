@@ -260,31 +260,42 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                   component, width, (transition_spacing(board, first, second)+1)//2,
                   clearance, surface)
     results = []
-    for collar in wide:
-        pair = tuple(Via(net, tracks[-1].end, board.rules.default_via_size_nm,
-                         board.rules.default_via_drill_nm, *span)
-                     for net, tracks in ((first.net, collar.first), (second.net, collar.second)))
-        if not _signal_drills_outside_smd(board,pair):
-            continue
-        escaped = replace(board, tracks=(*board.tracks, *collar.first, *collar.second))
-        reserved = RoutingClearanceIndex(escaped)
-        if not _reserve_vias(board, reserved, pair):
-            continue
-        returns = _return_via(board, reserved, collar, pair, first, second, surface, layer)
-        if returns is None:
-            continue
-        # A caller's site rank may drop a transition (``None``) or order it
-        # ahead of others; it never admits a site the checks above refused.
-        rank = 0 if site_rank is None else site_rank((*pair, *returns))
-        if rank is None:
-            continue
-        escaped = replace(escaped, vias=(*board.vias, *pair, *returns))
-        for inner in _ports(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
-                            pair[0].position, pair[1].position, component,
-                            width, offset, clearance, layer):
-            results.append(_Transition(replace(inner,
-                first=(*collar.first, *inner.first), second=(*collar.second, *inner.second),
-                preference=collar.preference+inner.preference), pair, returns, rank))
+    # Short collars retain priority. If all are rejected by actual transition
+    # geometry, try four bounded longer collars beyond a back-side pad bank.
+    # These remain explicit source-profiled tracks, not wider breakout regions.
+    # No local maze allowance is added by this fallback.
+    for family in range(2):
+        if family:
+            if results:
+                break
+            wide = _ports(board, index, first.net, second.net, first_position, second_position,
+                          component, width, (transition_spacing(board, first, second)+1)//2,
+                          clearance, surface, lengths=(4, 4.5, 5, 6), allow_local_fallback=False)
+        for collar in wide:
+            pair = tuple(Via(net, tracks[-1].end, board.rules.default_via_size_nm,
+                             board.rules.default_via_drill_nm, *span)
+                         for net, tracks in ((first.net, collar.first), (second.net, collar.second)))
+            if not _signal_drills_outside_smd(board,pair):
+                continue
+            escaped = replace(board, tracks=(*board.tracks, *collar.first, *collar.second))
+            reserved = RoutingClearanceIndex(escaped)
+            if not _reserve_vias(board, reserved, pair):
+                continue
+            returns = _return_via(board, reserved, collar, pair, first, second, surface, layer)
+            if returns is None:
+                continue
+            # A caller's site rank may drop a transition (``None``) or order it
+            # ahead of others; it never admits a site the checks above refused.
+            rank = 0 if site_rank is None else site_rank((*pair, *returns))
+            if rank is None:
+                continue
+            escaped = replace(escaped, vias=(*board.vias, *pair, *returns))
+            for inner in _ports(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
+                                pair[0].position, pair[1].position, component,
+                                width, offset, clearance, layer):
+                results.append(_Transition(replace(inner,
+                    first=(*collar.first, *inner.first), second=(*collar.second, *inner.second),
+                    preference=collar.preference+inner.preference), pair, returns, rank))
     # Preserve orientation diversity, then short collars; domain bound is
     # independent of maze expansion and never mutates previously locked copper.
     ordered = sorted(results, key=lambda t: (t.rank, t.port.preference,

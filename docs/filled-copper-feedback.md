@@ -475,3 +475,12 @@ macros, required arrays and previously admitted partial exits, stays intact.
 The trimmed candidate receives a fresh clearance index, both complete path
 witnesses, protected-witness checks and physical DRC. A failed trim rolls back.
 Native fill observations remain separate from this explicit-path admission.
+
+Paired through-via preparation first tries the established short collars. If
+none produces a legal complete surface/via/return/other-layer transition, it
+tries four longer collar distances (4 mm, 4.5 mm, 5 mm and 6 mm) to reach beyond
+opposite-side component banks. This fallback adds no local maze allowance and
+keeps the existing retained-port and joint-search bounds. Breakout regions,
+normal trace profiles, source keepouts, ordinary drill clearance, return-via
+requirements and final length/skew gates remain unchanged. Legal launch sites
+alone do not establish simultaneous or end-to-end pair connectivity.

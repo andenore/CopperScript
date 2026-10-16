@@ -164,7 +164,9 @@ def _legal(board: PhysicalBoard, index: RoutingClearanceIndex,
 
 def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
            second_name: str, first: Point, second: Point, component: str,
-           width: int, offset: int, clearance: int, layer: CopperLayer) -> tuple[_Port, ...]:
+           width: int, offset: int, clearance: int, layer: CopperLayer, *,
+           lengths: tuple[float, ...] = _PORT_LENGTHS,
+           allow_local_fallback: bool = True) -> tuple[_Port, ...]:
     separation = _heading(second, first)
     if separation is None:
         return ()
@@ -183,7 +185,7 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
         normal = _normal(heading, offset)
         sign = 1 if ((first.x_nm - second.x_nm) * normal.x_nm
                      + (first.y_nm - second.y_nm) * normal.y_nm) > 0 else -1
-        for length in _PORT_LENGTHS:
+        for length in lengths:
             step = nm_from_mm(length)
             dx, dy = _HEADS[heading]
             center = Point(middle.x_nm + dx * step, middle.y_nm + dy * step)
@@ -198,7 +200,7 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                 if _legal(board, index, first_tracks, second_tracks, clearance):
                     ports.append(_Port(center, heading, sign, first_tracks, second_tracks, preference))
                     break
-    if not ports and index.breakout.pair(first_name, second_name):
+    if not ports and allow_local_fallback and index.breakout.pair(first_name, second_name):
         # Finite local alternative for recessed paired lands. A short final
         # segment fixes the joint search orientation; both lead-ins are exact
         # source-to-port copper, checked together before a port is offered.
