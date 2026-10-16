@@ -74,7 +74,13 @@ def _select_source_obstruction(baseline, ranked, options):
     protected = _protected(board, original, options)
     links = _unique_associations(board.decoupling_links)
     owners = [ref for ref in ranked if ref in links][:options.exact_repair_candidates]
-    pending = sorted(baseline.pending_pads)[:options.exact_repair_candidates]
+    # Ordinary failures retain their existing first claim on the finite root
+    # allowance. Critical-only failures must also expose source obstructions;
+    # sharing this cap preserves the original quadratic predicate bound.
+    ordinary = sorted(set(baseline.pending_pads))
+    critical = {pad for net in board.nets if net.name in baseline.failed_critical_nets
+                for pad in net.pads} - set(ordinary)
+    pending = (ordinary + sorted(critical))[:options.exact_repair_candidates]
     roots = []
     rules = {r.net: r for r in board.net_routing_rules}
     nets = {p: n.name for n in board.nets for p in n.pads}

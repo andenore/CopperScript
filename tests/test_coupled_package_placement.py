@@ -332,3 +332,56 @@ def test_unreachable_or_congested_global_retains_success_gate(monkeypatch):
     result=access.improve_package_access(baseline,FanoutOptions(),placement_options=options,
         options=access.PackageAccessOptions(maximum_trials=1,maximum_placement_probes=1))
     assert result.accepted_moves==0 and result.trials[0].outcome=='global_failed' and result.source is board
+
+
+@pytest.mark.parametrize('renamed', (False, True))
+def test_failed_critical_pads_enter_same_bounded_source_projection_prepass(renamed):
+    baseline, options, cap, neighbor, requested = scene(renamed)
+    signal = 'LINK_713' if renamed else 'IO'
+    baseline.source = replace(baseline.source, nets=tuple(
+        replace(net, name=signal) if net.name == 'IO' else net
+        for net in baseline.source.nets))
+    before = baseline.source
+    baseline.pending_pads = ()
+    baseline.failed_critical_nets = frozenset((signal,))
+    token = state()
+    owner, trial = next(access.package_placement_trials(
+        baseline, options, 500000, _coupled_state=token))
+    assert owner == cap and baseline.source is before
+    poses = {p.reference: p for p in trial.placements}
+    old = {p.reference: p for p in before.placements}
+    assert poses[cap] == requested and poses[neighbor] != old[neighbor]
+    assert all(poses[ref] == old[ref] for ref in old if ref not in {cap, neighbor})
+    assert placement_solution_is_legal(before, poses, options)
+    assert replace(trial, placements=before.placements) == before
+    attempt = token.attempts[0]
+    assert attempt.outcome == 'geometry_candidate' and attempt.borrowed_probe_index == 1
+    assert attempt.source_shape_pairs <= 2*options.exact_repair_candidates**2
+    assert attempt.source_shape_predicates <= 4*options.exact_repair_candidates**2
+    failed = next(net.pads[0] for net in before.nets if net.name == signal)
+    assert any(e.failed_pad == failed for e in attempt.evidence)
+
+
+def test_critical_hints_share_root_budget_and_never_displace_pending_roots():
+    baseline, options, cap, neighbor, requested = scene()
+    # The critical endpoint END sorts before PKG. A separately appended budget
+    # would add extra shape work; a sorted union would discard the pending root.
+    baseline.failed_critical_nets = frozenset(('IO',))
+    options = replace(options, exact_repair_candidates=1)
+    owner, evidence, pairs, predicates = repair._select_source_obstruction(
+        baseline, [cap, neighbor], options)
+    assert owner == cap and evidence
+    assert all(e.failed_pad == baseline.pending_pads[0] for e in evidence)
+    assert pairs <= 2 and predicates <= 4
+
+
+def test_critical_only_hint_does_not_release_a_fixed_capacitor():
+    baseline, options, cap, neighbor, requested = scene()
+    baseline.pending_pads = ()
+    baseline.failed_critical_nets = frozenset(('IO',))
+    options = replace(options, fixed_references={cap, neighbor})
+    token = state()
+    assert list(access.package_placement_trials(
+        baseline, options, 500000, _coupled_state=token)) == []
+    assert not token.claimed
+    assert token.attempts[0].outcome == 'no_source_projection_hint'

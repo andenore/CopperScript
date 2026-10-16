@@ -260,3 +260,13 @@ rectangles. The check preserves explicit boundaries and priorities and accounts
 for holes. It does not merge regions, infer priority, waive native findings, or
 establish filled continuity. Correct source composition and rerun native fill
 before using the changed geometry as new evidence.
+
+
+The bounded source-projection prepass considers failed critical-net terminals
+as well as pending ordinary pads. Ordinary roots retain their existing priority;
+critical roots use only the remaining shared root allowance. The same component,
+land, layer, via, source-association and protected-owner filters apply. This
+selects a possible coupled pose experiment; it never admits a critical route or
+overrides a fixed source pose. Shape-pair, predicate, neighbor, probe and full
+trial limits remain unchanged, and complete fresh preflight still decides
+whether the entire placement transaction can replace the incumbent.
