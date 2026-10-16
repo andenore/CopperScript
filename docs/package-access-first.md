@@ -279,3 +279,12 @@ for the supply/return path obligation. A lost previously verified association
 rejects the complete transaction. Rejected pattern records retain up to 32
 exact source capacitor-pad identities for bounded placement dependency hints;
 they do not transfer copper, spend another routing trial or authorize a move.
+
+
+The bypass-identity acceptance guard uses the established association predicate:
+legacy same-surface checks prove a supply feed, while opposite-surface checks
+require supply and declared target-return paths. Preserving that set does not
+promote surface-feed checks to completed ground loops. Native fill assessment
+must continue to report open returns and unsupported return targets, including
+devices without a declared ground terminal. Electrical loop quality remains a
+separate engineering obligation.
