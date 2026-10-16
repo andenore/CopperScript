@@ -117,3 +117,11 @@ Opposite-face regression fixtures cover both terminal orders, required returns,
 one-via budget acceptance, zero-via/absent-layer/blocked-return rejection,
 renamed endpoints, exact resumed transition ownership and the aggregate state
 limit. This topology does not qualify layer-specific impedance or via stubs.
+
+
+For end-on cardinal terminal rows, a failed direct collar slot can try three
+analytic wide-and-tapered departures. Each starts transversely to clear the
+companion land, turns outward, then tapers to the declared pair pitch. Only
+one exact legal collar may occupy the original heading/lane/length slot;
+port counts, search budgets and acceptance gates are unchanged. Rotation,
+foreign-obstacle and insufficient-length fixtures cover this fallback.

@@ -162,6 +162,43 @@ def _legal(board: PhysicalBoard, index: RoutingClearanceIndex,
                for a in first for b in second if a.layer is b.layer)
 
 
+def _collinear_fork(first, second, center, heading, sign, offset, expansion=1):
+    """One analytic wide-and-tapered collar for end-on cardinal lands.
+
+    The direct narrow collar can pass too close to the other land. Depart
+    transversely, turn 45 degrees, clear the farther land, then taper to the
+    requested port pitch. Exact source width/gap and obstacle checks are still
+    required. This replaces a failed slot; it adds no port or maze allowance.
+    """
+    if heading % 2:
+        return None
+    dx, dy = _HEADS[heading]
+    nx, ny = -dy, dx
+    if (first.x_nm-second.x_nm)*nx+(first.y_nm-second.y_nm)*ny:
+        return None
+    middle = Point((first.x_nm+second.x_nm)//2, (first.y_nm+second.y_nm)//2)
+    spread = ceil(expansion * max(2*offset, ceil(hypot(first.x_nm-second.x_nm, first.y_nm-second.y_nm)/2)))
+    far = max((point.x_nm-middle.x_nm)*dx+(point.y_nm-middle.y_nm)*dy
+              for point in (first, second))
+    wide_distance = far+spread+2*offset
+    narrow_distance = wide_distance+spread-offset
+    distance = (center.x_nm-middle.x_nm)*dx+(center.y_nm-middle.y_nm)*dy
+    if distance <= narrow_distance:
+        return None
+    paths = []
+    for point, lane in ((first, sign), (second, -sign)):
+        wide = Point(middle.x_nm+dx*wide_distance+nx*lane*spread,
+                     middle.y_nm+dy*wide_distance+ny*lane*spread)
+        narrow = Point(middle.x_nm+dx*narrow_distance+nx*lane*offset,
+                       middle.y_nm+dy*narrow_distance+ny*lane*offset)
+        lead = spread // 2
+        paths.append((point, Point(point.x_nm+nx*lane*lead, point.y_nm+ny*lane*lead),
+                      Point(point.x_nm+dx*(spread-lead)+nx*lane*spread,
+                            point.y_nm+dy*(spread-lead)+ny*lane*spread),
+                      wide, narrow, Point(center.x_nm+nx*lane*offset, center.y_nm+ny*lane*offset)))
+    return tuple(paths)
+
+
 def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
            second_name: str, first: Point, second: Point, component: str,
            width: int, offset: int, clearance: int, layer: CopperLayer, *,
@@ -194,6 +231,7 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
             dx, dy = _HEADS[heading]
             center = Point(middle.x_nm + dx * step, middle.y_nm + dy * step)
             targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
+            admitted = False
             for a, b in product(_paths(first, targets[0]), _paths(second, targets[1])):
                 # Fanout must reach the pair port in its stated orientation.
                 if (_heading(a[-2], a[-1]) != heading
@@ -203,7 +241,20 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                                                _tracks(second_name, b, width, layer, index.breakout))
                 if _legal(board, index, first_tracks, second_tracks, clearance):
                     ports.append(_Port(center, heading, sign, first_tracks, second_tracks, preference))
+                    admitted = True
                     break
+            if not admitted and dot == 0:
+                # Three analytic widths, at most one accepted collar in this
+                # existing slot. The initial transverse lead clears square
+                # companion lands before the diagonal outward departure.
+                for expansion in (1, 1.5, 2):
+                    fork = _collinear_fork(first, second, center, heading, sign, offset, expansion)
+                    if fork is not None:
+                        a, b = (_tracks(first_name, fork[0], width, layer, index.breakout),
+                                _tracks(second_name, fork[1], width, layer, index.breakout))
+                        if _legal(board, index, a, b, clearance):
+                            ports.append(_Port(center, heading, sign, a, b, preference))
+                            break
     if not ports and allow_local_fallback and index.breakout.pair(first_name, second_name):
         # Finite local alternative for recessed paired lands. A short final
         # segment fixes the joint search orientation; both lead-ins are exact
