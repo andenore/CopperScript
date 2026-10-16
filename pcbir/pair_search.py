@@ -346,8 +346,12 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
         if not _legal(board, index, (*start.first, *end.first), (*start.second, *end.second), clearance):
             continue
         escaped_board = replace(board, tracks=(*board.tracks, *escaped))
+        escaped_index = RoutingClearanceIndex(escaped_board)
+        if not _can_depart(escaped_board, escaped_index, first_rule.net, second_rule.net,
+                           start, width, offset, clearance, layer, pitch_nm):
+            continue
         stats.searches += 1
-        candidate = _search(escaped_board, RoutingClearanceIndex(escaped_board), first_rule.net,
+        candidate = _search(escaped_board, escaped_index, first_rule.net,
                             second_rule.net, start, end, width, offset, clearance, layer,
                             pitch_nm, budget, stats)
         from .pair_search_resume import register_pair_search
@@ -493,6 +497,22 @@ def _goal_paths(point: Point, end: Point, heading: int, inward: int,
             second = Point(first.x_nm + fx * distance, first.y_nm + fy * distance)
             for path in _paths(second, approach):
                 yield (point, first, *path, end)
+
+
+def _can_depart(board, index, first_name, second_name, port, width, offset,
+                clearance, layer, pitch):
+    """Reject an impossible mandatory first step before spending a maze slot.
+
+    The spine search requires its first step to follow the exact port heading
+    for one pitch. This checks that same emitted geometry against the complete
+    escaped board. It adds no paths, lookahead states or acceptance exemption.
+    """
+    dx, dy = _HEADS[port.heading]
+    ahead = Point(port.center.x_nm + dx * pitch, port.center.y_nm + dy * pitch)
+    lanes = _lane_paths((port.center, ahead), port.heading, port.heading, offset, port.sign)
+    return lanes is not None and _legal(board, index,
+        _tracks(first_name, lanes[0], width, layer, index.breakout),
+        _tracks(second_name, lanes[1], width, layer, index.breakout), clearance)
 
 
 def _search(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str, second_name: str,

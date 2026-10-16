@@ -527,3 +527,11 @@ bypass reservations are revalidated. Failure retains the complete incumbent.
 Zone outlines, same-net labels and native fill observations do not substitute
 for these explicit paths. Required arrays and immutable macro/source copper
 retain their original ownership.
+
+
+Paired surface and via searches check the exact mandatory first spine step
+against the fully escaped board before spending a maze slot. A legal collar
+whose departure is obstructed cannot start that search at that pitch. The
+existing 128-combination, search-count and expanded-state limits remain; this
+check adds no lookahead search or geometry exemption. Endpoint approaches and
+complete candidates still pass the ordinary profile and DRC gates.

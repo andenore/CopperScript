@@ -13,7 +13,7 @@ from math import hypot, sqrt
 from typing import Callable, Iterator
 
 from .pair_search import (PairSearchCandidate, PairSearchStats, _Port, _HEADS,
-                          _legal, _ports, _search, _remaining_states)
+                          _legal, _ports, _search, _remaining_states, _can_depart)
 from .drc import placed_pad_shape
 from .geometry import RoundedConvexShape, shapes_clear
 from .placement import transformed_local_point
@@ -387,8 +387,12 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             if not _reserve_vias(board, RoutingClearanceIndex(escaped), vias):
                 continue
             escaped=replace(escaped,vias=(*board.vias,*vias))
+            escaped_index = RoutingClearanceIndex(escaped)
+            if not _can_depart(escaped, escaped_index, first.net, second.net,
+                               start, width, offset, clearance, layer, pitch_nm):
+                continue
             stats.searches += 1
-            candidate = _search(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
+            candidate = _search(escaped, escaped_index, first.net, second.net,
                 start,end,width,offset,clearance,layer,pitch_nm,budget,stats)
             from .pair_search_resume import register_pair_search
             register_pair_search(stats, board, via_pairs=(a.vias, b.vias),
