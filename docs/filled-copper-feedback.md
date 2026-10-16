@@ -572,3 +572,14 @@ incumbent. This does not iterate until closure or raise the fanout search limits
 The route report records `fanout.released_exit_retry`; regenerated owners clear
 that earlier telemetry. Complete critical/plane/boundary admission and native
 whole-board verification remain required.
+
+
+Cross-surface bypass refinement ranks the existing analytic launch sites by
+local distance before its unchanged per-terminal site cap. Coarse outward
+launch order remains unchanged. Inner-bridge destination refinement uses the
+same local ranking. This prevents a long blocked outward ray consuming the
+entire local allowance; it introduces no new site family, launch slots,
+maze states or complete-proposal budget. Analytic inventory materialization
+is bounded to eight times the site cap plus four package-derived sites.
+All old paths, original-edge ownership and complete supply/return gates remain
+mandatory; a rejected proposal contributes no copper.

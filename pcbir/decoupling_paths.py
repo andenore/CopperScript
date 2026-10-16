@@ -432,6 +432,24 @@ def _existing_launches(board, a, b, net, width, index, options, site_limit):
 
 
 
+def _local_launch_sites(board, placement, pad, options, site_limit):
+    """Nearest members of the original analytic inventory, within its site cap.
+
+    Outward rays are useful for distribution exits, but a short bypass can
+    lose every local alternative when a long ray consumes its site allowance.
+    Limit materialization to eight rays of at most site_limit steps plus four
+    package-derived interstitial sites. More distant points cannot enter the
+    nearest site_limit set, even at an unusually fine user-selected step.
+    """
+    bounded = replace(options, maximum_radius_nm=min(options.maximum_radius_nm,
+                                                     site_limit * options.step_nm))
+    start = transformed_local_point(placement, pad.position)
+    sites = tuple(_package_candidates(board, placement, pad, bounded))
+    ranked = sorted(sites, key=lambda point:
+        (point.x_nm-start.x_nm)**2 + (point.y_nm-start.y_nm)**2)
+    yield from ranked[:site_limit]
+
+
 def _inner_connections(board, selected, origin, destination, net, width, options, site_limit, work):
     """Bounded explicit two-via alternatives when the destination surface blocks.
 
@@ -449,7 +467,7 @@ def _inner_connections(board, selected, origin, destination, net, width, options
     inner.sort(key=lambda layer: (layer not in preferred, board.stackup.copper_layers.index(layer)))
     index = RoutingClearanceIndex(board)
     config = replace(options, step_nm=options.refinement_step_nm)
-    endpoints = islice(_package_candidates(board, destination[0], destination[1], config), site_limit)
+    endpoints = _local_launch_sites(board, destination[0], destination[1], config, site_limit)
     # Existing destination launches consume the same shared eight trials.
     # Require an exact original-edge path from that terminal to the via;
     # same-net vias and declared areas alone provide no connectivity evidence.
@@ -518,8 +536,9 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
         remaining=launch_limit-admitted
         settings=(options,replace(options,step_nm=options.refinement_step_nm))
         fresh=[]
-        for config in settings:
-            endpoints=islice(_package_candidates(board,a[0],a[1],config),site_limit)
+        for refinement, config in enumerate(settings):
+            endpoints = (_local_launch_sites(board,a[0],a[1],config,site_limit) if refinement
+                         else islice(_package_candidates(board,a[0],a[1],config),site_limit))
             fresh.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],endpoints))
             if len(fresh)>=remaining:
                 break
