@@ -23,6 +23,7 @@ packages under `packages/` are separate from these board and language examples.
 | Resolved local footprint | `resolved_footprint_board/board.copper` |
 | Round LED ring | `round_led_ring/board.copper` |
 | Valid compiler fixture | `valid_board/board.copper` |
+| Analog front end and vendor-model simulations | [Source, commands and current evidence](simulation/analog_frontend/README.md) |
 
 The CM4 carrier, managed-footprint, and simulation examples already use
 multi-file directories and retain their existing folder names.

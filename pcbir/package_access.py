@@ -291,6 +291,42 @@ def _access_result(
     return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard, boundary=boundary)
 
 
+def preflight_prepared_power_access(board, guides, preparation, fanout_options,
+                                    plane_options=None, *, options=None, on_progress=None, only_nets=None):
+    """Ordinary exits around a separately native-accepted, protected prefix.
+
+    No old explicit witness is converted into a plane witness. Changed poses
+    need a new preparation; this path does not negotiate or release its owners.
+    The caller must freshly refill the combined boundary before area routing.
+    """
+    from .hard_macros import materialize_hard_macros
+    from .power_preparation import (preparation_preserved, required_return_contacts,
+                                    assess_native_return_contacts)
+    if (materialize_hard_macros(board) != preparation.source
+            or not preparation_preserved(preparation, preparation.board)
+            or preparation.evidence is None or not preparation.evidence.matches(preparation.board)
+            or guides.placement_fingerprint != _placement_fingerprint(board)):
+        raise ValueError('stale power preparation source or native certificate')
+    returned = required_return_contacts(preparation.board, preparation.plan)
+    returns = assess_native_return_contacts(preparation.board, preparation.evidence, returned)
+    if returns['status'] not in {'native_connected', 'not_requested'}:
+        raise ValueError('power preparation has unverified required return contacts')
+    if plane_options is not None:
+        # These exact lands already have a protected, freshly checked native
+        # return. Repeating a local site search can reject a large land whose
+        # accepted contact lies beyond its centre-based search radius. Every
+        # other requested contact remains, and combined native admission still
+        # runs at the boundary. No held contact copper is changed or discarded.
+        requested = (frozenset(p for net in preparation.board.nets for p in net.pads)
+                     if plane_options.only_pads is None else plane_options.only_pads)
+        plane_options = replace(plane_options, only_pads=requested-returned)
+    fanout = route_fanout(preparation.board, fanout_options, only_nets=only_nets)
+    critical = replace(preparation.critical, board=fanout.board,
+                       locked_tracks=fanout.board.tracks, locked_vias=fanout.board.vias)
+    return _access_result(board, guides, fanout, critical, plane_options,
+                          (options or PackageAccessOptions()).boundary_options, on_progress)
+
+
 def _missing_bypass_links(source, before, after):
     """Fresh ordinary-owner predicate; later critical copper cannot repair it."""
     names = {link.net for link in source.decoupling_links}
@@ -432,11 +468,16 @@ def _negotiate_patterns(
     emit(on_progress, "package_pattern_probe", "finished",
          failed_critical_nets=sorted(probe_failed), hard_findings=probe_hard, reused_critical=reuse,
          search_tier=search_tier)
-    # Spend the bounded budget on clean-source probes with a strictly smaller
-    # failure set, or on failed plane access. This is a heuristic, not proof
-    # that the skipped joint search has no solution.
+    # A clean-source ordering may exchange failed critical owners rather than
+    # produce a strict subset: one pair becomes routable while another loses
+    # its launch. Its successful copper is still useful as a disposable
+    # obstacle for a new ordinary pattern. Spend the same bounded proposal
+    # budget on a changed, no-larger failure set; NEVER accept that exchange
+    # itself. Final all-owner validation retains the strict identity gate.
+    changed_probe = (probe_failed != baseline.failed_critical_nets
+                     and len(probe_failed) <= len(baseline.failed_critical_nets))
     if probe_hard or (not (plane_pending or ordinary_pending)
-                      and not probe_failed < baseline.failed_critical_nets):
+                      and not changed_probe):
         return baseline
     include_planes = bool(plane_options and baseline.source.zones and (plane_pending or ordinary_pending))
     strategies = (["critical_and_plane_first", "critical_first"] if include_planes else

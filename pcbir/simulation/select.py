@@ -145,6 +145,8 @@ def select_circuit(board: Board, plan: SimulationPlan) -> SimulationCircuit:
     model_names = [m.name.lower() for m in used_models.values()]
     if len(model_names) != len(set(model_names)):
         raise SimulationError("selected model IDs define the same SPICE model name")
+    if len({model.dialect for model in used_models.values()}) > 1:
+        raise SimulationError("mixed native and pspice model bundles need separate simulation plans")
     reference = aliases.get(plan.reference_node, plan.reference_node)
     if reference not in included_nets:
         raise SimulationError("reference_node must be a net in the selected circuit")

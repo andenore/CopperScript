@@ -432,7 +432,7 @@ def _existing_launches(board, a, b, net, width, index, options, site_limit):
 
 
 
-def _local_launch_sites(board, placement, pad, options, site_limit):
+def _local_launch_sites(board, placement, pad, options, site_limit, *, clearance=None, net=None):
     """Nearest members of the original analytic inventory, within its site cap.
 
     Outward rays are useful for distribution exits, but a short bypass can
@@ -447,6 +447,19 @@ def _local_launch_sites(board, placement, pad, options, site_limit):
     sites = tuple(_package_candidates(board, placement, pad, bounded))
     ranked = sorted(sites, key=lambda point:
         (point.x_nm-start.x_nm)**2 + (point.y_nm-start.y_nm)**2)
+    if options.maximum_geometry_candidates and clearance is not None and net is not None:
+        from .access_sites import obstacle_boundary_sites, circular_cell_sites
+        span = physical_via_span(board, board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
+        if span is not None:
+            geometric = obstacle_boundary_sites(clearance,net,start,board.rules.default_via_size_nm,
+                board.rules.default_via_drill_nm,span[:2],options.maximum_radius_nm,
+                min(options.maximum_geometry_candidates,max(1,site_limit//2)),
+                seeds=circular_cell_sites(board,placement,pad,options.maximum_neighbor_distance_nm,
+                                          options.maximum_radius_nm))
+            # Spend the SAME local-site cap on analytic and obstacle-derived
+            # sites. The latter can reach an off-grid capacitor launch without
+            # adding a phase, via permission, path slot or complete proposal.
+            ranked = tuple(dict.fromkeys((*ranked[:max(1,site_limit//2)],*geometric,*ranked)))
     yield from ranked[:site_limit]
 
 
@@ -504,7 +517,9 @@ def _inner_connections(board, selected, origin, destination, net, width, options
     inner.sort(key=lambda layer: (layer not in preferred, board.stackup.copper_layers.index(layer)))
     index = RoutingClearanceIndex(board)
     config = replace(options, step_nm=options.refinement_step_nm)
-    endpoints = _local_launch_sites(board, destination[0], destination[1], config, site_limit)
+    endpoints = (_local_launch_sites(board,destination[0],destination[1],config,site_limit,
+                                    clearance=index,net=net) if config.maximum_geometry_candidates else
+                 _local_launch_sites(board,destination[0],destination[1],config,site_limit))
     # Existing destination launches consume the same shared eight trials.
     # Require an exact original-edge path from that terminal to the via;
     # same-net vias and declared areas alone provide no connectivity evidence.
@@ -574,7 +589,8 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
         settings=(options,replace(options,step_nm=options.refinement_step_nm))
         fresh=[]
         for refinement, config in enumerate(settings):
-            endpoints = (_local_launch_sites(board,a[0],a[1],config,site_limit) if refinement
+            endpoints = ((_local_launch_sites(board,a[0],a[1],config,site_limit,clearance=index,net=net)
+                          if config.maximum_geometry_candidates else _local_launch_sites(board,a[0],a[1],config,site_limit)) if refinement
                          else islice(_package_candidates(board,a[0],a[1],config),site_limit))
             fresh.extend(_legal_choices(board,index,net,a[2].position,a[0],a[1],endpoints))
             if config.two_leg_escapes:
@@ -592,7 +608,13 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
                          for t in path if not track_is_contained(t, board.tracks))
             remaining_distance = abs(endpoint.x_nm-b[2].position.x_nm)+abs(endpoint.y_nm-b[2].position.y_nm)
             return length+remaining_distance, length, endpoint.x_nm, endpoint.y_nm
-        for path,via in sorted(dict.fromkeys(fresh),key=compact_score)[:remaining]:
+        # A short launch can face a blocked destination-side tail. Preserve
+        # outward alternatives as well as compact ones: neither ordering may
+        # monopolize the finite slots. Deduplicate before spending a slot.
+        inventory=tuple(dict.fromkeys(fresh))
+        compact=sorted(inventory,key=compact_score)
+        diverse=dict.fromkeys(chain.from_iterable(zip(compact,inventory)))
+        for path,via in islice(diverse,remaining):
             existing=next((v for v in board.vias if v.net==net and v.position==path[-1].end
                            and _normal_via(board,index,v)),None)
             selected=via or existing
@@ -662,7 +684,7 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                                  maximum_launch_candidates=8, maximum_return_candidates=8,
                                  maximum_site_candidates=64, maximum_proposals=64,
                                  maximum_path_states=10_000, protected_witnesses=(),
-                                 return_target=None):
+                                 return_target=None, _proposal_pool=None):
     """Atomically propose normal-through supply and explicit-pad return routes.
 
     Candidate counts/radius are computational bounds, never electrical limits.
@@ -731,6 +753,8 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                     return DecouplingPathResult(board,reason="bounded_complete_proposals_exhausted",
                                                 supply_path=existing.supply_path,return_path=existing.return_path)
                 attempted+=1
+                if _proposal_pool is not None:
+                    _proposal_pool['attempted'] = attempted
                 fresh=RoutingClearanceIndex(candidate)
                 measured=verify_crosslayer_decoupling(candidate,link,return_target=target,
                                                       maximum_path_states=maximum_path_states,index=fresh)
@@ -778,9 +802,43 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                         errors={f.fingerprint for f in run_physical_drc(candidate).findings
                                 if f.severity is DrcSeverity.ERROR and f.code not in {"DRC-OPEN-NET","DRC-ROUTE-INCOMPLETE"}}
                         if not errors-baseline:
-                            return replace(measured,created_tracks=created_tracks,created_vias=created_vias)
+                            result = replace(measured,created_tracks=created_tracks,created_vias=created_vias)
+                            if _proposal_pool is None:
+                                return result
+                            key = (created_tracks, created_vias)
+                            if key not in _proposal_pool['seen']:
+                                _proposal_pool['seen'].add(key)
+                                _proposal_pool['choices'].append(result)
+                            if len(_proposal_pool['choices']) >= _proposal_pool['limit']:
+                                return result
                 if attempted>=maximum_proposals:
                     return DecouplingPathResult(board,reason=("unwitnessed_generated_bypass_copper" if uncovered else "bounded_complete_proposals_exhausted"),
                                                 supply_path=existing.supply_path,return_path=existing.return_path)
     return DecouplingPathResult(board,reason=("unwitnessed_generated_bypass_copper" if uncovered else "bounded_supply_return_candidates_exhausted"),
                                 supply_path=existing.supply_path,return_path=existing.return_path)
+
+
+@dataclass(frozen=True, slots=True)
+class DecouplingAlternatives:
+    snapshot: str
+    choices: tuple[DecouplingPathResult, ...]
+    attempted: int
+    stop_reason: str
+
+
+def propose_crosslayer_alternatives(board, link, *, maximum_alternatives=8, **options):
+    """Collect complete alternatives in ONE existing bounded supply/return search.
+
+    Launch, site, local-path and complete-proposal work is shared across all
+    results. Every result retains the source association and fresh exact
+    supply/return witnesses. This does not release or adopt any input copper.
+    """
+    if type(maximum_alternatives) is not int or maximum_alternatives <= 0:
+        raise ValueError('positive bypass alternative bound required')
+    pool = dict(limit=maximum_alternatives, choices=[], seen=set(), attempted=0)
+    terminal = propose_crosslayer_decoupling(board, link, _proposal_pool=pool, **options)
+    choices = tuple(pool['choices'])
+    if not choices and terminal.witness is not None:
+        choices = (terminal,)
+    return DecouplingAlternatives(physical_board_digest(board), choices, pool['attempted'],
+        'alternative_budget_reached' if len(choices) >= maximum_alternatives else terminal.reason or 'existing_witness')

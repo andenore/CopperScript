@@ -13,7 +13,8 @@ from math import hypot, sqrt
 from typing import Callable, Iterator
 
 from .pair_search import (PairSearchCandidate, PairSearchStats, _Port, _HEADS,
-                          _legal, _ports, _search, _remaining_states, _can_depart)
+                          _legal, _ports, _search, _remaining_states, _can_depart,
+                          _PairAccessIndex, _normal, _shift, _tracks)
 from .drc import placed_pad_shape
 from .geometry import RoundedConvexShape, shapes_clear
 from .placement import transformed_local_point
@@ -244,6 +245,79 @@ def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
     return None
 
 
+def _local_via_ports(board, first, second, a, b, component, surface, layer):
+    """Finite recessed-land fallback: choose legal vias before searching collars.
+
+    Surface-only portals can sit above opposite-face bypass pads or ground
+    vias. Searching their lead-ins first hides the usable sites farther out.
+    The stagger follows the terminal pitch, with 16 legal sites and 32 local
+    path calls at most. Every path keeps both lanes, holes and old copper as
+    obstacles; the normal transition and owner gates still run afterwards.
+    """
+    from .pin_access import local_access_path
+    span = physical_via_span(board, surface, layer)
+    if span is None:
+        return ()
+    width = first.width_nm or board.rules.default_track_width_nm
+    clearance = max(board.rules.minimum_clearance_nm, first.clearance_nm or 0,
+                    second.clearance_nm or 0)
+    offset = (transition_spacing(board, first, second)+1)//2
+    middle = Point((a.x_nm+b.x_nm)//2, (a.y_nm+b.y_nm)//2)
+    pitch = max(abs(a.x_nm-b.x_nm), abs(a.y_nm-b.y_nm))
+    pose = next(p for p in board.placements if p.reference == component)
+    outward = Point(middle.x_nm-pose.position.x_nm, middle.y_nm-pose.position.y_nm)
+    headings = sorted((0, 2, 4, 6), key=lambda h:
+        (-(_HEADS[h][0]*outward.x_nm+_HEADS[h][1]*outward.y_nm), h))
+    results = []
+    sites = calls = 0
+    for heading, length, transverse, sign in product(headings,
+            (.5, .75, 1, 1.5, 2, 3, 4, 4.5, 5, 6),
+            (0, -pitch//2, pitch//2, -pitch, pitch), (-1, 1)):
+        if sites >= 16 or calls >= 32 or len(results) >= 8:
+            break
+        dx, dy = _HEADS[heading]
+        distance = nm_from_mm(length)
+        center = Point(middle.x_nm+dx*distance-dy*transverse,
+                       middle.y_nm+dy*distance+dx*transverse)
+        normal = _normal(heading, offset)
+        targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
+        pair = tuple(Via(rule.net, point, board.rules.default_via_size_nm,
+                         board.rules.default_via_drill_nm, *span)
+                     for rule, point in zip((first, second), targets))
+        if (not _signal_drills_outside_smd(board, pair)
+                or not _reserve_vias(board, RoutingClearanceIndex(board), pair)):
+            continue
+        sites += 1
+        approaches = tuple(Point(p.x_nm-dx*125000, p.y_nm-dy*125000) for p in targets)
+        tails = tuple(_tracks(rule.net, (approach, target), width, surface,
+                              RoutingClearanceIndex(board).breakout)
+                      for rule, approach, target in zip((first, second), approaches, targets))
+        if not _legal(board, RoutingClearanceIndex(board), *tails, clearance):
+            continue
+        for order in ((0, 1), (1, 0)):
+            held = replace(board, tracks=(*board.tracks, *tails[0], *tails[1]),
+                           vias=(*board.vias, *pair))
+            index = _PairAccessIndex(held)
+            paths = [None, None]
+            for member in order:
+                if calls >= 32:
+                    break
+                calls += 1
+                path = local_access_path(held, index, (first.net, second.net)[member],
+                    (a, b)[member], approaches[member], surface, width,
+                    step_nm=25000, detour_nm=500000, maximum_states=2400)
+                if path is None:
+                    break
+                paths[member] = (*path, *tails[member])
+                for track in path:
+                    index.add_track(track, locked=True)
+            if (all(p is not None for p in paths)
+                    and _legal(board, RoutingClearanceIndex(held), *paths, clearance)):
+                results.append(_Port(center, heading, sign, *paths, 8))
+                break
+    return tuple(results)
+
+
 def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRoutingRule,
                  first_position: Point, second_position: Point, component: str,
                  surface: CopperLayer, layer: CopperLayer,
@@ -288,13 +362,18 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
     # when legal short collars exist but lead into isolated routing pockets.
     # These remain explicit source-profiled tracks, not wider breakout regions.
     # No local maze allowance is added by this fallback.
-    for family in range(2):
-        if family:
+    for family in range(3):
+        if family == 1:
             if results and not include_outer:
                 break
             wide = _ports(board, index, first.net, second.net, first_position, second_position,
                           component, width, (transition_spacing(board, first, second)+1)//2,
                           clearance, surface, lengths=(4, 4.5, 5, 6), allow_local_fallback=False)
+        elif family == 2:
+            if results:
+                break
+            wide = _local_via_ports(board, first, second, first_position,
+                                    second_position, component, surface, layer)
         for collar in wide:
             pair = tuple(Via(net, tracks[-1].end, board.rules.default_via_size_nm,
                              board.rules.default_via_drill_nm, *span)

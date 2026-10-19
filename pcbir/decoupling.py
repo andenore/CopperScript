@@ -124,6 +124,9 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=N
             continue
         if only_nets is not None and link.net not in only_nets:
             continue
+        if fanout_options is not None and link.net in fanout_options.plane_return_nets:
+            pending.append((link, 'native_plane_return_pending'))
+            continue
         if link.target in owned or link.capacitor in owned:
             continue  # Prescribed local copper is never regenerated.
         target, cap = poses[link.target.component], poses[link.capacitor.component]

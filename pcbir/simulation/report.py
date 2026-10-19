@@ -227,9 +227,13 @@ def render_report(plan, waveforms, measurements, summary: dict, output: Path):
         links = [(f"{prefix}/run.log", "Solver log"), (f"{prefix}/deck.cir", "SPICE deck"),
                  (f"data/{run['analysis']}/{run['case']}/waveforms.csv", "CSV"), (f"data/{run['analysis']}/{run['case']}/waveforms.json", "JSON")]
         downloads = " · ".join(f'<a href="{path}" download>{label}</a>' for path, label in links if (output / path).is_file())
+        solver_messages = "".join(f"<li>{html.escape(message)}</li>" for message in run.get("solver_messages", []))
+        if run.get("solver_messages_omitted"):
+            solver_messages += f'<li>{run["solver_messages_omitted"]} more messages in the solver log.</li>'
         run_links.append(f'<li>{html.escape(run["case"])} · {html.escape(run["analysis"])}: '
             f'<strong>{html.escape(run["status"])}</strong> · {downloads}'
-            + (f'<p>{html.escape(run["error"])}</p>' if run.get("error") else "") + "</li>")
+            + (f'<p>{html.escape(run["error"])}</p>' if run.get("error") else "")
+            + (f'<details><summary>Solver convergence messages</summary><ul>{solver_messages}</ul></details>' if solver_messages else "") + "</li>")
     assumptions = "".join(f"<li>{html.escape(a)}</li>" for a in plan.assumptions)
     diagnostics = "".join(f"<li>{html.escape(message)}</li>" for r in waveforms for message in r.diagnostics)
     summary_text = {"passed": "All numerical analyses completed and all specified checks passed.",

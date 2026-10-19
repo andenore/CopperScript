@@ -22,6 +22,11 @@ def terminal_copper_layers(board, reference):
     numbers, missing references, apertures and unplated holes fail closed.
     Track policy is intersected separately by the caller.
     """
+    from .hard_macros import macro_routing_ports, macro_port_layers
+    net = next((n for n in board.nets if reference in n.pads), None)
+    port = macro_routing_ports(board, net.name).get(reference) if net else None
+    if port is not None:
+        return frozenset(macro_port_layers(board, port))
     pose = next((p for p in board.placements if p.reference == reference.component), None)
     if pose is None:
         return frozenset()
@@ -166,8 +171,18 @@ def source_terminal_guide(board, name, existing):
     net=next((n for n in board.nets if n.name==name),None)
     if net is None: return existing
     poses={p.reference:p for p in board.placements}
+    from .hard_macros import macro_routing_pads, macro_routing_ports, macro_owned_pads
+    ports = macro_routing_ports(board, name)
+    owned = macro_owned_pads(board)
+    references = macro_routing_pads(board, net)
     accesses=[]
-    for ref in net.pads:
+    for ref in references:
+        port = ports.get(ref)
+        if port is not None:
+            accesses.append(PairTerminal(ref,port.position,port.position,port.layer))
+            continue
+        if ref in owned:
+            return None  # An owned private land without a proved port is not an endpoint.
         pose=poses.get(ref.component)
         if pose is None: return existing
         lands=[p for p in board.footprints[pose.footprint].pads if p.number==ref.pad]
@@ -175,16 +190,45 @@ def source_terminal_guide(board, name, existing):
         pos=transformed_pad_position(board,pose,ref.pad)
         layer=CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
         accesses.append(PairTerminal(ref,pos,pos,layer))
-    if existing is not None and existing.connected and {a.pad for a in existing.accesses}==set(net.pads):
+    if (existing is not None and existing.connected
+            and {a.pad for a in existing.accesses}==set(references)
+            and all(a.pad not in ports or (a.pad_position==ports[a.pad].position
+                    and a.layer in terminal_copper_layers(board,a.pad)) for a in existing.accesses)):
         return existing
     return GlobalNetRoute(name,False,tuple(accesses),(),(),0,
         ('source terminals for exact search; no connected coarse guide',))
 
+def macro_terminal_guides_proved(board, guides):
+    """Every private endpoint is represented by its actual proved boundary port."""
+    from .hard_macros import macro_owned_pads, macro_routing_ports
+    owned=macro_owned_pads(board)
+    for guide in guides:
+        if guide is None:
+            return False
+        net=next((n for n in board.nets if n.name==guide.net),None)
+        if net is None:
+            return False
+        private=set(net.pads)&owned
+        ports=macro_routing_ports(board,guide.net)
+        represented=set()
+        for access in guide.accesses:
+            port=ports.get(access.pad)
+            if port is None:
+                if access.pad in private:
+                    return False
+                continue
+            if (access.pad_position!=port.position or access.access_position!=port.position
+                    or access.layer not in terminal_copper_layers(board,access.pad)):
+                return False
+            represented.update(port.pads)
+        if not private<=represented:
+            return False
+    return True
+
+
 def _surface_pair_terminals(board, first, second, routes):
     from .hard_macros import macro_owned_pads
     owned = macro_owned_pads(board)
-    if any(p in owned for n in board.nets if n.name in (first.net, second.net) for p in n.pads):
-        return routes, (), ()  # keep prescribed macro ports and their existing access contract
     guides=[source_terminal_guide(board,r.net,routes.get(r.net)) for r in (first,second)]
     if any(g is None for g in guides): return None,(),()
     all_branches=[]
@@ -199,6 +243,8 @@ def _surface_pair_terminals(board, first, second, routes):
         anchors=[]
         branches=[]
         for component,terminals in sorted(groups.items()):
+            if len(terminals)>1 and any(a.pad in owned for a in terminals):
+                return None,(),()  # Never tie private contacts or replace a prescribed port.
             anchor=_main_contact(board, rule, terminals)
             anchors.append(anchor)
             for other in sorted(terminals,key=lambda a:str(a.pad)):
@@ -257,7 +303,7 @@ def _paired_local_contacts(board, first, second, *, report=None):
     from .hard_macros import macro_owned_pads
     owned = macro_owned_pads(board)
     guides = [source_terminal_guide(board, r.net, None) for r in (first, second)]
-    if any(g is None or any(a.pad in owned for a in g.accesses) for g in guides):
+    if any(g is None for g in guides):
         return None
     groups = []
     for rule, guide in zip((first, second), guides):
@@ -268,6 +314,8 @@ def _paired_local_contacts(board, first, second, *, report=None):
         if len(grouped) != 2 or len(guide.accesses) != 3 or len(duplicate) != 1:
             return None
         contacts = tuple(sorted(duplicate[0], key=lambda a:str(a.pad)))
+        if any(a.pad in owned for a in contacts):
+            return None  # Only public duplicated contacts are disposable branch work.
         if (rule.breakout_length_nm is None or contacts[0].layer is not contacts[1].layer
             or (contacts[0].pad_position.x_nm-contacts[1].pad_position.x_nm)**2
                + (contacts[0].pad_position.y_nm-contacts[1].pad_position.y_nm)**2

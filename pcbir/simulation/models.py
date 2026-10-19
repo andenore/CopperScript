@@ -11,6 +11,10 @@ from typing import Mapping
 from .model import SimulationError, object_fields, read_json, required, strings, text
 
 
+# Engine-owned libraries only; model data cannot select a path or executable.
+CODE_MODELS = frozenset({"analog", "xtradev"})
+
+
 @dataclass(frozen=True, slots=True)
 class ModelBundle:
     model_id: str
@@ -25,6 +29,8 @@ class ModelBundle:
     entrypoint: str
     assets: tuple[tuple[str, str], ...]
     manifest: str
+    dialect: str = "native"
+    code_models: tuple[str, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "pin_map", MappingProxyType(dict(self.pin_map)))
@@ -43,15 +49,19 @@ def load_registry(path: Path | None) -> dict[str, ModelBundle]:
     for model_id, value in sorted(entries.items()):
         text(model_id, "model ID")
         d = object_fields(value, {"kind", "name", "terminals", "pin_map", "ignored_pins", "supported_parts", "analyses",
-                                  "ngspice_versions", "entrypoint", "files", "source_url", "license", "assumptions", "dialect"}, model_id)
+                                  "ngspice_versions", "entrypoint", "files", "source_url", "license", "assumptions", "dialect", "code_models"}, model_id)
         kind = required(d, "kind", model_id)
         if kind not in {"subcircuit", "diode", "bjt", "mosfet"}:
             raise SimulationError(f"model {model_id}: unsupported model kind")
         name = required(d, "name", model_id)
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             raise SimulationError(f"model {model_id}: invalid SPICE model name")
-        if d.get("dialect", "native") != "native":
-            raise SimulationError(f"model {model_id}: only qualified native ngspice models are supported")
+        dialect = d.get("dialect", "native")
+        if not isinstance(dialect, str) or dialect not in {"native", "pspice"}:
+            raise SimulationError(f"model {model_id}: supported dialects are native and pspice")
+        code_models = strings(d.get("code_models", []), model_id + ".code_models")
+        if set(code_models) - CODE_MODELS or (code_models and dialect != "pspice"):
+            raise SimulationError(f"model {model_id}: code_models must name supported engine libraries for pspice")
         terminals = strings(required(d, "terminals", model_id), model_id + ".terminals")
         if not terminals or (kind != "subcircuit" and len(terminals) != {"diode": 2, "bjt": 3, "mosfet": 4}[kind]):
             raise SimulationError(f"model {model_id}: incorrect terminal count")
@@ -152,5 +162,5 @@ def load_registry(path: Path | None) -> dict[str, ModelBundle]:
         manifest = json.dumps({"id": model_id, **d, "files": file_manifest, "registry_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}, sort_keys=True)
         bundles[model_id] = ModelBundle(model_id, kind, name, terminals, pin_map,
             strings(d.get("ignored_pins", []), "ignored_pins"), parts, analyses, tuple(versions), names[entry],
-            tuple(sorted((names[p], rewritten[names[p]]) for p in visited)), manifest)
+            tuple(sorted((names[p], rewritten[names[p]]) for p in visited)), manifest, dialect, code_models)
     return bundles

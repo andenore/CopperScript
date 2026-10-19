@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from .critical import CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets
@@ -42,6 +42,12 @@ class RoutingPipelineResult:
     duplicate_pad_stitch: DuplicatePadStitchResult | None = None
     critical_feedback: CriticalPlacementFeedbackResult | None = None
     package_access: PackageAccessResult | None = None
+    power_area_plan: object | None = None
+    power_area_status: str = "disabled"
+    power_area_options: object | None = None
+    power_preparation: object | None = None
+    power_preparation_validation: object | None = None
+    power_native_verifier: object | None = field(default=None, repr=False, compare=False)
 
     @property
     def board(self) -> PhysicalBoard:
@@ -62,6 +68,9 @@ def run_routing_pipeline(
     detailed_feedback_movement_nm: int = nm_from_mm("0.5"),
     critical_feedback_trials: int = 0,
     package_access_options: PackageAccessOptions | None = None,
+    power_area_options=None,
+    power_native_verifier=None,
+    routing_nets: frozenset[str] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> RoutingPipelineResult:
     """Run steps 4–8 in dependency order without weakening an earlier gate."""
@@ -72,6 +81,11 @@ def run_routing_pipeline(
     global_options = global_options or GlobalRouterOptions()
     detailed_options = detailed_options or DetailedRouterOptions()
     package_access_options = package_access_options or PackageAccessOptions()
+    if routing_nets is not None:
+        if (power_area_options is None or not power_area_options.plane_return_nets
+                or not isinstance(routing_nets, frozenset)
+                or not routing_nets <= {n.name for n in board.nets}):
+            raise ValueError('scoped routing requires native return preparation and declared net identities')
     if (fanout_options is not None and plane_stitch_options is None
             and package_access_options.reserve_plane_contacts and board.zones):
         plane_stitch_options = PlaneStitchOptions()
@@ -83,23 +97,64 @@ def run_routing_pipeline(
     emit(on_progress, "placement_global", "started")
     placement = optimize_placement_for_routing(
         board, placement_options, global_options, feedback_options,
+        **({"power_area_options": power_area_options} if power_area_options is not None else {}),
+        **({"power_native_verifier": power_native_verifier,"fanout_options":fanout_options,
+            "pair_state_limit":package_access_options.initial_pair_state_limit or None}
+           if power_area_options is not None and placement_options.support_pattern_trials else {}),
         **({"on_progress": on_progress} if on_progress is not None else {})
     )
     emit(on_progress, "placement_global", "finished", candidate=placement.placement_candidate,
          global_status=placement.global_route.status.value)
     access = None
+    preparation, preparation_validation = None, None
+    if power_area_options is not None and power_area_options.plane_return_nets:
+        from .power_preparation import prepare_power_distribution
+        from .package_access import preflight_prepared_power_access
+        from .fanout import route_fanout
+        if placement.package_patterns:
+            offsets=dict(power_area_options.package_pattern_offsets)
+            offsets.update((r['component'],r['pattern']['offset_nm']) for r in placement.package_patterns
+                           if r.get('pattern') is not None and r.get('status')=='complete_geometry_proposal')
+            # These are search seeds only. The exact post-critical scene must
+            # freshly accept every contact; changed poses never reuse evidence.
+            power_area_options=replace(power_area_options,package_patterns_before_contacts=True,
+                                       package_pattern_offsets=tuple(sorted(offsets.items())))
+        if fanout_options is None:
+            raise ValueError('native plane-return preparation requires package fanout')
+        fanout_options = replace(fanout_options,
+            plane_return_nets=frozenset(power_area_options.plane_return_nets))
+        if power_area_options.reserve_ordinary_before_contacts:
+            fanout_options = replace(fanout_options, prefer_surface_escapes=True, surface_fallback=True,
+                surface_preference_depth=1 if fanout_options.surface_preference_depth is None
+                                          else fanout_options.surface_preference_depth)
+        preparation = prepare_power_distribution(placement.board, placement.global_route,
+            power_area_options, fanout_options, native_verifier=power_native_verifier,
+            pair_state_limit=package_access_options.initial_pair_state_limit or None,
+            on_progress=on_progress, ordinary_nets=routing_nets)
+        if preparation.accepted:
+            access = preflight_prepared_power_access(placement.board, placement.global_route,
+                preparation, fanout_options, plane_stitch_options,
+                options=package_access_options, on_progress=on_progress, only_nets=routing_nets)
+        else:
+            # Diagnostic critical copper is retained; no rejected power/contact
+            # contribution or connectivity flag is promoted into the pipeline.
+            access = PackageAccessResult(placement.board, placement.global_route,
+                FanoutResult(preparation.source, {}, (), 0, 0), preparation.critical,
+                None, frozenset(), 0)
     if fanout_options is not None:
         access_options = package_access_options or PackageAccessOptions()
-        access = preflight_package_access(placement.board, placement.global_route,
-                                         fanout_options, plane_stitch_options,
-                                         options=access_options, on_progress=on_progress)
+        if preparation is None:
+            access = preflight_package_access(placement.board, placement.global_route,
+                                             fanout_options, plane_stitch_options,
+                                             options=access_options, on_progress=on_progress)
         # With fanout enabled, critical failures belong to the same escape-first
         # placement transaction, not a second critical-first controller.
         access_options = replace(access_options,
             maximum_trials=access_options.maximum_trials + critical_feedback_trials)
-        access = improve_package_access(access, fanout_options,
-            options=access_options, placement_options=placement_options,
-            global_options=global_options, plane_options=plane_stitch_options, on_progress=on_progress)
+        if preparation is None:
+            access = improve_package_access(access, fanout_options,
+                options=access_options, placement_options=placement_options,
+                global_options=global_options, plane_options=plane_stitch_options, on_progress=on_progress)
         placement = replace(placement, board=access.source, global_route=access.global_route,
             status=FeedbackStatus.PASS if access.global_route.status is GlobalRoutingStatus.SUCCESS else FeedbackStatus.WARNING,
             full_route_certified=access.global_route.status is GlobalRoutingStatus.SUCCESS,
@@ -110,7 +165,11 @@ def run_routing_pipeline(
             return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, access.critical,
                 detailed, run_physical_drc(detailed.board, policy=drc_policy),
                 fanout=replace(access.fanout, board=access.board), plane_stitch=access.plane_stitch,
-                package_access=access)
+                package_access=access, power_area_plan=preparation.plan if preparation else placement.power_area_plan,
+                power_area_status=(preparation.status if preparation and not preparation.accepted else
+                                   "package_access_incomplete") if power_area_options is not None else "disabled",
+                power_area_options=power_area_options, power_preparation=preparation,
+                power_native_verifier=power_native_verifier)
         critical = access.critical
     else:
         critical = route_critical_nets(placement.board, placement.global_route,
@@ -136,24 +195,67 @@ def run_routing_pipeline(
         if plane_stitch_options else None
     )
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
+    power_plan = preparation.plan if preparation else None
+    power_status = 'contact_routed_native_pending' if preparation else 'disabled'
+    def plan_distribution(source, held_fanout=None):
+        from .power_geometry import plan_power_areas, apply_power_area_plan
+        emit(on_progress, "power_area_planning", "started")
+        plan = plan_power_areas(source, power_area_options, on_progress=on_progress)
+        candidate, status = apply_power_area_plan(source, plan)
+        if candidate is not source and held_fanout is not None:
+            from .pin_escape import RoutingAccess, verified_routing_access, verified_fanout_path
+            from .routing_clearance import RoutingClearanceIndex
+            clearance = RoutingClearanceIndex(candidate)
+            net_by_pad = {p: n.name for n in candidate.nets for p in n.pads}
+            for pad, anchor in held_fanout.routing_accesses.items():
+                witness = (verified_routing_access(candidate, pad, net_by_pad[pad], anchor, clearance)
+                    if isinstance(anchor, RoutingAccess) else
+                    verified_fanout_path(candidate, pad, net_by_pad[pad], anchor, clearance))
+                if witness is None:
+                    candidate, status = source, "held_package_exit_rejected"
+                    break
+        emit(on_progress, "power_area_planning", "finished", status=status,
+             domains=len(plan.obligations), selected=len(plan.selected), exhausted=plan.exhausted)
+        return candidate, plan, status
     if access:
         emit(on_progress, "package_boundary_reservation", "started")
-    from .zone_geometry import distribution_zone_nets
-    deferred_zones = (frozenset(distribution_zone_nets(pre_fanout))
+    from .zone_geometry import deferred_zone_nets
+    deferred_zones = (frozenset(deferred_zone_nets(pre_fanout))
                       if detailed_options.defer_zone_nets else frozenset())
     fanout = reserve_boundary_access(pre_fanout, access.fanout, access.boundary,
                                      deferred_nets=deferred_zones) if access else None
     if access:
         emit(on_progress, "package_boundary_reservation", "finished", anchors=len(fanout.boundary_accesses),
              added_tracks=len(fanout.created_tracks) - len(access.fanout.created_tracks))
+    pre_detailed = fanout.board if fanout else pre_fanout
+    if preparation is not None:
+        from .power_preparation import validate_power_preparation
+        evidence = power_native_verifier(pre_detailed, 'power-return-boundary')
+        preparation_validation = validate_power_preparation(preparation, pre_detailed, evidence, power_area_options)
+        if preparation_validation['status'] != 'native_connected':
+            restored_fanout = FanoutResult(preparation.board, {}, (), 0, 0)
+            blocked = replace(access, boundary=None, fanout=restored_fanout,
+                critical=replace(access.critical, board=preparation.board), plane_stitch=None)
+            detailed = blocked_area_result(blocked)
+            return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, blocked.critical,
+                detailed, run_physical_drc(detailed.board, policy=drc_policy),
+                fanout=blocked.fanout, package_access=blocked, power_area_plan=power_plan,
+                power_area_status='power_preparation_boundary_rejected', power_area_options=power_area_options,
+                power_preparation=preparation, power_preparation_validation=preparation_validation,
+                power_native_verifier=power_native_verifier)
+    elif power_area_options is not None:
+        pre_detailed, power_plan, power_status = plan_distribution(pre_detailed, fanout)
+        deferred_zones = (frozenset(deferred_zone_nets(pre_detailed))
+                          if detailed_options.defer_zone_nets else frozenset())
     emit(on_progress, "ordinary_area", "started")
     detailed = route_detailed(
-        fanout.board if fanout else pre_fanout, placement.global_route,
+        pre_detailed, placement.global_route,
         detailed_options, fanout_accesses=fanout.routing_accesses if fanout else None,
         fanout_created_vias=frozenset((item.net, item.position)
                                     for item in fanout.created_vias) if fanout else None,
         fanout_created_tracks=fanout.created_tracks if fanout else None,
         on_progress=on_progress,
+        only_nets=routing_nets,
     )
     emit(on_progress, "ordinary_area", "finished", status=detailed.status.value,
          failed_nets=[n.net for n in detailed.nets if not n.connected],
@@ -169,7 +271,7 @@ def run_routing_pipeline(
         item.net for item in detailed.nets
         if not item.connected and item.net not in deferred_zones
     )
-    if failed_nets and detailed_feedback_trials:
+    if failed_nets and detailed_feedback_trials and preparation is None:
         accepted_score = _detailed_score(detailed, drc)
         for trial_board in detailed_failure_trials(
             placement.board, failed_nets, placement_options,
@@ -202,17 +304,21 @@ def run_routing_pipeline(
             trial_pre_fanout = (
                 trial_plane_stitch.board if trial_plane_stitch else trial_critical.board
             )
+            trial_power_plan, trial_power_status = None, "disabled"
             if trial_access:
                 emit(on_progress, "package_boundary_reservation", "started", trial=trials_run)
             trial_fanout = reserve_boundary_access(trial_pre_fanout, trial_access.fanout,
-                trial_access.boundary, deferred_nets=frozenset(distribution_zone_nets(trial_pre_fanout))
+                trial_access.boundary, deferred_nets=frozenset(deferred_zone_nets(trial_pre_fanout))
                 if detailed_options.defer_zone_nets else frozenset()) if trial_access else None
             if trial_access:
                 emit(on_progress, "package_boundary_reservation", "finished", trial=trials_run,
                      anchors=len(trial_fanout.boundary_accesses),
                      added_tracks=len(trial_fanout.created_tracks) - len(trial_access.fanout.created_tracks))
+            trial_pre_detailed = trial_fanout.board if trial_fanout else trial_pre_fanout
+            if power_area_options is not None:
+                trial_pre_detailed, trial_power_plan, trial_power_status = plan_distribution(trial_pre_detailed, trial_fanout)
             trial_detailed = route_detailed(
-                trial_fanout.board if trial_fanout else trial_pre_fanout,
+                trial_pre_detailed,
                 trial_global, detailed_options,
                 fanout_accesses=trial_fanout.routing_accesses if trial_fanout else None,
                 fanout_created_vias=frozenset((item.net, item.position)
@@ -237,11 +343,26 @@ def run_routing_pipeline(
                 )
                 duplicate_stitch = trial_duplicate
                 access = trial_access
+                power_plan, power_status = trial_power_plan, trial_power_status
+    if preparation is not None:
+        evidence = power_native_verifier(detailed.board, 'power-return-ordinary')
+        preparation_validation = validate_power_preparation(preparation, detailed.board, evidence, power_area_options)
+        if preparation_validation['status'] != 'native_connected':
+            # Roll back the complete ordinary trial, including closure/cleanup.
+            blocked = replace(access, boundary=None, plane_stitch=None,
+                              fanout=fanout, critical=replace(access.critical, board=pre_detailed))
+            detailed = blocked_area_result(blocked)
+            drc = run_physical_drc(detailed.board, policy=drc_policy)
+            access = blocked
+            plane_stitch, duplicate_stitch = None, None
+            power_status = 'power_preparation_ordinary_rejected'
     passed = (
-        placement.full_route_certified
+        routing_nets is None and placement.full_route_certified
         and critical.status is not CriticalRoutingStatus.FAILED
         and detailed.status is DetailedRoutingStatus.SUCCESS
         and drc.decision is DrcDecision.PASS
+        and not (power_plan is not None and power_plan.partitioned_zone_ids)
+        and (preparation is None or preparation_validation['status'] == 'native_connected')
     )
     return RoutingPipelineResult(
         status=PhysicalFlowStatus.PASS if passed else PhysicalFlowStatus.FAIL,
@@ -255,6 +376,12 @@ def run_routing_pipeline(
         duplicate_pad_stitch=duplicate_stitch,
         critical_feedback=critical_feedback,
         package_access=access,
+        power_area_plan=power_plan,
+        power_area_status=power_status,
+        power_area_options=power_area_options,
+        power_preparation=preparation,
+        power_preparation_validation=preparation_validation,
+        power_native_verifier=power_native_verifier,
     )
 
 
@@ -263,8 +390,8 @@ def _detailed_score(
 ) -> tuple[int, ...]:
     hard = sum(item.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}
                and item.severity.value == "error" for item in drc.findings)
-    from .zone_geometry import distribution_zone_nets
-    zone_nets = distribution_zone_nets(detailed.board)
+    from .zone_geometry import deferred_zone_nets
+    zone_nets = deferred_zone_nets(detailed.board)
     actual_opens = {net for item in drc.findings if item.code == "DRC-OPEN-NET"
                     for net in item.nets if net not in zone_nets}
     return (hard, len(actual_opens), detailed.metrics.unrouted_net_count,

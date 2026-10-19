@@ -5,8 +5,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import textwrap
 from types import SimpleNamespace
 from urllib.error import HTTPError
 import zipfile
@@ -213,6 +216,50 @@ def test_workflow_is_trusted_sha_pinned_and_routes_instead_of_dry_running():
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in re.findall(r"uses: \S+@([^\s]+)", workflow))
     assert "repository: andenore/CopperLib" not in workflow and "../CopperLib" not in workflow
     assert "bootstrap" not in workflow
+
+
+@pytest.mark.parametrize("job", ["test", "route"])
+@pytest.mark.parametrize("version_matches", [True, False])
+def test_kicad_install_checks_ubuntu_pin_before_exporting_tools(tmp_path, job, version_matches):
+    # Execute the actual workflow step, replacing only external commands. This
+    # catches using the Windows installer pin on Ubuntu and silent version drift.
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is required to exercise the Ubuntu install step")
+    workflow = (ROOT / ".github/workflows/board-routing.yml").read_text()
+    job_text = re.split(r"\n  (?=\S)", workflow.split(f"  {job}:\n", 1)[1], maxsplit=1)[0]
+    step = re.search(r"^      - name: Install KiCad 10[^\n]*\n        run: \|\n"
+                     r"((?:          [^\n]*\n)+)", job_text, re.MULTILINE)
+    assert step is not None
+    pins = json.loads((ROOT / ".github/board-toolchain.json").read_text())
+    assert pins["kicad_ubuntu_package_version"].split("~", 1)[0] == pins["kicad_ubuntu_version"]
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github/board-toolchain.json").write_text(json.dumps(pins))
+    actual = pins["kicad_ubuntu_version"] if version_matches else "0.0.0"
+    env = {**os.environ, "GITHUB_ENV": "exported-tools", "TEST_KICAD_VERSION": actual}
+    python = shlex.quote(sys.executable.replace("\\", "/"))
+    prelude = (f"set -e -o pipefail\npython() {{ {python} \"$@\"; }}\n"
+               'sudo() { printf "%s\\n" "$*" >> install-calls; }\n'
+               'kicad-cli() { printf "%s\\n" "$TEST_KICAD_VERSION"; }\n')
+    result = subprocess.run([bash, "--noprofile", "--norc", "-c",
+                             prelude + textwrap.dedent(step[1])],
+                            cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert (tmp_path / "install-calls").exists(), result.stdout + result.stderr
+    calls = (tmp_path / "install-calls").read_text().splitlines()
+    package = pins["kicad_ubuntu_package_version"]
+    assert calls[-1] == ("apt-get install --yes --no-install-recommends "
+                          f"kicad={package} kicad-footprints={package} make")
+    exports = tmp_path / "exported-tools"
+    if version_matches:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert exports.read_text().splitlines() == [
+            "KICAD_CLI=/usr/bin/kicad-cli",
+            "KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints"]
+    else:
+        assert result.returncode == 1
+        assert f"::error::Expected KiCad {pins['kicad_ubuntu_version']}, installed {actual}" in result.stdout
+        assert not exports.exists()
 
 
 def release_assets(tmp_path, monkeypatch):

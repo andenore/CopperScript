@@ -80,6 +80,121 @@ guidance prioritizes functional blocks, short supply paths, close decoupling,
 and deliberate power/reference layer planning:
 [Analog Devices](https://www.analog.com/en/resources/analog-dialogue/articles/what-are-the-basic-guidelines-for-layout-design-of-mixed-signal-pcbs.html).
 
+## Joint support-bank patterns
+
+`PlacementPlannerOptions.support_pattern_trials` opts into joint support
+placement after ordinary capacitor refinement and before placement candidate
+ranking. It defaults to zero. The normal `plan-layout`, `route-global` and
+`route-board` commands expose `--support-pattern-trials N`; N is the complete
+combination-check allowance per placement seed, not a fabrication constraint.
+The stage does not move accepted routed/frozen copper. Public output remains
+unrouted source poses; proof copper is separate.
+
+`support_patterns.py` groups explicit pin-associated capacitor roles by target
+pad, supply and return, without swapping same-rail components or values. A rail
+feeding different package balls retains separate local banks, jointly selected
+against each other. The physical IR requires one explicit target per capacitor.
+It derives finite end-on/paired, staggered, underside-pocket, land-rim and split-bank
+instances from actual transformed pad/courtyard dimensions. Legal source sides,
+rotations, fixed/rigid membership, macro and required-array owners remain
+binding. Opposite-face land-rim banks use actual outer land bounds rather than
+requiring clearance outside the front package courtyard; complete placement,
+hole and reserved-copper checks still apply. Source-forbidden sides are filtered
+before spending raw geometry probes. A fixed bank returns `fixed_or_unsupported` with no routing trials;
+unobserved association counts remain unknown rather than an invented zero pass.
+
+Whole-bank offsets use a bounded configuration-space sweep. Each held
+same-side courtyard expands into forbidden bank translations; source regions
+and board boundaries bound the translation interval. At most 64 x support
+events per template expose up to eight free y events each, retaining eight
+nearest offsets. Exact polygon, hole, macro and complete-placement checks still
+decide legality. Up to four seeds per family receive offsets, interleaved
+across families within the same cumulative 512 pose-probe limit. Roughly half
+the available probes go to nominal templates and the rest to offsets; no extra
+placement or routing budget is created. Bounding boxes are conservative
+proposal geometry and never establish infeasibility.
+
+Source-frame templates also translate/rotate the complete existing bank at
+0/90/180/270 degrees, subject to each member's authored orientations. They keep
+the original per-component roles and relative geometry when fixed neighbors
+prevent a compact bank. Legal source frames can receive offsets to free sites
+for another mutable bank. The capacitor-to-capacitor pitch uses their actual
+pair gap; the front package's courtyard gap does not inflate an opposite-face
+bank. Every generated family rejects fixed, rigid, macro and array owners.
+
+Joint selection uses the shared most-constrained-first/forward-checking kernel.
+It can move groups simultaneously where neither move is legal alone. Raw bank
+pose probes, retained family alternatives, compatibility checks, search states
+and complete checks have separate cumulative bounds. By default at most four
+groups of four members receive twelve retained alternatives each, with 512 raw
+bank probes, 2,048 search states and 8,192 compatibility checks. Group priority
+favours unresolved associations. Alternative families share the retained cap.
+
+Each full combination is checked against all held geometry, complete placement
+and relative rules. Ordinary exits are freshly reserved before local feeds, or
+the caller can supply exact tracks/vias and terminal ports. These objects are
+temporary fixed obstacles; final power-only proof copper excludes them. Existing
+verified associations and ordinary ports cannot be lost. Both supply and
+explicit target-package return paths must exist for every moved association.
+Same-face local returns use checked paths on source-permitted layers; opposite
+faces retain the standard bounded normal-via proposer. Missing return targets,
+forbidden transitions and blocked combinations cannot win through compactness.
+
+The search retains a small Pareto frontier over complete-association count,
+actual local path length, via count and the support/contact surface envelope.
+Selection prioritizes complete obligations and shorter local paths, then via
+count and occupied envelope. These are geometry proxies, not an extracted loop
+inductance or PDN model. A final clean-source regeneration must independently
+restore every retained witness before returning changed poses. Baseline and
+final regeneration add at most two routing passes beyond the complete-check
+allowance; each pass retains the existing per-link proposer bounds. A rejected
+trial retains no generated copper or moved pose. Reports expose work, family
+parameters, unobserved scope/phases and `native_acceptance: false`.
+
+Normal package/contact preparation, distribution-area planning and fresh native
+gates still follow. This local placement result does not prove onward area
+access, global routability, high-frequency loop quality or board qualification.
+Reference rationale and remaining consumer gates are in the
+[pattern research and implementation plan](power-area-planning-plan.md#pattern-based-support-placement-research-2026-10-17).
+
+### Joint support, contact and power-area trials
+
+When `route-board` enables both support-pattern trials and power-area planning,
+the placement search now runs the normal native-backed power preparation on
+each complete pose assignment. The caller's global routing settings, fanout
+settings and pair-state bound are forwarded. Critical routes, ordinary exits,
+local contacts, returns and area alternatives are regenerated from that trial's
+clean source; previous filled evidence and generated contacts are not reused.
+The source inventory, pin associations, fixed/rigid poses, macros and required
+arrays remain binding. A missing native verifier is reported as
+`native_tool_required`, with no moved pose.
+
+This mode starts before contact/ordinary ownership freezes. Caller-supplied
+pre-routed reservations are currently reported as
+`external_support_reservations_unsupported`; they are neither discarded nor
+passed through the clean-source macro boundary. The normal preparation instead
+creates its own early ordinary reservations when configured. Existing local
+supply/return witnesses must survive; plane-assisted continuity additionally
+requires the ordinary preparation's fresh native gates. Native continuity
+does not replace high-frequency loop qualification.
+
+All group preferences vary together within the existing complete-check cap;
+the expensive native checks are not all spent changing only the final DFS
+group. Rejected assignments, pair checks and search-state counters survive
+between samples. There are at most `maximum_complete_checks + 2` full power
+preparations, including baseline and mandatory final regeneration. Each uses
+the configured preparation bounds; these are nested bounds, not one shared
+maze allowance across different placements. Failure of the final regeneration
+rolls back every moved pose.
+
+The result still returns unrouted source poses. `power_trials` records the
+source digest, critical results, area/contact plan and native outcome of each
+preparation. `power_preparation` retains the final scoped native evidence and
+`signal_scene` its exact board; `proposal` is absent in this mode. Whole-board
+`native_acceptance` remains false. `power_native_acceptance` describes only
+the selected power scope. Standard downstream preparation runs again on the
+selected placement before routing admission.
+
 ## Inline differential-pair components
 
 Recognize an inline component only from explicit differential-pair topology:

@@ -27,14 +27,17 @@ def local_surface_candidates(
     A missing edge is not a reason to drop a terminal. No maze search, long
     arbitrary-angle shortcuts, component movement or cross-layer guesses occur
     by default. The optional two-terminal, explicitly via-free fallback uses
-    the shared exact surface maze with a 20,000-state bound per permitted layer.
+    the shared exact surface maze with a 20,000-state bound per terminal pair
+    and permitted layer. RF trees require explicit tree topology and zero vias;
+    geometric connectivity does not approve their stubs or RF performance.
     """
     if rule.kind not in {RouteKind.CRITICAL, RouteKind.CLOCK, RouteKind.RF_FEED}:
         return
     net = next((net for net in board.nets if net.name == rule.net), None)
     if net is None or not 2 <= len(net.pads) <= 8:
         return
-    if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(net.pads) != 2:
+    rf_tree = rule.kind is RouteKind.RF_FEED and rule.topology == "tree" and rule.max_vias == 0
+    if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(net.pads) != 2 and not rf_tree:
         return
     if len(net.pads) > 2 and rule.topology != "tree":
         return
@@ -55,7 +58,7 @@ def local_surface_candidates(
     # Count physical lands before deduplication to bound work on repeated pads.
     if not 2 <= len(terminals) <= 8:
         return
-    if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(terminals) != 2:
+    if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(terminals) != 2 and not rf_tree:
         return  # Preserve the existing physical point-to-point profile limit.
     terminals = sorted(set(terminals), key=lambda point: (point.x_nm, point.y_nm))
     if len(terminals) < 2:
@@ -76,7 +79,7 @@ def local_surface_candidates(
         for first, second in combinations(range(len(terminals)), 2):
             path = surface_path(board, clearance, rule.net, terminals[first], terminals[second],
                                 width, layer, board.tracks)
-            if not octilinear(path) and maze and len(terminals) == 2 and rule.max_vias == 0:
+            if not octilinear(path) and maze and (len(terminals) == 2 or rf_tree) and rule.max_vias == 0:
                 path = surface_path_between(
                     board, clearance, rule.net, terminals[first], terminals[second], width, layer,
                     step_nm=nm_from_mm("0.1"), maximum_detour_nm=nm_from_mm(2), state_budget=20_000)

@@ -9,20 +9,12 @@ import re
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
-from .backends.kicad_pcb import kicad_reference
 from .elaborate import elaborate
 from .erc import check, has_errors
 from .model import Board, ComponentInstance, PartDefinition
 from .serializer import board_to_dict
 
-SCHEMA = "copperscript-assembly-lock/v0.2"
-# v0.1 locks predate `populate` and load unchanged: every selection defaults to
-# supplier assembly, which is exactly what those locks meant.
-READABLE_SCHEMAS = (SCHEMA, "copperscript-assembly-lock/v0.1")
-
-# How a populated component reaches the board. Only "supplier" components are
-# ordered and placed by the assembler, so only they belong in its BOM/CPL.
-POPULATE_MODES = ("supplier", "consigned", "none")
+SCHEMA = "copperscript-assembly-lock/v0.1"
 
 
 class AssemblyError(ValueError):
@@ -40,7 +32,6 @@ class AssemblySelection:
     supplier_part: str | None = None
     source_url: str | None = None
     reviewed: bool = False
-    populate: str = "supplier"
 
     def __post_init__(self) -> None:
         for name in ("reference", "part"):
@@ -51,28 +42,10 @@ class AssemblySelection:
                 _text(value, name)
         if type(self.reviewed) is not bool:
             raise AssemblyError("reviewed must be a boolean")
-        if self.populate not in POPULATE_MODES:
-            raise AssemblyError(f"populate must be one of {', '.join(POPULATE_MODES)}")
-
-    @property
-    def ordered(self) -> bool:
-        """The assembler sources and places this component."""
-        return self.populate == "supplier"
 
     @property
     def exact(self) -> bool:
-        """Identity required for this component's populate mode.
-
-        A consigned component is still fitted, so it needs a full part identity
-        for whoever hand-places it, but no supplier offer. A component that is
-        not fitted needs neither.
-        """
-        if self.populate == "none":
-            return True
-        identity = (self.manufacturer, self.mpn, self.footprint)
-        if self.populate == "consigned":
-            return all(identity)
-        return all((*identity, self.supplier, self.supplier_part))
+        return all((self.manufacturer, self.mpn, self.supplier, self.supplier_part, self.footprint))
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +123,7 @@ def load_lock(path: str | Path) -> AssemblyLock:
         data = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
         if not isinstance(data, dict) or set(data) != {"schema", "board", "electrical_sha256", "selections"}:
             raise AssemblyError("expected schema, board, electrical_sha256 and selections fields only")
-        if data["schema"] not in READABLE_SCHEMAS or not isinstance(data["selections"], list):
+        if data["schema"] != SCHEMA or not isinstance(data["selections"], list):
             raise AssemblyError("unsupported assembly schema or invalid selections list")
         names = {f.name for f in fields(AssemblySelection)}
         entries = []
@@ -161,13 +134,6 @@ def load_lock(path: str | Path) -> AssemblyLock:
         return AssemblyLock(data["board"], data["electrical_sha256"], tuple(entries))
     except (json.JSONDecodeError, TypeError) as exc:
         raise AssemblyError(f"invalid assembly lock: {exc}") from exc
-
-
-_UNRESOLVED = {
-    "supplier": "manufacturer, full MPN, supplier, supplier part and footprint are required",
-    "consigned": "a consigned component still requires manufacturer, full MPN and footprint",
-    "none": "",
-}
 
 
 def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
@@ -186,7 +152,6 @@ def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
     offers = {}
     exact = set()
     reviewed = set()
-    populate: dict[str, set[str]] = {mode: set() for mode in POPULATE_MODES}
     for entry in sorted(lock.selections, key=lambda e: e.reference):
         ref = entry.reference
         if ref in seen:
@@ -203,13 +168,12 @@ def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
             issue("PART_MISMATCH", ref, "selected library part differs from the board")
         if entry.footprint != _footprint(component, part):
             issue("FOOTPRINT_MISMATCH", ref, "selected footprint differs from the board")
-        if entry.populate != "none" and part.manufacturer and entry.manufacturer != part.manufacturer:
+        if part.manufacturer and entry.manufacturer != part.manufacturer:
             issue("MANUFACTURER_MISMATCH", ref, "selection must use the library's manufacturer identity")
         if not entry.exact:
-            issue("UNRESOLVED_SELECTION", ref, _UNRESOLVED[entry.populate])
+            issue("UNRESOLVED_SELECTION", ref, "manufacturer, full MPN, supplier, supplier part and footprint are required")
         else:
             exact.add(ref)
-        populate[entry.populate].add(ref)
         if not entry.reviewed:
             issue("REVIEW_REQUIRED", ref, "package, ratings, mapping and footprint have not been approved")
         else:
@@ -228,111 +192,86 @@ def check_assembly(board: Board, lock: AssemblyLock) -> dict[str, object]:
         "schema": "copperscript-assembly-report/v0.1", "board": board.name,
         "passed": not issues, "component_count": len(required),
         "exact_selection_count": len(exact), "reviewed_count": len(reviewed),
-        # Consigned and not-fitted components are absent from the supplier
-        # BOM/CPL by design; report them so the omission is never silent.
-        "supplier_assembled_count": len(populate["supplier"]),
-        "consigned_count": len(populate["consigned"]),
-        "not_fitted_count": len(populate["none"]),
-        "consigned": sorted(populate["consigned"]), "not_fitted": sorted(populate["none"]),
         "availability": "not_checked", "manufacturing_ready": False, "issues": issues,
     }
 
 
-def _designators(entries) -> dict[str, str]:
-    """Board designator for each selection, as placed and printed on the PCB.
-
-    Assemblers match the BOM, the CPL and the silkscreen by designator, and the
-    KiCad export flattens hierarchical source references (BUCK_1V2/C_AVIN ->
-    BUCK_1V2_C_AVIN). Using the source form would leave every hierarchical
-    component unmatched against its own placement. Two references that flatten
-    to the same designator would be indistinguishable to the assembler, so that
-    is refused rather than silently merged.
-    """
-    result: dict[str, str] = {}
-    owner: dict[str, str] = {}
-    for entry in entries:
-        designator = kicad_reference(entry.reference)
-        if designator in owner and owner[designator] != entry.reference:
-            raise AssemblyError(f"references {owner[designator]} and {entry.reference} "
-                                f"both become board designator {designator}")
-        owner[designator] = entry.reference
-        result[entry.reference] = designator
-    return result
-
-
 def write_jlcpcb_bom(board: Board, lock: AssemblyLock, path: str | Path) -> None:
-    """Write the fully reviewed, supplier-assembled selections; not an order.
-
-    Consigned and not-fitted components are deliberately absent. The CPL is
-    built from this file's designators, so omitting them here preserves the
-    mandatory BOM/CPL reference equality and keeps the assembler from being
-    asked to place a part nobody supplied it. Whoever fits the consigned parts
-    works from the assembly report, which lists them by reference.
-    """
+    """Write only a fully reviewed selection BOM, not an ordering certificate."""
     if has_errors(check(board)):
         raise AssemblyError("ERC failed; BOM export refused")
     if not check_assembly(board, lock)["passed"]:
         raise AssemblyError("assembly selections failed; BOM export refused")
-    ordered = [entry for entry in lock.selections if entry.ordered]
-    if any(entry.supplier != "jlcpcb" for entry in ordered):
-        raise AssemblyError(
-            "JLCPCB BOM export requires jlcpcb offers for every supplier-assembled component; "
-            'mark the others populate="consigned" or populate="none"')
-    if not ordered:
-        raise AssemblyError("no supplier-assembled components; nothing to export")
+    if any(e.supplier != "jlcpcb" for e in lock.selections):
+        raise AssemblyError("JLCPCB BOM export requires jlcpcb offers for every populated component")
+    _write_bom_rows(board, lock, Path(path))
+
+
+def write_candidate_bom(board: Board, lock: AssemblyLock, directory: str | Path,
+                        *, native_positions: str | Path | None = None) -> dict:
+    """Prepare an explicitly unapproved review bundle without changing any gate.
+
+    Only REVIEW_REQUIRED can remain unresolved. Missing/stale/conflicting
+    selections and ERC errors still refuse output. The production BOM API is
+    unchanged; this candidate is for human review, not an ordering certificate.
+    """
+    if has_errors(check(board)):
+        raise AssemblyError("ERC failed; candidate BOM refused")
+    diagnostics = check_assembly(board, lock)
+    if any(i['code'] != 'REVIEW_REQUIRED' for i in diagnostics['issues']):
+        raise AssemblyError("candidate selections are inconsistent or incomplete")
+    if any(e.supplier != 'jlcpcb' for e in lock.selections):
+        raise AssemblyError("candidate BOM requires jlcpcb offers")
+    reference_map = _native_reference_map(lock)
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=False)
+    _write_bom_rows(board, lock, directory / 'bom-candidate-NOT-APPROVED.csv')
+    diagnostics.update(purpose='human_review_only', qualified_release=False,
+                       ordering_approved=False, electrical_sha256=lock.electrical_sha256,
+                       native_reference_map=reference_map)
+    if native_positions is not None:
+        from .manufacturing_files import ManufacturingFilesError, write_jlcpcb_cpl
+        native_positions = Path(native_positions)
+        before = hashlib.sha256(native_positions.read_bytes()).hexdigest()
+        try:
+            write_jlcpcb_cpl(native_positions, directory / 'cpl-candidate-NOT-APPROVED.csv',
+                             references=set(reference_map.values()))
+        except ManufacturingFilesError as exc:
+            raise AssemblyError(f'candidate CPL rejected: {exc}') from exc
+        if hashlib.sha256(native_positions.read_bytes()).hexdigest() != before:
+            raise AssemblyError('native positions changed during candidate review export')
+        diagnostics['native_positions_sha256'] = before
+        diagnostics['placement_review'] = 'not_approved; source/pose/pin-1/rotation review required'
+    (directory / 'assembly-review.json').write_text(
+        json.dumps(diagnostics, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    (directory / 'README.txt').write_text(
+        'UNAPPROVED ASSEMBLY REVIEW CANDIDATE\n'
+        'Do not submit this bundle as an approved order.\n'
+        'Review exact packages/ratings/pin maps, supplier stock and final CPL.\n'
+        'Selection flags and production BOM gates have not been changed.\n', encoding='utf-8')
+    return diagnostics
+
+
+def _native_reference_map(lock: AssemblyLock) -> dict[str, str]:
+    from .backends.kicad_pcb import kicad_reference
+    mapping = {entry.reference: kicad_reference(entry.reference) for entry in lock.selections}
+    if len(set(mapping.values())) != len(mapping):
+        raise AssemblyError("assembly references collide after native KiCad normalization")
+    return mapping
+
+
+def _write_bom_rows(board: Board, lock: AssemblyLock, output: Path) -> None:
+    reference_map = _native_reference_map(lock)
     components = _components(board)
-    designators = _designators(lock.selections)
     groups = {}
-    for entry in ordered:
+    for entry in lock.selections:
         component, _ = components[entry.reference]
         value = str(component.value) if component.value is not None else entry.mpn
         key = (value, entry.footprint, entry.supplier_part, entry.manufacturer, entry.mpn)
-        groups.setdefault(key, []).append(designators[entry.reference])
-    output = Path(path)
+        groups.setdefault(key, []).append(reference_map[entry.reference])
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(("Comment", "Designator", "Footprint", "LCSC Part #", "Manufacturer", "MPN"))
         for (value, footprint, code, manufacturer, mpn), references in sorted(groups.items()):
             writer.writerow((value, ",".join(sorted(references)), footprint, code, manufacturer, mpn))
-
-
-def _short_footprint(footprint: str | None) -> str:
-    """Library-qualified or path-like footprint ids, reduced to the footprint name."""
-    if not footprint:
-        return ""
-    name = footprint.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
-    return name.removesuffix(".kicad_mod")
-
-
-def write_hand_assembly_list(board: Board, lock: AssemblyLock, path: str | Path) -> int:
-    """Write every component the supplier will not place; return the count.
-
-    The companion to write_jlcpcb_bom, which omits these by design. Consigned
-    components must be bought and fitted by hand; not-fitted components are
-    listed too, so their empty footprints read as intended rather than as an
-    assembly defect.
-    """
-    if not check_assembly(board, lock)["passed"]:
-        raise AssemblyError("assembly selections failed; hand-assembly list refused")
-    designators = _designators(lock.selections)
-    groups: dict[tuple[str, ...], list[str]] = {}
-    for entry in lock.selections:
-        if entry.ordered:
-            continue
-        action = "hand-assemble" if entry.populate == "consigned" else "do not fit"
-        # Sourcing is optional on consigned selections; when recorded it is
-        # what the person buying the parts needs, so carry it through.
-        key = (action, entry.manufacturer or "", entry.mpn or "", _short_footprint(entry.footprint),
-               entry.supplier or "", entry.supplier_part or "", entry.source_url or "")
-        groups.setdefault(key, []).append(designators[entry.reference])
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(("Action", "Designator", "Quantity", "Manufacturer", "MPN", "Footprint",
-                         "Supplier", "Supplier Part", "URL"))
-        for (action, manufacturer, mpn, footprint, supplier, part, url), references in sorted(groups.items()):
-            writer.writerow((action, ",".join(sorted(references)), len(references),
-                             manufacturer, mpn, footprint, supplier, part, url))
-    return sum(len(references) for references in groups.values())

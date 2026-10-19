@@ -376,7 +376,7 @@ def test_real_operating_point(board, engine, tmp_path):
 def test_successful_exit_without_waveforms_is_a_failure(board, tmp_path, monkeypatch):
     import pcbir.simulation.ngspice as runner
     monkeypatch.setattr(runner, "engine_identity", lambda *a: {"major_version": 46})
-    monkeypatch.setattr(runner, "_execute", lambda *a: (0, "reported success without results", False))
+    monkeypatch.setattr(runner, "_execute", lambda *a, **kw: (0, "reported success without results", False))
     monkeypatch.setattr(runner, "require_reporting", lambda: None)
     monkeypatch.setattr(runner, "render_report", lambda *a: None)
     result = run_simulation(board, parse_plan(plan_data()), tmp_path / "missing", ngspice=sys.executable)

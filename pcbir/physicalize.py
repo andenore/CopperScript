@@ -67,7 +67,7 @@ from .physical import (
 from .quantities import Length, Quantity
 from .design import Design
 from .mechanical_profiles import mechanical_provenance
-from .power_planning import lower_power_domains
+from .power_planning import lower_power_domains, lower_power_feeds
 from .zone_geometry import lower_zone_outline
 
 
@@ -329,9 +329,14 @@ def _physicalize(
     )
     for index, (component, part, selected) in enumerate(selected_components):
         footprint = footprint_provider(part, component, selected)
-        if not part.assembled and footprint.internal_pad_groups:
+        if not part.assembled:
+            # Retain physical tuning/test lands, but never fabricate fitted
+            # package conduction or include an explicitly DNP part in native
+            # BOM/CPL. Separate identity prevents contaminating fitted users
+            # of the same land pattern.
             footprint = replace(footprint, name=f"{footprint.name}__unassembled",
-                                internal_pad_groups=())
+                                internal_pad_groups=(), exclude_from_bom=True,
+                                exclude_from_pos_files=True)
         elif part.internal_pad_groups and part.assembled:
             groups = merge_internal_pad_groups(footprint.internal_pad_groups, part.internal_pad_groups)
             # Proxy geometry has only one land per number. A duplicate-land
@@ -448,6 +453,7 @@ def _physicalize(
         placements=tuple(placements),
         nets=tuple(nets),
         power_domains=lower_power_domains(flat, nets, _physical_pin_number),
+        power_feeds=lower_power_feeds(flat, nets, _physical_pin_number),
         decoupling_links=_lower_decoupling(flat, nets),
         metadata=metadata,
         regions=regions,

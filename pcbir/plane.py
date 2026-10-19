@@ -34,6 +34,8 @@ from .physical import (
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
 from .surface_path import surface_path, surface_path_to_via, via_inside_board
+from .access_sites import circular_cell_sites, obstacle_boundary_sites
+from .copper_ownership import CopperUse
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +79,7 @@ class PlaneStitchResult:
     pending_pads: tuple[PadReference, ...]
     added_track_count: int
     added_via_count: int
+    copper_uses: tuple[CopperUse, ...] = ()
 
     @property
     def complete(self) -> bool:
@@ -131,6 +134,13 @@ def stitch_zone_pads(
     pending_lands: list[_PendingContact] = []
     anchors_by_net: dict[str, list[tuple[Point, CopperLayer]]] = {}
     preferred_via_uses: dict[Point, int] = {}
+    copper_uses, anchor_uses = [], {}
+    def record_contact(net, reference, position, side, tracks, *, dependencies=()):
+        points = {position, *(p for t in tracks for p in (t.start, t.end))}
+        vias = tuple(v for v in (*board.vias, *added_vias) if v.net == net and v.position in points)
+        identity = f'contact:{net}:{reference.component}.{reference.pad}'
+        copper_uses.append(CopperUse(identity, 'contact', (reference,), tuple(tracks), vias, dependencies))
+        anchor_uses[net, position, side] = identity
     via_size = board.rules.default_via_size_nm
     via_drill = board.rules.default_via_drill_nm
     outer_layers = (board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
@@ -268,6 +278,7 @@ def stitch_zone_pads(
                 if via is not None:
                     added_vias.append(via)
                     clearance.add_via(via)
+                record_contact(net, reference, position, side, tracks)
                 anchors_by_net.setdefault(net, []).append((position, side))
                 internal_contact = True
                 if group is not None:
@@ -296,20 +307,24 @@ def stitch_zone_pads(
                     item[0].x_nm, item[0].y_nm,
                 ),
             )
-            path = next((
-                candidate for anchor, _ in anchors
+            selected = next((
+                (candidate, anchor) for anchor, _ in anchors
                 if (candidate := surface_path(
                     board, clearance, contact.net, contact.position, anchor,
                     contact.width_nm, contact.side, (*board.tracks, *added_tracks),
                     maximum_detour_nm=options.maximum_detour_nm,
                 )) is not None
             ), None)
-            if path is None:
+            if selected is None:
                 remaining.append(contact)
                 continue
+            path, anchor = selected
             for track in path:
                 added_tracks.append(track)
                 clearance.add_track(track)
+            dependency = anchor_uses.get((contact.net, anchor, contact.side))
+            record_contact(contact.net, contact.reference, contact.position, contact.side, path,
+                           dependencies=(dependency,) if dependency else ())
             anchors_by_net.setdefault(contact.net, []).append(
                 (contact.position, contact.side)
             )
@@ -344,6 +359,7 @@ def stitch_zone_pads(
     )
     return PlaneStitchResult(
         routed, tuple(stitched), tuple(pending), len(added_tracks), len(added_vias),
+        tuple(copper_uses),
     )
 
 
@@ -356,6 +372,32 @@ def _stitch_land(
     preferred_via_uses: dict[Point, int],
 ) -> tuple[tuple[TrackSegment, ...], Via | None] | None:
     """Find one physical land's provisional contact to an inner zone."""
+    work = {'sites': 0, 'exhausted': False, 'ranked_selection': False}
+    choices = _stitch_land_choices(board, clearance, net, zones, pad, placement, position,
+        side, width, via_size, via_drill, outer_layers, options, committed_tracks,
+        committed_vias, preferred_via_uses, work=work)
+    if not choices:
+        return None
+    path, via = choices[0]
+    if work['ranked_selection'] and (path or via is not None):
+        target = via.position if via is not None else path[-1].end
+        preferred_via_uses[target] = preferred_via_uses.get(target, 0) + 1
+    return path, via
+
+
+def _stitch_land_choices(
+    board, clearance, net, zones, pad, placement, position, side, width,
+    via_size, via_drill, outer_layers, options, committed_tracks, committed_vias,
+    preferred_via_uses, *, maximum_alternatives=1, maximum_sites=None, work=None,
+):
+    """The same contact predicates, with an optional finite alternative pool."""
+    work = work if work is not None else {'sites': 0, 'exhausted': False}
+    def visit():
+        if maximum_sites is not None and work['sites'] >= maximum_sites:
+            work['exhausted'] = True
+            return False
+        work['sites'] += 1
+        return True
 
     preferred = ((net == "GND" and PadReference(placement.reference, pad.number)
                   in options.preferred_ground_pads)
@@ -364,8 +406,12 @@ def _stitch_land(
     choices: list[tuple[float, Point, tuple[TrackSegment, ...], Via | None]] = []
     best_cost = float("inf")
 
+    def remember(path, target, via):
+        work.setdefault('contact_targets', {}).setdefault((path, via), target)
+
     def consider(path: tuple[TrackSegment, ...], target: Point, via: Via | None) -> None:
         nonlocal best_cost
+        remember(path, target, via)
         length = max(
             _surface_route_length(net, side, width, position, target,
                                   (*committed_tracks, *path)),
@@ -397,33 +443,65 @@ def _stitch_land(
         ),
     )
     for existing in reusable:
+        if not visit():
+            break
         path = surface_path(
             board, clearance, net, position, existing.position, width, side,
             committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
         )
+        if path == ():
+            # The source already has a width-checked copper path to this
+            # contact. A same-length bridge to a neighbour is not an
+            # improvement and must not add redundant held-source copper.
+            remember(path, existing.position, None)
+            return ((path, None),)
         if path is not None:
-            if not preferred:
-                return path, None
+            if not preferred and maximum_alternatives == 1:
+                remember(path, existing.position, None)
+                return ((path, None),)
             consider(path, existing.position, None)
     reserved_region = any(zone.reserve_routing for zone in zones)
     if reserved_region:
         # Preserve the jointly assigned package exit before adding a drill.
         tail = _existing_via_zone_tail(
             board, clearance, net, zones, position, side, width, outer_layers, options,
-            committed_tracks, committed_vias,
+            committed_tracks, committed_vias, visit=visit if maximum_sites is not None else None,
         )
         if tail is not None:
-            return tail
+            remember(tail[0], tail[0][-1].end if tail[0] else position, tail[1])
+            if maximum_alternatives == 1:
+                return (tail,)
+            consider(tail[0], tail[0][-1].end if tail[0] else position, tail[1])
     pad_shape = placed_pad_shape(position, pad, placement)
     legal_via_targets: list[Point] = []
-    for candidate in _candidate_points(position, options):
+    interstices = circular_cell_sites(board, placement, pad,
+        options.maximum_radius_nm * 2, options.maximum_radius_nm)
+    # A legal BGA dogbone need not land at the exact cell centre. Back-side
+    # passives often push it toward its source ball. Reuse the fanout producer's
+    # bounded obstacle-frontier proposals, within this contact's existing site
+    # allowance; all layers, drill spacing and the complete lead still need
+    # the ordinary exact checks below. No source/reference coordinates enter.
+    frontiers = obstacle_boundary_sites(clearance, net, position, via_size, via_drill,
+        outer_layers, options.maximum_radius_nm, min(16, maximum_sites or 16),
+        seeds=interstices) if interstices else ()
+    from itertools import chain
+    seen_sites = set()
+    for candidate, radial in chain(((p, False) for p in (*interstices, *frontiers)),
+                                   ((p, True) for p in _candidate_points(position, options))):
+        if candidate in seen_sites:
+            continue
+        seen_sites.add(candidate)
+        if not visit():
+            break
         distance_x = abs(candidate.x_nm - position.x_nm)
         distance_y = abs(candidate.y_nm - position.y_nm)
         # Every possible route costs at least its pad-to-via distance. Once a
         # ring is farther than an existing choice, no later ring can win.
-        if preferred and choices and max(distance_x, distance_y) > min(
+        if maximum_alternatives == 1 and preferred and choices and max(distance_x, distance_y) > min(
                 nm_from_mm("2"), best_cost):
-            break
+            if radial:
+                break
+            continue
         if not _point_in_outline(candidate, board.outline.vertices):
             continue
         if not any(_point_in_zone(candidate, zone.outline) for zone in zones):
@@ -455,15 +533,18 @@ def _stitch_land(
             committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
         )
         if path is not None:
-            if not preferred:
-                return path, via
+            if not preferred and maximum_alternatives == 1:
+                remember(path, candidate, via)
+                return ((path, via),)
             consider(path, candidate, via)
     if choices:
-        _, target, path, via = min(choices, key=lambda item: (
+        work['ranked_selection'] = True
+        ranked = sorted(choices, key=lambda item: (
             item[0], item[3] is not None, item[1].x_nm, item[1].y_nm,
         ))
-        preferred_via_uses[target] = preferred_via_uses.get(target, 0) + 1
-        return path, via
+        return tuple(dict.fromkeys((path, via) for _, _, path, via in ranked))[:maximum_alternatives]
+    if work['exhausted']:
+        return ()
     # A dense package may have no legal straight, elbow, or short lateral
     # escape. Search its small local neighborhood jointly over path and via
     # location before considering a qualified via in the SMD land itself.
@@ -485,9 +566,9 @@ def _stitch_land(
     )
     if maze is not None:
         tracks, candidate = maze
-        return tracks, Via(
+        return ((tracks, Via(
             net, candidate, via_size, via_drill, outer_layers[0], outer_layers[1],
-        )
+        )),)
     if options.ground_via_in_pad and net == "GND":
         # A centered, plated-over-filled through via is the last resort. The
         # smaller drill is checked against actual holes, not the ordinary via
@@ -504,14 +585,80 @@ def _stitch_land(
                     allow_pad_overlap=True,
                     allowed_pad=PadReference(placement.reference,pad.number),
                 )):
-            return (), Via(
+            return (((), Via(
                 net, position, size, drill, outer_layers[0], outer_layers[1],
                 finish="filled-capped",
-            )
-    return None if reserved_region else _existing_via_zone_tail(
+            )),)
+    tail = None if reserved_region else _existing_via_zone_tail(
         board, clearance, net, zones, position, side, width, outer_layers, options,
-        committed_tracks, committed_vias,
+        committed_tracks, committed_vias, visit=visit if maximum_sites is not None else None,
     )
+    if tail is not None:
+        remember(tail[0], tail[0][-1].end if tail[0] else position, tail[1])
+    return (tail,) if tail is not None else ()
+
+
+@dataclass(frozen=True, slots=True)
+class PlaneContactProposals:
+    snapshot: str
+    choices: tuple
+    site_queries: int
+    stop_reason: str
+    # Actual proposer targets, parallel to choices. In particular a reused
+    # plated transition remains named even if all lead-in copper already
+    # existed and the proposal contains no new tracks or via.
+    targets: tuple = ()
+
+
+def propose_plane_contacts(board, reference, options=None, *, maximum_alternatives=8,
+                           maximum_sites=128):
+    """Enumerate one land's prospective contacts without mutating its board.
+
+    Uses the normal stitcher's exact annulus/drill/path and process predicates.
+    The finite pool is not native continuity evidence. Macro/array contacts and
+    multi-land aliases remain held for their existing producers.
+    """
+    from .drc import physical_board_digest
+    from .hard_macros import macro_owned_pads
+    from .pad_via_arrays import array_rules, require_via_in_pad_arrays
+    if any(type(v) is not int or v <= 0 for v in (maximum_alternatives, maximum_sites)):
+        raise ValueError('positive contact alternative and site bounds required')
+    require_via_in_pad_arrays(board, 'contact alternatives')
+    digest = physical_board_digest(board)
+    def finish(choices=(), work=None, reason=''):
+        work = work or {'sites': 0, 'exhausted': False}
+        targets = tuple(work.get('contact_targets', {}).get((path,via),
+            via.position if via is not None else None) for path,via in choices)
+        return PlaneContactProposals(digest, tuple(choices), work['sites'], reason or (
+            'site_budget_exhausted' if work['exhausted'] else 'finite_pool_generated' if choices else 'no_contact_candidate'), targets)
+    if reference in macro_owned_pads(board) or reference in {r.pad for r in array_rules(board)}:
+        return finish(reason='protected_contact')
+    pose = next((p for p in board.placements if p.reference == reference.component), None)
+    net = next((n.name for n in board.nets if reference in n.pads), None)
+    lands = tuple(p for p in board.footprints[pose.footprint].pads if p.number == reference.pad) if pose else ()
+    if not net or len(lands) != 1 or lands[0].kind is not PadKind.SMD:
+        return finish(reason='unsupported_contact_terminal')
+    options = options or PlaneStitchOptions()
+    side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
+    outer = (board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
+    zones = [z for z in board.zones if z.net == net and any(l is not side for l in z.layers)
+             and (options.include_surface_zones or any(l not in outer for l in z.layers))]
+    if not zones:
+        return finish(reason='no_declared_contact_zone')
+    allowed = {r.pad for r in board.via_in_pad_rules}
+    options = replace(options, ground_via_in_pad=reference in allowed,
+        preferred_ground_pads=options.preferred_ground_pads if options.preferred_ground_pads is not None
+        else frozenset({reference}))
+    rule = next((r for r in board.net_routing_rules if r.net == net), None)
+    width = max(rule.width_nm if rule and rule.width_nm is not None else 0,
+                options.escape_width_nm or board.rules.default_track_width_nm)
+    work = {'sites': 0, 'exhausted': False}
+    choices = _stitch_land_choices(board, RoutingClearanceIndex(board), net, zones, lands[0], pose,
+        transformed_local_point(pose, lands[0].position), side, width,
+        board.rules.default_via_size_nm, board.rules.default_via_drill_nm, outer, options,
+        board.tracks, board.vias, {}, maximum_alternatives=maximum_alternatives,
+        maximum_sites=maximum_sites, work=work)
+    return finish(choices, work)
 
 
 def _surface_route_length(
@@ -550,7 +697,7 @@ def _existing_via_zone_tail(
     board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
     zones: list[CopperZone], position: Point, side: CopperLayer, width: int,
     outer_layers: tuple[CopperLayer, CopperLayer], options: PlaneStitchOptions,
-    committed_tracks: tuple[TrackSegment, ...], committed_vias: tuple[Via, ...],
+    committed_tracks: tuple[TrackSegment, ...], committed_vias: tuple[Via, ...], *, visit=None,
 ) -> tuple[tuple[TrackSegment, ...], None] | None:
     """Retain an existing escape and contact a nearby zone."""
     def distance_squared(point: Point) -> int:
@@ -572,6 +719,8 @@ def _existing_via_zone_tail(
         key=lambda via: (distance_squared(via.position), via.position.x_nm, via.position.y_nm),
     )
     for via in reusable:
+        if visit is not None and not visit():
+            return None
         access = surface_path(
             board, clearance, net, position, via.position, width, side,
             committed_tracks, maximum_detour_nm=options.maximum_detour_nm,
@@ -579,6 +728,8 @@ def _existing_via_zone_tail(
         if access is None:
             continue
         for target in _candidate_points(position, options):
+            if visit is not None and not visit():
+                return None
             if distance_squared(target) > radius_squared:
                 continue
             for layer in layers:

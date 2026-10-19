@@ -269,12 +269,15 @@ class GlobalRouterOptions:
     pin_access_candidates: int = 4
     escape_radius_nm: int = nm_from_mm("3")
     escape_step_nm: int = nm_from_mm("0.5")
+    critical_escape_step_nm: int | None = None
 
     def __post_init__(self) -> None:
         if self.tile_size_nm <= 0 or self.maximum_iterations <= 0:
             raise ValueError("global router dimensions and iteration count must be positive")
         if min(self.pin_access_candidates, self.escape_radius_nm, self.escape_step_nm) <= 0:
             raise ValueError("pin-access options must be positive")
+        if self.critical_escape_step_nm is not None and (type(self.critical_escape_step_nm) is not int or self.critical_escape_step_nm <= 0):
+            raise ValueError("critical pin-access refinement must be a positive integer")
         if min(
             self.present_penalty,
             self.present_penalty_growth,
@@ -392,13 +395,13 @@ def route_global(
     emit(on_progress, "global_pin_access", "started")
     rules = {rule.net: rule for rule in board.net_routing_rules}
     clearance = RoutingClearanceIndex(board)
-    from .zone_geometry import distribution_zone_nets
-    zone_nets = distribution_zone_nets(board)
+    from .zone_geometry import deferred_zone_nets
+    zone_nets = deferred_zone_nets(board)
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
     owner_connected = {net.name for net in board.nets if owner_graph is not None and owner_graph.net_connected(net)}
     access_options = {
-        (net.name, pad): _pin_access_candidates(
+        (net.name, pad): _global_pin_access_candidates(
             board, graph, pad, net.name,
             routing_layers(board, net.name, rules.get(net.name)),
             rules.get(net.name), clearance, options,
@@ -492,6 +495,17 @@ def route_global(
     return result
 
 
+def _global_pin_access_candidates(board, graph, pad, net, layers, rule, clearance, options):
+    """One opt-in finer retry for a failed specialized terminal, never all nets."""
+    candidates = _pin_access_candidates(board, graph, pad, net, layers, rule, clearance, options)
+    if (not candidates and rule is not None and rule.kind is not RouteKind.GENERAL
+            and options.critical_escape_step_nm is not None
+            and options.critical_escape_step_nm < options.escape_step_nm):
+        candidates = _pin_access_candidates(board, graph, pad, net, layers, rule, clearance,
+            replace(options, escape_step_nm=options.critical_escape_step_nm, critical_escape_step_nm=None))
+    return candidates
+
+
 def _route_iteration(
     board: PhysicalBoard,
     graph: _Graph,
@@ -509,10 +523,10 @@ def _route_iteration(
         key=lambda net: _net_order(net.name, rules.get(net.name)),
     )
     from .hard_macros import macro_routing_pads
-    from .zone_geometry import distribution_zone_nets
+    from .zone_geometry import deferred_zone_nets
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
-    zone_nets = distribution_zone_nets(board)
+    zone_nets = deferred_zone_nets(board)
     for net in ordered_nets:
         if owner_graph is not None and owner_graph.net_connected(net):
             routes.append(GlobalNetRoute(net.name, True, (), (), (), 0,

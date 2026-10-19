@@ -84,28 +84,28 @@ class EscapeConflicts:
         if candidate not in self._identities:
             identity = len(self._identities)
             self._identities[candidate] = identity
-            tracks, via = candidate
+            tracks, vias = _copper_parts(candidate)
             points = [p for t in tracks for p in (t.start, t.end)]
-            radius = max(t.width_nm // 2 for t in tracks)
-            if via is not None:
+            radius = max((t.width_nm // 2 for t in tracks), default=0)
+            for via in vias:
                 points.append(via.position)
                 radius = max(radius, via.size_nm // 2, via.drill_nm // 2)
             margin = radius + self.margin
-            self._bounds[identity] = (min(p.x_nm for p in points)-margin,
+            self._bounds[identity] = ((min(p.x_nm for p in points)-margin,
                 min(p.y_nm for p in points)-margin, max(p.x_nm for p in points)+margin,
-                max(p.y_nm for p in points)+margin)
+                max(p.y_nm for p in points)+margin) if points else None)
         return self._identities[candidate]
 
-    def compatible(self, first: EscapeCandidate, second: EscapeCandidate) -> bool:
+    def compatible(self, first: EscapeCandidate, second: EscapeCandidate, *, ordered_lanes=True) -> bool:
         if self.queries >= self.maximum_queries:
             raise _BudgetExceeded("candidate compatibility query budget exhausted")
         self.queries += 1
         a, b = self._identity(first), self._identity(second)
-        key = min(a, b), max(a, b)
+        key = min(a, b), max(a, b), ordered_lanes
         if key in self._cache:
             return self._cache[key]
         aa, bb = self._bounds[a], self._bounds[b]
-        if aa[2] < bb[0] or bb[2] < aa[0] or aa[3] < bb[1] or bb[3] < aa[1]:
+        if aa is None or bb is None or aa[2] < bb[0] or bb[2] < aa[0] or aa[3] < bb[1] or bb[3] < aa[1]:
             # Conservative separated bounds prove compatibility without any
             # exact geometry query. Do not charge its scarce budget or fill
             # the exact-pair cache with distant packages. Total queries retain
@@ -115,21 +115,50 @@ class EscapeConflicts:
         if self.checks >= self.maximum_checks:
             raise _BudgetExceeded("candidate compatibility budget exhausted")
         self.checks += 1
-        if a not in self._indices:
-            index = RoutingClearanceIndex(self.board)
-            for track in first[0]:
-                index.add_track(track, locked=True)
-            if first[1] is not None:
-                index.add_via(first[1], locked=True)
-            self._indices[a] = index
-        index = self._indices[a]
-        tracks, via = second
-        answer = (not escape_paths_cross(first[0], tracks)
-                  and all(index.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in tracks)
-                  and (via is None or index.can_via(via.net, via.position, via.size_nm,
-                       via.from_layer, via.to_layer, drill_nm=via.drill_nm)))
+        for identity, candidate in ((a, first), (b, second)):
+            if identity not in self._indices:
+                index = RoutingClearanceIndex(self.board)
+                tracks, vias = _copper_parts(candidate)
+                for track in tracks:
+                    index.add_track(track, locked=True)
+                for via in vias:
+                    index.add_via(via, locked=True)
+                self._indices[identity] = index
+        def clear(candidate, index):
+            tracks, vias = _copper_parts(candidate)
+            return (all(index.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in tracks)
+                    and all(index.can_via(v.net, v.position, v.size_nm, v.from_layer,
+                                         v.to_layer, drill_nm=v.drill_nm) for v in vias))
+        answer = ((not ordered_lanes or not escape_paths_cross(first[0], second[0]))
+                  and clear(second, self._indices[a]) and clear(first, self._indices[b]))
         self._cache[key] = answer
         return answer
+
+
+def _copper_parts(candidate):
+    tracks, vias = candidate
+    return tracks, (() if vias is None else (vias,) if isinstance(vias, Via) else vias)
+
+
+def _finite_assignment(remaining, assigned, *, preferred, rank, compatible, consume_state,
+                       accept_complete=None, choice_key=None):
+    """Shared MRV/forward-checking kernel; callers own work and acceptance."""
+    if not remaining:
+        return assigned if accept_complete is None or accept_complete(assigned) else None
+    pad = min(remaining, key=lambda p: (len(remaining[p]), rank[p]))
+    for choice in sorted(remaining[pad], key=lambda i: (
+            i != preferred.get(pad), choice_key(pad,i,remaining) if choice_key else i, i)):
+        consume_state()
+        filtered = {other: tuple(i for i in values if compatible(pad, choice, other, i))
+                    for other, values in remaining.items() if other != pad}
+        if any(not values for values in filtered.values()):
+            continue
+        answer = _finite_assignment(filtered, {**assigned, pad: choice}, preferred=preferred,
+            rank=rank, compatible=compatible, consume_state=consume_state, accept_complete=accept_complete,
+            choice_key=choice_key)
+        if answer is not None:
+            return answer
+    return None
 
 
 def improve_escape_assignment(
@@ -172,25 +201,11 @@ def improve_escape_assignment(
                 trials.append(EscapeAssignmentTrial(root, tuple(sorted(cluster)), 0, False,
                                                     "local cluster pin budget exceeded"))
                 continue
-            def search(remaining, assigned):
+            def consume_state():
                 nonlocal states
-                if not remaining:
-                    return assigned
-                pad = min(remaining, key=lambda p: (len(remaining[p]), rank[p]))
-                choices = sorted(remaining[pad], key=lambda i: (i != selected.get(pad), i))
-                for choice in choices:
-                    if states >= options.maximum_search_states:
-                        raise _BudgetExceeded("local assignment search budget exhausted")
-                    states += 1
-                    filtered = {other: tuple(i for i in values if conflicts.compatible(
-                        domains[pad][choice], domains[other][i]))
-                        for other, values in remaining.items() if other != pad}
-                    if any(not values for values in filtered.values()):
-                        continue
-                    answer = search(filtered, {**assigned, pad: choice})
-                    if answer is not None:
-                        return answer
-                return None
+                if states >= options.maximum_search_states:
+                    raise _BudgetExceeded("local assignment search budget exhausted")
+                states += 1
 
             while True:
                 for pad in sorted(cluster):
@@ -211,7 +226,9 @@ def improve_escape_assignment(
                         else:
                             values.append(i)
                     available[pad] = tuple(values)
-                answer = search(available, {})
+                answer = _finite_assignment(available, {}, preferred=selected, rank=rank,
+                    compatible=lambda p, i, q, j: conflicts.compatible(domains[p][i], domains[q][j]),
+                    consume_state=consume_state)
                 if answer is not None:
                     selected.update(answer)
                     diagnostic = "compatible local assignment found"

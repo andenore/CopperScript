@@ -77,8 +77,14 @@ class PlacementPlannerOptions:
     escape_spacing_passes: int = 2
     escape_max_movement_nm: Nanometres = nm_from_mm("16")
     power_domain_weight: float = 0.25
+    support_pattern_trials: int = 0
+    package_support_trials: int = 0
 
     def __post_init__(self) -> None:
+        if type(self.support_pattern_trials) is not int or self.support_pattern_trials < 0:
+            raise ValueError('support pattern trials must be a nonnegative integer')
+        if type(self.package_support_trials) is not int or self.package_support_trials < 0:
+            raise ValueError('package support trials must be a nonnegative integer')
         positive = (
             self.grid_step_nm,
             self.edge_clearance_nm,
@@ -177,6 +183,8 @@ class PlacementStatistics:
     refinement_swap_count: int
     routing_feedback_passes: int
     failed_seed_attempts: tuple[PlacementSeedFailure, ...] = ()
+    support_patterns: object = None
+    package_patterns: tuple = ()
 
 
 class PlacementAlgorithmError(ValueError):
@@ -234,7 +242,8 @@ class CorridorReservation:
 def generate_placement_candidates(
     board: PhysicalBoard,
     options: PlacementPlannerOptions | None = None,
-    *, progress=None,
+    *, progress=None, power_area_options=None, power_native_verifier=None,
+    global_router_options=None, fanout_options=None, pair_state_limit=None,
 ) -> tuple[PlacementCandidate, ...]:
     """Return a deterministic Pareto frontier of legal placement candidates."""
 
@@ -249,6 +258,17 @@ def generate_placement_candidates(
         raise PlacementAlgorithmError(
             f"fixed placement references unknown component {unknown_fixed[0]!r}"
         )
+    # Diagnose contradictory source/session locks before a soft placement
+    # phase tries to reserve decoupling paths through immutable macro copper.
+    # A fixed origin without a fixed angle does not prove a pin's location.
+    rules = _rules(board)
+    fixed_poses = {ref: pose for ref, pose in _fixed_placements(board, placements, options).items()
+                   if ref in options.fixed_references
+                   or rules[ref].fixed_rotation_degrees is not None}
+    fixed_violations = relative_placement_violations(board, fixed_poses)
+    if fixed_violations:
+        raise PlacementAlgorithmError("conflicting fixed placement constraints: "
+            + "; ".join(str(item["message"]) for item in fixed_violations))
     conflicts = reserved_corridor_conflicts(
         board, _fixed_placements(board, placements, options)
     )
@@ -302,6 +322,28 @@ def generate_placement_candidates(
         bypass_board = replace(board, placements=tuple(refined[p.reference] for p in board.placements))
         refined, bypass_moves = improve_decoupling_placement(bypass_board, refined, phase_options)
         moves += bypass_moves
+        support_report = None
+        if options.support_pattern_trials:
+            from .support_patterns import improve_support_placement, SupportPatternOptions
+            if progress:
+                progress('support_patterns', seed, seeds)
+            support_source = replace(board, placements=tuple(refined[p.reference] for p in board.placements))
+            support = improve_support_placement(support_source, refined, phase_options,
+                options=SupportPatternOptions(maximum_complete_checks=options.support_pattern_trials),
+                **(dict(power_area_options=power_area_options,power_native_verifier=power_native_verifier,
+                        global_router_options=global_router_options,fanout_options=fanout_options,
+                        pair_state_limit=pair_state_limit)
+                   if power_area_options is not None else {}))
+            support_report = support.report()
+            updated = {p.reference:p for p in support.board.placements}
+            moves += sum(updated[r] != p for r,p in refined.items())
+            refined = updated
+        package_report=()
+        if options.package_support_trials:
+            from .package_support import improve_package_support_placement
+            package_source=replace(board,placements=tuple(refined[p.reference] for p in board.placements))
+            updated,package_report=improve_package_support_placement(package_source,refined,phase_options)
+            moves+=sum(updated[r]!=p for r,p in refined.items());refined=updated
         metrics = placement_metrics(board, refined, options, spacing_model=spacing)
         if metrics.constraint_penalty_nm or not placement_solution_is_legal(board, refined, options):
             if closest_rejected is None or metrics.constraint_penalty_nm < closest_rejected[0]:
@@ -320,6 +362,8 @@ def generate_placement_candidates(
                     moves,
                     swaps,
                     feedback_passes,
+                    support_patterns=support_report,
+                    package_patterns=package_report,
                 ),
             )
         )
@@ -610,7 +654,7 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
     if not cluster_placement_matches(board, placements):
         errors.append("rigid cluster/hard-macro member poses must move together")
     if _relative_penalty(board, placements):
-        errors.append("relative placement constraint (alignment/distance) is not satisfied")
+        errors.extend(str(item["message"]) for item in relative_placement_violations(board, placements))
     return tuple(dict.fromkeys(errors)) or ("pose violates a represented physical constraint",)
 
 

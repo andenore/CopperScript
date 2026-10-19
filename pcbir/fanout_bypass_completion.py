@@ -60,6 +60,7 @@ def complete_late_bypasses(incumbent, original_pending, options, *, only_nets=No
         raise ValueError("late bypass selection contains an undeclared original obligation")
     selected=tuple(dict.fromkeys(link for link,_ in original_pending
         if poses[link.capacitor.component].side is not poses[link.target.component].side
+        and link.net not in options.plane_return_nets
         and (only_nets is None or link.net in only_nets)))
     report=LateBypassCompletionReport(selected_links=selected,remaining_links=selected,trigger=trigger)
     def reject(reason):

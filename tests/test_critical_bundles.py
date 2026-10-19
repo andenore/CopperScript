@@ -84,13 +84,17 @@ def _blocked_middle_board(**options) -> PhysicalBoard:
 
 
 def _repair_board(connector_centres, walls, obstacle) -> PhysicalBoard:
-    """Three pairs between an upper and a lower wall, around a small obstacle."""
+    """Three surface-only pairs sharing a corridor around a small obstacle."""
     upper, lower = walls
-    return _bundle_board(_rows(("-1.0", "0", "1.0"), "0.5"), _rows(connector_centres, "0.4"), (
+    board = _bundle_board(_rows(("-1.0", "0", "1.0"), "0.5"), _rows(connector_centres, "0.4"), (
         _keepout("upper-wall", "10", "0", "20", upper),
         _keepout("lower-wall", "10", lower, "20", "20"),
         _keepout("obstacle", *obstacle),
     ))
+    # This fixture exercises congestion repair, independently of improving
+    # paired-via escapes that can legally bypass a routed surface neighbour.
+    return replace(board, net_routing_rules=tuple(replace(
+        r, allowed_layers=(CopperLayer.FRONT,), max_vias=0) for r in board.net_routing_rules))
 
 
 # The connector row is spread wider and sits higher than the package row; an
@@ -100,9 +104,6 @@ def _repair_board(connector_centres, walls, obstacle) -> PhysicalBoard:
 # pair after it succeeds. Searches use a bounded state budget (4000) to keep
 # the test fast.
 REPAIRABLE = (("-1.5", "-0.3", "0.9"), ("7.0", "13.0"), ("14", "8.8", "15.5", "10.0"))
-# The connector row sits lower and the obstacle covers the middle lane. The
-# same rip-up routes the middle pair but then leaves no path for the bottom pair.
-UNREPAIRABLE = (("-0.8", "0.4", "1.6"), ("6.9", "13.1"), ("15", "9.7", "16.5", "11.7"))
 
 
 def test_bundles_are_planned_per_component_pair_kind_and_priority() -> None:
@@ -222,12 +223,33 @@ def test_a_squeezed_pair_without_spacing_findings_rips_up_its_nearest_neighbour(
     assert not {f.code for f in run_physical_drc(result.board).findings} & {"DRC-SHORT", "DRC-CLEARANCE"}
 
 
-def test_rejected_bundle_repair_restores_the_previous_state_exactly() -> None:
-    board = _repair_board(*UNREPAIRABLE)
+@pytest.mark.parametrize('rejected_group', ('LANE_A', 'LANE_C'))
+def test_rejected_bundle_repair_restores_the_previous_state_exactly(monkeypatch, rejected_group) -> None:
+    import pcbir.critical as critical
+    board = _repair_board(*REPAIRABLE)
     guides = route_global(board)
     baseline = route_critical_nets(board, guides, pair_state_limit=4000, bundle_repair_limit=0)
+    original = critical._route_pair_group
+    rejected = []
+
+    def reject_completed_trial(*args, **kwargs):
+        result, tracks, vias = original(*args, **kwargs)
+        # Inject rejection only after real routing succeeds for the first or
+        # second repair leg. Initial routing of A fails, and initial routing
+        # of C has no A copper. This remains a rollback test when routing gains
+        # new candidates and formerly blocked geometric fixtures become legal.
+        prior_tracks = args[5]
+        in_trial = (rejected_group == 'LANE_A' or
+                    any(t.net in _group('LANE_A') for t in prior_tracks))
+        if result.nets == _group(rejected_group) and result.connected and in_trial:
+            rejected.append((result, tracks, vias))
+            return replace(result, connected=False, diagnostics=('injected trial rejection',)), (), ()
+        return result, tracks, vias
+
+    monkeypatch.setattr(critical, '_route_pair_group', reject_completed_trial)
     result = route_critical_nets(board, guides, pair_state_limit=4000)
     (bundle,) = result.bundles
+    assert rejected and all(tracks for _, tracks, _ in rejected)
     assert bundle.repairs_attempted >= 1 and bundle.repairs_accepted == 0
     assert all(not item.accepted and item.reason for item in bundle.repairs)
     assert not next(item for item in result.nets if item.nets == _group("LANE_A")).connected

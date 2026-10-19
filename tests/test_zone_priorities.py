@@ -29,3 +29,32 @@ def test_region_strictly_inside_hole_does_not_intersect_material():
     first=CopperZone('a','GND',(CopperLayer.FRONT,),replace(outer,holes=(rectangle(3,3,4,4).outer,)))
     second=CopperZone('b','GND',(CopperLayer.FRONT,),rectangle(4,4,1,1))
     assert not findings(second,first)
+
+
+def test_disjoint_zone_envelopes_skip_exact_edge_comparisons(monkeypatch):
+    """Large sampled boundaries elsewhere must not dominate candidate DRC."""
+    import math
+    import pcbir.geometry as geometry
+    from pcbir.drc import _check_zone_priorities
+    zones = tuple(CopperZone(str(i), 'GND', (CopperLayer.FRONT,),
+        PolygonWithHoles(PolygonRing(tuple(Point.mm(
+            2 + 4 * i + math.cos(j * math.tau / 100),
+            2 + math.sin(j * math.tau / 100)) for j in range(100)))))
+        for i in range(30))
+    board = PhysicalBoard('separated fills', BoardOutline.rectangle(125, 5), {}, (),
+                          (PhysicalNet('GND', ()),), zones=zones)
+    def unexpected(*args):
+        raise AssertionError('disjoint envelopes reached exact edge comparison')
+    monkeypatch.setattr(geometry, 'segments_intersect', unexpected)
+    result = []
+    _check_zone_priorities(board, result)
+    assert not result
+
+
+def test_point_touch_and_hole_edge_contact_remain_errors():
+    second = CopperZone('b', 'GND', (CopperLayer.FRONT,), rectangle(4, 4, 1, 1))
+    assert findings(second)
+    outer = rectangle(1, 1, 8, 8)
+    first = CopperZone('a', 'GND', (CopperLayer.FRONT,),
+        replace(outer, holes=(rectangle(3, 3, 4, 4).outer,)))
+    assert findings(replace(second, outline=rectangle(3, 4, 1, 1)), first)

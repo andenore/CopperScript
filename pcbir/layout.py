@@ -108,6 +108,10 @@ class LayoutReport:
                             "refinement_move_count": candidate.statistics.refinement_move_count,
                             "refinement_swap_count": candidate.statistics.refinement_swap_count,
                             "routing_feedback_passes": candidate.statistics.routing_feedback_passes,
+                            **({"support_patterns": candidate.statistics.support_patterns}
+                               if candidate.statistics.support_patterns is not None else {}),
+                            **({"package_patterns": candidate.statistics.package_patterns}
+                               if candidate.statistics.package_patterns else {}),
                             **({"failed_seed_attempts": [asdict(failure)
                                 for failure in candidate.statistics.failed_seed_attempts]}
                                if candidate.statistics.failed_seed_attempts else {}),

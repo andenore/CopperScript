@@ -25,6 +25,42 @@ reusable support/layout obligations through the library contract without baking
 in one board's reference designators or coordinates. Clearly isolated synthetic
 compiler test fixtures are not reusable component catalogue entries.
 
+## Package escape faults: reference comparison is required
+
+For every blocked package exit or fault involving package escape, compare the
+actual failing geometry with the applicable manufacturer's reference layout
+before selecting a repair. This applies to signal, power and ground escapes,
+support-component obstructions, wrong layer/transition choices and failed
+package-to-route handoffs. A generic BGA diagram cannot replace an available
+layout for the selected package.
+
+1. Record the exact reference part/package, source URL, revision, page/layer
+   locators and asset hashes. State family/mode differences and import limits.
+   If no applicable reference can be inspected, retain that gap explicitly;
+   do not claim a reference comparison or invent its geometry.
+2. Align by physical lands and pin identities, with rotation/mirroring and
+   board-side viewing convention explicit. Compare all relevant copper layers
+   and the neighboring support parts. Identify actual connected escapes rather
+   than assigning the nearest same-net via to a pin without a path witness.
+3. Explain differences in initial direction, dogbone offset, layer sequence,
+   lane ordering, via/land dimensions, pad approach, decoupler orientation,
+   power/ground areas and return access. Distinguish the reference topology
+   from dimensions or fabrication processes unavailable to the consumer.
+4. Translate each supported difference into a generic candidate family,
+   placement/route ordering rule or source-backed physical contract. The
+   generated result should resemble the applicable reference's structure;
+   one-off package designator/coordinate selectors and copying incompatible
+   clearances, via technology or stackups are not repairs.
+5. Compare the same bounded subset before/after with unchanged physical
+   constraints, exact ownership, preserved accepted exits and fresh native
+   validation. Show both reference resemblance and actual access/connectivity
+   results. A closer-looking or isolated legal escape alone does not close
+   the complete-package, SI/PDN, assembly or prototype gates.
+
+Keep board/reference measurements and comparisons in the consumer. Keep the
+generalized algorithms and synthetic regressions in CopperScript, and reusable
+reference-derived part contracts/macros in independently versioned libraries.
+
 ## RF components: always review matching and layout
 
 1. Inspect the exact manufacturer's datasheet, reference schematic and reference
@@ -43,6 +79,18 @@ compiler test fixtures are not reusable component catalogue entries.
    placement alone cannot preserve prescribed copper or matching-ground paths.
 4. Check the placed and routed result with the real footprints and stackup.
    Component-centre proximity alone cannot prove short pin-to-pad routing.
+   Verify transformed land positions and the backend's rotation convention;
+   rotating a symmetric protection device can keep its courtyard unchanged
+   while moving the signal land away from the connector. Source-fixed pin
+   distances must be mutually feasible before copper-access optimization.
+   For co-located transmitters/receivers, quantify maximum transmitted power
+   including tolerance, minimum measured isolation, filter rejection and the
+   receiver's immunity in its actual gain mode. The shared
+   `pcbir.rf_coexistence.isolation_budget` API accepts integer mdB bounds and
+   leaves unknown isolation/rejection incomplete. Point samples cannot be
+   interpolated into band guarantees. Review filter passband loss, power/ESD,
+   harmonics and non-antenna coupling independently; a favourable budget is
+   not installed RF approval.
    Preserve antenna copper/component exclusions and avoid generic ground fills
    or stitching that bypass a prescribed matching return. Different packages,
    antennas, bands or stackups require reviewed adaptations and tuning; do not
@@ -100,3 +148,14 @@ Implementation references:
 - [Language constraints and routing profiles](language-reference.md)
 - [Device and part generation](device-generation.md)
 - [CopperLib hard-macro review checklist](https://github.com/andenore/CopperLib/blob/main/docs/hard-macro-review-checklist.md)
+
+## Via-free RF support trees
+
+RF feeds default to point-to-point. A port net that also connects a shunt TVS
+or tuning land may explicitly declare `topology = "tree"` with `max_vias = 0`.
+The shared router then considers bounded surface trees joining every physical
+land (including DNP and repeated-pad lands), retaining original layer, width,
+clearance and total length budgets. Clock and differential profiles are not
+silently reinterpreted. The local proposal is not a Steiner or RF network solver:
+review branch lengths, launch discontinuities, component parasitics, ESD return
+and reference geometry independently. A connected tree is not an RF approval.
