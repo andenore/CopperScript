@@ -1,5 +1,13 @@
 # Agent guidance
 
+**Routing refactor in progress.** Routing, placement-for-routing and power
+work follow [the routing refactor plan](docs/routing-refactor-plan.md). Where
+that plan conflicts with the rules below, the plan wins:
+- Measure every change with the benchmark ladder.
+- Don't create new evidence bundles.
+- Don't add gate-driven recovery modules.
+- Keep CopperAssetTracker, CopperLedRing and the examples working.
+
 Start with `copper agent-guide` in the active CLI environment. Request individual
 topics and selected library contracts as needed. For contributor work, use the
 [task index](docs/README.md) to choose the relevant reference; consult
