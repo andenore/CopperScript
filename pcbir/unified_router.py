@@ -746,7 +746,7 @@ class _Router:
             return route
         tree: dict[int, float] = {node: cost for node, _, cost in components[0]}
         leads = {node: lead for node, lead, _ in components[0]}
-        used_leads: dict[int, tuple[TrackSegment, ...]] = {}
+        used_leads: dict[tuple[TrackSegment, ...], bool] = {}
         remaining = list(range(1, len(components)))
         # Order targets by distance from the first component.
         base = g.unpack(next(iter(tree)))
@@ -769,12 +769,15 @@ class _Router:
                 return route
             path, end_node = found
             ci, lead, _ = targets[end_node]
+            # Leads are per component: two pad groups may share an attach
+            # node, so key used leads by their copper, not by the node.
             copper: list[TrackSegment] = []
-            if path[0] in leads and path[0] not in used_leads:
-                used_leads[path[0]] = leads[path[0]]
-                copper.extend(leads[path[0]])
-            if end_node not in used_leads:
-                used_leads[end_node] = lead
+            start_lead = leads.get(path[0], ())
+            if start_lead and start_lead not in used_leads:
+                used_leads[start_lead] = True
+                copper.extend(start_lead)
+            if lead and lead not in used_leads:
+                used_leads[lead] = True
                 copper.extend(lead)
             route.paths.append(path)
             route.leads.append(tuple(copper))
