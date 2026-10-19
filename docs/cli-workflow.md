@@ -17,6 +17,49 @@ python -m copperscript check examples/invalid_board/board.copper
 python -m copperscript power-check examples/valid_board/board.copper
 ```
 
+`check` prints `file:line:column` for each finding it can locate in the root
+source, appends a hint such as `(did you mean 'PB7'?)` when one is available and
+ends with an `OK:` or `FAILED:` summary. `--json` emits a
+`copperscript.check/v1` document; a finding's `fix` carries a source `range` and
+`replacement` only when the replacement is machine-applicable (for example a
+misspelled endpoint or declaration keyword). Compile errors use the same
+document with exit code 2. `--pins warn|error|off` controls `UNMARKED_PIN`
+(see [no-connect pins](language-reference.md#no-connect-pins)).
+
+```console
+python -m copperscript check examples/invalid_board/board.copper --json
+python -m copperscript explain UNMARKED_PIN
+python -m copperscript explain --list
+```
+
+`query` answers compact questions about the compiled flat design without
+re-reading source. Names use hierarchical `INSTANCE/REF` paths; unknown names
+fail with exit 2 and a close-match suggestion. `--json` emits deterministic,
+compact `copperscript.query/v1` documents.
+
+```console
+python -m copperscript query BOARD.copper pins U1          # pin, number, net, status, type, notes
+python -m copperscript query BOARD.copper net GND          # members, supply, decoupling capacitors
+python -m copperscript query BOARD.copper component C1     # part, value, footprint, properties, pins
+python -m copperscript query BOARD.copper unconnected      # open pins grouped by why they are open
+python -m copperscript query BOARD.copper components       # one line per component
+python -m copperscript query BOARD.copper nets             # one line per net
+```
+
+After a routing or layout run, `issues` lists grouped, located failures and `view`
+renders one of them; see [routing and placement iteration](llm-workflow.md#routing-and-placement-iteration).
+
+```console
+python -m copperscript issues build/BOARD/runs/STAMP
+python -m copperscript view build/BOARD/runs/STAMP --issue P1 -o build/views/P1.png
+python -m copperscript state show build/trials/candidate.state.json
+```
+
+Pin status is `connected`, `no_connect`, `part_do_not_connect`, `unmarked`,
+`optional`, `required_unconnected`, `power_input_unconnected`, `unmodeled` or
+`open`. Queries describe declared connectivity and intent only; they do not
+run ERC, placement or routing.
+
 The examples already have a committed lock. Populate the URL dependency cache,
 then reproduce without network access:
 

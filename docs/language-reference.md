@@ -650,6 +650,41 @@ net I2C_SDA {
 
 An endpoint always has the form `component.pin`.
 
+## No-connect pins
+
+`no_connect` records that pins are left open on purpose, so a deliberate
+decision is distinguishable from a forgotten connection:
+
+```copper
+no_connect U_NRF.DEC2, U_NRF.DCC {
+    reason = "QFAA LDO reference: C6 not mounted, DC/DC disabled";
+}
+no_connect U1.PA0;
+```
+
+One declaration lists one or more `component.pin` endpoints; `reason` is the
+only property and must be a non-empty string. Boards and modules may declare
+no-connects; module declarations are qualified by instance path. Module boundary
+ports cannot be targeted (`CMP125`).
+
+ERC reports `NO_CONNECT_CONNECTED` when a declared pin is also on a net,
+`NO_CONNECT_REQUIRED_PIN` when the part requires the pin, `DUPLICATE_NO_CONNECT`
+(warning) for repeats, and `UNKNOWN_COMPONENT`/`UNKNOWN_PIN` for bad endpoints.
+A no-connect does not silence `UNSOURCED_POWER_INPUT`.
+
+`copper check` and the language server also report `UNMARKED_PIN`: one warning
+per component listing ordinary modeled pins that are neither on a net nor
+declared no-connect. Power inputs, required, optional and part-level
+do-not-connect pins, and pins without an electrical profile are excluded because
+they are reported or decided elsewhere. Components inside module instances are
+excluded: only the module's own source can declare their no-connects, and a
+`no_connect` on a module port is an error (`NO_CONNECT_MODULE_PORT`).
+`copper check --pins error` makes the
+warning blocking; `--pins off` hides it. The `erc.check()` API reports it only
+with `unmarked_pins=True`. No-connects appear in the IR as `no_connects` only
+when declared, and do not change KiCad export, which already marks every
+unconnected schematic pin.
+
 ## Supplies
 
 Supplies annotate nets with voltage and source information.
@@ -1771,7 +1806,7 @@ item           = library | package_import | port | pin | pad | power_domain
                | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
                | power_state | interface | constraint | mechanical | silkscreen
-               | physical_macro ;
+               | physical_macro | no_connect ;
 silkscreen     = "silkscreen", "{", silk_item*, "}" ;
 silk_item      = "branding", geometry_properties
                | ("text" | "logo" | "line" | "rectangle" | "circle" | "arc" | "polygon"), name, geometry_properties ;
@@ -1809,6 +1844,8 @@ physical_macro = "physical_macro", name, ":", qualified_name, ["on", instance_pa
 macro_mapping  = ("member" | "net"), (name | string), "=", target_reference, ";" ;
 component      = "component", name, ":", qualified_name, (";" | properties) ;
 net            = "net", name, "{", endpoint*, "}" ;
+no_connect     = "no_connect", endpoint_ref, (",", endpoint_ref)*, (";" | properties) ;
+endpoint_ref   = name, ".", qualified_name ;
 endpoint       = name, ".", qualified_name, ";" ;
 supply         = "supply", name, properties ;
 power_state    = "power_state", name, "{", (name, "=", ("on" | "off" | "unknown"), ";")*, "}" ;

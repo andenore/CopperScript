@@ -29,6 +29,7 @@ from .syntax import (
     MechanicalProfileUseDecl,
     MuxDecl,
     NetDecl,
+    NoConnectDecl,
     PartPropertyDecl,
     PadDecl,
     PeripheralDecl,
@@ -172,6 +173,8 @@ class Parser:
                 declarations.append(self._module_instance())
             elif keyword == "net":
                 declarations.append(self._net())
+            elif keyword == "no_connect":
+                declarations.append(self._no_connect())
             elif keyword == "supply":
                 declarations.append(self._supply())
             elif keyword == "interface":
@@ -183,7 +186,9 @@ class Parser:
             elif keyword == "power_state":
                 declarations.append(self._power_state())
             else:
-                self._error("PAR002", f"unknown declaration {keyword!r}", self.tokens[self.index - 1])
+                match = _closest(keyword, _BOARD_KEYWORDS)
+                self._error("PAR002", f"unknown declaration {keyword!r}", self.tokens[self.index - 1],
+                            hint=f"did you mean {match!r}?" if match else None, replacement=match)
         self._expect_symbol("}")
         self._expect(TokenKind.EOF, "end of file")
         return Document(
@@ -421,11 +426,27 @@ class Parser:
         name = self._name("net name")
         self._expect_symbol("{")
         endpoints: list[str] = []
+        locations = []
         while not self._at_symbol("}"):
+            locations.append(self.current.location)
             endpoints.append(self._endpoint())
             self._expect_symbol(";")
         self._expect_symbol("}")
-        return NetDecl(location, name, tuple(endpoints))
+        return NetDecl(location, name, tuple(endpoints), tuple(locations))
+
+    def _no_connect(self) -> NoConnectDecl:
+        # no_connect U1.NC1, U1.NC2 { reason = "..."; }   (block optional; ';' without it)
+        location = self.tokens[self.index - 1].location
+        endpoints: list[str] = []
+        locations = []
+        while True:
+            locations.append(self.current.location)
+            endpoints.append(self._endpoint())
+            if not self._accept_symbol(","):
+                break
+        if self._accept_symbol(";"):
+            return NoConnectDecl(location, tuple(endpoints), {}, tuple(locations))
+        return NoConnectDecl(location, tuple(endpoints), self._assignment_block(), tuple(locations))
 
     def _supply(self) -> SupplyDecl:
         location = self.current.location
@@ -653,8 +674,22 @@ class Parser:
     def _describe(token: Token) -> str:
         return token.kind.value if token.kind is TokenKind.EOF else repr(token.text)
 
-    def _error(self, code: str, message: str, token: Token | None = None):
-        raise CopperScriptError(code, message, (token or self.current).location)
+    def _error(self, code: str, message: str, token: Token | None = None, *, hint: str | None = None,
+               replacement: str | None = None):
+        raise CopperScriptError(code, message, (token or self.current).location, hint=hint,
+                                replacement=replacement)
+
+
+_BOARD_KEYWORDS = (
+    "component", "port", "module", "net", "no_connect", "supply", "interface", "constraint",
+    "configure", "power_state", "import", "use", "mechanical", "silkscreen", "physical_macro",
+)
+
+
+def _closest(word: str, candidates) -> str | None:
+    from difflib import get_close_matches
+    match = get_close_matches(word, list(candidates), n=1, cutoff=0.6)
+    return match[0] if match else None
 
 
 def parse(source: str, filename: str = "<memory>") -> Document:

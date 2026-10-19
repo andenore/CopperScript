@@ -30,7 +30,7 @@ def parse_recovering(text: str, filename: str) -> Parsed:
     declarations, imports, libraries = [], [], []
     i = 3
     closed = False
-    starters = {'component', 'module', 'net', 'supply', 'interface', 'constraint',
+    starters = {'component', 'module', 'net', 'no_connect', 'supply', 'interface', 'constraint',
                 'member', 'track', 'via', 'isolated', 'port', 'protected_region', 'keepout',
                 'zone', 'polygon', 'plane_return', 'width_contract', 'edge_opening',
                 'configure', 'power_state', 'port', 'import', 'use', 'mechanical', 'silkscreen', 'physical_macro',

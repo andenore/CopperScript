@@ -470,6 +470,14 @@ class Net:
 
 
 @dataclass(frozen=True, slots=True)
+class NoConnect:
+    """Explicit design intent that a package pin is deliberately left open."""
+
+    endpoint: Endpoint
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Supply:
     name: str
     voltage: Voltage
@@ -596,6 +604,7 @@ class ModuleDefinition:
     devices: Mapping[str, DeviceDefinition] = field(default_factory=dict)
     peripheral_selections: tuple[PeripheralSelection, ...] = ()
     physical_macros: tuple[MacroBinding, ...] = ()
+    no_connects: tuple[NoConnect, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ports", MappingProxyType(dict(self.ports)))
@@ -635,6 +644,7 @@ class Board:
     peripheral_selections: tuple[PeripheralSelection, ...] = ()
     power_states: tuple[PowerState, ...] = ()
     physical_macros: tuple[MacroBinding, ...] = ()
+    no_connects: tuple[NoConnect, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "library", MappingProxyType(dict(self.library)))
@@ -661,6 +671,7 @@ class FlatElectricalView:
     power_states: tuple[PowerState, ...] = ()
     physical_macros: tuple[MacroBinding, ...] = ()
     net_aliases: Mapping[str, str] = field(default_factory=dict)
+    no_connects: tuple[NoConnect, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "library", MappingProxyType(dict(self.library)))

@@ -35,6 +35,7 @@ from .model import (
     ModuleInstance,
     MuxOption,
     Net,
+    NoConnect,
     PartDefinition,
     ModeGroupDefinition,
     PackagePinDefinition,
@@ -87,6 +88,7 @@ from .syntax import (
     MechanicalProfileUseDecl,
     MuxDecl,
     NetDecl,
+    NoConnectDecl,
     PortDecl,
     PartPropertyDecl,
     PadDecl,
@@ -516,6 +518,7 @@ def _compile_board(
         peripheral_selections=body.peripheral_selections,
         power_states=body.power_states,
         physical_macros=body.physical_macros,
+        no_connects=body.no_connects,
     )
 
 
@@ -559,6 +562,7 @@ def _compile_module(
         devices=body.devices,
         peripheral_selections=body.peripheral_selections,
         physical_macros=body.physical_macros,
+        no_connects=body.no_connects,
     )
 
 
@@ -582,6 +586,7 @@ def _lower_unit(
     constraints: list[Constraint] = []
     configurations: list[ConfigurationDecl] = []
     power_states: list[PowerState] = []
+    no_connects: list[NoConnect] = []
 
     for declaration in document.declarations:
         if isinstance(declaration, ComponentDecl):
@@ -612,6 +617,8 @@ def _lower_unit(
             )
         elif isinstance(declaration, NetDecl):
             nets.append(Net(declaration.name, tuple(ep(value) for value in declaration.endpoints)))
+        elif isinstance(declaration, NoConnectDecl):
+            no_connects.extend(_no_connects(declaration))
         elif isinstance(declaration, SupplyDecl):
             supplies.append(_supply(declaration))
         elif isinstance(declaration, InterfaceDecl):
@@ -641,6 +648,7 @@ def _lower_unit(
             peripheral_selections=selections,
             power_states=tuple(power_states),
             physical_macros=compile_macro_bindings(document, macro_assets or {}),
+            no_connects=tuple(no_connects),
         ),
         ports,
         tuple(module_instances),
@@ -1616,6 +1624,23 @@ def _optional_voltage(value: Scalar | None, location: SourceLocation) -> Voltage
     return compiled
 
 
+def _no_connects(declaration: NoConnectDecl) -> list[NoConnect]:
+    _reject_unknown_attributes(declaration.attributes, {"reason"}, declaration.location)
+    reason = declaration.attributes.get("reason")
+    if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+        _error("CMP124", "no_connect reason must be a non-empty string", declaration.location)
+    result = []
+    for index, text in enumerate(declaration.endpoints):
+        location = (declaration.endpoint_locations[index]
+                    if index < len(declaration.endpoint_locations) else declaration.location)
+        endpoint = ep(text)
+        if endpoint.component == "port":
+            _error("CMP125", "no_connect cannot target a module boundary port; every port must "
+                   "be on an internal net", location)
+        result.append(NoConnect(endpoint, reason))
+    return result
+
+
 def _supply(declaration: SupplyDecl) -> Supply:
     _reject_unknown_attributes(
         declaration.attributes, {"voltage", "net", "source", "external"}, declaration.location
@@ -1946,8 +1971,12 @@ def _reject_unknown_attributes(
 ) -> None:
     unknown = sorted(set(attributes) - allowed)
     if unknown:
-        _error("CMP018", f"unknown property {unknown[0]!r}", location)
+        from difflib import get_close_matches
+        match = get_close_matches(unknown[0], sorted(allowed), n=1, cutoff=0.6)
+        _error("CMP018", f"unknown property {unknown[0]!r}", location,
+               hint=(f"did you mean {match[0]!r}?" if match else
+                     "allowed: " + ", ".join(sorted(allowed)) if len(allowed) <= 12 else None))
 
 
-def _error(code: str, message: str, location: SourceLocation):
-    raise CopperScriptError(code, message, location)
+def _error(code: str, message: str, location: SourceLocation, *, hint: str | None = None):
+    raise CopperScriptError(code, message, location, hint=hint)

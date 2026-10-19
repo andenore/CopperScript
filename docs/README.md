@@ -13,6 +13,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Find parts across dependencies | [Library context](library-context.md) |
 | Resolve or pin footprints | [Footprint dependencies](footprint-dependencies.md) |
 | Read compact reports or requirement coverage | [LLM workflow](llm-workflow.md) |
+| Iterate on routing or placement failures | [LLM workflow: iteration](llm-workflow.md#routing-and-placement-iteration); `copper agent-guide iteration` |
 | Change routing or native repair | [Filled-copper feedback](filled-copper-feedback.md); follow linked specialized references only as needed |
 | Profile or compare routing | [Routing performance](routing-performance.md) |
 | Add components or reusable circuits | [Integration guidelines](component-integration-guidelines.md) |

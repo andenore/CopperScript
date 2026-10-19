@@ -22,11 +22,12 @@ from ..macro_bindings import is_macro_import
 
 MAX_TEXT = 8 * 1024 * 1024
 MAX_IMPORT_DEPTH = 64
-KEYWORDS = ('component', 'module', 'net', 'supply', 'interface', 'constraint',
+KEYWORDS = ('component', 'module', 'net', 'no_connect', 'supply', 'interface', 'constraint',
             'configure', 'power_state', 'import', 'use', 'port', 'mechanical', 'silkscreen', 'physical_macro', 'macro')
 PROPERTIES = {
     'component': ('value', 'footprint', 'role', 'decouples'),
     'supply': ('voltage', 'net', 'source', 'external'),
+    'no_connect': ('reason',),
     'pin': ('number', 'domains', 'directions', 'drive_modes', 'voltage_min',
             'voltage_max', 'bond', 'connection', 'traits'),
     'branding': ('enabled', 'position', 'size', 'rotation', 'side', 'material', 'exposed', 'layout'),
@@ -434,8 +435,10 @@ class Analysis:
         offset = error.location.offset
         token = next((t for t in unit.parsed.tokens if t.location.offset == offset), None)
         end = token.end_offset if token else min(offset + 1, len(unit.text.source))
+        hint = getattr(error, 'hint', None)
         diagnostic = {'range': unit.text.range(offset, end), 'severity': 1,
-                      'code': error.code, 'source': 'CopperScript', 'message': error.message}
+                      'code': error.code, 'source': 'CopperScript',
+                      'message': f'{error.message} ({hint})' if hint else error.message}
         if unit is not self.root:
             # Imported errors belong to this board's import, with the exact origin attached.
             origin = {'uri': unit.path.as_uri(), 'range': diagnostic['range']}
@@ -494,14 +497,15 @@ class Analysis:
                                        package_resolver=self.resolver)
             except MacroPreparationError as exc:
                 return [self.error_diagnostic(CopperScriptError('MAC005', exc.message, exc.location))]
-            findings = check(board)
+            findings = check(board, unmarked_pins=True)
         except CopperScriptError as exc:
             return [self.error_diagnostic(exc)]
         result = []
         for finding in findings:
             diagnostic = {'range': self.subject_range(finding.subject),
                           'severity': 1 if finding.severity.value == 'error' else 2,
-                          'code': finding.code, 'source': 'CopperScript', 'message': finding.message}
+                          'code': finding.code, 'source': 'CopperScript',
+                          'message': f'{finding.message} ({finding.hint})' if finding.hint else finding.message}
             result.append(diagnostic)
         return result
 

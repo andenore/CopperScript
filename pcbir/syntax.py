@@ -225,6 +225,18 @@ class NetDecl:
     location: SourceLocation
     name: str
     endpoints: tuple[str, ...]
+    # Parallel to ``endpoints`` when produced by the parser; empty otherwise.
+    endpoint_locations: tuple[SourceLocation, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class NoConnectDecl:
+    """Explicit intent that package pins stay unconnected."""
+
+    location: SourceLocation
+    endpoints: tuple[str, ...]
+    attributes: dict[str, Scalar]
+    endpoint_locations: tuple[SourceLocation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,6 +331,7 @@ Declaration = (
     | MacroItemDecl
     | MacroPadDecl
     | NetDecl
+    | NoConnectDecl
     | SupplyDecl
     | InterfaceDecl
     | ConstraintDecl
@@ -342,8 +355,13 @@ class Document:
 class CopperScriptError(Exception):
     """A source-located lexical, syntax, or lowering error."""
 
-    def __init__(self, code: str, message: str, location: SourceLocation):
+    def __init__(self, code: str, message: str, location: SourceLocation, *, hint: str | None = None,
+                 replacement: str | None = None):
         self.code = code
         self.message = message
         self.location = location
-        super().__init__(f"{location}: {code}: {message}")
+        self.hint = hint
+        # Machine-applicable replacement for the token at ``location``.
+        self.replacement = replacement
+        suffix = f" ({hint})" if hint else ""
+        super().__init__(f"{location}: {code}: {message}{suffix}")

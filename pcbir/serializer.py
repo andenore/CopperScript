@@ -82,6 +82,7 @@ def board_to_dict(board: Board | Design) -> dict[str, object]:
         "kind": "board",
         "name": board.name,
         **_macro_fields(board.physical_macros),
+        **_no_connect_fields(board.no_connects),
         **_unit_fields(
             board.library,
             board.components,
@@ -126,6 +127,7 @@ def _module_to_dict(definition: ModuleDefinition) -> dict[str, object]:
         "kind": "module",
         "name": definition.name,
         **_macro_fields(definition.physical_macros),
+        **_no_connect_fields(definition.no_connects),
         "ports": {
             name: pin_type.value for name, pin_type in definition.ports.items()
         },
@@ -142,6 +144,13 @@ def _module_to_dict(definition: ModuleDefinition) -> dict[str, object]:
             (),
         ),
     }
+
+
+def _no_connect_fields(no_connects):
+    # Omitted when empty so existing IR documents stay byte-identical.
+    return {"no_connects": [
+        {"endpoint": str(item.endpoint), "reason": item.reason} for item in no_connects
+    ]} if no_connects else {}
 
 
 def _macro_fields(bindings):
