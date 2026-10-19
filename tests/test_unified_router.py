@@ -102,3 +102,13 @@ def test_unroutable_net_is_reported_not_raised() -> None:
     result, drc, summary = _route(board, maximum_iterations=1, maximum_expansions=5)
     assert summary["signal"]["connections"] == 1
     assert not result.nets[0].connected or summary["signal"]["opens"] == 0
+
+
+def test_pad_groups_sharing_an_attach_node_both_keep_their_lead_ins() -> None:
+    # A row of same-net pads closer than two grid pitches: neighbouring pads
+    # often attach to the same node, and each needs its own lead-in.
+    row = tuple((4 + 0.8 * i, 10.1) for i in range(5)) + ((17, 10),)
+    result, drc, summary = _route(_board({"ROW": row}))
+    assert summary["signal"]["opens"] == 0
+    # Single-pad test parts this close overlap courtyards; copper must be clean.
+    assert set(summary["drc"]["errors_by_code"]) <= {"DRC-PLACEMENT"}
