@@ -72,8 +72,22 @@ def run_routing_pipeline(
     power_native_verifier=None,
     routing_nets: frozenset[str] | None = None,
     on_progress: ProgressCallback | None = None,
+    legacy_gates: bool = False,
+    unified_options=None,
 ) -> RoutingPipelineResult:
-    """Run steps 4–8 in dependency order without weakening an earlier gate."""
+    """Run steps 4–8 in dependency order and always reach ordinary routing.
+
+    An incomplete package access or a rejected power preparation is reported,
+    and ordinary routing then works around whatever access exists. With
+    ``legacy_gates`` the pre-refactor behaviour returns early instead.
+    With ``unified_options`` the unified negotiated router replaces the
+    ordinary detailed router.
+    """
+    if unified_options is not None:
+        from functools import partial
+        route_ordinary = partial(_route_unified_compat, unified_options)
+    else:
+        route_ordinary = route_detailed
 
     from .hard_macros import macro_source
     board = macro_source(board)
@@ -159,7 +173,9 @@ def run_routing_pipeline(
             status=FeedbackStatus.PASS if access.global_route.status is GlobalRoutingStatus.SUCCESS else FeedbackStatus.WARNING,
             full_route_certified=access.global_route.status is GlobalRoutingStatus.SUCCESS,
             placement_candidate=placement.placement_candidate + ("-access" if access.accepted_moves else ""))
-        if not access.ready:
+        if not access.ready and not legacy_gates:
+            emit(on_progress, "package_access", "incomplete", pending_pads=len(access.pending_pads))
+        elif not access.ready:
             emit(on_progress, "ordinary_area", "blocked", reason="package_access_incomplete")
             detailed = blocked_area_result(access)
             return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, access.critical,
@@ -222,17 +238,29 @@ def run_routing_pipeline(
     from .zone_geometry import deferred_zone_nets
     deferred_zones = (frozenset(deferred_zone_nets(pre_fanout))
                       if detailed_options.defer_zone_nets else frozenset())
-    fanout = reserve_boundary_access(pre_fanout, access.fanout, access.boundary,
-                                     deferred_nets=deferred_zones) if access else None
+    if access and access.ready:
+        fanout = reserve_boundary_access(pre_fanout, access.fanout, access.boundary,
+                                         deferred_nets=deferred_zones)
+    elif access:
+        # Incomplete access: keep the verified launches that exist and let the
+        # ordinary router reach the remaining pads itself.
+        fanout = replace(access.fanout, board=pre_fanout)
+    else:
+        fanout = None
     if access:
-        emit(on_progress, "package_boundary_reservation", "finished", anchors=len(fanout.boundary_accesses),
+        emit(on_progress, "package_boundary_reservation", "finished", anchors=len(fanout.boundary_accesses or {}),
              added_tracks=len(fanout.created_tracks) - len(access.fanout.created_tracks))
     pre_detailed = fanout.board if fanout else pre_fanout
+    if preparation is not None and not preparation.accepted and not legacy_gates:
+        power_status = 'power_preparation_rejected'
+        preparation = None
     if preparation is not None:
         from .power_preparation import validate_power_preparation
         evidence = power_native_verifier(pre_detailed, 'power-return-boundary')
         preparation_validation = validate_power_preparation(preparation, pre_detailed, evidence, power_area_options)
-        if preparation_validation['status'] != 'native_connected':
+        if preparation_validation['status'] != 'native_connected' and not legacy_gates:
+            power_status = 'power_preparation_boundary_rejected'
+        elif preparation_validation['status'] != 'native_connected':
             restored_fanout = FanoutResult(preparation.board, {}, (), 0, 0)
             blocked = replace(access, boundary=None, fanout=restored_fanout,
                 critical=replace(access.critical, board=preparation.board), plane_stitch=None)
@@ -248,7 +276,7 @@ def run_routing_pipeline(
         deferred_zones = (frozenset(deferred_zone_nets(pre_detailed))
                           if detailed_options.defer_zone_nets else frozenset())
     emit(on_progress, "ordinary_area", "started")
-    detailed = route_detailed(
+    detailed = route_ordinary(
         pre_detailed, placement.global_route,
         detailed_options, fanout_accesses=fanout.routing_accesses if fanout else None,
         fanout_created_vias=frozenset((item.net, item.position)
@@ -317,7 +345,7 @@ def run_routing_pipeline(
             trial_pre_detailed = trial_fanout.board if trial_fanout else trial_pre_fanout
             if power_area_options is not None:
                 trial_pre_detailed, trial_power_plan, trial_power_status = plan_distribution(trial_pre_detailed, trial_fanout)
-            trial_detailed = route_detailed(
+            trial_detailed = route_ordinary(
                 trial_pre_detailed,
                 trial_global, detailed_options,
                 fanout_accesses=trial_fanout.routing_accesses if trial_fanout else None,
@@ -347,7 +375,9 @@ def run_routing_pipeline(
     if preparation is not None:
         evidence = power_native_verifier(detailed.board, 'power-return-ordinary')
         preparation_validation = validate_power_preparation(preparation, detailed.board, evidence, power_area_options)
-        if preparation_validation['status'] != 'native_connected':
+        if preparation_validation['status'] != 'native_connected' and not legacy_gates:
+            power_status = 'power_preparation_ordinary_rejected'
+        elif preparation_validation['status'] != 'native_connected':
             # Roll back the complete ordinary trial, including closure/cleanup.
             blocked = replace(access, boundary=None, plane_stitch=None,
                               fanout=fanout, critical=replace(access.critical, board=pre_detailed))
@@ -383,6 +413,11 @@ def run_routing_pipeline(
         power_preparation_validation=preparation_validation,
         power_native_verifier=power_native_verifier,
     )
+
+
+def _route_unified_compat(unified_options, board, global_route, _detailed_options, **kwargs):
+    from .unified_router import route_unified
+    return route_unified(board, global_route, unified_options, **kwargs)
 
 
 def _detailed_score(

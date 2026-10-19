@@ -121,7 +121,7 @@ def test_impossible_contact_stops_area_and_preserves_failure_evidence():
     board = replace(board, copper_keepouts=(CopperKeepout("no-contact-via",
         board.stackup.copper_layers, board.zones[0].outline,
         block_tracks=False, block_vias=True, block_zones=False),))
-    result = run_routing_pipeline(board,
+    result = run_routing_pipeline(board, legacy_gates=True,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
             refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in board.placements)),
@@ -206,8 +206,8 @@ def with_test_owners(board, tmp_path, *, blocking_macro=False, required_array=Fa
         bindings={"first": "OWNER_A", "second": "OWNER_B"}, net_bindings={"owned": "OWNER_NET"})
 
 
-def owned_pipeline(board):
-    return run_routing_pipeline(board,
+def owned_pipeline(board, legacy_gates=False):
+    return run_routing_pipeline(board, legacy_gates=legacy_gates,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
             refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in board.placements)),
@@ -251,7 +251,7 @@ def test_immutable_macro_blocking_contact_is_not_evicted(tmp_path):
                              required_array=True)
     owner = materialize_hard_macros(board)
     assert not hard_findings(owner)
-    result = owned_pipeline(board)
+    result = owned_pipeline(board, legacy_gates=True)
     assert not result.package_access.ready
     assert result.plane_stitch.pending_pads
     assert result.detailed.metrics.passes == 0

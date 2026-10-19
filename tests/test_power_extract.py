@@ -123,7 +123,7 @@ def test_standard_pipeline_uses_plan_inside_placement_and_before_detail():
                        PlacementRoutingFeedbackOptions, DetailedRouterOptions)
     from pcbir.power_geometry import PowerAreaOptions
     b = source_board()
-    result = run_routing_pipeline(b,
+    result = run_routing_pipeline(b, legacy_gates=True,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0, refinement_passes=0,
                                                   fixed_references=frozenset(p.reference for p in b.placements)),
         global_options=GlobalRouterOptions(tile_size_nm=2000000),

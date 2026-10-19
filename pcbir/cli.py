@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict
-from decimal import InvalidOperation
+from decimal import Decimal, InvalidOperation
 from math import isqrt
 from pathlib import Path
 import traceback
@@ -32,6 +32,7 @@ from .physicalize import (
 from .physical import PadReference, nm_from_mm
 from .detailed import DetailedRouterOptions
 from .drc import DrcDecision, run_physical_drc
+from .route_summary import connection_summary
 from .flow import PhysicalFlowStatus, run_routing_pipeline
 from .fanout import FanoutOptions
 from .package_access import PackageAccessOptions
@@ -485,6 +486,16 @@ def _parser() -> argparse.ArgumentParser:
         "--fanout", action=argparse.BooleanOptionalAction, default=True,
         help="reserve and negotiate package exits and plane access before area routing (default; --no-fanout opts out)",
     )
+    board_route_parser.add_argument("--router", choices=("legacy", "unified"), default="legacy",
+        help="ordinary detailed router: the pass-based legacy router or the unified negotiated router")
+    board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=Decimal("0.25"),
+        help="grid pitch of the unified router (default: 0.25 mm)")
+    board_route_parser.add_argument("--unified-iterations", type=int, default=40,
+        help="maximum negotiation iterations of the unified router (default: 40)")
+    board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
+        help="wall-time budget for the unified router; it returns its best result when exceeded")
+    board_route_parser.add_argument("--legacy-gates", action="store_true",
+        help="stop before ordinary routing when package access or power preparation is incomplete (pre-refactor behaviour)")
     board_route_parser.add_argument("--package-access-trials", type=int, default=8,
         help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
     board_route_parser.add_argument("--package-placement-probes", type=_nonnegative_int, default=16,
@@ -707,8 +718,20 @@ def _apply_routing_profile(args, argv):
             setattr(args, name, value)
 
 
+def _unified_options(args):
+    if getattr(args, "router", "legacy") != "unified":
+        return None
+    from .unified_router import UnifiedRouterOptions
+    return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm),
+                                maximum_iterations=args.unified_iterations,
+                                time_budget_s=args.unified_time_budget_s)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["bench"]:
+        from .bench import main as bench_main
+        return bench_main(argv[1:])
     args = _parser().parse_args(argv)
     _apply_routing_profile(args, argv)
     if args.command == "compile-macro":
@@ -1243,6 +1266,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                             destination_ports=args.package_destination_ports,
                             refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
                     on_progress=progress,
+                    legacy_gates=args.legacy_gates,
+                    unified_options=_unified_options(args),
                     **({"power_area_options": power_area_options} if power_area_options is not None else {}),
                     **({"power_native_verifier": power_native_verifier} if power_native_verifier is not None else {}),
                 )
@@ -1404,6 +1429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "critical": json.loads(result.critical.to_json()),
                 "detailed": json.loads(result.detailed.to_json()),
                 "drc": json.loads(output_drc.to_json()),
+                "summary": connection_summary(output_board, output_drc, native=plane_verification),
             }
             if power_area_options is not None:
                 report["power_area_planning"] = {

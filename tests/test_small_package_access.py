@@ -74,6 +74,6 @@ def test_plane_failure_blocks_area_search_instead_of_publishing_partial_access(m
         PlaneStitchResult(source, (), (PadReference("U", "2"),), 0, 0))
     monkeypatch.setattr(flow, "route_detailed", lambda *args, **kwargs:
                         (_ for _ in ()).throw(AssertionError("area search must be gated")))
-    result = flow.run_routing_pipeline(board, fanout_options=settings,
+    result = flow.run_routing_pipeline(board, legacy_gates=True, fanout_options=settings,
         package_access_options=PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=0))
     assert not result.package_access.ready and result.detailed.metrics.passes == 0

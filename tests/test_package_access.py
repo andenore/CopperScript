@@ -95,7 +95,7 @@ def test_pending_exit_stops_area_router_with_zero_search_passes(monkeypatch):
         PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
     monkeypatch.setattr("pcbir.flow.route_detailed", lambda *args, **kwargs:
         pytest.fail("area router must not be called"))
-    result = run_routing_pipeline(board, fanout_options=options,
+    result = run_routing_pipeline(board, legacy_gates=True, fanout_options=options,
         package_access_options=access.PackageAccessOptions(maximum_trials=0))
     assert result.status is PhysicalFlowStatus.FAIL
     assert not result.package_access.ready and len(result.package_access.pending_pads) == 2
@@ -115,7 +115,7 @@ def test_pending_boundary_channel_stops_area_despite_complete_dogbones(monkeypat
         return replace(result, ports=result.ports[1:], pending_pads=(result.ports[0].pad,))
     monkeypatch.setattr(access, "analyze_boundary_access", blocked)
     monkeypatch.setattr("pcbir.flow.route_detailed", lambda *args, **kwargs: pytest.fail("area must not start"))
-    result = run_routing_pipeline(board, fanout_options=settings,
+    result = run_routing_pipeline(board, legacy_gates=True, fanout_options=settings,
         package_access_options=access.PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=0))
     assert not result.fanout.pending_pads and result.package_access.boundary.pending_pads
     assert not result.package_access.ready and result.detailed.metrics.passes == 0
@@ -409,7 +409,7 @@ def test_pipeline_obeys_pattern_budget_before_starting_area(monkeypatch, budget)
     board, guides, settings = pattern_trap()
     monkeypatch.setattr("pcbir.flow.optimize_placement_for_routing", lambda *_:
         PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
-    result = run_routing_pipeline(board, fanout_options=settings,
+    result = run_routing_pipeline(board, legacy_gates=True, fanout_options=settings,
         package_access_options=access.PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=budget),
         detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm(.5), maximum_passes=1))
     assert result.package_access.ready == bool(budget)

@@ -70,7 +70,7 @@ def test_progress_does_not_report_area_started_when_package_gate_blocks(monkeypa
         return replace(result, pending_pads=(PadReference('J1', '1'),))
     monkeypatch.setattr(access, 'route_fanout', pending)
     events = []
-    result = run_routing_pipeline(board(),
+    result = run_routing_pipeline(board(), legacy_gates=True,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0, refinement_passes=0),
         fanout_options=FanoutOptions(), package_access_options=access.PackageAccessOptions(maximum_trials=0),
         on_progress=lambda phase, event, details: events.append((phase, event, details)))
