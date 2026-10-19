@@ -105,10 +105,20 @@ def test_unroutable_net_is_reported_not_raised() -> None:
 
 
 def test_pad_groups_sharing_an_attach_node_both_keep_their_lead_ins() -> None:
-    # A row of same-net pads closer than two grid pitches: neighbouring pads
-    # often attach to the same node, and each needs its own lead-in.
-    row = tuple((4 + 0.8 * i, 10.1) for i in range(5)) + ((17, 10),)
-    result, drc, summary = _route(_board({"ROW": row}))
+    # A fine-pitch connector row on one net (like a board-to-board supply
+    # row): neighbouring pads attach to the same grid node, and each needs
+    # its own lead-in. Regression: only one of them was emitted.
+    row = PhysicalFootprint("test/row", tuple(
+        FootprintPad(str(i + 1), Point.mm(0, f"{0.4 * i:.1f}"), Size.mm("0.2", "0.2")) for i in range(5)),
+        Size.mm("0.6", "2.2"))
+    one = _footprint()
+    board = PhysicalBoard(
+        "Unified", BoardOutline.rectangle(26, 26), {row.name: row, one.name: one},
+        (Placement("J", row.name, Point.mm("11.5", "12.1")), Placement("T", one.name, Point.mm(20, 13))),
+        (PhysicalNet("ROW", tuple(PadReference("J", str(i + 1)) for i in range(5)) + (PadReference("T", "1"),)),),
+        rules=DesignRules(minimum_clearance_nm=nm_from_mm("0.1"), minimum_track_width_nm=nm_from_mm("0.1"),
+                          default_track_width_nm=nm_from_mm("0.15"), default_via_size_nm=nm_from_mm("0.6"),
+                          default_via_drill_nm=nm_from_mm("0.3"), minimum_hole_clearance_nm=nm_from_mm("0.25")))
+    result, drc, summary = _route(board)
     assert summary["signal"]["opens"] == 0
-    # Single-pad test parts this close overlap courtyards; copper must be clean.
-    assert set(summary["drc"]["errors_by_code"]) <= {"DRC-PLACEMENT"}
+    assert summary["drc"]["errors"] == 0
