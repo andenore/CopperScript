@@ -122,3 +122,19 @@ def test_pad_groups_sharing_an_attach_node_both_keep_their_lead_ins() -> None:
     result, drc, summary = _route(board)
     assert summary["signal"]["opens"] == 0
     assert summary["drc"]["errors"] == 0
+
+
+def test_native_kernel_matches_python_search(monkeypatch) -> None:
+    import pcbir.native as native
+    if native.astar() is None:
+        import pytest
+        pytest.skip("no native kernel for this platform")
+    nets = {f"H{i}": ((2, 4 + 2 * i), (18, 4 + 2 * i)) for i in range(4)}
+    nets.update({f"V{i}": ((4 + 3 * i, 2), (4 + 3 * i, 18)) for i in range(4)})
+    board = _board(nets)
+    with_kernel, _, summary = _route(board)
+    monkeypatch.setattr(native, "astar", lambda: None)
+    without, _, summary_python = _route(board)
+    assert summary["signal"]["opens"] == summary_python["signal"]["opens"] == 0
+    assert set(with_kernel.board.tracks) == set(without.board.tracks)
+    assert set(with_kernel.board.vias) == set(without.board.vias)

@@ -21,7 +21,7 @@ router in place of :func:`pcbir.detailed.route_detailed`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from heapq import heappop, heappush
 from math import ceil, floor, hypot, sqrt
 from time import perf_counter
@@ -204,7 +204,7 @@ class _Rasters:
         self.holes = holes          # (owner, x, y, radius)
         self.margin = margin
         self._track: dict[tuple[int, int], tuple[list[int], list[int]]] = {}
-        self._via: dict[tuple[int, int, int], list[int]] = {}
+        self._via: dict[tuple[int, int, int], tuple] = {}
         g = grid
         self.px, self.py = np.meshgrid(g.xs, g.ys)                      # node centres
         self.mx, self.my = np.meshgrid(g.xs + g.pitch / 2, g.ys + g.pitch / 2)  # cell centres
@@ -235,12 +235,20 @@ class _Rasters:
 
     def track(self, width: int, clearance: int) -> tuple[list[int], list[int]]:
         """Owner lists for nodes and cell centres: _FREE, a net id or _FOREIGN."""
+        return self._track_entry(width, clearance)[:2]
+
+    def track_arrays(self, width: int, clearance: int):
+        """The same owner rasters as flat int32 numpy arrays (native kernel)."""
+        return self._track_entry(width, clearance)[2:]
+
+    def _track_entry(self, width: int, clearance: int):
         key = (width, clearance)
         if key not in self._track:
-            self._track[key] = (self._build(width / 2, clearance, self.px, self.py,
-                                            self.inside_nodes, self.edge_nodes, for_via=False),
-                                self._build(width / 2, clearance, self.mx, self.my,
-                                            self.inside_cells, self.edge_cells, for_via=False))
+            nodes = np.ascontiguousarray(self._build(width / 2, clearance, self.px, self.py,
+                self.inside_nodes, self.edge_nodes, for_via=False, as_array=True).ravel())
+            cells = np.ascontiguousarray(self._build(width / 2, clearance, self.mx, self.my,
+                self.inside_cells, self.edge_cells, for_via=False, as_array=True).ravel())
+            self._track[key] = (nodes.tolist(), cells.tolist(), nodes, cells)
         return self._track[key]
 
     def via(self, size: int, drill: int, clearance: int) -> list[int]:
@@ -265,8 +273,13 @@ class _Rasters:
                 win = np.hypot(self.px[iy0:iy1 + 1, ix0:ix1 + 1] - x,
                                self.py[iy0:iy1 + 1, ix0:ix1 + 1] - y) < reach
                 owner[iy0:iy1 + 1, ix0:ix1 + 1][win] = _FOREIGN
-            self._via[key] = owner.ravel().tolist()
-        return self._via[key]
+            flat = np.ascontiguousarray(owner.ravel().astype(np.int32))
+            self._via[key] = (flat.tolist(), flat)
+        return self._via[key][0]
+
+    def via_array(self, size: int, drill: int, clearance: int):
+        self.via(size, drill, clearance)
+        return self._via[(size, drill, clearance)][1]
 
     def _build(self, half_width: float, clearance: int, px, py, inside, edge, *,
                for_via: bool, as_array: bool = False):
@@ -329,6 +342,7 @@ class _NetSpec:
     neck_width: int = 0
     neck_clearance: int = 0
     plane: frozenset[int] = frozenset()      # plane-region nodes (zone nets only)
+    arrays: dict = field(default_factory=dict)  # numpy copies of the node sets, for the kernel
     region: frozenset[int] = frozenset()     # nodes inside the net's breakout regions
     neck: frozenset[int] = frozenset()       # region nodes legal only at neck width
     neck_mid: frozenset[int] = frozenset()   # region cell centres legal only at neck width
@@ -348,18 +362,40 @@ class _NetRoute:
 
 
 class _Occupancy:
-    def __init__(self, size: int, plane: int) -> None:
-        self.occ = [0] * size
-        self.via_occ = [0] * plane
-        self.history = [0.0] * size
-        self.via_history = [0.0] * plane
+    """Shared negotiation state as flat numpy arrays (also read by the kernel)."""
+
+    def __init__(self, size: int, plane: int, *, arrays: bool = True) -> None:
+        # numpy arrays feed the native kernel; plain lists are much faster for
+        # the pure-Python search, which indexes element by element.
+        self.arrays = arrays
+        if arrays:
+            self.occ = np.zeros(size, dtype=np.int32)
+            self.via_occ = np.zeros(plane, dtype=np.int32)
+            self.history = np.zeros(size, dtype=np.float64)
+            self.via_history = np.zeros(plane, dtype=np.float64)
+        else:
+            self.occ, self.via_occ = [0] * size, [0] * plane
+            self.history, self.via_history = [0.0] * size, [0.0] * plane
+
+    def copy_history(self, other: "_Occupancy") -> None:
+        if self.arrays:
+            self.history = np.asarray(other.history, dtype=np.float64).copy()
+            self.via_history = np.asarray(other.via_history, dtype=np.float64).copy()
+        else:
+            self.history, self.via_history = list(other.history), list(other.via_history)
 
     def add(self, route: _NetRoute, sign: int) -> None:
-        occ, via_occ = self.occ, self.via_occ
-        for node in route.claims:
-            occ[node] += sign
-        for xy in route.via_claims:
-            via_occ[xy] += sign
+        if not self.arrays:
+            occ, via_occ = self.occ, self.via_occ
+            for node in route.claims:
+                occ[node] += sign
+            for xy in route.via_claims:
+                via_occ[xy] += sign
+            return
+        if route.claims:
+            self.occ[np.fromiter(route.claims, dtype=np.int64, count=len(route.claims))] += sign
+        if route.via_claims:
+            self.via_occ[np.fromiter(route.via_claims, dtype=np.int64, count=len(route.via_claims))] += sign
 
 
 def _disc_offsets(radius_in_pitches: float) -> tuple[tuple[int, int], ...]:
@@ -405,10 +441,24 @@ class _Router:
         obstacles, holes = self._obstacles()
         margin = options.raster_margin_nm if options.raster_margin_nm is not None else pitch // 8
         self.rasters = _Rasters(board, self.grid, obstacles, holes, margin)
-        self.occupancy = _Occupancy(self.grid.size, self.grid.plane)
+        from .native import astar as native_astar
+        self.native = native_astar()
+        self.occupancy = _Occupancy(self.grid.size, self.grid.plane, arrays=self.native is not None)
         from array import array
         self._best = array("d", [1e30]) * self.grid.size
         self._parent = array("i", [-1]) * self.grid.size
+        if self.native is not None:
+            size = self.grid.size
+            self._n_best = np.full(size, 1e30, dtype=np.float64)
+            self._n_parent = np.full(size, -1, dtype=np.int32)
+            self._n_flags = np.zeros(size, dtype=np.uint8)
+            self._n_extra = np.zeros(size, dtype=np.float64)
+            self._n_heap_cap = 3_000_000
+            self._n_heap = np.zeros(self._n_heap_cap * 3, dtype=np.float64)  # 24-byte entries
+            self._n_touched_cap = min(size, 4_000_000)
+            self._n_touched = np.zeros(self._n_touched_cap, dtype=np.int32)
+            self._n_path_cap = 1_000_000
+            self._n_path = np.zeros(self._n_path_cap, dtype=np.int32)
         ranks, headings = signal_layer_preferences(board)
         g = self.grid
         self.layer_cost = [options.outer_layer_cost if i in (0, g.nl - 1) else 0.0 for i in range(g.nl)]
@@ -486,6 +536,9 @@ class _Router:
             spec.plane = planes
             # Small pours (surface islands) must also reach the main plane.
             spec.components.extend([[(node, (), 0.0) for node in island] for island in islands])
+        for key in ("neck", "neck_mid", "region", "plane"):
+            nodes = getattr(spec, key)
+            spec.arrays[key] = np.fromiter(nodes, dtype=np.int64, count=len(nodes))
         xs = [self.grid.unpack(node)[1] for comp in spec.components for node, _, _ in comp]
         ys = [self.grid.unpack(node)[2] for comp in spec.components for node, _, _ in comp]
         spec.span = (max(xs) - min(xs) + max(ys) - min(ys)) if xs else 0
@@ -877,8 +930,13 @@ class _Router:
                 nodes.extend(node for node, distance in self._segment_nodes(
                     track.start, track.end, layer_of[track.layer], g.pitch / 2 + 1) )
             self._lead_nodes[lead] = nodes
+        if not nodes:
+            return 0.0
         hist, occ = self.occupancy.history, self.occupancy.occ
-        return sum(hist[n] + present * occ[n] for n in nodes)
+        if not self.occupancy.arrays:
+            return sum(hist[n] + present * occ[n] for n in nodes)
+        index = np.asarray(nodes, dtype=np.int64)
+        return float(hist[index].sum() + present * occ[index].sum())
 
     def _segment_nodes(self, start: Point, end: Point, layer: int, radius_nm: float):
         """(node, distance) for grid nodes strictly within radius of a segment."""
@@ -938,6 +996,10 @@ class _Router:
     def _astar(self, spec, sources, targets, present, box, tbox, owner, mid_owner, via_owner,
                target_extra=None):
         """A* over the shared grid; arrays are reused across searches."""
+        if self.native is not None:
+            result = self._astar_native(spec, sources, targets, present, box, tbox, target_extra)
+            if result is not NotImplemented:
+                return result
         g, options = self.grid, self.options
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
         hist, via_hist = self.occupancy.history, self.occupancy.via_history
@@ -1059,6 +1121,77 @@ class _Router:
         for node in touched:
             best[node] = INF
         return result
+
+    def _astar_native(self, spec, sources, targets, present, box, tbox, target_extra):
+        """The same search in the C kernel; NotImplemented asks for the Python path."""
+        import ctypes
+        g = self.grid
+        owner, mid_owner = self.rasters.track_arrays(spec.width, spec.clearance)
+        via_owner = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance)
+        occupancy = self.occupancy
+        flags, extra = self._n_flags, self._n_extra
+        layers = np.asarray(spec.layers, dtype=np.int32)
+        move_base = self._move_base(spec)
+        source_nodes = np.fromiter(sources.keys(), dtype=np.int32, count=len(sources))
+        source_costs = np.fromiter(sources.values(), dtype=np.float64, count=len(sources))
+        if isinstance(targets, (set, frozenset)) and spec.plane and len(targets) >= len(spec.plane):
+            plane_nodes = spec.arrays["plane"]
+            others = np.fromiter((t for t in targets if t not in spec.plane), dtype=np.int64)
+            target_nodes = np.concatenate((plane_nodes, others)) if others.size else plane_nodes
+        else:
+            target_nodes = np.fromiter(targets, dtype=np.int64, count=len(targets))
+        marks = [(spec.arrays["neck"], 1), (spec.arrays["neck_mid"], 2), (spec.arrays["region"], 4),
+                 (target_nodes, 8)]
+        for nodes, bit in marks:
+            if nodes.size:
+                flags[nodes] |= bit
+        extra_pointer = None
+        if target_extra:
+            keys = np.fromiter(target_extra.keys(), dtype=np.int64, count=len(target_extra))
+            extra[keys] = np.fromiter(target_extra.values(), dtype=np.float64, count=len(target_extra))
+            extra_pointer = extra.ctypes.data
+        touched_count = ctypes.c_int(0)
+        P = lambda a: a.ctypes.data
+        length = self.native(
+            g.nx, g.ny, g.nl, P(owner), P(mid_owner), P(via_owner),
+            P(occupancy.history), P(occupancy.occ), P(occupancy.via_history), P(occupancy.via_occ),
+            P(flags), spec.nid, P(layers), len(layers), P(move_base),
+            float(present), float(self.via_cost * spec.via_factor),
+            *box, *tbox,
+            P(source_nodes), P(source_costs), len(source_nodes),
+            extra_pointer, self.options.maximum_expansions,
+            P(self._n_best), P(self._n_parent), P(self._n_heap), self._n_heap_cap,
+            P(self._n_touched), self._n_touched_cap, ctypes.byref(touched_count),
+            P(self._n_path), self._n_path_cap)
+        touched = self._n_touched[:touched_count.value]
+        self._n_best[touched] = 1e30
+        for nodes, bit in marks:
+            if nodes.size:
+                flags[nodes] = 0
+        if target_extra:
+            extra[keys] = 0.0
+        if length < 0:
+            return NotImplemented
+        if length == 0:
+            return None
+        path = self._n_path[:length].tolist()
+        return path, path[-1]
+
+    def _move_base(self, spec) -> np.ndarray:
+        cache = getattr(self, "_move_cache", None)
+        if cache is None:
+            g, options = self.grid, self.options
+            table = []
+            for layer in range(g.nl):
+                head = self.heading[layer]
+                lc = self.layer_cost[layer]
+                for dx, dy, step in _MOVES:
+                    base = step * (1.0 + lc)
+                    if head is not None and (head == "h" and dy and not dx or head == "n" and dx and not dy):
+                        base += options.wrong_way_cost * step
+                    table.append(base)
+            cache = self._move_cache = np.asarray(table, dtype=np.float64)
+        return cache
 
     # -- negotiation ------------------------------------------------------
 
@@ -1231,8 +1364,7 @@ class _Router:
     def history_seed(self, other: "_Router") -> None:
         """Carry congestion history over from an earlier router on the same grid."""
         if other.grid.size == self.grid.size and other.grid.pitch == self.grid.pitch:
-            self.occupancy.history = list(other.occupancy.history)
-            self.occupancy.via_history = list(other.occupancy.via_history)
+            self.occupancy.copy_history(other.occupancy)
             self.present = other.present
 
     def penalise_points(self, name: str, points: list[Point], amount: float) -> None:

@@ -83,13 +83,16 @@ def run_routing_pipeline(
     With ``unified_options`` the unified negotiated router replaces the
     ordinary detailed router.
     """
+    unified_fanout = None
     if unified_options is not None:
         from functools import partial
         route_ordinary = partial(_route_unified_compat, unified_options)
         # The unified router owns terminal access itself: no package-access
         # search, only deterministic BGA dogbones before ordinary routing.
         # Power comes from declared planes (refactor plan P3), not the
-        # power-preparation allocator.
+        # power-preparation allocator. The established escape generator still
+        # seeds pad launches (once, no gate, no search over alternatives).
+        unified_fanout = fanout_options
         fanout_options = None
         if power_area_options is not None:
             emit(on_progress, "power_area_planning", "skipped", reason="unified router uses declared planes")
@@ -299,6 +302,9 @@ def run_routing_pipeline(
         on_progress=on_progress,
         only_nets=routing_nets,
     )
+    if unified_options is not None and unified_fanout is not None:
+        detailed = _escape_assist(detailed, placement.global_route, unified_options, unified_fanout,
+                                  on_progress)
     emit(on_progress, "ordinary_area", "finished", status=detailed.status.value,
          failed_nets=[n.net for n in detailed.nets if not n.connected],
          passes=detailed.metrics.passes)
@@ -427,6 +433,45 @@ def run_routing_pipeline(
         power_preparation_validation=preparation_validation,
         power_native_verifier=power_native_verifier,
     )
+
+
+def _escape_assist(detailed, global_route, unified_options, fanout_options, on_progress):
+    """Give pads the unified router could not reach a checked via escape, then retry.
+
+    Escapes are generated only for the failed nets, against the board with all
+    accepted copper, so they cannot take space from routed nets. The result is
+    kept only if it connects more nets.
+    """
+    from .fanout import route_fanout
+    from .unified_router import route_unified
+    from .zone_geometry import deferred_zone_nets
+    plane_nets = {zone.net for zone in detailed.board.zones}
+    failed = frozenset(n.net for n in detailed.nets if not n.connected and n.net not in plane_nets)
+    if not failed:
+        return detailed
+    emit(on_progress, "escape_assist", "started", nets=len(failed))
+    seeds = route_fanout(detailed.board, fanout_options, only_nets=failed)
+    if not seeds.accesses:
+        emit(on_progress, "escape_assist", "finished", escaped=0, adopted=False)
+        return detailed
+    retry = route_unified(seeds.board, global_route, unified_options, only_nets=failed,
+                          on_progress=on_progress)
+    before = sum(1 for n in detailed.nets if n.connected)
+    connected = {n.net for n in retry.nets if n.connected}
+    after = sum(1 for n in detailed.nets if n.connected or n.net in connected)
+    adopted = after > before
+    emit(on_progress, "escape_assist", "finished", escaped=len(seeds.accesses), adopted=adopted,
+         recovered=after - before)
+    if not adopted:
+        return detailed
+    nets = tuple(next((r for r in retry.nets if r.net == n.net), n) if n.net in failed else n
+                 for n in detailed.nets)
+    metrics = replace(detailed.metrics,
+                      routed_net_count=sum(n.connected for n in nets),
+                      unrouted_net_count=sum(not n.connected for n in nets))
+    status = detailed.status.__class__.SUCCESS if all(n.connected or n.net in plane_nets for n in nets) \
+        else detailed.status
+    return replace(detailed, board=retry.board, nets=nets, metrics=metrics, status=status)
 
 
 def _route_unified_compat(unified_options, board, global_route, _detailed_options, **kwargs):

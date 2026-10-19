@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "PCB DSL prototype contributors" }]
-dependencies = []
+dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
@@ -28,10 +28,11 @@ tiny = "copperscript.library_data:tiny_library"
 standard = "copperscript.library_data:tiny_library"
 
 [tool.setuptools]
-packages = ["copperscript", "pcbir", "pcbir.backends", "pcbir.importers", "pcbir.simulation", "pcbir.editor", "pcbir.editor.assets", "pcbir.lsp"]
+packages = ["copperscript", "pcbir", "pcbir.native", "pcbir.backends", "pcbir.importers", "pcbir.simulation", "pcbir.editor", "pcbir.editor.assets", "pcbir.lsp"]
 
 [tool.setuptools.package-data]
 "pcbir.editor.assets" = ["*.html", "*.css", "*.js", "*.svg", "*.png"]
+"pcbir.native" = ["*.c", "*.so", "*.dll", "*.sha256"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

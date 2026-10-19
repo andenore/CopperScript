@@ -9,3 +9,6 @@ copper.mod text eol=lf
 examples/simulation/analog_frontend/models/opa2197.lib text eol=lf
 # Showcase illustration hashes describe exact SVG bytes on every platform.
 site/assets/*.svg text eol=lf
+# Prebuilt native router kernels (tools/build_kernel.py).
+pcbir/native/*.so -text
+pcbir/native/*.dll -text
