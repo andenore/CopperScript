@@ -325,6 +325,7 @@ class _NetSpec:
     layers: tuple[int, ...]
     components: list[list[tuple[int, tuple[TrackSegment, ...], float]]]  # attach candidates per component
     span: int
+    via_factor: float = 1.0                  # extra via cost for nets with a via budget
     neck_width: int = 0
     neck_clearance: int = 0
     plane: frozenset[int] = frozenset()      # plane-region nodes (zone nets only)
@@ -416,6 +417,7 @@ class _Router:
         self.default_width = default_width
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
         self.routes: dict[str, _NetRoute] = {}
+        self._lead_nodes: dict[tuple, list[int]] = {}
         self.present = options.present_factor
 
     # -- setup ------------------------------------------------------------
@@ -456,12 +458,21 @@ class _Router:
         width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
         clearance = max(board.rules.minimum_clearance_nm, rule.clearance_nm or 0 if rule else 0)
         allowed = set(routing_layers(board, net.name, rule))
+        if rule is not None and rule.max_vias == 0:
+            # No vias: stay on the copper layers of the net's own pads.
+            pad_layers = set()
+            for pad in net.pads:
+                for _, layer_indexes, *_ in self._pad_anchors(pad, None):
+                    pad_layers.update(g.layers[i] for i in layer_indexes)
+            allowed &= pad_layers
         layers = tuple(i for i, layer in enumerate(g.layers) if layer in allowed)
         if not layers:
             return None
         spec = _NetSpec(net.name, self._net_id(net.name), width, clearance,
                         board.rules.default_via_size_nm, board.rules.default_via_drill_nm,
                         layers, [], 0)
+        if rule is not None and rule.max_vias:
+            spec.via_factor = 4.0
         # Breakout rules let a net narrow next to its own lands (see breakout.py).
         if rule is not None and rule.breakout_length_nm and rule.breakout_width_nm \
                 and rule.breakout_width_nm < width:
@@ -710,7 +721,7 @@ class _Router:
                 continue
             if any(node in targets for node, _, _ in component):
                 continue  # Already inside the plane's fill.
-            sources = {node: cost for node, _, cost in component}
+            sources = {node: cost + self._lead_penalty(lead, present) for node, lead, cost in component}
             leads = {node: lead for node, lead, _ in component}
             xs = [g.unpack(n)[1] for n in sources]; ys = [g.unpack(n)[2] for n in sources]
             box = (max(0, min(xs) - margin), max(0, min(ys) - margin),
@@ -744,7 +755,8 @@ class _Router:
             route.reason = "no legal terminal access for %d of %d pad groups" % (
                 sum(1 for c in components if not c), len(components))
             return route
-        tree: dict[int, float] = {node: cost for node, _, cost in components[0]}
+        tree: dict[int, float] = {node: cost + self._lead_penalty(lead, present)
+                                  for node, lead, cost in components[0]}
         leads = {node: lead for node, lead, _ in components[0]}
         used_leads: dict[tuple[TrackSegment, ...], bool] = {}
         remaining = list(range(1, len(components)))
@@ -761,7 +773,9 @@ class _Router:
             for ci in remaining:
                 for node, lead, cost in components[ci]:
                     targets[node] = (ci, lead, cost)
-            found = self._search(spec, tree, targets, present)
+            extra = {node: cost + self._lead_penalty(lead, present)
+                     for node, (_, lead, cost) in targets.items()}
+            found = self._search(spec, tree, targets, present, extra)
             if found is None:
                 route.reason = "no path to %d remaining pad groups" % len(remaining)
                 route.connected = False
@@ -785,7 +799,7 @@ class _Router:
                 tree[node] = 0.0
             for node, lead2, cost in components[ci]:
                 if node not in tree:
-                    tree[node] = cost
+                    tree[node] = cost + self._lead_penalty(lead2, present)
                     leads[node] = lead2
             remaining.remove(ci)
         route.connected = True
@@ -823,6 +837,18 @@ class _Router:
                     x, y = xa + ox, ya + oy
                     if 0 <= x < g.nx and 0 <= y < g.ny:
                         claims.add(la * g.plane + y * g.nx + x)
+        # Lead-ins are off-grid copper: claim around them and treat the
+        # nodes along them as path nodes, so they negotiate like paths.
+        layer_of = {layer: i for i, layer in enumerate(g.layers)}
+        for leads in route.leads:
+            for track in leads:
+                layer = layer_of[track.layer]
+                radius_nm = track.width_nm / 2 + spec.clearance + self.default_width / 2
+                near = g.pitch / 2
+                for node, distance in self._segment_nodes(track.start, track.end, layer, radius_nm):
+                    claims.add(node)
+                    if distance <= near:
+                        nodes.add(node)
         for xy in via_xy:
             yv, xv = divmod(xy, g.nx)
             for ox, oy in _disc_offsets_cached(via_radius):
@@ -838,7 +864,43 @@ class _Router:
         route.claims, route.via_claims = claims, via_claims
         route.length = length
 
-    def _search(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float):
+    def _lead_penalty(self, lead: tuple[TrackSegment, ...], present: float) -> float:
+        """Congestion price of an off-grid lead-in, so attach choices negotiate too."""
+        if not lead:
+            return 0.0
+        nodes = self._lead_nodes.get(lead)
+        if nodes is None:
+            g = self.grid
+            layer_of = {layer: i for i, layer in enumerate(g.layers)}
+            nodes = []
+            for track in lead:
+                nodes.extend(node for node, distance in self._segment_nodes(
+                    track.start, track.end, layer_of[track.layer], g.pitch / 2 + 1) )
+            self._lead_nodes[lead] = nodes
+        hist, occ = self.occupancy.history, self.occupancy.occ
+        return sum(hist[n] + present * occ[n] for n in nodes)
+
+    def _segment_nodes(self, start: Point, end: Point, layer: int, radius_nm: float):
+        """(node, distance) for grid nodes strictly within radius of a segment."""
+        g = self.grid
+        ix0, iy0, ix1, iy1 = g.window(min(start.x_nm, end.x_nm) - radius_nm, min(start.y_nm, end.y_nm) - radius_nm,
+                                      max(start.x_nm, end.x_nm) + radius_nm, max(start.y_nm, end.y_nm) + radius_nm)
+        ax, ay, bx, by = start.x_nm, start.y_nm, end.x_nm, end.y_nm
+        dx, dy = bx - ax, by - ay
+        length2 = dx * dx + dy * dy
+        result = []
+        for iy in range(iy0, iy1 + 1):
+            py = g.y0 + iy * g.pitch
+            for ix in range(ix0, ix1 + 1):
+                px = g.x0 + ix * g.pitch
+                t = 0.0 if not length2 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / length2))
+                distance = hypot(px - (ax + t * dx), py - (ay + t * dy))
+                if distance < radius_nm:
+                    result.append((layer * g.plane + iy * g.nx + ix, distance))
+        return result
+
+    def _search(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
+                target_extra=None):
         g, options = self.grid, self.options
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self.rasters.via(spec.via_size, spec.via_drill, spec.clearance)
@@ -861,7 +923,7 @@ class _Router:
         by1 = min(g.ny - 1, max(ty1, max(y for _, y in src_xy)) + margin)
         for attempt in range(3):
             result = self._astar(spec, sources, targets, present, (bx0, by0, bx1, by1),
-                                 (tx0, ty0, tx1, ty1), owner, mid_owner, via_owner)
+                                 (tx0, ty0, tx1, ty1), owner, mid_owner, via_owner, target_extra)
             if result is not None:
                 return result
             if (bx0, by0, bx1, by1) == (0, 0, nx - 1, g.ny - 1):
@@ -873,7 +935,8 @@ class _Router:
                 bx0, by0, bx1, by1 = 0, 0, nx - 1, g.ny - 1
         return None
 
-    def _astar(self, spec, sources, targets, present, box, tbox, owner, mid_owner, via_owner):
+    def _astar(self, spec, sources, targets, present, box, tbox, owner, mid_owner, via_owner,
+               target_extra=None):
         """A* over the shared grid; arrays are reused across searches."""
         g, options = self.grid, self.options
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
@@ -886,7 +949,7 @@ class _Router:
         tx0, ty0, tx1, ty1 = tbox
         layer_cost, heading = self.layer_cost, self.heading
         wrong = options.wrong_way_cost
-        via_cost = self.via_cost
+        via_cost = self.via_cost * spec.via_factor
         best, parent = self._best, self._parent
         touched = []
         heap: list = []
@@ -924,11 +987,17 @@ class _Router:
             move_tables.append(table)
         while heap:
             f, cost, node = pop(heap)
+            if node < 0:
+                found = -node - 1  # a target, completed with its lead-in price
+                break
             if cost > best[node]:
                 continue
             if node in targets:
-                found = node
-                break
+                if target_extra is None:
+                    found = node
+                    break
+                extra = target_extra.get(node, 0.0)
+                push(heap, (cost + extra, cost + extra, -node - 1))
             expansions += 1
             if expansions > limit:
                 break
@@ -1055,7 +1124,7 @@ class _Router:
             self.present = present
             # Reroute conflicted nets; retry failed nets now and then, since
             # congestion elsewhere may have moved.
-            pending = [s.name for s in specs if s.name in conflicts or (s.name in failed and iteration % 3 == 0)]
+            pending = [s.name for s in specs if s.name in conflicts or (s.name in failed and iteration in (3, 6))]
             if not pending:
                 break
         _, snapshot, conflicts = best_snapshot
@@ -1159,6 +1228,13 @@ class _Router:
                 complete.add(name)
         return accepted, rejected, complete
 
+    def history_seed(self, other: "_Router") -> None:
+        """Carry congestion history over from an earlier router on the same grid."""
+        if other.grid.size == self.grid.size and other.grid.pitch == self.grid.pitch:
+            self.occupancy.history = list(other.occupancy.history)
+            self.occupancy.via_history = list(other.occupancy.via_history)
+            self.present = other.present
+
     def penalise_points(self, name: str, points: list[Point], amount: float) -> None:
         g = self.grid
         hist = self.occupancy.history
@@ -1172,6 +1248,53 @@ class _Router:
                     via_hist[y * g.nx + x] += amount
                     for layer in range(g.nl):
                         hist[layer * g.plane + y * g.nx + x] += amount
+
+
+def _open_count(board: PhysicalBoard, nets, accepted, plane_nets) -> tuple[int, int]:
+    """(open signal connections, incomplete plane nets) with ``accepted`` copper."""
+    from .drc import explicit_copper_connectivity
+    names = {net.name for net in nets}
+    candidate = replace(board,
+        tracks=(*board.tracks, *(t for name in sorted(accepted) for t in accepted[name][0])),
+        vias=(*board.vias, *(v for name in sorted(accepted) for v in accepted[name][1])))
+    graph = explicit_copper_connectivity(candidate, only_nets=frozenset(names))
+    opens = 0
+    for net in nets:
+        if net.name in plane_nets:
+            continue
+        roots = set()
+        isolated = 0
+        for pad in net.pads:
+            nodes = graph.pad_nodes.get(pad, ())
+            if nodes:
+                roots.add(graph.roots[nodes[0]])
+            else:
+                isolated += 1
+        opens += max(0, len(roots) + isolated - 1)
+    planes = sum(1 for net in nets if net.name in plane_nets and net.name not in accepted)
+    return opens, planes
+
+
+def _neighbour_nets(board: PhysicalBoard, nets, accepted, reach: int) -> set[str]:
+    """Nets with accepted new copper within ``reach`` of the given nets' pads."""
+    from .placement import transformed_local_point
+    poses = {p.reference: p for p in board.placements}
+    names = {net.name for net in nets}
+    points = []
+    for net in nets:
+        for pad in net.pads:
+            pose = poses[pad.component]
+            for land in board.footprints[pose.footprint].pads:
+                if land.number == pad.pad:
+                    points.append(transformed_local_point(pose, land.position))
+    result = set()
+    for name, (tracks, vias) in accepted.items():
+        if name in names:
+            continue
+        ends = [p for t in tracks for p in (t.start, t.end)] + [v.position for v in vias]
+        if any(abs(a.x_nm - b.x_nm) <= reach and abs(a.y_nm - b.y_nm) <= reach for a in ends for b in points):
+            result.add(name)
+    return result
 
 
 def choose_pitch(board: PhysicalBoard, default_nm: int = nm_from_mm("0.25")) -> int:
@@ -1272,21 +1395,54 @@ def route_unified(
     router = _Router(board, options, nets, on_progress)
     emit(on_progress, "unified_setup", "finished", nets=len(router.specs),
          grid=[router.grid.nx, router.grid.ny, router.grid.nl], seconds=round(perf_counter() - started, 2))
-    accepted: dict[str, tuple[list[TrackSegment], list[Via]]] = {}
-    rejected: dict[str, list[Point]] = {}
-    iterations = 0
-    retry: set[str] | None = None
-    for round_index in range(options.commit_rounds):
-        routes, conflicts, used = router.negotiate(deadline, retry)
-        iterations += used
-        accepted, rejected, complete = router.commit(routes, conflicts)
-        emit(on_progress, "unified_commit", "finished", round=round_index + 1,
-             accepted=len(accepted), rejected=len(rejected), conflicted=len(conflicts))
-        if not rejected or (deadline is not None and perf_counter() > deadline):
+    routes, conflicts, iterations = router.negotiate(deadline)
+    accepted, rejected, complete = router.commit(routes, conflicts)
+    emit(on_progress, "unified_commit", "finished", round=1,
+         accepted=len(accepted), rejected=len(rejected), conflicted=len(conflicts))
+    # Rip-in repair: committed copper becomes a fixed obstacle and the
+    # remaining nets are routed again against it. This settles the residual
+    # cases where the raster and the exact check disagree (off-grid lead-ins).
+    for round_index in range(1, options.commit_rounds):
+        remaining = [net for net in nets if net.name not in complete]
+        if not remaining or (deadline is not None and perf_counter() > deadline):
             break
-        for name, points in rejected.items():
-            router.penalise_points(name, points, 4.0)
-        retry = set(rejected)
+        # Rip up neighbours whose new copper crowds the remaining nets' pads,
+        # so they renegotiate together; everything else stays fixed.
+        snapshot = ({k: (list(v[0]), list(v[1])) for k, v in accepted.items()}, set(complete), dict(rejected))
+        crowd = _neighbour_nets(board, remaining, accepted, nm_from_mm("1.0"))
+        for name in crowd:
+            accepted.pop(name, None)
+            complete.discard(name)
+        remaining = [net for net in nets if net.name not in complete]
+        partial = replace(board,
+            tracks=(*board.tracks, *(t for name in sorted(accepted) for t in accepted[name][0])),
+            vias=(*board.vias, *(v for name in sorted(accepted) for v in accepted[name][1])))
+        fixed = explicit_copper_connectivity(partial)
+        remaining = [net for net in remaining if not fixed.net_connected(net) or net.name in plane_nets]
+        repair = _Router(partial, options, remaining, on_progress)
+        repair.history_seed(router)
+        more_routes, more_conflicts, used = repair.negotiate(deadline)
+        iterations += used
+        more, more_rejected, more_complete = repair.commit(more_routes, more_conflicts)
+        for name, (tracks, vias) in more.items():
+            old_tracks, old_vias = accepted.get(name, ([], []))
+            accepted[name] = (old_tracks + tracks, old_vias + vias)
+        complete |= more_complete
+        complete |= {net.name for net in remaining if net.name not in more_routes
+                     and fixed.net_connected(net) and net.name not in plane_nets}
+        rejected = {name: points for name, points in more_rejected.items() if name not in complete}
+        improved = _open_count(board, nets, accepted, plane_nets) < _open_count(board, nets, snapshot[0], plane_nets)
+        if not improved:
+            # Keep the better earlier state; a repair never loses routed nets.
+            accepted, complete, rejected = snapshot
+        else:
+            for name, route in more_routes.items():
+                router.routes[name] = route
+        emit(on_progress, "unified_commit", "finished", round=round_index + 1,
+             accepted=len(more), rejected=len(more_rejected), conflicted=len(more_conflicts),
+             adopted=improved)
+        if not improved:
+            break
     spec_names = {s.name for s in router.specs}
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
