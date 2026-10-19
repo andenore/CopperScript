@@ -122,7 +122,8 @@ def _row(result: dict) -> dict:
         "completion": signal.get("completion"),
         "opens": signal.get("opens"),
         "connections": signal.get("connections"),
-        "plane_opens": summary.get("plane", {}).get("explicit_opens"),
+        "plane_opens": summary.get("plane", {}).get("estimated_opens",
+                                                    summary.get("plane", {}).get("explicit_opens")),
         "drc_errors": summary.get("drc", {}).get("errors"),
         "native_unconnected": summary.get("native", {}).get("unconnected"),
         "vias": summary.get("copper", {}).get("vias"),
@@ -164,7 +165,7 @@ def markdown(document: dict, problems: list[str] | None = None) -> str:
     lines = [f"# Benchmark ladder: {document['label']}", "",
              f"CopperScript `{document.get('copperscript_commit') or 'unknown'}`, "
              f"{document['started_utc']}", "",
-             "| Board | Status | Completion | Opens / connections | Plane opens | DRC errors | Native unconnected | Vias | Length mm | Time s |",
+             "| Board | Status | Completion | Opens / connections | Plane opens (est.) | DRC errors | Native unconnected | Vias | Length mm | Time s |",
              "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for item in document["results"]:
         row = _row(item)

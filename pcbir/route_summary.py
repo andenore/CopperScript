@@ -13,7 +13,7 @@ from collections import Counter
 from .physical import PhysicalBoard
 
 
-def connection_summary(board: PhysicalBoard, drc=None, *, native=None) -> dict:
+def connection_summary(board: PhysicalBoard, drc=None, *, native=None, estimate_planes: bool = True) -> dict:
     """Return connection, open, copper and DRC counts for ``board``.
 
     ``drc`` is an optional :class:`PhysicalDrcReport` for the same board.
@@ -58,6 +58,11 @@ def connection_summary(board: PhysicalBoard, drc=None, *, native=None) -> dict:
         "copper": {"tracks": len(tracks), "vias": len(board.vias),
                    "track_length_mm": round(length / 1_000_000, 3)},
     }
+    if estimate_planes and board.zones:
+        from .plane_estimate import estimate_plane_connectivity
+        estimate = estimate_plane_connectivity(board)
+        result["plane"]["estimated_opens"] = estimate.opens
+        result["plane"]["estimated_open_nets"] = estimate.report()["open_nets"]
     if drc is not None:
         codes = Counter(finding.code for finding in drc.findings
                         if finding.severity.value == "error" and finding.disposition.value == "active")

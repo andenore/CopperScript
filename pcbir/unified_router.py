@@ -36,7 +36,6 @@ from .detailed import (
     DetailedRoutingResult,
     DetailedRoutingStatus,
     _fingerprint,
-    _prune_fanout_copper,
 )
 from .geometry import RoundedConvexShape
 from .physical import (
@@ -81,6 +80,7 @@ class UnifiedRouterOptions:
     window_margin_nm: int = nm_from_mm("2.5")
     maximum_expansions: int = 400_000
     commit_rounds: int = 4
+    bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
 
@@ -326,8 +326,10 @@ class _NetSpec:
     components: list[list[tuple[int, tuple[TrackSegment, ...], float]]]  # attach candidates per component
     span: int
     neck_width: int = 0
-    neck: frozenset[int] = frozenset()       # nodes legal only at neck width
-    neck_mid: frozenset[int] = frozenset()   # cell centres legal only at neck width
+    neck_clearance: int = 0
+    region: frozenset[int] = frozenset()     # nodes inside the net's breakout regions
+    neck: frozenset[int] = frozenset()       # region nodes legal only at neck width
+    neck_mid: frozenset[int] = frozenset()   # region cell centres legal only at neck width
 
 
 @dataclass(slots=True)
@@ -451,39 +453,54 @@ class _Router:
         spec = _NetSpec(net.name, self._net_id(net.name), width, clearance,
                         board.rules.default_via_size_nm, board.rules.default_via_drill_nm,
                         layers, [], 0)
-        neck_width = min(width, board.rules.minimum_track_width_nm)
-        if neck_width < width:
-            spec.neck_width = neck_width
-            spec.neck, spec.neck_mid = self._neck_nodes(net, spec)
+        # Breakout rules let a net narrow next to its own lands (see breakout.py).
+        if rule is not None and rule.breakout_length_nm and rule.breakout_width_nm \
+                and rule.breakout_width_nm < width:
+            spec.neck_width = max(rule.breakout_width_nm, board.rules.minimum_track_width_nm)
+            spec.neck_clearance = max(board.rules.minimum_clearance_nm,
+                                      rule.breakout_clearance_nm or rule.clearance_nm or 0)
+            spec.region, spec.neck, spec.neck_mid = self._neck_nodes(net, spec, rule.breakout_length_nm)
         spec.components = self._components(net, spec)
         xs = [self.grid.unpack(node)[1] for comp in spec.components for node, _, _ in comp]
         ys = [self.grid.unpack(node)[2] for comp in spec.components for node, _, _ in comp]
         spec.span = (max(xs) - min(xs) + max(ys) - min(ys)) if xs else 0
         return spec
 
-    def _neck_nodes(self, net, spec: _NetSpec):
-        """Nodes near the net's own pads that are legal only at the neck width."""
-        g = self.grid
+    def _neck_nodes(self, net, spec: _NetSpec, length: int):
+        """Breakout-region nodes, and those legal there only at the neck width."""
+        from .drc import placed_pad_shape
+        from .placement import transformed_local_point
+        g, board = self.grid, self.board
         main, main_mid = self.rasters.track(spec.width, spec.clearance)
-        neck, neck_mid = self.rasters.track(spec.neck_width, spec.clearance)
-        radius = self.options.neck_radius_nm
-        nodes, cells = set(), set()
+        neck, neck_mid = self.rasters.track(spec.neck_width, spec.neck_clearance)
         nid = spec.nid
+        region, nodes, cells = set(), set(), set()
+        poses = {p.reference: p for p in board.placements}
         for pad in net.pads:
-            for position, _ in self._pad_anchors(pad, spec):
-                ix0, iy0, ix1, iy1 = g.window(position.x_nm - radius, position.y_nm - radius,
-                                              position.x_nm + radius, position.y_nm + radius)
-                for iy in range(iy0, iy1 + 1):
-                    for ix in range(ix0, ix1 + 1):
-                        if hypot(g.x0 + ix * g.pitch - position.x_nm, g.y0 + iy * g.pitch - position.y_nm) > radius:
-                            continue
-                        for layer in spec.layers:
-                            node = g.index(layer, ix, iy)
-                            if main[node] not in (_FREE, nid) and neck[node] in (_FREE, nid):
-                                nodes.add(node)
-                            if main_mid[node] not in (_FREE, nid) and neck_mid[node] in (_FREE, nid):
-                                cells.add(node)
-        return frozenset(nodes), frozenset(cells)
+            pose = poses[pad.component]
+            for land in board.footprints[pose.footprint].pads:
+                if land.number != pad.pad:
+                    continue
+                shape = placed_pad_shape(transformed_local_point(pose, land.position), land, pose)
+                reach = shape.radius_nm + length
+                xs = [p.x_nm for p in shape.spine]; ys = [p.y_nm for p in shape.spine]
+                ix0, iy0, ix1, iy1 = g.window(min(xs) - reach, min(ys) - reach, max(xs) + reach, max(ys) + reach)
+                if ix0 > ix1 or iy0 > iy1:
+                    continue
+                wx = self.rasters.px[iy0:iy1 + 1, ix0:ix1 + 1]
+                wy = self.rasters.py[iy0:iy1 + 1, ix0:ix1 + 1]
+                # Strictly inside, with a small margin for the centreline test.
+                inside = _spine_distance(shape.spine, wx, wy) < reach - g.pitch // 8
+                for jy, jx in zip(*inside.nonzero()):
+                    iy, ix = iy0 + int(jy), ix0 + int(jx)
+                    for layer in spec.layers:
+                        node = g.index(layer, ix, iy)
+                        region.add(node)
+                        if main[node] not in (_FREE, nid) and neck[node] in (_FREE, nid):
+                            nodes.add(node)
+                        if main_mid[node] not in (_FREE, nid) and neck_mid[node] in (_FREE, nid):
+                            cells.add(node)
+        return frozenset(region), frozenset(nodes), frozenset(cells)
 
     def _components(self, net, spec: _NetSpec):
         """Group already-joined pads; collect grid attach candidates per group."""
@@ -497,10 +514,18 @@ class _Router:
             nodes = graph.pad_nodes.get(pad, ())
             root = graph.roots[nodes[0]] if nodes else f"pad:{pad.component}.{pad.pad}"
             groups.setdefault(root, []).append(pad)
+        from .hard_macros import macro_port_layers, macro_routing_ports
+        ports = macro_routing_ports(board, net.name)
         components = []
         for root, members in sorted(groups.items(), key=lambda item: str(item[1][0])):
             anchors: list[tuple[Point, tuple[int, ...]]] = []
             for pad in members:
+                port = ports.get(pad)
+                if port is not None:
+                    # A hard macro exposes this pad group only at its port.
+                    layers = tuple(self.grid.layers.index(l) for l in macro_port_layers(board, port))
+                    anchors.append((port.position, layers))
+                    continue
                 anchors.extend(self._pad_anchors(pad, spec))
             if not root.startswith("pad:"):
                 # Existing copper of this group (fanout, plane taps, partial routes).
@@ -716,7 +741,7 @@ class _Router:
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
         hist, via_hist = self.occupancy.history, self.occupancy.via_history
         nid = spec.nid
-        neck, neck_mid = spec.neck, spec.neck_mid
+        neck, neck_mid, region = spec.neck, spec.neck_mid, spec.region
         nx, ny, plane, nl = g.nx, g.ny, g.plane, g.nl
         bx0, by0, bx1, by1 = box
         tx0, ty0, tx1, ty1 = tbox
@@ -757,6 +782,7 @@ class _Router:
             layer, rest = divmod(node, plane)
             y, x = divmod(rest, nx)
             lc = layer_cost[layer]
+            here_in_region = node in region
             head = heading[layer]
             for dx, dy, step in _MOVES:
                 x2, y2 = x + dx, y + dy
@@ -764,12 +790,12 @@ class _Router:
                     continue
                 n2 = node + dy * nx + dx
                 o = owner[n2]
-                if o != -1 and o != nid and n2 not in neck:
+                if o != -1 and o != nid and not (here_in_region and n2 in neck):
                     continue
                 if dx and dy:
                     cell = layer * plane + (y if dy > 0 else y - 1) * nx + (x if dx > 0 else x - 1)
                     o = mid_owner[cell]
-                    if o != -1 and o != nid and cell not in neck_mid:
+                    if o != -1 and o != nid and not (here_in_region and n2 in region and cell in neck_mid):
                         continue
                 base = step
                 if head is not None:
@@ -794,7 +820,7 @@ class _Router:
                     continue
                 n2 = layer2 * plane + xy
                 o = owner[n2]
-                if o != -1 and o != nid and n2 not in neck:
+                if o != -1 and o != nid:
                     continue
                 c = cost + vpen * (1.0 + hist[n2]) * (1.0 + present * occ[n2])
                 if c < best.get(n2, 1e30):
@@ -889,9 +915,11 @@ class _Router:
         vias: list[Via] = []
         for lead in route.leads:
             tracks.extend(lead)
-        neck = spec.neck
+        neck, region = spec.neck, spec.region
         def width_of(a: int, b: int) -> int:
-            return spec.neck_width if (a in neck or b in neck) else spec.width
+            if a in region and b in region and (a in neck or b in neck or _diagonal_mid(g, a, b) in spec.neck_mid):
+                return spec.neck_width
+            return spec.width
         for path in route.paths:
             if len(path) < 2:
                 continue
@@ -971,6 +999,14 @@ class _Router:
                     via_hist[y * g.nx + x] += amount
                     for layer in range(g.nl):
                         hist[layer * g.plane + y * g.nx + x] += amount
+
+
+def _diagonal_mid(g: _Grid, a: int, b: int) -> int:
+    la, xa, ya = g.unpack(a)
+    _, xb, yb = g.unpack(b)
+    if xa == xb or ya == yb:
+        return -1
+    return la * g.plane + min(ya, yb) * g.nx + min(xa, xb)
 
 
 _OFFSET_CACHE: dict = {}
@@ -1058,12 +1094,6 @@ def route_unified(
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
     all_tracks = (*board.tracks, *new_tracks)
     all_vias = (*board.vias, *new_vias)
-    if fanout_accesses:
-        successful = {pad for net in board.nets if net.name in accepted for pad in net.pads}
-        cleanup = {pad: anchor for pad, anchor in fanout_accesses.items() if pad in successful}
-        all_tracks, all_vias = _prune_fanout_copper(
-            board, all_tracks, all_vias, cleanup, frozenset(accepted), fanout_created_vias,
-            fanout_created_tracks, smooth=False, release=False)
     metadata = dict(board.metadata)
     routed_names = set(accepted) | {net.name for net in already}
     unrouted = [net.name for net in nets if net.name not in accepted]

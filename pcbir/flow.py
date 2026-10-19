@@ -86,6 +86,14 @@ def run_routing_pipeline(
     if unified_options is not None:
         from functools import partial
         route_ordinary = partial(_route_unified_compat, unified_options)
+        # The unified router owns terminal access itself: no package-access
+        # search, only deterministic BGA dogbones before ordinary routing.
+        # Power comes from declared planes (refactor plan P3), not the
+        # power-preparation allocator.
+        fanout_options = None
+        if power_area_options is not None:
+            emit(on_progress, "power_area_planning", "skipped", reason="unified router uses declared planes")
+        power_area_options = None
     else:
         route_ordinary = route_detailed
 
@@ -206,6 +214,12 @@ def run_routing_pipeline(
     if access is None and critical.board.decoupling_links:
         from .decoupling import route_decouplers
         critical = replace(critical, board=route_decouplers(critical.board).board)
+    if unified_options is not None and getattr(unified_options, "bga_fanout", True):
+        from .bga_fanout import plan_bga_fanouts
+        emit(on_progress, "bga_fanout", "started")
+        bga = plan_bga_fanouts(critical.board)
+        critical = replace(critical, board=bga.board)
+        emit(on_progress, "bga_fanout", "finished", **bga.report())
     plane_stitch = access.plane_stitch if access else (
         stitch_zone_pads(critical.board, plane_stitch_options)
         if plane_stitch_options else None
