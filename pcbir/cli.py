@@ -488,8 +488,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument("--router", choices=("legacy", "unified"), default="legacy",
         help="ordinary detailed router: the pass-based legacy router or the unified negotiated router")
-    board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=Decimal("0.25"),
-        help="grid pitch of the unified router (default: 0.25 mm)")
+    board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
+        help="grid pitch of the unified router (default: 0.25 mm, finer to align with ball grids)")
     board_route_parser.add_argument("--unified-iterations", type=int, default=40,
         help="maximum negotiation iterations of the unified router (default: 40)")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
@@ -722,7 +722,7 @@ def _unified_options(args):
     if getattr(args, "router", "legacy") != "unified":
         return None
     from .unified_router import UnifiedRouterOptions
-    return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm),
+    return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
                                 maximum_iterations=args.unified_iterations,
                                 time_budget_s=args.unified_time_budget_s)
 

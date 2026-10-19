@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from .package_patterns import circular_array
 from .physical import (BoardSide, CopperLayer, PadReference, PhysicalBoard, Point, RouteKind,
                        TrackSegment, Via)
+from .pin_escape import checked_access_path
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers
@@ -105,21 +106,32 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
             iy = array.ys_nm.index(land.position.y_nm)
             sx = -1 if 2 * ix < nx - 1 else 1
             sy = -1 if 2 * iy < ny - 1 else 1
+            # The four adjacent cell centres (outward first), then the next
+            # ring of cell centres reached by a checked octilinear stub.
             options = [(sx, sy), (sx, -sy), (-sx, sy), (-sx, -sy)]
+            options += sorted(((dx, dy) for dx in (-3, -1, 1, 3) for dy in (-3, -1, 1, 3)
+                               if max(abs(dx), abs(dy)) == 3),
+                              key=lambda d: (-(d[0] * sx + d[1] * sy), d))
             start = transformed_local_point(pose, land.position)
             accepted = False
             for dx, dy in options:
                 local = Point(land.position.x_nm + dx * half, land.position.y_nm + dy * half)
                 site = transformed_local_point(pose, local)
                 via = Via(net, site, via_size, via_drill, layers[0], layers[-1])
-                stub = TrackSegment(net, start, site, width, side)
                 if not index.can_via(net, site, via_size, via.from_layer, via.to_layer, drill_nm=via_drill):
                     continue
-                if not index.can_track(net, start, site, width, side):
+                if abs(dx) == 1:
+                    stubs = ((TrackSegment(net, start, site, width, side),)
+                             if index.can_track(net, start, site, width, side) else None)
+                else:
+                    path = checked_access_path(board, index, net, start, site, width, side)
+                    stubs = tuple(path) if path else None
+                if not stubs:
                     continue
-                index.add_track(stub)
+                for stub in stubs:
+                    index.add_track(stub)
+                    tracks.append(stub)
                 index.add_via(via)
-                tracks.append(stub)
                 vias.append(via)
                 fanned.append(reference)
                 accepted = True

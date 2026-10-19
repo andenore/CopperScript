@@ -18,6 +18,7 @@ def place_rigid_clusters(board, targets, original, options):
         _best_legal_choice, _adjacency, _relative_penalty, _pack_local_components,
         _placement_polygon, _polygons_too_close,
     )
+    from .physical import component_pair_courtyard_gap_nm
 
     if not board.rigid_clusters:
         return targets, original, options
@@ -31,9 +32,10 @@ def place_rigid_clusters(board, targets, original, options):
     fixed_obstacles = sorted(placed.items())
     for index, (reference, pose) in enumerate(fixed_obstacles):
         for other_reference, other in fixed_obstacles[:index]:
+            gap = component_pair_courtyard_gap_nm(board, other_reference, reference,
+                                                  fallback_nm=options.component_clearance_nm)
             if pose.side is other.side and _polygons_too_close(
-                    _placement_polygon(board, pose), _placement_polygon(board, other),
-                    options.component_clearance_nm):
+                    _placement_polygon(board, pose), _placement_polygon(board, other), gap):
                 raise PlacementAlgorithmError(
                     f"conflicting fixed placements {other_reference!r} and {reference!r}: "
                     "courtyard clearance; cluster search cannot relocate either")

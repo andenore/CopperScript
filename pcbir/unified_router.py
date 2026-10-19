@@ -65,12 +65,12 @@ _MOVES = ((1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
 
 @dataclass(frozen=True, slots=True)
 class UnifiedRouterOptions:
-    pitch_nm: int = nm_from_mm("0.25")
+    pitch_nm: int | None = None    # None: 0.25 mm, finer where a ball grid needs it
     maximum_iterations: int = 40
     present_factor: float = 0.6
     present_growth: float = 1.5
     history_increment: float = 0.8
-    via_cost: float = 6.0          # in pitch lengths
+    via_cost_mm: float = 1.5       # a via costs as much as this much track
     wrong_way_cost: float = 0.5    # added per pitch against a layer's preferred heading
     outer_layer_cost: float = 0.0  # added per pitch on surface layers
     attach_radius_nm: int = nm_from_mm("1.5")
@@ -85,7 +85,7 @@ class UnifiedRouterOptions:
     time_budget_s: float | None = None
 
     def __post_init__(self) -> None:
-        if self.pitch_nm <= 0 or self.maximum_iterations <= 0:
+        if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0:
             raise ValueError("unified router pitch and iterations must be positive")
 
 
@@ -327,6 +327,7 @@ class _NetSpec:
     span: int
     neck_width: int = 0
     neck_clearance: int = 0
+    plane: frozenset[int] = frozenset()      # plane-region nodes (zone nets only)
     region: frozenset[int] = frozenset()     # nodes inside the net's breakout regions
     neck: frozenset[int] = frozenset()       # region nodes legal only at neck width
     neck_mid: frozenset[int] = frozenset()   # region cell centres legal only at neck width
@@ -335,7 +336,7 @@ class _NetSpec:
 @dataclass(slots=True)
 class _NetRoute:
     paths: list[list[int]]                      # node sequences
-    leads: list[tuple[TrackSegment, ...]]       # lead-in copper used
+    leads: list[tuple[TrackSegment, ...]]       # lead-in copper used, per path
     nodes: set[int]                             # path nodes (all layers)
     via_xy: set[int]                            # plane indexes holding a via
     claims: set[int]
@@ -390,16 +391,23 @@ class _Router:
         self.board = board
         self.options = options
         self.on_progress = on_progress
-        self.grid = _Grid(board, options.pitch_nm)
+        pitch = options.pitch_nm or choose_pitch(board)
+        self.pitch = pitch
+        self.via_cost = options.via_cost_mm * 1_000_000 / pitch
+        self.grid = _Grid(board, pitch)
         self.rules: dict[str, NetRoutingRule] = {r.net: r for r in board.net_routing_rules}
+        self.zone_nets = {zone.net for zone in board.zones}
         self.clearance = RoutingClearanceIndex(board)
         self.net_ids: dict[str, int] = {}
         for net in board.nets:
             self.net_ids.setdefault(net.name, len(self.net_ids))
         obstacles, holes = self._obstacles()
-        margin = options.raster_margin_nm if options.raster_margin_nm is not None else options.pitch_nm // 8
+        margin = options.raster_margin_nm if options.raster_margin_nm is not None else pitch // 8
         self.rasters = _Rasters(board, self.grid, obstacles, holes, margin)
         self.occupancy = _Occupancy(self.grid.size, self.grid.plane)
+        from array import array
+        self._best = array("d", [1e30]) * self.grid.size
+        self._parent = array("i", [-1]) * self.grid.size
         ranks, headings = signal_layer_preferences(board)
         g = self.grid
         self.layer_cost = [options.outer_layer_cost if i in (0, g.nl - 1) else 0.0 for i in range(g.nl)]
@@ -408,6 +416,7 @@ class _Router:
         self.default_width = default_width
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
         self.routes: dict[str, _NetRoute] = {}
+        self.present = options.present_factor
 
     # -- setup ------------------------------------------------------------
 
@@ -461,10 +470,41 @@ class _Router:
                                       rule.breakout_clearance_nm or rule.clearance_nm or 0)
             spec.region, spec.neck, spec.neck_mid = self._neck_nodes(net, spec, rule.breakout_length_nm)
         spec.components = self._components(net, spec)
+        if net.name in self.zone_nets:
+            planes, islands = self._zone_regions(net.name, spec)
+            spec.plane = planes
+            # Small pours (surface islands) must also reach the main plane.
+            spec.components.extend([[(node, (), 0.0) for node in island] for island in islands])
         xs = [self.grid.unpack(node)[1] for comp in spec.components for node, _, _ in comp]
         ys = [self.grid.unpack(node)[2] for comp in spec.components for node, _, _ in comp]
         spec.span = (max(xs) - min(xs) + max(ys) - min(ys)) if xs else 0
         return spec
+
+    def _zone_regions(self, name: str, spec: _NetSpec):
+        """Plane target nodes of a zone net, and its smaller separate pours."""
+        g = self.grid
+        owner, _ = self.rasters.track(spec.width, spec.clearance)
+        owner_arr = np.asarray(owner, dtype=np.int32).reshape(g.nl, g.ny, g.nx)
+        free = (owner_arr == _FREE) | (owner_arr == spec.nid)
+        regions = []
+        for zone in self.board.zones:
+            if zone.net != name:
+                continue
+            inside = _polygon_inside(zone.outline.outer.vertices, self.rasters.px, self.rasters.py)
+            for hole in zone.outline.holes:
+                inside &= ~_polygon_inside(hole.vertices, self.rasters.px, self.rasters.py)
+            for layer in zone.layers:
+                index = g.layers.index(layer)
+                mask = inside & free[index]
+                nodes = np.flatnonzero(mask) + index * g.plane
+                if nodes.size:
+                    regions.append(nodes)
+        if not regions:
+            return frozenset(), []
+        largest = max(r.size for r in regions)
+        planes = frozenset(int(n) for r in regions if r.size * 4 >= largest for n in r)
+        islands = [r.tolist() for r in regions if r.size * 4 < largest]
+        return planes, islands
 
     def _neck_nodes(self, net, spec: _NetSpec, length: int):
         """Breakout-region nodes, and those legal there only at the neck width."""
@@ -514,10 +554,14 @@ class _Router:
             nodes = graph.pad_nodes.get(pad, ())
             root = graph.roots[nodes[0]] if nodes else f"pad:{pad.component}.{pad.pad}"
             groups.setdefault(root, []).append(pad)
-        from .hard_macros import macro_port_layers, macro_routing_ports
+        from .hard_macros import macro_owned_pads, macro_port_layers, macro_routing_ports
         ports = macro_routing_ports(board, net.name)
+        owned = macro_owned_pads(board) if net.name in self.zone_nets else frozenset()
         components = []
         for root, members in sorted(groups.items(), key=lambda item: str(item[1][0])):
+            if owned and all(pad in owned for pad in members):
+                # A hard macro proves its own plane returns at materialization.
+                continue
             anchors: list[tuple[Point, tuple[int, ...]]] = []
             for pad in members:
                 port = ports.get(pad)
@@ -555,7 +599,12 @@ class _Router:
                 layers = (self.grid.layers.index(side),)
             else:
                 layers = tuple(range(self.grid.nl))
-            result.append((position, layers))
+            # Outward axis from the package centre, for fine-pitch lead-ins.
+            dx, dy = position.x_nm - pose.position.x_nm, position.y_nm - pose.position.y_nm
+            outward = None
+            if max(abs(dx), abs(dy)) > nm_from_mm("0.3"):
+                outward = (1 if dx > 0 else -1, 0) if abs(dx) >= abs(dy) else (0, 1 if dy > 0 else -1)
+            result.append((position, layers, outward))
         return result
 
     def _attach(self, anchors, spec: _NetSpec):
@@ -565,7 +614,9 @@ class _Router:
         owner, _ = self.rasters.track(spec.width, spec.clearance)
         radius = options.attach_radius_nm
         seen: dict[int, tuple[int, tuple[TrackSegment, ...], float]] = {}
-        for position, layers in anchors:
+        for anchor in anchors:
+            position, layers = anchor[0], anchor[1]
+            outward = anchor[2] if len(anchor) > 2 else None
             ix0, iy0, ix1, iy1 = g.window(position.x_nm - radius, position.y_nm - radius,
                                           position.x_nm + radius, position.y_nm + radius)
             near = sorted(((hypot(g.x0 + ix * g.pitch - position.x_nm, g.y0 + iy * g.pitch - position.y_nm), ix, iy)
@@ -594,11 +645,95 @@ class _Router:
                     if node not in seen or seen[node][2] > cost:
                         seen[node] = (node, tuple(path), cost)
                     found += 1
+                if found < 2 and outward is not None:
+                    self._attach_extended(position, outward, layer, spec, owner, seen)
         return list(seen.values())
+
+    def _attach_extended(self, position, outward, layer, spec, owner, seen):
+        """Straight out along the pad's outward axis, then a checked lead-in.
+
+        Fine-pitch pins rarely have a legal grid node within reach of a
+        two-leg lead-in; their channel is the pin axis itself.
+        """
+        if outward is None:
+            return
+        from .pin_escape import checked_access_path
+        g = self.grid
+        widths = [spec.width] + ([spec.neck_width] if spec.neck_width else [])
+        for extension_mm in ("0.3", "0.5", "0.75", "1.0", "1.5"):
+            extension = nm_from_mm(extension_mm)
+            corner = Point(position.x_nm + outward[0] * extension, position.y_nm + outward[1] * extension)
+            for width in widths:
+                if not self.clearance.can_track(spec.name, position, corner, width, g.layers[layer]):
+                    continue
+                stem = TrackSegment(spec.name, position, corner, width, g.layers[layer])
+                reach = nm_from_mm("0.6")
+                ix0, iy0, ix1, iy1 = g.window(corner.x_nm - reach, corner.y_nm - reach,
+                                              corner.x_nm + reach, corner.y_nm + reach)
+                near = sorted(((hypot(g.x0 + ix * g.pitch - corner.x_nm, g.y0 + iy * g.pitch - corner.y_nm), ix, iy)
+                               for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)))
+                found = 0
+                for distance, ix, iy in near:
+                    if found >= 3:
+                        break
+                    node = g.index(layer, ix, iy)
+                    if owner[node] not in (_FREE, spec.nid):
+                        continue
+                    target = Point(g.x0 + ix * g.pitch, g.y0 + iy * g.pitch)
+                    path = checked_access_path(self.board, self.clearance, spec.name, corner, target,
+                                               width, g.layers[layer])
+                    if path is None:
+                        continue
+                    cost = (extension + distance) / g.pitch
+                    if node not in seen or seen[node][2] > cost:
+                        seen[node] = (node, (stem, *path), cost)
+                    found += 1
+                if found:
+                    return
 
     # -- search -----------------------------------------------------------
 
+    def _route_plane_net(self, spec: _NetSpec, present: float) -> _NetRoute:
+        """Join every pad group (and small pour) of a zone net to its plane."""
+        g = self.grid
+        route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0)
+        targets = set(spec.plane)
+        used_leads: dict[int, tuple[TrackSegment, ...]] = {}
+        missing = 0
+        whole = (0, 0, g.nx - 1, g.ny - 1)
+        owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
+        via_owner = self.rasters.via(spec.via_size, spec.via_drill, spec.clearance)
+        margin = int(self.options.window_margin_nm // g.pitch)
+        for component in spec.components:
+            if not component:
+                missing += 1
+                continue
+            if any(node in targets for node, _, _ in component):
+                continue  # Already inside the plane's fill.
+            sources = {node: cost for node, _, cost in component}
+            leads = {node: lead for node, lead, _ in component}
+            xs = [g.unpack(n)[1] for n in sources]; ys = [g.unpack(n)[2] for n in sources]
+            box = (max(0, min(xs) - margin), max(0, min(ys) - margin),
+                   min(g.nx - 1, max(xs) + margin), min(g.ny - 1, max(ys) + margin))
+            found = self._astar(spec, sources, targets, present, box, whole, owner, mid_owner, via_owner)
+            if found is None:
+                found = self._astar(spec, sources, targets, present, whole, whole, owner, mid_owner, via_owner)
+            if found is None:
+                missing += 1
+                continue
+            path, _ = found
+            route.paths.append(path)
+            route.leads.append(tuple(leads.get(path[0], ())))
+            targets.update(path)
+        route.connected = missing == 0
+        if missing:
+            route.reason = f"{missing} of {len(spec.components)} pad groups cannot reach the plane"
+        self._finish_route(route, spec)
+        return route
+
     def _route_net(self, spec: _NetSpec, present: float) -> _NetRoute:
+        if spec.plane:
+            return self._route_plane_net(spec, present)
         g = self.grid
         components = [c for c in spec.components]
         route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0)
@@ -634,15 +769,15 @@ class _Router:
                 return route
             path, end_node = found
             ci, lead, _ = targets[end_node]
-            if first_root:
-                start = path[0]
-                if start in leads:
-                    used_leads[start] = leads[start]
-                first_root = False
-            elif path[0] in leads:
+            copper: list[TrackSegment] = []
+            if path[0] in leads and path[0] not in used_leads:
                 used_leads[path[0]] = leads[path[0]]
-            used_leads[end_node] = lead
+                copper.extend(leads[path[0]])
+            if end_node not in used_leads:
+                used_leads[end_node] = lead
+                copper.extend(lead)
             route.paths.append(path)
+            route.leads.append(tuple(copper))
             for node in path:
                 tree[node] = 0.0
             for node, lead2, cost in components[ci]:
@@ -650,7 +785,6 @@ class _Router:
                     tree[node] = cost
                     leads[node] = lead2
             remaining.remove(ci)
-        route.leads = list(used_leads.values())
         route.connected = True
         self._finish_route(route, spec)
         return route
@@ -712,7 +846,7 @@ class _Router:
         layers = spec.layers
         layer_cost, heading = self.layer_cost, self.heading
         wrong = options.wrong_way_cost
-        via_cost = options.via_cost
+        via_cost = self.via_cost
         target_xy = [(g.unpack(t)[1], g.unpack(t)[2]) for t in targets]
         tx0 = min(x for x, _ in target_xy); tx1 = max(x for x, _ in target_xy)
         ty0 = min(y for _, y in target_xy); ty1 = max(y for _, y in target_xy)
@@ -737,99 +871,122 @@ class _Router:
         return None
 
     def _astar(self, spec, sources, targets, present, box, tbox, owner, mid_owner, via_owner):
+        """A* over the shared grid; arrays are reused across searches."""
         g, options = self.grid, self.options
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
         hist, via_hist = self.occupancy.history, self.occupancy.via_history
         nid = spec.nid
         neck, neck_mid, region = spec.neck, spec.neck_mid, spec.region
-        nx, ny, plane, nl = g.nx, g.ny, g.plane, g.nl
+        use_neck = bool(neck or neck_mid)
+        nx, plane = g.nx, g.plane
         bx0, by0, bx1, by1 = box
         tx0, ty0, tx1, ty1 = tbox
-        allowed = [False] * nl
-        for layer in spec.layers:
-            allowed[layer] = True
         layer_cost, heading = self.layer_cost, self.heading
         wrong = options.wrong_way_cost
-        via_cost = options.via_cost
-        best: dict[int, float] = {}
-        parent: dict[int, int] = {}
+        via_cost = self.via_cost
+        best, parent = self._best, self._parent
+        touched = []
         heap: list = []
+        push, pop = heappush, heappop
+        layers = spec.layers
+        allowed = set(layers)
+        INF = 1e30
         for node, cost in sources.items():
-            layer, x, y = g.unpack(node)
-            if not allowed[layer]:
+            layer, rest = divmod(node, plane)
+            if layer not in allowed:
                 continue
+            y, x = divmod(rest, nx)
             best[node] = cost
             parent[node] = -1
-            hx = max(tx0 - x, 0, x - tx1)
-            hy = max(ty0 - y, 0, y - ty1)
-            h = max(hx, hy) + (_SQRT2 - 1) * min(hx, hy)
-            heappush(heap, (cost + h, cost, node))
+            touched.append(node)
+            hx = tx0 - x if x < tx0 else (x - tx1 if x > tx1 else 0)
+            hy = ty0 - y if y < ty0 else (y - ty1 if y > ty1 else 0)
+            push(heap, (cost + (hx if hx > hy else hy) + 0.41421356 * (hy if hx > hy else hx), cost, node))
         expansions = 0
         limit = options.maximum_expansions
+        found = None
+        # Per layer: move list with heading-adjusted base costs.
+        move_tables = []
+        for layer in range(g.nl):
+            head = heading[layer]
+            lc = layer_cost[layer]
+            table = []
+            for dx, dy, step in _MOVES:
+                base = step * (1.0 + lc)
+                if head is not None and (head == "h" and dy and not dx or head == "n" and dx and not dy):
+                    base += wrong * step
+                cell_dy = 0 if dy > 0 else -1
+                cell_dx = 0 if dx > 0 else -1
+                table.append((dx, dy, dy * nx + dx, base, bool(dx and dy), cell_dy * nx + cell_dx))
+            move_tables.append(table)
         while heap:
-            f, cost, node = heappop(heap)
-            if cost > best.get(node, 1e30):
+            f, cost, node = pop(heap)
+            if cost > best[node]:
                 continue
             if node in targets:
-                path = [node]
-                while parent[path[-1]] != -1:
-                    path.append(parent[path[-1]])
-                path.reverse()
-                return path, node
+                found = node
+                break
             expansions += 1
             if expansions > limit:
-                return None
+                break
             layer, rest = divmod(node, plane)
             y, x = divmod(rest, nx)
-            lc = layer_cost[layer]
-            here_in_region = node in region
-            head = heading[layer]
-            for dx, dy, step in _MOVES:
-                x2, y2 = x + dx, y + dy
+            here_in_region = use_neck and node in region
+            for dx, dy, dn, base, diagonal, dcell in move_tables[layer]:
+                x2 = x + dx
+                y2 = y + dy
                 if x2 < bx0 or x2 > bx1 or y2 < by0 or y2 > by1:
                     continue
-                n2 = node + dy * nx + dx
+                n2 = node + dn
                 o = owner[n2]
                 if o != -1 and o != nid and not (here_in_region and n2 in neck):
                     continue
-                if dx and dy:
-                    cell = layer * plane + (y if dy > 0 else y - 1) * nx + (x if dx > 0 else x - 1)
+                if diagonal:
+                    cell = node + dcell
                     o = mid_owner[cell]
                     if o != -1 and o != nid and not (here_in_region and n2 in region and cell in neck_mid):
                         continue
-                base = step
-                if head is not None:
-                    if head == "h" and dy and not dx or head == "n" and dx and not dy:
-                        base += wrong * step
-                base += lc * step
                 c = cost + base * (1.0 + hist[n2]) * (1.0 + present * occ[n2])
-                if c < best.get(n2, 1e30):
+                if c < best[n2]:
+                    if best[n2] >= INF:
+                        touched.append(n2)
                     best[n2] = c
                     parent[n2] = node
-                    hx = max(tx0 - x2, 0, x2 - tx1)
-                    hy = max(ty0 - y2, 0, y2 - ty1)
-                    heappush(heap, (c + max(hx, hy) + 0.41421356 * min(hx, hy), c, n2))
+                    hx = tx0 - x2 if x2 < tx0 else (x2 - tx1 if x2 > tx1 else 0)
+                    hy = ty0 - y2 if y2 < ty0 else (y2 - ty1 if y2 > ty1 else 0)
+                    push(heap, (c + (hx if hx > hy else hy) + 0.41421356 * (hy if hx > hy else hx), c, n2))
             # Layer changes through a through via at this xy.
-            xy = rest
-            o = via_owner[xy]
+            o = via_owner[rest]
             if o != -1 and o != nid:
                 continue
-            vpen = via_cost * (1.0 + via_hist[xy]) * (1.0 + present * via_occ[xy])
-            for layer2 in spec.layers:
+            vpen = via_cost * (1.0 + via_hist[rest]) * (1.0 + present * via_occ[rest])
+            hx = tx0 - x if x < tx0 else (x - tx1 if x > tx1 else 0)
+            hy = ty0 - y if y < ty0 else (y - ty1 if y > ty1 else 0)
+            h = (hx if hx > hy else hy) + 0.41421356 * (hy if hx > hy else hx)
+            for layer2 in layers:
                 if layer2 == layer:
                     continue
-                n2 = layer2 * plane + xy
+                n2 = layer2 * plane + rest
                 o = owner[n2]
                 if o != -1 and o != nid:
                     continue
                 c = cost + vpen * (1.0 + hist[n2]) * (1.0 + present * occ[n2])
-                if c < best.get(n2, 1e30):
+                if c < best[n2]:
+                    if best[n2] >= INF:
+                        touched.append(n2)
                     best[n2] = c
                     parent[n2] = node
-                    hx = max(tx0 - x, 0, x - tx1)
-                    hy = max(ty0 - y, 0, y - ty1)
-                    heappush(heap, (c + max(hx, hy) + 0.41421356 * min(hx, hy), c, n2))
-        return None
+                    push(heap, (c + h, c, n2))
+        result = None
+        if found is not None:
+            path = [found]
+            while parent[path[-1]] != -1:
+                path.append(parent[path[-1]])
+            path.reverse()
+            result = (path, found)
+        for node in touched:
+            best[node] = INF
+        return result
 
     # -- negotiation ------------------------------------------------------
 
@@ -864,7 +1021,7 @@ class _Router:
         options = self.options
         specs = sorted(self.specs, key=lambda s: (s.span, s.name))
         routes = self.routes
-        present = options.present_factor
+        present = self.present
         best_snapshot = None
         pending = [s.name for s in specs if only is None or s.name in only or s.name not in routes]
         by_name = {s.name: s for s in specs}
@@ -892,6 +1049,7 @@ class _Router:
                 break
             self._penalise(routes, conflicts)
             present *= options.present_growth
+            self.present = present
             # Reroute conflicted nets; retry failed nets now and then, since
             # congestion elsewhere may have moved.
             pending = [s.name for s in specs if s.name in conflicts or (s.name in failed and iteration % 3 == 0)]
@@ -909,20 +1067,17 @@ class _Router:
 
     # -- materialisation --------------------------------------------------
 
-    def copper(self, spec: _NetSpec, route: _NetRoute):
+    def copper(self, spec: _NetSpec, path: list[int], leads: tuple[TrackSegment, ...]):
+        """Tracks and vias of one path, with its lead-ins."""
         g = self.grid
-        tracks: list[TrackSegment] = []
+        tracks: list[TrackSegment] = list(leads)
         vias: list[Via] = []
-        for lead in route.leads:
-            tracks.extend(lead)
         neck, region = spec.neck, spec.region
         def width_of(a: int, b: int) -> int:
             if a in region and b in region and (a in neck or b in neck or _diagonal_mid(g, a, b) in spec.neck_mid):
                 return spec.neck_width
             return spec.width
-        for path in route.paths:
-            if len(path) < 2:
-                continue
+        if len(path) >= 2:
             run_start = path[0]
             prev = path[0]
             direction = None
@@ -949,42 +1104,57 @@ class _Router:
             if run_start != prev:
                 tracks.append(TrackSegment(spec.name, g.point(run_start), g.point(prev),
                                            run_width, g.layers[g.unpack(prev)[0]]))
-        unique_vias = list(dict.fromkeys(vias))
-        return tracks, unique_vias
+        return tracks, list(dict.fromkeys(vias))
 
-    def commit(self, routes: Mapping[str, _NetRoute]):
-        """Exact check; returns accepted copper per net and rejected net names."""
+    def commit(self, routes: Mapping[str, _NetRoute], conflicts=frozenset()):
+        """Exact check of every path; returns accepted copper, rejections, complete nets."""
         from .surface_path import _track_inside_board
         index = RoutingClearanceIndex(self.board)
         accepted: dict[str, tuple[list[TrackSegment], list[Via]]] = {}
         rejected: dict[str, list[Point]] = {}
+        complete: set[str] = set()
         by_name = {s.name: s for s in self.specs}
-        order = sorted((name for name, route in routes.items() if route.connected and route.paths),
-                       key=lambda name: (by_name[name].span, name))
+        order = sorted((name for name, route in routes.items() if route.paths),
+                       key=lambda name: (name in conflicts, not routes[name].connected,
+                                         by_name[name].span, name))
         for name in order:
             spec = by_name[name]
-            tracks, vias = self.copper(spec, routes[name])
-            bad: list[Point] = []
-            for track in tracks:
-                if not (index.can_track(name, track.start, track.end, track.width_nm, track.layer)
-                        and _track_inside_board(self.board, track.start, track.end, track.width_nm)):
-                    bad.append(Point((track.start.x_nm + track.end.x_nm) // 2,
-                                     (track.start.y_nm + track.end.y_nm) // 2))
-            for via in vias:
-                if not index.can_via(name, via.position, via.size_nm, via.from_layer, via.to_layer,
-                                     drill_nm=via.drill_nm):
-                    bad.append(via.position)
-            if not bad and index.candidate_via_conflict(vias) is not None:
-                bad.append(vias[0].position)
-            if bad:
-                rejected[name] = bad
-                continue
-            for track in tracks:
-                index.add_track(track)
-            for via in vias:
-                index.add_via(via)
-            accepted[name] = (tracks, vias)
-        return accepted, rejected
+            route = routes[name]
+            all_ok = route.connected
+            net_tracks: list[TrackSegment] = []
+            net_vias: list[Via] = []
+            for path, leads in zip(route.paths, route.leads):
+                tracks, vias = self.copper(spec, path, leads)
+                bad: list[Point] = []
+                for track in tracks:
+                    if not (index.can_track(name, track.start, track.end, track.width_nm, track.layer)
+                            and _track_inside_board(self.board, track.start, track.end, track.width_nm)):
+                        bad.append(Point((track.start.x_nm + track.end.x_nm) // 2,
+                                         (track.start.y_nm + track.end.y_nm) // 2))
+                for via in vias:
+                    if via in net_vias:
+                        continue
+                    if not index.can_via(name, via.position, via.size_nm, via.from_layer, via.to_layer,
+                                         drill_nm=via.drill_nm):
+                        bad.append(via.position)
+                if not bad and index.candidate_via_conflict([v for v in vias if v not in net_vias]) is not None:
+                    bad.append(vias[0].position)
+                if bad:
+                    rejected.setdefault(name, []).extend(bad)
+                    all_ok = False
+                    continue
+                for track in tracks:
+                    index.add_track(track)
+                    net_tracks.append(track)
+                for via in vias:
+                    if via not in net_vias:
+                        index.add_via(via)
+                        net_vias.append(via)
+            if net_tracks or net_vias:
+                accepted[name] = (net_tracks, net_vias)
+            if all_ok:
+                complete.add(name)
+        return accepted, rejected, complete
 
     def penalise_points(self, name: str, points: list[Point], amount: float) -> None:
         g = self.grid
@@ -999,6 +1169,31 @@ class _Router:
                     via_hist[y * g.nx + x] += amount
                     for layer in range(g.nl):
                         hist[layer * g.plane + y * g.nx + x] += amount
+
+
+def choose_pitch(board: PhysicalBoard, default_nm: int = nm_from_mm("0.25")) -> int:
+    """0.25 mm, or the coarsest finer pitch that puts nodes on every ball and
+    on the channel centre lines of each full-grid ball array (BGA)."""
+    from .package_patterns import circular_array
+    from .placement import transformed_local_point
+    pitch = default_nm
+    for pose in board.placements:
+        try:
+            array = circular_array(board, pose.reference)
+        except ValueError:
+            array = None
+        if array is None:
+            continue
+        land = board.footprints[pose.footprint].pads[0]
+        corner = transformed_local_point(pose, land.position)
+        for candidate in (pitch, pitch // 2, pitch // 4, nm_from_mm("0.05")):
+            if candidate <= 0:
+                continue
+            if (array.pitch_nm // 2) % candidate == 0 and corner.x_nm % candidate == 0 \
+                    and corner.y_nm % candidate == 0:
+                pitch = candidate
+                break
+    return pitch
 
 
 def _diagonal_mid(g: _Grid, a: int, b: int) -> int:
@@ -1059,8 +1254,9 @@ def route_unified(
     zone_nets = deferred_zone_nets(board)
     from .drc import explicit_copper_connectivity
     connectivity = explicit_copper_connectivity(board)
+    plane_nets = {zone.net for zone in board.zones}
     nets = [net for net in board.nets
-            if len(net.pads) >= 2 and net.name not in zone_nets
+            if (len(net.pads) >= 2 or net.name in plane_nets) and (net.name not in zone_nets or net.name in plane_nets)
             and (only_nets is None or net.name in only_nets)
             and (rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
             and not connectivity.net_connected(net)]
@@ -1080,8 +1276,7 @@ def route_unified(
     for round_index in range(options.commit_rounds):
         routes, conflicts, used = router.negotiate(deadline, retry)
         iterations += used
-        candidates = {name: route for name, route in routes.items() if name not in conflicts}
-        accepted, rejected = router.commit(candidates)
+        accepted, rejected, complete = router.commit(routes, conflicts)
         emit(on_progress, "unified_commit", "finished", round=round_index + 1,
              accepted=len(accepted), rejected=len(rejected), conflicted=len(conflicts))
         if not rejected or (deadline is not None and perf_counter() > deadline):
@@ -1095,8 +1290,8 @@ def route_unified(
     all_tracks = (*board.tracks, *new_tracks)
     all_vias = (*board.vias, *new_vias)
     metadata = dict(board.metadata)
-    routed_names = set(accepted) | {net.name for net in already}
-    unrouted = [net.name for net in nets if net.name not in accepted]
+    routed_names = set(complete) | {net.name for net in already}
+    unrouted = [net.name for net in nets if net.name not in complete]
     success = not unrouted
     metadata.update({"detailed_routing": "complete" if success else "partial",
                      "detailed_router": "unified",
@@ -1118,10 +1313,6 @@ def route_unified(
             net.name, net.name in routed_names, len(tracks), len(vias),
             int(sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm) for t in tracks)),
             0, diagnostics))
-    for net in board.nets:
-        if net.name in zone_nets and len(net.pads) >= 2 and (only_nets is None or net.name in only_nets):
-            results.append(DetailedNetResult(net.name, False, 0, 0, 0, 0,
-                                             ("zone net awaits verified fill and pad stitching",)))
     metrics = DetailedRoutingMetrics(
         routed_net_count=sum(r.connected for r in results),
         unrouted_net_count=sum(not r.connected for r in results),

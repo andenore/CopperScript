@@ -35,16 +35,23 @@ def register_terminal_capacity(board, graph, access_options):
             identifier=_via_resource_id(graph,access.node,via.from_layer,via.to_layer)
             _,low,high,x,y=identifier.split(':')
             nodes=(GridNode(int(low),int(x),int(y)),GridNode(int(high),int(x),int(y)))
+            # Capacity registration may add witnesses but never removes a
+            # terminal choice: global routing is a guide, and a pad left with
+            # no choices makes the whole net unreachable (CopperAssetTracker
+            # regressed this way). Detailed routing checks exact copper.
             if any(node not in graph.legal_nodes for node in nodes):
+                held.append(access)
                 continue
             positions=sites.get(identifier,())
             if via.position not in positions:
                 if proposals >= MAX_TERMINAL_CAPACITY_PROPOSALS:
+                    held.append(access)
                     continue
                 proposals+=1
                 capacity_net='<capacity-proposal-'+str(proposals)+'>'
                 if not index.can_via(capacity_net,via.position,via.size_nm,
                         via.from_layer,via.to_layer,via.drill_nm,check_hole_copper=True):
+                    held.append(access)
                     continue
                 sites[identifier]=(*positions,via.position)
                 index.add_via(replace(via,net=capacity_net),locked=True)

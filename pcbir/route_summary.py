@@ -79,11 +79,8 @@ def connection_summary(board: PhysicalBoard, drc=None, *, native=None, estimate_
 
 
 def _plane_nets(board: PhysicalBoard) -> set[str]:
-    try:
-        from .zone_geometry import deferred_zone_nets
-    except ImportError:  # Older engines: every zone net counts as a plane net.
-        return {zone.net for zone in board.zones}
-    return set(deferred_zone_nets(board))
+    """Nets with any declared zone: their connectivity is the fill's."""
+    return {zone.net for zone in board.zones}
 
 
 def _length(start, end) -> int:
