@@ -387,10 +387,23 @@ def issues_document(run: Run, issues: list[RunIssue], *, limit: int | None = Non
             "report": str(run.report_path) if run.report_path else None,
             "board": str(run.board_path) if run.board_path else None,
             "filled_board": str(run.filled_board_path) if run.filled_board_path else None,
+            # Lets a viewer (CopperReview) check the issues belong to the board it shows.
+            "board_sha256": _sha256(run.board_path), "filled_board_sha256": _sha256(run.filled_board_path),
             "status": status, "routing_complete": report.get("routing_complete"),
             "issue_count": len(issues), "omitted": len(issues) - len(shown), "finding_counts": counts,
             "stopped_after": report.get("stopped_after"),
             "issues": [issue.document() for issue in shown]}
+
+
+def _sha256(path: Path | None) -> str | None:
+    if path is None or not path.is_file():
+        return None
+    import hashlib
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def render_issues(document: dict[str, object]) -> str:

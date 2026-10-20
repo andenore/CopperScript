@@ -37,7 +37,9 @@ package-access preflight, `<- P1..P17`). Layout reports list failed gates (`L`)
 and non-passing findings (`F`). `--cluster-mm` changes grouping and ids, so
 pass the same value to `view`. Lists are balanced across stages; use
 `--stage`, `--net`, `--code` or `--limit 0`. `--json` emits
-`copperscript.run-issues/v1`.
+`copperscript.run-issues/v1`, including the SHA-256 of the run's board and
+refilled board; CopperReview's **Load issues** draws those issues on the
+matching board so review notes can cite their ids.
 
 `view` draws pads, tracks, vias and copper areas in a millimetre window, one
 panel per copper layer (`--layers auto` keeps layers with highlighted copper),

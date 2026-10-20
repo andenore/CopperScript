@@ -221,6 +221,7 @@ def scene_from_kicad_pcb(path: str | Path) -> Scene:
         copper = ("F.Cu", "B.Cu")
     nets = {item[1]: item[2] for item in _atoms(root, "net") if len(item) >= 3}
     scene = Scene(name=path.stem, copper_layers=copper, source=str(path))
+    footprint_zones = []
 
     for footprint in _atoms(root, "footprint"):
         at = _first(footprint, "at")
@@ -237,11 +238,13 @@ def scene_from_kicad_pcb(path: str | Path) -> Scene:
         for text in _atoms(footprint, "fp_text"):
             if not ref and len(text) > 2 and text[1] == "reference":
                 ref = text[2]
-        if ref in scene.footprints:  # duplicate designators: keep each footprint's pads apart
-            n = 2
-            while f"{ref}#{n}" in scene.footprints:
+        if not ref or ref in scene.footprints:
+            # Blank (logos, fiducials) or duplicate designators: keep each footprint's pads
+            # apart, named like CopperReview (FP#1, R1#2).
+            base, n = ref or "FP", 1 if not ref else 2
+            while f"{base}#{n}" in scene.footprints:
                 n += 1
-            ref = f"{ref}#{n}"
+            ref = f"{base}#{n}"
         scene.footprints[ref] = SceneFootprint(ref, (fx, fy), frot, side)
         for pad in _atoms(footprint, "pad"):
             if len(pad) < 4:
@@ -266,6 +269,8 @@ def scene_from_kicad_pcb(path: str | Path) -> Scene:
                 ref, str(number), _net_name(pad, nets), layers,
                 pad_polygon(shape, width, height, pangle, center, float(ratio[1]) if ratio else 0.25),
                 center, drill))
+        # Zones inside a footprint (module copper, keepouts) are stored in board coordinates.
+        footprint_zones.extend(_atoms(footprint, "zone"))
 
     for segment in _atoms(root, "segment"):
         layer = (_first(segment, "layer") or [None, ""])[1]
@@ -285,7 +290,7 @@ def scene_from_kicad_pcb(path: str | Path) -> Scene:
             layers = copper[i:j + 1]
         scene.vias.append(SceneVia(_net_name(via, nets), _xy(_first(via, "at")),
                                    float(_first(via, "size")[1]), float(_first(via, "drill")[1]), layers))
-    for zone in _atoms(root, "zone"):
+    for zone in _atoms(root, "zone") + footprint_zones:
         if _first(zone, "keepout") is not None:
             continue  # rule areas are not copper
         net = _net_name(zone, nets) or (_first(zone, "net_name") or [None, ""])[1]
@@ -295,7 +300,7 @@ def scene_from_kicad_pcb(path: str | Path) -> Scene:
             filled_layers.add(layer)
             scene.areas.append(SceneArea(net, layer, _ring(_first(polygon, "pts")), (), "fill"))
         outline = _first(zone, "polygon")
-        if outline is None:
+        if outline is None or len(_atoms(_first(outline, "pts") or [], "xy")) < 3:
             continue
         for layer in _layer_names(zone, copper):
             if layer not in filled_layers:  # unfilled layers keep their outline, never fake copper
