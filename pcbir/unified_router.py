@@ -382,6 +382,7 @@ class _NetSpec:
     optional: int = 0                        # trailing components that may stay unjoined
     via_budget: int | None = None            # new vias allowed (max_vias minus existing ones)
     islands: int = 0                         # trailing components that are plane pieces
+    explicit: dict = field(default_factory=dict)  # component index -> layers its plane path may not end on
 
 
 @dataclass(slots=True)
@@ -465,8 +466,11 @@ def _segment_offsets(dx: int, dy: int, radius_in_pitches: float) -> tuple[tuple[
 
 class _Router:
     def __init__(self, board: PhysicalBoard, options: UnifiedRouterOptions,
-                 nets: list, on_progress) -> None:
+                 nets: list, on_progress, *, explicit_pads: frozenset[PadReference] = frozenset()) -> None:
         self.board = board
+        # Plane pads that must reach the plane with copper of their own, not
+        # by lying in a pour piece (pour re-check, see route_unified).
+        self.explicit_pads = frozenset(explicit_pads)
         self.options = options
         self.on_progress = on_progress
         pitch = options.pitch_nm or choose_pitch(board)
@@ -832,7 +836,19 @@ class _Router:
                         anchors.append((track.start, (layer,)))
                         anchors.append((track.end, (layer,)))
             components.append(self._attach(anchors, spec))
+            if self.explicit_pads and set(members) & self.explicit_pads:
+                spec.explicit[len(components) - 1] = self._explicit_exclusion(members, spec)
         return components
+
+    def _explicit_exclusion(self, pads, spec: _NetSpec) -> frozenset[int]:
+        """The surface layers of these pads: a plane path from an explicit pad
+        may not end there. It has to change layer (a via to an inner plane or
+        the far side), because pour on its own layer can be walled off again
+        by later signal copper."""
+        poses = {p.reference: p for p in self.board.placements}
+        return frozenset(self.grid.layers.index(CopperLayer.FRONT if poses[pad.component].side.value == "front"
+                                                else CopperLayer.BACK)
+                         for pad in pads if pad.component in poses)
 
     def _pad_anchors(self, pad: PadReference, spec: _NetSpec):
         from .placement import transformed_local_point
@@ -1071,12 +1087,26 @@ class _Router:
             if not component:
                 missing += not optional
                 continue
-            if any(node in targets for node, _, _ in component):
+            excluded = spec.explicit.get(position)
+            if excluded is None and any(node in targets for node, _, _ in component):
                 if position >= first_island:
                     targets.update(node for node, _, _ in component)
                 continue  # Already inside the plane's fill.
             sources = {node: cost + self._lead_penalty(lead, present) for node, lead, cost in component}
             leads = {node: lead for node, lead, _ in component}
+            if excluded is not None:
+                # Explicit copper: the path must end on another layer's plane.
+                allowed = {node for node in targets if node // g.plane not in excluded}
+                found = self._astar(spec, sources, allowed, present, whole, whole,
+                                    owner, mid_owner, via_owner)
+                if found is None:
+                    missing += not optional
+                    continue
+                path, _ = found
+                route.paths.append(path)
+                route.leads.append(tuple(leads.get(path[0], ())))
+                targets.update(path)
+                continue
             xs = [g.unpack(n)[1] for n in sources]; ys = [g.unpack(n)[2] for n in sources]
             box = (max(0, min(xs) - margin), max(0, min(ys) - margin),
                    min(g.nx - 1, max(xs) + margin), min(g.ny - 1, max(ys) + margin))
@@ -1798,6 +1828,99 @@ def _open_count(board: PhysicalBoard, nets, accepted, plane_nets) -> tuple[int, 
     return opens, planes
 
 
+def _with(board: PhysicalBoard, accepted, *, without=frozenset()) -> PhysicalBoard:
+    """``board`` plus the accepted copper of every net not in ``without``."""
+    names = sorted(name for name in accepted if name not in without)
+    return replace(board,
+        tracks=(*board.tracks, *(t for name in names for t in accepted[name][0])),
+        vias=(*board.vias, *(v for name in names for v in accepted[name][1])))
+
+
+def _merge(accepted, more):
+    merged = {name: (list(tracks), list(vias)) for name, (tracks, vias) in accepted.items()}
+    for name, (tracks, vias) in more.items():
+        old_tracks, old_vias = merged.get(name, ([], []))
+        merged[name] = (old_tracks + list(tracks), old_vias + list(vias))
+    return merged
+
+
+def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadline, on_progress):
+    """Reconnect plane pads that committed signal copper walled off from their pour.
+
+    Plane pieces are labelled once, from fixed copper, so signal copper
+    committed afterwards can wall a plane pad off from the pour piece it was
+    counted in. The raster pour estimate names such pads. Two steps, each kept
+    only if the estimate improves and no signal connection is lost:
+
+    1. Route the plane nets again against all committed copper (new vias or
+       tracks where the pads still have room).
+    2. For pads still cut off, rip up the signal copper crowding them, route
+       the plane net first with explicit copper for those pads (lying in a
+       pour piece does not count), then route the ripped nets around it.
+    """
+    before = _pour_estimate(board, accepted)
+    routed_planes = {net.name for net in nets if net.name in plane_nets}
+    cut = {name: pads for name, pads in before.open_pads.items() if name in routed_planes}
+    report = {"cut_off": sum(map(len, cut.values())),
+              "pads": sorted(p for pads in cut.values() for p in pads)[:12], "steps": [], "iterations": 0}
+    if not cut:
+        return accepted, complete, report
+    signal_before = _open_count(board, nets, accepted, plane_nets)[0]
+    plane_list = [net for net in nets if net.name in cut]
+
+    def keep(candidate, estimate, label):
+        signal = _open_count(board, nets, candidate, plane_nets)[0]
+        ok = estimate.opens < current[1].opens and signal <= signal_before
+        report["steps"].append(f"{label}: pour opens {current[1].opens}->{estimate.opens}, "
+                               f"signal opens {signal_before}->{signal}" + ("" if ok else " (not kept)"))
+        return ok
+
+    current = (accepted, before)
+    # Step 1: plane nets only, everything else fixed.
+    step = _Router(_with(board, accepted), options, plane_list, on_progress)
+    routes, conflicts, used = step.negotiate(deadline)
+    report["iterations"] += used
+    more, _, _ = step.commit(routes, conflicts)
+    candidate = _merge(accepted, more)
+    estimate = _pour_estimate(board, candidate)
+    if keep(candidate, estimate, "plane reroute"):
+        current = (candidate, estimate)
+    still = {name: pads for name, pads in current[1].open_pads.items() if name in routed_planes}
+    if still and (deadline is None or perf_counter() <= deadline):
+        # Step 2: rip up the crowd around the remaining pads; plane copper first.
+        pads = frozenset(PadReference(*pad.rsplit(".", 1)) for group in still.values() for pad in group)
+        focus = [PhysicalNet(name, tuple(PadReference(*pad.rsplit(".", 1)) for pad in group))
+                 for name, group in sorted(still.items())]
+        crowd = {name for name in _neighbour_nets(board, focus, current[0], nm_from_mm("1.0"))
+                 if name not in plane_nets}
+        ripped = {name: value for name, value in current[0].items() if name not in crowd}
+        partial = _with(board, ripped)
+        first = _Router(partial, options, [net for net in nets if net.name in still], on_progress,
+                        explicit_pads=pads)
+        routes, conflicts, used = first.negotiate(deadline)
+        report["iterations"] += used
+        plane_more, plane_rejected, _ = first.commit(routes, conflicts)
+        report["explicit_route"] = {
+            name: {"copper": [len(part) for part in plane_more.get(name, ((), ()))],
+                   "reason": (routes[name].reason if name in routes else "not routed"),
+                   "rejected": _rejection_text(first, name) if name in plane_rejected else ""}
+            for name in still}
+        candidate = _merge(ripped, plane_more)
+        second = _Router(_with(board, candidate), options, [net for net in nets if net.name in crowd], on_progress)
+        routes, conflicts, used = second.negotiate(deadline)
+        report["iterations"] += used
+        signal_more, _, signal_complete = second.commit(routes, conflicts)
+        candidate = _merge(candidate, signal_more)
+        estimate = _pour_estimate(board, candidate)
+        if keep(candidate, estimate, f"explicit copper, {len(crowd)} net(s) ripped up"):
+            current = (candidate, estimate)
+            complete = (complete - crowd) | set(signal_complete)
+    report["adopted"] = current[0] is not accepted
+    report["still_cut_off"] = sorted(p for name, group in current[1].open_pads.items()
+                                     if name in routed_planes for p in group)[:12]
+    return current[0], complete, report
+
+
 def _pour_estimate(board: PhysicalBoard, accepted):
     """Raster pour connectivity of ``board`` with ``accepted`` copper added."""
     from .plane_estimate import estimate_plane_connectivity
@@ -1965,18 +2088,14 @@ def route_unified(
     # Rip-in repair: committed copper becomes a fixed obstacle and the
     # remaining nets are routed again against it. This settles the residual
     # cases where the raster and the exact check disagree (off-grid lead-ins).
-    def repair_attempt(seed: bool, focus=None):
-        """One rip-in repair; returns the new (accepted, complete, rejected, routes, stats).
-
-        ``focus`` (nets with a subset of pads) narrows which pads' crowding
-        neighbours are ripped up; by default all remaining nets' pads.
-        """
+    def repair_attempt(seed: bool):
+        """One rip-in repair; returns the new (accepted, complete, rejected, routes, stats)."""
         work = {k: (list(v[0]), list(v[1])) for k, v in accepted.items()}
         done = set(complete)
         remaining = [net for net in nets if net.name not in done]
         # Rip up neighbours whose new copper crowds the remaining nets' pads,
         # so they renegotiate together; everything else stays fixed.
-        crowd = _neighbour_nets(board, focus if focus is not None else remaining, work, nm_from_mm("1.0"))
+        crowd = _neighbour_nets(board, remaining, work, nm_from_mm("1.0"))
         # The exact check names what blocked a rejected path: rip those too.
         remaining_names = {net.name for net in remaining}
         crowd |= {blocker for name in remaining_names
@@ -2043,38 +2162,10 @@ def route_unified(
         if not improved:
             break
     if options.pour_recheck and plane_nets and (deadline is None or perf_counter() <= deadline):
-        # Committed signal copper carves surface pours. A plane pad that was
-        # counted as touching a pour piece may now be walled off: reopen its
-        # net, rip up the copper crowding those pads, and renegotiate. Kept
-        # only if the pour estimate improves and no signal connection is lost.
-        before = _pour_estimate(board, accepted)
-        routed_planes = {net.name for net in nets if net.name in plane_nets}
-        cut = {name: pads for name, pads in before.open_pads.items() if name in routed_planes}
-        adopted, outcome = False, "none cut off"
-        if cut:
-            focus = [PhysicalNet(name, tuple(PadReference(*pad.rsplit(".", 1)) for pad in pads))
-                     for name, pads in sorted(cut.items())]
-            saved = (accepted, complete, rejected)
-            complete = set(complete) - set(cut)
-            attempt = repair_attempt(False, focus)
-            outcome = "no repair attempt"
-            if attempt is not None:
-                work, done, still, more_routes, stats, rejections = attempt
-                iterations += stats[3]
-                after = _pour_estimate(board, work)
-                signal_before = _open_count(board, nets, saved[0], plane_nets)[0]
-                signal_after = _open_count(board, nets, work, plane_nets)[0]
-                outcome = (f"pour opens {before.opens}->{after.opens}, "
-                           f"signal opens {signal_before}->{signal_after}")
-                if after.opens < before.opens and signal_after <= signal_before:
-                    accepted, complete, rejected = work, done, still
-                    router.rejections = {**router.rejections, **rejections}
-                    router.routes.update(more_routes)
-                    adopted = True
-            if not adopted:
-                accepted, complete, rejected = saved
-        emit(on_progress, "unified_pour_recheck", "finished", cut_off=sum(map(len, cut.values())),
-             pads=sorted(pad for pads in cut.values() for pad in pads)[:12], adopted=adopted, outcome=outcome)
+        accepted, complete, recheck = _recheck_pours(
+            board, nets, plane_nets, accepted, set(complete), options, deadline, on_progress)
+        iterations += recheck.pop("iterations", 0)
+        emit(on_progress, "unified_pour_recheck", "finished", **recheck)
     spec_names = {s.name for s in router.specs}
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
