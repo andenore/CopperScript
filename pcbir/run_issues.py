@@ -118,11 +118,30 @@ def load_run(path: str | Path) -> Run:
     board = directory / "board.kicad_pcb"
     if not board.is_file():
         board = next(iter(sorted(directory.glob("*.kicad_pcb"))), None)
-    filled = None
-    if report is not None:
-        native_dirs = sorted(directory.glob(report.stem + ".native-*/verification-*"))
-        filled = next((p for d in reversed(native_dirs) for p in sorted(d.glob("*.kicad_pcb"))), None)
+    filled = _reported_filled_board(report) if report is not None else None
     return Run(directory, report, board, filled)
+
+
+def _reported_filled_board(report: Path) -> Path | None:
+    """Use the report's exact verification, never the last attempted candidate."""
+
+    try:
+        document = json.loads(report.read_text(encoding="utf-8"))
+        native = document.get("plane_verification") if isinstance(document, dict) else None
+        if not isinstance(native, dict):
+            return None
+        location, digest = native.get("artifact_directory"), native.get("filled_board_digest")
+        if not isinstance(location, str) or not location or not isinstance(digest, str) or not digest:
+            return None
+        directory = Path(location)
+        if not directory.is_absolute():
+            directory = report.parent / directory
+        # Includes custom evidence directories and the final native-cleanup result.
+        # Missing/stale evidence is unavailable; a sibling trial is not a substitute.
+        return next((path for path in sorted(directory.glob("*.kicad_pcb"))
+                     if _sha256(path) == digest), None)
+    except (OSError, ValueError):
+        return None
 
 
 def _schema(path: Path) -> str:

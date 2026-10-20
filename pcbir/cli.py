@@ -37,7 +37,7 @@ from .fanout import FanoutOptions
 from .package_access import PackageAccessOptions
 from .boundary_access import BoundaryAccessOptions
 from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
-from .pad_stitch import stitch_duplicate_pads
+from .pad_stitch import DuplicatePadStitchResult, stitch_duplicate_pads
 from .pad_via_arrays import via_in_pad_array_report
 from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
@@ -1617,14 +1617,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if isinstance(exc, ValueError):
                     return 2
                 raise
-            # A stopped run is an intermediate scene: native refill/feedback would only re-describe it.
+            # Export a stopped run's exact stage geometry; no later copper mutation.
             native_cli = None if result.stopped_after else args.verify_plane_fill
-            emit(progress, "final_contacts_native_drc", "started")
-            stitch = (escape_feedback.plane_stitch if escape_feedback is not None
+            if not result.stopped_after:
+                emit(progress, "final_contacts_native_drc", "started")
+            stitch = (result.plane_stitch if result.stopped_after
+                      else escape_feedback.plane_stitch if escape_feedback is not None
                       else stitch_zone_pads(result.board, plane_options) if stitch_enabled
                       else result.plane_stitch)
-            output_board = stitch.board if stitch_enabled else result.board
-            duplicate_stitch = stitch_duplicate_pads(output_board)
+            output_board = stitch.board if stitch_enabled and not result.stopped_after else result.board
+            duplicate_stitch = (DuplicatePadStitchResult(output_board, (), (), 0) if result.stopped_after
+                                else stitch_duplicate_pads(output_board))
             output_board = duplicate_stitch.board
             from collections import Counter
             from .hard_macros import resolved_macro_geometry
@@ -1633,17 +1636,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             for macro in output_board.hard_macros:
                 if macro.cluster in output_board.materialized_macros:
                     fixed.update(resolved_macro_geometry(output_board, macro)[0])
-            swept = trim_dangling_overhangs(output_board, fixed)
+            swept = output_board if result.stopped_after else trim_dangling_overhangs(output_board, fixed)
             trimmed_overhangs = swept is not output_board
             output_board = swept
             output_drc = (
                 run_physical_drc(output_board)
-                if stitch_enabled
+                if not result.stopped_after and (stitch_enabled
                 or duplicate_stitch.added_track_count
-                or trimmed_overhangs
+                or trimmed_overhangs)
                 else result.drc
             )
-            emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
+            if not result.stopped_after:
+                emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
             filled_feedback = None
             try:
                 if native_cli:
@@ -1688,7 +1692,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plane_verification)
             closure_status = (
                 PhysicalFlowStatus.PASS
-                if routing_complete_with_fill(result, output_board, output_drc, plane_verification)
+                if result.stopped_after is None
+                and routing_complete_with_fill(result, output_board, output_drc, plane_verification)
                 and (not args.verify_plane_fill or plane_verification is not None and plane_verification.passed)
                 and not duplicate_pending
                 and not plane_pending
@@ -1706,7 +1711,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
                     "filled_copper_search_states")},
                 "erc_diagnostics": [str(item) for item in diagnostics],
-                **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run"}
+                **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run",
+                    "final_copper_processing": "skipped_for_stopped_run"}
                    if result.stopped_after else {}),
                 # Later stages (package-access moves, zone-escape trials) may still move parts.
                 **({"placement_reuse": {**placement_reuse,
@@ -1960,6 +1966,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_via_count": result.plane_stitch.added_via_count,
                 }
             report["duplicate_pad_stitch"] = {
+                **({"status": "not_run"} if result.stopped_after else {}),
                 "stitched_pads": [
                     f"{item.component}.{item.pad}" for item in duplicate_stitch.stitched
                 ],

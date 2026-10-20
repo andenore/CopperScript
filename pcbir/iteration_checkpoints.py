@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .state_codec import describe_state, load_state, save_state
+from .state_codec import describe_state, encode, load_state, save_state
 
 ERROR_SCHEMA = "copperscript-route-error/v1"
 
@@ -38,7 +38,21 @@ def code_digest() -> str:
 
 
 def _options_digest(*options) -> str:
-    return "sha256:" + hashlib.sha256(repr(options).encode()).hexdigest()
+    def canonical(value):
+        if isinstance(value, list):
+            return [canonical(item) for item in value]
+        if isinstance(value, dict):
+            result = {key: canonical(item) for key, item in value.items()}
+            # State files retain mapping insertion order for round trips; option
+            # identity depends on contents. Tuple/list order remains significant.
+            for tag in ("$map", "$set", "$frozenset"):
+                if tag in result:
+                    result[tag] = sorted(result[tag], key=lambda item: json.dumps(item, sort_keys=True))
+            return result
+        return value
+
+    body = json.dumps(canonical(encode(options)), sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(body.encode()).hexdigest()
 
 
 def placement_key(board, placement_options, global_options, feedback_options, power_area_options=None,
