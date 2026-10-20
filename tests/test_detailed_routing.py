@@ -1225,3 +1225,100 @@ def test_progressive_guide_can_project_corridor_to_signal_layer() -> None:
     assert not {finding.code for finding in run_physical_drc(result.board).findings} & {
         "DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET",
     }
+
+
+def _successes(stats) -> int:
+    return (stats.corridor_successes + stats.widened_corridor_successes
+            + stats.projected_corridor_successes + stats.full_board_successes)
+
+
+def test_search_stats_are_deterministic_telemetry_outside_copper_and_fingerprint() -> None:
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    options = DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"))
+
+    first = route_detailed(board, guide, options)
+    second = route_detailed(board, guide, options)
+
+    work = first.search_work
+    assert work is not None and work == second.search_work
+    assert work.search_calls >= 1 and work.expanded_states >= work.search_calls
+    assert work.failed_expanded_states <= work.expanded_states
+    assert work.search_calls == (_successes(work) + work.budget_exhausted_calls
+                                 + work.no_path_calls)
+    net = first.nets[0]
+    assert net.connected and net.search_stats is not None
+    assert net.search_stats.corridor_successes >= 1
+    assert net.search_stats.maximum_target_count >= 1
+    # Telemetry never takes part in equality or the copper/route fingerprint.
+    assert replace(first, search_work=None) == first
+    assert replace(net, search_stats=None) == net
+    stripped = replace(first, nets=tuple(replace(item, search_stats=None) for item in first.nets))
+    assert stripped.routing_fingerprint == first.routing_fingerprint
+    document = json.loads(first.to_json())
+    assert document["search_work"]["expanded_states"] == work.expanded_states
+    assert document["nets"][0]["search_stats"]["search_calls"] == net.search_stats.search_calls
+
+
+def test_exhausted_search_budget_is_counted_as_failed_work() -> None:
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(1), maximum_passes=1, maximum_search_states=1,
+    ))
+
+    work = result.search_work
+    assert work is not None and work.budget_exhausted_calls >= 1
+    assert _successes(work) == 0
+    assert work.failed_expanded_states == work.expanded_states
+    assert result.nets[0].search_stats.budget_exhausted_calls >= 1
+
+
+def test_search_stats_record_the_stage_that_found_the_path() -> None:
+    base = replace(_board(), stackup=Stackup((
+        CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2, CopperLayer.BACK,
+    )))
+    guide = route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    board = replace(base, copper_keepouts=(CopperKeepout(
+        "surface-wall", (CopperLayer.FRONT,),
+        PolygonWithHoles(PolygonRing((
+            Point.mm(9, 0), Point.mm(11, 0), Point.mm(11, 12), Point.mm(9, 12),
+        ))),
+    ),))
+
+    result = route_detailed(board, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(1), maximum_passes=1,
+        maximum_search_states=1000, progressive_guides=True,
+    ))
+
+    stats = result.nets[0].search_stats
+    assert result.status is DetailedRoutingStatus.SUCCESS
+    # The front-layer corridor is walled off, so its searches fail and a later
+    # stage (projected corridor or whole board) finds the path.
+    assert stats.corridor_successes == 0
+    assert stats.projected_corridor_successes + stats.full_board_successes >= 1
+    assert stats.failed_expanded_states > 0
+
+
+def test_progress_reports_only_executed_search_work() -> None:
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    events = []
+
+    result = route_detailed(board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm("0.5")),
+                            on_progress=lambda phase, event, details: events.append(
+                                (phase, event, details)))
+
+    finished = [details for phase, event, details in events
+                if phase == "detailed_net" and event == "finished"]
+    assert finished
+    for details in finished:
+        if details.get("search_reuse") == "hit":
+            assert "search_stats" not in details
+        else:
+            assert details["search_seconds"] >= 0
+            assert details["search_stats"]["search_calls"] >= 1
+    executed = sum(details["search_stats"]["expanded_states"]
+                   for details in finished if "search_stats" in details)
+    assert 0 < executed <= result.search_work.expanded_states

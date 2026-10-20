@@ -57,7 +57,15 @@ from test_detailed_routing import _board
 from test_routing_benchmark import save_run
 
 WIDTH = nm_from_mm("0.25")
-TELEMETRY = {"search_identity", "search_reuse", "reused_search_seconds"}
+# Work counters differ by design: a reuse hit repeats no search.
+TELEMETRY = {"search_identity", "search_reuse", "reused_search_seconds",
+             "search_seconds", "search_stats"}
+
+
+def _without_search_work(document: str) -> dict:
+    parsed = json.loads(document)
+    parsed.pop("search_work")
+    return parsed
 
 
 def _keepout(name: str, corners: tuple[Point, Point]) -> CopperKeepout:
@@ -334,7 +342,9 @@ def test_route_detailed_is_byte_identical_with_and_without_search_reuse() -> Non
     reused = route_detailed(board, global_route, options,
                             on_progress=lambda p, e, d: events.append((p, e, d)))
     assert reused == plain
-    assert reused.to_json() == plain.to_json()
+    # Identical bytes apart from the run's search-work totals, which reuse lowers.
+    assert _without_search_work(reused.to_json()) == _without_search_work(plain.to_json())
+    assert reused.search_work.expanded_states <= plain.search_work.expanded_states
     assert reused.routing_fingerprint == plain.routing_fingerprint
     assert reused.board.tracks == plain.board.tracks and reused.board.vias == plain.board.vias
     assert [item.connected for item in reused.nets] == [True, True, True, False]
