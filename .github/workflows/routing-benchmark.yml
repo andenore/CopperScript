@@ -95,10 +95,17 @@ jobs:
           PCBENCH_NEWDRC_OUT: ${{ github.workspace }}/work/newdrc
         run: |
           PP=tools/datagen/pcbench_prep
-          /usr/bin/python3 $PP/convert_v9.py --workers 4
-          /usr/bin/python3 $PP/drc_fix_v9.py --workers 4
-          /usr/bin/python3 $PP/make_guide.py --base-dir "$PCBENCH_NEWDRC_OUT" --stem processed_v9 --suffix _guide_v3 \
-            --workers 4 --log "$RUNNER_TEMP/make_guide_log.json"
+          # Each step's output tail also becomes an annotation (job logs are not always reachable).
+          step() {
+            local title=$1; shift
+            set +e; "$@" > "$RUNNER_TEMP/step.txt" 2>&1; local code=$?; set -e
+            tail -n 40 "$RUNNER_TEMP/step.txt" | python3 -c 'import sys; t = sys.stdin.read(); print(("::error" if sys.argv[2] != "0" else "::notice") + " title=" + sys.argv[1] + " (exit " + sys.argv[2] + ")::" + t.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))' "$title" "$code"
+            return $code
+          }
+          step convert_v9 /usr/bin/python3 $PP/convert_v9.py --workers 4
+          step drc_fix_v9 /usr/bin/python3 $PP/drc_fix_v9.py --workers 4
+          step make_guide /usr/bin/python3 $PP/make_guide.py --base-dir "$PCBENCH_NEWDRC_OUT" --stem processed_v9 \
+            --suffix _guide_v3 --workers 4 --log "$RUNNER_TEMP/make_guide_log.json"
       - name: Collect the benchmark boards under their D3 names
         run: |
           mkdir -p boards
