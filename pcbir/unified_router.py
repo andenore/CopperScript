@@ -2050,20 +2050,23 @@ def route_unified(
         before = _pour_estimate(board, accepted)
         routed_planes = {net.name for net in nets if net.name in plane_nets}
         cut = {name: pads for name, pads in before.open_pads.items() if name in routed_planes}
-        adopted = False
+        adopted, outcome = False, "none cut off"
         if cut:
             focus = [PhysicalNet(name, tuple(PadReference(*pad.rsplit(".", 1)) for pad in pads))
                      for name, pads in sorted(cut.items())]
             saved = (accepted, complete, rejected)
             complete = set(complete) - set(cut)
             attempt = repair_attempt(False, focus)
+            outcome = "no repair attempt"
             if attempt is not None:
                 work, done, still, more_routes, stats, rejections = attempt
                 iterations += stats[3]
                 after = _pour_estimate(board, work)
-                if (after.opens < before.opens
-                        and _open_count(board, nets, work, plane_nets)[0]
-                        <= _open_count(board, nets, saved[0], plane_nets)[0]):
+                signal_before = _open_count(board, nets, saved[0], plane_nets)[0]
+                signal_after = _open_count(board, nets, work, plane_nets)[0]
+                outcome = (f"pour opens {before.opens}->{after.opens}, "
+                           f"signal opens {signal_before}->{signal_after}")
+                if after.opens < before.opens and signal_after <= signal_before:
                     accepted, complete, rejected = work, done, still
                     router.rejections = {**router.rejections, **rejections}
                     router.routes.update(more_routes)
@@ -2071,7 +2074,7 @@ def route_unified(
             if not adopted:
                 accepted, complete, rejected = saved
         emit(on_progress, "unified_pour_recheck", "finished", cut_off=sum(map(len, cut.values())),
-             adopted=adopted)
+             pads=sorted(pad for pads in cut.values() for pad in pads)[:12], adopted=adopted, outcome=outcome)
     spec_names = {s.name for s in router.specs}
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
