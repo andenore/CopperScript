@@ -167,7 +167,7 @@ def run_routing_pipeline(
             access = PackageAccessResult(placement.board, placement.global_route,
                 FanoutResult(preparation.source, {}, (), 0, 0), preparation.critical,
                 None, frozenset(), 0)
-    reserved = None
+    reserved = held = None
     if fanout_options is not None:
         access_options = package_access_options or PackageAccessOptions()
         if preparation is None:
@@ -207,9 +207,18 @@ def run_routing_pipeline(
             # critical router runs; the critical router sees them as keepouts,
             # so it cannot wall those pins in (one exact pass, no gate).
             reserved = _plan_ordinary_escapes(placement.board, unified_fanout, on_progress)
+        if (unified_options is not None and placement.board.decoupling_links
+                and getattr(unified_options, "pre_route_decouplers", True)):
+            # Bypasses route before critical nets (as package access did), so
+            # a critical route cannot take a capacitor's short surface feed.
+            held = _plan_decouplers(placement.board, reserved[2] if reserved else (), on_progress)
+            if reserved is not None and held[3]:
+                dropped = {keepout.id for keepout in held[3]}
+                reserved = (reserved[0], reserved[1], tuple(k for k in reserved[2] if k.id not in dropped))
         source = placement.board
-        if reserved is not None:
-            source = replace(source, copper_keepouts=(*source.copper_keepouts, *reserved[2]))
+        extra = (*(reserved[2] if reserved else ()), *(held[2] if held else ()))
+        if extra:
+            source = replace(source, copper_keepouts=(*source.copper_keepouts, *extra))
         critical = route_critical_nets(source, placement.global_route,
                                        on_progress=critical_progress(on_progress))
         if reserved is not None:
@@ -223,7 +232,8 @@ def run_routing_pipeline(
                     emit(on_progress, "ordinary_escapes", "released",
                          nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
                     retry = route_critical_nets(
-                        replace(placement.board, copper_keepouts=(*placement.board.copper_keepouts, *kept)),
+                        replace(placement.board, copper_keepouts=(*placement.board.copper_keepouts, *kept,
+                                                                  *(held[2] if held else ()))),
                         placement.global_route, on_progress=critical_progress(on_progress))
                     if sum(not item.connected for item in retry.nets) < len(
                             [item for item in critical.nets if not item.connected]):
@@ -242,10 +252,38 @@ def run_routing_pipeline(
                                 status=FeedbackStatus.PASS,
                                 full_route_certified=True,
                                 placement_candidate=placement.placement_candidate + "-critical")
+    if held is not None and critical_feedback is not None and critical_feedback.accepted_moves:
+        held = None  # placement moved: the planned bypass copper no longer applies
+        critical = replace(critical, board=replace(critical.board, copper_keepouts=tuple(
+            k for k in critical.board.copper_keepouts if not k.id.startswith("bypass-reserve"))))
+    if held is not None:
+        # The critical router kept clear of the reserved bypass copper, so it
+        # joins the board unchanged.
+        board = critical.board
+        temporary = {keepout.id for keepout in held[2]}
+        critical = replace(critical, board=replace(
+            board, tracks=(*board.tracks, *held[0]), vias=(*board.vias, *held[1]),
+            copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary)))
     if access is None and critical.board.decoupling_links and getattr(
             unified_options, "pre_route_decouplers", True):
         from .decoupling import route_decouplers
-        critical = replace(critical, board=route_decouplers(critical.board).board)
+        bypass = route_decouplers(critical.board)
+        critical = replace(critical, board=bypass.board)
+        pending = frozenset(link for link, _ in bypass.pending)
+        if reserved is not None and pending:
+            # A bypass the reservations blocked gets them released around its
+            # own capacitor and target pad only, then one more attempt.
+            pads = {pad for link in pending for pad in (link.capacitor, link.target, link.return_pad)}
+            kept = _release_reservations(critical.board, reserved[2], frozenset(), pads=pads,
+                                         margin_nm=nm_from_mm("0.5"))
+            if len(kept) < len(reserved[2]):
+                temporary = {keepout.id for keepout in reserved[2]} - {keepout.id for keepout in kept}
+                board = critical.board
+                retry = route_decouplers(replace(board, copper_keepouts=tuple(
+                    k for k in board.copper_keepouts if k.id not in temporary)), only_links=pending)
+                if len(retry.pending) < len(pending):
+                    critical = replace(critical, board=replace(retry.board,
+                                                               copper_keepouts=board.copper_keepouts))
     if reserved is not None:
         # The reservations also held while decouplers routed. The escapes
         # themselves are not kept: the unified router finds its own exact
@@ -489,7 +527,6 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress):
     from collections import Counter
     from .fanout import route_fanout
     from .hard_macros import macro_source, materialize_hard_macros
-    from .physical import CopperKeepout, Point, PolygonRing, PolygonWithHoles
     rules = {rule.net: rule for rule in board.net_routing_rules}
     # Signal nets only: supply and return nets are decoupled or planes, and
     # leaving them out also keeps the escape generator from routing bypasses.
@@ -509,50 +546,95 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress):
         return None
     tracks = list((Counter(escapes.board.tracks) - Counter(frame.tracks)).elements())
     vias = list((Counter(escapes.board.vias) - Counter(frame.vias)).elements())
-    gap = board.rules.minimum_clearance_nm
-    keepouts = []
-
-    def capsule(a, b, radius):
-        import math
-        dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
-        length = math.hypot(dx, dy)
-        ux, uy = (dx / length, dy / length) if length else (1.0, 0.0)
-        nx, ny = -uy, ux
-        corners = []
-        for (px, py), sx in ((( a.x_nm, a.y_nm), -1), ((b.x_nm, b.y_nm), 1)):
-            for sn in ((-1, 1) if sx < 0 else (1, -1)):
-                corners.append(Point(int(round(px + sx * radius * ux + sn * radius * nx)),
-                                     int(round(py + sx * radius * uy + sn * radius * ny))))
-        return PolygonWithHoles(PolygonRing(tuple(corners)))
-
-    for index, track in enumerate(tracks):
-        keepouts.append(CopperKeepout(f"escape-reserve-track-{index}", (track.layer,),
-                                      capsule(track.start, track.end, track.width_nm // 2 + gap),
-                                      block_tracks=True, block_vias=True, block_zones=False))
-    for index, via in enumerate(vias):
-        layers = board.stackup.copper_layers
-        span = layers[layers.index(via.from_layer):layers.index(via.to_layer) + 1]
-        keepouts.append(CopperKeepout(f"escape-reserve-via-{index}", tuple(span),
-                                      capsule(via.position, via.position, via.size_nm // 2 + gap),
-                                      block_tracks=True, block_vias=True, block_zones=False))
+    keepouts = _copper_keepouts(board, tracks, vias, "escape-reserve")
     emit(on_progress, "ordinary_escapes", "finished", vias=len(vias), tracks=len(tracks),
          pending=len(escapes.pending_pads))
     return tuple(tracks), tuple(vias), tuple(keepouts)
 
 
-def _release_reservations(board, keepouts, nets, margin_nm=nm_from_mm("2")):
-    """Escape reservations that lie outside the pad boxes of ``nets`` (+margin)."""
+def _copper_keepouts(board, tracks, vias, prefix):
+    """Keepouts covering planned copper plus clearance, for one routing stage."""
+    import math
+    from .physical import CopperKeepout, Point, PolygonRing, PolygonWithHoles
+    gap = board.rules.minimum_clearance_nm
+
+    def capsule(a, b, radius):
+        dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
+        length = math.hypot(dx, dy)
+        ux, uy = (dx / length, dy / length) if length else (1.0, 0.0)
+        nx, ny = -uy, ux
+        corners = []
+        for (px, py), sx in (((a.x_nm, a.y_nm), -1), ((b.x_nm, b.y_nm), 1)):
+            for sn in ((-1, 1) if sx < 0 else (1, -1)):
+                corners.append(Point(int(round(px + sx * radius * ux + sn * radius * nx)),
+                                     int(round(py + sx * radius * uy + sn * radius * ny))))
+        return PolygonWithHoles(PolygonRing(tuple(corners)))
+
+    keepouts = []
+    for index, track in enumerate(tracks):
+        keepouts.append(CopperKeepout(f"{prefix}-track-{index}", (track.layer,),
+                                      capsule(track.start, track.end, track.width_nm // 2 + gap),
+                                      block_tracks=True, block_vias=True, block_zones=False))
+    layers = board.stackup.copper_layers
+    for index, via in enumerate(vias):
+        span = layers[layers.index(via.from_layer):layers.index(via.to_layer) + 1]
+        keepouts.append(CopperKeepout(f"{prefix}-via-{index}", tuple(span),
+                                      capsule(via.position, via.position, via.size_nm // 2 + gap),
+                                      block_tracks=True, block_vias=True, block_zones=False))
+    return tuple(keepouts)
+
+
+def _plan_decouplers(board, reserved_keepouts, on_progress):
+    """Bypass copper routed before critical nets, held as keepouts meanwhile.
+
+    The critical router needs a board without ordinary copper, so bypasses are
+    planned on the macro-materialized frame (respecting escape reservations),
+    reserved as keepouts while critical nets route, and added back afterwards.
+    """
+    from collections import Counter
+    from .decoupling import route_decouplers
+    from .hard_macros import macro_source, materialize_hard_macros
+    emit(on_progress, "bypass_reservation", "started", links=len(board.decoupling_links))
+    frame = materialize_hard_macros(macro_source(board))
+    frame = replace(frame, copper_keepouts=(*frame.copper_keepouts, *reserved_keepouts))
+    result = route_decouplers(frame)
+    released = ()
+    pending = frozenset(link for link, _ in result.pending)
+    if pending and reserved_keepouts:
+        # Escape reservations next to a blocked bypass give way to it: free
+        # them around the link's own pads and route just those links again.
+        pads = {pad for link in pending for pad in (link.capacitor, link.target, link.return_pad)}
+        kept = _release_reservations(board, reserved_keepouts, frozenset(), nm_from_mm("1.5"), pads=pads)
+        if len(kept) < len(reserved_keepouts):
+            kept_ids = {k.id for k in kept}
+            retry_frame = replace(result.board, copper_keepouts=tuple(
+                k for k in result.board.copper_keepouts
+                if not k.id.startswith("escape-reserve") or k.id in kept_ids))
+            retry = route_decouplers(retry_frame, only_links=pending)
+            if len(retry.pending) < len(pending):
+                released = tuple(k for k in reserved_keepouts if k.id not in kept_ids)
+                result = retry
+    tracks = list((Counter(result.board.tracks) - Counter(frame.tracks)).elements())
+    vias = list((Counter(result.board.vias) - Counter(frame.vias)).elements())
+    emit(on_progress, "bypass_reservation", "finished", tracks=len(tracks), vias=len(vias),
+         pending=len(result.pending), released=len(released))
+    return tuple(tracks), tuple(vias), _copper_keepouts(board, tracks, vias, "bypass-reserve"), released
+
+
+def _release_reservations(board, keepouts, nets, margin_nm=nm_from_mm("2"), *, pads=()):
+    """Escape reservations outside the pad boxes of ``nets`` and around ``pads`` (+margin)."""
     from .placement import transformed_local_point
     poses = {pose.reference: pose for pose in board.placements}
+
+    def where(pad):
+        pose = poses[pad.component]
+        land = next(l for l in board.footprints[pose.footprint].pads if l.number == pad.pad)
+        return transformed_local_point(pose, land.position)
+
     boxes = []
-    for net in board.nets:
-        if net.name not in nets:
-            continue
-        points = []
-        for pad in net.pads:
-            pose = poses[pad.component]
-            land = next(l for l in board.footprints[pose.footprint].pads if l.number == pad.pad)
-            points.append(transformed_local_point(pose, land.position))
+    groups = [[where(pad) for pad in net.pads] for net in board.nets if net.name in nets]
+    groups += [[where(pad)] for pad in pads]
+    for points in groups:
         if points:
             boxes.append((min(p.x_nm for p in points) - margin_nm, min(p.y_nm for p in points) - margin_nm,
                           max(p.x_nm for p in points) + margin_nm, max(p.y_nm for p in points) + margin_nm))
