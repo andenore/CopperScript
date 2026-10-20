@@ -64,3 +64,36 @@ shards, then scores every board and its reference and publishes the
 aggregate and per-board tables in the run summary and as a notice
 annotation. Artifacts keep each routed board, its KiCad DRC report and
 its result record.
+
+## Baseline (2026-10-20)
+
+D3-A, 99 boards, commit 07f51f6, stock KiCad 9.0.9 on `ubuntu-24.04`:
+
+| Measure | CopperScript | Original routing (scorer check) |
+|---|---:|---:|
+| Clean pass | 79 / 99 (0.798) | 99 / 99 |
+| Mean net completion | 0.909 | |
+| Mean KiCad error-level violations | 0.081 | 0 |
+| Mean unconnected items | 1.31 | 0 |
+| Mean vias | 3.40 | |
+| Mean track length | 156.3 mm | |
+| Mean seconds per board | 31.8 (max 258) | |
+
+For orientation only, PCBWorld reports clean pass 0.80 for Freerouting,
+0.86 for its PPO agent and 0.74 for KiCadRoutingTools on D3-A. Those
+numbers come from PCBWorld's own engine build and scorer, not this workflow,
+so they are not a like-for-like comparison.
+
+The 20 failures, by first cause:
+
+| Cause | Boards |
+|---|---:|
+| Package-access preflight blocks area routing (pin access on small boards with few global tiles) | 6 |
+| One net left unrouted without a located diagnostic | 8 |
+| Detailed search cannot reach a terminal | 4 |
+| KiCad clearance or short violations CopperScript's own DRC does not report | 2 |
+
+Fixing the importer before this baseline raised the clean pass from 0.697:
+surface custom pads now use their copper's own bounding box, and pad-only
+spacing findings on imported placements no longer block package access (see
+[KiCad board import](kicad-board-import.md)).
