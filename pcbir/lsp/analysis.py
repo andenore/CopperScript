@@ -16,7 +16,7 @@ from ..syntax import (ComponentDecl, ConfigurationDecl, ConstraintDecl,
                       CopperScriptError, Document, ModuleInstanceDecl, RawQuantity,
                       PhysicalMacroDecl, ImportDecl, MacroItemDecl, MacroPadReference)
 from .frontend import Parsed, parse_recovering
-from .text import Text, path_from_uri, remember_client_uri, uri_for
+from .text import Text, forget_client_uri, path_from_uri, remember_client_uri, uri_for
 from .packages import SnapshotResolver
 from ..macro_bindings import is_macro_import
 
@@ -444,6 +444,7 @@ class Analysis:
         if replacement and token is not None and unit is self.root:
             # Same rule as `copper check --json`: only an exact token span is machine-applicable.
             diagnostic['data'] = {'fix': {'range': diagnostic['range'], 'newText': replacement,
+                                          'oldText': unit.text.source[offset:end],
                                           'title': f'Replace with {replacement!r}'}}
         if unit is not self.root:
             # Imported errors belong to this board's import, with the exact origin attached.
@@ -524,6 +525,7 @@ class Analysis:
             data = {}
             if span is not None and finding.replacement is not None:
                 data['fix'] = {'range': where, 'newText': finding.replacement,
+                               'oldText': self.root.text.source[start:end],
                                'title': f'Replace {finding.subject!r} with {finding.replacement!r}'}
             pins = unmarked.get(finding.subject) if finding.code == 'UNMARKED_PIN' else None
             if pins and '/' not in finding.subject and all(_PIN_NAME.fullmatch(p) for p in pins):
@@ -542,18 +544,37 @@ class Analysis:
             if not isinstance(data, dict):
                 continue
             fix = data.get('fix')
-            if isinstance(fix, dict) and isinstance(fix.get('newText'), str):
+            # A fix from an older publication is offered only while its range still holds the
+            # text it was computed for (the document may have changed since).
+            if isinstance(fix, dict) and isinstance(fix.get('newText'), str) and self._range_text(fix.get('range')) == fix.get('oldText'):
                 actions.append({'title': fix.get('title') or 'Apply fix', 'kind': 'quickfix', 'isPreferred': True,
                                 'diagnostics': [diagnostic],
                                 'edit': {'changes': {uri: [{'range': fix['range'], 'newText': fix['newText']}]}}})
             pins = data.get('no_connect')
             if isinstance(pins, list) and pins and all(isinstance(p, str) and _ENDPOINT.fullmatch(p) for p in pins):
                 edit = self.insert_before_board_end(f'no_connect {", ".join(pins)} {{ reason = "TODO: why unused"; }}')
-                if edit:
+                if edit and self._parses_with(edit):
                     actions.append({'title': f'Declare no_connect for {", ".join(p.split(".", 1)[1] for p in pins)}',
                                     'kind': 'quickfix', 'diagnostics': [diagnostic],
                                     'edit': {'changes': {uri: [edit]}}})
         return actions
+
+    def _range_text(self, lsp_range):
+        try:
+            return self.root.text.source[self.root.text.offset(lsp_range['start']):self.root.text.offset(lsp_range['end'])]
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _parses_with(self, edit):
+        """Offer an insertion only if the edited document still parses (pin names vary by library)."""
+        from ..parser import parse
+        at = self.root.text.offset(edit['range']['start'])
+        source = self.root.text.source
+        try:
+            parse(source[:at] + edit['newText'] + source[at:], str(self.root.path))
+        except CopperScriptError:
+            return False
+        return True
 
     def insert_before_board_end(self, statement):
         """A text edit adding ``statement`` as the last member of the root board."""
@@ -623,7 +644,9 @@ class Workspace:
 
     def close(self, uri):
         with self.lock:
-            self.documents.pop(path_from_uri(uri), None)
+            path = path_from_uri(uri)
+            self.documents.pop(path, None)
+            forget_client_uri(path, uri)
             self.invalidate()
 
     def snapshot(self):

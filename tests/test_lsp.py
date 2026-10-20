@@ -435,3 +435,18 @@ def test_grammar_highlights_every_board_keyword():
     patterns = json.dumps(grammar['repository']['keywords'])
     words = set(re.findall(r'[a-z_]+', patterns))
     assert set(_BOARD_KEYWORDS) <= words, sorted(set(_BOARD_KEYWORDS) - words)
+
+
+def test_quick_fixes_are_withheld_when_stale_or_unparseable(tmp_path):
+    text = SOURCE.replace('net N { R1.1; }', 'net N { R1.1; R1.22; }')
+    analysis, uri, findings = _diagnostics(tmp_path, text)
+    unknown = next(d for d in findings if d['code'] == 'UNKNOWN_PIN')
+    # The document changed under an older diagnostic: its range no longer holds 'R1.22'.
+    edited = text.replace('R1.22', 'R1.99')
+    ws, uri = workspace(tmp_path, edited)
+    actions = ws.analysis(uri).code_actions({'textDocument': {'uri': uri}, 'context': {'diagnostics': [unknown]}})
+    assert not any(a.get('isPreferred') for a in actions)
+    # An insertion that would not parse (a pin named like 1A) is not offered.
+    marked = {'range': unknown['range'], 'code': 'UNMARKED_PIN', 'data': {'no_connect': ['R1.1A']}}
+    actions = analysis.code_actions({'textDocument': {'uri': uri}, 'context': {'diagnostics': [marked]}})
+    assert actions == []

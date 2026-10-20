@@ -125,6 +125,10 @@ Code. Close discards that buffer and restores disk-backed import analysis.
   `U3.SDA`, `componnet` -> `component`, unknown constraint targets) and declare
   `no_connect` for every pin of an UNMARKED_PIN warning, inserted as the last
   board member with a TODO reason. Fix data travels in each diagnostic's `data`.
+- The VS Code client restarts a crashed server with backoff (at most five times in
+  five minutes) and shows its state in the status bar; a request timeout (30 s) is
+  not retried automatically. Quick fixes are offered only while the text they
+  were computed for is unchanged, and a `no_connect` insertion only if it parses.
 - File URIs: VS Code's `file:///c%3A/...` drive encoding is decoded on Windows,
   and replies (diagnostics, definitions) use the URI the client opened, so files
   reached through a symlink, junction or `subst` drive work.

@@ -200,3 +200,42 @@ def test_cached_macro_preview_copper_matches_fresh_materialization(tmp_path):
                     if p.reference in members else p for p in board.placements)
     same(replace(board, placements=shifted))
     assert anchor in members
+
+
+def test_macro_members_inherit_their_anchors_source_locks(tmp_path):
+    from test_macro_definitions import definition_project
+    from pcbir.editor.project import document_session
+    path, _, _, source = definition_project(tmp_path)
+    path.write_text(source.replace('fixed_placement(U1) { x = 10mm; y = 10mm; }',
+                                   'fixed_placement(U1) { x = 10mm; y = 10mm; rotation = 0; side = front; }')
+                    .replace('constraint fixed_placement(R1) { x = 12mm; y = 10mm; }', ''), encoding='utf-8')
+    scene = document_session(path, None).scene()
+    member = next(c for c in scene['components'] if c['reference'] == 'R1')
+    assert member['lock_owner'] == 'U1'
+    assert member['source_position_locked'] and member['source_rotation_locked'] and member['source_side_locked']
+    assert next(c for c in scene['components'] if c['reference'] == 'U1')['lock_owner'] is None
+
+
+def test_macro_cache_rechecks_board_changes_and_retries_failures(tmp_path):
+    from dataclasses import replace
+    from test_macro_definitions import definition_project
+    from pcbir.editor.project import document_session
+    from pcbir.editor.scene import _MacroCopperCache
+    path, _, _, _ = definition_project(tmp_path)
+    board = document_session(path, None).state.board
+    cache = _MacroCopperCache()
+    copper, error = cache.get(board)
+    assert error is None
+    # Any other board field (here: the rules) is part of the key.
+    changed = replace(board, rules=replace(board.rules, minimum_track_width_nm=board.rules.minimum_track_width_nm + 1))
+    assert cache.success_key(changed) != cache.success_key(board)
+    # Failures are keyed on every pose, so a later board state is evaluated again.
+    cache.entries = [("error", cache.failure_key(board), (None, "stale failure"))]
+    members = {m.reference for c in board.rigid_clusters for m in c.members}
+    outsider = next((p for p in board.placements if p.reference not in members), None)
+    if outsider is not None:
+        moved = replace(board, placements=tuple(
+            replace(p, position=replace(p.position, x_nm=p.position.x_nm + 1)) if p is outsider else p
+            for p in board.placements))
+        assert cache.get(moved)[1] is None
+    assert cache.get(board)[1] == "stale failure"

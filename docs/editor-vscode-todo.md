@@ -84,3 +84,15 @@ important first; check current code before starting an item.
 - [ ] Semantic tokens for components, nets, pins and parts; scope-aware rename/references.
 - [ ] Run `tests/vscode/integration.cjs` in Windows CI with `@vscode/test-electron`.
 - [x] `language-configuration.json` word pattern including `-`.
+
+## Follow-ups from the fix review
+
+- [ ] Language server: `file://server/share/...` (Windows UNC, as VS Code writes it) is
+  rejected as a remote host, so projects on network shares get no language tools.
+- [ ] Language server: `_CLIENT_URIS` is process-wide; two URIs for one path publish
+  under the last one opened.
+- [ ] ERC checks device-unit constraint pins with `active_bonded_pads`, physicalize with
+  `pins_bonded_to_pad`; confirm they agree under configurations.
+- [ ] Editor: macro preview copper is not re-accepted when a part outside the macro
+  moves onto it (placement legality reports the overlap instead).
+

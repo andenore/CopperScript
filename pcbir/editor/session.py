@@ -282,10 +282,19 @@ class EditorSession:
             board = source_board
             if moved:
                 from .transactions import seed_placements
-                board = seed_placements(source_board, draft)
+                # Only parts moved in this session carry their draft pose onto the new source.
+                board = seed_placements(source_board, draft, only=moved)
             reloaded_poses = self._poses(board)
             kept = sorted(ref for ref in moved if reloaded_poses.get(ref) == draft_poses[ref])
             dropped = sorted(moved - set(kept))
+            # Kept poses that break a rule of the new source (orientation, region, overlap)
+            # stay for the user to fix, and are reported.
+            invalid = []
+            if kept:
+                from ..placement import placement_rejection_reasons
+                reasons = placement_rejection_reasons(board, {p.reference: p for p in board.placements}, self.options)
+                named = {ref for message in reasons for ref in message.partition(":")[0].split(" / ")}
+                invalid = [ref for ref in kept if ref in named]
             from .transactions import electrical_identity
             self.workspace.identity = electrical_identity(design.electrical)
             self.workspace.inputs = self.workspace._inputs()
@@ -302,7 +311,7 @@ class EditorSession:
             self.close()
             self.revision += 1
             return {"scene": self.scene(), "accepted": True,
-                    "placement_kept": kept, "placement_dropped": dropped}
+                    "placement_kept": kept, "placement_dropped": dropped, "placement_invalid": invalid}
         self._check(request["revision"])
         if self.job and self.job.poll()["status"] == "running":
             self.job.cancel("stale", "session edited; old placement cancelled")

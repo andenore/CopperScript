@@ -151,6 +151,10 @@ test("quick fixes, severities and automatic restart after a crash", {skip: !pyth
     assert.match(status.text, /Copper/);
     // A crash restarts the server instead of leaving every provider silent.
     first.connection.child.kill("SIGKILL");
+    for (let i = 0; i < 100 && api.clients.size; i++) await new Promise(r => setTimeout(r, 20));
+    // During the backoff a request does not start a server early.
+    assert.equal(await providers.DocumentSymbol.provideDocumentSymbols(doc), undefined);
+    assert.equal(api.clients.size, 0);
     let next;
     for (let i = 0; i < 200; i++) {
       next = [...api.clients.values()][0];

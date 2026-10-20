@@ -33,6 +33,11 @@ def remember_client_uri(uri: str) -> Path:
     return path
 
 
+def forget_client_uri(path: Path, uri: str) -> None:
+    if _CLIENT_URIS.get(path) == uri:
+        del _CLIENT_URIS[path]
+
+
 def uri_for(path: Path) -> str:
     return _CLIENT_URIS.get(path) or path.as_uri()
 

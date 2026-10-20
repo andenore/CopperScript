@@ -136,9 +136,11 @@ the indicator remains until placement is saved.
 
 **Reload source** (after an external save, for example from VS Code) discards
 previews and undo history but keeps unsaved positions for parts that still exist
-with the same footprint and that the new source does not fix. The status line
-names the parts kept and those reset because the new source now fixes or changed
-them; nothing is written to the source.
+with the same footprint and that the new source does not fix; parts not moved in
+this session take the new source's poses. The status line names the parts kept,
+kept parts that now break a rule of the new source (for example a new allowed
+orientation), and those reset because the new source fixes or changed them;
+nothing is written to the source.
 
 ## Mechanical editing
 
@@ -322,14 +324,16 @@ revision discards the result. Only incident ratsnest nets are recomputed for pos
 changes; exact graph semantics remain unchanged.
 
 Hard-macro preview copper (and its whole-board DRC acceptance) is rebuilt only
-when a macro, its member poses or the board's fixed inputs (outline, zones,
-stackup, rules, nets) change; moving other parts reuses it, and their clearance
-to macro copper is reported by placement legality. Via-in-pad arrays are always
+when the board changes in anything other than the poses of parts outside the
+macros; moving those parts reuses it, and their clearance to macro copper is
+reported by placement legality. A failed materialization is retried whenever
+anything on the board changes. Via-in-pad arrays are always
 recomputed. On examples/full_vertical (55 parts) a move or discard takes about
 0.3 s instead of 2-3 s; the remaining time is the per-part legality explanation.
 
-Saving holds a `<file>.editor-lock` only while writing. A lock older than 30 s is
-left over from a crashed save and is removed automatically; a fresh one means
+Saving holds a `<file>.editor-lock` while it re-checks inputs and writes the file.
+A lock older than 120 s is left over from a crashed save and is removed
+automatically (atomically, so a live lock is never removed); a fresh one means
 another editor is saving, so retry.
 
 ## Routed reference and connectivity evidence

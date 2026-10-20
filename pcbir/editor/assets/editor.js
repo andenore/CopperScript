@@ -499,9 +499,10 @@ async function operation(action, fields={}, applyImmediately=false) {
         "Invalid temporary pose — adjust its position or rotation. " +(preview.placement_validation?.issues||[]).map(issue=>issue.message).join("; "),!preview.placement_hard_legal);}
     else {acceptScene(result.scene);sourcePreview=result.source_preview||sourcePreview;populate();
       if (action==="reload_source") {
-        const kept=result.placement_kept||[],dropped=result.placement_dropped||[];
+        const kept=result.placement_kept||[],dropped=result.placement_dropped||[],invalid=result.placement_invalid||[];
         status("Source reloaded." +(kept.length ? ` Kept unsaved positions for ${kept.join(", ")}.` : "") +
-          (dropped.length ? ` Reset ${dropped.join(", ")}: the new source fixes or changed them.` : ""),dropped.length>0);
+          (invalid.length ? ` ${invalid.join(", ")} now break${invalid.length===1?"s":""} a rule of the new source; adjust them.` : "") +
+          (dropped.length ? ` Reset ${dropped.join(", ")}: the new source fixes or changed them.` : ""),dropped.length>0 || invalid.length>0);
       } else if (action==="discard") {
         status("Preview discarded." +(accepted.outputs_stale ? " Earlier applied changes still leave route, fill and manufacturing outputs stale." : ""));
       } else

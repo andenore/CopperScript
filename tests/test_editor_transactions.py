@@ -373,3 +373,23 @@ def test_inserted_members_add_no_blank_or_whitespace_only_lines():
     patched = feature_patch(crlf, category="constraint", kind="min_distance",
                             parameters={"distance": "3 mm"}, targets=["R1", "R2"])[0].apply(crlf)
     assert b"\r\n    constraint min_distance(R1, R2)" in patched and b"\n\n" not in patched.replace(b"\r\n", b"\n")
+
+
+def test_reload_moves_only_parts_moved_in_this_session_and_reports_rule_breaks(tmp_path):
+    raw = SOURCE.replace("    constraint fixed_placement(R2) { x = 20mm; y = 10mm; rotation = 0; side = front; }\n", "")
+    s = session(tmp_path, raw.encode())
+    op(s, "move", reference="R2", x_nm=24000000, y_nm=20000000, rotation=90, side="front")
+    op(s, "apply")
+    # The new source adds a part and allows R2 only at 0 degrees.
+    s.source.write_bytes(raw.replace("    component R2: RESISTOR;\n",
+        "    component R2: RESISTOR;\n    component R3: RESISTOR;\n").replace(
+        "    net B { R1.2; R2.2; }", "    net B { R1.2; R2.2; R3.1; }\n    no_connect R3.2 { reason = \"test\"; }").replace(
+        "} // End.", '    constraint allowed_orientations(R2) { values = "0"; }\n} // End.').encode())
+    result = op(s, "reload_source")
+    assert result["placement_kept"] == ["R2"] and result["placement_invalid"] == ["R2"]
+    fresh = SourceWorkspace(s.source, compile_design_source(SourceSnapshot(s.source.read_bytes()).text,
+                            str(s.source), offline=True), prototype_physicalize).build(
+        compile_design_source(SourceSnapshot(s.source.read_bytes()).text, str(s.source), offline=True))
+    expected = {p.reference: (p.position, p.rotation_degrees, p.side) for p in fresh.placements}
+    poses = s._poses(s.state.board)
+    assert {ref: pose for ref, pose in poses.items() if ref != "R2"} == {ref: pose for ref, pose in expected.items() if ref != "R2"}

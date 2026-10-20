@@ -105,7 +105,7 @@ function activateLsp(vscode, context) {
     vscode.DiagnosticSeverity.Information ?? vscode.DiagnosticSeverity.Warning,
     vscode.DiagnosticSeverity.Hint ?? vscode.DiagnosticSeverity.Warning][(s || 1) - 1] ?? vscode.DiagnosticSeverity.Warning;
   // Automatic restart after a crash or timeout of a server that had started.
-  const restarts = new Map(), RESTART_LIMIT = 5, RESTART_WINDOW = 5 * 60 * 1000;
+  const restarts = new Map(), restartAt = new Map(), RESTART_LIMIT = 5, RESTART_WINDOW = 5 * 60 * 1000;
   const status = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Left ?? 1, 0);
   if (status) { status.command = "copperscript.restartLanguageServer"; context.subscriptions.push(status); }
   const showStatus = (state, detail) => {
@@ -118,7 +118,7 @@ function activateLsp(vscode, context) {
   let disposed = false;
   function retire() {
     for (const c of clients.values()) { c.retired = true; if (c.connection) void c.connection.stop(); }
-    clients.clear(); diagnostics.clear(); published.clear(); restarts.clear();
+    clients.clear(); diagnostics.clear(); published.clear(); restarts.clear(); restartAt.clear();
   }
   function restart() {
     retire();
@@ -160,20 +160,24 @@ function activateLsp(vscode, context) {
     if (!folder) return null;
     const id = folder.uri.toString();
     if (clients.has(id)) return clients.get(id);
+    if ((restartAt.get(id) || 0) > Date.now()) return null;
     const entry = {versions: new Map(), folderId: id};
     const config = vscode.workspace.getConfiguration("copperscript.lsp", document.uri);
     const report = error => {
       if (entry.retired || disposed) return;
       output.appendLine(`${folder.uri.fsPath}: ${error.message}`);
-      if (entry.started) {
-        // A running server crashed or timed out: restart it with backoff instead of going silent.
+      if (entry.started && !/timed out/.test(error.message)) {
+        // A running server crashed: restart it with backoff instead of going silent. A timeout
+        // is not retried automatically (a slow board would only time out again).
         const now = Date.now(), recent = (restarts.get(id) || []).filter(t => now - t < RESTART_WINDOW);
         if (recent.length < RESTART_LIMIT) {
           restarts.set(id, [...recent, now]);
           entry.retired = true; clients.delete(id);
           const delay = Math.min(30000, 1000 * 2 ** recent.length);
+          restartAt.set(id, Date.now() + delay);  // client() waits until then, whatever the user does
           showStatus("restarting", `${error.message}; restarting in ${delay / 1000} s`);
           const timer = setTimeout(() => {
+            restartAt.delete(id);
             if (disposed) return;
             for (const doc of vscode.workspace.textDocuments)
               if (vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() === id) client(doc);
