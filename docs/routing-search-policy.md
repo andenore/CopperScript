@@ -79,8 +79,10 @@ Two scopes are reported in the route-board JSON under `detailed`:
 
 Each executed `detailed_net` progress event adds `search_seconds` and
 `search_stats`; reuse hits carry neither, so summing these events over a
-`routing.log` counts every executed search once. Searches outside
-`_search_detailed_net` appear only in `search_work`.
+`routing.log` counts every executed search once; `python -m
+pcbir.routing_benchmark summarize RUN` reports that sum as
+`work.detailed_search`. Searches outside `_search_detailed_net` appear only
+in `search_work`.
 
 Counts are deterministic for fixed inputs. Like the policy telemetry above,
 they never enter equality, physical metadata, candidate comparisons, route
