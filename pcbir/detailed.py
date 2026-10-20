@@ -1968,17 +1968,28 @@ def _search_once(
     target_distances = ({target: guide_distance.distance_nm(point) for target, point in target_points}
                         if guide_distance is not None else {})
 
+    weight = options.heuristic_weight_percent
+
     def heuristic(node: DetailedNode) -> int:
+        """Queue estimate: the weighted octile bound, plus the unweighted guide bound.
+
+        Weighted passes (``heuristic_weight_percent`` > 100) trade optimality
+        for speed through the octile term only. The guide-deviation bound is
+        added unweighted so it prunes without making those searches greedier.
+        """
         value = heuristic_cache.get(node)
         if value is None:
             if guide_distance is None:
-                value = min(_heuristic(grid, node, target, options) for target in targets)
+                value = _queue_estimate(
+                    min(_heuristic(grid, node, target, options) for target in targets), 0, weight)
             else:
                 point = grid.point(node)
                 distance = guide_distance.distance_nm(point)
-                # Guide deviation costs 50 units per exposed nanometre.
-                value = min(_heuristic(grid, node, target, options) + 50 * guide_distance.exposed_length_bound_nm(
-                                point, distance, target_point, target_distances[target])
+                value = min(_queue_estimate(
+                                _heuristic(grid, node, target, options),
+                                guide_distance.exposed_length_bound_nm(
+                                    point, distance, target_point, target_distances[target]),
+                                weight)
                             for target, target_point in target_points)
             heuristic_cache[node] = value
         return value
@@ -2025,7 +2036,7 @@ def _search_once(
         best[node_id(start), ""] = 0
         previous[state] = None
         heappush(queue, (
-            options.heuristic_weight_percent * heuristic(start) // 100,
+            heuristic(start),
             0, 0, 0, start, "", serial,
         ))
         serial += 1
@@ -2148,7 +2159,7 @@ def _search_once(
                 queue,
                 (
                     candidate_cost + (
-                        options.heuristic_weight_percent * heuristic(neighbor) // 100
+                        heuristic(neighbor)
                     ),
                     candidate_cost,
                     next_vias,
@@ -2830,6 +2841,17 @@ def _merge_collinear_tracks(
             if index not in {first_index, second_index}
         ]
         active.append(joined)
+
+
+def _queue_estimate(octile_cost: int, exposed_guide_nm: int, weight_percent: int) -> int:
+    """A* queue estimate: weighted octile bound plus the unweighted guide bound.
+
+    ``heuristic_weight_percent`` above 100 deliberately inflates the octile
+    term so later passes and repairs search greedily. Guide deviation costs 50
+    units per exposed nanometre; that admissible bound is never inflated, so
+    it prunes without making weighted searches accept worse paths.
+    """
+    return weight_percent * octile_cost // 100 + 50 * exposed_guide_nm
 
 
 def _heuristic(

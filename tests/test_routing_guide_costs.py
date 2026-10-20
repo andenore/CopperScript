@@ -187,3 +187,29 @@ def test_guide_distance_heuristic_keeps_cost_and_expands_fewer_states():
     # Same optimal search cost; ties may pick a different equal-cost path.
     assert bounded.metrics.total_length_nm <= plain.metrics.total_length_nm * 1.05
     assert bounded.search_work.expanded_states < plain.search_work.expanded_states
+
+
+@pytest.mark.parametrize("weight", [100, 200, 300])
+def test_heuristic_weight_inflates_only_the_octile_term(weight):
+    from pcbir.detailed import _queue_estimate
+    octile, exposed = 7_000_000, 3_000_000
+    # Unchanged legacy estimate when no guide bound applies.
+    assert _queue_estimate(octile, 0, weight) == weight * octile // 100
+    # The guide bound adds exactly its admissible cost, whatever the weight.
+    assert _queue_estimate(octile, exposed, weight) - _queue_estimate(octile, 0, weight) == 50 * exposed
+
+
+def test_weighted_walled_search_with_guide_bound_still_connects():
+    """Smoke test only: weighted search with the guide bound finds a route."""
+    from dataclasses import replace
+    from pcbir import DetailedRouterOptions, route_detailed, route_global, GlobalRouterOptions
+    from pcbir.physical import CopperKeepout, PolygonRing, PolygonWithHoles, nm_from_mm
+    from test_detailed_routing import _board
+    board = _board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    walled = replace(board, copper_keepouts=(CopperKeepout("wall", (F,), PolygonWithHoles(PolygonRing((
+        Point.mm(9, 0), Point.mm(11, 0), Point.mm(11, 9), Point.mm(9, 9))))),))
+    result = route_detailed(walled, guide, DetailedRouterOptions(
+        pitch_nm=nm_from_mm(".5"), maximum_passes=1, heuristic_weight_percent=300,
+        guide_distance_heuristic=True))
+    assert result.nets[0].connected
