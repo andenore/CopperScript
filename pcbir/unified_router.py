@@ -95,9 +95,14 @@ class UnifiedRouterOptions:
     # Nets without a profile width may narrow to the board minimum this close
     # to their pads (0 disables).
     implicit_neck_nm: int = nm_from_mm("2.5")
+    # Trapped pins: exact local maze to open space within this radius (0 = off).
+    local_escape_radius_nm: int = nm_from_mm("2.0")
+    local_escape_step_nm: int = nm_from_mm("0.025")
     # Route decoupling capacitors with the dedicated decoupler router before
     # the unified router (their copper is then fixed).
     pre_route_decouplers: bool = True
+    # Escape crowded ordinary pins (fanout.route_fanout) before critical routing.
+    escapes_first: bool = True
 
     def __post_init__(self) -> None:
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0:
@@ -801,7 +806,99 @@ class _Router:
                     found += 1
                 if found < 2 and outward is not None:
                     self._attach_extended(position, outward, layer, spec, owner, seen)
+                if options.local_escape_radius_nm and not self._reaches_open(
+                        [node for node in seen if node // g.plane == layer], spec):
+                    self._attach_local(position, layer, spec, seen)
         return list(seen.values())
+
+    def _open_space(self, spec: _NetSpec):
+        """Per node: True when it lies in a large connected region of free space.
+
+        Labelled per layer on the raster of the narrowest width the net may
+        use (4-connected); "large" is at least 4 mm² of free cells.
+        """
+        from .plane_estimate import _label
+        width = spec.neck_width or spec.width
+        clearance = spec.neck_clearance or spec.clearance
+        key = (width, clearance)
+        cache = self.__dict__.setdefault("_open_cache", {})
+        if key not in cache:
+            g = self.grid
+            owner, _ = self.rasters.track(width, clearance)
+            arr = np.asarray(owner, dtype=np.int32).reshape(g.nl, g.ny, g.nx)
+            minimum = max(16, int(nm_from_mm("2") ** 2 // (g.pitch * g.pitch)))
+            result = np.zeros(g.size, dtype=bool)
+            for layer in range(g.nl):
+                labels, count = _label(arr[layer] == _FREE)
+                if not count:
+                    continue
+                sizes = np.bincount(labels.ravel(), minlength=count + 1)
+                big = sizes >= minimum
+                big[0] = False
+                result[layer * g.plane:(layer + 1) * g.plane] = big[labels.ravel()]
+            cache[key] = result
+        return cache[key]
+
+    def _reaches_open(self, nodes, spec: _NetSpec, limit: int = 600) -> bool:
+        """Whether a short flood from ``nodes`` (through free or own-net cells
+        on the same layer, at the net's narrowest width) reaches open space."""
+        if not nodes:
+            return False
+        g = self.grid
+        open_space = self._open_space(spec)
+        owner, _ = self.rasters.track(spec.neck_width or spec.width, spec.neck_clearance or spec.clearance)
+        nid = spec.nid
+        stack, visited = list(nodes), set(nodes)
+        while stack and len(visited) < limit:
+            node = stack.pop()
+            if open_space[node]:
+                return True
+            layer, rest = divmod(node, g.plane)
+            y, x = divmod(rest, g.nx)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                if 0 <= x + dx < g.nx and 0 <= y + dy < g.ny:
+                    other = node + dy * g.nx + dx
+                    if other not in visited and owner[other] in (_FREE, nid):
+                        visited.add(other)
+                        stack.append(other)
+        return len(visited) >= limit
+
+    def _attach_local(self, position, layer, spec, seen) -> None:
+        """Exact-geometry escape for a pin whose grid neighbourhood is a pocket.
+
+        The legality raster is conservative by a fraction of the pitch, so
+        a minimum-width channel between fixed copper can vanish from it. A
+        small exact maze (pin_access.local_access_path) then reaches the
+        nearest grid nodes that lie in open space.
+        """
+        from .pin_access import local_access_path
+        g, options = self.grid, self.options
+        open_space = self._open_space(spec)
+        width = spec.neck_width or spec.width
+        reach = options.local_escape_radius_nm
+        ix0, iy0, ix1, iy1 = g.window(position.x_nm - reach, position.y_nm - reach,
+                                      position.x_nm + reach, position.y_nm + reach)
+        owner, _ = self.rasters.track(spec.width, spec.clearance)
+        near = sorted((hypot(g.x0 + ix * g.pitch - position.x_nm, g.y0 + iy * g.pitch - position.y_nm), ix, iy)
+                      for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1))
+        found = tries = 0
+        for distance, ix, iy in near:
+            if distance > reach or found >= 3 or tries >= 12:
+                break
+            node = g.index(layer, ix, iy)
+            if not open_space[node] or owner[node] != _FREE:
+                continue
+            tries += 1
+            target = Point(g.x0 + ix * g.pitch, g.y0 + iy * g.pitch)
+            path = local_access_path(self.board, self.clearance, spec.name, position, target,
+                                     g.layers[layer], width, step_nm=options.local_escape_step_nm,
+                                     detour_nm=nm_from_mm("0.5"), maximum_states=20000)
+            if not path:
+                continue
+            cost = 2 * distance / g.pitch
+            if node not in seen or seen[node][2] > cost:
+                seen[node] = (node, tuple(path), cost)
+            found += 1
 
     def _attach_extended(self, position, outward, layer, spec, owner, seen):
         """Straight out along the pad's outward axis, then a checked lead-in.

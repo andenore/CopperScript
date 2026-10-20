@@ -14,7 +14,7 @@ from .boundary_access import reserve_boundary_access
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .pad_stitch import DuplicatePadStitchResult
 from .route_closure import close_detailed_lands
-from .physical import PhysicalBoard, nm_from_mm
+from .physical import PhysicalBoard, RouteKind, nm_from_mm
 from .placement import PlacementPlannerOptions
 from .routeflow import (FeedbackStatus, PlacementRoutingFeedbackOptions, PlacementRoutingResult,
                         detailed_failure_trials, optimize_placement_for_routing)
@@ -200,8 +200,24 @@ def run_routing_pipeline(
                 power_native_verifier=power_native_verifier)
         critical = access.critical
     else:
-        critical = route_critical_nets(placement.board, placement.global_route,
+        reserved = None
+        if (unified_options is not None and unified_fanout is not None
+                and getattr(unified_options, "escapes_first", True)):
+            # Ordinary pins of crowded packages get their escapes before the
+            # critical router runs; the critical router sees them as keepouts,
+            # so it cannot wall those pins in (one exact pass, no gate).
+            reserved = _plan_ordinary_escapes(placement.board, unified_fanout, on_progress)
+        source = placement.board
+        if reserved is not None:
+            source = replace(source, copper_keepouts=(*source.copper_keepouts, *reserved[2]))
+        critical = route_critical_nets(source, placement.global_route,
                                        on_progress=critical_progress(on_progress))
+        if reserved is not None:
+            board = critical.board
+            temporary = {keepout.id for keepout in reserved[2]}
+            critical = replace(critical, board=replace(
+                board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary),
+                tracks=(*board.tracks, *reserved[0]), vias=(*board.vias, *reserved[1])))
     critical_feedback = None
     if critical_feedback_trials and access is None:
         critical_feedback = improve_critical_placement(
@@ -443,6 +459,61 @@ def run_routing_pipeline(
         power_preparation_validation=preparation_validation,
         power_native_verifier=power_native_verifier,
     )
+
+
+def _plan_ordinary_escapes(board, fanout_options, on_progress):
+    """Escapes for crowded ordinary pins, and keepouts that reserve them.
+
+    Returns (tracks, vias, keepouts) on the macro-materialized frame, or None.
+    """
+    from collections import Counter
+    from .fanout import route_fanout
+    from .hard_macros import macro_source, materialize_hard_macros
+    from .physical import CopperKeepout, Point, PolygonRing, PolygonWithHoles
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    ordinary = frozenset(net.name for net in board.nets
+                         if len(net.pads) >= 2 and (rules.get(net.name) is None
+                                                    or rules[net.name].kind is RouteKind.GENERAL))
+    if not ordinary:
+        return None
+    emit(on_progress, "ordinary_escapes", "started", nets=len(ordinary))
+    frame = materialize_hard_macros(macro_source(board))
+    try:
+        escapes = route_fanout(frame, fanout_options, only_nets=ordinary)
+    except ValueError as error:
+        emit(on_progress, "ordinary_escapes", "finished", skipped=str(error))
+        return None
+    tracks = list((Counter(escapes.board.tracks) - Counter(frame.tracks)).elements())
+    vias = list((Counter(escapes.board.vias) - Counter(frame.vias)).elements())
+    gap = board.rules.minimum_clearance_nm
+    keepouts = []
+
+    def capsule(a, b, radius):
+        import math
+        dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
+        length = math.hypot(dx, dy)
+        ux, uy = (dx / length, dy / length) if length else (1.0, 0.0)
+        nx, ny = -uy, ux
+        corners = []
+        for (px, py), sx in ((( a.x_nm, a.y_nm), -1), ((b.x_nm, b.y_nm), 1)):
+            for sn in ((-1, 1) if sx < 0 else (1, -1)):
+                corners.append(Point(int(round(px + sx * radius * ux + sn * radius * nx)),
+                                     int(round(py + sx * radius * uy + sn * radius * ny))))
+        return PolygonWithHoles(PolygonRing(tuple(corners)))
+
+    for index, track in enumerate(tracks):
+        keepouts.append(CopperKeepout(f"escape-reserve-track-{index}", (track.layer,),
+                                      capsule(track.start, track.end, track.width_nm // 2 + gap),
+                                      block_tracks=True, block_vias=True, block_zones=False))
+    for index, via in enumerate(vias):
+        layers = board.stackup.copper_layers
+        span = layers[layers.index(via.from_layer):layers.index(via.to_layer) + 1]
+        keepouts.append(CopperKeepout(f"escape-reserve-via-{index}", tuple(span),
+                                      capsule(via.position, via.position, via.size_nm // 2 + gap),
+                                      block_tracks=True, block_vias=True, block_zones=False))
+    emit(on_progress, "ordinary_escapes", "finished", vias=len(vias), tracks=len(tracks),
+         pending=len(escapes.pending_pads))
+    return tuple(tracks), tuple(vias), tuple(keepouts)
 
 
 def _route_unified_compat(unified_options, board, global_route, _detailed_options, *,
