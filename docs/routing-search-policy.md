@@ -57,3 +57,34 @@ it does not open the reserved plane or override explicit net-layer restrictions.
 wirelength-based cost, a grid-invariant quantity or a physical-rule finding.
 The first-feasible guided-stage policy and whole-scope neutral fallback still
 have their separately tracked R5/R6b limitations.
+
+## Search-work counters
+
+`DetailedSearchStats` counts bounded A* searches. One *call* searches for one
+terminal connection in one stage; stages run in order: the guide corridor,
+wider corridors (`progressive_guides`), the corridor projected onto other
+allowed layers, then the whole board. Each call ends as `found` (counted per
+stage), `budget` (it reached its state budget) or `no_path` (its queue
+emptied). `failed_expanded_states` totals the states expanded by calls that
+found nothing: work that produced no copper.
+
+Two scopes are reported in the route-board JSON under `detailed`:
+
+- `search_work` totals every search of one `route_detailed` call, including
+  rejected passes, repair trials, probes and the neutral-cost fallback rerun.
+  A nested `route_detailed` call is also counted by its caller.
+- `nets[].search_stats` describes the attempt that produced that net's
+  reported result. A memo hit (see `search_reuse`) returns the original
+  attempt, with its original counts.
+
+Each executed `detailed_net` progress event adds `search_seconds` and
+`search_stats`; reuse hits carry neither, so summing these events over a
+`routing.log` counts every executed search once; `python -m
+pcbir.routing_benchmark summarize RUN` reports that sum as
+`work.detailed_search`. Searches outside `_search_detailed_net` appear only
+in `search_work`.
+
+Counts are deterministic for fixed inputs. Like the policy telemetry above,
+they never enter equality, physical metadata, candidate comparisons, route
+fingerprints or acceptance. The search memo lowers `search_work` without
+changing copper, so report bytes may differ between otherwise identical runs.

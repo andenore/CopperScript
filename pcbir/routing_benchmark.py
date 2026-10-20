@@ -62,6 +62,27 @@ def _settings(manifest: dict) -> list[str] | None:
     return result
 
 
+def _detailed_search_work(spans: list[dict]) -> dict | None:
+    """Sum executed ``detailed_net`` search counters; reuse hits carry none."""
+
+    executed = [span["finished_details"] for span in spans if span["phase"] == "detailed_net"
+                and isinstance(span["finished_details"].get("search_stats"), dict)]
+    if not executed:
+        return None
+    totals: Counter = Counter()
+    for details in executed:
+        stats = details["search_stats"]
+        for key, value in stats.items():
+            if key != "maximum_target_count" and isinstance(value, int):
+                totals[key] += value
+    return {**dict(sorted(totals.items())),
+            "maximum_target_count": max(details["search_stats"].get("maximum_target_count", 0)
+                                        for details in executed),
+            "executed_attempts": len(executed),
+            "search_seconds": round(sum(float(details.get("search_seconds", 0.0))
+                                        for details in executed), 3)}
+
+
 def summarize_run(directory: Path) -> dict:
     directory = directory.resolve()
     manifest = _document(directory / "run.json")
@@ -111,6 +132,7 @@ def summarize_run(directory: Path) -> dict:
                 for span in spans if span["phase"] == "detailed_net").items())),
             "reused_detailed_attempts": sum(span["phase"] == "detailed_net"
                 and span["finished_details"].get("search_reuse") == "hit" for span in spans),
+            "detailed_search": _detailed_search_work(spans),
             "trial_decisions": {phase: dict(sorted(Counter(span["finished_details"].get("decision", "unknown")
                 for span in spans if span["phase"] == phase).items()))
                 for phase in ("zone_full_trial", "zone_incremental_trial")},
@@ -121,7 +143,8 @@ def summarize_run(directory: Path) -> dict:
                     "Critical state counts include discarded probes; do not add tier counts again. "
                     "Detailed attempt counts include rejected work, not unique accepted nets; "
                     "reused attempts answered an exactly repeated search without searching. "
-                    "General area state counts are not yet recorded."}
+                    "detailed_search totals executed area searches, including rejected and "
+                    "probe attempts; it is null for runs without search_stats telemetry."}
         if not phases["events"]:
             # Older runs have a plain-text log but no structured telemetry.
             # Zero observed events cannot establish zero routing work.
