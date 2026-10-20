@@ -203,7 +203,7 @@ def run_routing_pipeline(
         reserved = None
         if (unified_options is not None and unified_fanout is not None
                 and getattr(unified_options, "escapes_first", True)):
-            # Ordinary pins of crowded packages get their escapes before the
+            # Ordinary pins of crowded packages get escapes planned before the
             # critical router runs; the critical router sees them as keepouts,
             # so it cannot wall those pins in (one exact pass, no gate).
             reserved = _plan_ordinary_escapes(placement.board, unified_fanout, on_progress)
@@ -215,9 +215,11 @@ def run_routing_pipeline(
         if reserved is not None:
             board = critical.board
             temporary = {keepout.id for keepout in reserved[2]}
+            # The escapes themselves are not kept: the unified router finds its
+            # own exact access, and a fixed escape of one pin can block a
+            # neighbour that the escape generator left pending.
             critical = replace(critical, board=replace(
-                board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary),
-                tracks=(*board.tracks, *reserved[0]), vias=(*board.vias, *reserved[1])))
+                board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary)))
     critical_feedback = None
     if critical_feedback_trials and access is None:
         critical_feedback = improve_critical_placement(
