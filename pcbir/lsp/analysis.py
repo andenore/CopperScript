@@ -3,19 +3,20 @@
 Only declared imports are traversed. Package resolution remains locked/offline;
 editor overlays affect analysis, never dependency locks or build artifacts.
 """
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
 
 from ..compiler import QUANTITY_TYPES, compile_source
-from ..erc import check
+from ..erc import build_context, check, unmarked_pins
 from ..lexer import TokenKind
 from ..library import library_factory
 from ..syntax import (ComponentDecl, ConfigurationDecl, ConstraintDecl,
                       CopperScriptError, Document, ModuleInstanceDecl, RawQuantity,
                       PhysicalMacroDecl, ImportDecl, MacroItemDecl, MacroPadReference)
 from .frontend import Parsed, parse_recovering
-from .text import Text, path_from_uri
+from .text import Text, path_from_uri, remember_client_uri, uri_for
 from .packages import SnapshotResolver
 from ..macro_bindings import is_macro_import
 
@@ -81,7 +82,7 @@ class Symbol:
     kind: int
 
     def location(self):
-        return {'uri': self.unit.path.as_uri(),
+        return {'uri': uri_for(self.unit.path),
                 'range': self.unit.text.range(self.selection_start, self.selection_end)}
 
     def outline(self):
@@ -316,7 +317,7 @@ class Analysis:
         if found and isinstance(found[0].node, ImportDecl):
             contract = self.macro_contracts.get((found[0].unit.path, found[0].node.alias))
             if contract:
-                return {'uri': contract[0].as_uri(), 'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 0}}}
+                return {'uri': uri_for(contract[0]), 'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 0}}}
         return found[0].location() if found else None
 
     def macro_scope_unit(self, declaration):
@@ -439,9 +440,14 @@ class Analysis:
         diagnostic = {'range': unit.text.range(offset, end), 'severity': 1,
                       'code': error.code, 'source': 'CopperScript',
                       'message': f'{error.message} ({hint})' if hint else error.message}
+        replacement = getattr(error, 'replacement', None)
+        if replacement and token is not None and unit is self.root:
+            # Same rule as `copper check --json`: only an exact token span is machine-applicable.
+            diagnostic['data'] = {'fix': {'range': diagnostic['range'], 'newText': replacement,
+                                          'title': f'Replace with {replacement!r}'}}
         if unit is not self.root:
             # Imported errors belong to this board's import, with the exact origin attached.
-            origin = {'uri': unit.path.as_uri(), 'range': diagnostic['range']}
+            origin = {'uri': uri_for(unit.path), 'range': diagnostic['range']}
             declaration = next((d for d in self.root.document.imports if unit.namespace == d.alias or unit.namespace.startswith(d.alias + '.')), None)
             diagnostic['range'] = self.root.text.range(declaration.location.offset, declaration.location.offset + len(declaration.alias)) if declaration else self.root.text.range(0, 0)
             diagnostic['relatedInformation'] = [{'location': origin, 'message': error.message}]
@@ -498,16 +504,86 @@ class Analysis:
             except MacroPreparationError as exc:
                 return [self.error_diagnostic(CopperScriptError('MAC005', exc.message, exc.location))]
             findings = check(board, unmarked_pins=True)
+            unmarked = unmarked_pins(build_context(board)) if any(f.code == 'UNMARKED_PIN' for f in findings) else {}
         except CopperScriptError as exc:
             return [self.error_diagnostic(exc)]
+        from ..diagnostics import locate
         result = []
-        for finding in findings:
-            diagnostic = {'range': self.subject_range(finding.subject),
-                          'severity': 1 if finding.severity.value == 'error' else 2,
+        # The CLI's locator: honours a finding's origin (net/no_connect) and repeats.
+        for finding, span in locate(findings, self.root.text.source, str(self.root.path)):
+            if span is not None and span.start.filename == str(self.root.path):
+                start = span.start.offset
+                end = self.root.text.starts[span.end_line - 1] + span.end_column - 1
+                where = self.root.text.range(start, end)
+            else:
+                where = self.subject_range(finding.subject)
+                span = None
+            diagnostic = {'range': where, 'severity': 1 if finding.severity.value == 'error' else 2,
                           'code': finding.code, 'source': 'CopperScript',
                           'message': f'{finding.message} ({finding.hint})' if finding.hint else finding.message}
+            data = {}
+            if span is not None and finding.replacement is not None:
+                data['fix'] = {'range': where, 'newText': finding.replacement,
+                               'title': f'Replace {finding.subject!r} with {finding.replacement!r}'}
+            pins = unmarked.get(finding.subject) if finding.code == 'UNMARKED_PIN' else None
+            if pins and '/' not in finding.subject and all(_PIN_NAME.fullmatch(p) for p in pins):
+                data['no_connect'] = [f'{finding.subject}.{p}' for p in pins]
+            if data:
+                diagnostic['data'] = data
             result.append(diagnostic)
         return result
+
+    def code_actions(self, params):
+        """Quick fixes: apply a located replacement; declare no_connect for unmarked pins."""
+        uri = params['textDocument']['uri']
+        actions = []
+        for diagnostic in (params.get('context') or {}).get('diagnostics') or []:
+            data = diagnostic.get('data') if isinstance(diagnostic, dict) else None
+            if not isinstance(data, dict):
+                continue
+            fix = data.get('fix')
+            if isinstance(fix, dict) and isinstance(fix.get('newText'), str):
+                actions.append({'title': fix.get('title') or 'Apply fix', 'kind': 'quickfix', 'isPreferred': True,
+                                'diagnostics': [diagnostic],
+                                'edit': {'changes': {uri: [{'range': fix['range'], 'newText': fix['newText']}]}}})
+            pins = data.get('no_connect')
+            if isinstance(pins, list) and pins and all(isinstance(p, str) and _ENDPOINT.fullmatch(p) for p in pins):
+                edit = self.insert_before_board_end(f'no_connect {", ".join(pins)} {{ reason = "TODO: why unused"; }}')
+                if edit:
+                    actions.append({'title': f'Declare no_connect for {", ".join(p.split(".", 1)[1] for p in pins)}',
+                                    'kind': 'quickfix', 'diagnostics': [diagnostic],
+                                    'edit': {'changes': {uri: [edit]}}})
+        return actions
+
+    def insert_before_board_end(self, statement):
+        """A text edit adding ``statement`` as the last member of the root board."""
+        tokens = [t for t in self.root.parsed.tokens if t.kind is not TokenKind.EOF]
+        closing = next((t for t in reversed(tokens) if t.text == '}'), None)
+        if closing is None:
+            return None
+        source = self.root.text.source
+        line_start = source.rfind('\n', 0, closing.location.offset) + 1
+        # Indent like the board's first member (the token after the opening brace).
+        opening = next((i for i, t in enumerate(tokens) if t.text == '{'), None)
+        indent = '    '
+        if opening is not None and opening + 1 < len(tokens):
+            member = tokens[opening + 1].location.offset
+            prefix = source[source.rfind('\n', 0, member) + 1:member]
+            if prefix and prefix.strip() == '':
+                indent = prefix
+        newline = '\r\n' if '\r\n' in source else '\n'
+        if source[line_start:closing.location.offset].strip() == '':
+            at = line_start
+            text = f'{indent}{statement}{newline}'
+        else:
+            at = closing.location.offset
+            text = f'{newline}{indent}{statement}{newline}'
+        position = self.root.text.position(at)
+        return {'range': {'start': position, 'end': position}, 'newText': text}
+
+
+_PIN_NAME = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_\-]*')
+_ENDPOINT = re.compile(r'[A-Za-z_][A-Za-z0-9_\-]*\.[A-Za-z0-9_][A-Za-z0-9_\-]*')
 
 
 class Workspace:
@@ -520,7 +596,7 @@ class Workspace:
         self.disk_generation = 0
 
     def update(self, uri, version, text=None, changes=None):
-        path = path_from_uri(uri)
+        path = remember_client_uri(uri)
         if path.suffix.lower() != '.copper' or type(version) is not int:
             raise ValueError('a Copper document and integer version are required')
         with self.lock:

@@ -610,7 +610,8 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
     if not cluster_placement_matches(board, placements):
         errors.append("rigid cluster/hard-macro member poses must move together")
     if _relative_penalty(board, placements):
-        errors.append("relative placement constraint (alignment/distance) is not satisfied")
+        named = [v["message"] for v in relative_placement_violations(board, placements)]
+        errors.extend(named or ["relative placement constraint (alignment/distance) is not satisfied"])
     return tuple(dict.fromkeys(errors)) or ("pose violates a represented physical constraint",)
 
 
@@ -2856,6 +2857,12 @@ def _local_connection_length(board: PhysicalBoard, placements: Mapping[str, Plac
                if (b := _target_point(board, placements, right)) is not None)
 
 
+def _mm_text(value_nm: int) -> str:
+    """Millimetres through the shared quantity formatter (exact, fixed-point)."""
+    from .quantities import Length
+    return str(Length.of(Decimal(value_nm) / Decimal(1_000_000), "mm"))
+
+
 def relative_placement_violations(
     board: PhysicalBoard, placements: Mapping[str, Placement]
 ) -> tuple[dict[str, object], ...]:
@@ -2906,7 +2913,7 @@ def relative_placement_violations(
                     "excess_nm": amount,
                     "message": (
                         f"{left_target.reference} to {right_target.reference}: "
-                        f"{kind_text} distance {limit} nm, actual {actual} nm"
+                        f"{kind_text} distance {_mm_text(limit)}, actual {_mm_text(actual)}"
                     ),
                 })
         elif rule.kind is RelativePlacementKind.ALIGN:
@@ -2930,7 +2937,7 @@ def relative_placement_violations(
                     "message": (
                         f"{', '.join(target.reference for target in rule.targets)}: "
                         f"{rule.axis.value if rule.axis is not None else 'axis'} alignment "
-                        f"tolerance {tolerance} nm, actual span {actual} nm"
+                        f"tolerance {_mm_text(tolerance)}, actual span {_mm_text(actual)}"
                     ),
                 })
     return tuple(violations)

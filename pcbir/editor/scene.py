@@ -9,7 +9,10 @@ from math import cos, hypot, isqrt, radians, sin
 
 from ..drc import explicit_copper_connectivity, placed_pad_shape
 from ..geometry import bounds
-from ..hard_macros import materialize_hard_macros
+from threading import Lock
+
+from ..hard_macros import materialize_hard_macros, materialize_macro_copper
+from ..pad_via_arrays import materialize_via_in_pad_arrays
 from ..physical import (FootprintArc, FootprintCircle, FootprintLayer,
                         FootprintLine, FootprintPolygon, FootprintRectangle,
                         PadKind, PadReference, PadShape, PhysicalBoard, Point)
@@ -32,11 +35,60 @@ def _shape(shape) -> dict:
     return {"spine": [_point(p) for p in shape.spine], "radius_nm": shape.radius_nm}
 
 
+class _MacroCopperCache:
+    """Last few macro materializations, reused while the macros and their inputs are unchanged.
+
+    Macro copper (and its whole-board DRC acceptance) costs seconds on a real
+    board and the editor rebuilds the scene on every move. The key holds every
+    input the macro step reads except the poses of parts outside the macros;
+    those parts' clearance to macro copper is reported by placement legality.
+    Via-in-pad arrays, which any part can own, are always recomputed.
+    """
+
+    def __init__(self, size=4):
+        self.size, self.entries, self.lock = size, [], Lock()
+
+    @staticmethod
+    def key(board):
+        members = {m.reference for c in board.rigid_clusters for m in c.members}
+        poses = tuple(sorted(((p.reference, p.footprint, p.position, p.rotation_degrees, p.side)
+                              for p in board.placements if p.reference in members), key=lambda item: item[0]))
+        footprints = tuple(sorted((name, board.footprints[name]) for name in {p[1] for p in poses}))
+        return (board.hard_macros, board.rigid_clusters, poses, footprints, board.outline, board.zones,
+                board.stackup, board.rules, board.nets, board.tracks, board.vias, board.polygons,
+                board.zone_fills, board.materialized_macros)
+
+    def get(self, board):
+        key = self.key(board)
+        with self.lock:
+            for entry in self.entries:
+                if entry[0] == key:
+                    return entry[1]
+        try:
+            outcome = (materialize_macro_copper(board), None)
+        except ValueError as exc:
+            outcome = (None, str(exc))
+        with self.lock:
+            self.entries = [(key, outcome), *self.entries][:self.size]
+        return outcome
+
+
+_MACRO_COPPER = _MacroCopperCache()
+
+
 def _preview_copper(board):
     if not board.hard_macros:
         return board, None
     try:
-        return materialize_hard_macros(board), None
+        if board.materialized_macros:
+            return materialize_hard_macros(board), None
+        copper, error = _MACRO_COPPER.get(board)
+        if error is not None:
+            raise ValueError(error)
+        # Cached macro copper on this board's poses; arrays follow the current pads.
+        return materialize_via_in_pad_arrays(replace(board, tracks=copper.tracks, vias=copper.vias,
+            zones=copper.zones, polygons=copper.polygons, materialized_macros=copper.materialized_macros,
+            metadata={**board.metadata, "fabrication_ready": "false"})), None
     except ValueError as exc:
         # Inspection-grid poses may not yet form a legal macro. Keep the viewer
         # usable for legalization, but grant no private-copper connectivity.
@@ -227,6 +279,9 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
         from ..mechanical_assembly import component_height
         rule = rules.get(pose.reference)
         cluster = next((c for c in board.rigid_clusters if any(m.reference == pose.reference for m in c.members)), None)
+        # Rigid-macro members move with their anchor, so they inherit the anchor's source locks.
+        owner = cluster.anchor.reference if cluster and cluster.anchor.reference != pose.reference else None
+        lock_rule = rule if owner is None else (rule or rules.get(owner))
         angles = rule.allowed_orientations if rule else (0, 90, 180, 270)
         if cluster:
             member = next(m for m in cluster.members if m.reference == pose.reference)
@@ -258,9 +313,10 @@ def board_scene(board: PhysicalBoard, *, source_revision: str, revision: int = 0
             "value": pose.value, "body": [_point(p) for p in body],
             "silkscreen": footprint_silkscreen_scene(footprint, pose),
             "courtyard": [_point(p) for p in transformed_footprint_polygon(board, pose)],
-            "pads": pads, "source_position_locked": bool(rule and rule.fixed_position is not None),
-            "source_rotation_locked": bool(rule and rule.fixed_rotation_degrees is not None),
-            "source_side_locked": bool(rule and rule.side is not None),
+            "pads": pads, "source_position_locked": bool(lock_rule and lock_rule.fixed_position is not None),
+            "source_rotation_locked": bool(lock_rule and lock_rule.fixed_rotation_degrees is not None),
+            "source_side_locked": bool(lock_rule and lock_rule.side is not None),
+            "lock_owner": owner if lock_rule is not rule else None,
             "session_locked": pose.reference in session_locks,
             "constraint_warning": pose.reference in violating_references,
             "pose_invalid": pose.reference in invalid_references,

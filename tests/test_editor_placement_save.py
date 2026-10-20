@@ -163,3 +163,40 @@ def test_fixed_macro_anchor_never_overwrites_conflicting_member_intent():
     # Partial anchors remain solver inputs; they do not choose an arbitrary frame.
     board = replace(board, placement_rules=(replace(anchor, fixed_rotation_degrees=None), member))
     assert apply_fixed_cluster_poses(board).placements == board.placements
+
+
+def test_cached_macro_preview_copper_matches_fresh_materialization(tmp_path):
+    """The editor reuses macro copper while the macro is unchanged; it must equal a fresh build."""
+    from dataclasses import replace
+    from test_macro_definitions import definition_project
+    from pcbir.editor.project import document_session
+    from pcbir.editor.scene import _preview_copper
+    from pcbir.hard_macros import materialize_hard_macros
+    path, _, _, _ = definition_project(tmp_path)
+    s = document_session(path, None)
+    board = s.state.board
+    members = {m.reference for c in board.rigid_clusters for m in c.members}
+
+    def same(candidate):
+        cached, error = _preview_copper(candidate)
+        try:
+            fresh = materialize_hard_macros(candidate)
+        except ValueError as exc:
+            assert error == str(exc)
+            return
+        assert error is None
+        assert (cached.tracks, cached.vias, cached.zones, cached.polygons) == \
+            (fresh.tracks, fresh.vias, fresh.zones, fresh.polygons)
+        assert cached.placements == candidate.placements
+
+    same(board)
+    same(board)  # second call is served from the cache
+    outsider = next((p for p in board.placements if p.reference not in members), None)
+    if outsider is not None:
+        moved = replace(outsider, position=replace(outsider.position, x_nm=outsider.position.x_nm + 1000000))
+        same(replace(board, placements=tuple(moved if p is outsider else p for p in board.placements)))
+    anchor = board.rigid_clusters[0].anchor.reference
+    shifted = tuple(replace(p, position=replace(p.position, x_nm=p.position.x_nm + 2000000))
+                    if p.reference in members else p for p in board.placements)
+    same(replace(board, placements=shifted))
+    assert anchor in members

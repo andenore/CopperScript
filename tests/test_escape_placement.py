@@ -421,7 +421,7 @@ def test_failed_local_relation_reports_measured_limit_and_blockers_without_movin
     board = local_companion_board()
     board = replace(board, placements=board.placements[:2],
                     relative_rules=(replace(board.relative_rules[0], distance_nm=nm_from_mm(.1)),))
-    with pytest.raises(PlacementPlanningError, match="maximum distance 100000 nm, actual.*local candidate blockers: U"):
+    with pytest.raises(PlacementPlanningError, match="maximum distance 0.1 mm, actual.*local candidate blockers: U"):
         plan_placement(board, options())
     assert board.placements[0].position == Point.mm(10, 10)
 

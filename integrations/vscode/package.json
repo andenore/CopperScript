@@ -2,7 +2,7 @@
   "name": "copperscript",
   "displayName": "CopperScript",
   "description": "CopperScript language server and source-authoritative mechanical editor, using a selected local compiler",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "andenore",
   "license": "MIT",
   "icon": "media/copper-logo.png",

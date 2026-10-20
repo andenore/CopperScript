@@ -31,7 +31,7 @@
 <label>Placement side <select id="pose-side"><option value="front">Front</option><option value="back">Rear</option></select></label>
 <fieldset><legend>Placement draft</legend><p>Drag and rotate freely. Use Review placement at the top to save the layout as source locks.</p>
 <button id="move" disabled>Preview pose</button><button id="lock" disabled>Lock for this session</button><p id="temporary-lock-state">No component selected.</p></fieldset>
-<div id="pose-validation" role="alert" hidden><strong>Invalid temporary pose</strong><p id="pose-validation-reasons"></p></div>
+<div id="pose-validation" role="alert" hidden><strong id="pose-validation-title">Invalid temporary pose</strong><p id="pose-validation-reasons"></p></div>
 <fieldset id="persistent-controls" disabled><legend>Saved source locks</legend>
 <p id="source-lock-state">Select a component to inspect its saved locks.</p><label><input id="edit-locks" type="checkbox"> Edit source locks</label>
 <label><input id="position-lock" type="checkbox"> Save a position lock</label>

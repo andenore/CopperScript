@@ -155,6 +155,24 @@ def declaration_index(snapshot: SourceSnapshot) -> DeclarationSpan:
     return read(0)[0]
 
 
+def insert_member(snapshot: SourceSnapshot, closing_brace: int, statement: str) -> TextEdit:
+    """Add ``statement`` as the last member before the block brace at ``closing_brace``.
+
+    A brace alone on its line keeps its indentation and the member goes on the line
+    above it, one level deeper; no whitespace-only or blank lines are introduced.
+    """
+    text, newline = snapshot.text, snapshot.newline
+    line_start = text.rfind("\n", 0, closing_brace) + 1
+    prefix = text[line_start:closing_brace]
+    unit = "\t" if prefix.startswith("\t") else "    "
+    if prefix.strip() == "":
+        return TextEdit(SourceSpan(line_start, line_start), prefix + unit + statement + newline)
+    # Brace on a line with other text ("board X { ... }"): open a new line for the member.
+    indent = prefix[:len(prefix) - len(prefix.lstrip())]
+    return TextEdit(SourceSpan(closing_brace, closing_brace),
+                    newline + indent + unit + statement + newline + indent)
+
+
 def _erase_tokens(tokens, span):
     # Comments/trivia survive deletion as well as replacement.
     return [TextEdit(_span(t), "") for t in tokens if t.kind is not TokenKind.EOF
@@ -310,14 +328,11 @@ def mechanical_patch(snapshot: SourceSnapshot, *, kind: str, name: str = "", sha
             raise SourceEditError("feature is not owned by this source")
         else:
             node = next(n for n in declaration_index(snapshot).children if n.header == ("mechanical",))
-            offset = node.span.end - 1
-            edits.append(TextEdit(SourceSpan(offset, offset), snapshot.newline + "        " + literal + snapshot.newline + "    "))
+            edits.append(insert_member(snapshot, node.span.end - 1, literal))
     elif remove:
         raise SourceEditError("feature is not owned by this source")
     else:
-        offset = tokens[-2].location.offset
-        text = snapshot.newline + "    mechanical { " + literal + " }" + snapshot.newline
-        edits.append(TextEdit(SourceSpan(offset, offset), text))
+        edits.append(insert_member(snapshot, tokens[-2].location.offset, "mechanical { " + literal + " }"))
     patch = SourcePatch(snapshot.revision, tuple(edits))
     parse(SourceSnapshot(patch.apply(snapshot), snapshot.filename).text, snapshot.filename)
     return patch

@@ -163,3 +163,18 @@ def test_plain_string_form_has_no_hint_suffix():
     board = compile_source(TYPO, "t.copper")
     unknown = next(d for d in check(board) if d.code == "UNKNOWN_PIN")
     assert str(unknown) == "ERROR UNKNOWN_PIN [U1.PB77]: part STM32_LIKE has no pin 'PB77'"
+
+
+def test_constraints_naming_unknown_components_or_pins_are_errors():
+    source = TYPO.replace("    net SDA { U1.PB77; R1.2; }\n", "    net SDA { U1.VDD; R1.2; }\n").replace(
+        "    supply GND", "    constraint max_distance(R1, GHOST) { distance = 3mm; }\n"
+                         "    constraint align(R1, U1.VDDD) { axis = \"x\"; }\n"
+                         "    constraint max_distance(R1, U1) { distance = 5mm; }\n    supply GND")
+    findings = [d for d in check(compile_source(source, "constraints.copper"))
+                if d.code == "UNKNOWN_CONSTRAINT_TARGET"]
+    assert [d.subject for d in findings] == ["GHOST", "U1.VDDD"]
+    assert findings[1].replacement == "U1.VDD" and "did you mean 'VDD'" in findings[1].hint
+    located = dict((d.subject, span) for d, span in locate(findings, source, "constraints.copper"))
+    line = source.splitlines()[located["GHOST"].start.line - 1]
+    assert "max_distance(R1, GHOST)" in line
+    assert explain("UNKNOWN_CONSTRAINT_TARGET")

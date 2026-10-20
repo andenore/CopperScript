@@ -350,3 +350,88 @@ def test_real_stdio_server_startup_and_exit(entry):
     assert read_message(output)['result']['serverInfo']['name'] == 'CopperScript'
     assert read_message(output)['result'] is None
     assert read_message(output) is None
+
+
+def test_vscode_encoded_drive_uris_decode_on_windows():
+    import nturl2path
+    from pcbir.lsp.text import local_path_text
+    assert local_path_text('file:///c%3A/Users/me/proj/board.copper', nturl2path.url2pathname) == r'C:\Users\me\proj\board.copper'
+    assert local_path_text('file:///C:/p%20x/board.copper', nturl2path.url2pathname) == r'C:\p x\board.copper'
+    # Only the drive colon is decoded early; other escapes are decoded exactly once.
+    assert local_path_text('file:///c%3a/a%25b/board.copper', nturl2path.url2pathname) == r'C:\a%b\board.copper'
+
+
+def test_replies_use_the_uri_the_client_opened(tmp_path):
+    real = tmp_path / 'real'
+    real.mkdir()
+    (real / 'board.copper').write_text(SOURCE, encoding='utf-8')
+    link = tmp_path / 'link'
+    link.symlink_to(real, target_is_directory=True)
+    uri = (link / 'board.copper').as_uri()
+    ws = Workspace()
+    ws.update(uri, 1, SOURCE)
+    analysis = ws.analysis(uri)
+    assert analysis.definition(at(SOURCE, 'R1.1'))['uri'] == uri
+    out = BytesIO()
+    server = Server(Writer(out), debounce=0)
+    server.workspace = ws
+    server.diagnostics(ws.snapshot())
+    server.close()
+    published = [json.loads(chunk) for chunk in out.getvalue().split(b'\r\n\r\n')[1:]
+                 for chunk in [chunk.split(b'Content-Length')[0]]]
+    assert published and all(m['params']['uri'] == uri for m in published)
+
+
+def _diagnostics(tmp_path, text):
+    ws, uri = workspace(tmp_path, text)
+    return ws.analysis(uri), uri, ws.analysis(uri).diagnostics()
+
+
+def test_located_diagnostics_match_the_cli(tmp_path):
+    text = SOURCE.replace('net N { R1.1; }', 'net N { R1.1; }\n    net N { R1.2; }')
+    _, _, findings = _diagnostics(tmp_path, text)
+    duplicate = next(d for d in findings if d['code'] == 'DUPLICATE_NET')
+    assert duplicate['range']['start'] == at(text, 'N { R1.2')
+
+
+def test_quick_fixes_replace_typos_and_declare_no_connect(tmp_path):
+    text = SOURCE.replace('net N { R1.1; }', 'net N { R1.1; R1.22; }')
+    analysis, uri, findings = _diagnostics(tmp_path, text)
+    unknown = next(d for d in findings if d['code'] == 'UNKNOWN_PIN')
+    assert unknown['data']['fix']['newText'] == 'R1.2'
+    actions = analysis.code_actions({'textDocument': {'uri': uri}, 'context': {'diagnostics': findings}})
+    replace = next(a for a in actions if a.get('isPreferred'))
+    assert replace['edit']['changes'][uri] == [{'range': unknown['range'], 'newText': 'R1.2'}]
+    declare = next(a for a in actions if a['title'].startswith('Declare no_connect'))
+    edit = declare['edit']['changes'][uri][0]
+    lines = text.split('\n')
+    assert edit['range']['start'] == {'line': len(lines) - 1, 'character': 0}
+    assert edit['newText'] == '    no_connect R1.2 { reason = "TODO: why unused"; }\n'
+    patched = '\n'.join(lines[:-1] + [edit['newText'].rstrip('\n'), lines[-1]])
+    assert compile_source(patched, str(tmp_path / 'board.copper'))
+    _, _, after = _diagnostics(tmp_path, patched.replace('R1.22', 'R1.2').replace('    no_connect R1.2 { reason = "TODO: why unused"; }\n', ''))
+    assert not any(d['code'] == 'UNMARKED_PIN' for d in after)
+    syntax = SOURCE.replace('component R1', 'componnet R1')
+    analysis, uri, findings = _diagnostics(tmp_path, syntax)
+    action = analysis.code_actions({'textDocument': {'uri': uri}, 'context': {'diagnostics': findings}})[0]
+    assert action['edit']['changes'][uri][0]['newText'] == 'component'
+
+
+def test_unknown_notifications_are_ignored():
+    out = BytesIO()
+    server = Server(Writer(out), debounce=0)
+    server.dispatch({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}})
+    server.dispatch({'jsonrpc': '2.0', 'method': 'workspace/didChangeConfiguration', 'params': {}})
+    server.dispatch({'jsonrpc': '2.0', 'method': 'custom/unknownNotification', 'params': {}})
+    server.close()
+    assert b'logMessage' not in out.getvalue()
+    assert b'codeActionProvider' in out.getvalue()
+
+
+def test_grammar_highlights_every_board_keyword():
+    import re
+    from pcbir.parser import _BOARD_KEYWORDS
+    grammar = json.loads((Path(__file__).parents[1] / 'integrations/vscode/syntaxes/copper.tmLanguage.json').read_text(encoding='utf-8'))
+    patterns = json.dumps(grammar['repository']['keywords'])
+    words = set(re.findall(r'[a-z_]+', patterns))
+    assert set(_BOARD_KEYWORDS) <= words, sorted(set(_BOARD_KEYWORDS) - words)

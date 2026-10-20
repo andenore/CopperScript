@@ -1101,13 +1101,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .editor.dependencies import prepare_editor_dependencies
         try:
             progress = (lambda message: print(message, flush=True)) if not args.scene_output else None
+            # Large boards take seconds to open: say what is happening before the URL appears.
+            if progress:
+                progress("Opening board: checking source and dependencies...")
             prepare_editor_dependencies(args.board, offline=args.offline, locked=args.locked, progress=progress,
                                         project=args.project)
             from .editor.overlay import RoutedOverlay
+            if progress:
+                progress("Opening board: resolving footprints and building the physical board...")
             session = document_session(args.board, None, footprint_roots=args.footprint_root,
                 layers=args.layers, fab_profile=args.fab_profile, templates=args.placement_templates,
                 macros=args.hard_macro, allow_proxy=args.allow_proxy_footprints,
                 overlay=RoutedOverlay.load(args.overlay) if args.overlay else None, project=args.project)
+            if progress:
+                progress("Opening board: editor session ready.")
             if args.scene_output:
                 if args.scene_output.resolve() == args.board.resolve():
                     raise ValueError("scene output cannot overwrite the source board")

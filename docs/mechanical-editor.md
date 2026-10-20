@@ -132,7 +132,13 @@ cannot be saved. Discarding a source review retains the placement draft.
 
 The **Placement unsaved** indicator compares the layout with source-derived
 poses. Saving an unrelated feature does not claim to save temporary placement;
-the indicator remains until placement is saved or the source is reloaded.
+the indicator remains until placement is saved.
+
+**Reload source** (after an external save, for example from VS Code) discards
+previews and undo history but keeps unsaved positions for parts that still exist
+with the same footprint and that the new source does not fix. The status line
+names the parts kept and those reset because the new source now fixes or changed
+them; nothing is written to the source.
 
 ## Mechanical editing
 
@@ -155,7 +161,8 @@ Full enclosure solid modelling, panels and general MCAD constraints are deferred
 
 Render actual pads, courtyards, conservative body envelopes, mechanical holes,
 regions, keepouts and footprint provenance. Front and rear share authoritative
-board coordinates; a mirrored rear view is presentation only. Include hierarchy,
+board coordinates; the rear view is not mirrored (rear parts are drawn as seen
+from the front, in the same coordinates). Include hierarchy,
 reference search, zoom/fit, measurement, grid snapping and exact numeric editing.
 Footprint origins and pad anchors must be labelled rather than confused with
 component body centroids.
@@ -264,7 +271,7 @@ geometry and apply/save controls. The save hint explains which changes persist;
 a successful save is explicitly reported. Restarting the service reconstructs
 only persisted source intent.
 
-The sidebar has **Components**, **Mechanics**, and **View** tabs. Left/right arrows
+The sidebar has **Components**, **Mechanics**, **Properties** and **View** tabs. Left/right arrows
 and Home/End switch tabs with keyboard focus. Component selection on the board
 opens Components; switching tabs preserves typed pose values. Leaving Mechanics
 turns off active polygon drawing and measurement so hidden tools cannot consume
@@ -313,6 +320,17 @@ until the planner completes, reports an error or the user presses Cancel placeme
 The service remains usable during computation. Manual edits cancel older work, and a changed source/session
 revision discards the result. Only incident ratsnest nets are recomputed for pose
 changes; exact graph semantics remain unchanged.
+
+Hard-macro preview copper (and its whole-board DRC acceptance) is rebuilt only
+when a macro, its member poses or the board's fixed inputs (outline, zones,
+stackup, rules, nets) change; moving other parts reuses it, and their clearance
+to macro copper is reported by placement legality. Via-in-pad arrays are always
+recomputed. On examples/full_vertical (55 parts) a move or discard takes about
+0.3 s instead of 2-3 s; the remaining time is the per-part legality explanation.
+
+Saving holds a `<file>.editor-lock` only while writing. A lock older than 30 s is
+left over from a crashed save and is removed automatically; a fresh one means
+another editor is saving, so retry.
 
 ## Routed reference and connectivity evidence
 

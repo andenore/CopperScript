@@ -6,7 +6,8 @@ Highlighting works without starting the language server or installing a compiler
 Semantic token highlighting remains a planned LSP feature.
 
 The regular `.copper` text editor also includes completion, hover, go to definition,
-document symbols and live syntax/compiler/ERC diagnostics. Language features use
+document symbols, live syntax/compiler/ERC diagnostics and quick fixes (suggested
+replacements, declaring `no_connect` for unconnected pins). Language features use
 the standard [CopperScript LSP](https://github.com/andenore/CopperScript/blob/main/docs/language-server.md) and activate only
 in trusted local workspaces. The existing mechanical editor remains optional.
 
@@ -107,8 +108,8 @@ Offline installable artifact (no npm/marketplace build dependencies):
 
 ```sh
 node integrations/vscode/build.cjs
-python integrations/vscode/package.py -o build/copperscript-0.3.1.vsix
-code --install-extension build/copperscript-0.3.1.vsix
+python integrations/vscode/package.py -o build/copperscript-0.3.2.vsix
+code --install-extension build/copperscript-0.3.2.vsix
 ```
 
 Packaging uses fixed archive timestamps and whitelisted runtime assets. Existing

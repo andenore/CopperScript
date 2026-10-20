@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from difflib import unified_diff
 from hashlib import sha256
 import os
+import time
 from pathlib import Path
 import stat
 import tempfile
@@ -72,6 +73,19 @@ def seed_placements(board: PhysicalBoard, seeds: PhysicalBoard) -> PhysicalBoard
         poses.append(p)
     from ..clusters import apply_fixed_cluster_poses
     return apply_fixed_cluster_poses(replace(board, placements=tuple(poses)))
+
+
+# A save holds the lock only while writing a few bytes; an older lock was left by a crash.
+STALE_LOCK_SECONDS = 30
+
+
+def _break_stale_lock(lock: Path) -> None:
+    try:
+        age = time.time() - lock.stat().st_mtime
+    except FileNotFoundError:
+        return
+    if age > STALE_LOCK_SECONDS:
+        lock.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -161,9 +175,12 @@ class SourceWorkspace:
         lock = self.source.with_name(self.source.name + ".editor-lock")
         temporary = None
         owns_lock = False
+        _break_stale_lock(lock)
         try:
-            with lock.open("x"):
+            with lock.open("x") as marker:
                 owns_lock = True
+                marker.write(f"pid {os.getpid()} at {time.time():.0f}\n")
+                marker.flush()
                 if self.source.read_bytes() != review.before.raw:
                     raise SourceEditError("source changed since review; reload before saving")
                 mode = stat.S_IMODE(self.source.stat().st_mode)
@@ -181,7 +198,8 @@ class SourceWorkspace:
                 os.replace(temporary, self.source)
                 temporary = None
         except FileExistsError as exc:
-            raise SourceEditError("another editor owns the source save lock") from exc
+            raise SourceEditError(f"another editor is saving this source right now ({lock.name}); retry in a "
+                                  f"moment. A lock older than {STALE_LOCK_SECONDS} s is removed automatically") from exc
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)

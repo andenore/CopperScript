@@ -90,6 +90,9 @@ def test_job_has_no_elapsed_time_limit_and_can_complete_or_fail(monkeypatch, out
         control.release.set()
         info = wait(job)
         assert info["status"] == status
+        # Elapsed time stops when the job does.
+        clock[0] += 300
+        assert job.poll()["elapsed_seconds"] == info["elapsed_seconds"] == 600
         assert job.result == (outcome[1] if status == "completed" else None)
         assert info["error"] == (outcome[1] if status == "failed" else None)
     finally:

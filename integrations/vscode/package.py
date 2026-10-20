@@ -9,6 +9,8 @@ import zipfile
 def package(stage, output):
     stage, output = Path(stage), Path(output)
     manifest = json.loads((stage / "package.json").read_text(encoding="utf-8"))
+    # The Marketplace prerequisite follows the manifest's engines.vscode range ("^1.90.0" -> 1.90.0).
+    engine = manifest["engines"]["vscode"].lstrip("^~>= ")
     content_types = b'''<?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="json" ContentType="application/json"/>
@@ -28,7 +30,7 @@ def package(stage, output):
 <Metadata><Identity Id="{escape(manifest['name'])}" Version="{escape(manifest['version'])}" Language="en-US" Publisher="{escape(manifest['publisher'])}"/>
 <DisplayName>{escape(manifest['displayName'])}</DisplayName><Description xml:space="preserve">{escape(manifest['description'])}</Description><License>extension/LICENSE</License><Icon>extension/{escape(manifest['icon'])}</Icon></Metadata>
 <Installation><InstallationTarget Id="Microsoft.VisualStudio.Code"/></Installation><Dependencies/>
-<Prerequisites><Prerequisite Id="Microsoft.VisualStudio.Code" Version="[1.90.0,)" DisplayName="Visual Studio Code"/></Prerequisites>
+<Prerequisites><Prerequisite Id="Microsoft.VisualStudio.Code" Version="[{escape(engine)},)" DisplayName="Visual Studio Code"/></Prerequisites>
 <Assets><Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true"/><Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/{escape(manifest['icon'])}" Addressable="true"/></Assets>
 </PackageManifest>'''.encode()
     files = {"[Content_Types].xml": content_types, "extension.vsixmanifest": xml}

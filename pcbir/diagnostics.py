@@ -227,6 +227,11 @@ EXPLANATIONS: dict[str, tuple[str, str]] = {
         "The component's part has no pin (or device unit terminal) with this name.",
         "Use the exact pin name from the part definition: `copper query BOARD pins REF` lists them. "
         "Do not infer names from footprint pad numbers."),
+    "UNKNOWN_CONSTRAINT_TARGET": (
+        "A placement constraint (max_distance, align, placement_region, ...) names a component or pin "
+        "that does not exist, so placement would silently drop it.",
+        "Use the component reference (and exact pin name) as declared; `copper query BOARD components` "
+        "and `copper query BOARD pins REF` list them."),
     "UNKNOWN_PART": (
         "A component uses a part that no `use library` or import provides.",
         "Check the import alias and exported name with `copper library search` / `inspect`."),

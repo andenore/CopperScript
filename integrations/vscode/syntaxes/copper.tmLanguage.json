@@ -141,7 +141,7 @@
         },
         {
           "name": "storage.type.copper",
-          "match": "(?<![\\p{L}\\p{N}_-])(?:board|module|part|device|board_profile|component|net|supply|interface|constraint|configure|power_state|port|pin|pad|peripheral|power_domain|mux|resource|unit|group|mode_group|pad_set|route|signal|bind|mechanical|outline|cutout|hole|rules|keepout|copper_keepout|datum|edge|attach|overhang|component_height|enclosure|assembly_access|boundary|slot|reference|connector|stackup|copper|dielectric|silkscreen|branding|text|logo|line|rectangle|circle|arc|polygon|macro|physical_macro|member|track|via|isolated|protected_region|zone|plane_return|width_contract|edge_opening|contact|on)(?![\\p{L}\\p{N}_-])"
+          "match": "(?<![\\p{L}\\p{N}_-])(?:board|module|part|device|board_profile|component|net|no_connect|supply|interface|constraint|configure|power_state|port|pin|pad|peripheral|power_domain|mux|resource|unit|group|mode_group|pad_set|route|signal|bind|mechanical|outline|cutout|hole|rules|keepout|copper_keepout|datum|edge|attach|overhang|component_height|enclosure|assembly_access|boundary|slot|reference|connector|stackup|copper|dielectric|silkscreen|branding|text|logo|line|rectangle|circle|arc|polygon|macro|physical_macro|member|track|via|isolated|protected_region|zone|plane_return|width_contract|edge_opening|contact|on)(?![\\p{L}\\p{N}_-])"
         }
       ]
     },
