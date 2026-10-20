@@ -54,9 +54,14 @@ inventory mismatch or cache corruption fails setup rather than substituting
 the latest library. Push the pinned CopperLib revision before tagging
 CopperScript; GitHub cannot fetch a commit that only exists locally.
 
-The committed `.github/board-toolchain.json` pins Python 3.12.12 and the official
-KiCad 10.0.6 x86_64 installer by SHA-256. The latter installs matching footprint
-libraries, avoiding floating external footprint downloads. Actions are pinned
+The committed `.github/board-toolchain.json` pins Python 3.12.12 and KiCad
+10.0.7. The Ubuntu workflow installs KiCad and its bundled footprint libraries
+from the KiCad 10.0 release PPA and fails unless `kicad-cli version` equals the
+pin, so a PPA update stops CI rather than silently changing native results.
+The installer URL and SHA-256 fields serve only the Windows helper
+`scripts/ci_install_kicad.ps1`, which no workflow currently runs; they still
+name the 10.0.6 installer because no verified 10.0.7 installer digest has
+been recorded. Actions are pinned
 by full commit and Python build/test tools by exact version. The fresh Windows
 runner checks out source with canonical LF bytes. The generated project keeps
 its own exported footprints, so recipients do not need CopperLib or matching

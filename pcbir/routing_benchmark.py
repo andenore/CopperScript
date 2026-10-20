@@ -2,6 +2,7 @@
 
 Usage: python -m pcbir.routing_benchmark summarize build/my-board/<run>
        python -m pcbir.routing_benchmark compare <baseline-run> <candidate-run>
+       python -m pcbir.routing_benchmark table <baseline-run> <candidate-run>
 """
 from __future__ import annotations
 
@@ -62,6 +63,27 @@ def _settings(manifest: dict) -> list[str] | None:
     return result
 
 
+def _detailed_search_work(spans: list[dict]) -> dict | None:
+    """Sum executed ``detailed_net`` search counters; reuse hits carry none."""
+
+    executed = [span["finished_details"] for span in spans if span["phase"] == "detailed_net"
+                and isinstance(span["finished_details"].get("search_stats"), dict)]
+    if not executed:
+        return None
+    totals: Counter = Counter()
+    for details in executed:
+        stats = details["search_stats"]
+        for key, value in stats.items():
+            if key != "maximum_target_count" and isinstance(value, int):
+                totals[key] += value
+    return {**dict(sorted(totals.items())),
+            "maximum_target_count": max(details["search_stats"].get("maximum_target_count", 0)
+                                        for details in executed),
+            "executed_attempts": len(executed),
+            "search_seconds": round(sum(float(details.get("search_seconds", 0.0))
+                                        for details in executed), 3)}
+
+
 def summarize_run(directory: Path) -> dict:
     directory = directory.resolve()
     manifest = _document(directory / "run.json")
@@ -111,6 +133,7 @@ def summarize_run(directory: Path) -> dict:
                 for span in spans if span["phase"] == "detailed_net").items())),
             "reused_detailed_attempts": sum(span["phase"] == "detailed_net"
                 and span["finished_details"].get("search_reuse") == "hit" for span in spans),
+            "detailed_search": _detailed_search_work(spans),
             "trial_decisions": {phase: dict(sorted(Counter(span["finished_details"].get("decision", "unknown")
                 for span in spans if span["phase"] == phase).items()))
                 for phase in ("zone_full_trial", "zone_incremental_trial")},
@@ -121,7 +144,8 @@ def summarize_run(directory: Path) -> dict:
                     "Critical state counts include discarded probes; do not add tier counts again. "
                     "Detailed attempt counts include rejected work, not unique accepted nets; "
                     "reused attempts answered an exactly repeated search without searching. "
-                    "General area state counts are not yet recorded."}
+                    "detailed_search totals executed area searches, including rejected and "
+                    "probe attempts; it is null for runs without search_stats telemetry."}
         if not phases["events"]:
             # Older runs have a plain-text log but no structured telemetry.
             # Zero observed events cannot establish zero routing work.
@@ -319,6 +343,74 @@ def compare_runs(baseline: dict, candidate: dict) -> dict:
                 "Instrumented/overlapping phase times are not speedup measurements."}
 
 
+def _table_value(summary: dict, path: str):
+    value = summary
+    for name in path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(name)
+    if isinstance(value, list):
+        return len(value)
+    return value
+
+
+_TABLE_ROWS = (
+    ("Run completed", "completed"),
+    ("Elapsed seconds", "elapsed_seconds"),
+    ("Failed signal nets", "quality.failed_signals"),
+    ("Failed critical nets", "quality.failed_critical"),
+    ("Unrouted ordinary nets", "quality.detailed_metrics.unrouted_net_count"),
+    ("Tracks", "quality.detailed_metrics.track_count"),
+    ("Vias", "quality.detailed_metrics.via_count"),
+    ("Track length (nm)", "quality.detailed_metrics.total_length_nm"),
+    ("Independent KiCad check passed", "quality.independent.passed"),
+    ("KiCad unconnected items", "quality.independent.unconnected_count"),
+    ("KiCad other violations", "quality.independent.other_violation_count"),
+    ("KiCad version", "quality.independent.kicad_version"),
+    ("Area search attempts executed", "work.detailed_search.executed_attempts"),
+    ("Area search calls", "work.detailed_search.search_calls"),
+    ("Area states expanded", "work.detailed_search.expanded_states"),
+    ("Area states in failed calls", "work.detailed_search.failed_expanded_states"),
+    ("Area calls out of budget", "work.detailed_search.budget_exhausted_calls"),
+    ("Area calls with no path", "work.detailed_search.no_path_calls"),
+    ("Area search seconds", "work.detailed_search.search_seconds"),
+    ("Reused area attempts", "work.reused_detailed_attempts"),
+)
+
+
+def comparison_table(baseline: dict, candidate: dict, *, phase_rows: int = 8) -> str:
+    """Markdown side-by-side of two summaries; observation only, never a verdict."""
+
+    def cell(value) -> str:
+        if value is None:
+            return "–"
+        if isinstance(value, float):
+            return f"{value:,.1f}"
+        if isinstance(value, int) and not isinstance(value, bool):
+            return f"{value:,}"
+        return str(value)
+
+    lines = ["| Measure | Baseline | Candidate |", "|---|---:|---:|"]
+    for label, path in _TABLE_ROWS:
+        lines.append(f"| {label} | {cell(_table_value(baseline, path))} | "
+                     f"{cell(_table_value(candidate, path))} |")
+    phases = {side: (summary.get("work") or {}).get("phase_inclusive_seconds", {})
+              for side, summary in (("baseline", baseline), ("candidate", candidate))}
+    ranked = sorted(set(phases["baseline"]) | set(phases["candidate"]),
+                    key=lambda phase: (-max(phases["baseline"].get(phase, 0), phases["candidate"].get(phase, 0)), phase))
+    for phase in ranked[:phase_rows]:
+        lines.append(f"| Phase `{phase}` seconds (inclusive, overlapping) | "
+                     f"{cell(phases['baseline'].get(phase))} | {cell(phases['candidate'].get(phase))} |")
+    prints = [((summary.get("quality") or {}).get("fingerprints") or {}) for summary in (baseline, candidate)]
+    for name in ("global", "critical", "detailed", "filled_board"):
+        same = prints[0].get(name) is not None and prints[0].get(name) == prints[1].get(name)
+        lines.append(f"| `{name}` fingerprint identical | {cell(same)} | |")
+    lines.append("")
+    lines.append("Measurements only: not signoff, fabrication readiness or an acceptance decision. "
+                 "Phase times overlap and must not be added.")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -327,8 +419,14 @@ def main(argv: list[str] | None = None) -> int:
     comparison = commands.add_parser("compare")
     comparison.add_argument("baseline", type=Path)
     comparison.add_argument("candidate", type=Path)
+    table = commands.add_parser("table", help="Markdown side-by-side of two runs")
+    table.add_argument("baseline", type=Path)
+    table.add_argument("candidate", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "table":
+            print(comparison_table(summarize_run(args.baseline), summarize_run(args.candidate)), end="")
+            return 0
         if args.command == "summarize":
             result = summarize_run(args.directory)
             code = 0
