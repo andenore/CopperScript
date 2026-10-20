@@ -5,6 +5,9 @@ code/coverage check before work; public behavior belongs in its canonical guide.
 
 ## Editor and mechanical contracts
 
+See [the physical editor and VS Code backlog](editor-vscode-todo.md) for the
+2026-10-20 review findings (latency, constraint targets, Windows URIs, quick fixes).
+
 - [ ] Add a physical-IR body envelope when a backend needs exact body geometry;
   the editor's derived visual envelope is not a physical-schema guarantee.
 - [ ] Add keyboard next/previous component selection and warning navigation,
