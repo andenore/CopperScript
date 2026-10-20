@@ -19,3 +19,13 @@ def test_remote_fixed_part_is_reported() -> None:
     near = replace(near, placement_rules=tuple(
         ComponentPlacementRule(pose.reference, fixed_position=pose.position) for pose in near.placements))
     assert not [f for f in placement_intent_findings(near) if f.code == "REMOTE_FIXED_PART"]
+
+
+def test_remote_fixed_part_at_the_board_edge_is_mechanical_and_not_reported() -> None:
+    board = _board({"SIG": ((3, 10), (17, 10))})
+    edge = replace(board.placements[0], position=Point.mm(1, 13))
+    board = replace(board, placements=(edge, board.placements[1]))
+    board = replace(board, placement_rules=tuple(
+        ComponentPlacementRule(pose.reference, fixed_position=pose.position) for pose in board.placements))
+    remote = [f.subject for f in placement_intent_findings(board) if f.code == "REMOTE_FIXED_PART"]
+    assert remote == [board.placements[1].reference]

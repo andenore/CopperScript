@@ -292,6 +292,17 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
         issues.append(RunIssue(f"R{index}", "routing", "NET-UNROUTED", f"{len(nets)} net(s): {reason}",
                                len(nets), nets=nets, points=_net_points(scene, nets) if len(nets) <= 6 else [],
                                caused_by=caused))
+    if not native.get("native_findings"):
+        # Without a native fill check, the raster plane estimate is the only plane evidence.
+        estimated = _section(_section(report, "summary"), "plane").get("estimated_open_pads")
+        for index, (net, pads) in enumerate(sorted((estimated or {}).items()), 1):
+            pads = [str(p) for p in _items(pads)]
+            issues.append(RunIssue(f"E{index}", "plane", "PLANE-ESTIMATED-OPEN",
+                                   f"{len(pads)} {net} pad(s) cut off from the rest of the net "
+                                   f"(estimate, zones unfilled): " + ", ".join(pads[:6])
+                                   + (f" +{len(pads) - 6}" if len(pads) > 6 else ""),
+                                   len(pads), nets=[net], objects=pads,
+                                   points=[p for pad in pads for p in _pad_points(scene, pad)]))
     issues.extend(_placement_issues(report, scene))
     return issues
 

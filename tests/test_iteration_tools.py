@@ -239,3 +239,18 @@ def test_route_report_placement_findings_become_located_warnings(tmp_path, run_d
     assert warning.stage == "placement" and warning.code == "REMOTE_FIXED_PART"
     assert warning.objects == [ref] and warning.window() is not None
     assert [i.id for i in issues if i.stage == "placement"] == ["W1"]
+
+
+def test_estimated_plane_opens_are_located_when_no_native_check_ran(tmp_path, run_dir):
+    run_copy = tmp_path / "estimated"
+    run_copy.mkdir()
+    (run_copy / "board.kicad_pcb").write_text((run_dir / "board.kicad_pcb").read_text())
+    report = json.loads((run_dir / "route-report.json").read_text())
+    pad = load_run(run_dir).scene().pads[0]
+    report["plane_verification"] = {}
+    report["summary"] = {"plane": {"estimated_open_pads": {"GND": [f"{pad.ref}.{pad.pad}"]}}}
+    (run_copy / "route-report.json").write_text(json.dumps(report))
+    issue = find_issue(run_issues(load_run(run_copy)), "E1")
+    assert issue.code == "PLANE-ESTIMATED-OPEN" and issue.nets == ["GND"] and issue.window() is not None
+    # A native fill check supersedes the estimate.
+    assert all(i.stage != "plane" for i in run_issues(load_run(run_dir)))

@@ -14,7 +14,7 @@ join regions, and thermal reliefs count as connected.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -27,10 +27,13 @@ class PlaneEstimate:
     net_groups: dict          # net -> number of disconnected groups of its pads
     opens: int                # sum over zone nets of (groups - 1)
     unfilled_zones: tuple[str, ...]
+    # net -> pads outside the net's largest connected group ("REF.PAD"), i.e. where to look
+    open_pads: dict = field(default_factory=dict)
 
     def report(self) -> dict:
         return {"pitch_mm": self.pitch_nm / 1_000_000, "opens": self.opens,
                 "open_nets": sorted(net for net, groups in self.net_groups.items() if groups > 1),
+                "open_pads": {net: list(pads) for net, pads in sorted(self.open_pads.items())},
                 "unfilled_zones": list(self.unfilled_zones)}
 
 
@@ -225,17 +228,22 @@ def estimate_plane_connectivity(board: PhysicalBoard, *, pitch_nm: int = nm_from
                     for name in names:
                         union(name, region)
     groups = {}
+    open_pads = {}
     for net in board.nets:
         if net.name not in zone_nets or len(net.pads) < 2:
             continue
-        roots = set()
+        members: dict[str, list[str]] = {}
         for pad in net.pads:
             nodes = graph.pad_nodes.get(pad, ())
             names = [f"root:{graph.roots[key]}" for key in nodes] or [f"pad:{pad.component}.{pad.pad}"]
-            roots.add(find(names[0]))
-        groups[net.name] = len(roots)
+            members.setdefault(find(names[0]), []).append(f"{pad.component}.{pad.pad}")
+        groups[net.name] = len(members)
+        if len(members) > 1:
+            largest = max(members.values(), key=lambda pads: (len(pads), sorted(pads)))
+            open_pads[net.name] = tuple(sorted(p for pads in members.values() if pads is not largest
+                                               for p in pads))
     opens = sum(count - 1 for count in groups.values())
-    return PlaneEstimate(pitch_nm, groups, opens, tuple(unfilled))
+    return PlaneEstimate(pitch_nm, groups, opens, tuple(unfilled), open_pads)
 
 
 def _pad_ref(identity):

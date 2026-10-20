@@ -62,7 +62,9 @@ def connection_summary(board: PhysicalBoard, drc=None, *, native=None, estimate_
         from .plane_estimate import estimate_plane_connectivity
         estimate = estimate_plane_connectivity(board)
         result["plane"]["estimated_opens"] = estimate.opens
-        result["plane"]["estimated_open_nets"] = estimate.report()["open_nets"]
+        estimated = estimate.report()
+        result["plane"]["estimated_open_nets"] = estimated["open_nets"]
+        result["plane"]["estimated_open_pads"] = estimated["open_pads"]
     if drc is not None:
         codes = Counter(finding.code for finding in drc.findings
                         if finding.severity.value == "error" and finding.disposition.value == "active")

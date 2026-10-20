@@ -383,12 +383,15 @@ def _gates(findings: tuple[LayoutFinding, ...]) -> tuple[LayoutGate, ...]:
     )
 
 
-def placement_intent_findings(board: PhysicalBoard, *, remote_mm: float = 8.0) -> tuple[LayoutFinding, ...]:
+def placement_intent_findings(board: PhysicalBoard, *, remote_mm: float = 8.0,
+                              edge_mm: float = 2.0) -> tuple[LayoutFinding, ...]:
     """Placement facts that usually mean an authored pose fights the routing.
 
     * REMOTE_FIXED_PART: a fixed small part (at most four pads) whose nearest
       pad partner on a signal net is more than ``remote_mm`` away (for example
-      a crystal load capacitor fixed far from its crystal).
+      a crystal load capacitor fixed far from its crystal). Parts within
+      ``edge_mm`` of the board outline are skipped: connectors, antennas and
+      switches are fixed at the edge for mechanical reasons.
     * FIXED_PART_IN_PAIR_CORRIDOR: a fixed part that sits in the path of a
       differential pair between fixed terminals (automatic pair corridors).
     * AUTO_PAIR_CORRIDORS: the corridors movable parts were kept out of.
@@ -406,10 +409,26 @@ def placement_intent_findings(board: PhysicalBoard, *, remote_mm: float = 8.0) -
     fixed = {ref for ref, rule in rules.items() if rule.fixed_position is not None and ref in poses}
     excluded = set(distribution_zone_nets(board)) | {domain.net for domain in board.power_domains}
     excluded |= {link.return_net for link in board.decoupling_links}
+    outline = board.outline.vertices
+    edges = [(outline[i], outline[(i + 1) % len(outline)]) for i in range(len(outline))]
+
+    def edge_distance_mm(point):
+        best_nm = float("inf")
+        for a, b in edges:
+            dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
+            length2 = dx * dx + dy * dy
+            t = 0.0 if length2 == 0 else max(0.0, min(1.0, ((point.x_nm - a.x_nm) * dx
+                                                          + (point.y_nm - a.y_nm) * dy) / length2))
+            best_nm = min(best_nm, hypot(point.x_nm - a.x_nm - t * dx, point.y_nm - a.y_nm - t * dy))
+        return best_nm / 1_000_000
+
     for reference in sorted(fixed):
         pose = poses[reference]
         pads = board.footprints[pose.footprint].pads
         if len(pads) > 4:
+            continue
+        # Edge parts (connectors, antennas, switches) are fixed for mechanical reasons.
+        if min(edge_distance_mm(point) for point in _placement_polygon(board, pose)) <= edge_mm:
             continue
         best = None
         for net in board.nets:
