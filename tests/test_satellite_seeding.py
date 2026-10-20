@@ -13,7 +13,7 @@ def test_ungrouped_parts_start_at_their_connected_pads() -> None:
     board = _board({"SIG": ((3, 10), (17, 10))})
     far = Point.mm(22, 22)
     board = replace(board, placements=(board.placements[0], replace(board.placements[1], position=far)))
-    options = placement.PlacementPlannerOptions(fixed_references=frozenset({"SIG_0"}))
+    options = placement.PlacementPlannerOptions(fixed_references=frozenset({"SIG_0"}), satellite_seeding=True)
     source = {pose.reference: pose for pose in board.placements}
     seeded = placement._initial_seed(board, source, options, 0)
     anchor = source["SIG_0"].position

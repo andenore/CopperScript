@@ -63,7 +63,7 @@ class PlacementPlannerOptions:
     component_clearance_nm: Nanometres = DEFAULT_ADDITIONAL_COURTYARD_GAP_NM
     congestion_bin_nm: Nanometres = nm_from_mm("5")
     analytical_iterations: int = 40
-    satellite_seeding: bool = True       # seed ungrouped parts at their connected pads
+    satellite_seeding: bool = False      # seed ungrouped parts at their connected pads
     analytical_step_mm: float = 0.08
     analytical_momentum: float = 0.85
     refinement_passes: int = 2
