@@ -261,9 +261,23 @@ def run_routing_pipeline(
         # joins the board unchanged.
         board = critical.board
         temporary = {keepout.id for keepout in held[2]}
+        board = replace(board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary))
+        # Each piece is checked exactly: a reservation left out next to fixed
+        # macro copper did not bind the critical router there.
+        from .routing_clearance import RoutingClearanceIndex
+        index = RoutingClearanceIndex(board)
+        tracks, vias = [], []
+        for via in held[1]:
+            if index.can_via(via.net, via.position, via.size_nm, via.from_layer, via.to_layer,
+                             drill_nm=via.drill_nm):
+                index.add_via(via)
+                vias.append(via)
+        for track in held[0]:
+            if index.can_track(track.net, track.start, track.end, track.width_nm, track.layer):
+                index.add_track(track)
+                tracks.append(track)
         critical = replace(critical, board=replace(
-            board, tracks=(*board.tracks, *held[0]), vias=(*board.vias, *held[1]),
-            copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary)))
+            board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias)))
     if access is None and critical.board.decoupling_links and getattr(
             unified_options, "pre_route_decouplers", True):
         from .decoupling import route_decouplers
@@ -546,17 +560,38 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress):
         return None
     tracks = list((Counter(escapes.board.tracks) - Counter(frame.tracks)).elements())
     vias = list((Counter(escapes.board.vias) - Counter(frame.vias)).elements())
-    keepouts = _copper_keepouts(board, tracks, vias, "escape-reserve")
+    keepouts = _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=frame)
     emit(on_progress, "ordinary_escapes", "finished", vias=len(vias), tracks=len(tracks),
          pending=len(escapes.pending_pads))
     return tuple(tracks), tuple(vias), tuple(keepouts)
 
 
-def _copper_keepouts(board, tracks, vias, prefix):
-    """Keepouts covering planned copper plus clearance, for one routing stage."""
+def _copper_keepouts(board, tracks, vias, prefix, fixed=None):
+    """Keepouts covering planned copper plus clearance, for one routing stage.
+
+    A keepout that would overlap ``fixed`` copper (materialized hard macros,
+    which the planned copper may join) is left out: keepouts bind every net,
+    and fixed copper must stay legal.
+    """
     import math
+    from .drc import _segment_distance
     from .physical import CopperKeepout, Point, PolygonRing, PolygonWithHoles
     gap = board.rules.minimum_clearance_nm
+    layers_all = board.stackup.copper_layers
+    solid = []  # (a, b, half_width, layers) of fixed copper
+    if fixed is not None:
+        solid += [(t.start, t.end, t.width_nm / 2, {t.layer}) for t in fixed.tracks]
+        solid += [(v.position, v.position, v.size_nm / 2,
+                   set(layers_all[layers_all.index(v.from_layer):layers_all.index(v.to_layer) + 1]))
+                  for v in fixed.vias]
+
+    def touches(a, b, radius, layers):
+        for c, d, half, other in solid:
+            # The keepout is a rectangle with square ends: its corners reach
+            # radius * sqrt(2) from the copper centre line.
+            if layers & other and _segment_distance(a, b, c, d) < radius * 1.42 + half:
+                return True
+        return False
 
     def capsule(a, b, radius):
         dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
@@ -572,12 +607,16 @@ def _copper_keepouts(board, tracks, vias, prefix):
 
     keepouts = []
     for index, track in enumerate(tracks):
+        if touches(track.start, track.end, track.width_nm // 2 + gap, {track.layer}):
+            continue
         keepouts.append(CopperKeepout(f"{prefix}-track-{index}", (track.layer,),
                                       capsule(track.start, track.end, track.width_nm // 2 + gap),
                                       block_tracks=True, block_vias=True, block_zones=False))
     layers = board.stackup.copper_layers
     for index, via in enumerate(vias):
         span = layers[layers.index(via.from_layer):layers.index(via.to_layer) + 1]
+        if touches(via.position, via.position, via.size_nm // 2 + gap, set(span)):
+            continue
         keepouts.append(CopperKeepout(f"{prefix}-via-{index}", tuple(span),
                                       capsule(via.position, via.position, via.size_nm // 2 + gap),
                                       block_tracks=True, block_vias=True, block_zones=False))
@@ -618,7 +657,8 @@ def _plan_decouplers(board, reserved_keepouts, on_progress):
     vias = list((Counter(result.board.vias) - Counter(frame.vias)).elements())
     emit(on_progress, "bypass_reservation", "finished", tracks=len(tracks), vias=len(vias),
          pending=len(result.pending), released=len(released))
-    return tuple(tracks), tuple(vias), _copper_keepouts(board, tracks, vias, "bypass-reserve"), released
+    return (tuple(tracks), tuple(vias), _copper_keepouts(board, tracks, vias, "bypass-reserve", fixed=frame),
+            released)
 
 
 def _release_reservations(board, keepouts, nets, margin_nm=nm_from_mm("2"), *, pads=()):
