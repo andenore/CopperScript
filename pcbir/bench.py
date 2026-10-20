@@ -12,7 +12,7 @@ The ladder file lists boards with their project directory, source file and
 missing is reported as ``skipped``, so the ladder runs wherever the optional
 consumer checkouts are absent.
 
-Each run writes ``<out>/<board>/route.json``, ``board.kicad_pcb`` and
+Each run writes ``<out>/<board>/route-report.json``, ``board.kicad_pcb`` and
 ``route.log``. The aggregate goes to ``<out>/results.json`` and
 ``<out>/results.md``. Numbers come from the report's pipeline-independent
 ``summary`` block (see :mod:`pcbir.route_summary`).
@@ -71,7 +71,7 @@ def run_board(board: dict, out: Path, *, kicad_cli: str | None = None,
     if not source.is_file():
         return {**record, "status": "skipped", "reason": f"missing {source}"}
     directory.mkdir(parents=True, exist_ok=False)
-    report = directory / "route.json"
+    report = directory / "route-report.json"  # what `copper issues RUN_DIR` reads
     command = [python, "-m", "copperscript", "route-board", board["source"], *board["args"], *extra_args,
                "--report", str(report), "-o", str(directory / "board.kicad_pcb")]
     if kicad_cli and board["native"]:
