@@ -465,7 +465,7 @@ def _parser() -> argparse.ArgumentParser:
         "issues", help="list a run's failures grouped by cause, each with an id, nets, layers and window")
     issues_parser.add_argument("target", type=Path, help="run directory or route/layout report")
     issues_parser.add_argument("--net", help="only issues touching this net")
-    issues_parser.add_argument("--stage", choices=("access", "critical", "native", "physical", "routing", "layout", "error"))
+    issues_parser.add_argument("--stage", choices=("global", "access", "critical", "native", "physical", "routing", "layout", "error"))
     issues_parser.add_argument("--code", help="only this issue code, e.g. UNCONNECTED_ITEMS")
     issues_parser.add_argument("--limit", type=int, default=15, help="maximum issues listed (0 = all)")
     issues_parser.add_argument("--cluster-mm", type=float, default=3.0, help="spatial grouping distance")

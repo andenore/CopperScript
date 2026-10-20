@@ -383,3 +383,21 @@ def test_runs_without_search_telemetry_report_no_detailed_search_work(tmp_path):
         "".join("PROGRESS " + json.dumps(e) + "\n" for e in events), encoding="utf-8")
 
     assert benchmark.summarize_run(tmp_path / "run")["work"]["detailed_search"] is None
+
+
+def test_comparison_table_shows_side_by_side_measurements_without_a_verdict(tmp_path):
+    save_run(tmp_path / "before")
+    save_run(tmp_path / "after", seconds=80)
+    table = benchmark.comparison_table(benchmark.summarize_run(tmp_path / "before"),
+                                       benchmark.summarize_run(tmp_path / "after"))
+    rows = {line.split(" | ")[0].lstrip("| "): line for line in table.splitlines() if line.startswith("| ")}
+    assert rows["Elapsed seconds"] == "| Elapsed seconds | 100 | 80 |"
+    assert rows["Vias"] == "| Vias | 10 | 10 |"
+    assert rows["Area states expanded"].endswith("| – | – |")
+    assert "not signoff" in table
+
+
+def test_table_command_prints_markdown(tmp_path):
+    save_run(tmp_path / "before")
+    save_run(tmp_path / "after")
+    assert benchmark.main(["table", str(tmp_path / "before"), str(tmp_path / "after")]) == 0
