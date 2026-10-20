@@ -390,3 +390,6 @@ python -m pip install -e ".[test]"
 copper check examples/valid_board/board.copper
 python -m pytest
 ```
+
+To use every core, install `pytest-xdist` and run `python -m pytest -n auto`.
+Each worker is a separate process; tests keep their files under `tmp_path`.
