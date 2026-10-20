@@ -224,3 +224,28 @@ def test_pad_without_angle_is_absolute_zero(tmp_path):
     ys = [y for _, y in pad.polygon]
     assert abs(pad.center[0] - 10) < 1e-9 and abs(pad.center[1] - 9) < 1e-9  # offset rotates with the part
     assert max(xs) - min(xs) > max(ys) - min(ys)  # absolute angle 0: still horizontal
+
+
+def test_unconnected_global_routes_explain_a_blocked_access_stage(run_dir, tmp_path):
+    report = json.loads((run_dir / "route-report.json").read_text())
+    report["package_access"] = {"pending_pads": [], "failed_critical_nets": []}
+    report["global"] = {"status": "unreachable", "routes": [
+        {"net": "N1", "connected": False, "deferred_to_zone": False,
+         "diagnostics": ["no legal bounded local/global access for R1.1"]},
+        {"net": "N2", "connected": False, "deferred_to_zone": False,
+         "diagnostics": ["no legal bounded local/global access for R1.1"]},
+        {"net": "GND", "connected": False, "deferred_to_zone": True, "diagnostics": []},
+        {"net": "N3", "connected": True, "deferred_to_zone": False, "diagnostics": []}]}
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "board.kicad_pcb").write_text((run_dir / "board.kicad_pcb").read_text())
+    (run / "route-report.json").write_text(json.dumps(report))
+
+    issues = run_issues(load_run(run))
+
+    global_issue = find_issue(issues, "G1")
+    assert global_issue.code == "GLOBAL-UNROUTED" and global_issue.stage == "global"
+    assert global_issue.nets == ["N1", "N2"] and global_issue.objects == ["R1.1"]
+    assert "GND" not in global_issue.nets
+    assert find_issue(issues, "R1").caused_by == "G1"
+    assert [i.id for i in filter_issues(issues, stage="global")] == ["G1"]

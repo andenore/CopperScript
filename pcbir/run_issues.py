@@ -14,6 +14,7 @@ aid; the full report and its gates are unchanged and remain authoritative.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -208,6 +209,10 @@ def _items(value) -> list:
     return value if isinstance(value, list) else []
 
 
+# A component.pad named by a global-access diagnostic ("... access for U3.12").
+_GLOBAL_PAD = re.compile(r"\bfor ([A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9_]+)\b")
+
+
 def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
     report = run.report
     if not isinstance(report, dict):
@@ -244,6 +249,26 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
             issues.append(issue)
         count = len(issues)
         access_id = "P1" if count == 1 else f"P1..P{count}"
+    # Package access also requires a successful global route. Report nets the
+    # global router left unconnected, grouped by reason; they explain a blocked
+    # access stage when no exit is pending.
+    unrouted_global: dict[str, list[str]] = defaultdict(list)
+    for route in _items(_section(report, "global").get("routes")):
+        if isinstance(route, dict) and route.get("connected") is False and not route.get("deferred_to_zone"):
+            reason = "; ".join(str(d) for d in route.get("diagnostics") or []) or "no global route"
+            unrouted_global[reason].append(str(route.get("net", "?")))
+    global_ids = []
+    for index, (reason, nets) in enumerate(sorted(unrouted_global.items(),
+                                                  key=lambda kv: (-len(kv[1]), kv[0])), 1):
+        pads = sorted(set(_GLOBAL_PAD.findall(reason)))
+        points = [p for pad in pads for p in _pad_points(scene, pad)] or (
+            _net_points(scene, nets) if len(nets) <= 6 else [])
+        issues.append(RunIssue(f"G{index}", "global", "GLOBAL-UNROUTED",
+                               f"{len(nets)} net(s) without a global route: {reason}", len(nets),
+                               nets=sorted(nets), objects=pads, points=points))
+        global_ids.append(f"G{index}")
+    if access_id is None and global_ids:
+        access_id = global_ids[0] if len(global_ids) == 1 else f"G1..G{len(global_ids)}"
     failed_critical = [str(n) for n in _items(access.get("failed_critical_nets"))]
     if failed_critical:
         issues.append(RunIssue("C1", "critical", "CRITICAL-BLOCKED",
