@@ -421,7 +421,14 @@ class PackageResolver:
                         "-C", str(temporary), *arguments], capture_output=True, text=True)
                     if completed.returncode:
                         raise CopperScriptError("PKG006", completed.stderr.strip(), location)
-            temporary.replace(destination)
+            try:
+                temporary.replace(destination)
+            except OSError:
+                # Another process (e.g. a parallel test worker) published the same
+                # immutable module@version first; keep its entry. The lock checksum
+                # is still verified against whatever is cached.
+                if destination.is_symlink() or not destination.is_dir():
+                    raise
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary, onerror=_remove_readonly)

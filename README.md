@@ -138,6 +138,9 @@ python -m pip install -e ".[test]"
 python -m pytest
 ```
 
+To use every core, install `pytest-xdist` and run `python -m pytest -n auto`.
+Each worker is a separate process; tests keep their files under `tmp_path`.
+
 Populate pinned dependencies once, then use their verified cache offline:
 
 ```console

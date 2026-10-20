@@ -294,3 +294,34 @@ def test_manifest_rejects_invalid_remote_replacements(tmp_path: Path, replacemen
     with pytest.raises(CopperScriptError) as captured:
         read_manifest(manifest_path)
     assert captured.value.code == "PKG009"
+
+
+def test_concurrent_cache_fill_keeps_the_first_published_module(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    import pcbir.packages as packages
+    from pcbir.syntax import SourceLocation
+
+    manifest = packages.ModuleManifest("example/project", {}, {}, tmp_path / "copper.mod")
+    resolver = packages.PackageResolver(manifest)
+    module, version = "github.com/vendor/library", "v1.0.0"
+    cache_key = hashlib.sha256(f"{module}@{version}".encode()).hexdigest()[:20]
+    destination = resolver.cache_root / cache_key
+
+    def clone_while_another_worker_publishes(command, **_):
+        # A parallel worker finishes the same immutable clone between our
+        # cache-miss check and our rename into place.
+        (destination / "parts").mkdir(parents=True)
+        (destination / "parts" / "winner.txt").write_text("first", encoding="utf-8")
+        (Path(command[-1]) / "parts").mkdir(parents=True)
+        (Path(command[-1]) / "parts" / "loser.txt").write_text("second", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(packages.subprocess, "run", clone_while_another_worker_publishes)
+
+    resolved = resolver._fetch_git_module(module, version, SourceLocation("copper.mod", 0, 1, 1))
+
+    assert resolved == destination.resolve()
+    assert (resolved / "parts" / "winner.txt").read_text(encoding="utf-8") == "first"
+    assert not (resolved / "parts" / "loser.txt").exists()
+    assert sorted(path.name for path in resolver.cache_root.iterdir()) == [cache_key]
