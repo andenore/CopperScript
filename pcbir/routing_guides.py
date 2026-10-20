@@ -99,6 +99,57 @@ class GuideExposure:
         return round(length * max(0.0, min(1.0, 1.0 - covered)))
 
 
+class GuideDistance:
+    """Lower bounds on guide-exposed length, for admissible search heuristics.
+
+    The region is the union of every layer's capsules and access squares, so
+    a distance to it never exceeds the distance to one layer's region that
+    ``GuideExposure`` charges. A via changes layer at one planar point.
+    """
+
+    def __init__(self, guide: GlobalNetRoute, margin_nm: int):
+        self.capsules = tuple((segment.start, segment.end, segment.guide_half_width_nm + margin_nm)
+                              for segment in guide.segments)
+        self.squares = tuple((access.access_position, margin_nm) for access in guide.accesses)
+
+    def distance_nm(self, point: Point) -> float:
+        """Euclidean distance to the guide union; ``inf`` for an empty guide."""
+        best = float("inf")
+        for start, end, radius in self.capsules:
+            dx, dy = end.x_nm - start.x_nm, end.y_nm - start.y_nm
+            ox, oy = point.x_nm - start.x_nm, point.y_nm - start.y_nm
+            span = dx * dx + dy * dy
+            fraction = max(0.0, min(1.0, (ox * dx + oy * dy) / span)) if span else 0.0
+            distance = hypot(ox - fraction * dx, oy - fraction * dy) - radius
+            if distance < best:
+                best = distance
+                if best <= 0:
+                    return 0.0
+        for center, radius in self.squares:
+            dx = max(0, abs(point.x_nm - center.x_nm) - radius)
+            dy = max(0, abs(point.y_nm - center.y_nm) - radius)
+            distance = hypot(dx, dy)
+            if distance < best:
+                best = distance
+                if best <= 0:
+                    return 0.0
+        return best
+
+    def exposed_length_bound_nm(self, first: Point, first_distance: float,
+                                second: Point, second_distance: float) -> int:
+        """Guide-exposed length that any planar path between two points must have.
+
+        A path either stays outside the union, exposing all of its length (at
+        least the straight distance), or enters it, exposing at least each
+        endpoint's distance to it. ``outside_length_nm`` rounds each edge to a
+        nanometre, so the bound keeps 1 % slack: it stays below the charged
+        length for every edge longer than 50 nm.
+        """
+        straight = hypot(second.x_nm - first.x_nm, second.y_nm - first.y_nm)
+        bound = min(straight, first_distance + second_distance)
+        return max(0, int(0.99 * bound))
+
+
 def guide_transition_cost(inside_from: bool, inside_to: bool, event_cost: int) -> int:
     """A via entering an unguided layer is one event, not planar wirelength."""
     return event_cost if inside_from and not inside_to else 0

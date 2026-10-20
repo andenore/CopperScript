@@ -34,7 +34,13 @@ Require current profiles and exact-output/quality comparisons before optimizatio
 - [x] Record guide expansions, budget exhaustion, no-path failures and target-set sizes
   (`DetailedSearchStats`; see [search policy](routing-search-policy.md#search-work-counters)).
 
-- [ ] Add cheap feasible-port/layer reachability screening before costly repairs.
+- [x] ~~Add cheap feasible-port/layer reachability screening before costly repairs.~~
+  Measured and rejected (2026-10-20, full-vertical, 321 failed A* calls): a
+  static-obstacle reachability screen (blocked nodes and keepouts, ignoring
+  other nets' copper) is the only exact cheap relaxation, and it proves 6 calls
+  unreachable, saving 916 of 1.41M states while costing 62 s of BFS. Other
+  nets' copper causes the no-path failures, and 56 of 76 budget-exhausted calls
+  are reachable with more states, so the lever is the search heuristic.
 
 - [ ] Evaluate tighter adaptive/coarse-to-fine corridors with wide/neutral fallback.
 

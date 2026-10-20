@@ -841,6 +841,10 @@ def _parser() -> argparse.ArgumentParser:
         help="retry maze search in gradually wider guide corridors",
     )
     board_route_parser.add_argument(
+        "--guide-distance-heuristic", action="store_true",
+        help="add the unavoidable guide-deviation cost to the maze search lower bound",
+    )
+    board_route_parser.add_argument(
         "--repair-budget-multiplier", type=int, default=1,
         help="multiply the search limit only when retrying nets left open after all passes",
     )
@@ -1495,6 +1499,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     enable_soft_ripup=args.soft_ripup,
                     constrained_pins_first=args.constrained_pins_first,
                     progressive_guides=args.progressive_guides,
+                    guide_distance_heuristic=args.guide_distance_heuristic,
                     repair_budget_multiplier=args.repair_budget_multiplier,
                     defer_zone_nets=bool(physical_board.zones) or args.defer_zone_nets,
                     maximum_ripup_blockers=args.maximum_ripup_blockers,
