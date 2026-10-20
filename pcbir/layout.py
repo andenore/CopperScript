@@ -186,7 +186,7 @@ def plan_placement(
     )
     channels = EscapeSpacingModel(board, margin_nm=options.escape_margin_nm,
         transit_lanes=options.escape_transit_lanes).channels({p.reference: p for p in selected.placements})
-    findings = _findings(board, selected.metrics, candidates, channels)
+    findings = _findings(board, selected.metrics, candidates, channels) + placement_intent_findings(planned)
     gates = _gates(findings)
     return PlacementPlan(
         planned,
@@ -381,3 +381,76 @@ def _gates(findings: tuple[LayoutFinding, ...]) -> tuple[LayoutGate, ...]:
             "release is blocked until routing and signoff pass",
         ),
     )
+
+
+def placement_intent_findings(board: PhysicalBoard, *, remote_mm: float = 8.0) -> tuple[LayoutFinding, ...]:
+    """Placement facts that usually mean an authored pose fights the routing.
+
+    * REMOTE_FIXED_PART: a fixed small part (at most four pads) whose nearest
+      pad partner on a signal net is more than ``remote_mm`` away (for example
+      a crystal load capacitor fixed far from its crystal).
+    * FIXED_PART_IN_PAIR_CORRIDOR: a fixed part that sits in the path of a
+      differential pair between fixed terminals (automatic pair corridors).
+    * AUTO_PAIR_CORRIDORS: the corridors movable parts were kept out of.
+
+    Planes, power rails, decoupling returns and nets with more than twelve
+    pads are ignored when looking for partners: they connect almost everything.
+    """
+    from math import hypot
+    from .placement import _keepout_blocks, _placement_polygon, _rules, automatic_pair_corridors, \
+        transformed_pad_position
+    from .zone_geometry import distribution_zone_nets
+    findings: list[LayoutFinding] = []
+    rules = _rules(board)
+    poses = {pose.reference: pose for pose in board.placements}
+    fixed = {ref for ref, rule in rules.items() if rule.fixed_position is not None and ref in poses}
+    excluded = set(distribution_zone_nets(board)) | {domain.net for domain in board.power_domains}
+    excluded |= {link.return_net for link in board.decoupling_links}
+    for reference in sorted(fixed):
+        pose = poses[reference]
+        pads = board.footprints[pose.footprint].pads
+        if len(pads) > 4:
+            continue
+        best = None
+        for net in board.nets:
+            if net.name in excluded or len(net.pads) > 12:
+                continue
+            own = [pad for pad in net.pads if pad.component == reference]
+            if not own:
+                continue
+            for pad in own:
+                here = transformed_pad_position(board, pose, pad.pad)
+                for other in net.pads:
+                    if other.component == reference or other.component not in poses:
+                        continue
+                    there = transformed_pad_position(board, poses[other.component], other.pad)
+                    distance = hypot(here.x_nm - there.x_nm, here.y_nm - there.y_nm) / 1_000_000
+                    if best is None or distance < best[0]:
+                        best = (distance, net.name, f"{other.component}.{other.pad}")
+        if best is not None and best[0] > remote_mm:
+            findings.append(LayoutFinding(
+                "REMOTE_FIXED_PART", LayoutStage.PLACE, GateStatus.WARNING,
+                f"{reference} is fixed {best[0]:.1f} mm from its nearest signal partner {best[2]} "
+                f"(net {best[1]}); if it serves that pin, move it there or drop its fixed_placement",
+                reference))
+    corridors = automatic_pair_corridors(board)
+    blocking: dict[str, list[str]] = {}
+    for corridor in corridors:
+        for reference in sorted(fixed):
+            if reference in corridor.terminal_references:
+                continue
+            pose = poses[reference]
+            if _keepout_blocks(board, corridor.keepout, pose, _placement_polygon(board, pose)):
+                blocking.setdefault(reference, []).append("/".join(corridor.nets))
+    for reference, pairs in sorted(blocking.items()):
+        findings.append(LayoutFinding(
+            "FIXED_PART_IN_PAIR_CORRIDOR", LayoutStage.PLACE, GateStatus.WARNING,
+            f"{reference} is fixed in the straight path of differential pair(s) {', '.join(pairs)}; "
+            "those pairs have to route around it",
+            reference))
+    if corridors:
+        findings.append(LayoutFinding(
+            "AUTO_PAIR_CORRIDORS", LayoutStage.PLACE, GateStatus.PASS,
+            f"kept movable parts out of {len(corridors)} differential-pair path(s) between fixed terminals: "
+            + ", ".join("/".join(item.nets) for item in corridors)))
+    return tuple(findings)

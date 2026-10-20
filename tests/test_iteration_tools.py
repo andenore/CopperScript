@@ -222,3 +222,20 @@ def test_pad_without_angle_is_absolute_zero(tmp_path):
     ys = [y for _, y in pad.polygon]
     assert abs(pad.center[0] - 10) < 1e-9 and abs(pad.center[1] - 9) < 1e-9  # offset rotates with the part
     assert max(xs) - min(xs) > max(ys) - min(ys)  # absolute angle 0: still horizontal
+
+
+def test_route_report_placement_findings_become_located_warnings(tmp_path, run_dir):
+    run_copy = tmp_path / "placed"
+    run_copy.mkdir()
+    (run_copy / "board.kicad_pcb").write_text((run_dir / "board.kicad_pcb").read_text())
+    report = json.loads((run_dir / "route-report.json").read_text())
+    ref = load_run(run_dir).scene().pads[0].ref
+    report["placement_findings"] = [
+        {"code": "REMOTE_FIXED_PART", "status": "warn", "message": "fixed 20 mm from its partner", "subject": ref},
+        {"code": "AUTO_PAIR_CORRIDORS", "status": "pass", "message": "2 corridors"}]
+    (run_copy / "route-report.json").write_text(json.dumps(report))
+    issues = run_issues(load_run(run_copy))
+    warning = find_issue(issues, "W1")
+    assert warning.stage == "placement" and warning.code == "REMOTE_FIXED_PART"
+    assert warning.objects == [ref] and warning.window() is not None
+    assert [i.id for i in issues if i.stage == "placement"] == ["W1"]

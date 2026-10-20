@@ -19,7 +19,7 @@ from .critical_review import critical_lane_review, lane_review_line
 from .erc import check, has_errors
 from .footprints import FootprintResolver, FootprintResolutionError, prepare_footprint_dependencies
 from .importers import KiCadModImportError, load_kicad_mod
-from .layout import PlacementPlannerOptions, plan_placement
+from .layout import PlacementPlannerOptions, placement_intent_findings, plan_placement
 from .placement_templates import apply_placement_templates
 from .loader import BoardLoadError, load_board, load_design
 from .power import analyze_power_states
@@ -1739,6 +1739,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "detailed": json.loads(result.detailed.to_json()),
                 "drc": json.loads(output_drc.to_json()),
                 "summary": connection_summary(output_board, output_drc, native=plane_verification),
+                "placement_findings": [
+                    {"code": f.code, "status": f.status.value, "message": f.message,
+                     **({"subject": f.subject} if f.subject is not None else {})}
+                    for f in placement_intent_findings(result.placement_and_global.board)],
             }
             if power_area_options is not None:
                 report["power_area_planning"] = {

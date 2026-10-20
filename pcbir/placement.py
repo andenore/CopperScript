@@ -63,7 +63,8 @@ class PlacementPlannerOptions:
     component_clearance_nm: Nanometres = DEFAULT_ADDITIONAL_COURTYARD_GAP_NM
     congestion_bin_nm: Nanometres = nm_from_mm("5")
     analytical_iterations: int = 40
-    satellite_seeding: bool = False      # seed ungrouped parts at their connected pads
+    satellite_seeding: bool = True       # seed ungrouped parts at their connected pads
+    auto_pair_corridors: bool = True     # keep movable parts out of fixed differential pairs' paths
     analytical_step_mm: float = 0.08
     analytical_momentum: float = 0.85
     refinement_passes: int = 2
@@ -690,6 +691,34 @@ def reserved_corridors(board: PhysicalBoard) -> CorridorReservation:
     # The entry holds the board itself, so its id cannot be reused while cached.
     _CORRIDOR_CACHE[id(board)] = (board, result)
     return result
+
+
+_AUTO_CORRIDOR_CACHE: dict[int, tuple[PhysicalBoard, tuple[ReservedCorridor, ...]]] = {}
+
+
+def automatic_pair_corridors(board: PhysicalBoard) -> tuple[ReservedCorridor, ...]:
+    """Corridors for every differential pair whose terminals are all fixed.
+
+    The same geometry as ``reserve_corridor`` (hull of the pair's lands plus
+    width, gap and clearance), derived without the rule. They keep movable,
+    unrelated parts out of a critical pair's path; authored fixed placements
+    are never checked against them. Pairs that already reserve a corridor,
+    or whose terminals are not fixed, are left out.
+    """
+    cached = _AUTO_CORRIDOR_CACHE.get(id(board))
+    if cached is not None and cached[0] is board:
+        return cached[1]
+    reserved = {rule.net for rule in board.net_routing_rules if rule.reserve_corridor}
+    pairs = sorted({tuple(sorted((rule.net, rule.differential_partner)))
+                    for rule in board.net_routing_rules
+                    if rule.differential_partner and rule.net not in reserved
+                    and rule.differential_partner not in reserved})
+    corridors = tuple(result for result in (_derive_corridor(board, members) for members in pairs)
+                      if not isinstance(result, str))
+    if len(_AUTO_CORRIDOR_CACHE) >= _CORRIDOR_CACHE_SIZE:
+        _AUTO_CORRIDOR_CACHE.clear()
+    _AUTO_CORRIDOR_CACHE[id(board)] = (board, corridors)
+    return corridors
 
 
 def reserved_corridor_conflicts(
@@ -2491,6 +2520,12 @@ def _legal(
         if (candidate.reference not in corridor.terminal_references
                 and _keepout_blocks(board, corridor.keepout, candidate, polygon)):
             return False
+    if options.auto_pair_corridors and (rule is None or rule.fixed_position is None):
+        # Movable parts only: an authored fixed pose is the author's call.
+        for corridor in automatic_pair_corridors(board):
+            if (candidate.reference not in corridor.terminal_references
+                    and _keepout_blocks(board, corridor.keepout, candidate, polygon)):
+                return False
     if cluster_keepouts is None:
         cluster_keepouts = resolved_cluster_keepouts(board, {**placed, candidate.reference: candidate})
     for keepout in (*board.copper_keepouts, *cluster_keepouts):
