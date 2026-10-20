@@ -86,6 +86,7 @@ class UnifiedRouterOptions:
     # Extra cost (as history) on a ball grid's own surface layer: escapes are
     # short, so through-traffic between the balls should prefer inner layers.
     ball_field_cost: float = 2.0
+    ball_field_via_sites: bool = False       # new vias inside a ball array only at cell centres
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
@@ -228,6 +229,7 @@ class _Rasters:
         self.margin = margin
         self._track: dict[tuple[int, int], tuple[list[int], list[int]]] = {}
         self._via: dict[tuple[int, int, int], tuple] = {}
+        self.via_mask = None        # (ny, nx) bool: False forbids a new via there
         g = grid
         self.px, self.py = np.meshgrid(g.xs, g.ys)                      # node centres
         self.mx, self.my = np.meshgrid(g.xs + g.pitch / 2, g.ys + g.pitch / 2)  # cell centres
@@ -296,6 +298,8 @@ class _Rasters:
                 win = np.hypot(self.px[iy0:iy1 + 1, ix0:ix1 + 1] - x,
                                self.py[iy0:iy1 + 1, ix0:ix1 + 1] - y) < reach
                 owner[iy0:iy1 + 1, ix0:ix1 + 1][win] = _FOREIGN
+            if self.via_mask is not None:
+                owner = np.where(self.via_mask, owner, _FOREIGN)
             flat = np.ascontiguousarray(owner.ravel().astype(np.int32))
             self._via[key] = (flat.tolist(), flat)
         return self._via[key][0]
@@ -472,6 +476,8 @@ class _Router:
         obstacles, holes = self._obstacles()
         margin = options.raster_margin_nm if options.raster_margin_nm is not None else pitch // 8
         self.rasters = _Rasters(board, self.grid, obstacles, holes, margin)
+        if options.ball_field_via_sites:
+            self.rasters.via_mask = self._ball_field_via_mask()
         from .native import astar as native_astar
         self.native = native_astar()
         self.occupancy = _Occupancy(self.grid.size, self.grid.plane, arrays=self.native is not None)
@@ -527,6 +533,42 @@ class _Router:
             for iy in range(iy0, iy1 + 1):
                 for ix in range(ix0, ix1 + 1):
                     hist[g.index(layer, ix, iy)] += cost
+
+    def _ball_field_via_mask(self):
+        """Inside a full ball array, new vias only at cell centres (dogbone sites).
+
+        Reference BGA layouts keep a regular via lattice so the inner layers
+        get straight channels between via rows; a via dropped anywhere else in
+        the field closes channels for everyone (the FX10 kit, for example,
+        fans out every inner ball to its cell centre).
+        """
+        from .package_patterns import circular_array
+        from .placement import transformed_local_point
+        g = self.grid
+        mask = None
+        for pose in self.board.placements:
+            try:
+                array = circular_array(self.board, pose.reference)
+            except ValueError:
+                array = None
+            if array is None:
+                continue
+            if mask is None:
+                mask = np.ones((g.ny, g.nx), dtype=bool)
+            pads = self.board.footprints[pose.footprint].pads
+            points = [transformed_local_point(pose, p.position) for p in pads]
+            x0 = min(p.x_nm for p in points); x1 = max(p.x_nm for p in points)
+            y0 = min(p.y_nm for p in points); y1 = max(p.y_nm for p in points)
+            ix0, iy0, ix1, iy1 = g.window(x0, y0, x1, y1)
+            mask[iy0:iy1 + 1, ix0:ix1 + 1] = False
+            # Cell centres: half a pitch off every ball row and column.
+            def centred(values, origin):
+                cells = (values - origin) / array.pitch_nm - 0.5
+                return np.abs(cells - np.round(cells)) * array.pitch_nm <= g.pitch / 4
+            on_x = centred(np.asarray(g.xs[ix0:ix1 + 1]), x0)
+            on_y = centred(np.asarray(g.ys[iy0:iy1 + 1]), y0)
+            mask[iy0:iy1 + 1, ix0:ix1 + 1] |= np.outer(on_y, on_x)
+        return mask
 
     def _net_id(self, name: str) -> int:
         if name not in self.net_ids:

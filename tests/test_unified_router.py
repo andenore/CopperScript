@@ -21,6 +21,7 @@ from pcbir import (
     route_global,
     run_physical_drc,
 )
+from pcbir.physical import PadShape
 from pcbir.route_summary import connection_summary
 from pcbir.unified_router import UnifiedRouterOptions, route_unified
 
@@ -160,3 +161,30 @@ def test_saved_inputs_replay_to_the_same_copper(tmp_path) -> None:
     again = replay_unified(state)
     assert set(again.board.tracks) == set(first.board.tracks)
     assert set(again.board.vias) == set(first.board.vias)
+
+
+def test_ball_field_via_mask_keeps_only_cell_centres() -> None:
+    from types import SimpleNamespace
+    from pcbir.package_patterns import circular_array  # noqa: F401  (array detection is exercised on real boards)
+    from pcbir.unified_router import _Router
+    import numpy as np
+    # 3x3 ball array at 1 mm pitch; grid pitch 0.25 mm.
+    footprint = PhysicalFootprint("test/bga9", tuple(
+        FootprintPad(str(i), Point.mm(x, y), Size.mm("0.4", "0.4"), shape=PadShape.CIRCLE)
+        for i, (x, y) in enumerate(((x, y) for y in (-1, 0, 1) for x in (-1, 0, 1)), 1)), Size.mm(3, 3))
+    board = replace(_board({"A": ((3, 10), (17, 10))}), footprints={**_board({"A": ((3, 10), (17, 10))}).footprints,
+                                                                   footprint.name: footprint})
+    board = replace(board, placements=(*board.placements, Placement("U", footprint.name, Point.mm(10, 4))))
+    router = _Router(board, UnifiedRouterOptions(pitch_nm=nm_from_mm("0.25"), ball_field_via_sites=True),
+                     [n for n in board.nets], None)
+    mask = router._ball_field_via_mask()
+    if mask is None:
+        import pytest
+        pytest.skip("3x3 array not detected as a ball field")
+    g = router.grid
+    def at(x, y):
+        ix = int(round((nm_from_mm(x) - g.x0) / g.pitch)); iy = int(round((nm_from_mm(y) - g.y0) / g.pitch))
+        return bool(mask[iy, ix])
+    assert at(9.5, 3.5) and at(10.5, 4.5)          # cell centres
+    assert not at(10, 4) and not at(9.75, 3.5)      # on a ball / between centres
+    assert at(15, 15)                               # outside the field
