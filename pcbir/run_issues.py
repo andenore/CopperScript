@@ -110,6 +110,11 @@ def load_run(path: str | Path) -> Run:
         if report is None:
             candidates = sorted(p for p in path.glob("*.json") if not p.name.endswith(".summary.json"))
             report = next((p for p in candidates if _schema(p).startswith("copperscript-")), None)
+    if report is not None and not report.name.endswith(".error.json"):
+        # A later run into the same place that failed leaves only an error record.
+        error = report.with_name(report.stem + ".error.json")
+        if error.is_file() and error.stat().st_mtime >= report.stat().st_mtime:
+            report = error
     board = directory / "board.kicad_pcb"
     if not board.is_file():
         board = next(iter(sorted(directory.glob("*.kicad_pcb"))), None)
@@ -195,6 +200,13 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
     issues: list[RunIssue] = []
     if str(report.get("schema", "")).startswith("copperscript-layout-report"):
         return _layout_issues(report, scene)
+    if str(report.get("schema", "")).startswith("copperscript-route-error"):
+        stage = ", ".join(report.get("open_stages") or []) or "an unknown stage (run with --progress)"
+        components = [str(c) for c in _items(report.get("components"))]
+        points = [p.center for ref in components for p in (scene.pads if scene else []) if p.ref == ref]
+        return [RunIssue("E1", "error", "RUN-ERROR",
+                         f"{report.get('error_type', 'Error')} in {stage}: {str(report.get('message', ''))[:300]}",
+                         objects=components, points=points)]
 
     access = _section(report, "package_access")
     pending = [str(p) for p in _items(access.get("pending_pads"))]
@@ -377,11 +389,13 @@ def issues_document(run: Run, issues: list[RunIssue], *, limit: int | None = Non
             "filled_board": str(run.filled_board_path) if run.filled_board_path else None,
             "status": status, "routing_complete": report.get("routing_complete"),
             "issue_count": len(issues), "omitted": len(issues) - len(shown), "finding_counts": counts,
+            "stopped_after": report.get("stopped_after"),
             "issues": [issue.document() for issue in shown]}
 
 
 def render_issues(document: dict[str, object]) -> str:
-    lines = [f"{document['status']}  routing_complete={document['routing_complete']}  "
+    stopped = f"  stopped after {document['stopped_after']}" if document.get("stopped_after") else ""
+    lines = [f"{document['status']}{stopped}  routing_complete={document['routing_complete']}  "
              f"{document['issue_count']} grouped issue(s)",
              "findings: " + ", ".join(f"{code} {count}" for code, count in document["finding_counts"].items())]
     for issue in document["issues"]:

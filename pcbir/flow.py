@@ -29,6 +29,11 @@ class PhysicalFlowStatus(str, Enum):
     FAIL = "fail"
 
 
+# Stage boundaries where an iteration may stop early (``stop_after``). Stopping
+# never passes a gate: the result is a FAIL with ``stopped_after`` set.
+STOP_STAGES = ("placement", "package-preflight", "package-access")
+
+
 @dataclass(frozen=True, slots=True)
 class RoutingPipelineResult:
     status: PhysicalFlowStatus
@@ -42,10 +47,30 @@ class RoutingPipelineResult:
     duplicate_pad_stitch: DuplicatePadStitchResult | None = None
     critical_feedback: CriticalPlacementFeedbackResult | None = None
     package_access: PackageAccessResult | None = None
+    stopped_after: str | None = None
 
     @property
     def board(self) -> PhysicalBoard:
         return self.detailed.board
+
+
+def _stopped_after_placement(placement: PlacementRoutingResult, drc_policy) -> tuple:
+    """Zero-pass critical/detailed results for a run stopped after placement."""
+
+    from .critical import _fingerprint as critical_fingerprint
+    from .detailed import DetailedNetResult, DetailedRoutingMetrics, _fingerprint as detailed_fingerprint
+    board = replace(placement.board, metadata={**placement.board.metadata, "stopped_after": "placement",
+                                               "detailed_routing": "not_run", "fabrication_ready": "false"})
+    global_fp = placement.global_route.routing_fingerprint
+    critical = CriticalRoutingResult(CriticalRoutingStatus.WARNING, board, (), (), (), global_fp,
+                                     critical_fingerprint(global_fp, [], [], []))
+    reason = "not routed: run stopped after placement (--stop-after placement)"
+    nets = tuple(DetailedNetResult(net.name, False, 0, 0, 0, 0, (reason,))
+                 for net in board.nets if len(net.pads) >= 2)
+    metrics = DetailedRoutingMetrics(0, len(nets), 0, 0, 0, 0, 0, 0)
+    detailed = DetailedRoutingResult(DetailedRoutingStatus.PARTIAL, board, nets, metrics, len(board.tracks),
+                                     len(board.vias), global_fp, detailed_fingerprint(global_fp, board, metrics))
+    return critical, detailed, run_physical_drc(board, policy=drc_policy)
 
 
 def run_routing_pipeline(
@@ -63,8 +88,17 @@ def run_routing_pipeline(
     critical_feedback_trials: int = 0,
     package_access_options: PackageAccessOptions | None = None,
     on_progress: ProgressCallback | None = None,
+    stop_after: str | None = None,
+    initial_placement: PlacementRoutingResult | None = None,
+    on_stage=None,
 ) -> RoutingPipelineResult:
-    """Run steps 4–8 in dependency order without weakening an earlier gate."""
+    """Run steps 4–8 in dependency order without weakening an earlier gate.
+
+    ``stop_after`` ends the run at a stage boundary (see ``STOP_STAGES``) with a
+    FAIL result carrying ``stopped_after``. ``initial_placement`` replaces the
+    placement/global stage with an earlier, explicitly supplied result.
+    ``on_stage(name, value)`` observes completed stages (e.g. for checkpoints).
+    """
 
     from .hard_macros import macro_source
     board = macro_source(board)
@@ -80,37 +114,68 @@ def run_routing_pipeline(
     )
     if detailed_feedback_trials < 0 or critical_feedback_trials < 0 or detailed_feedback_movement_nm <= 0:
         raise ValueError("routing placement feedback bounds are invalid")
-    emit(on_progress, "placement_global", "started")
-    placement = optimize_placement_for_routing(
-        board, placement_options, global_options, feedback_options,
-        **({"on_progress": on_progress} if on_progress is not None else {})
-    )
-    emit(on_progress, "placement_global", "finished", candidate=placement.placement_candidate,
-         global_status=placement.global_route.status.value)
+    if stop_after is not None and stop_after not in STOP_STAGES:
+        raise ValueError(f"stop_after must be one of {', '.join(STOP_STAGES)}")
+    if stop_after in {"package-preflight", "package-access"} and fanout_options is None:
+        raise ValueError(f"stopping after {stop_after} requires package fanout (--fanout)")
+    if initial_placement is not None:
+        if (initial_placement.board.name != board.name
+                or {n.name for n in initial_placement.board.nets} != {n.name for n in board.nets}):
+            raise ValueError("the supplied placement belongs to a different board")
+        placement = initial_placement
+        emit(on_progress, "placement_global", "reused", candidate=placement.placement_candidate,
+             global_status=placement.global_route.status.value)
+    else:
+        emit(on_progress, "placement_global", "started")
+        placement = optimize_placement_for_routing(
+            board, placement_options, global_options, feedback_options,
+            **({"on_progress": on_progress} if on_progress is not None else {})
+        )
+        emit(on_progress, "placement_global", "finished", candidate=placement.placement_candidate,
+             global_status=placement.global_route.status.value)
+    if on_stage is not None:
+        on_stage("placement", placement)
+    if stop_after == "placement":
+        emit(on_progress, "ordinary_area", "stopped", reason="stop_after_placement")
+        critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
+        return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
+                                     stopped_after="placement")
     access = None
+    stopped = None
     if fanout_options is not None:
         access_options = package_access_options or PackageAccessOptions()
         access = preflight_package_access(placement.board, placement.global_route,
                                          fanout_options, plane_stitch_options,
                                          options=access_options, on_progress=on_progress)
+        if stop_after == "package-preflight":
+            stopped = "package-preflight"
         # With fanout enabled, critical failures belong to the same escape-first
         # placement transaction, not a second critical-first controller.
         access_options = replace(access_options,
             maximum_trials=access_options.maximum_trials + critical_feedback_trials)
-        access = improve_package_access(access, fanout_options,
-            options=access_options, placement_options=placement_options,
-            global_options=global_options, plane_options=plane_stitch_options, on_progress=on_progress)
+        if stopped is None:
+            access = improve_package_access(access, fanout_options,
+                options=access_options, placement_options=placement_options,
+                global_options=global_options, plane_options=plane_stitch_options, on_progress=on_progress)
+            if stop_after == "package-access":
+                stopped = "package-access"
         placement = replace(placement, board=access.source, global_route=access.global_route,
             status=FeedbackStatus.PASS if access.global_route.status is GlobalRoutingStatus.SUCCESS else FeedbackStatus.WARNING,
             full_route_certified=access.global_route.status is GlobalRoutingStatus.SUCCESS,
             placement_candidate=placement.placement_candidate + ("-access" if access.accepted_moves else ""))
-        if not access.ready:
-            emit(on_progress, "ordinary_area", "blocked", reason="package_access_incomplete")
-            detailed = blocked_area_result(access)
+        if on_stage is not None:
+            on_stage(stopped or "package-access", access)
+        if not access.ready or stopped is not None:
+            if stopped is not None:
+                emit(on_progress, "ordinary_area", "stopped", reason=f"stop_after_{stopped}",
+                     package_access_ready=access.ready)
+            else:
+                emit(on_progress, "ordinary_area", "blocked", reason="package_access_incomplete")
+            detailed = blocked_area_result(access, stopped_after=stopped)
             return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, access.critical,
                 detailed, run_physical_drc(detailed.board, policy=drc_policy),
                 fanout=replace(access.fanout, board=access.board), plane_stitch=access.plane_stitch,
-                package_access=access)
+                package_access=access, stopped_after=stopped)
         critical = access.critical
     else:
         critical = route_critical_nets(placement.board, placement.global_route,

@@ -465,7 +465,7 @@ def _parser() -> argparse.ArgumentParser:
         "issues", help="list a run's failures grouped by cause, each with an id, nets, layers and window")
     issues_parser.add_argument("target", type=Path, help="run directory or route/layout report")
     issues_parser.add_argument("--net", help="only issues touching this net")
-    issues_parser.add_argument("--stage", choices=("access", "critical", "native", "physical", "routing"))
+    issues_parser.add_argument("--stage", choices=("access", "critical", "native", "physical", "routing", "layout", "error"))
     issues_parser.add_argument("--code", help="only this issue code, e.g. UNCONNECTED_ITEMS")
     issues_parser.add_argument("--limit", type=int, default=15, help="maximum issues listed (0 = all)")
     issues_parser.add_argument("--cluster-mm", type=float, default=3.0, help="spatial grouping distance")
@@ -914,6 +914,16 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum expanded states per native-driven bridge search (default: 4000)")
     board_route_parser.add_argument("--native-evidence-directory", type=Path,
         help="new directory for recoverable native candidates/reports; default: fresh sibling of route report")
+    from .flow import STOP_STAGES
+    board_route_parser.add_argument("--stop-after", choices=STOP_STAGES,
+        help="end the run at this stage boundary and write the report (status fail, stopped_after set); "
+             "skips zone-escape, filled-copper and final native verification; package-* stops need fanout "
+             "(on unless --no-fanout)")
+    board_route_parser.add_argument("--checkpoint-dir", type=Path,
+        help="write stage checkpoints here (placement.state.json) for a later --reuse-placement")
+    board_route_parser.add_argument("--reuse-placement", type=Path,
+        help="start from a placement checkpoint; refused when the physical board or placement/global/"
+             "feedback options differ; a compiler code change is allowed and recorded in the report")
 
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
@@ -1362,6 +1372,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(diagnostic)
                 print("Board routing stopped because ERC reported errors.")
                 return 1
+            stage_tracker, placement_reuse, checkpoints = None, None, {}
             try:
                 physical_options = PrototypePhysicalOptions(
                     copper_layers=args.layers, fabrication_profile=args.fab_profile,
@@ -1493,8 +1504,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                     maze_escapes=args.fanout_maze,
                 ) if args.fanout else None
                 progress = console_progress() if args.progress else None
+                from .iteration_checkpoints import (StageTracker, load_placement_checkpoint, placement_key,
+                                                    save_placement_checkpoint)
+                if progress is not None:
+                    # Remember the open stage so a failure leaves a located record.
+                    stage_tracker = progress = StageTracker(progress)
+                checkpoint_key = (placement_key(physical_board, placement_options, router_options,
+                                                feedback_options)
+                                  if args.checkpoint_dir or args.reuse_placement else None)
+                initial_placement = None
+                if args.reuse_placement:
+                    initial_placement, placement_reuse = load_placement_checkpoint(args.reuse_placement,
+                                                                                   checkpoint_key)
+                    print(f"Reusing placement {placement_reuse['candidate']} from {args.reuse_placement}"
+                          + (" (compiler code changed since it was saved)" if placement_reuse["code_changed"] else ""))
+
+                def on_stage(name, value):
+                    if args.checkpoint_dir and name == "placement" and initial_placement is None:
+                        try:
+                            path = save_placement_checkpoint(args.checkpoint_dir / "placement.state.json", value,
+                                                             checkpoint_key)
+                        except (OSError, ValueError) as exc:
+                            checkpoints["placement_error"] = f"{type(exc).__name__}: {exc}"[:500]
+                            print(f"Placement checkpoint not saved: {exc}", flush=True)
+                        else:
+                            checkpoints["placement"] = str(path)
+                            print(f"Placement checkpoint -> {path}", flush=True)
+
                 result = run_routing_pipeline(
                     physical_board,
+                    stop_after=args.stop_after,
+                    initial_placement=initial_placement,
+                    on_stage=on_stage,
                     placement_options=placement_options,
                     global_options=router_options,
                     feedback_options=feedback_options,
@@ -1545,13 +1586,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ),
                         on_progress=progress,
                     ) if stitch_enabled and (args.zone_escape_trials
-                                             or args.zone_local_ripup_trials) else None
+                                             or args.zone_local_ripup_trials)
+                    and result.stopped_after is None else None
                 )
                 if escape_feedback is not None:
                     result = escape_feedback.pipeline
-            except ValueError as exc:
-                _print_error(args, "ROUTING ERROR", exc)
-                return 2
+            except Exception as exc:
+                # Expected failures (ValueError) exit 2; anything else is a bug and keeps its
+                # traceback. Both leave a located record next to --report.
+                if isinstance(exc, ValueError):
+                    _print_error(args, "ROUTING ERROR", exc)
+                if args.report is not None:
+                    from .iteration_checkpoints import write_error_record
+                    try:
+                        record = write_error_record(args.report,
+                            board_name=board.name, error=exc, tracker=stage_tracker,
+                            args_summary={"stop_after": args.stop_after,
+                                          "reuse_placement": str(args.reuse_placement) if args.reuse_placement else None,
+                                          "routing_profile": args.routing_profile})
+                        print(f"Error record -> {record} (copper issues {record.parent} lists it)", flush=True)
+                    except OSError:
+                        pass
+                if isinstance(exc, ValueError):
+                    return 2
+                raise
+            # A stopped run is an intermediate scene: native refill/feedback would only re-describe it.
+            native_cli = None if result.stopped_after else args.verify_plane_fill
             emit(progress, "final_contacts_native_drc", "started")
             stitch = (escape_feedback.plane_stitch if escape_feedback is not None
                       else stitch_zone_pads(result.board, plane_options) if stitch_enabled
@@ -1579,15 +1639,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
             filled_feedback = None
             try:
-                if args.verify_plane_fill:
+                if native_cli:
                     emit(progress, "independent_kicad", "started")
                 plane_verification = None
-                if args.verify_plane_fill:
+                if native_cli:
                     report_location = args.report or Path(f"{board.name}.route-report.json")
                     evidence_directory = args.native_evidence_directory or report_location.with_name(
                         report_location.stem + ".native-" + uuid4().hex[:12])
                     filled_feedback = improve_filled_copper(result, output_board,
-                        kicad_cli=args.verify_plane_fill,
+                        kicad_cli=native_cli,
                         options=FilledCopperFeedbackOptions(maximum_trials=args.filled_copper_trials,
                             maximum_search_states=args.filled_copper_search_states,
                             maximum_blockers=args.maximum_ripup_blockers,
@@ -1602,7 +1662,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     from .plane_verify import remove_native_dangling_tracks
                     output_board, plane_verification = remove_native_dangling_tracks(
                         output_board, plane_verification, fixed,
-                        kicad_cli=args.verify_plane_fill,
+                        kicad_cli=native_cli,
                         artifact_directory=evidence_directory / "native-cleanup")
                     if not plane_verification.matches(output_board):
                         raise RuntimeError("native cleanup verification is stale")
@@ -1639,6 +1699,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
                     "filled_copper_search_states")},
                 "erc_diagnostics": [str(item) for item in diagnostics],
+                **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run"}
+                   if result.stopped_after else {}),
+                # Later stages (package-access moves, zone-escape trials) may still move parts.
+                **({"placement_reuse": {**placement_reuse,
+                                        "final_candidate": result.placement_and_global.placement_candidate}}
+                   if placement_reuse else {}),
+                **({"checkpoints": checkpoints} if checkpoints else {}),
                 "fabrication_ready": False,
                 "routing_complete": closure_status is PhysicalFlowStatus.PASS,
                 "placement_candidate": result.placement_and_global.placement_candidate,
@@ -1681,7 +1748,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                        for trial in access.pattern_trials],
                     "trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
                                for trial in access.trials],
-                    "ordinary_area_started": access.ready,
+                    "ordinary_area_started": access.ready and result.stopped_after is None,
                 }
                 if access.boundary is not None:
                     boundary = access.boundary
@@ -1925,6 +1992,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 emit(progress, "export", "started")
                 report_path.parent.mkdir(parents=True, exist_ok=True)
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                report_path.with_name(report_path.stem + ".error.json").unlink(missing_ok=True)
                 summary_path, compact_summary = write_summary(report_path)
                 if args.output:
                     pcb_manifest = KiCadPcbBackend().generate(output_board)
@@ -1937,6 +2005,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             except (OSError, ValueError) as exc:
                 _print_error(args, "OUTPUT ERROR", exc)
                 return 2
+            if result.stopped_after:
+                print(f"STOPPED after {result.stopped_after} (--stop-after): partial run, open nets below are expected")
             print(
                 f"BOARD ROUTE: {closure_status.value} - "
                 f"ordinary routed={connectivity['routed_ordinary_net_count']}, "

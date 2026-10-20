@@ -48,6 +48,8 @@ python -m copperscript query BOARD.copper nets             # one line per net
 
 After a routing or layout run, `issues` lists grouped, located failures and `view`
 renders one of them; see [routing and placement iteration](llm-workflow.md#routing-and-placement-iteration).
+`route-board --stop-after STAGE`, `--checkpoint-dir` and `--reuse-placement`
+shorten reruns; see [shorter reruns](llm-workflow.md#shorter-reruns).
 
 ```console
 python -m copperscript issues build/BOARD/runs/STAMP

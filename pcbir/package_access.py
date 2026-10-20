@@ -1355,14 +1355,17 @@ def _placement_access_probe(
         tuple(sorted(boundary_pending)), tuple(sorted(lost)), hard, quality, rank)
 
 
-def blocked_area_result(access: PackageAccessResult) -> DetailedRoutingResult:
+def blocked_area_result(access: PackageAccessResult, *, stopped_after: str | None = None) -> DetailedRoutingResult:
     """Explicit zero-pass result: preserve diagnostic copper, do not run a router."""
-    reason = "area routing blocked: package-access preflight incomplete"
+    reason = (f"not routed: run stopped after {stopped_after} (--stop-after {stopped_after})" if stopped_after
+              else "area routing blocked: package-access preflight incomplete")
     rules = {rule.net: rule for rule in access.board.net_routing_rules}
     nets = tuple(DetailedNetResult(net.name, False, 0, 0, 0, 0, (reason,))
                  for net in access.board.nets if len(net.pads) >= 2
                  and (net.name not in rules or rules[net.name].kind is RouteKind.GENERAL))
-    metadata = {**access.board.metadata, "package_access": "blocked", "detailed_routing": "partial",
+    metadata = {**access.board.metadata,
+                "package_access": ("ready" if access.ready else "incomplete") if stopped_after else "blocked",
+                "detailed_routing": "partial",
                 "fabrication_ready": "false"}
     board = replace(access.board, metadata=metadata)
     metrics = DetailedRoutingMetrics(0, len(nets), 0, 0, 0, 0, 0, 0)
