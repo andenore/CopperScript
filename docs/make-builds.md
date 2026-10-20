@@ -20,7 +20,6 @@ make EXAMPLE=cm4 compile
 make EXAMPLE=cm4 route
 make EXAMPLE=full-vertical route
 make EXAMPLE=nrf52 route
-make EXAMPLE=round-led-ring route
 make compile-examples
 make check-examples
 ```
@@ -35,7 +34,7 @@ Targets:
 | `layout` | Placement draft and report, not a routed board |
 | `edit` | Mechanical/floorplan editor |
 | `route` | Profiled package escape/routing, saved copper fill and native DRC |
-| `compile-examples` (root only) | Compile all 16 registered complete examples |
+| `compile-examples` (root only) | Compile the registered examples and compatibility fixtures |
 | `check-examples` (root only) | Run `check`, `compile`, and a dry-run of `route` for every registered complete example |
 
 `compile-examples` and `check-examples` exclude `examples/invalid_board/board.copper` and the intentionally
@@ -44,9 +43,16 @@ example is not a promise of successful routing or production readiness: only
 an actual passed route/fill/DRC run establishes that board's connectivity.
 The CM4 four-layer routing preset has been verified with KiCad 10.0.6.
 
+For the LED-ring board, use [CopperLedRing](https://github.com/andenore/CopperLedRing)
+and its own pinned build targets. `EXAMPLE=round-led-ring` is deprecated; it
+remains selectable and in the fast regression checks for compatibility.
+Its legacy geometry tests do not establish the standalone project's routing
+status. See the [deprecation notes](round-led-ring.md).
+
 `check-examples` checks the fast targets and expands every route recipe without starting
 routing. CI additionally runs the `layout` and non-interactive `edit` targets for the
-physical examples (`cm4`, `full-vertical`, `nrf52`, `round-led-ring`, the mechanical
+physical examples and compatibility fixtures (`cm4`, `full-vertical`, `nrf52`,
+the deprecated `round-led-ring`, the mechanical
 examples, and `resolved-footprint`) on each commit. Electrical and simulation fixtures
 without complete footprint identities still run their complete fast target set. Actual
 routing remains limited to release tags.

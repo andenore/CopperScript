@@ -1,4 +1,6 @@
-"""Build a 50 mm, twelve-LED coin-cell board with a true circular outline.
+"""Deprecated LED-ring fixture; use https://github.com/andenore/CopperLedRing.
+
+Retained for regression coverage and command compatibility.
 
 Connectivity, mechanical geometry, fixed placements and pour intent are entirely
 in examples/round_led_ring/board.copper. This optional wrapper renders the example.
@@ -16,6 +18,7 @@ import json
 from pathlib import Path
 import pstats
 import subprocess
+import sys
 
 from pcbir.compiler import compile_design_file
 from pcbir.erc import check
@@ -128,6 +131,8 @@ def main(argv=None):
     parser.add_argument("--route", action="store_true", help="attempt package escape and signal routing")
     parser.add_argument("--kicad-cli", type=Path, help="refill ground pours and independently check/save PCB")
     args = parser.parse_args(argv)
+    print("Deprecated LED-ring fixture: use https://github.com/andenore/CopperLedRing "
+          "for the maintained board and build instructions.", file=sys.stderr)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     # An interrupted rerun must never leave an earlier success as its status.
     (args.output_dir / "summary.json").write_text(json.dumps({
