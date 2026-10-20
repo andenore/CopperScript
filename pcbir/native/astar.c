@@ -8,7 +8,7 @@
  *
  * The Python router owns every array and passes them in; nothing here
  * allocates. Semantics match _Router._astar exactly (same costs, same
- * tie-breaking order is not guaranteed, same legality rules).
+ * tie-breaking order, same legality rules).
  */
 #include <stdint.h>
 
@@ -44,11 +44,19 @@ typedef struct {
     int32_t node; /* negative: completed target marker */
 } entry_t;
 
+/* Same order as Python's heap of (key, g, node) tuples, so both searches
+ * break ties identically. */
+static inline int entry_less(const entry_t *a, const entry_t *b) {
+    if (a->key != b->key) return a->key < b->key;
+    if (a->g != b->g) return a->g < b->g;
+    return a->node < b->node;
+}
+
 static void heap_push(entry_t *heap, int *size, entry_t value) {
     int i = (*size)++;
     while (i > 0) {
         int parent = (i - 1) >> 1;
-        if (heap[parent].key <= value.key) break;
+        if (!entry_less(&value, &heap[parent])) break;
         heap[i] = heap[parent];
         i = parent;
     }
@@ -63,8 +71,8 @@ static entry_t heap_pop(entry_t *heap, int *size) {
     for (;;) {
         int child = 2 * i + 1;
         if (child >= n) break;
-        if (child + 1 < n && heap[child + 1].key < heap[child].key) child++;
-        if (heap[child].key >= last.key) break;
+        if (child + 1 < n && entry_less(&heap[child + 1], &heap[child])) child++;
+        if (!entry_less(&heap[child], &last)) break;
         heap[i] = heap[child];
         i = child;
     }
