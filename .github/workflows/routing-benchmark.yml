@@ -93,6 +93,8 @@ jobs:
           PCBENCH_PCBS_ROOT: ${{ github.workspace }}/PCBench/PCBs
           PCBENCH_V9_ROOT: ${{ github.workspace }}/work/v9
           PCBENCH_NEWDRC_OUT: ${{ github.workspace }}/work/newdrc
+          # drc_fix_v9.py imports PCBWorld's configs package without adding the repository to sys.path.
+          PYTHONPATH: ${{ github.workspace }}/PCBWorld
         run: |
           PP=tools/datagen/pcbench_prep
           # Each step's output tail also becomes an annotation (job logs are not always reachable).
