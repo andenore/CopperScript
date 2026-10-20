@@ -398,6 +398,14 @@ Open items:
     vias.
   - Next levers are placement feedback driven by these hotspots (the
     `routeflow` outer loop) and a part-owned FX10 fanout macro (P4).
+- **CopperProbe source pins parts far from their pins.** `copper issues`
+  flags 16 fixed parts (REMOTE_FIXED_PART), e.g. R_CC_DET 65.7 mm and C_CLKP
+  40 mm from their nearest partner. Releasing 14 of them (side kept) in a copy
+  gave 0.857 (34 opens), the best so far, with every critical net routed.
+  Releasing them in the real source is the owner's call.
+- **CopperProbe ADC bus (11 nets) at the FX10 south edge.** max_vias=2 and a
+  length limit; F.Cu just south of the package is full of other copper, so
+  the bus drops to inner layers and runs out of vias or length.
 - **Satellite parts under a BGA.** The FX10 kit puts the RESREF resistor on
   B.Cu under the package, 1.2 mm from its ball. The placer never changes a
   part's side, so R_RESREF lands about 7 mm away on F.Cu. (Crystal caps were
