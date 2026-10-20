@@ -1,0 +1,70 @@
+from dataclasses import replace
+import json
+
+from pcbir.bench import _top_level_spans, net_codes, score_drc_report, summarize, write_back_routing
+from pcbir.importers.kicad_mod import _parse_sexpr
+from pcbir.importers.kicad_pcb import parse_kicad_pcb
+from pcbir.physical import CopperLayer, Point, TrackSegment, Via, nm_from_mm
+
+from test_kicad_pcb_import import LEGACY
+
+
+def _routed(text):
+    board = parse_kicad_pcb(text, source="legacy", name="legacy", project=None).board
+    track = TrackSegment("SIG", Point(nm_from_mm(10), nm_from_mm(10)), Point(nm_from_mm("12.5"), nm_from_mm(10)),
+                         nm_from_mm("0.2"), CopperLayer.BACK)
+    via = Via("GND", Point(nm_from_mm(14), nm_from_mm(11)), nm_from_mm("0.6"), nm_from_mm("0.3"))
+    return replace(board, tracks=(track,), vias=(via,))
+
+
+def test_write_back_replaces_routing_and_keeps_everything_else():
+    written = write_back_routing(LEGACY, _routed(LEGACY))
+    root = _parse_sexpr(written, "written")
+    tags = [tag for _, _, tag in _top_level_spans(written)]
+    assert tags.count("segment") == 1 and tags.count("via") == 1
+    segment = next(item for item in root if isinstance(item, list) and item[0] == "segment")
+    via = next(item for item in root if isinstance(item, list) and item[0] == "via")
+    # KiCad 5 custom layer names and the board's own net numbers are used.
+    assert ["layer", "Bottom"] in segment and ["net", "2"] in segment and ["end", "12.5", "10"] in segment
+    assert ["layers", "Top", "Bottom"] in via and ["net", "1"] in via
+    # Non-routing items survive byte for byte.
+    for start, end, tag in _top_level_spans(LEGACY):
+        if tag not in {"segment", "via"}:
+            assert LEGACY[start:end] in written
+    assert written.rstrip().endswith(")")
+    assert net_codes(written) == {"": 0, "GND": 1, "SIG": 2}
+
+
+def test_write_back_rejects_unknown_nets():
+    stripped = LEGACY.replace('(net 0 "") (net 1 GND) (net 2 SIG)', '(net 0 "") (net 2 SIG)')
+    try:
+        write_back_routing(stripped, _routed(LEGACY))
+    except ValueError as exc:
+        assert "GND" in str(exc)
+    else:
+        raise AssertionError("unknown net accepted")
+
+
+def test_clean_pass_needs_no_errors_and_nothing_unconnected():
+    clean = {"violations": [{"severity": "warning", "type": "silk_overlap"}], "unconnected_items": []}
+    assert score_drc_report(clean)["clean_pass"] is True
+    dirty = {"violations": [{"severity": "error", "type": "clearance"}], "unconnected_items": []}
+    assert score_drc_report(dirty)["clean_pass"] is False
+    assert score_drc_report(dirty)["drc_error_types"] == {"clearance": 1}
+    assert score_drc_report({"violations": [], "unconnected_items": [{}]})["clean_pass"] is False
+
+
+def test_summary_counts_failures_against_the_clean_pass_rate(tmp_path):
+    for name, record in {
+        "a": {"status": "routed", "scored": True, "clean_pass": True, "routable_nets": 4, "unrouted_nets": [],
+              "drc_errors": 0, "unconnected_items": 0, "vias": 2, "wirelength_mm": 10, "seconds": 1},
+        "b": {"status": "routed", "scored": True, "clean_pass": False, "routable_nets": 4, "unrouted_nets": ["X"],
+              "drc_errors": 2, "unconnected_items": 1, "vias": 4, "wirelength_mm": 20, "seconds": 3},
+        "c": {"status": "import_failed", "seconds": 0},
+    }.items():
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "result.json").write_text(json.dumps(record))
+    summary = summarize(tmp_path)
+    assert summary["boards"] == 3 and summary["clean_pass_rate"] == 0.333
+    assert summary["net_completion_mean"] == 0.875
+    assert summary["statuses"] == {"import_failed": 1, "routed": 2}

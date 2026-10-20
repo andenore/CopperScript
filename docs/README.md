@@ -24,6 +24,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Generate manufacturing or assembly files | [Manufacturing files](manufacturing-files.md), [assembly pinning](assembly-pinning.md) |
 | Share KiCad outputs | [Project export](kicad-project-export.md) |
 | Import placed KiCad boards for routing comparison | [KiCad board import](kicad-board-import.md) |
+| Score router changes on many third-party boards | [Multi-board routing benchmark](routing-benchmark.md) |
 | Use or change editor language features | [Language server and implementation plan](language-server.md) |
 | Package or publish the VS Code extension | [Extension release plan](extension-release-plan.md) |
 | Work on compiler internals or ERC | [Compiler architecture](compiler-architecture.md) |
