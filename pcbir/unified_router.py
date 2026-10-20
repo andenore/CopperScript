@@ -382,6 +382,11 @@ class _NetRoute:
     connected: bool
     length: float
     reason: str = ""
+    # Nodes covered by this route's own copper beyond a default-width track
+    # (wide tracks, via pads), mapped to the path node or ("via", xy) that
+    # owns them. Claims assume default-width neighbours, so these nodes are
+    # checked against other nets' claims as well.
+    body: dict = field(default_factory=dict)
 
 
 class _Occupancy:
@@ -1063,6 +1068,9 @@ class _Router:
         via_xy: set[int] = set()
         claims: set[int] = set()
         via_claims: set[int] = set()
+        body: dict = {}
+        wide = (spec.width - self.default_width) / 2 / g.pitch
+        via_body = (spec.via_size - self.default_width) / 2 / g.pitch
         track_radius = (spec.width / 2 + spec.clearance + self.default_width / 2) / g.pitch
         via_radius = (spec.via_size / 2 + spec.clearance + self.default_width / 2) / g.pitch
         via_via_radius = (spec.via_size + spec.clearance) / g.pitch
@@ -1081,6 +1089,11 @@ class _Router:
                     x, y = xa + ox, ya + oy
                     if 0 <= x < g.nx and 0 <= y < g.ny:
                         claims.add(la * g.plane + y * g.nx + x)
+                if wide >= 0.5:
+                    for ox, oy in _segment_offsets_cached(dx, dy, wide):
+                        x, y = xa + ox, ya + oy
+                        if 0 <= x < g.nx and 0 <= y < g.ny:
+                            body.setdefault(la * g.plane + y * g.nx + x, a)
             nodes.update(path)
             if len(path) == 1:
                 la, xa, ya = g.unpack(path[0])
@@ -1102,6 +1115,12 @@ class _Router:
                         nodes.add(node)
         for xy in via_xy:
             yv, xv = divmod(xy, g.nx)
+            if via_body >= 0.5:
+                for ox, oy in _disc_offsets_cached(via_body):
+                    x, y = xv + ox, yv + oy
+                    if 0 <= x < g.nx and 0 <= y < g.ny:
+                        for layer in range(g.nl):
+                            body[layer * g.plane + y * g.nx + x] = ("via", xy)
             for ox, oy in _disc_offsets_cached(via_radius):
                 x, y = xv + ox, yv + oy
                 if 0 <= x < g.nx and 0 <= y < g.ny:
@@ -1113,6 +1132,7 @@ class _Router:
                     via_claims.add(y * g.nx + x)
         route.nodes, route.via_xy = nodes, via_xy
         route.claims, route.via_claims = claims, via_claims
+        route.body = {node: owner for node, owner in body.items() if node not in nodes}
         route.length = length
 
     def _lead_penalty(self, lead: tuple[TrackSegment, ...], present: float) -> float:
@@ -1429,6 +1449,9 @@ class _Router:
             if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.nodes):
                 bad.add(name)
                 continue
+            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.body):
+                bad.add(name)
+                continue
             if any(via_occ[xy] - (1 if xy in route.via_claims else 0) > 0 for xy in route.via_xy):
                 bad.add(name)
         return bad
@@ -1445,6 +1468,12 @@ class _Router:
             for xy in route.via_xy:
                 if via_occ[xy] - (1 if xy in route.via_claims else 0) > 0:
                     via_hist[xy] += inc
+            for node, owner in route.body.items():
+                if occ[node] - (1 if node in route.claims else 0) > 0:
+                    if isinstance(owner, tuple):
+                        via_hist[owner[1]] += inc
+                    else:
+                        hist[owner] += inc
 
     def negotiate(self, deadline: float | None, only: set[str] | None = None):
         """PathFinder loop. Routes persist on the router between calls."""
