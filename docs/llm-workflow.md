@@ -5,6 +5,60 @@ or `recovery` when needed. Search the consuming project's declared dependencies,
 then retrieve selected contracts; see [library context](library-context.md).
 Guidance and discovery metadata do not qualify a design.
 
+## Source feedback
+
+```console
+copper check board.copper --json
+copper explain UNKNOWN_PIN
+copper query board.copper pins U1
+copper query board.copper unconnected
+```
+
+`check --json` returns located findings, hints and machine-applicable fixes; apply
+a `fix` only when its range still holds the original text. Declare deliberately
+open pins with `no_connect` so `UNMARKED_PIN` separates omissions from decisions.
+`query` verifies intent (pin-to-net, decoupling, open pins) from the compiled
+design instead of re-reading source. See [CLI workflow](cli-workflow.md).
+
+## Routing and placement iteration
+
+```console
+copper issues build/BOARD/runs/STAMP                  # grouped causes with ids and windows
+copper view build/BOARD/runs/STAMP --issue P1         # one picture per relevant copper layer
+copper view build/BOARD/runs/STAMP --issue N3 --filled
+copper view build/BOARD/runs/STAMP --issue P1 --reference REF.kicad_pcb --align U1:U1
+```
+
+`issues` reads the run's report and board. Pending package exits are grouped
+spatially (`P`); native gaps (unconnected items) per net and place, other native
+kinds (dangling copper, clearance) per type (`N`); repeated consequences collapse
+into one line with `caused_by` (for example every net blocked by
+package-access preflight, `<- P1..P17`). Layout reports list failed gates (`L`)
+and non-passing findings (`F`). `--cluster-mm` changes grouping and ids, so
+pass the same value to `view`. Lists are balanced across stages; use
+`--stage`, `--net`, `--code` or `--limit 0`. `--json` emits
+`copperscript.run-issues/v1`.
+
+`view` draws pads, tracks, vias and copper areas in a millimetre window, one
+panel per copper layer (`--layers auto` keeps layers with highlighted copper),
+rings issue positions and labels parts and pads in small windows. It prints a
+legend (pads, vias and tracks of the highlighted nets, marker positions) that
+often answers the question without opening the image. `--reference` overlays a
+second `.kicad_pcb` as magenta outlines, aligned on the pads of `--align
+OURS:THEIRS` with mirroring tried automatically; the legend reports matched
+pads, rotation and fit RMS. Targets may be a run directory, a report, a
+`.kicad_pcb` or a `copperscript.state/v1` file holding a `PhysicalBoard`.
+Native issues are drawn on the run's refilled board when present. When an
+issue's markers spread wider than 40 mm, the densest group is framed and the
+legend says so. Trapezoid and custom pads are drawn as their anchor rectangle.
+
+For scripts, `pcbir.workbench` provides `load_run`, `run_issues`, `view`,
+`scene_from_physical`, `save_state` and `load_state`. State files round-trip
+`pcbir` dataclasses, enums, tuples, mappings, Decimals and Fractions exactly
+(not plain classes or `init=False` fields), carry a content digest, and only
+construct dataclasses and enums defined in `pcbir` modules. Views, issue groups and state files are reading aids and working
+artifacts; they do not replace report gates, native verification or evidence.
+
 ## Report inspection
 
 ```console

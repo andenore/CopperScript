@@ -64,3 +64,29 @@ Wait for a later request. No fabrication or measurement campaign is initiated
 by this plan. Future acceptance should cover rail startup, transient loads,
 charging/temperature behavior, firmware interfaces and RF tuning/OTA behavior
 in the intended enclosure, bound to the actual built revision and components.
+
+## 7. Source ergonomics and feedback (proposed)
+
+Implemented: explicit `no_connect` with `UNMARKED_PIN`, located `check`
+diagnostics with hints and `--json` fixes, `copper explain` and `copper query`;
+for routing iterations `copper issues` (grouped, located failures), `copper view`
+(per-layer windows with reference overlays) and `pcbir.workbench` state files.
+Proposed next, each to be measured with item 1 before claiming savings:
+
+- Arrays, loops and pin groups (`component LED[1..12]`, `U1.VSS*`) and
+  placement patterns for repeated parts.
+- Board `defaults {}`, footprint aliases and inline two-terminal connections
+  (`between = (DEC1, GND)`).
+- Parameterized modules; typed SPI/UART/SWD/USB interfaces that generate nets;
+  solver-backed pin assignment from the existing mux model, written back to source.
+- Typed firmware obligations and pin-map export (devicetree overlay, C header).
+- Semantic `copper diff` at netlist/intent level; labelled per-layer renders for
+  vision models; relative placement as the default style in examples.
+- An MCP server over check/query/library/route/summarize; datasheet-to-part
+  drafting with per-fact locators; guide entries mined from evaluation failures.
+- Per-property source locations so `CMP018` can point at, and fix, the property.
+- Routing iterations: solver decision traces with `copper explain-route` (located
+  blockers instead of monkeypatched internals); a structured reference diff to
+  accompany the overlay (via counts/positions, layer use, support placement);
+  `copper verify-native` cached by board digest; `route-board --resume` with a
+  narrowed net scope.

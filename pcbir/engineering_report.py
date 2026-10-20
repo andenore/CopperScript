@@ -49,8 +49,12 @@ def summarize_report(report, *, issue_limit=8, report_path=None, report_digest=N
         or f.get("code") == "DRC-OPEN-NET" and f.get("nets") and set(f["nets"]) <= deferred
         for f in findings)
     if native is not None and not native.get("passed", False):
-        issue("native", "NATIVE-VERIFY", "filled-board", "; ".join(native.get("findings", [])) or
-              "Native verification has not passed.", "Inspect the retained native DRC report and mapped objects.")
+        # Native findings repeat one description per item; count them instead.
+        repeated = Counter(native.get("findings", []))
+        detail = "; ".join(f"{count} x {text}" if count > 1 else text for text, count in repeated.items())
+        issue("native", "NATIVE-VERIFY", "filled-board", detail or "Native verification has not passed.",
+              "Run `copper issues RUN --stage native` for grouped, located findings and "
+              "`copper view RUN --issue ID --filled` to see one.")
     for finding in findings:
         if finding.get("severity") == "error":
             if native_closed and report.get("routing_complete") is True and only_deferred and (
@@ -61,14 +65,18 @@ def summarize_report(report, *, issue_limit=8, report_path=None, report_digest=N
                 # Describe the already recorded native resolution accurately.
                 reconciled += 1
                 continue
-            issue("physical", finding.get("code", "DRC-UNKNOWN"), ",".join(finding.get("nets", [])),
-                finding.get("message", ""), "Inspect the indicated net/object in the full physical DRC report.",
+            nets = finding.get("nets") or []
+            issue("physical", finding.get("code", "DRC-UNKNOWN"), ",".join(nets),
+                finding.get("message", ""),
+                (f"Locate it with `copper issues RUN --net {nets[0]}`; see it with `copper view RUN --net {nets[0]}`."
+                 if nets else "List located physical issues with `copper issues RUN --stage physical`."),
                 measurements=[{"actual_nm": finding.get("measured_nm"), "limit_nm": finding.get("required_nm")}])
     access = report.get("package_access", {})
     if access.get("status") == "blocked":
         issue("access", "PACKAGE-ACCESS", ",".join(access.get("pending_pads", [])),
               access.get("placement_stop_reason") or "Package access remains incomplete.",
-              "Inspect access/placement constraints and rejected proposals; search exhaustion is not an impossibility proof.")
+              "See the pending pads with `copper issues RUN --stage access` and `copper view RUN --issue P1` "
+              "(add --reference/--align for the manufacturer layout); search exhaustion is not an impossibility proof.")
     for row in report.get("fanout", {}).get("decoupling_pending", []):
         issue("decoupling", "SURFACE-BYPASS", row.get("capacitor"), row.get("reason", ""),
               "Inspect the actual protected land, capacitor pose and blocking copper.")
@@ -149,6 +157,8 @@ def summary_lines(summary):
         lines.append(f"    Next: {row['next_step']}")
     if summary["omitted_issue_count"]:
         lines.append(f"  {summary['omitted_issue_count']} additional issues in the full report")
+    if summary["issues"]:
+        lines.append("Grouped and located: copper issues RUN; picture: copper view RUN --issue ID")
     return lines
 
 

@@ -56,7 +56,7 @@ def test_unknown_topic_is_a_clear_cli_error(capsys):
 
 def test_topic_navigation_is_available_in_text_and_json():
     guide = get_guide()
-    assert set(guide["topics"]) == {"start", "syntax", "libraries", "verification", "recovery"}
+    assert set(guide["topics"]) == {"start", "syntax", "libraries", "verification", "iteration", "recovery"}
     for topic in guide["topics"]:
         assert topic in render_guide(guide)
     assert get_guide("libraries")["content_digest"] != guide["content_digest"]

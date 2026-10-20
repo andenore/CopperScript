@@ -16,6 +16,7 @@ from .model import (
     Interface,
     ModuleDefinition,
     Net,
+    NoConnect,
     PartDefinition,
     PeripheralSelection,
     PinType,
@@ -46,6 +47,7 @@ def elaborate(board: Board) -> FlatElectricalView:
         power_states=board.power_states,
         physical_macros=board.physical_macros,
         net_aliases={n.name: n.name for n in board.nets},
+        no_connects=board.no_connects,
     )
     cache: dict[str, _Template] = {}
     for instance in board.module_instances:
@@ -77,6 +79,7 @@ def _template_for(
         peripheral_selections=definition.peripheral_selections,
         physical_macros=definition.physical_macros,
         net_aliases={n.name: n.name for n in definition.nets},
+        no_connects=definition.no_connects,
     )
     for instance in definition.module_instances:
         child = _template_for(instance.module, definitions, cache, (*stack, name))
@@ -263,6 +266,9 @@ def _expand_one(
         net_aliases={**parent.net_aliases, **{
             _qualify(instance_ref, alias): child_net_map.get(net, _qualify(instance_ref, net))
             for alias, net in template.body.net_aliases.items()}},
+        no_connects=(*parent.no_connects, *(
+            NoConnect(_qualify_endpoint(instance_ref, item.endpoint), item.reason)
+            for item in template.body.no_connects)),
     )
 
 

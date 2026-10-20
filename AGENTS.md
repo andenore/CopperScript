@@ -17,6 +17,12 @@ Accepted architectural rationale is opt-in; follow current task references.
 - Generic algorithms belong in CopperScript; reusable parts/circuits belong in
   independently versioned library repositories; board composition and evidence
   belong in consumers. For this LLM improvement work, do not expand CopperLib.
+- Iterate on routing/placement failures with `copper agent-guide iteration`:
+  `copper issues RUN` (grouped, located causes), then `copper view RUN --issue ID`
+  (add `--reference REF.kicad_pcb --align OURS:THEIRS` for package exits). Do not
+  write one-off render, inspect or state-codec scripts; if a script is unavoidable,
+  build it on `pcbir.workbench`. Add needed solver diagnostics to CopperScript
+  rather than monkeypatching private functions.
 - Use the standard bounded `route-board` pipeline. Preserve fixed/rigid intent,
   immutable macros, required via-array multiplicity and verified package exits
   while a net is partial. Mutable dependency trials need exact ownership,

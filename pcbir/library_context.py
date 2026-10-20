@@ -30,7 +30,7 @@ SECTIONS = ("overview", "interfaces", "requirements", "composition", "properties
 _INTERFACES = {"PinDecl", "PadDecl", "PortDecl", "PeripheralDecl", "InterfaceDecl", "MacroPadDecl",
                "UnitDecl", "PowerDomainDecl", "SignalGroupDecl", "ModeGroupDecl", "PadSetDecl"}
 _REQUIREMENTS = {"ConstraintDecl", "RouteRuleDecl", "SupplyDecl", "PowerStateDecl", "PhysicalMacroDecl", "MacroItemDecl"}
-_COMPOSITION = {"ComponentDecl", "ModuleInstanceDecl", "NetDecl", "ConfigurationDecl",
+_COMPOSITION = {"ComponentDecl", "ModuleInstanceDecl", "NetDecl", "NoConnectDecl", "ConfigurationDecl",
                 "MuxDecl", "MechanicalProfileUseDecl", "MechanicalItemDecl", "MechanicalDecl"}
 _CORE_PROPERTIES = {"category", "manufacturer", "assembled", "mpn", "description", "device",
                     "footprint", "footprints", "value", "source_document", "source_revision",
@@ -51,7 +51,9 @@ def _value(value: object) -> object:
     if isinstance(value, SourceLocation):
         return {"line": value.line, "column": value.column}
     if is_dataclass(value):
-        return {f.name: _value(getattr(value, f.name)) for f in fields(value) if f.name != "location"}
+        # Source positions are editor data, not library content.
+        return {f.name: _value(getattr(value, f.name)) for f in fields(value)
+                if f.name not in {"location", "endpoint_locations"}}
     if isinstance(value, dict):
         return {k: _value(v) for k, v in value.items()}
     if isinstance(value, (tuple, list)):

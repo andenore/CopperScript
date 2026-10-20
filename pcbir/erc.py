@@ -36,6 +36,7 @@ from .model import (
     SignalDomain,
 )
 from .quantities import Voltage
+from .syntax import SourceLocation
 
 
 class Severity(str, Enum):
@@ -49,10 +50,20 @@ class Diagnostic:
     code: str
     message: str
     subject: str | None = None
+    # Optional guidance. ``replacement`` is machine-applicable: it replaces the
+    # source text of ``subject`` (e.g. a misspelled endpoint) when located.
+    hint: str | None = None
+    replacement: str | None = None
+    # Attached by source-aware front ends; ERC itself never parses source.
+    location: SourceLocation | None = None
+    # Declaration the subject came from ("net NAME" or "no_connect"), for locating it.
+    origin: str | None = None
 
     def __str__(self) -> str:
-        location = f" [{self.subject}]" if self.subject else ""
-        return f"{self.severity.value.upper()} {self.code}{location}: {self.message}"
+        # Hints are not part of the stable text form; front ends print them separately.
+        subject = f" [{self.subject}]" if self.subject else ""
+        where = f"{self.location}: " if self.location else ""
+        return f"{where}{self.severity.value.upper()} {self.code}{subject}: {self.message}"
 
 
 @dataclass(slots=True)
@@ -164,19 +175,16 @@ class _Context:
         return next(iter(voltages.values())), ""
 
 
-def check(board: Board | FlatElectricalView) -> list[Diagnostic]:
-    """Run ERC on a derived flat view while preserving hierarchical input."""
+def check(board: Board | FlatElectricalView, *, unmarked_pins: bool = False) -> list[Diagnostic]:
+    """Run ERC on a derived flat view while preserving hierarchical input.
+
+    ``unmarked_pins`` adds one UNMARKED_PIN warning per component whose
+    ordinary pins are neither on a net nor declared ``no_connect``.
+    """
 
     diagnostics: list[Diagnostic] = []
-    if isinstance(board, Board):
-        board = elaborate(board)
-    components = _first_by(board.components, lambda item: item.ref)
-    nets = _first_by(board.nets, lambda item: item.name)
-    supplies = _first_by(board.supplies, lambda item: item.name)
-    context = _Context(board, components, nets, supplies, defaultdict(list))
-    for net in board.nets:
-        for endpoint in net.endpoints:
-            context.pin_to_nets[context.canonical_endpoint(endpoint) or endpoint].append(net.name)
+    context = build_context(board)
+    board = context.board
 
     diagnostics.extend(_check_duplicates(board))
     diagnostics.extend(_check_pin_membership(context))
@@ -189,7 +197,175 @@ def check(board: Board | FlatElectricalView) -> list[Diagnostic]:
     diagnostics.extend(_check_peripheral_selections(context))
     diagnostics.extend(_check_package_rules(context))
     diagnostics.extend(_check_modes_and_groups(context))
+    diagnostics.extend(_check_no_connects(context))
+    if unmarked_pins:
+        diagnostics.extend(_check_unmarked_pins(context))
     return diagnostics
+
+
+def _suggest(word: str, candidates: Iterable[str]) -> str | None:
+    from difflib import get_close_matches
+    matches = get_close_matches(word, sorted(set(candidates)), n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def _pin_candidates(context: "_Context", component: ComponentInstance, part: PartDefinition) -> list[str]:
+    names = list(part.pins)
+    device = context.board.devices.get(part.device or "")
+    if device is not None:
+        names.extend(f"{unit_name}.{terminal}" for unit_name, unit in device.units.items()
+                     for terminal in unit.terminals)
+    return names
+
+
+def _source_names(context: "_Context") -> set[str]:
+    """References a source endpoint can name: local components and module instances."""
+    names = {ref for ref in context.components if "/" not in ref}
+    names.update(item.path for item in getattr(context.board, "module_instances", ())
+                 if "/" not in getattr(item, "path", "/"))
+    return names
+
+
+def _unknown_component(context: "_Context", endpoint: Endpoint, owner: str, origin: str) -> Diagnostic:
+    # Hierarchical INST/REF names are not valid source endpoints, so never suggest them.
+    match = None if "/" in endpoint.component else _suggest(endpoint.component, _source_names(context))
+    return Diagnostic(
+        Severity.ERROR, "UNKNOWN_COMPONENT",
+        f"{owner} references unknown component {endpoint.component!r}", str(endpoint),
+        hint=f"did you mean {match!r}?" if match else None,
+        replacement=f"{match}.{endpoint.pin}" if match else None,
+        origin=origin,
+    )
+
+
+def _unknown_pin(context: "_Context", endpoint: Endpoint, component: ComponentInstance,
+                 part: PartDefinition, origin: str, *, prefix: str = "") -> Diagnostic:
+    match = _suggest(endpoint.pin, _pin_candidates(context, component, part))
+    return Diagnostic(
+        Severity.ERROR, "UNKNOWN_PIN", f"{prefix}part {part.name} has no pin {endpoint.pin!r}", str(endpoint),
+        hint=f"did you mean {match!r}?" if match else "run `copper query BOARD pins "
+             f"{component.ref}` to list its pins",
+        replacement=f"{endpoint.component}.{match}" if match and "/" not in endpoint.component else None,
+        origin=origin,
+    )
+
+
+def _check_no_connects(context: _Context) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    seen: set[Endpoint] = set()
+    for item in context.board.no_connects:
+        endpoint = item.endpoint
+        component = context.components.get(endpoint.component)
+        if component is None and endpoint.component in _source_names(context):
+            diagnostics.append(Diagnostic(
+                Severity.ERROR, "NO_CONNECT_MODULE_PORT",
+                f"{endpoint.component} is a module instance; no_connect applies to component pins",
+                str(endpoint), hint="every module port must be connected by the parent; declare "
+                "no_connect inside the module for its own spare pins", origin="no_connect"))
+            continue
+        if component is None:
+            diagnostics.append(_unknown_component(context, endpoint, "no_connect", "no_connect"))
+            continue
+        part = context.board.library.get(component.part)
+        if part is None:
+            continue  # UNKNOWN_PART is reported for the component itself.
+        resolved = context.resolve_pin(endpoint)
+        if resolved is None:
+            diagnostics.append(_unknown_pin(context, endpoint, component, part, "no_connect",
+                                            prefix="no_connect: "))
+            continue
+        canonical = Endpoint(endpoint.component, resolved[2].name)
+        if canonical in seen:
+            diagnostics.append(Diagnostic(
+                Severity.WARNING, "DUPLICATE_NO_CONNECT", "pin is marked no_connect more than once",
+                str(endpoint), origin="no_connect"))
+            continue
+        seen.add(canonical)
+        nets = context.pin_to_nets.get(canonical, [])
+        if nets:
+            diagnostics.append(Diagnostic(
+                Severity.ERROR, "NO_CONNECT_CONNECTED",
+                f"pin is marked no_connect but is connected to net {', '.join(nets)}", str(endpoint),
+                hint="remove the pin from the net, or delete the no_connect if the connection is intended",
+                origin="no_connect"))
+        if resolved[2].connection_policy is ConnectionPolicy.REQUIRED:
+            diagnostics.append(Diagnostic(
+                Severity.ERROR, "NO_CONNECT_REQUIRED_PIN",
+                f"part {part.name} requires pin {resolved[2].name} to be connected", str(endpoint),
+                origin="no_connect"))
+    return diagnostics
+
+
+def no_connect_endpoints(context: "_Context") -> dict[Endpoint, str | None]:
+    """Canonical explicitly-open pins mapped to their reasons (first declaration wins)."""
+
+    result: dict[Endpoint, str | None] = {}
+    for item in context.board.no_connects:
+        canonical = context.canonical_endpoint(item.endpoint) or item.endpoint
+        result.setdefault(canonical, item.reason)
+    return result
+
+
+def unmarked_pins(context: _Context) -> dict[str, list[str]]:
+    """Ordinary modeled pins, per component, that are neither connected nor declared open.
+
+    Power inputs (UNSOURCED_POWER_INPUT), required pins (REQUIRED_PIN_UNCONNECTED),
+    do-not-connect and optional pins, and pins without an electrical profile are
+    excluded because they are already decided or reported elsewhere. Components
+    inside module instances (``INST/REF``) are excluded: only the module's own
+    source can declare their no_connects.
+    """
+
+    marked = {context.canonical_endpoint(item.endpoint) or item.endpoint
+              for item in context.board.no_connects}
+    result: dict[str, list[str]] = {}
+    for component in context.components.values():  # first declaration per ref
+        if "/" in component.ref:
+            continue  # module-owned spare pins are the module author's decision
+        part = context.board.library.get(component.part)
+        if part is None:
+            continue
+        open_pins = []
+        for pin in part.pins.values():
+            endpoint = Endpoint(component.ref, pin.name)
+            if pin.connection_policy is not ConnectionPolicy.NORMAL:
+                continue
+            if context.pin_to_nets.get(endpoint) or endpoint in marked:
+                continue
+            profile = context.pin_profile(component, part, pin)
+            if profile is None or _is_power_input(profile):
+                continue
+            open_pins.append(pin.name)
+        if open_pins:
+            result[component.ref] = open_pins
+    return result
+
+
+def _check_unmarked_pins(context: _Context) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    for ref, pins in unmarked_pins(context).items():
+        shown = ", ".join(pins[:12]) + (f", +{len(pins) - 12} more" if len(pins) > 12 else "")
+        noun = "pin is" if len(pins) == 1 else f"{len(pins)} pins are"
+        example = ", ".join(f"{ref}.{name}" for name in pins[:3])
+        diagnostics.append(Diagnostic(
+            Severity.WARNING, "UNMARKED_PIN",
+            f"{noun} neither on a net nor marked no_connect: {shown}", ref,
+            hint=f"connect {'it' if len(pins) == 1 else 'them'}, or declare intent with `no_connect {example} {{ reason = \"...\"; }}`"))
+    return diagnostics
+
+
+def build_context(board: Board | FlatElectricalView) -> _Context:
+    """Shared pin/net index used by ERC and design queries."""
+
+    if isinstance(board, Board):
+        board = elaborate(board)
+    context = _Context(board, _first_by(board.components, lambda item: item.ref),
+                       _first_by(board.nets, lambda item: item.name),
+                       _first_by(board.supplies, lambda item: item.name), defaultdict(list))
+    for net in board.nets:
+        for endpoint in net.endpoints:
+            context.pin_to_nets[context.canonical_endpoint(endpoint) or endpoint].append(net.name)
+    return context
 
 
 def has_errors(diagnostics: Iterable[Diagnostic]) -> bool:
@@ -235,12 +411,15 @@ def _check_references(context: _Context) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     for component in context.board.components:
         if component.part not in context.board.library:
+            match = _suggest(component.part, context.board.library)
             diagnostics.append(
                 Diagnostic(
                     Severity.ERROR,
                     "UNKNOWN_PART",
                     f"component {component.ref} uses unknown part {component.part!r}",
                     component.ref,
+                    hint=f"did you mean {match!r}?" if match else
+                    "search declared libraries with `copper library search QUERY --project .`",
                 )
             )
             continue
@@ -273,26 +452,12 @@ def _check_references(context: _Context) -> list[Diagnostic]:
         for endpoint in net.endpoints:
             component = context.components.get(endpoint.component)
             if component is None:
-                diagnostics.append(
-                    Diagnostic(
-                        Severity.ERROR,
-                        "UNKNOWN_COMPONENT",
-                        f"net {net.name} references unknown component {endpoint.component!r}",
-                        str(endpoint),
-                    )
-                )
+                diagnostics.append(_unknown_component(context, endpoint, f"net {net.name}", f"net {net.name}"))
                 continue
             part = context.board.library.get(component.part)
             resolved = context.resolve_pin(endpoint) if part is not None else None
             if part is not None and resolved is None:
-                diagnostics.append(
-                    Diagnostic(
-                        Severity.ERROR,
-                        "UNKNOWN_PIN",
-                        f"part {part.name} has no pin {endpoint.pin!r}",
-                        str(endpoint),
-                    )
-                )
+                diagnostics.append(_unknown_pin(context, endpoint, component, part, f"net {net.name}"))
             elif resolved is not None and context.pin_profile(*resolved) is None:
                 diagnostics.append(
                     Diagnostic(
@@ -305,12 +470,15 @@ def _check_references(context: _Context) -> list[Diagnostic]:
 
     for supply in context.board.supplies:
         if supply.net not in context.nets:
+            match = _suggest(supply.net, context.nets)
             diagnostics.append(
                 Diagnostic(
                     Severity.ERROR,
                     "UNKNOWN_NET",
                     f"supply {supply.name} references unknown net {supply.net!r}",
                     supply.name,
+                    hint=f"did you mean {match!r}?" if match else
+                    "a supply needs a net with the same name or an explicit net = NAME",
                 )
             )
         if supply.source is not None:

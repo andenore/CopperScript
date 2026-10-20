@@ -60,6 +60,246 @@ def _print_error(args: argparse.Namespace, label: str, exc: BaseException) -> No
     print(f"{label}: {exc}")
 
 
+def _run_check(args: argparse.Namespace) -> int:
+    """ERC with source locations, did-you-mean hints and optional JSON fixes."""
+    from dataclasses import replace as _replace
+    from .diagnostics import (check_document, compile_error_document, diagnostic_document,
+                              locate, severity_counts)
+    from .erc import Severity
+    from .syntax import CopperScriptError
+    display = str(args.board)
+    try:
+        design = load_design(args.board, locked=args.locked, offline=args.offline)
+    except BoardLoadError as exc:
+        cause = exc.__cause__
+        if args.json:
+            try:
+                source = args.board.read_text(encoding="utf-8")
+            except OSError:
+                source = None
+            documents = ([compile_error_document(cause, root=str(args.board.resolve()), source=source,
+                                                 display=display)]
+                         if isinstance(cause, CopperScriptError) else
+                         [{"severity": "error", "code": "LOAD", "message": str(exc), "subject": None,
+                           "hint": None, "location": None, "fix": None}])
+            print(json.dumps(check_document(None, display, documents), sort_keys=True, separators=(",", ":")))
+            return 2
+        _print_error(args, "COMPILE ERROR", exc)
+        return 2
+    board = design.electrical
+    diagnostics = check(board, unmarked_pins=args.pins != "off")
+    if args.pins == "error":
+        diagnostics = [_replace(d, severity=Severity.ERROR) if d.code == "UNMARKED_PIN" else d
+                       for d in diagnostics]
+    try:
+        source = args.board.read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    located = locate(diagnostics, source, display)
+    errors, warnings = severity_counts(diagnostics)
+    if args.json:
+        print(json.dumps(check_document(board.name, display, [diagnostic_document(d, span) for d, span in located]),
+                         sort_keys=True, separators=(",", ":")))
+        return 1 if errors else 0
+    for diagnostic, _span in located:
+        print(f"{diagnostic} ({diagnostic.hint})" if diagnostic.hint else diagnostic)
+    if not errors:
+        suffix = f" with {warnings} warning{'s' if warnings != 1 else ''}" if warnings else ""
+        print(f"OK: {board.name} passed ERC{suffix}")
+    else:
+        print(f"FAILED: {errors} error{'s' if errors != 1 else ''}, {warnings} warning{'s' if warnings != 1 else ''}"
+              " (details: copper explain CODE; fixes: copper check --json)")
+    from .elaborate import elaborate
+    if elaborate(board).physical_macros:
+        print("Physical macro asset and geometry checks remain pending; run lock and the physical build workflow.")
+    return 1 if errors else 0
+
+
+def _run_explain(args: argparse.Namespace) -> int:
+    from .diagnostics import EXPLANATIONS, explain, suggest_code
+    if args.list or not args.code:
+        codes = sorted(EXPLANATIONS)
+        if args.json:
+            print(json.dumps({"codes": codes, "families": ["CMP", "LEX", "MAC", "MEC", "PAR", "SLK"]}))
+        else:
+            print("\n".join(codes))
+            print("Compiler families: PARnnn, LEXnnn, CMPnnn, MECnnn, SLKnnn, MACnnn")
+        return 0
+    entry = explain(args.code)
+    if entry is None:
+        match = suggest_code(args.code)
+        print(f"Unknown diagnostic code {args.code!r}" + (f"; did you mean {match}?" if match else "")
+              + " (copper explain --list)")
+        return 2
+    if args.json:
+        print(json.dumps(entry, sort_keys=True))
+    else:
+        print(f"{entry['code']}: {entry['summary']}\nFix: {entry['fix']}")
+    return 0
+
+
+def _run_query(args: argparse.Namespace) -> int:
+    from .design_query import QueryError, render_query, run_query
+    try:
+        design = load_design(args.board, locked=args.locked, offline=args.offline)
+    except BoardLoadError as exc:
+        _print_error(args, "COMPILE ERROR", exc)
+        return 2
+    try:
+        result = run_query(design.electrical, args.kind, args.name)
+    except QueryError as exc:
+        print(f"QUERY ERROR: {exc}")
+        return 2
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")) if args.json else render_query(result))
+    return 0
+
+
+def _run_issues(args: argparse.Namespace) -> int:
+    from .run_issues import filter_issues, issues_document, load_run, render_issues, run_issues
+    try:
+        run = load_run(args.target)
+        issues = filter_issues(run_issues(run, cluster_mm=args.cluster_mm), net=args.net, stage=args.stage,
+                               code=args.code)
+        document = issues_document(run, issues, limit=args.limit or None)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"ISSUES ERROR: {exc}")
+        return 2
+    print(json.dumps(document, sort_keys=True, separators=(",", ":")) if args.json else render_issues(document))
+    return 0
+
+
+def _run_view(args: argparse.Namespace) -> int:
+    from .run_issues import find_issue, load_run, run_issues
+    from .scene import scene_from_kicad_pcb
+    from .view import ViewRequest, align_reference, layers_in_window, render, window_around
+    from .workbench import scene_of
+    try:
+        target = args.target
+        run = load_run(target) if (target.is_dir() or target.suffix == ".json") and not _is_state(target) else None
+        if args.margin < 0:
+            raise ValueError("--margin must be zero or positive")
+        notes: list[str] = []
+        if args.filled and (run is None or run.filled_board_path is None):
+            notes.append("note: no refilled native board in this run; zones are drawn as outlines")
+        scene = (run.scene(filled=args.filled) if run is not None else scene_of(target))
+        nets: list[str] = list(args.net or [])
+        markers: list[tuple[float, float]] = []
+        issue_layers: tuple[str, ...] = ()
+        title = ""
+        if args.issue:
+            if run is None:
+                raise ValueError("--issue needs a run directory or report")
+            issue = find_issue(run_issues(run, cluster_mm=args.cluster_mm), args.issue)
+            if issue.stage == "native" and run.filled_board_path is not None and not args.filled:
+                scene = run.scene(filled=True)  # native findings describe the refilled board
+                notes.append("note: native finding drawn on the run's refilled board")
+            markers = list(issue.points)
+            if not markers:
+                if len(issue.nets) > 8:
+                    raise ValueError(f"issue {issue.id} has no position and {len(issue.nets)} nets; "
+                                     f"view one with --net, e.g. --net {issue.nets[0]}")
+                markers = [p.center for p in scene.pads if p.net in set(issue.nets)]
+            if not markers:
+                raise ValueError(f"issue {issue.id} has no position; try --net with one of its nets")
+            focus, spread_note = _focus(markers)
+            if spread_note:
+                notes.append(spread_note)
+            window = window_around(focus, args.margin)
+            present = _nets_in_window(scene, window)
+            nets = [n for n in issue.nets if n in present][:8] or issue.nets[:8]
+            issue_layers = tuple(layer for layer in issue.layers if layer in scene.copper_layers)
+            title = f"{issue.id} {issue.code}: {issue.title}"
+            notes.insert(0, f"issue {issue.id}: {issue.title}")
+            label = issue.id
+        elif args.window:
+            values = [float(v) for v in args.window.split(",")]
+            if len(values) != 4 or values[2] <= values[0] or values[3] <= values[1]:
+                raise ValueError("--window needs x0,y0,x1,y1 with x1 > x0 and y1 > y0")
+            window, label = tuple(values), "window"
+        elif args.pad:
+            ref, _, number = args.pad.rpartition(".")
+            pads = scene.pad(ref, number)
+            if not pads:
+                raise ValueError(f"no pad {args.pad} in {scene.source}")
+            window, label = window_around([q for p in pads for q in p.polygon], args.margin), args.pad
+            nets = nets or [p.net for p in pads if p.net]
+        elif args.component:
+            pads = [p for p in scene.pads if p.ref == args.component]
+            if not pads:
+                raise ValueError(f"no component {args.component} in {scene.source}")
+            window, label = window_around([q for p in pads for q in p.polygon], args.margin), args.component
+        else:
+            points = [p.center for p in scene.pads if p.net in set(nets)]
+            points += [t.start for t in scene.tracks if t.net in set(nets)]
+            if not points:
+                raise ValueError(f"no copper on net(s) {', '.join(nets)}")
+            window, label = window_around(points, args.margin), "_".join(nets)
+        nets = list(dict.fromkeys([*nets, *args.highlight]))
+        if args.layers == "auto":
+            auto = set(layers_in_window(scene, window, nets)) | set(issue_layers)
+            layers = tuple(layer for layer in scene.copper_layers if layer in auto)
+        elif args.layers == "all":
+            layers = scene.copper_layers
+        else:
+            layers = tuple(item.strip() for item in args.layers.split(",") if item.strip())
+            if not layers:
+                raise ValueError("--layers needs auto, all or at least one copper layer")
+            unknown = [layer for layer in layers if layer not in scene.copper_layers]
+            if unknown:
+                raise ValueError(f"unknown layer(s) {', '.join(unknown)}; board has {', '.join(scene.copper_layers)}")
+        overlay = alignment = None
+        if args.reference:
+            if not args.align:
+                raise ValueError("--reference needs --align REF[:REF_IN_REFERENCE]")
+            ours, _, theirs = args.align.partition(":")
+            overlay, alignment = align_reference(scene_from_kicad_pcb(args.reference), theirs or ours, scene, ours)
+        output = args.output or Path("build") / "views" / (_safe_label(label) + ".png")
+        request = ViewRequest(tuple(window), tuple(layers), tuple(nets), markers, title or label)
+        path, lines = render(scene, request, output, reference=overlay, alignment=alignment)
+        lines = notes[:1] + lines + notes[1:] if args.issue else lines + notes
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"VIEW ERROR: {exc}")
+        return 2
+    if args.json:
+        print(json.dumps({"image": str(path), "legend": lines}, separators=(",", ":")))
+    else:
+        print(f"image: {path}")
+        print("\n".join(lines))
+    return 0
+
+
+def _focus(points, limit_mm: float = 40.0, cluster_mm: float = 5.0):
+    """Frame the densest group when markers spread wider than a readable window."""
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    if max(xs) - min(xs) <= limit_mm and max(ys) - min(ys) <= limit_mm:
+        return points, None
+    from .run_issues import _clusters
+    groups = _clusters(list(points), lambda p: [p], cluster_mm)
+    best = groups[0]
+    return best, (f"note: markers span {max(xs) - min(xs):.0f} x {max(ys) - min(ys):.0f} mm; showing the "
+                  f"densest of {len(groups)} groups ({len(best)} of {len(points)} markers); "
+                  "use --window to look elsewhere")
+
+
+def _nets_in_window(scene, window) -> set[str]:
+    from .view import _inside, _segment_hits
+    found = {p.net for p in scene.pads if _inside(p.center, window)}
+    found |= {v.net for v in scene.vias if _inside(v.center, window)}
+    found |= {t.net for t in scene.tracks if _segment_hits(t.start, t.end, window)}
+    return found
+
+
+def _is_state(path: Path) -> bool:
+    from .state_codec import is_state_file
+    return path.is_file() and is_state_file(path)
+
+
+def _safe_label(label: str) -> str:
+    import re
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", label)[:80] or "view"
+
+
 def _positive_mm(value: str) -> str:
     try:
         if nm_from_mm(value) <= 0:
@@ -218,6 +458,55 @@ def _parser() -> argparse.ArgumentParser:
     check_parser = subparsers.add_parser("check", help="run electrical-rules checks")
     check_parser.add_argument("board", type=Path, help="a .copper source file")
     _add_resolution_options(check_parser)
+    check_parser.add_argument("--json", action="store_true",
+                              help="emit located diagnostics with hints and machine-applicable fixes")
+    check_parser.add_argument("--pins", choices=("warn", "error", "off"), default="warn",
+                              help="pins neither on a net nor declared no_connect (default: warn)")
+    explain_parser = subparsers.add_parser("explain", help="explain a diagnostic code and its usual fix")
+    explain_parser.add_argument("code", nargs="?", help="for example UNKNOWN_PIN, UNMARKED_PIN or PAR002")
+    explain_parser.add_argument("--list", action="store_true", help="list explained diagnostic codes")
+    explain_parser.add_argument("--json", action="store_true")
+    issues_parser = subparsers.add_parser(
+        "issues", help="list a run's failures grouped by cause, each with an id, nets, layers and window")
+    issues_parser.add_argument("target", type=Path, help="run directory or route/layout report")
+    issues_parser.add_argument("--net", help="only issues touching this net")
+    issues_parser.add_argument("--stage", choices=("access", "critical", "native", "physical", "routing"))
+    issues_parser.add_argument("--code", help="only this issue code, e.g. UNCONNECTED_ITEMS")
+    issues_parser.add_argument("--limit", type=int, default=15, help="maximum issues listed (0 = all)")
+    issues_parser.add_argument("--cluster-mm", type=float, default=3.0, help="spatial grouping distance")
+    issues_parser.add_argument("--json", action="store_true")
+    view_parser = subparsers.add_parser(
+        "view", help="render a board window per copper layer: an issue, net, pad, component or explicit window")
+    view_parser.add_argument("target", type=Path,
+                             help="run directory, route/layout report, .kicad_pcb, or copperscript.state file")
+    pick = view_parser.add_mutually_exclusive_group(required=True)
+    pick.add_argument("--issue", help="issue id from `copper issues`, e.g. P1 or N3")
+    pick.add_argument("--net", action="append", help="net to highlight and frame (repeatable)")
+    pick.add_argument("--pad", help="REF.PAD to frame")
+    pick.add_argument("--component", help="component reference to frame")
+    pick.add_argument("--window", help="x0,y0,x1,y1 in mm (KiCad coordinates, y down)")
+    view_parser.add_argument("--highlight", action="append", default=[], help="extra net to colour (repeatable)")
+    view_parser.add_argument("--layers", default="auto", help="auto, all, or comma-separated copper layers")
+    view_parser.add_argument("--margin", type=float, default=1.5, help="mm added around the framed objects (>= 0)")
+    view_parser.add_argument("--cluster-mm", type=float, default=3.0,
+                             help="must match the value given to `copper issues` so issue ids agree")
+    view_parser.add_argument("--filled", action="store_true",
+                             help="draw the run's native refilled board (real zone fills) when present")
+    view_parser.add_argument("--reference", type=Path, help="reference .kicad_pcb to overlay as outlines")
+    view_parser.add_argument("--align", help="REF[:REF_IN_REFERENCE] whose pads align the reference")
+    view_parser.add_argument("-o", "--output", type=Path, help="PNG path (default: build/views/LABEL.png)")
+    view_parser.add_argument("--json", action="store_true", help="print the legend as JSON")
+    state_parser = subparsers.add_parser("state", help="inspect copperscript.state files written by pcbir.workbench")
+    state_parser.add_argument("action", choices=("show",))
+    state_parser.add_argument("file", type=Path)
+    from .design_query import QUERY_KINDS
+    query_parser = subparsers.add_parser(
+        "query", help="answer compact questions about the compiled design (pins, nets, components, open pins)")
+    query_parser.add_argument("board", type=Path, help="a .copper source file")
+    query_parser.add_argument("kind", choices=QUERY_KINDS, help="what to list or inspect")
+    query_parser.add_argument("name", nargs="?", help="component reference or net name (hierarchical: INST/REF)")
+    query_parser.add_argument("--json", action="store_true", help="deterministic machine-readable output")
+    _add_resolution_options(query_parser)
 
     si_parser = subparsers.add_parser(
         "si-check",
@@ -764,6 +1053,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .agent_guide import get_guide, render_guide
         print(render_guide(get_guide(args.topic), as_json=args.json))
         return 0
+    if args.command == "check":
+        return _run_check(args)
+    if args.command == "explain":
+        return _run_explain(args)
+    if args.command == "query":
+        return _run_query(args)
+    if args.command == "issues":
+        return _run_issues(args)
+    if args.command == "view":
+        return _run_view(args)
+    if args.command == "state":
+        from .state_codec import StateError, describe_state
+        try:
+            print(json.dumps(describe_state(args.file), sort_keys=True))
+        except (StateError, OSError, ValueError) as exc:
+            print(f"STATE ERROR: {exc}")
+            return 2
+        return 0
     if args.command == "library":
         from .library_context import diagnostics, index_library, inspect, project_catalog, render_page, search, write_index
         from .packages import find_manifest, read_manifest
@@ -1005,7 +1312,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     if args.command in {
-        "check",
         "lock",
         "power-check",
         "compile",
@@ -1080,16 +1386,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         diagnostics = (
             analyze_power_states(board) if args.command == "power-check" else check(board)
         )
-        if args.command == "check":
-            if diagnostics:
-                for diagnostic in diagnostics:
-                    print(diagnostic)
-            else:
-                print(f"OK: {board.name} passed ERC")
-            from .elaborate import elaborate
-            if elaborate(board).physical_macros:
-                print("Physical macro asset and geometry checks remain pending; run lock and the physical build workflow.")
-            return 1 if has_errors(diagnostics) else 0
         if args.command == "power-check":
             if diagnostics:
                 for diagnostic in diagnostics:
