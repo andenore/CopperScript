@@ -376,6 +376,7 @@ class _NetSpec:
     neck_mid: frozenset[int] = frozenset()   # region cell centres legal only at neck width
     target_only: tuple[int, ...] = ()        # layers entered only on target nodes (plane layers)
     optional: int = 0                        # trailing components that may stay unjoined
+    via_budget: int | None = None            # new vias allowed (max_vias minus existing ones)
     islands: int = 0                         # trailing components that are plane pieces
 
 
@@ -631,6 +632,8 @@ class _Router:
         spec.target_only = target_only
         if rule is not None and rule.max_vias:
             spec.via_factor = 4.0
+            existing = sum(1 for via in board.vias if via.net == net.name)
+            spec.via_budget = max(0, rule.max_vias - existing)
         # Breakout rules let a net narrow next to its own lands (see breakout.py).
         if rule is not None and rule.breakout_length_nm and rule.breakout_width_nm \
                 and rule.breakout_width_nm < width:
@@ -1092,6 +1095,23 @@ class _Router:
         return route
 
     def _route_net(self, spec: _NetSpec, present: float) -> _NetRoute:
+        route = self._route_net_once(spec, present)
+        if spec.via_budget is not None and len(route.via_xy) > spec.via_budget:
+            # Over the net's via budget: search again with vias priced far
+            # higher; a budget overrun stays a failure, not a DRC error.
+            factor = spec.via_factor
+            spec.via_factor = factor * 10
+            try:
+                retry = self._route_net_once(spec, present)
+            finally:
+                spec.via_factor = factor
+            route = retry if len(retry.via_xy) <= len(route.via_xy) else route
+            if len(route.via_xy) > spec.via_budget:
+                route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0,
+                                  f"needs {len(route.via_xy)} new vias, max_vias leaves {spec.via_budget}")
+        return route
+
+    def _route_net_once(self, spec: _NetSpec, present: float) -> _NetRoute:
         if spec.plane:
             return self._route_plane_net(spec, present)
         g = self.grid

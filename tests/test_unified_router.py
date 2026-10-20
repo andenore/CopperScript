@@ -188,3 +188,14 @@ def test_ball_field_via_mask_keeps_only_cell_centres() -> None:
     assert at(9.5, 3.5) and at(10.5, 4.5)          # cell centres
     assert not at(10, 4) and not at(9.75, 3.5)      # on a ball / between centres
     assert at(15, 15)                               # outside the field
+
+
+def test_via_budget_is_never_exceeded() -> None:
+    from pcbir.physical import NetRoutingRule, RouteKind
+    # V may not use vias and H only one: whatever H does, it stays in budget.
+    board = _board({"H": ((2, 10), (18, 10)), "V": ((10, 2), (10, 18))})
+    board = replace(board, net_routing_rules=(NetRoutingRule("H", RouteKind.GENERAL, max_vias=1),
+                                              NetRoutingRule("V", RouteKind.GENERAL, max_vias=0)))
+    result, drc, summary = _route(board)
+    assert len([via for via in result.board.vias if via.net == "H"]) <= 1
+    assert "DRC-MAX-VIAS" not in summary["drc"]["errors_by_code"]
