@@ -1,0 +1,4 @@
+{
+  "baseline_ref": "0d356e272f3a1afaffdffdc6d00594ce464d0a4e",
+  "note": "Commit routed as the baseline for claude/plan-* comparison runs. Each plan step sets it to the commit it builds on."
+}
