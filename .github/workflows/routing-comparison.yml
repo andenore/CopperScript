@@ -80,12 +80,17 @@ jobs:
           make --no-print-directory EXAMPLE=full-vertical route PYTHON=python PROFILE=none \
             KICAD_CLI=/usr/bin/kicad-cli KICAD_FOOTPRINTS=/usr/share/kicad/footprints \
             "RESOLVE_ARGS=--locked --offline" PLACEMENT_TEMPLATES= \
-            RUN_DIR="$PWD/build/comparison/${{ matrix.side }}"
-          code=$?
+            RUN_DIR="$PWD/build/comparison/${{ matrix.side }}" 2>&1 | tee "$RUNNER_TEMP/route-output.txt"
+          code=${PIPESTATUS[0]}
           echo "route exit code $code (unmet gates exit 1; the run manifest is authoritative)"
           git rev-parse HEAD > "build/comparison/${{ matrix.side }}/source-commit.txt"
           python -c 'import json, sys; m = json.load(open(sys.argv[1])); print("::notice title=Route ${{ matrix.side }}::status=%s exit_code=%s elapsed_seconds=%s commit=%s" % (m.get("status"), m.get("exit_code"), m.get("elapsed_seconds"), sys.argv[2]))' \
             "build/comparison/${{ matrix.side }}/run.json" "$(git rev-parse --short HEAD)" || true
+          # Located causes and the end of the route output, also as annotations.
+          python -m copperscript issues "build/comparison/${{ matrix.side }}" --limit 20 > "$RUNNER_TEMP/issues.txt" 2>&1
+          for item in "issues.txt:Issues ${{ matrix.side }}" "route-output.txt:Route output tail ${{ matrix.side }}"; do
+            tail -n 60 "$RUNNER_TEMP/${item%%:*}" | python -c 'import sys; t = sys.stdin.read(); print("::notice title=" + sys.argv[1] + "::" + t.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))' "${item#*:}" || true
+          done
       - name: Preserve the run directory
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
