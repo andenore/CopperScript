@@ -30,7 +30,7 @@ def test_fixture_is_the_shared_copy():
 def test_footprints_in_file_order_have_unique_names_and_poses(scene):
     footprints = list(scene.footprints.values())
     assert len(footprints) == len(EXPECTED["footprints"])
-    assert [f.ref for f in footprints] == ["R1", "U2", "U3", "FP#1", "FP#2", "TP1", "TP1#2"]
+    assert [f.ref for f in footprints] == ["R1", "U2", "U3", "Logo#1", "Logo#2", "TP1", "TP1#2"]
     for got, want in zip(footprints, EXPECTED["footprints"]):
         _close(got.center, want["position_mm"])
         assert got.rotation == want["rotation_deg"] and got.side == want["side"]
@@ -79,3 +79,12 @@ def test_arcs_and_vias(scene):
         via = next(v for v in scene.vias if v.net == want["net"])
         _close(via.center, want["position_mm"])
         assert list(via.layers) == want["layers"]
+
+
+def test_renamed_duplicates_never_take_a_real_designator(tmp_path):
+    board = tmp_path / "dup.kicad_pcb"
+    board.write_text('(kicad_pcb (layers (0 "F.Cu" signal))'
+                     ' (footprint "R" (layer "F.Cu") (at 0 0) (property "Reference" "R1"))'
+                     ' (footprint "R" (layer "F.Cu") (at 1 0) (property "Reference" "R1"))'
+                     ' (footprint "R" (layer "F.Cu") (at 2 0) (property "Reference" "R1#2")))', encoding="utf-8")
+    assert list(scene_from_kicad_pcb(board).footprints) == ["R1", "R1#3", "R1#2"]

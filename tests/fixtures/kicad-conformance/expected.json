@@ -1,7 +1,7 @@
 {
  "about": "Shared KiCad reader conformance expectations. Identical copies live in CopperScript (tests/fixtures/kicad-conformance) and CopperReview (tests/fixtures/kicad-conformance). Values follow KiCad conventions, derived independently of both readers: pad positions are footprint-local and rotate with the footprint (x' = x cos a + y sin a, y' = -x sin a + y cos a, y down); pad angles are absolute and 0 when omitted; back footprints are already mirrored in the file; zones inside footprints use board coordinates; an arc's sampled points lie on its circle and keep exact endpoints. Footprints are listed in file order because readers name blank and duplicate references differently.",
  "board": "conformance.kicad_pcb",
- "board_sha256": "5b61ff2c07b538ada2ef9b424403daa3bd1ec92fc06ad1d62147a35f716bdea4",
+ "board_sha256": "1c24563eab08e421d69af6f3f068271d8f6769f37e8e3fac8f2c8e4b119ed435",
  "footprints": [
   {
    "native_reference": "R1",
@@ -456,5 +456,8 @@
   }
  ],
  "tolerance_mm": 1e-05,
- "empty_zones_skipped": 1
+ "degenerate_zones_skipped": {
+  "note": "a keepout with no outline and a keepout whose outline has two points: neither is drawn or queried",
+  "count": 2
+ }
 }

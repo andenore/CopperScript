@@ -222,6 +222,12 @@ def scene_from_kicad_pcb(path: str | Path) -> Scene:
     nets = {item[1]: item[2] for item in _atoms(root, "net") if len(item) >= 3}
     scene = Scene(name=path.stem, copper_layers=copper, source=str(path))
     footprint_zones = []
+    # Real designators are reserved first so a renamed duplicate never takes one.
+    reserved = set()
+    for footprint in _atoms(root, "footprint"):
+        props = {p[1]: p[2] for p in _atoms(footprint, "property") if len(p) > 2}
+        reserved.add(props.get("CopperScriptPath") or props.get("Reference") or "")
+    reserved.discard("")
 
     for footprint in _atoms(root, "footprint"):
         at = _first(footprint, "at")
@@ -239,10 +245,12 @@ def scene_from_kicad_pcb(path: str | Path) -> Scene:
             if not ref and len(text) > 2 and text[1] == "reference":
                 ref = text[2]
         if not ref or ref in scene.footprints:
-            # Blank (logos, fiducials) or duplicate designators: keep each footprint's pads
-            # apart, named like CopperReview (FP#1, R1#2).
-            base, n = ref or "FP", 1 if not ref else 2
-            while f"{base}#{n}" in scene.footprints:
+            # Blank (logos, fiducials) or duplicate designators keep their pads apart under the
+            # same names CopperReview gives them: <reference, else footprint name>#n.
+            name = footprint[1] if len(footprint) > 1 and isinstance(footprint[1], str) else ""
+            base = ref or name.rsplit(":", 1)[-1] or "FP"
+            n = 1 if not ref else 2
+            while f"{base}#{n}" in scene.footprints or f"{base}#{n}" in reserved:
                 n += 1
             ref = f"{base}#{n}"
         scene.footprints[ref] = SceneFootprint(ref, (fx, fy), frot, side)
