@@ -80,6 +80,10 @@ class UnifiedRouterOptions:
     window_margin_nm: int = nm_from_mm("2.5")
     maximum_expansions: int = 400_000
     commit_rounds: int = 4
+    full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
+    # Extra cost (as history) on a ball grid's own surface layer: escapes are
+    # short, so through-traffic between the balls should prefer inner layers.
+    ball_field_cost: float = 2.0
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
@@ -465,12 +469,36 @@ class _Router:
         self.heading = [headings.get(layer) for layer in g.layers]
         default_width = board.rules.default_track_width_nm
         self.default_width = default_width
+        self._seed_ball_field_cost()
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
         self.routes: dict[str, _NetRoute] = {}
         self._lead_nodes: dict[tuple, list[int]] = {}
         self.present = options.present_factor
 
     # -- setup ------------------------------------------------------------
+
+    def _seed_ball_field_cost(self) -> None:
+        cost = self.options.ball_field_cost
+        if not cost:
+            return
+        from .package_patterns import circular_array
+        from .placement import transformed_local_point
+        g = self.grid
+        hist = self.occupancy.history
+        for pose in self.board.placements:
+            try:
+                array = circular_array(self.board, pose.reference)
+            except ValueError:
+                array = None
+            if array is None:
+                continue
+            corners = [transformed_local_point(pose, p.position) for p in self.board.footprints[pose.footprint].pads]
+            ix0, iy0, ix1, iy1 = g.window(min(p.x_nm for p in corners), min(p.y_nm for p in corners),
+                                          max(p.x_nm for p in corners), max(p.y_nm for p in corners))
+            layer = g.layers.index(CopperLayer.FRONT if pose.side.value == "front" else CopperLayer.BACK)
+            for iy in range(iy0, iy1 + 1):
+                for ix in range(ix0, ix1 + 1):
+                    hist[g.index(layer, ix, iy)] += cost
 
     def _net_id(self, name: str) -> int:
         if name not in self.net_ids:
@@ -1258,6 +1286,8 @@ class _Router:
             # Reroute conflicted nets; retry failed nets now and then, since
             # congestion elsewhere may have moved.
             pending = [s.name for s in specs if s.name in conflicts or (s.name in failed and iteration in (3, 6))]
+            if options.full_reroute_every and iteration % options.full_reroute_every == 0:
+                pending = [s.name for s in specs if s.name not in failed or iteration in (3, 6)]
             if not pending:
                 break
         _, snapshot, conflicts = best_snapshot
@@ -1495,8 +1525,12 @@ def route_unified(
     fanout_created_tracks: tuple[TrackSegment, ...] | None = None,
     only_nets: frozenset[str] | None = None,
     on_progress: ProgressCallback | None = None,
+    escape_seeder=None,
 ) -> DetailedRoutingResult:
     """Route all ordinary nets with one negotiated-congestion loop.
+
+    ``escape_seeder(board, net_names)`` may return a board with checked pad
+    escapes for nets that failed; repair rounds use it before rerouting.
 
     Signature-compatible with :func:`pcbir.detailed.route_detailed`.
     Existing copper is fixed; zone nets are deferred to fill.
@@ -1534,45 +1568,70 @@ def route_unified(
     # Rip-in repair: committed copper becomes a fixed obstacle and the
     # remaining nets are routed again against it. This settles the residual
     # cases where the raster and the exact check disagree (off-grid lead-ins).
-    for round_index in range(1, options.commit_rounds):
-        remaining = [net for net in nets if net.name not in complete]
-        if not remaining or (deadline is not None and perf_counter() > deadline):
-            break
+    def repair_attempt(seed: bool):
+        """One rip-in repair; returns the new (accepted, complete, rejected, routes, stats)."""
+        work = {k: (list(v[0]), list(v[1])) for k, v in accepted.items()}
+        done = set(complete)
+        remaining = [net for net in nets if net.name not in done]
         # Rip up neighbours whose new copper crowds the remaining nets' pads,
         # so they renegotiate together; everything else stays fixed.
-        snapshot = ({k: (list(v[0]), list(v[1])) for k, v in accepted.items()}, set(complete), dict(rejected))
-        crowd = _neighbour_nets(board, remaining, accepted, nm_from_mm("1.0"))
+        crowd = _neighbour_nets(board, remaining, work, nm_from_mm("1.0"))
         for name in crowd:
-            accepted.pop(name, None)
-            complete.discard(name)
-        remaining = [net for net in nets if net.name not in complete]
+            work.pop(name, None)
+            done.discard(name)
+        remaining = [net for net in nets if net.name not in done]
         partial = replace(board,
-            tracks=(*board.tracks, *(t for name in sorted(accepted) for t in accepted[name][0])),
-            vias=(*board.vias, *(v for name in sorted(accepted) for v in accepted[name][1])))
+            tracks=(*board.tracks, *(t for name in sorted(work) for t in work[name][0])),
+            vias=(*board.vias, *(v for name in sorted(work) for v in work[name][1])))
+        if seed:
+            failed_signal = frozenset(net.name for net in remaining
+                                      if net.name not in plane_nets and net.name not in crowd)
+            if not failed_signal:
+                return None
+            seeded = escape_seeder(partial, failed_signal)
+            from collections import Counter
+            for track in (Counter(seeded.tracks) - Counter(partial.tracks)).elements():
+                work.setdefault(track.net, ([], []))[0].append(track)
+            for via in (Counter(seeded.vias) - Counter(partial.vias)).elements():
+                work.setdefault(via.net, ([], []))[1].append(via)
+            partial = seeded
         fixed = explicit_copper_connectivity(partial)
         remaining = [net for net in remaining if not fixed.net_connected(net) or net.name in plane_nets]
         repair = _Router(partial, options, remaining, on_progress)
         repair.history_seed(router)
         more_routes, more_conflicts, used = repair.negotiate(deadline)
-        iterations += used
         more, more_rejected, more_complete = repair.commit(more_routes, more_conflicts)
         for name, (tracks, vias) in more.items():
-            old_tracks, old_vias = accepted.get(name, ([], []))
-            accepted[name] = (old_tracks + tracks, old_vias + vias)
-        complete |= more_complete
-        complete |= {net.name for net in remaining if net.name not in more_routes
-                     and fixed.net_connected(net) and net.name not in plane_nets}
-        rejected = {name: points for name, points in more_rejected.items() if name not in complete}
-        improved = _open_count(board, nets, accepted, plane_nets) < _open_count(board, nets, snapshot[0], plane_nets)
-        if not improved:
-            # Keep the better earlier state; a repair never loses routed nets.
-            accepted, complete, rejected = snapshot
-        else:
+            old_tracks, old_vias = work.get(name, ([], []))
+            work[name] = (old_tracks + tracks, old_vias + vias)
+        done |= more_complete
+        done |= {net.name for net in remaining if net.name not in more_routes
+                 and fixed.net_connected(net) and net.name not in plane_nets}
+        still = {name: points for name, points in more_rejected.items() if name not in done}
+        return work, done, still, more_routes, (len(more), len(more_rejected), len(more_conflicts), used)
+
+    for round_index in range(1, options.commit_rounds):
+        if all(net.name in complete for net in nets) or (deadline is not None and perf_counter() > deadline):
+            break
+        baseline = _open_count(board, nets, accepted, plane_nets)
+        best_attempt = None
+        for seed in ((False, True) if escape_seeder is not None else (False,)):
+            attempt = repair_attempt(seed)
+            if attempt is None:
+                continue
+            iterations += attempt[4][3]
+            score = _open_count(board, nets, attempt[0], plane_nets)
+            if score < baseline and (best_attempt is None or score < best_attempt[0]):
+                best_attempt = (score, attempt, seed)
+            if best_attempt is not None and best_attempt[0][0] == 0:
+                break
+        improved = best_attempt is not None
+        if improved:
+            _, (accepted, complete, rejected, more_routes, stats), seeded = best_attempt
             for name, route in more_routes.items():
                 router.routes[name] = route
-        emit(on_progress, "unified_commit", "finished", round=round_index + 1,
-             accepted=len(more), rejected=len(more_rejected), conflicted=len(more_conflicts),
-             adopted=improved)
+        emit(on_progress, "unified_commit", "finished", round=round_index + 1, adopted=improved,
+             seeded=bool(improved and seeded))
         if not improved:
             break
     spec_names = {s.name for s in router.specs}
