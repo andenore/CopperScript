@@ -93,6 +93,9 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         tracks=len(routed.tracks), vias=len(routed.vias),
         wirelength_mm=round(sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
                                 for t in routed.tracks) / 1_000_000, 3),
+        stages=_stage_summary(result),
+        unrouted_details={item.net: list(item.diagnostics[:4]) for item in detailed.nets if not item.connected}
+        if detailed else {},
         moved_placements=sum(1 for a, b in zip(sorted(board.placements, key=lambda p: p.reference),
                                                sorted(routed.placements, key=lambda p: p.reference))
                              if (a.position, a.rotation_degrees, a.side) != (b.position, b.rotation_degrees, b.side)),
@@ -104,6 +107,28 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         shutil.copyfile(project, out_dir / Path(ROUTED_NAME).with_suffix(".kicad_pro"))
     _save(out_dir, record)
     return record
+
+
+def _stage_summary(result) -> dict:
+    """Where the pipeline stopped short, for failure analysis (never a pass criterion)."""
+    summary: dict = {"global": result.placement_and_global.global_route.status.value,
+                     "global_unconnected": {item.net: list(item.diagnostics[:2])
+                                            for item in result.placement_and_global.global_route.routes
+                                            if not item.connected},
+                     "critical": result.critical.status.value,
+                     "detailed": result.detailed.status.value}
+    access = result.package_access
+    if access is not None:
+        boundary = access.boundary
+        summary["package_access"] = {
+            "hard_findings": access.hard_findings,
+            "failed_critical_nets": sorted(access.failed_critical_nets),
+            "stop_reason": access.placement_stop_reason,
+            "native_accepted": boundary.native_accepted if boundary else None,
+            "pending_pads": [f"{item.component}.{item.pad}" for item in boundary.pending_pads][:12]
+            if boundary else [],
+        }
+    return summary
 
 
 def _reasons(nets) -> dict[str, int]:
@@ -289,7 +314,15 @@ def score_drc_report(report: dict) -> dict:
     by_type: dict[str, int] = {}
     for item in errors:
         by_type[item.get("type", "?")] = by_type.get(item.get("type", "?"), 0) + 1
-    return {"drc_errors": len(errors), "drc_warnings": len(violations) - len(errors),
+    def describe(item: dict, kind: str) -> dict:
+        return {"kind": kind, "type": item.get("type"), "description": item.get("description"),
+                "items": [{"description": part.get("description"), "pos": part.get("pos")}
+                          for part in (item.get("items") or [])[:3]]}
+
+    findings = [describe(item, "violation") for item in errors[:10]]
+    findings += [describe(item, "unconnected") for item in unconnected[:10]]
+    return {"drc_findings": findings,
+            "drc_errors": len(errors), "drc_warnings": len(violations) - len(errors),
             "unconnected_items": len(unconnected), "drc_error_types": dict(sorted(by_type.items())),
             "kicad_version": report.get("kicad_version"),
             "clean_pass": not errors and not unconnected}
@@ -354,6 +387,50 @@ def board_table(root: Path) -> str:
     return "\n".join(rows) + "\n"
 
 
+def failure_report(root: Path) -> str:
+    """Per failing board: where routing stopped, each unrouted net's diagnostics, KiCad's findings."""
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(root.rglob("result.json"))]
+    out = []
+    for item in records:
+        if item.get("clean_pass"):
+            continue
+        out.append(f"#### {item.get('board')}")
+        out.append(f"status {item.get('status')}; components {item.get('components')}; routable nets "
+                   f"{item.get('routable_nets')}; layers {item.get('copper_layers')}; "
+                   f"approximations {item.get('import_approximations')}")
+        if item.get("error"):
+            out.append(f"error: {item['error'][-300:]}")
+        stages = item.get("stages") or {}
+        if stages:
+            out.append(f"stages: {json.dumps(stages, sort_keys=True)[:700]}")
+        for net, diagnostics in (item.get("unrouted_details") or {}).items():
+            out.append(f"- unrouted {net}: {' | '.join(diagnostics)[:300]}")
+        for finding in item.get("drc_findings") or []:
+            parts = "; ".join(f"{part.get('description')} @ {part.get('pos')}" for part in finding["items"])
+            out.append(f"- KiCad {finding['kind']} {finding.get('type')}: {finding.get('description')} :: {parts}"[:400])
+        out.append("")
+    return "\n".join(out) + "\n"
+
+
+def annotation_chunks(text: str, limit: int = 3900) -> list[str]:
+    """Line-aligned pieces that fit GitHub's 4 KB annotation message."""
+    chunks, current = [], ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if len(current) + len(line) > limit:
+            chunks.append(current)
+            current = ""
+        current += line
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _note(item: dict) -> str:
     reasons = item.get("unrouted_reasons") or {}
     text = (item.get("error") or item.get("drc_error") or item.get("refill_error")
@@ -384,6 +461,12 @@ def main(argv: list[str] | None = None) -> int:
     summary.add_argument("--markdown", action="store_true")
     boards = commands.add_parser("boards")
     boards.add_argument("root", type=Path)
+    failures = commands.add_parser("failures")
+    failures.add_argument("root", type=Path)
+    annotate = commands.add_parser("annotate", help="print a file as GitHub notice annotations")
+    annotate.add_argument("file", type=Path)
+    annotate.add_argument("--title", required=True)
+    annotate.add_argument("--first", type=int, default=0, help="first chunk index (a step shows 10)")
     args = parser.parse_args(argv)
     if args.command == "route":
         record = route_board_file(args.board, args.out, search_budget=args.search_budget)
@@ -391,6 +474,15 @@ def main(argv: list[str] | None = None) -> int:
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":
         record = score_result(args.directory, args.kicad_cli, pcbnew_python=args.pcbnew_python)
+    elif args.command == "annotate":
+        chunks = annotation_chunks(args.file.read_text(encoding="utf-8"))
+        for index in range(args.first, min(args.first + 10, len(chunks))):
+            text = chunks[index].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::notice title={args.title} {index + 1}/{len(chunks)}::{text}")
+        return 0
+    elif args.command == "failures":
+        print(failure_report(args.root), end="")
+        return 0
     elif args.command == "boards":
         print(board_table(args.root), end="")
         return 0
