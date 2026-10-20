@@ -68,6 +68,11 @@ class DrcCompleteness(str, Enum):
     INCOMPLETE = "incomplete"
 
 
+# Board metadata key: "external" when placement legality is established by the
+# board's source tool (an imported placement), not by CopperScript's planner.
+EXTERNAL_PLACEMENT_KEY = "placement_legality"
+
+
 class DrcCoverageStatus(str, Enum):
     EXECUTED = "executed"
     NOT_APPLICABLE = "not_applicable"
@@ -264,11 +269,17 @@ def run_physical_drc(
 
     _check_connectivity(board, findings)
     coverage.append(DrcCoverage("connectivity", DrcCoverageStatus.EXECUTED, True))
-    if not placement_solution_is_legal(
-        board, {item.reference: item for item in board.placements}
-    ):
-        findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR, "component placement violates board, keepout, or courtyard legality"))
-    coverage.append(DrcCoverage("placement_legality", DrcCoverageStatus.EXECUTED, True))
+    if board.metadata.get(EXTERNAL_PLACEMENT_KEY) == "external":
+        # An imported placement is the input under test, not CopperScript's
+        # plan: its legality is established by its source tool, not by the
+        # planner's edge and courtyard conventions. Copper checks still run.
+        coverage.append(DrcCoverage("placement_legality", DrcCoverageStatus.NOT_APPLICABLE, True))
+    else:
+        if not placement_solution_is_legal(
+            board, {item.reference: item for item in board.placements}
+        ):
+            findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR, "component placement violates board, keepout, or courtyard legality"))
+        coverage.append(DrcCoverage("placement_legality", DrcCoverageStatus.EXECUTED, True))
     coverage.append(DrcCoverage("courtyard_gap",
         DrcCoverageStatus.EXECUTED if any(rule.additional_courtyard_gap_nm is not None
                                         for rule in board.placement_rules)
