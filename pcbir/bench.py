@@ -94,8 +94,8 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         wirelength_mm=round(sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
                                 for t in routed.tracks) / 1_000_000, 3),
         stages=_stage_summary(result),
-        unrouted_details={item.net: list(item.diagnostics[:4]) for item in detailed.nets if not item.connected}
-        if detailed else {},
+        unrouted_details={item.net: list(item.diagnostics[:4]) + _search_note(item)
+                          for item in detailed.nets if not item.connected} if detailed else {},
         moved_placements=sum(1 for a, b in zip(sorted(board.placements, key=lambda p: p.reference),
                                                sorted(routed.placements, key=lambda p: p.reference))
                              if (a.position, a.rotation_degrees, a.side) != (b.position, b.rotation_degrees, b.side)),
@@ -107,6 +107,14 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         shutil.copyfile(project, out_dir / Path(ROUTED_NAME).with_suffix(".kicad_pro"))
     _save(out_dir, record)
     return record
+
+
+def _search_note(item) -> list[str]:
+    stats = getattr(item, "search_stats", None)
+    if not stats or not stats.search_calls:
+        return []
+    return [f"search: {stats.search_calls} calls, {stats.budget_exhausted_calls} out of budget, "
+            f"{stats.no_path_calls} no path, {stats.expanded_states} states"]
 
 
 def _stage_summary(result) -> dict:
@@ -121,6 +129,10 @@ def _stage_summary(result) -> dict:
     if access is not None:
         boundary = access.boundary
         summary["package_access"] = {
+            "ready": access.ready,
+            "fanout_pending": [f"{item.component}.{item.pad}" for item in access.fanout.pending_pads][:12],
+            "plane_pending": [f"{item.component}.{item.pad}" for item in access.plane_stitch.pending_pads][:12]
+            if access.plane_stitch else [],
             "hard_findings": access.hard_findings,
             "failed_critical_nets": sorted(access.failed_critical_nets),
             "stop_reason": access.placement_stop_reason,
