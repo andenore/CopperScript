@@ -1620,6 +1620,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             stitch = (escape_feedback.plane_stitch if escape_feedback is not None
                       else stitch_zone_pads(result.board, plane_options) if stitch_enabled
                       else result.plane_stitch)
+            plane_repair = None
+            if stitch_enabled and stitch is not None and stitch.board.zones:
+                # Routing after stitching can wall a pour-contact pad off; re-stitch those explicitly.
+                from .plane import repair_cut_off_plane_pads
+                before = stitch.added_track_count + stitch.added_via_count
+                stitch, still_cut_off = repair_cut_off_plane_pads(stitch, plane_options)
+                plane_repair = {"added_copper": stitch.added_track_count + stitch.added_via_count - before,
+                                "still_cut_off": [f"{p.component}.{p.pad}" for p in still_cut_off]}
             output_board = stitch.board if stitch_enabled else result.board
             duplicate_stitch = stitch_duplicate_pads(output_board)
             output_board = duplicate_stitch.board
@@ -1981,6 +1989,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                     "zone_fill_verified": False,
                 }
+                if plane_repair is not None:
+                    report["plane_stitch"]["cut_off_repair"] = plane_repair
             if result.plane_stitch is not None:
                 report["early_plane_stitch"] = {
                     "selected_pads": [

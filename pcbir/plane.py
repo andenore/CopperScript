@@ -55,6 +55,10 @@ class PlaneStitchOptions:
     # Opt-in opposite-side surface zones, e.g. a two-layer rear ground pour.
     # Same-side-only zones are refill intent, not a reason to invent a via.
     include_surface_zones: bool = False
+    # Repair mode: a pad inside a same-side pour still needs explicit copper
+    # (a via, or a surface path to an already connected same-net pad or via).
+    # Used after routing, when a later trace may have walled a pad off.
+    require_explicit: bool = False
 
     def __post_init__(self) -> None:
         if self.only_pads is not None:
@@ -256,7 +260,7 @@ def stitch_zone_pads(
                     (*board.tracks, *added_tracks), (*board.vias, *added_vias),
                     preferred_via_uses,
                 )
-                if choice is None:
+                if choice is None and not options.require_explicit:
                     # A declared same-side pour is another *prospective*
                     # contact. Do not force a redundant through-via in a large
                     # land merely because an opposite-side pour also exists.
@@ -268,6 +272,7 @@ def stitch_zone_pads(
                             and _point_in_zone(position, k.outline) for k in keepouts):
                         internal_contact = True
                         continue
+                if choice is None:
                     if group is None:
                         pending_lands.append(_PendingContact(net, reference, position, side, width))
                     continue
@@ -286,6 +291,26 @@ def stitch_zone_pads(
             if group is not None and not internal_contact and lands:
                 pending_lands.append(_PendingContact(net, reference,
                     transformed_local_point(placement, lands[0].position), side, width))
+
+    if options.require_explicit and options.only_pads is not None:
+        # Repair mode: pads outside the selection are already connected, and
+        # so are the net's through vias inside its zones; both are anchors.
+        for net in {contact.net for contact in pending_lands}:
+            for reference in net_pads[net]:
+                if reference in options.only_pads or reference.component not in placements:
+                    continue
+                placement = placements[reference.component]
+                land = next((item for item in board.footprints[placement.footprint].pads
+                             if item.number == reference.pad and item.kind is PadKind.SMD), None)
+                if land is not None:
+                    side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+                    anchors_by_net.setdefault(net, []).append(
+                        (transformed_local_point(placement, land.position), side))
+            for via in (*board.vias, *added_vias):
+                if (via.net == net and via.from_layer == outer_layers[0] and via.to_layer == outer_layers[1]
+                        and any(_point_in_zone(via.position, zone.outline) for zone in zones_by_net.get(net, ()))):
+                    for side in outer_layers:
+                        anchors_by_net.setdefault(net, []).append((via.position, side))
 
     # A blocked land may still reach the plane through an already escaped
     # same-net land. Retry until no further local chain can be proven.
@@ -799,3 +824,43 @@ def _point_in_outline(point: Point, polygon: tuple[Point, ...]) -> bool:
             if point.x_nm < crossing:
                 inside = not inside
     return inside
+
+
+def repair_cut_off_plane_pads(
+    stitch: PlaneStitchResult, options: PlaneStitchOptions, *, rounds: int = 2,
+) -> tuple[PlaneStitchResult, tuple[PadReference, ...]]:
+    """Give explicit copper to pads the plane estimate finds walled off.
+
+    Stitching counts a pad inside a same-side pour as a prospective contact.
+    Routing done afterwards can cut the pour off around it. Here the raster
+    estimate (pour flood fill with clearances) names such pads, and they are
+    stitched again in ``require_explicit`` mode. A repair round is kept only
+    if the estimate's open count drops. Returns the result and the pads that
+    remain cut off. This is an estimate; native refill stays authoritative.
+    """
+    from .plane_estimate import estimate_plane_connectivity
+
+    def cut_off(estimate):
+        return tuple(sorted(PadReference(*pad.rsplit(".", 1))
+                            for pads in estimate.open_pads.values() for pad in pads))
+
+    current = stitch
+    estimate = estimate_plane_connectivity(current.board)
+    for _ in range(rounds):
+        pads = cut_off(estimate)
+        if not pads:
+            break
+        repair = stitch_zone_pads(current.board, replace(
+            options, only_pads=frozenset(pads), require_explicit=True))
+        if not repair.added_track_count and not repair.added_via_count:
+            break
+        after = estimate_plane_connectivity(repair.board)
+        if after.opens >= estimate.opens:
+            break
+        current = PlaneStitchResult(
+            repair.board, current.stitched_pads, current.pending_pads,
+            current.added_track_count + repair.added_track_count,
+            current.added_via_count + repair.added_via_count,
+            (*current.copper_uses, *repair.copper_uses))
+        estimate = after
+    return current, cut_off(estimate)
