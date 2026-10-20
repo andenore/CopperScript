@@ -1288,12 +1288,6 @@ def _pin_access_candidates(
                     node = min(nodes, key=lambda item: (
                         _node_distance_nm(graph.point(item), anchor), item,
                     ))
-                    # The coarse graph needs layer-change capacity at this
-                    # tile; an access without it makes the net unreachable
-                    # (CopperAssetTracker regressed this way at b2d42b1).
-                    identifier = _via_resource_id(graph, node, span[0], span[1])
-                    if identifier not in graph.via_sites or not graph.via_sites[identifier]:
-                        continue
                     # This terminal transition is actual checked copper at
                     # anchor, not a sampled coarse-grid crossing. It ends at
                     # an existing legal node through its own exact lead-in.

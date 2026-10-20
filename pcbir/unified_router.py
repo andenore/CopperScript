@@ -87,6 +87,15 @@ class UnifiedRouterOptions:
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
+    # Supply islands carved from a spare plane layer before routing
+    # (power_islands.py): "auto", a copper layer name, or None.
+    power_islands: str | None = None
+    # Nets without a profile width may narrow to the board minimum this close
+    # to their pads (0 disables).
+    implicit_neck_nm: int = nm_from_mm("2.5")
+    # Route decoupling capacitors with the dedicated decoupler router before
+    # the unified router (their copper is then fixed).
+    pre_route_decouplers: bool = True
 
     def __post_init__(self) -> None:
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0:
@@ -350,6 +359,9 @@ class _NetSpec:
     region: frozenset[int] = frozenset()     # nodes inside the net's breakout regions
     neck: frozenset[int] = frozenset()       # region nodes legal only at neck width
     neck_mid: frozenset[int] = frozenset()   # region cell centres legal only at neck width
+    target_only: tuple[int, ...] = ()        # layers entered only on target nodes (plane layers)
+    optional: int = 0                        # trailing components that may stay unjoined
+    islands: int = 0                         # trailing components that are plane pieces
 
 
 @dataclass(slots=True)
@@ -543,12 +555,21 @@ class _Router:
                 for _, layer_indexes, *_ in self._pad_anchors(pad, None):
                     pad_layers.update(g.layers[i] for i in layer_indexes)
             allowed &= pad_layers
+        target_only = ()
+        if net.name in self.zone_nets:
+            # A plane net reaches its own zone layers even where they are
+            # dedicated planes, but only by landing inside its fill.
+            zone_layers = {layer for zone in board.zones if zone.net == net.name for layer in zone.layers}
+            target_only = tuple(i for i, layer in enumerate(g.layers)
+                                if layer in zone_layers and layer not in allowed)
+            allowed |= zone_layers
         layers = tuple(i for i, layer in enumerate(g.layers) if layer in allowed)
         if not layers:
             return None
         spec = _NetSpec(net.name, self._net_id(net.name), width, clearance,
                         board.rules.default_via_size_nm, board.rules.default_via_drill_nm,
                         layers, [], 0)
+        spec.target_only = target_only
         if rule is not None and rule.max_vias:
             spec.via_factor = 4.0
         # Breakout rules let a net narrow next to its own lands (see breakout.py).
@@ -558,12 +579,23 @@ class _Router:
             spec.neck_clearance = max(board.rules.minimum_clearance_nm,
                                       rule.breakout_clearance_nm or rule.clearance_nm or 0)
             spec.region, spec.neck, spec.neck_mid = self._neck_nodes(net, spec, rule.breakout_length_nm)
+        elif (self.options.implicit_neck_nm and (rule is None or rule.width_nm is None)
+              and width > board.rules.minimum_track_width_nm):
+            # Without a profile width only the board minimum binds (DRC), so a
+            # net may narrow near its own pads to pass between fine-pitch lands.
+            spec.neck_width = board.rules.minimum_track_width_nm
+            spec.neck_clearance = clearance
+            spec.region, spec.neck, spec.neck_mid = self._neck_nodes(net, spec, self.options.implicit_neck_nm)
         spec.components = self._components(net, spec)
         if net.name in self.zone_nets:
-            planes, islands = self._zone_regions(net.name, spec)
+            planes, islands, optional = self._zone_regions(net.name, spec)
             spec.plane = planes
-            # Small pours (surface islands) must also reach the main plane.
+            # Small pours (surface islands) must also reach the main plane;
+            # fragments of a layer that already has plane copper may stay apart.
             spec.components.extend([[(node, (), 0.0) for node in island] for island in islands])
+            spec.components.extend([[(node, (), 0.0) for node in island] for island in optional])
+            spec.islands = len(islands) + len(optional)
+            spec.optional = len(optional)
         for key in ("neck", "neck_mid", "region", "plane"):
             nodes = getattr(spec, key)
             spec.arrays[key] = np.fromiter(nodes, dtype=np.int64, count=len(nodes))
@@ -573,12 +605,20 @@ class _Router:
         return spec
 
     def _zone_regions(self, name: str, spec: _NetSpec):
-        """Plane target nodes of a zone net, and its smaller separate pours."""
+        """Plane target nodes of a zone net, its separate pours, and fragments.
+
+        Fill is labelled per layer (8-connected over cells the net may use).
+        Each layer's largest piece is plane copper when it is at least a
+        quarter of the overall largest piece. Other pieces on a layer without
+        plane copper are pours that must be joined; pieces on a plane layer
+        are fragments (split islands, cut-off plane) joined when possible.
+        """
+        from .plane_estimate import _label
         g = self.grid
         owner, _ = self.rasters.track(spec.width, spec.clearance)
         owner_arr = np.asarray(owner, dtype=np.int32).reshape(g.nl, g.ny, g.nx)
         free = (owner_arr == _FREE) | (owner_arr == spec.nid)
-        regions = []
+        per_layer: dict[int, np.ndarray] = {}
         for zone in self.board.zones:
             if zone.net != name:
                 continue
@@ -588,15 +628,34 @@ class _Router:
             for layer in zone.layers:
                 index = g.layers.index(layer)
                 mask = inside & free[index]
-                nodes = np.flatnonzero(mask) + index * g.plane
-                if nodes.size:
-                    regions.append(nodes)
-        if not regions:
-            return frozenset(), []
-        largest = max(r.size for r in regions)
-        planes = frozenset(int(n) for r in regions if r.size * 4 >= largest for n in r)
-        islands = [r.tolist() for r in regions if r.size * 4 < largest]
-        return planes, islands
+                per_layer[index] = per_layer[index] | mask if index in per_layer else mask
+        minimum = max(4, int(nm_from_mm("0.8") ** 2 // (g.pitch * g.pitch)))
+        pieces: dict[int, list[np.ndarray]] = {}
+        for index, mask in per_layer.items():
+            labels, count = _label(mask)
+            if not count:
+                continue
+            flat = labels.ravel()
+            sizes = np.bincount(flat, minlength=count + 1)
+            order = np.argsort(-sizes[1:]) + 1
+            found = []
+            for k, label in enumerate(order):
+                if sizes[label] < minimum and k:
+                    break
+                found.append(np.flatnonzero(flat == label) + index * g.plane)
+            pieces[index] = found
+        if not pieces:
+            return frozenset(), [], []
+        largest = max(p[0].size for p in pieces.values())
+        planes, islands, optional = set(), [], []
+        for index, found in pieces.items():
+            first, rest = found[0], found[1:]
+            if first.size * 4 >= largest:
+                planes.update(first.tolist())
+            else:
+                islands.append(first.tolist())
+            optional.extend(r.tolist() for r in rest)
+        return frozenset(planes), islands, optional
 
     def _neck_nodes(self, net, spec: _NetSpec, length: int):
         """Breakout-region nodes, and those legal there only at the neck width."""
@@ -796,11 +855,20 @@ class _Router:
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self.rasters.via(spec.via_size, spec.via_drill, spec.clearance)
         margin = int(self.options.window_margin_nm // g.pitch)
-        for component in spec.components:
+        count = len(spec.components)
+        first_island = count - spec.islands
+        first_optional = count - spec.optional
+        # Plane pieces first: once joined they are targets for the pads.
+        order = list(range(first_island, count)) + list(range(first_island))
+        for position in order:
+            component = spec.components[position]
+            optional = position >= first_optional
             if not component:
-                missing += 1
+                missing += not optional
                 continue
             if any(node in targets for node, _, _ in component):
+                if position >= first_island:
+                    targets.update(node for node, _, _ in component)
                 continue  # Already inside the plane's fill.
             sources = {node: cost + self._lead_penalty(lead, present) for node, lead, cost in component}
             leads = {node: lead for node, lead, _ in component}
@@ -811,15 +879,17 @@ class _Router:
             if found is None:
                 found = self._astar(spec, sources, targets, present, whole, whole, owner, mid_owner, via_owner)
             if found is None:
-                missing += 1
+                missing += not optional
                 continue
             path, _ = found
             route.paths.append(path)
             route.leads.append(tuple(leads.get(path[0], ())))
             targets.update(path)
+            if position >= first_island:
+                targets.update(sources)
         route.connected = missing == 0
         if missing:
-            route.reason = f"{missing} of {len(spec.components)} pad groups cannot reach the plane"
+            route.reason = f"{missing} of {count - spec.optional} pad groups cannot reach the plane"
         self._finish_route(route, spec)
         return route
 
@@ -1046,6 +1116,7 @@ class _Router:
         push, pop = heappush, heappop
         layers = spec.layers
         allowed = set(layers)
+        target_only = set(spec.target_only)
         INF = 1e30
         for node, cost in sources.items():
             layer, rest = divmod(node, plane)
@@ -1094,12 +1165,15 @@ class _Router:
             layer, rest = divmod(node, plane)
             y, x = divmod(rest, nx)
             here_in_region = use_neck and node in region
+            only_targets = layer in target_only
             for dx, dy, dn, base, diagonal, dcell in move_tables[layer]:
                 x2 = x + dx
                 y2 = y + dy
                 if x2 < bx0 or x2 > bx1 or y2 < by0 or y2 > by1:
                     continue
                 n2 = node + dn
+                if only_targets and n2 not in targets:
+                    continue
                 o = owner[n2]
                 if o != -1 and o != nid and not (here_in_region and n2 in neck):
                     continue
@@ -1129,6 +1203,8 @@ class _Router:
                 if layer2 == layer:
                     continue
                 n2 = layer2 * plane + rest
+                if layer2 in target_only and n2 not in targets:
+                    continue
                 o = owner[n2]
                 if o != -1 and o != nid:
                     continue
@@ -1158,7 +1234,8 @@ class _Router:
         via_owner = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance)
         occupancy = self.occupancy
         flags, extra = self._n_flags, self._n_extra
-        layers = np.asarray(spec.layers, dtype=np.int32)
+        layers = np.asarray([layer | (0x100 if layer in spec.target_only else 0) for layer in spec.layers],
+                            dtype=np.int32)
         move_base = self._move_base(spec)
         source_nodes = np.fromiter(sources.keys(), dtype=np.int32, count=len(sources))
         source_costs = np.fromiter(sources.values(), dtype=np.float64, count=len(sources))

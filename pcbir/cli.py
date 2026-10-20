@@ -494,6 +494,11 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum negotiation iterations of the unified router (default: 40)")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
         help="wall-time budget for the unified router; it returns its best result when exceeded")
+    board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
+        help="unified router: route decoupling capacitors with everything else instead of first")
+    board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
+        help="unified router: carve islands for decoupled supply rails out of a spare plane layer "
+             "(auto picks the outermost layer of a net with two plane layers)")
     board_route_parser.add_argument("--legacy-gates", action="store_true",
         help="stop before ordinary routing when package access or power preparation is incomplete (pre-refactor behaviour)")
     board_route_parser.add_argument("--package-access-trials", type=int, default=8,
@@ -724,7 +729,9 @@ def _unified_options(args):
     from .unified_router import UnifiedRouterOptions
     return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
                                 maximum_iterations=args.unified_iterations,
-                                time_budget_s=args.unified_time_budget_s)
+                                time_budget_s=args.unified_time_budget_s,
+                                power_islands=None if args.power_islands == "off" else args.power_islands,
+                                pre_route_decouplers=not args.unified_no_decouplers)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

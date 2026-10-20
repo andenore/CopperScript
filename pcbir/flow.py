@@ -215,9 +215,21 @@ def run_routing_pipeline(
                                 status=FeedbackStatus.PASS,
                                 full_route_certified=True,
                                 placement_candidate=placement.placement_candidate + "-critical")
-    if access is None and critical.board.decoupling_links:
+    if access is None and critical.board.decoupling_links and getattr(
+            unified_options, "pre_route_decouplers", True):
         from .decoupling import route_decouplers
         critical = replace(critical, board=route_decouplers(critical.board).board)
+    if unified_options is not None and getattr(unified_options, "power_islands", None):
+        from .physical import CopperLayer
+        from .power_islands import auto_power_layer, plan_power_islands
+        choice = unified_options.power_islands
+        layer = auto_power_layer(critical.board) if choice == "auto" else CopperLayer(choice)
+        if layer is not None:
+            emit(on_progress, "power_islands", "started", layer=layer.value)
+            partition = plan_power_islands(critical.board, layer)
+            critical = replace(critical, board=replace(
+                critical.board, zones=(*critical.board.zones, *partition.zones)))
+            emit(on_progress, "power_islands", "finished", **partition.report())
     if unified_options is not None and getattr(unified_options, "bga_fanout", True):
         from .bga_fanout import plan_bga_fanouts
         emit(on_progress, "bga_fanout", "started")

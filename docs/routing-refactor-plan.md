@@ -167,6 +167,16 @@ the default path imports it (phase P7).
 | `placement*.py`, `clusters.py`, `incremental_placement.py`, `routeflow.py` (`optimize_placement_for_routing`, `detailed_failure_trials`) | Placement, plus the optional outer loop driven by opens |
 | `critical_review.py`, `pair_geometry.py`, `route_path_geometry.py`, `return_paths.py` | Read-only reports |
 
+### New (added by the refactor)
+
+| Module | Role |
+| --- | --- |
+| `unified_router.py` | Negotiated-congestion (PathFinder) router on a numpy legality raster; exact commit through `routing_clearance` (P5) |
+| `native/astar.c` + prebuilt `.so`/`.dll`, `tools/build_kernel.py` | Optional C A* kernel with identical results; pure Python fallback (`COPPER_NO_NATIVE=1`) (P6) |
+| `bga_fanout.py` | Deterministic quadrant dogbones for full-grid ball arrays (P4) |
+| `power_islands.py` | Automatic split-plane islands for decoupled rails on a spare plane layer (P3, opt-in `--power-islands`) |
+| `route_summary.py`, `plane_estimate.py`, `bench.py`, `bench/ladder.json` | Pipeline-independent completion summary, raster plane estimate, benchmark ladder (P1) |
+
 ### Lift (useful parts inside large modules)
 
 | From | Lift | Drop |
@@ -362,6 +372,18 @@ evidence bundle.
 
 Rough total: 6–8 weeks of focused work. P2 alone should produce the first
 whole-board CopperProbe result within the first week.
+
+## 5a. Progress (branch `refactor/routing`)
+
+| Date | Phase | Ladder (completion, unified router) |
+| --- | --- | --- |
+| 2026-10-19 | P0–P2 done; P5 prototype | legacy: round-led-ring 0.57, nrf52 1.0, full-vertical 0.88, cm4 0.76 |
+| 2026-10-20 | P5/P6 working, P4 dogbones, P3 islands (opt-in) | round-led-ring 0.94, nrf52 0.94–1.0, full-vertical 0.99, cm4 0.81–1.0, asset-tracker 0.93, CopperProbe ≈0.80 |
+
+Open items: CopperProbe does not converge around the FX10 ball field (about
+40 nets stay conflicted on 4 signal layers, with In1/In4 both GND). Automatic
+In4 power islands and implicit neck-down did not reduce that on their own;
+the next lever is placement (FX10 surroundings) or a part-owned fanout macro.
 
 ## 6. Decisions (owner, 2026-10-19)
 

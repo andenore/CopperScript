@@ -104,7 +104,8 @@ EXPORT int pcbir_astar(
     int heap_size = 0, touched_count = 0, expansions = 0, found = -1, i;
     uint8_t allowed[64];
     for (i = 0; i < nl && i < 64; i++) allowed[i] = 0;
-    for (i = 0; i < n_layers; i++) allowed[layers[i]] = 1;
+    /* A layer index with bit 8 set may be entered only on target nodes. */
+    for (i = 0; i < n_layers; i++) allowed[layers[i] & 0xff] = (layers[i] & 0x100) ? 2 : 1;
 
     for (i = 0; i < n_sources; i++) {
         int node = sources[i];
@@ -136,12 +137,14 @@ EXPORT int pcbir_astar(
         if (++expansions > max_expansions) break;
         int layer = node / plane, rest = node % plane;
         int y = rest / nx, x = rest % nx;
+        int target_only = allowed[layer] == 2;
         int here_in_region = flags[node] & FLAG_REGION;
         const double *base = move_base + layer * 8;
         for (int m = 0; m < 8; m++) {
             int x2 = x + DX[m], y2 = y + DY[m];
             if (x2 < bx0 || x2 > bx1 || y2 < by0 || y2 > by1) continue;
             int n2 = node + DY[m] * nx + DX[m];
+            if (target_only && !(flags[n2] & FLAG_TARGET)) continue;
             int o = owner[n2];
             if (o != -1 && o != nid && !(here_in_region && (flags[n2] & FLAG_NECK))) continue;
             if (DX[m] && DY[m]) {
@@ -168,9 +171,10 @@ EXPORT int pcbir_astar(
         double vpen = via_cost * (1.0 + via_hist[rest]) * (1.0 + present * via_occ[rest]);
         double h = octile(x, y, tx0, ty0, tx1, ty1);
         for (i = 0; i < n_layers; i++) {
-            int layer2 = layers[i];
+            int layer2 = layers[i] & 0xff;
             if (layer2 == layer) continue;
             int n2 = layer2 * plane + rest;
+            if ((layers[i] & 0x100) && !(flags[n2] & FLAG_TARGET)) continue;
             int o = owner[n2];
             if (o != -1 && o != nid) continue;
             double c = cost + vpen * (1.0 + hist[n2]) * (1.0 + present * occ[n2]);
