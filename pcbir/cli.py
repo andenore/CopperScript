@@ -1603,7 +1603,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ),
                         on_progress=progress,
                     ) if stitch_enabled and (args.zone_escape_trials
-                                             or args.zone_local_ripup_trials) else None
+                                             or args.zone_local_ripup_trials)
+                      # The unified router joins plane pads itself; the legacy
+                      # late-escape repair reruns the legacy pipeline.
+                      and getattr(args, "router", "legacy") != "unified" else None
                 )
                 if escape_feedback is not None:
                     result = escape_feedback.pipeline

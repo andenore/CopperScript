@@ -98,6 +98,7 @@ class UnifiedRouterOptions:
     # Trapped pins: exact local maze to open space within this radius (0 = off).
     local_escape_radius_nm: int = nm_from_mm("2.0")
     local_escape_step_nm: int = nm_from_mm("0.025")
+    local_escape_limit: int = 40             # trapped pins per router that get an exact local maze
     # Route decoupling capacitors with the dedicated decoupler router before
     # the unified router (their copper is then fixed).
     pre_route_decouplers: bool = True
@@ -878,6 +879,10 @@ class _Router:
         """
         from .pin_access import local_access_path
         g, options = self.grid, self.options
+        spent = self.__dict__.get("_local_spent", 0)
+        if spent >= options.local_escape_limit:
+            return
+        self._local_spent = spent + 1
         open_space = self._open_space(spec)
         width = spec.neck_width or spec.width
         reach = options.local_escape_radius_nm
