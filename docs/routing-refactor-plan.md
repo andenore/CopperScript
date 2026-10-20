@@ -380,6 +380,7 @@ whole-board CopperProbe result within the first week.
 | 2026-10-19 | P0–P2 done; P5 prototype | legacy: round-led-ring 0.57, nrf52 1.0, full-vertical 0.88, cm4 0.76 |
 | 2026-10-20 | P5/P6 working, P4 dogbones, P3 islands (opt-in) | round-led-ring 0.98, nrf52 1.0, full-vertical 0.99–1.0, cm4 1.0, led-ring 1.0, asset-tracker 0.95, CopperProbe ≈0.82; all DRC-clean |
 | 2026-10-20 (pm) | Escape and bypass reservations before critical routing; exact pin escapes; full-footprint negotiation | asset-tracker 1.0 (120/120), led-ring 1.0, nrf52 1.0, cm4 1.0, full-vertical 1.0, round-led-ring 0.98; all DRC-clean |
+| 2026-10-20 (eve) | Automatic diff-pair corridors, satellite seeding, placement and plane-estimate diagnostics in `copper issues` | asset-tracker 1.0, led-ring 1.0, nrf52 1.0, cm4 1.0, full-vertical 0.99, round-led-ring 0.98; all DRC-clean. CopperProbe (7 parts unfixed) 0.844: USB_DM/DP now route |
 
 Open items:
 
@@ -395,6 +396,13 @@ Open items:
     vias.
   - Next levers are placement feedback driven by these hotspots (the
     `routeflow` outer loop) and a part-owned FX10 fanout macro (P4).
+- **Satellite parts land far from their partners** when the space next to
+  them is taken. On CopperProbe the selected candidate puts C_XIN 15 mm and
+  C_XOUT 8 mm from the crystal: the FX10 dogbone vias fill the area, and
+  candidate selection (global-route score) does not see the distance.
+- **Surface-pour contacts are not re-checked after routing.** On
+  asset-tracker, U_CC.3 (GND) is counted as stitched to the F.Cu pour, but a
+  later signal trace walls it off (`copper issues` E1).
 - **Freerouting comparison (D2)** is blocked here: the sandbox can't download
   the jar.
 - **Windows DLL** is built but not yet run on Windows.
