@@ -814,7 +814,7 @@ class _Router:
                     self._attach_extended(position, outward, layer, spec, owner, seen)
                 if options.local_escape_radius_nm and not self._reaches_open(
                         [node for node in seen if node // g.plane == layer], spec):
-                    self._attach_local(position, layer, spec, seen)
+                    self._attach_local(position, layer, spec, seen, outward)
         return list(seen.values())
 
     def _open_space(self, spec: _NetSpec):
@@ -869,7 +869,7 @@ class _Router:
                         stack.append(other)
         return len(visited) >= limit
 
-    def _attach_local(self, position, layer, spec, seen) -> None:
+    def _attach_local(self, position, layer, spec, seen, outward=None) -> None:
         """Exact-geometry escape for a pin whose grid neighbourhood is a pocket.
 
         The legality raster is conservative by a fraction of the pitch, so
@@ -889,11 +889,19 @@ class _Router:
         ix0, iy0, ix1, iy1 = g.window(position.x_nm - reach, position.y_nm - reach,
                                       position.x_nm + reach, position.y_nm + reach)
         owner, _ = self.rasters.track(spec.width, spec.clearance)
-        near = sorted((hypot(g.x0 + ix * g.pitch - position.x_nm, g.y0 + iy * g.pitch - position.y_nm), ix, iy)
-                      for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1))
-        found = tries = 0
-        for distance, ix, iy in near:
-            if distance > reach or found >= 3 or tries >= 12:
+        def rank(ix, iy):
+            dx, dy = g.x0 + ix * g.pitch - position.x_nm, g.y0 + iy * g.pitch - position.y_nm
+            distance = hypot(dx, dy)
+            # Targets ahead of the pin (along its outward axis) first: a pin's
+            # exit is rarely back across its own package.
+            behind = outward is not None and dx * outward[0] + dy * outward[1] < 0
+            return (distance * (2.0 if behind else 1.0), distance, ix, iy)
+        near = sorted(rank(ix, iy) for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1))
+        found = tries = misses = 0
+        for _, distance, ix, iy in near:
+            # A failed maze is the expensive case; four in a row mean the pin
+            # is enclosed beyond this radius (a dense array without a dogbone).
+            if distance > reach or found >= 3 or tries >= 12 or misses >= 4:
                 break
             node = g.index(layer, ix, iy)
             if not open_space[node] or owner[node] != _FREE:
@@ -904,7 +912,9 @@ class _Router:
                                      g.layers[layer], width, step_nm=options.local_escape_step_nm,
                                      detour_nm=nm_from_mm("0.5"), maximum_states=20000)
             if not path:
+                misses += 1
                 continue
+            misses = 0
             cost = 2 * distance / g.pitch
             if node not in seen or seen[node][2] > cost:
                 seen[node] = (node, tuple(path), cost)
