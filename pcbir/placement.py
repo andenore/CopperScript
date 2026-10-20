@@ -2098,7 +2098,8 @@ def _detailed_refine(
             if not _legal(swapped_b, trial, board, options):
                 continue
             trial[right] = swapped_b
-            if _fast_score(board, trial, spacing, options.power_domain_weight) < _fast_score(board, placements, spacing, options.power_domain_weight):
+            if _meaningfully_better(_fast_score(board, trial, spacing, options.power_domain_weight),
+                                    _fast_score(board, placements, spacing, options.power_domain_weight)):
                 placements = trial
                 changed = True
                 swap_count += 1
@@ -3196,6 +3197,21 @@ def _spread_escape_components(
         if not changed:
             break
     return placements, moves
+
+
+_ESCAPE_SCORE_STEP_NM = 100_000
+
+
+def _meaningfully_better(new: tuple, old: tuple, step_nm: int = _ESCAPE_SCORE_STEP_NM) -> bool:
+    """``new < old`` for :func:`_fast_score`, with escape-width differences under
+    ``step_nm`` treated as ties. A swap may move parts far apart: a few
+    micrometres of escape width must not outrank millimetres of wirelength
+    (a crystal load capacitor traded 12 mm away for 10 um of escape width)."""
+    if new[0] != old[0]:
+        return new[0] < old[0]
+    if abs(new[1] - old[1]) >= step_nm:
+        return new[1] < old[1]
+    return new[2:] < old[2:]
 
 
 def _fast_score(board: PhysicalBoard, placements: Mapping[str, Placement],
