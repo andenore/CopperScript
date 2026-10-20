@@ -59,9 +59,9 @@ The committed `.github/board-toolchain.json` pins Python 3.12.12 and KiCad
 from the KiCad 10.0 release PPA and fails unless `kicad-cli version` equals the
 pin, so a PPA update stops CI rather than silently changing native results.
 The installer URL and SHA-256 fields serve only the Windows helper
-`scripts/ci_install_kicad.ps1`, which no workflow currently runs; they still
-name the 10.0.6 installer because no verified 10.0.7 installer digest has
-been recorded. Actions are pinned
+`scripts/ci_install_kicad.ps1`, which no workflow currently runs; they name
+the official 10.0.7 x86_64 installer and its SHA-256, computed from the
+GitHub release download. Actions are pinned
 by full commit and Python build/test tools by exact version. The fresh Windows
 runner checks out source with canonical LF bytes. The generated project keeps
 its own exported footprints, so recipients do not need CopperLib or matching
@@ -117,5 +117,5 @@ the inspection gate correctly rejected completion.
 - [GitHub workflow syntax and permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
 - [GitHub Actions limits](https://docs.github.com/en/actions/reference/limits)
 - [GitHub release REST API](https://docs.github.com/en/rest/releases/releases)
-- [Official KiCad 10.0.6 release](https://github.com/KiCad/kicad-source-mirror/releases/tag/10.0.6)
+- [Official KiCad 10.0.7 release](https://github.com/KiCad/kicad-source-mirror/releases/tag/10.0.7)
 - [KiCad CLI documentation](https://docs.kicad.org/10.0/en/cli/cli.html)
