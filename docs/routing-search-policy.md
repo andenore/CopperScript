@@ -88,3 +88,34 @@ Counts are deterministic for fixed inputs. Like the policy telemetry above,
 they never enter equality, physical metadata, candidate comparisons, route
 fingerprints or acceptance. The search memo lowers `search_work` without
 changing copper, so report bytes may differ between otherwise identical runs.
+
+## Guide-distance heuristic (opt-in, off by default)
+
+`guide_distance_heuristic` (`--guide-distance-heuristic`) adds the guide
+deviation that any path to the target must pay to the maze search's lower
+bound: 50 units per nanometre of `GuideDistance.exposed_length_bound_nm`, the
+smaller of the straight distance and both endpoints' distances to the union of
+every layer's guide capsules and access squares. `_queue_estimate` inflates
+only the octile term in weighted passes; the guide bound is never inflated.
+
+Measured on 2026-10-20 (local, unprofiled, same inputs and settings as the
+make recipes):
+
+- Paired replays of 38 whole-board searches on identical inputs: identical
+  optimal cost at 100 % weight, median 0.77 of the states (0.50–0.94), and 4
+  of 21 searches that exhausted 20,000 states completed within that budget.
+- Whole runs:
+
+| Case | Vias | Track mm | States expanded |
+| --- | --- | --- | --- |
+| full-vertical candidate-00 | 46 → 62 | 1,572.3 → 1,587.8 | +10.0 % |
+| full-vertical candidate-01 | 51 → 51 | 1,640.7 → 1,640.3 | −9.9 % |
+| full-vertical candidate-02 | 56 → 65 | 1,506.7 → 1,599.2 | −58.8 % |
+| cm4 | 23 → 23 | 587.6 → 587.6 | −5.3 % |
+| nrf52 | 10 → 10 | 317.5 → 317.5 | 0.0 % |
+
+Unrouted nets were unchanged in every case. Total work fell 17 %, but routed
+quality never improved and twice became worse, so the option stays off. The
+search budget also filters quality: a net whose detour exceeds it is retried
+by rip-up and repair, which can find better copper than a long whole-board
+detour accepted in a normal pass. A faster search accepts more such detours.
