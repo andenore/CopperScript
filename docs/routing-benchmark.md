@@ -77,7 +77,7 @@ D3-A, 99 boards, commit 07f51f6, stock KiCad 9.0.9 on `ubuntu-24.04`:
 | Mean unconnected items | 1.31 | 0 |
 | Mean vias | 3.40 | |
 | Mean track length | 156.3 mm | |
-| Mean seconds per board | 31.8 (max 258) | |
+| Mean seconds per board | 31.8 (max 971) | |
 
 For orientation only, PCBWorld reports clean pass 0.80 for Freerouting,
 0.86 for its PPO agent and 0.74 for KiCadRoutingTools on D3-A. Those
