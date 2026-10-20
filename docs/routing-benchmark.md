@@ -35,9 +35,11 @@ vias are appended, using the file's own net numbers and copper layer names.
 Every other byte of the file is unchanged. The `.kicad_pro` is copied
 alongside.
 
-`python -m pcbir.bench score DIR` runs stock
-`kicad-cli pcb drc --format json --all-track-errors --refill-zones` on the
-written board, under its own project rules. PCBWorld's definitions apply:
+`python -m pcbir.bench score DIR --pcbnew-python PY` first refills the
+board's zones through KiCad's `pcbnew` module (zones still hold the original
+routing's fill), as PCBWorld's own preparation does, then runs stock
+`kicad-cli pcb drc --format json --all-track-errors` on the written board
+under its own project rules. PCBWorld's definitions apply:
 
 | Measure | Meaning |
 |---|---|

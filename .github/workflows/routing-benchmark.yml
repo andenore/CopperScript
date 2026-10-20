@@ -229,9 +229,9 @@ jobs:
             id=$(basename "$dir")
             # A board whose run never wrote a record (lost shard) still counts against the pass rate.
             [ -f "../results/$id/result.json" ] || { mkdir -p "../results/$id"; printf '{"board": "%s", "status": "missing"}\n' "$id" > "../results/$id/result.json"; }
-            python -m pcbir.bench score "../results/$id" --kicad-cli /usr/bin/kicad-cli > /dev/null || echo "$id score failed"
+            python -m pcbir.bench score "../results/$id" --kicad-cli /usr/bin/kicad-cli --pcbnew-python /usr/bin/python3 > /dev/null || echo "$id score failed"
             python -m pcbir.bench reference "$dir/processed_v9_guide_v3.kicad_pcb" --out "../reference/$id" > /dev/null
-            python -m pcbir.bench score "../reference/$id" --kicad-cli /usr/bin/kicad-cli > /dev/null || echo "$id reference score failed"
+            python -m pcbir.bench score "../reference/$id" --kicad-cli /usr/bin/kicad-cli --pcbnew-python /usr/bin/python3 > /dev/null || echo "$id reference score failed"
           done
       - name: Summarize
         run: |

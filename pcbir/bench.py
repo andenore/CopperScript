@@ -217,17 +217,41 @@ def _mm(value_nm: int) -> str:
 
 # --------------------------------------------------------------------------- scoring
 
-def score_result(out_dir: Path, kicad_cli: str, *, refill_zones: bool = True, timeout: int = 600) -> dict:
-    """Run KiCad DRC on the routed board and add PCBWorld-style scores to its record."""
+_REFILL_HELPER = """
+import sys, pcbnew
+board = pcbnew.LoadBoard(sys.argv[1])
+pcbnew.ZONE_FILLER(board).Fill(board.Zones())
+pcbnew.SaveBoard(sys.argv[1], board)
+"""
+
+
+def score_result(out_dir: Path, kicad_cli: str, *, pcbnew_python: str | None = None, timeout: int = 600) -> dict:
+    """Run KiCad DRC on the routed board and add PCBWorld-style scores to its record.
+
+    Zones still hold the original board's fill, so with ``pcbnew_python`` (an
+    interpreter that imports KiCad's ``pcbnew``) they are refilled first, as
+    PCBWorld's own preparation does. Without it the stale fill is scored.
+    """
     record = json.loads((out_dir / "result.json").read_text(encoding="utf-8"))
     routed = out_dir / ROUTED_NAME
     if not routed.is_file():
         record.update(clean_pass=False, scored=False)
         _save(out_dir, record)
         return record
+    record["refill_zones"] = False
+    if pcbnew_python and "(zone" in routed.read_text(encoding="utf-8"):
+        try:
+            refill = subprocess.run([pcbnew_python, "-c", _REFILL_HELPER, str(routed)], capture_output=True,
+                                    text=True, timeout=timeout, check=False)
+            record["refill_zones"] = refill.returncode == 0
+            if refill.returncode:
+                record["refill_error"] = (refill.stderr or refill.stdout)[-500:]
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            record["refill_error"] = str(exc)
     report = out_dir / "kicad-drc.json"
+    report.unlink(missing_ok=True)
     command = [kicad_cli, "pcb", "drc", "--format", "json", "--units", "mm", "--all-track-errors",
-               *(["--refill-zones"] if refill_zones else []), "-o", str(report), str(routed)]
+               "-o", str(report), str(routed)]
     try:
         completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
         record["drc_exit_code"] = completed.returncode
@@ -236,12 +260,12 @@ def score_result(out_dir: Path, kicad_cli: str, *, refill_zones: bool = True, ti
         _save(out_dir, record)
         return record
     if not report.is_file():
-        record.update(clean_pass=False, scored=False, drc_error=(completed.stderr or completed.stdout)[-500:])
+        record.update(clean_pass=False, scored=False,
+                      drc_error=(completed.stderr or completed.stdout or f"exit {completed.returncode}")[-500:])
         _save(out_dir, record)
         return record
     record.update(score_drc_report(json.loads(report.read_text(encoding="utf-8"))))
     record["scored"] = True
-    record["refill_zones"] = refill_zones
     _save(out_dir, record)
     return record
 
@@ -307,15 +331,21 @@ def board_table(root: Path) -> str:
     def order(item):
         return (bool(item.get("clean_pass")), -(item.get("drc_errors") or 0) - (item.get("unconnected_items") or 0))
 
-    rows = ["| Board | Status | Clean | Unrouted nets | KiCad errors | Unconnected | Vias | Seconds | Error types |",
-            "|---|---|---|---|---|---|---|---|---|"]
+    rows = ["| Board | Status | Clean | Unrouted nets | KiCad errors | Unconnected | Vias | Seconds | Error types | Note |",
+            "|---|---|---|---|---|---|---|---|---|---|"]
     for item in sorted(records, key=order):
         unrouted = item.get("unrouted_nets")
         types = ", ".join(f"{name} {count}" for name, count in (item.get("drc_error_types") or {}).items())
         rows.append(f"| {item.get('board')} | {item.get('status')} | {'yes' if item.get('clean_pass') else 'no'} | "
                     f"{len(unrouted) if unrouted is not None else ''} | {item.get('drc_errors', '')} | "
-                    f"{item.get('unconnected_items', '')} | {item.get('vias', '')} | {item.get('seconds', '')} | {types} |")
+                    f"{item.get('unconnected_items', '')} | {item.get('vias', '')} | {item.get('seconds', '')} | {types} | "
+                    f"{_note(item)} |")
     return "\n".join(rows) + "\n"
+
+
+def _note(item: dict) -> str:
+    text = item.get("error") or item.get("drc_error") or item.get("refill_error") or ""
+    return " ".join(str(text).split()).replace("|", "/")[-160:]
 
 
 def _save(out_dir: Path, record: dict) -> None:
@@ -335,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     score = commands.add_parser("score")
     score.add_argument("directory", type=Path)
     score.add_argument("--kicad-cli", default="kicad-cli")
-    score.add_argument("--no-refill-zones", action="store_true")
+    score.add_argument("--pcbnew-python", help="interpreter importing KiCad's pcbnew, to refill zones first")
     summary = commands.add_parser("summarize")
     summary.add_argument("root", type=Path)
     summary.add_argument("--markdown", action="store_true")
@@ -347,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "reference":
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":
-        record = score_result(args.directory, args.kicad_cli, refill_zones=not args.no_refill_zones)
+        record = score_result(args.directory, args.kicad_cli, pcbnew_python=args.pcbnew_python)
     elif args.command == "boards":
         print(board_table(args.root), end="")
         return 0
