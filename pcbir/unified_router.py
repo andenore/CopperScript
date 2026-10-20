@@ -86,6 +86,7 @@ class UnifiedRouterOptions:
     # Extra cost (as history) on a ball grid's own surface layer: escapes are
     # short, so through-traffic between the balls should prefer inner layers.
     ball_field_cost: float = 2.0
+    reuse_plane_vias: bool = False           # plane pads may join an existing via of their net
     ball_field_via_sites: bool = False       # new vias inside a ball array only at cell centres
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
@@ -647,6 +648,8 @@ class _Router:
         spec.components = self._components(net, spec)
         if net.name in self.zone_nets:
             planes, islands, optional = self._zone_regions(net.name, spec)
+            if self.options.reuse_plane_vias:
+                planes = planes | self._plane_via_taps(net.name, spec, planes)
             spec.plane = planes
             # Small pours (surface islands) must also reach the main plane;
             # fragments of a layer that already has plane copper may stay apart.
@@ -661,6 +664,37 @@ class _Router:
         ys = [self.grid.unpack(node)[2] for comp in spec.components for node, _, _ in comp]
         spec.span = (max(xs) - min(xs) + max(ys) - min(ys)) if xs else 0
         return spec
+
+    def _plane_via_taps(self, name: str, spec: _NetSpec, planes) -> frozenset[int]:
+        """Nodes on every routing layer at existing vias of a plane net that
+        already land in its plane: a pad reaches the plane by joining such a
+        via on its own layer, without a new via (reference layouts share
+        return vias between a ball and its bypass capacitor)."""
+        g = self.grid
+        layers_all = list(g.layers)
+        taps = set()
+        for via in self.board.vias:
+            if via.net != name:
+                continue
+            ix = int(round((via.position.x_nm - g.x0) / g.pitch))
+            iy = int(round((via.position.y_nm - g.y0) / g.pitch))
+            if not (0 <= ix < g.nx and 0 <= iy < g.ny):
+                continue
+            span = layers_all[layers_all.index(via.from_layer):layers_all.index(via.to_layer) + 1]
+            # The plane must surround the via (fill reaches it from all
+            # sides), not just touch it at one raster node.
+            reach = max(1, int(round((via.size_nm / 2 + spec.clearance) / g.pitch)) + 1)
+            def surrounded(index):
+                return all(0 <= ix + dx < g.nx and 0 <= iy + dy < g.ny
+                           and g.index(index, ix + dx, iy + dy) in planes
+                           for dx, dy in ((reach, 0), (-reach, 0), (0, reach), (0, -reach)))
+            if not any(surrounded(layers_all.index(layer)) for layer in span):
+                continue
+            for layer in span:
+                index = layers_all.index(layer)
+                if index in spec.layers:
+                    taps.add(g.index(index, ix, iy))
+        return frozenset(taps)
 
     def _zone_regions(self, name: str, spec: _NetSpec):
         """Plane target nodes of a zone net, its separate pours, and fragments.
