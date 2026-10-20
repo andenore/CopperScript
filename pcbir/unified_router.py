@@ -1439,6 +1439,9 @@ class _Router:
             layer, rest = divmod(node, plane)
             y, x = divmod(rest, nx)
             here_in_region = use_neck and node in region
+            # A node legal only at neck width must not be left towards a node
+            # outside the region: that step would be drawn at full width.
+            here_neck_only = here_in_region and node in neck
             only_targets = layer in target_only
             for dx, dy, dn, base, diagonal, dcell in move_tables[layer]:
                 x2 = x + dx
@@ -1447,6 +1450,8 @@ class _Router:
                     continue
                 n2 = node + dn
                 if only_targets and n2 not in targets:
+                    continue
+                if here_neck_only and n2 not in region:
                     continue
                 o = owner[n2]
                 if o != -1 and o != nid and not (here_in_region and n2 in neck):

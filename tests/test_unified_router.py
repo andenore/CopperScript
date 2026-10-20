@@ -231,3 +231,39 @@ def test_pour_recheck_reconnects_a_plane_pad_walled_off_by_signal_copper() -> No
     assert estimate_plane_connectivity(checked.board).opens == 0
     assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0
     assert any(via.net == "GND" for via in checked.board.vias)
+
+
+def _neck_exit_path(monkeypatch, kernel: bool):
+    import numpy as np
+    import pcbir.native as native
+    from pcbir.unified_router import _Router
+    if not kernel:
+        monkeypatch.setattr(native, "astar", lambda: None)
+    board = _board({"A": ((3, 10), (17, 10))})
+    router = _Router(board, UnifiedRouterOptions(), list(board.nets), None)
+    spec = router.specs[0]
+    g = router.grid
+    y = g.ny // 2
+    source, left, target = g.index(0, 40, y), g.index(0, 39, y), g.index(0, 60, y)
+    # The source is legal only at neck width; its region is itself and its left neighbour.
+    spec.neck, spec.region, spec.neck_mid = frozenset({source}), frozenset({source, left}), frozenset()
+    for key in ("neck", "neck_mid", "region"):
+        nodes = getattr(spec, key)
+        spec.arrays[key] = np.fromiter(nodes, dtype=np.int64, count=len(nodes))
+    found = router._search(spec, {source: 0.0}, {target}, 1.0)
+    assert found is not None
+    return found[0], spec.region
+
+
+def test_a_neck_only_node_is_left_inside_its_region_python(monkeypatch) -> None:
+    path, region = _neck_exit_path(monkeypatch, kernel=False)
+    assert path[1] in region
+
+
+def test_a_neck_only_node_is_left_inside_its_region_native(monkeypatch) -> None:
+    import pcbir.native as native
+    if native.astar() is None:
+        import pytest
+        pytest.skip("no native kernel for this platform")
+    path, region = _neck_exit_path(monkeypatch, kernel=True)
+    assert path[1] in region

@@ -147,12 +147,16 @@ EXPORT int pcbir_astar(
         int y = rest / nx, x = rest % nx;
         int target_only = allowed[layer] == 2;
         int here_in_region = flags[node] & FLAG_REGION;
+        /* A neck-only node must not be left towards a node outside the region
+           (that step would be drawn at full width). */
+        int here_neck_only = here_in_region && (flags[node] & FLAG_NECK);
         const double *base = move_base + layer * 8;
         for (int m = 0; m < 8; m++) {
             int x2 = x + DX[m], y2 = y + DY[m];
             if (x2 < bx0 || x2 > bx1 || y2 < by0 || y2 > by1) continue;
             int n2 = node + DY[m] * nx + DX[m];
             if (target_only && !(flags[n2] & FLAG_TARGET)) continue;
+            if (here_neck_only && !(flags[n2] & FLAG_REGION)) continue;
             int o = owner[n2];
             if (o != -1 && o != nid && !(here_in_region && (flags[n2] & FLAG_NECK))) continue;
             if (DX[m] && DY[m]) {
