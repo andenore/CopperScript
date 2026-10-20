@@ -78,6 +78,8 @@ class UnifiedRouterOptions:
     neck_radius_nm: int = nm_from_mm("1.2")
     attach_candidates: int = 6
     window_margin_nm: int = nm_from_mm("2.5")
+    present_limit: float = 0.0               # cap on the present-congestion factor (0 = none)
+    window_growth_limit: int = 6             # persistent conflicts widen the window up to this factor
     maximum_expansions: int = 400_000
     commit_rounds: int = 4
     full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
@@ -486,6 +488,7 @@ class _Router:
         self.routes: dict[str, _NetRoute] = {}
         self._lead_nodes: dict[tuple, list[int]] = {}
         self.present = options.present_factor
+        self.conflict_age: dict[str, int] = {}
 
     # -- setup ------------------------------------------------------------
 
@@ -854,7 +857,7 @@ class _Router:
         whole = (0, 0, g.nx - 1, g.ny - 1)
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self.rasters.via(spec.via_size, spec.via_drill, spec.clearance)
-        margin = int(self.options.window_margin_nm // g.pitch)
+        margin = self._margin(spec)
         count = len(spec.components)
         first_island = count - spec.islands
         first_optional = count - spec.optional
@@ -1055,6 +1058,11 @@ class _Router:
                     result.append((layer * g.plane + iy * g.nx + ix, distance))
         return result
 
+    def _margin(self, spec: _NetSpec) -> int:
+        age = self.conflict_age.get(spec.name, 0)
+        scale = min(self.options.window_growth_limit, 1 + age // 3)
+        return int(self.options.window_margin_nm * scale // self.grid.pitch)
+
     def _search(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
                 target_extra=None):
         g, options = self.grid, self.options
@@ -1072,7 +1080,7 @@ class _Router:
         tx0 = min(x for x, _ in target_xy); tx1 = max(x for x, _ in target_xy)
         ty0 = min(y for _, y in target_xy); ty1 = max(y for _, y in target_xy)
         src_xy = [g.unpack(s)[1:] for s in sources]
-        margin = int(options.window_margin_nm // g.pitch)
+        margin = self._margin(spec)
         bx0 = max(0, min(tx0, min(x for x, _ in src_xy)) - margin)
         bx1 = min(nx - 1, max(tx1, max(x for x, _ in src_xy)) + margin)
         by0 = max(0, min(ty0, min(y for _, y in src_xy)) - margin)
@@ -1096,6 +1104,8 @@ class _Router:
         """A* over the shared grid; arrays are reused across searches."""
         if self.native is not None:
             result = self._astar_native(spec, sources, targets, present, box, tbox, target_extra)
+            if result is NotImplemented and self._grow_native_buffers():
+                result = self._astar_native(spec, sources, targets, present, box, tbox, target_extra)
             if result is not NotImplemented:
                 return result
         g, options = self.grid, self.options
@@ -1226,6 +1236,19 @@ class _Router:
             best[node] = INF
         return result
 
+    def _grow_native_buffers(self) -> bool:
+        """Enlarge the kernel's scratch buffers after an overflow (bounded by the grid)."""
+        size = self.grid.size
+        if self._n_heap_cap >= 4 * size and self._n_touched_cap >= size and self._n_path_cap >= size:
+            return False
+        self._n_heap_cap = min(4 * size, self._n_heap_cap * 2)
+        self._n_heap = np.zeros(self._n_heap_cap * 3, dtype=np.float64)
+        self._n_touched_cap = size
+        self._n_touched = np.zeros(size, dtype=np.int32)
+        self._n_path_cap = min(size, self._n_path_cap * 2)
+        self._n_path = np.zeros(self._n_path_cap, dtype=np.int32)
+        return True
+
     def _astar_native(self, spec, sources, targets, present, box, tbox, target_extra):
         """The same search in the C kernel; NotImplemented asks for the Python path."""
         import ctypes
@@ -1347,6 +1370,11 @@ class _Router:
                 routes[name] = route
                 self.occupancy.add(route, +1)
             conflicts = self._conflicts(routes)
+            # Nets that stay conflicted search a wider window: congestion
+            # costs alone never widen the box, so a needed detour beyond the
+            # margin would otherwise stay invisible.
+            for name in pending:
+                self.conflict_age[name] = self.conflict_age.get(name, 0) + 1 if name in conflicts else 0
             failed = {name for name, route in routes.items() if not route.connected}
             score = (len(failed) + len(conflicts), sum(r.length for r in routes.values()))
             if best_snapshot is None or score < best_snapshot[0]:
@@ -1359,6 +1387,8 @@ class _Router:
                 break
             self._penalise(routes, conflicts)
             present *= options.present_growth
+            if options.present_limit:
+                present = min(present, options.present_limit)
             self.present = present
             # Reroute conflicted nets; retry failed nets now and then, since
             # congestion elsewhere may have moved.
@@ -1473,6 +1503,7 @@ class _Router:
         if other.grid.size == self.grid.size and other.grid.pitch == self.grid.pitch:
             self.occupancy.copy_history(other.occupancy)
             self.present = other.present
+            self.conflict_age = dict(other.conflict_age)
 
     def penalise_points(self, name: str, points: list[Point], amount: float) -> None:
         g = self.grid
