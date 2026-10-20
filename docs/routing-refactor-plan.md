@@ -418,7 +418,9 @@ Open items:
   swapped 12 mm away for 10 um of escape width; fixed, now about 3.3 mm.)
 - **Freerouting comparison (D2)** is blocked here: the sandbox can't download
   the jar.
-- **Windows DLL** is built but not yet run on Windows.
+- **Windows DLL** verified 2026-10-20: it loads, matches the Python search, and the
+  small/medium ladder reproduces the Linux numbers (round-led-ring 0.98, nrf52 1.0,
+  full-vertical 0.99, cm4 1.0; 0 DRC).
 
 ## 6. Decisions (owner, 2026-10-19)
 
