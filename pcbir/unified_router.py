@@ -98,6 +98,8 @@ class UnifiedRouterOptions:
     # Trapped pins: exact local maze to open space within this radius (0 = off).
     local_escape_radius_nm: int = nm_from_mm("2.0")
     local_escape_step_nm: int = nm_from_mm("0.025")
+    # Write the router's inputs to this state file before routing (replay_unified).
+    save_inputs_path: str | None = None
     local_escape_limit: int = 40             # trapped pins per router that get an exact local maze
     # Route decoupling capacitors with the dedicated decoupler router before
     # the unified router (their copper is then fixed).
@@ -1618,7 +1620,8 @@ class _Router:
                         bad.append(where)
                         blockers, fixed = index.blocking_track_nets(track)
                         self.rejections.setdefault(name, []).append(
-                            (where, track.layer.value, tuple(sorted(blockers)), fixed))
+                            (where, track.layer.value, tuple(sorted(blockers)), fixed,
+                             _first_reason(index.track_blocker_records(track))))
                 for via in vias:
                     if via in net_vias:
                         continue
@@ -1627,7 +1630,8 @@ class _Router:
                         bad.append(via.position)
                         blockers, fixed = index.blocking_via_nets(via)
                         self.rejections.setdefault(name, []).append(
-                            (via.position, "via", tuple(sorted(blockers)), fixed))
+                            (via.position, "via", tuple(sorted(blockers)), fixed,
+                             _first_reason(index.via_blocker_records(via))))
                 if not bad and index.candidate_via_conflict([v for v in vias if v not in net_vias]) is not None:
                     bad.append(vias[0].position)
                 if bad:
@@ -1716,16 +1720,22 @@ def _neighbour_nets(board: PhysicalBoard, nets, accepted, reach: int) -> set[str
     return result
 
 
+def _first_reason(records) -> str:
+    """"reason: identity" of the first blocker record, or ""."""
+    return f"{records[0].reason}: {records[0].identity}" if records else ""
+
+
 def _rejection_text(router, name: str) -> str:
     """Where the exact commit check rejected a net, and what blocked it."""
     details = getattr(router, "rejections", {}).get(name, [])
     if not details:
         return "unified: rejected by exact commit check"
-    where, layer, blockers, fixed = details[0]
+    where, layer, blockers, fixed, *rest = details[0]
     by = ", ".join(blockers) if blockers else ("fixed copper" if fixed else "board geometry")
+    reason = f" [{rest[0]}]" if rest and rest[0] else ""
     more = f" (+{len(details) - 1} more)" if len(details) > 1 else ""
     return (f"unified: rejected by exact commit check: blocked by {by} at "
-            f"({where.x_nm / 1e6:.2f},{where.y_nm / 1e6:.2f}) {layer}{more}")
+            f"({where.x_nm / 1e6:.2f},{where.y_nm / 1e6:.2f}) {layer}{reason}{more}")
 
 
 def choose_pitch(board: PhysicalBoard, default_nm: int = nm_from_mm("0.25")) -> int:
@@ -1806,6 +1816,16 @@ def route_unified(
     """
 
     options = options or UnifiedRouterOptions()
+    if options.save_inputs_path:
+        # A replayable input state for iterating on the router alone
+        # (see replay_unified); a working artifact, not evidence.
+        from .state_codec import save_state
+        save_state(options.save_inputs_path, {
+            "board": board, "global_route": global_route,
+            "options": replace(options, save_inputs_path=None),
+            "fanout_accesses": fanout_accesses, "fanout_created_vias": fanout_created_vias,
+            "fanout_created_tracks": fanout_created_tracks, "only_nets": only_nets,
+        }, note="route_unified inputs")
     started = perf_counter()
     deadline = started + options.time_budget_s if options.time_budget_s else None
     if board.hard_macros and set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
@@ -1848,7 +1868,7 @@ def route_unified(
         # The exact check names what blocked a rejected path: rip those too.
         remaining_names = {net.name for net in remaining}
         crowd |= {blocker for name in remaining_names
-                  for _, _, blockers, _ in router.rejections.get(name, ())
+                  for _, _, blockers, *_ in router.rejections.get(name, ())
                   for blocker in blockers if blocker in work and blocker not in plane_nets}
         for name in crowd:
             work.pop(name, None)
@@ -1952,3 +1972,18 @@ def route_unified(
         not r.connected and "zone net" not in " ".join(r.diagnostics) for r in results) else DetailedRoutingStatus.PARTIAL
     return DetailedRoutingResult(status, routed, tuple(results), metrics, len(board.tracks),
                                  len(board.vias), global_route.routing_fingerprint, fingerprint)
+
+
+def replay_unified(path, on_progress: ProgressCallback | None = None, **overrides) -> DetailedRoutingResult:
+    """Route the inputs saved by ``save_inputs_path`` again, with option overrides.
+
+    Without the pipeline's escape seeder (repair rounds run unseeded).
+    """
+    from .state_codec import load_state
+    saved = load_state(path)
+    options = replace(saved["options"], **overrides)
+    return route_unified(saved["board"], saved["global_route"], options,
+                         fanout_accesses=saved["fanout_accesses"],
+                         fanout_created_vias=saved["fanout_created_vias"],
+                         fanout_created_tracks=saved["fanout_created_tracks"],
+                         only_nets=saved["only_nets"], on_progress=on_progress)

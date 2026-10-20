@@ -145,8 +145,18 @@ def test_native_kernel_matches_python_search(monkeypatch) -> None:
 def test_rejection_diagnostic_names_the_blocker() -> None:
     from types import SimpleNamespace
     from pcbir.unified_router import _rejection_text
-    router = SimpleNamespace(rejections={"A": [(Point.mm(1, 2), "F.Cu", ("B",), False),
-                                               (Point.mm(3, 4), "via", (), True)]})
+    router = SimpleNamespace(rejections={"A": [(Point.mm(1, 2), "F.Cu", ("B",), False, "copper clearance: t1"),
+                                               (Point.mm(3, 4), "via", (), True, "")]})
     assert _rejection_text(router, "A") == \
-        "unified: rejected by exact commit check: blocked by B at (1.00,2.00) F.Cu (+1 more)"
+        "unified: rejected by exact commit check: blocked by B at (1.00,2.00) F.Cu [copper clearance: t1] (+1 more)"
     assert _rejection_text(router, "C") == "unified: rejected by exact commit check"
+
+
+def test_saved_inputs_replay_to_the_same_copper(tmp_path) -> None:
+    from pcbir.unified_router import replay_unified
+    board = _board({"H": ((2, 10), (18, 10)), "V": ((10, 2), (10, 18))})
+    state = tmp_path / "inputs.state.json"
+    first, _, _ = _route(board, save_inputs_path=str(state))
+    again = replay_unified(state)
+    assert set(again.board.tracks) == set(first.board.tracks)
+    assert set(again.board.vias) == set(first.board.vias)

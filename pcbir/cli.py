@@ -783,6 +783,8 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum negotiation iterations of the unified router (default: 40)")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
         help="wall-time budget for the unified router; it returns its best result when exceeded")
+    board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
+        help="unified router: save its inputs as a state file for replay_unified")
     board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
         help="unified router: route decoupling capacitors with everything else instead of first")
     board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
@@ -1020,7 +1022,8 @@ def _unified_options(args):
                                 maximum_iterations=args.unified_iterations,
                                 time_budget_s=args.unified_time_budget_s,
                                 power_islands=None if args.power_islands == "off" else args.power_islands,
-                                pre_route_decouplers=not args.unified_no_decouplers)
+                                pre_route_decouplers=not args.unified_no_decouplers,
+                                save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
