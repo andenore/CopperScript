@@ -136,3 +136,85 @@ def test_registered_terminal_slots_are_real_coexisting_and_budgeted(monkeypatch)
     assert limited==graph
     assert all(a.via is None for a in filtered['N5',ref])
     assert b.tracks==b.vias==()
+
+
+def _terminal_setup():
+    from pcbir.routing import _build_graph,_pin_access_candidates,GlobalRouterOptions
+    b,pose,pad,start=fixture()
+    options=GlobalRouterOptions(tile_size_nm=2500000,escape_step_nm=125000,pin_access_candidates=16)
+    graph=_build_graph(b,options)
+    graph=replace(graph,via_sites={name:() for name in graph.via_sites},resources={key:r for key,r in graph.resources.items() if r.layer is not None})
+    ix=RoutingClearanceIndex(b); ref=PadReference('U','5')
+    choices=_pin_access_candidates(b,graph,ref,'N5',(CopperLayer.FRONT,CopperLayer.BACK),None,ix,options)
+    launch=next(a for a in choices if a.via is not None)
+    return b,graph,ref,choices,launch
+
+
+def _site_vias(graph):
+    vias=[]
+    for name,points in graph.via_sites.items():
+        _,low,high,_,_=name.split(':')
+        for pos in points:
+            vias.append(Via('slot'+str(len(vias)),pos,450000,200000,graph.layers[int(low)],graph.layers[int(high)]))
+    return vias
+
+
+def test_terminal_launch_displaces_only_colliding_sampled_witnesses():
+    from pcbir.global_terminals import register_terminal_capacity
+    from pcbir.routing import _via_resource_id
+    b,graph,ref,choices,launch=_terminal_setup()
+    identifier=_via_resource_id(graph,launch.node,launch.via.from_layer,launch.via.to_layer)
+    near=Point(launch.via.position.x_nm+200000,launch.via.position.y_nm)
+    far=Point(1000000,1000000)
+    # One sampled witness collides with the launch, one is far away.
+    sampled=replace(graph,via_sites={**graph.via_sites,identifier:(near,far)})
+    ix=RoutingClearanceIndex(b)
+    assert not ix.candidate_vias_clear((launch.via,replace(launch.via,net='w',position=near)))
+
+    result,held=register_terminal_capacity(b,sampled,{('N5',ref):(launch,)})
+
+    assert held['N5',ref]==(launch,)
+    assert result.via_sites[identifier]==(far,launch.via.position)
+    assert ix.candidate_vias_clear(tuple(_site_vias(result)))
+    for resource in result.resources.values():
+        if resource.layer is None and resource.identifier==identifier:
+            assert resource.capacity==2
+
+
+def test_witness_under_an_accepted_launch_is_never_displaced():
+    from pcbir.global_terminals import register_terminal_capacity
+    from pcbir.routing import _via_resource_id
+    b,graph,ref,choices,launch=_terminal_setup()
+    identifier=_via_resource_id(graph,launch.node,launch.via.from_layer,launch.via.to_layer)
+    other=PadReference('U','4')
+    near=Point(launch.via.position.x_nm+200000,launch.via.position.y_nm)
+    # N4's launch sits exactly on the sampled witness and is accepted first.
+    sitting=replace(launch,pad=other,via=replace(launch.via,net='N4',position=near))
+    sampled=replace(graph,via_sites={**graph.via_sites,identifier:(near,)})
+
+    result,held=register_terminal_capacity(b,sampled,{('N4',other):(sitting,),('N5',ref):(launch,)})
+
+    assert held['N4',other]==(sitting,)
+    assert held['N5',ref]==()
+    assert result.via_sites[identifier]==(near,)
+
+
+def test_only_a_pad_left_without_access_tries_its_wider_candidates():
+    from pcbir.global_terminals import register_terminal_capacity
+    b,graph,ref,choices,launch=_terminal_setup()
+    vias=[a for a in choices if a.via is not None]
+    calls=[]
+
+    def expand(key):
+        calls.append(key)
+        return tuple(vias)
+
+    # The pad's only offered launch is illegal, so it alone expands.
+    blocked=replace(launch,node=replace(launch.node,x_index=10**6))
+    result,held=register_terminal_capacity(b,graph,{('N5',ref):(blocked,)},expand)
+    assert calls==[('N5',ref)]
+    assert len(held['N5',ref])==1 and held['N5',ref][0].via is not None
+
+    calls.clear()
+    register_terminal_capacity(b,graph,{('N5',ref):(launch,)},expand)
+    assert calls==[]

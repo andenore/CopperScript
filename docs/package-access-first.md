@@ -298,3 +298,22 @@ spends its existing slot and reports up to 32 exact capacitor identities for
 placement feedback. It neither purchases a replacement trial nor changes the
 incumbent. Surviving candidates retain the full all-owner validation and final
 bypass-preservation gate; early success is not an acceptance certificate.
+
+### Global terminal launch capacity
+
+Global pin access registers each terminal via launch as an exact capacity
+site of its coarse via resource (`register_terminal_capacity`). Sampled via
+sites are capacity witnesses, not copper any route will place. A launch that
+collides only with sampled witnesses is registered and displaces them; their
+tiles lose that capacity, so every remaining site still coexists with every
+other. Board copper, an already registered terminal site, or a witness an
+accepted launch sits on still rejects a launch.
+
+Registration runs in two passes in the same deterministic pad order: first
+each pad's first admissible launch, then the remaining alternatives, so one
+pad cannot claim every launch near a fine-pitch neighbour. A pad left with no
+admissible access tries one wider candidate set (four times the
+`pin_access_candidates` allowance) under the same checks. A pad that still
+has none reports "no legal bounded local/global access"; the global route is
+then unreachable and package access is not ready. Registered capacity is a
+coarse budget, not reserved copper or DRC evidence.
