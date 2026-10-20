@@ -199,3 +199,35 @@ def test_via_budget_is_never_exceeded() -> None:
     result, drc, summary = _route(board)
     assert len([via for via in result.board.vias if via.net == "H"]) <= 1
     assert "DRC-MAX-VIAS" not in summary["drc"]["errors_by_code"]
+
+
+def _walled_plane_pad_board() -> PhysicalBoard:
+    from pcbir import CopperZone, PolygonRing, PolygonWithHoles
+    # Pad positions are offset by +3 mm in _board.
+    # GND_1 lies outside the F.Cu pour, so GND gets copper (a via) in the first pass.
+    board = _board({"GND": ((10, 10), (20, 2)), "A": ((11.9, 5), (11.9, 15))})
+    w = nm_from_mm("0.2")
+    corners = [(14.5, 11.5), (11.5, 11.5), (11.5, 14.5), (14.5, 14.5)]
+    wall = tuple(TrackSegment("W", Point.mm(*a), Point.mm(*b), w, CopperLayer.FRONT)
+                 for a, b in zip(corners, corners[1:]))  # a U open towards net A
+    outline = PolygonWithHoles(PolygonRing((Point.mm(0.5, 0.5), Point.mm(25.5, 0.5),
+                                            Point.mm(25.5, 25.5), Point.mm(0.5, 25.5))))
+    front = PolygonWithHoles(PolygonRing((Point.mm(0.5, 0.5), Point.mm(20, 0.5),
+                                          Point.mm(20, 25.5), Point.mm(0.5, 25.5))))
+    zones = (CopperZone("gnd-f", "GND", (CopperLayer.FRONT,), front),
+             CopperZone("gnd-b", "GND", (CopperLayer.BACK,), outline))
+    from pcbir.physical import Via
+    stitching = tuple(Via("GND", Point.mm(x, y), nm_from_mm("0.6"), nm_from_mm("0.3"),
+                          CopperLayer.FRONT, CopperLayer.BACK) for x in (3, 18) for y in (3, 23))
+    return replace(board, tracks=wall, vias=stitching, zones=zones, nets=(*board.nets, PhysicalNet("W", ())))
+
+
+def test_pour_recheck_reconnects_a_plane_pad_walled_off_by_signal_copper() -> None:
+    from pcbir.plane_estimate import estimate_plane_connectivity
+    board = _walled_plane_pad_board()
+    unchecked, _, _ = _route(board, pour_recheck=False)
+    assert estimate_plane_connectivity(unchecked.board).report()["open_pads"] == {"GND": ["GND_0.1"]}
+    checked, drc, summary = _route(board)
+    assert estimate_plane_connectivity(checked.board).opens == 0
+    assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0
+    assert any(via.net == "GND" for via in checked.board.vias)
