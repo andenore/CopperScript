@@ -89,6 +89,7 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         seconds=round(time.perf_counter() - started, 3),
         pipeline_status=result.status.value,
         unrouted_nets=sorted(item.net for item in detailed.nets if not item.connected) if detailed else None,
+        unrouted_reasons=_reasons(item for item in detailed.nets if not item.connected) if detailed else {},
         tracks=len(routed.tracks), vias=len(routed.vias),
         wirelength_mm=round(sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
                                 for t in routed.tracks) / 1_000_000, 3),
@@ -103,6 +104,16 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         shutil.copyfile(project, out_dir / Path(ROUTED_NAME).with_suffix(".kicad_pro"))
     _save(out_dir, record)
     return record
+
+
+def _reasons(nets) -> dict[str, int]:
+    """Count the first diagnostic of each unrouted net, digits folded so like causes group."""
+    import re
+    counts: dict[str, int] = {}
+    for item in nets:
+        text = re.sub(r"\d+", "#", item.diagnostics[0])[:120] if item.diagnostics else "no diagnostic"
+        counts[text] = counts.get(text, 0) + 1
+    return dict(sorted(counts.items(), key=lambda pair: (-pair[1], pair[0])))
 
 
 def reference_board_file(board_path: Path, out_dir: Path) -> dict:
@@ -344,7 +355,9 @@ def board_table(root: Path) -> str:
 
 
 def _note(item: dict) -> str:
-    text = item.get("error") or item.get("drc_error") or item.get("refill_error") or ""
+    reasons = item.get("unrouted_reasons") or {}
+    text = (item.get("error") or item.get("drc_error") or item.get("refill_error")
+            or "; ".join(f"{count}× {reason}" for reason, count in list(reasons.items())[:2]))
     return " ".join(str(text).split()).replace("|", "/")[-160:]
 
 
