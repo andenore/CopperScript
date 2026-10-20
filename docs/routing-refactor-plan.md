@@ -378,12 +378,25 @@ whole-board CopperProbe result within the first week.
 | Date | Phase | Ladder (completion, unified router) |
 | --- | --- | --- |
 | 2026-10-19 | P0–P2 done; P5 prototype | legacy: round-led-ring 0.57, nrf52 1.0, full-vertical 0.88, cm4 0.76 |
-| 2026-10-20 | P5/P6 working, P4 dogbones, P3 islands (opt-in) | round-led-ring 0.94, nrf52 0.94–1.0, full-vertical 0.99, cm4 0.81–1.0, asset-tracker 0.93, CopperProbe ≈0.80 |
+| 2026-10-20 | P5/P6 working, P4 dogbones, P3 islands (opt-in) | round-led-ring 0.98, nrf52 1.0, full-vertical 0.99–1.0, cm4 1.0, led-ring 1.0, asset-tracker 0.95, CopperProbe ≈0.82; all DRC-clean |
 
-Open items: CopperProbe does not converge around the FX10 ball field (about
-40 nets stay conflicted on 4 signal layers, with In1/In4 both GND). Automatic
-In4 power islands and implicit neck-down did not reduce that on their own;
-the next lever is placement (FX10 surroundings) or a part-owned fanout macro.
+Open items:
+
+- **CopperProbe** stops at about 15 conflicted plus a few unroutable nets.
+  Diagnosis on 2026-10-20:
+  - It is not layer capacity. Turning In4 into a signal layer gives the same
+    result.
+  - The conflicts are a few hundred grid cells, mostly F.Cu within 0.5 mm of
+    FX10 balls and next to the crystal caps (C_XIN, C_XOUT) and the
+    C_FX_L3/C_FX_A3 corner. This is terminal access in a dense neighbourhood.
+  - Some nets fail even alone, because of board rules: VBUS has 0.4 mm width
+    with no breakout rule on a 0.25 mm QFN pin, and FB is F.Cu-only with no
+    vias.
+  - Next levers are placement feedback driven by these hotspots (the
+    `routeflow` outer loop) and a part-owned FX10 fanout macro (P4).
+- **Freerouting comparison (D2)** is blocked here: the sandbox can't download
+  the jar.
+- **Windows DLL** is built but not yet run on Windows.
 
 ## 6. Decisions (owner, 2026-10-19)
 
