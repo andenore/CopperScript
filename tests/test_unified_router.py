@@ -140,3 +140,13 @@ def test_native_kernel_matches_python_search(monkeypatch) -> None:
     assert summary["signal"]["opens"] == summary_python["signal"]["opens"] == 0
     assert set(with_kernel.board.tracks) == set(without.board.tracks)
     assert set(with_kernel.board.vias) == set(without.board.vias)
+
+
+def test_rejection_diagnostic_names_the_blocker() -> None:
+    from types import SimpleNamespace
+    from pcbir.unified_router import _rejection_text
+    router = SimpleNamespace(rejections={"A": [(Point.mm(1, 2), "F.Cu", ("B",), False),
+                                               (Point.mm(3, 4), "via", (), True)]})
+    assert _rejection_text(router, "A") == \
+        "unified: rejected by exact commit check: blocked by B at (1.00,2.00) F.Cu (+1 more)"
+    assert _rejection_text(router, "C") == "unified: rejected by exact commit check"

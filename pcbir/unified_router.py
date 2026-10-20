@@ -1549,6 +1549,7 @@ class _Router:
         """Exact check of every path; returns accepted copper, rejections, complete nets."""
         from .surface_path import _track_inside_board
         index = RoutingClearanceIndex(self.board)
+        self.rejections: dict[str, list[tuple[Point, str, tuple[str, ...], bool]]] = {}
         accepted: dict[str, tuple[list[TrackSegment], list[Via]]] = {}
         rejected: dict[str, list[Point]] = {}
         complete: set[str] = set()
@@ -1568,14 +1569,21 @@ class _Router:
                 for track in tracks:
                     if not (index.can_track(name, track.start, track.end, track.width_nm, track.layer)
                             and _track_inside_board(self.board, track.start, track.end, track.width_nm)):
-                        bad.append(Point((track.start.x_nm + track.end.x_nm) // 2,
-                                         (track.start.y_nm + track.end.y_nm) // 2))
+                        where = Point((track.start.x_nm + track.end.x_nm) // 2,
+                                      (track.start.y_nm + track.end.y_nm) // 2)
+                        bad.append(where)
+                        blockers, fixed = index.blocking_track_nets(track)
+                        self.rejections.setdefault(name, []).append(
+                            (where, track.layer.value, tuple(sorted(blockers)), fixed))
                 for via in vias:
                     if via in net_vias:
                         continue
                     if not index.can_via(name, via.position, via.size_nm, via.from_layer, via.to_layer,
                                          drill_nm=via.drill_nm):
                         bad.append(via.position)
+                        blockers, fixed = index.blocking_via_nets(via)
+                        self.rejections.setdefault(name, []).append(
+                            (via.position, "via", tuple(sorted(blockers)), fixed))
                 if not bad and index.candidate_via_conflict([v for v in vias if v not in net_vias]) is not None:
                     bad.append(vias[0].position)
                 if bad:
@@ -1662,6 +1670,18 @@ def _neighbour_nets(board: PhysicalBoard, nets, accepted, reach: int) -> set[str
         if any(abs(a.x_nm - b.x_nm) <= reach and abs(a.y_nm - b.y_nm) <= reach for a in ends for b in points):
             result.add(name)
     return result
+
+
+def _rejection_text(router, name: str) -> str:
+    """Where the exact commit check rejected a net, and what blocked it."""
+    details = getattr(router, "rejections", {}).get(name, [])
+    if not details:
+        return "unified: rejected by exact commit check"
+    where, layer, blockers, fixed = details[0]
+    by = ", ".join(blockers) if blockers else ("fixed copper" if fixed else "board geometry")
+    more = f" (+{len(details) - 1} more)" if len(details) > 1 else ""
+    return (f"unified: rejected by exact commit check: blocked by {by} at "
+            f"({where.x_nm / 1e6:.2f},{where.y_nm / 1e6:.2f}) {layer}{more}")
 
 
 def choose_pitch(board: PhysicalBoard, default_nm: int = nm_from_mm("0.25")) -> int:
@@ -1781,6 +1801,11 @@ def route_unified(
         # Rip up neighbours whose new copper crowds the remaining nets' pads,
         # so they renegotiate together; everything else stays fixed.
         crowd = _neighbour_nets(board, remaining, work, nm_from_mm("1.0"))
+        # The exact check names what blocked a rejected path: rip those too.
+        remaining_names = {net.name for net in remaining}
+        crowd |= {blocker for name in remaining_names
+                  for _, _, blockers, _ in router.rejections.get(name, ())
+                  for blocker in blockers if blocker in work and blocker not in plane_nets}
         for name in crowd:
             work.pop(name, None)
             done.discard(name)
@@ -1813,7 +1838,8 @@ def route_unified(
         done |= {net.name for net in remaining if net.name not in more_routes
                  and fixed.net_connected(net) and net.name not in plane_nets}
         still = {name: points for name, points in more_rejected.items() if name not in done}
-        return work, done, still, more_routes, (len(more), len(more_rejected), len(more_conflicts), used)
+        return work, done, still, more_routes, (len(more), len(more_rejected), len(more_conflicts), used), \
+            repair.rejections
 
     for round_index in range(1, options.commit_rounds):
         if all(net.name in complete for net in nets) or (deadline is not None and perf_counter() > deadline):
@@ -1832,7 +1858,8 @@ def route_unified(
                 break
         improved = best_attempt is not None
         if improved:
-            _, (accepted, complete, rejected, more_routes, stats), seeded = best_attempt
+            _, (accepted, complete, rejected, more_routes, stats, rejections), seeded = best_attempt
+            router.rejections = {**router.rejections, **rejections}
             for name, route in more_routes.items():
                 router.routes[name] = route
         emit(on_progress, "unified_commit", "finished", round=round_index + 1, adopted=improved,
@@ -1860,7 +1887,7 @@ def route_unified(
         diagnostics = ()
         if net.name not in routed_names:
             last = router.routes.get(net.name)
-            diagnostics = ("unified: rejected by exact commit check",) if net.name in rejected else (
+            diagnostics = (_rejection_text(router, net.name),) if net.name in rejected else (
                 ("unified: no routable layer",) if net.name not in spec_names else
                 (f"unified: {last.reason}" if last is not None and last.reason else
                  "unified: unresolved congestion",))

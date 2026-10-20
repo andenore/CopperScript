@@ -167,6 +167,7 @@ def run_routing_pipeline(
             access = PackageAccessResult(placement.board, placement.global_route,
                 FanoutResult(preparation.source, {}, (), 0, 0), preparation.critical,
                 None, frozenset(), 0)
+    reserved = None
     if fanout_options is not None:
         access_options = package_access_options or PackageAccessOptions()
         if preparation is None:
@@ -200,7 +201,6 @@ def run_routing_pipeline(
                 power_native_verifier=power_native_verifier)
         critical = access.critical
     else:
-        reserved = None
         if (unified_options is not None and unified_fanout is not None
                 and getattr(unified_options, "escapes_first", True)):
             # Ordinary pins of crowded packages get escapes planned before the
@@ -213,13 +213,22 @@ def run_routing_pipeline(
         critical = route_critical_nets(source, placement.global_route,
                                        on_progress=critical_progress(on_progress))
         if reserved is not None:
-            board = critical.board
-            temporary = {keepout.id for keepout in reserved[2]}
-            # The escapes themselves are not kept: the unified router finds its
-            # own exact access, and a fixed escape of one pin can block a
-            # neighbour that the escape generator left pending.
-            critical = replace(critical, board=replace(
-                board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary)))
+            failed = {name for item in critical.nets if not item.connected for name in item.nets}
+            if failed:
+                # Critical nets come first: free the reservations around the
+                # pads of any critical net they blocked and route again; keep
+                # whichever attempt connects more critical nets.
+                kept = _release_reservations(placement.board, reserved[2], failed)
+                if len(kept) < len(reserved[2]):
+                    emit(on_progress, "ordinary_escapes", "released",
+                         nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
+                    retry = route_critical_nets(
+                        replace(placement.board, copper_keepouts=(*placement.board.copper_keepouts, *kept)),
+                        placement.global_route, on_progress=critical_progress(on_progress))
+                    if sum(not item.connected for item in retry.nets) < len(
+                            [item for item in critical.nets if not item.connected]):
+                        critical = retry
+                        reserved = (reserved[0], reserved[1], kept)
     critical_feedback = None
     if critical_feedback_trials and access is None:
         critical_feedback = improve_critical_placement(
@@ -237,6 +246,15 @@ def run_routing_pipeline(
             unified_options, "pre_route_decouplers", True):
         from .decoupling import route_decouplers
         critical = replace(critical, board=route_decouplers(critical.board).board)
+    if reserved is not None:
+        # The reservations also held while decouplers routed. The escapes
+        # themselves are not kept: the unified router finds its own exact
+        # access, and a fixed escape of one pin can block a neighbour that the
+        # escape generator left pending.
+        temporary = {keepout.id for keepout in reserved[2]}
+        board = critical.board
+        critical = replace(critical, board=replace(
+            board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary)))
     if unified_options is not None and getattr(unified_options, "power_islands", None):
         from .physical import CopperLayer
         from .power_islands import auto_power_layer, plan_power_islands
@@ -473,9 +491,13 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress):
     from .hard_macros import macro_source, materialize_hard_macros
     from .physical import CopperKeepout, Point, PolygonRing, PolygonWithHoles
     rules = {rule.net: rule for rule in board.net_routing_rules}
+    # Signal nets only: supply and return nets are decoupled or planes, and
+    # leaving them out also keeps the escape generator from routing bypasses.
+    supply = {zone.net for zone in board.zones}
+    supply |= {link.net for link in board.decoupling_links} | {link.return_net for link in board.decoupling_links}
     ordinary = frozenset(net.name for net in board.nets
-                         if len(net.pads) >= 2 and (rules.get(net.name) is None
-                                                    or rules[net.name].kind is RouteKind.GENERAL))
+                         if len(net.pads) >= 2 and net.name not in supply
+                         and (rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL))
     if not ordinary:
         return None
     emit(on_progress, "ordinary_escapes", "started", nets=len(ordinary))
@@ -516,6 +538,32 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress):
     emit(on_progress, "ordinary_escapes", "finished", vias=len(vias), tracks=len(tracks),
          pending=len(escapes.pending_pads))
     return tuple(tracks), tuple(vias), tuple(keepouts)
+
+
+def _release_reservations(board, keepouts, nets, margin_nm=nm_from_mm("2")):
+    """Escape reservations that lie outside the pad boxes of ``nets`` (+margin)."""
+    from .placement import transformed_local_point
+    poses = {pose.reference: pose for pose in board.placements}
+    boxes = []
+    for net in board.nets:
+        if net.name not in nets:
+            continue
+        points = []
+        for pad in net.pads:
+            pose = poses[pad.component]
+            land = next(l for l in board.footprints[pose.footprint].pads if l.number == pad.pad)
+            points.append(transformed_local_point(pose, land.position))
+        if points:
+            boxes.append((min(p.x_nm for p in points) - margin_nm, min(p.y_nm for p in points) - margin_nm,
+                          max(p.x_nm for p in points) + margin_nm, max(p.y_nm for p in points) + margin_nm))
+
+    def inside(keepout):
+        vertices = keepout.outline.outer.vertices
+        cx = sum(v.x_nm for v in vertices) / len(vertices)
+        cy = sum(v.y_nm for v in vertices) / len(vertices)
+        return any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, y0, x1, y1 in boxes)
+
+    return tuple(keepout for keepout in keepouts if not inside(keepout))
 
 
 def _route_unified_compat(unified_options, board, global_route, _detailed_options, *,
