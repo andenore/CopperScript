@@ -767,7 +767,6 @@ class _Router:
         g, options = self.grid, self.options
         owner, _ = self.rasters.track(spec.width, spec.clearance)
         radius = options.attach_radius_nm
-        open_space = self._open_space(spec)
         seen: dict[int, tuple[int, tuple[TrackSegment, ...], float]] = {}
         for anchor in anchors:
             position, layers = anchor[0], anchor[1]
@@ -780,14 +779,12 @@ class _Router:
                 if layer not in spec.layers:
                     continue
                 found = 0
-                tries = 0
                 for distance, ix, iy in near:
-                    if distance > radius or found >= options.attach_candidates or tries >= 60:
+                    if distance > radius or found >= options.attach_candidates:
                         break
                     node = g.index(layer, ix, iy)
                     if owner[node] not in (_FREE, spec.nid) and node not in spec.neck:
                         continue
-                    tries += 1
                     target = Point(g.x0 + ix * g.pitch, g.y0 + iy * g.pitch)
                     path = None
                     if node not in spec.neck:
@@ -801,43 +798,10 @@ class _Router:
                     cost = distance / g.pitch
                     if node not in seen or seen[node][2] > cost:
                         seen[node] = (node, tuple(path), cost)
-                    # A node in a small enclosed pocket of free space is kept
-                    # but does not count: the search would go on to the
-                    # nearest nodes that actually lead somewhere.
-                    if open_space[node]:
-                        found += 1
+                    found += 1
                 if found < 2 and outward is not None:
                     self._attach_extended(position, outward, layer, spec, owner, seen)
         return list(seen.values())
-
-    def _open_space(self, spec: _NetSpec):
-        """Per node: True when it lies in a large connected region of free space.
-
-        Labelled per layer on the raster of the narrowest width the net may
-        use (4-connected); "large" is at least 4 mm² of free cells.
-        """
-        from .plane_estimate import _label
-        width = spec.neck_width or spec.width
-        clearance = spec.neck_clearance or spec.clearance
-        key = (width, clearance)
-        cache = self.__dict__.setdefault("_open_cache", {})
-        if key not in cache:
-            g = self.grid
-            owner, _ = self.rasters.track(width, clearance)
-            arr = np.asarray(owner, dtype=np.int32).reshape(g.nl, g.ny, g.nx)
-            minimum = max(16, int(nm_from_mm("2") ** 2 // (g.pitch * g.pitch)))
-            result = np.zeros(g.size, dtype=bool)
-            for layer in range(g.nl):
-                free = arr[layer] == _FREE
-                labels, count = _label(free)
-                if not count:
-                    continue
-                sizes = np.bincount(labels.ravel(), minlength=count + 1)
-                big = sizes >= minimum
-                big[0] = False
-                result[layer * g.plane:(layer + 1) * g.plane] = big[labels.ravel()]
-            cache[key] = result
-        return cache[key]
 
     def _attach_extended(self, position, outward, layer, spec, owner, seen):
         """Straight out along the pad's outward axis, then a checked lead-in.
