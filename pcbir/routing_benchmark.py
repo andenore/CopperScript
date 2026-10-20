@@ -357,6 +357,9 @@ def _table_value(summary: dict, path: str):
 _TABLE_ROWS = (
     ("Run completed", "completed"),
     ("Elapsed seconds", "elapsed_seconds"),
+    ("Global routing status", "quality.global_status"),
+    ("Critical routing status", "quality.critical_status"),
+    ("Package access", "quality.package_access"),
     ("Failed signal nets", "quality.failed_signals"),
     ("Failed critical nets", "quality.failed_critical"),
     ("Unrouted ordinary nets", "quality.detailed_metrics.unrouted_net_count"),
