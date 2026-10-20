@@ -63,6 +63,7 @@ class PlacementPlannerOptions:
     component_clearance_nm: Nanometres = DEFAULT_ADDITIONAL_COURTYARD_GAP_NM
     congestion_bin_nm: Nanometres = nm_from_mm("5")
     analytical_iterations: int = 40
+    satellite_seeding: bool = True       # seed ungrouped parts at their connected pads
     analytical_step_mm: float = 0.08
     analytical_momentum: float = 0.85
     refinement_passes: int = 2
@@ -914,6 +915,7 @@ def _initial_seed(
             reference,
         ),
     )
+    anchors = _satellite_anchors(board, fixed, movable) if options.satellite_seeding else {}
     for index, reference in enumerate(movable):
         original = source[reference]
         group = primary_group.get(reference)
@@ -927,11 +929,57 @@ def _initial_seed(
                 target.y_nm + dy * options.grid_step_nm * 2,
             )
         else:
-            point = _seed_transform(original.position, bounds, seed, index)
+            point = anchors.get(reference) or _seed_transform(original.position, bounds, seed, index)
+            if reference in anchors:
+                dx, dy = _spiral_offset(index + seed, max(1, len(movable)))
+                point = Point(point.x_nm + dx * options.grid_step_nm, point.y_nm + dy * options.grid_step_nm)
         orientations = _allowed_orientations(board, reference)
         rotation = orientations[(seed + index) % len(orientations)]
         result[reference] = replace(original, position=point, rotation_degrees=rotation)
     return result
+
+
+def _satellite_anchors(board: PhysicalBoard, fixed: Mapping[str, Placement],
+                       movable: Iterable[str]) -> dict[str, Point]:
+    """Seed points for ungrouped movable parts at their connected pads.
+
+    A part joined by signal nets to already-located parts starts at the mean
+    of those pads (plane and power-rail nets excluded: they connect almost
+    everything). Two passes let chains of passives follow their anchor.
+    Without this, parts start wherever the prototype pass put them, and the
+    bounded analytical pass cannot bring a far seed home (CopperProbe's crystal
+    and FX10 strap resistors stayed 20-30 mm from their pins).
+    """
+    from .zone_geometry import distribution_zone_nets
+    excluded = set(distribution_zone_nets(board))
+    excluded |= {domain.net for domain in board.power_domains}
+    excluded |= {link.return_net for link in board.decoupling_links}
+    movable = [reference for reference in movable if reference not in fixed]
+    located: dict[str, Point] = {reference: pose.position for reference, pose in fixed.items()}
+    nets_of: dict[str, list] = {}
+    for net in board.nets:
+        if net.name in excluded or len(net.pads) > 12:
+            continue
+        for pad in net.pads:
+            nets_of.setdefault(pad.component, []).append(net)
+    poses = {pose.reference: pose for pose in board.placements}
+    anchors: dict[str, Point] = {}
+    for _ in range(2):
+        for reference in movable:
+            points = []
+            for net in nets_of.get(reference, ()):
+                for pad in net.pads:
+                    if pad.component == reference or pad.component not in located:
+                        continue
+                    if pad.component in fixed:
+                        points.append(transformed_pad_position(board, fixed[pad.component], pad.pad))
+                    else:
+                        points.append(located[pad.component])
+            if points:
+                anchors[reference] = Point(round(sum(p.x_nm for p in points) / len(points)),
+                                           round(sum(p.y_nm for p in points) / len(points)))
+        located.update(anchors)
+    return anchors
 
 
 def _spiral_offset(index: int, count: int) -> tuple[int, int]:
