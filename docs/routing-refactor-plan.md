@@ -382,6 +382,7 @@ whole-board CopperProbe result within the first week.
 | 2026-10-20 (pm) | Escape and bypass reservations before critical routing; exact pin escapes; full-footprint negotiation | asset-tracker 1.0 (120/120), led-ring 1.0, nrf52 1.0, cm4 1.0, full-vertical 1.0, round-led-ring 0.98; all DRC-clean |
 | 2026-10-20 (eve) | Automatic diff-pair corridors, satellite seeding, placement and plane-estimate diagnostics in `copper issues` | asset-tracker 1.0, led-ring 1.0, nrf52 1.0, cm4 1.0, full-vertical 0.99, round-led-ring 0.98; all DRC-clean. CopperProbe (7 parts unfixed) 0.844: USB_DM/DP now route |
 | 2026-10-20 (late) | Pour re-check in the unified router (walled-off plane pads get explicit copper) | asset-tracker 1.0 and 0 estimated plane opens (was 1: U_CC.3), others unchanged; all DRC-clean |
+| 2026-10-20 (night) | Neck exits stay inside the breakout region; refinement swaps ignore escape differences under 0.1 mm | full-vertical 1.0 (was 0.988), asset-tracker 1.0, led-ring 1.0, nrf52 1.0, cm4 1.0, round-led-ring 0.98; all DRC-clean, 0 estimated plane opens |
 
 Open items:
 
@@ -397,10 +398,10 @@ Open items:
     vias.
   - Next levers are placement feedback driven by these hotspots (the
     `routeflow` outer loop) and a part-owned FX10 fanout macro (P4).
-- **Satellite parts land far from their partners** when the space next to
-  them is taken. On CopperProbe the selected candidate puts C_XIN 15 mm and
-  C_XOUT 8 mm from the crystal: the FX10 dogbone vias fill the area, and
-  candidate selection (global-route score) does not see the distance.
+- **Satellite parts under a BGA.** The FX10 kit puts the RESREF resistor on
+  B.Cu under the package, 1.2 mm from its ball. The placer never changes a
+  part's side, so R_RESREF lands about 7 mm away on F.Cu. (Crystal caps were
+  swapped 12 mm away for 10 um of escape width; fixed, now about 3.3 mm.)
 - **Freerouting comparison (D2)** is blocked here: the sandbox can't download
   the jar.
 - **Windows DLL** is built but not yet run on Windows.
