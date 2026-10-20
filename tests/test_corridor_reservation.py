@@ -223,13 +223,17 @@ def test_movable_capacitor_is_placed_outside_the_reserved_corridor() -> None:
     assert "CORRIDOR_NOT_RESERVED" not in codes
 
 
-def test_without_reserve_corridor_the_capacitor_lands_in_the_corridor() -> None:
-    plan = plan_placement(_board(reserve=False), OPTIONS)
+def test_without_reserve_corridor_only_the_automatic_corridor_protects_the_pair() -> None:
+    manual_only = replace(OPTIONS, auto_pair_corridors=False)
+    plan = plan_placement(_board(reserve=False), manual_only)
 
     assert reserved_corridors(_board(reserve=False)).corridors == ()
     # The same placement would block the pair: a decoupling capacitor in the breakout.
     assert _overlaps_corridor(plan.board, _pose(plan.board, "C1"), _board())
     assert "reserved_corridors" in json.loads(plan.report.to_json())
+    # The pair's terminals are fixed, so the automatic corridor keeps C1 out.
+    automatic = plan_placement(_board(reserve=False), OPTIONS)
+    assert not _overlaps_corridor(automatic.board, _pose(automatic.board, "C1"), _board())
 
 
 def test_corridor_is_enforced_by_shared_legality_and_named_in_rejections() -> None:
@@ -244,9 +248,10 @@ def test_corridor_is_enforced_by_shared_legality_and_named_in_rejections() -> No
     # The corridor is side-specific, like a hand-drawn keepout.
     flipped = {**inside, "C1": replace(inside["C1"], side=BoardSide.BACK)}
     assert placement_solution_is_legal(board, flipped, OPTIONS)
-    # Without the property, the same pose is legal.
+    # Without the property, only the automatic pair corridor rejects the pose.
     unreserved = _board(reserve=False)
-    assert placement_solution_is_legal(unreserved, inside, OPTIONS)
+    assert not placement_solution_is_legal(unreserved, inside, OPTIONS)
+    assert placement_solution_is_legal(unreserved, inside, replace(OPTIONS, auto_pair_corridors=False))
 
 
 def test_fixed_non_terminal_component_in_corridor_is_an_error() -> None:
