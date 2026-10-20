@@ -379,6 +379,7 @@ whole-board CopperProbe result within the first week.
 | --- | --- | --- |
 | 2026-10-19 | P0–P2 done; P5 prototype | legacy: round-led-ring 0.57, nrf52 1.0, full-vertical 0.88, cm4 0.76 |
 | 2026-10-20 | P5/P6 working, P4 dogbones, P3 islands (opt-in) | round-led-ring 0.98, nrf52 1.0, full-vertical 0.99–1.0, cm4 1.0, led-ring 1.0, asset-tracker 0.95, CopperProbe ≈0.82; all DRC-clean |
+| 2026-10-20 (pm) | Escape and bypass reservations before critical routing; exact pin escapes; full-footprint negotiation | asset-tracker 1.0 (120/120), led-ring 1.0, nrf52 1.0, cm4 1.0, full-vertical 1.0, round-led-ring 0.98; all DRC-clean |
 
 Open items:
 
