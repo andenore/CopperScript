@@ -384,6 +384,8 @@ def run_physical_drc(
     ):
         coverage.append(DrcCoverage(name, DrcCoverageStatus.UNSUPPORTED, False, detail))
 
+    if board.metadata.get(EXTERNAL_PLACEMENT_KEY) == "external":
+        findings = [_as_input_copper(item) for item in findings]
     waiver_map = {item.finding_fingerprint: item for item in waivers}
     waived: list[DrcFinding] = []
     for finding in sorted(findings, key=_finding_key):
@@ -1671,6 +1673,25 @@ def _report_document(report: PhysicalDrcReport, *, include_token: bool) -> dict[
     if include_token:
         document["token"] = {"schema": report.token.schema, "board_digest": report.token.board_digest, "rules_digest": report.token.rules_digest, "report_digest": report.token.report_digest, "decision": report.token.decision.value, "completeness": report.token.completeness.value, "token_digest": report.token.token_digest}
     return document
+
+
+# Spacing findings among placed pads alone (to each other, to the edge, to
+# keepouts) are fixed by an imported board's own footprints and placement, and
+# no routing change can alter them.
+INPUT_COPPER_CODE = "DRC-INPUT-COPPER"
+_INPUT_COPPER_SOURCES = frozenset({
+    "DRC-BOARD-EDGE", "DRC-CLEARANCE", "DRC-SHORT", "DRC-HOLE-CLEARANCE", "DRC-DRILL-SPACING",
+    "DRC-COPPER-KEEPOUT",
+})
+
+
+def _as_input_copper(item: DrcFinding) -> DrcFinding:
+    """On an imported placement, report a pad-only spacing finding as input, not routing, copper."""
+    if (item.code not in _INPUT_COPPER_SOURCES or not item.objects
+            or not all(str(name).startswith("pad:") for name in item.objects)):
+        return item
+    return replace(item, code=INPUT_COPPER_CODE, severity=DrcSeverity.WARNING,
+                   message=f"{item.code} in the imported board's placed pads: {item.message}")
 
 
 def _finding(code: str, severity: DrcSeverity, message: str, **kwargs: object) -> DrcFinding:

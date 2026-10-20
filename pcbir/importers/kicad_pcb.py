@@ -673,6 +673,7 @@ def _library_pad(node: list[SExpr], back: bool, footprint_angle: Decimal, where:
     width = _nm(size_node[1], where) if size_node is not None else 0
     height = _nm(size_node[2], where) if size_node is not None and len(size_node) > 2 else width
 
+    custom_offset = (0, 0)
     if shape == "trapezoid":
         delta = _first(node, "rect_delta")
         dx = abs(_nm(delta[1], where)) if delta is not None else 0
@@ -681,11 +682,12 @@ def _library_pad(node: list[SExpr], back: bool, footprint_angle: Decimal, where:
         shape = "rect"
         log.approx("trapezoid pad as bounding rectangle")
     elif shape == "custom":
-        width, height, offset = _custom_pad_bounds(node, width, height, where)
+        # A surface pad's rectangle is the copper's own bounding box; a plated
+        # pad keeps its centre on the drill, so its rectangle is centred there.
+        centred = kind in {"thru_hole", "np_thru_hole"}
+        width, height, custom_offset = _custom_pad_bounds(node, width, height, where, centred=centred)
         shape = "rect"
         log.approx("custom pad as bounding rectangle")
-        if offset != (0, 0):
-            log.approx("custom pad anchor offset ignored")
     if _first(node, "chamfer_ratio") is not None or _first(node, "chamfer") is not None:
         log.approx("pad chamfers dropped (unchamfered pad contains the copper)")
     if _first(node, "clearance") is not None:
@@ -698,6 +700,12 @@ def _library_pad(node: list[SExpr], back: bool, footprint_angle: Decimal, where:
     at = _first(node, "at")
     position = _xy(at, where) if at is not None else Point(0, 0)
     board_angle = _angle(at)
+    if custom_offset != (0, 0):
+        # Pad primitives are in the pad's frame, turned by its angle relative to the footprint.
+        turn = radians(float(board_angle - footprint_angle))
+        u, v = custom_offset
+        position = Point(round(position.x_nm + u * cos(turn) + v * sin(turn)),
+                         round(position.y_nm - u * sin(turn) + v * cos(turn)))
     if back:
         position = Point(position.x_nm, -position.y_nm)
         local_angle = _turn(footprint_angle - board_angle)
@@ -782,9 +790,14 @@ def _pad_drill(node: list[SExpr] | None, kind: str, where: str, log: _Log) -> li
     return ["drill", values[0]] if values else None
 
 
-def _custom_pad_bounds(node: list[SExpr], width: int, height: int,
-                       where: str) -> tuple[int, int, tuple[int, int]]:
-    """Bounding box of a custom pad's anchor and primitives, centred on the anchor."""
+def _custom_pad_bounds(node: list[SExpr], width: int, height: int, where: str, *,
+                       centred: bool = False) -> tuple[int, int, tuple[int, int]]:
+    """Bounding box of a custom pad's anchor and primitives.
+
+    Returns its size and its centre's offset from the anchor in the pad's own
+    frame; with ``centred`` the box is grown symmetrically about the anchor
+    and the offset is zero.
+    """
     xs = [-width / 2, width / 2]
     ys = [-height / 2, height / 2]
     primitives = _first(node, "primitives")
@@ -805,10 +818,12 @@ def _custom_pad_bounds(node: list[SExpr], width: int, height: int,
         for point in points:
             xs.extend((point.x_nm - half, point.x_nm + half))
             ys.extend((point.y_nm - half, point.y_nm + half))
-    # A centred rectangle containing everything keeps the pad anchor fixed.
-    half_width = max(abs(min(xs)), abs(max(xs)))
-    half_height = max(abs(min(ys)), abs(max(ys)))
-    return round(2 * half_width), round(2 * half_height), (0, 0)
+    if centred:
+        half_width = max(abs(min(xs)), abs(max(xs)))
+        half_height = max(abs(min(ys)), abs(max(ys)))
+        return round(2 * half_width), round(2 * half_height), (0, 0)
+    return (round(max(xs) - min(xs)), round(max(ys) - min(ys)),
+            (round((max(xs) + min(xs)) / 2), round((max(ys) + min(ys)) / 2)))
 
 
 # --------------------------------------------------------------------------- outline

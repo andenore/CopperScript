@@ -30,7 +30,9 @@ defaults. Non-default classes become per-net width and clearance rules.
 
 Board-only constructs the strict importer rejects are replaced by a superset
 of their copper or dropped when they do not change copper: custom and
-trapezoid pads become bounding rectangles, chamfers and pad-level clearance
+trapezoid pads become bounding rectangles (a surface custom pad's rectangle
+is its copper's own box, which may sit off the anchor; a plated one stays
+centred on its drill), chamfers and pad-level clearance
 overrides are dropped, plated pads listed on some layers are treated as on
 all layers, copper graphics and zones on nets without pads become keepouts
 for every net, and an outline that does not close falls back to its bounding
@@ -47,6 +49,16 @@ planner's edge and courtyard conventions. Copper clearance, short, hole and
 connectivity checks are unchanged. Route an imported board by passing its
 placement as `initial_placement` to `run_routing_pipeline`, so the placer
 does not move it.
+
+Spacing findings that involve only placed pads (pad to pad, pad to board
+edge, pad to keepout, between pad holes) are fixed by the imported
+footprints and placement; no routing change can alter them. On these boards
+they are reported as warning-level `DRC-INPUT-COPPER` findings naming the
+original check, so they do not block package access or count as routing
+errors. Often they come from the approximations above, or from the source
+project's own relaxed rules (for example a copper-to-edge clearance below
+the copper clearance). Any finding that involves a track or via keeps its
+ordinary code and severity.
 
 On a 148-board sample of the public PCBench corpus (KiCad 5), 145 boards
 import; the three failures use surface pads on both outer layers.

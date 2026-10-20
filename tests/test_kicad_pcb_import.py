@@ -189,6 +189,52 @@ def test_imported_placement_is_external_to_placement_legality_but_copper_is_chec
     assert "DRC-PLACEMENT" in {finding.code for finding in report.findings}
 
 
+CUSTOM = """(kicad_pcb (version 20241229) (generator "test")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (net 0 "") (net 1 "A")
+  (footprint "TAB" (layer "F.Cu") (at 10 10 90)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (pad "1" smd custom (at 0 0 90) (size 0.5 0.5) (layers "F.Cu" "F.Mask") (net 1 "A")
+      (options (clearance outline) (anchor rect))
+      (primitives (gr_poly (pts (xy 0 -0.25) (xy 2 -0.25) (xy 2 0.25) (xy 0 0.25)) (width 0) (fill yes)))))
+  (footprint "TAB" (layer "B.Cu") (at 30 10)
+    (property "Reference" "U2" (at 0 0 0) (layer "B.SilkS"))
+    (pad "1" smd custom (at 0 0) (size 0.5 0.5) (layers "B.Cu" "B.Mask") (net 1 "A")
+      (options (clearance outline) (anchor rect))
+      (primitives (gr_poly (pts (xy 0 -0.25) (xy 2 -0.25) (xy 2 0.25) (xy 0 0.25)) (width 0) (fill yes)))))
+  (gr_rect (start 0 0) (end 40 20) (stroke (width 0.1) (type default)) (layer "Edge.Cuts"))
+)"""
+
+
+def test_surface_custom_pad_is_its_copper_bounding_box_not_one_centred_on_the_anchor():
+    board = parse_kicad_pcb(CUSTOM, source="custom").board
+    placements = {p.reference: p for p in board.placements}
+    for reference, centre in (("U1", Point.mm(10, "9.125")), ("U2", Point.mm("30.875", 10))):
+        placement = placements[reference]
+        pad = board.footprints[placement.footprint].pads[0]
+        assert transformed_local_point(placement, pad.position) == centre
+        assert sorted((pad.size.width_nm, pad.size.height_nm)) == [nm_from_mm("0.5"), nm_from_mm("2.25")]
+
+
+def test_pad_only_spacing_of_an_imported_board_is_input_copper_not_a_routing_error():
+    board = parse_kicad_pcb(ZONES.replace("(at 19 5)", "(at 19.6 5)"), source="edge").board
+    policy = PhysicalDrcPolicy(require_completed_detailed_route=False)
+    findings = run_physical_drc(board, policy=policy).findings
+    edge = [item for item in findings if item.objects == ("pad:TP2.1:0",)]
+    assert [(item.code, item.severity.value) for item in edge] == [("DRC-INPUT-COPPER", "warning")]
+    assert "DRC-BOARD-EDGE" in edge[0].message
+    # Routed copper keeps the ordinary rule.
+    from pcbir.physical import TrackSegment
+    track = TrackSegment("GND", Point(nm_from_mm("19.6"), nm_from_mm(5)), Point(nm_from_mm("19.9"), nm_from_mm(5)),
+                         nm_from_mm("0.2"), CopperLayer.FRONT)
+    findings = run_physical_drc(replace(board, tracks=(track,)), policy=policy).findings
+    assert any(item.code == "DRC-BOARD-EDGE" and item.severity.value == "error" for item in findings)
+    # CopperScript's own boards are unchanged.
+    native = replace(board, metadata={k: v for k, v in board.metadata.items() if k != EXTERNAL_PLACEMENT_KEY})
+    assert any(item.code == "DRC-BOARD-EDGE" and item.objects == ("pad:TP2.1:0",)
+               for item in run_physical_drc(native, policy=policy).findings)
+
+
 def test_unrepresentable_double_sided_surface_pad_is_reported():
     text = ZONES.replace('(pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask") (net 1 "GND")))\n  (gr_rect',
                          '(pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu" "B.Cu") (net 1 "GND")))\n  (gr_rect')
