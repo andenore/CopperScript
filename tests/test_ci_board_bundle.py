@@ -201,15 +201,16 @@ def test_workflow_is_trusted_sha_pinned_and_routes_instead_of_dry_running():
     assert "workflow_dispatch:" not in workflow
     test_job = workflow.split("  test:\n", 1)[1].split("  route:\n", 1)[0]
     route_job = workflow.split("  route:\n", 1)[1].split("  publish:\n", 1)[0]
-    assert "run: python -m pytest" in test_job and "ci_board_bundle.py route" not in test_job
+    assert "python -m pytest" in test_job and "ci_board_bundle.py route" not in test_job
     assert "pygerber==2.4.3" in test_job
     assert test_job.index("Install KiCad 10") < test_job.index("Run complete test suite")
     assert "if: ${{ startsWith(github.ref, 'refs/tags/v') }}" in route_job
     assert "needs: test" in route_job and "timeout-minutes: 360" in route_job
     assert "group: board-routing-${{ github.ref }}" in route_job
     assert "run: python scripts/ci_board_bundle.py route --minutes 270" in route_job
-    assert "run: python -m pytest" not in route_job and "--dry-run" not in route_job
-    assert "ppa:kicad/kicad-10.0-releases" in workflow
+    assert "python -m pytest" not in route_job and "--dry-run" not in route_job
+    assert all("run: bash scripts/ci_install_kicad10.sh" in job for job in (test_job, route_job))
+    assert "ppa:kicad/kicad-10.0-releases" in (ROOT / "scripts/ci_install_kicad10.sh").read_text()
     assert "pytest tests/test_ci_board_bundle.py" not in workflow
     assert "contents: write" in workflow.split("  publish:")[1]
     assert "contents: write" not in workflow.split("  publish:")[0]
@@ -229,27 +230,31 @@ def test_kicad_install_checks_ubuntu_pin_before_exporting_tools(tmp_path, job, v
         pytest.skip("Bash is required to exercise the Ubuntu install step")
     workflow = (ROOT / ".github/workflows/board-routing.yml").read_text()
     job_text = re.split(r"\n  (?=\S)", workflow.split(f"  {job}:\n", 1)[1], maxsplit=1)[0]
-    step = re.search(r"^      - name: Install KiCad 10[^\n]*\n        run: \|\n"
-                     r"((?:          [^\n]*\n)+)", job_text, re.MULTILINE)
+    step = re.search(r"^      - name: Install KiCad 10[^\n]*\n(?:        env:\n(?:          [^\n]*\n)+)?"
+                     r"        run: bash scripts/ci_install_kicad10.sh\n", job_text, re.MULTILINE)
     assert step is not None
     pins = json.loads((ROOT / ".github/board-toolchain.json").read_text())
     assert pins["kicad_ubuntu_package_version"].split("~", 1)[0] == pins["kicad_ubuntu_version"]
     (tmp_path / ".github").mkdir()
     (tmp_path / ".github/board-toolchain.json").write_text(json.dumps(pins))
+    package = pins["kicad_ubuntu_package_version"]
     actual = pins["kicad_ubuntu_version"] if version_matches else "0.0.0"
-    env = {**os.environ, "GITHUB_ENV": "exported-tools", "TEST_KICAD_VERSION": actual}
+    env = {**os.environ, "GITHUB_ENV": "exported-tools", "TEST_KICAD_VERSION": actual,
+           "TEST_KICAD_PACKAGE": package}
+    env.pop("KICAD_DEB_CACHE", None)
     python = shlex.quote(sys.executable.replace("\\", "/"))
-    prelude = (f"set -e -o pipefail\npython() {{ {python} \"$@\"; }}\n"
+    script = shlex.quote(str(ROOT / "scripts/ci_install_kicad10.sh").replace("\\", "/"))
+    prelude = (f"python3() {{ {python} \"$@\"; }}\n"
                'sudo() { printf "%s\\n" "$*" >> install-calls; }\n'
+               'apt-cache() { printf "     kicad | %s | http://ppa.launchpadcontent.net noble/main amd64 Packages\\n" '
+               '"$TEST_KICAD_PACKAGE"; }\n'
                'kicad-cli() { printf "%s\\n" "$TEST_KICAD_VERSION"; }\n')
-    result = subprocess.run([bash, "--noprofile", "--norc", "-c",
-                             prelude + textwrap.dedent(step[1])],
+    result = subprocess.run([bash, "--noprofile", "--norc", "-c", prelude + f"source {script}"],
                             cwd=tmp_path, env=env, capture_output=True, text=True)
     assert (tmp_path / "install-calls").exists(), result.stdout + result.stderr
     calls = (tmp_path / "install-calls").read_text().splitlines()
-    package = pins["kicad_ubuntu_package_version"]
-    assert calls[-1] == ("apt-get install --yes --no-install-recommends "
-                          f"kicad={package} kicad-footprints={package} make")
+    assert calls[-1].endswith("install --yes --no-install-recommends "
+                              f"kicad={package} kicad-footprints={package} make")
     exports = tmp_path / "exported-tools"
     if version_matches:
         assert result.returncode == 0, result.stdout + result.stderr
@@ -258,7 +263,7 @@ def test_kicad_install_checks_ubuntu_pin_before_exporting_tools(tmp_path, job, v
             "KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints"]
     else:
         assert result.returncode == 1
-        assert f"::error::Expected KiCad {pins['kicad_ubuntu_version']}, installed {actual}" in result.stdout
+        assert f"Expected KiCad {pins['kicad_ubuntu_version']}, installed {actual}" in result.stdout
         assert not exports.exists()
 
 
