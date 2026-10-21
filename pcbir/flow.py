@@ -102,6 +102,7 @@ def run_routing_pipeline(
     stop_after: str | None = None,
     initial_placement: PlacementRoutingResult | None = None,
     on_stage=None,
+    escape_plan_options=None,
 ) -> RoutingPipelineResult:
     """Run steps 4–8 in dependency order and always reach ordinary routing.
 
@@ -115,6 +116,8 @@ def run_routing_pipeline(
     FAIL result carrying ``stopped_after``. ``initial_placement`` replaces the
     placement/global stage with an earlier, explicitly supplied result.
     ``on_stage(name, value)`` observes completed stages (e.g. for checkpoints).
+    ``escape_plan_options`` with ``two_end_order`` gives the ordinary detailed
+    router a two-end escape plan of the board it routes (escape planning E3).
     """
     unified_fanout = None
     if unified_options is not None:
@@ -183,6 +186,19 @@ def run_routing_pipeline(
         critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
         return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
                                      stopped_after="placement")
+    if escape_plan_options is not None and escape_plan_options.two_end_order and unified_options is None:
+        # Plan once on the placed board: fanout keeps kept nets' surface pins
+        # off dogbone vias, and the detailed router follows the plan's order
+        # and layers. The unified router owns its own access and ignores it.
+        from .escape_plan import plan_two_end_escapes
+        escape_plan = plan_two_end_escapes(placement.board, escape_plan_options)
+        emit(on_progress, "escape_plan", "finished", bundles=len(escape_plan.pairs),
+             planned_nets=len(escape_plan.net_order), surface_pads=len(escape_plan.surface_pads))
+        if fanout_options is not None:
+            fanout_options = replace(fanout_options,
+                                     surface_pads=fanout_options.surface_pads | escape_plan.surface_pads)
+        detailed_options = replace(detailed_options, escape_net_order=escape_plan.net_order,
+                                   escape_layer_biases=escape_plan.layer_biases)
     access = None
     preparation, preparation_validation = None, None
     if power_area_options is not None and power_area_options.plane_return_nets:
@@ -529,7 +545,8 @@ def run_routing_pipeline(
                 trial_pre_detailed, trial_power_plan, trial_power_status = plan_distribution(trial_pre_detailed, trial_fanout)
             trial_detailed = route_ordinary(
                 trial_pre_detailed,
-                trial_global, detailed_options,
+                trial_global, _planned(detailed_options, trial_pre_detailed, escape_plan_options,
+                                       unified_options),
                 fanout_accesses=trial_fanout.routing_accesses if trial_fanout else None,
                 fanout_created_vias=frozenset((item.net, item.position)
                                             for item in trial_fanout.created_vias)
@@ -750,6 +767,16 @@ def _release_reservations(board, keepouts, nets, margin_nm=nm_from_mm("2"), *, p
         return any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, y0, x1, y1 in boxes)
 
     return tuple(keepout for keepout in keepouts if not inside(keepout))
+
+
+def _planned(detailed_options: DetailedRouterOptions, board: PhysicalBoard, escape_plan_options,
+             unified_options) -> DetailedRouterOptions:
+    """``detailed_options`` with a fresh two-end escape plan of a moved ``board``, when one is asked for."""
+    if escape_plan_options is None or not escape_plan_options.two_end_order or unified_options is not None:
+        return detailed_options
+    from .escape_plan import plan_two_end_escapes
+    plan = plan_two_end_escapes(board, escape_plan_options)
+    return replace(detailed_options, escape_net_order=plan.net_order, escape_layer_biases=plan.layer_biases)
 
 
 def _route_unified_compat(unified_options, board, global_route, _detailed_options, *,

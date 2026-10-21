@@ -360,3 +360,135 @@ def test_cluster_reports_carry_field_summaries():
                                   "pitch_nm": [1000000, 1000000], "gaps": {"column": 6, "diagonal": 8, "row": 6},
                                   "minimum_capacity": {"column": 0, "diagonal": 1, "row": 0},
                                   "tiles": 4, "via_sites": 0}]
+
+
+# --------------------------------------------------------------------------- two-end plan (E3)
+
+from dataclasses import replace  # noqa: E402
+
+from pcbir.detailed import DetailedRouterOptions, route_detailed  # noqa: E402
+from pcbir.escape_plan import plan_two_end_escapes  # noqa: E402
+from pcbir.geometry import Bounds  # noqa: E402
+from pcbir.routing import GlobalRouterOptions, route_global  # noqa: E402
+from pcbir.routing_costs import LayerBias  # noqa: E402
+
+
+def test_plan_keeps_the_planar_subset_and_moves_the_rest():
+    board = two_rows({1: 2, 2: 1, 3: 3, 4: 4})
+    plan = plan_two_end_escapes(board)
+    (pair,) = plan.pairs
+    assert (pair.first, pair.second, pair.planar_layer) == ("A", "B", CopperLayer.FRONT)
+    assert len(pair.moved) == 1 and pair.moved[0][1] is CopperLayer.BACK
+    moved = pair.moved[0][0]
+    assert set(pair.kept) == {"N1", "N2", "N3", "N4"} - {moved} and pair.unmoved == ()
+    # Moved nets first, then kept nets from the outside of the bundle in.
+    assert plan.net_order[0] == moved
+    assert plan.net_order[1:] == (pair.kept[0], pair.kept[-1], pair.kept[1])
+    # A moved net pays off its planned layer, only inside the corridor around both parts' bundle pins;
+    # kept nets stay free to use any layer at a through-hole end.
+    assert {(bias.net, bias.layer) for bias in plan.layer_biases} == {(moved, CopperLayer.FRONT)}
+    assert pair.corridor == Bounds(nm_from_mm(9), nm_from_mm(9), nm_from_mm(31), nm_from_mm(14))
+    assert plan.report()["pairs"][0]["moved"] == {moved: "B.Cu"}
+
+
+def test_plan_covers_every_net_joining_a_crossing_pair():
+    # N4 also reaches a third part, so it is no bundle net for the diagnostics, but it still
+    # runs between A and B: the plan orders it and gives it a layer with the bundle.
+    board = two_rows({1: 2, 2: 1, 3: 3, 4: 4})
+    footprints = {**board.footprints, "single": row("single", 1)}
+    nets = tuple(PhysicalNet(net.name, net.pads + ((PadReference("C", "1"),) if net.name == "N4" else ()))
+                 for net in board.nets)
+    board = PhysicalBoard("rows", board.outline, footprints,
+                          board.placements + (Placement("C", "single", Point.mm(20, 25)),), nets, rules=RULES)
+    assert escape_diagnostics(board).pairs[0].nets == ("N1", "N2", "N3")
+    plan = plan_two_end_escapes(board)
+    (pair,) = plan.pairs
+    assert "N4" in pair.kept and "N4" in plan.net_order
+    # Kept bundle nets escape on their surface; the tree keeps its dogbone towards its third pad.
+    kept_bundle = set(pair.kept) - {"N4"}
+    assert {pad.pad for pad in plan.surface_pads if pad.component == "A"} == {
+        net[1:] for net in kept_bundle}
+    assert PadReference("A", "4") not in plan.surface_pads
+
+
+def test_plan_ignores_bundles_that_do_not_cross_or_have_no_shared_surface():
+    assert plan_two_end_escapes(two_rows({1: 1, 2: 2, 3: 3, 4: 4})) == plan_two_end_escapes(two_rows({}))
+    # A on the back, B on the front: the bundle has no layer both ends reach without a via.
+    opposite = plan_two_end_escapes(two_rows({1: 2, 2: 1, 3: 3, 4: 4}, side=BoardSide.BACK))
+    assert opposite.pairs == () and opposite.net_order == ()
+
+
+def test_net_without_another_legal_layer_stays_unmoved():
+    board = two_rows({1: 2, 2: 1, 3: 3, 4: 4})
+    pinned = tuple(NetRoutingRule(net.name, allowed_layers=(CopperLayer.FRONT,)) for net in board.nets)
+    (pair,) = plan_two_end_escapes(replace(board, net_routing_rules=pinned)).pairs
+    assert pair.moved == () and len(pair.unmoved) == 1
+    assert not plan_two_end_escapes(replace(board, net_routing_rules=pinned)).layer_biases
+
+
+def test_plan_bounds_must_not_be_negative():
+    with pytest.raises(ValueError):
+        plan_two_end_escapes(two_rows({1: 2, 2: 1}), EscapePlanOptions(layer_bias_rate=-1))
+    with pytest.raises(ValueError):
+        DetailedRouterOptions(escape_layer_biases=(LayerBias("N", CopperLayer.FRONT, Bounds(0, 0, 1, 1), -1),))
+
+
+def straight_board() -> PhysicalBoard:
+    pad = PhysicalFootprint("one-pad", (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),), Size.mm(1, 1))
+    return PhysicalBoard("straight", BoardOutline.rectangle(20, 12), {pad.name: pad},
+                         (Placement("J1", pad.name, Point.mm(3, 6)), Placement("J2", pad.name, Point.mm(17, 6))),
+                         (PhysicalNet("SIG", (PadReference("J1", "1"), PadReference("J2", "1"))),))
+
+
+def test_layer_bias_charges_only_track_whose_midpoint_is_in_its_area():
+    bias = LayerBias("SIG", CopperLayer.FRONT, Bounds(0, 0, nm_from_mm(10), nm_from_mm(10)), 20)
+    # 20 cost units per millimetre: twice the cost of the track itself (10 per mm).
+    assert bias.cost(Point.mm(1, 1), Point.mm(3, 1)) == 2 * 20 * 1_000_000
+    assert bias.cost(Point.mm(12, 1), Point.mm(14, 1)) == 0
+    assert bias.cost(Point.mm(9, 1), Point.mm(10, 1)) > 0 and bias.cost(Point.mm(10, 1), Point.mm(12, 1)) == 0
+
+
+def test_layer_bias_moves_a_net_to_its_planned_layer_inside_the_corridor():
+    board = straight_board()
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    options = DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=1)
+    plain = route_detailed(board, guide, options)
+    assert plain.board.vias == () and {track.layer for track in plain.board.tracks} == {CopperLayer.FRONT}
+    corridor = Bounds(nm_from_mm(6), 0, nm_from_mm(14), nm_from_mm(12))
+    planned = route_detailed(board, guide, replace(options, escape_layer_biases=(
+        LayerBias("SIG", CopperLayer.FRONT, corridor, 200),)))
+    assert planned.nets[0].connected and len(planned.board.vias) == 2
+    assert all(track.layer is CopperLayer.BACK for track in planned.board.tracks
+               if corridor.min_x < (track.start.x_nm + track.end.x_nm) // 2 < corridor.max_x)
+    # Another net's bias changes nothing.
+    other = route_detailed(board, guide, replace(options, escape_layer_biases=(
+        LayerBias("OTHER", CopperLayer.FRONT, corridor, 200),)))
+    assert other.board.tracks == plain.board.tracks
+
+
+def test_planned_nets_route_first_in_the_first_two_passes():
+    board = two_rows({1: 1, 2: 2, 3: 3, 4: 4})
+    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    seen: list[tuple[int, str]] = []
+
+    def progress(stage, status, fields):
+        if stage == "detailed_net" and status == "started":
+            seen.append((fields["pass_index"], fields["net"]))
+
+    route_detailed(board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=2,
+                                                       escape_net_order=("N3", "N1")), on_progress=progress)
+    assert seen and {index for index, _net in seen} <= {1, 2}
+    for pass_index in {index for index, _net in seen}:
+        names = [net for index, net in seen if index == pass_index]
+        assert names[:2] == ["N3", "N1"] and sorted(names[2:]) == ["N2", "N4"]
+
+
+def test_fanout_keeps_planned_surface_pins_off_dogbone_vias():
+    from pcbir.fanout import FanoutOptions, route_fanout
+    board = two_rows({1: 1, 2: 2, 3: 3, 4: 4})
+    plain = route_fanout(board, FanoutOptions())
+    assert any(via.net == "N2" for via in plain.created_vias)
+    planned = route_fanout(board, FanoutOptions(surface_pads=frozenset({PadReference("A", "2")})))
+    assert not any(via.net == "N2" and via.position.x_nm < nm_from_mm(20) for via in planned.created_vias)
+    assert PadReference("A", "2") not in planned.pending_pads
+    assert any(via.net == "N3" and via.position.x_nm < nm_from_mm(20) for via in planned.created_vias)

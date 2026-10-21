@@ -21,8 +21,13 @@ neighbouring pins and, for a lattice, the tiles between them with their
 diagonal gaps (Yan & Wong) and via sites. Capacities use each net's escape
 rule, necked down where its breakout rule says so.
 
-The model is advisory and never changes routing. Every number is computed
-from integer pad geometry with deterministic tie-breaks.
+Step E3 plans crossing bundles (``plan_two_end_escapes``): the largest
+non-crossing subset stays on one layer, the rest move to another through a
+via near the surface end, and the bundle routes first. Fanout and the
+ordinary detailed router follow the plan only when ``two_end_order`` is set.
+
+Diagnostics never change routing. Every number is computed from integer pad
+geometry with deterministic tie-breaks.
 """
 from __future__ import annotations
 
@@ -37,6 +42,8 @@ from .geometry import (Bounds, RoundedConvexShape, bounds, orientation, point_on
                        shape_distance_squared)
 from .physical import (BoardSide, CopperLayer, NetRoutingRule, PadKind, PadReference, PhysicalBoard, Point)
 from .placement import transformed_local_point
+from .routing_costs import LayerBias
+from .routing_layers import routing_layers
 from .zone_geometry import distribution_zone_nets
 
 
@@ -50,6 +57,13 @@ class EscapePlanOptions:
     # distance, or than the minimum, form one pad field.
     field_spacing_factor: int = 3
     field_spacing_minimum_nm: int = 3_000_000
+    # Two-end planning (E3): plan crossing bundles' layers and route order.
+    two_end_order: bool = False
+    # The corridor of a bundle is its pins' box grown by this much.
+    corridor_margin_nm: int = 1_000_000
+    # Extra cost per millimetre for a bundle net off its planned layer in the
+    # corridor, in routing cost units (10 doubles the cost of track).
+    layer_bias_rate: int = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +133,8 @@ class ClusterPairEscape:
     # Nets outside one largest non-crossing subset: another layer or a detour.
     layer_moves: tuple[str, ...]
     analysed: bool = True
+    # The bundle along the first component's boundary, from its far side.
+    order: tuple[str, ...] = ()
 
     def report(self) -> dict:
         return {"components": [self.first, self.second], "nets": list(self.nets),
@@ -522,7 +538,7 @@ def _pair(first: ClusterEscape, second: ClusterEscape, nets: tuple[str, ...],
                 crossing_nets.update((net, other))
     kept = _longest_chain(ranked, second_order)
     return ClusterPairEscape(first.component, second.component, nets, crossings, tuple(sorted(crossing_nets)),
-                             tuple(net for net in nets if net not in kept))
+                             tuple(net for net in nets if net not in kept), order=tuple(ranked))
 
 
 def _boundary_order(cluster: ClusterEscape, nets: tuple[str, ...], centre: tuple[float, float],
@@ -580,6 +596,113 @@ def _longest_chain(ranked: list[str], second_order: dict[str, tuple]) -> set[str
         kept.add(ranked[index])
         index = previous[index]
     return kept
+
+
+# --------------------------------------------------------------------------- two-end plan (E3)
+
+@dataclass(frozen=True, slots=True)
+class PairPlan:
+    """Layer assignment and route order of one crossing bundle."""
+
+    first: str
+    second: str
+    planar_layer: CopperLayer
+    kept: tuple[str, ...]  # on the planar layer, in boundary order
+    moved: tuple[tuple[str, CopperLayer], ...]  # to another layer through a via
+    unmoved: tuple[str, ...]  # outside the planar subset, but with no other legal layer
+    corridor: Bounds
+
+    def report(self) -> dict:
+        return {"components": [self.first, self.second], "planar_layer": self.planar_layer.value,
+                "kept": list(self.kept), "moved": {net: layer.value for net, layer in self.moved},
+                "unmoved": list(self.unmoved),
+                "corridor_nm": [self.corridor.min_x, self.corridor.min_y, self.corridor.max_x, self.corridor.max_y]}
+
+
+@dataclass(frozen=True, slots=True)
+class EscapePlan:
+    pairs: tuple[PairPlan, ...]
+    # Nets to route first, in this order: each bundle's moved nets, then its kept nets outermost first.
+    net_order: tuple[str, ...]
+    layer_biases: tuple[LayerBias, ...]
+    # Surface pins of kept nets: they escape on their surface, without a dogbone via.
+    surface_pads: frozenset[PadReference] = frozenset()
+
+    def report(self) -> dict:
+        return {"pairs": [pair.report() for pair in self.pairs], "net_order": list(self.net_order),
+                "surface_pads": sorted(_pad_text(pad) for pad in self.surface_pads)}
+
+
+def plan_two_end_escapes(board: PhysicalBoard, options: EscapePlanOptions | None = None,
+                         diagnostics: EscapeDiagnostics | None = None) -> EscapePlan:
+    """Planar layer assignment and route order for every crossing bundle (Ozdal & Wong).
+
+    A bundle whose two ends cross is planned together with every other signal
+    net joining the same two parts. The largest non-crossing subset stays on the *planar layer*:
+    the surface of a part whose bundle pins are all surface lands, else the
+    first layer the nets share. Every other net moves to the legal layer
+    nearest it in the stackup, changing layer through a via near the surface
+    part. The assignment is soft: inside the bundle's corridor a moved net
+    pays ``layer_bias_rate`` per millimetre on any layer but its own. Kept nets
+    are not biased: they already start on the planar layer, and at a
+    through-hole end every layer is theirs (holding them to the planar layer
+    there squeezes the bundle through one layer's gaps). A bundle routes
+    before other nets, moved nets first, then kept nets from the outside in,
+    so no net takes the gap an outer one needs.
+    """
+    options = options or EscapePlanOptions()
+    if options.corridor_margin_nm < 0 or options.layer_bias_rate < 0:
+        raise ValueError("escape plan corridor margin and layer bias must not be negative")
+    diagnostics = diagnostics or escape_diagnostics(board, options)
+    clusters = {cluster.component: cluster for cluster in diagnostics.clusters}
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    stack = tuple(board.stackup.copper_layers)
+    pairs, order, biases, surface_pads = [], [], [], set()
+    zone_nets = distribution_zone_nets(board)
+    for crossing in diagnostics.pairs:
+        if not crossing.analysed or not crossing.crossing_pairs:
+            continue
+        # The plan covers every signal net joining the two parts, rails and
+        # other trees included: they cross the bundle too, and an unplanned
+        # one routed last finds its lane taken.
+        members = {pin.net for pin in clusters[crossing.first].pins if pin.net is not None} & {
+            pin.net for pin in clusters[crossing.second].pins if pin.net is not None}
+        nets = tuple(sorted(net for net in members if net not in zone_nets))
+        pair = _pair(clusters[crossing.first], clusters[crossing.second], nets, options)
+        if not pair.analysed:
+            continue
+        pins = [pin for component in (pair.first, pair.second) for pin in clusters[component].pins
+                if pin.net in pair.nets]
+        allowed = {net: routing_layers(board, net, rules.get(net)) for net in pair.nets}
+        surfaces = {pin.layers[0] for pin in pins if len(pin.layers) == 1}
+        shared = [layer for layer in stack if all(layer in layers for layers in allowed.values())]
+        if len(surfaces) > 1 or not shared or surfaces and next(iter(surfaces)) not in shared:
+            continue  # bundle pins on both outer layers, or no common layer: nothing planar to keep
+        planar = next(iter(surfaces)) if surfaces else shared[0]
+        moves = set(pair.layer_moves)
+        kept = tuple(net for net in pair.order if net not in moves)
+        moved, unmoved = [], []
+        for net in pair.order:
+            if net not in moves:
+                continue
+            others = [layer for layer in allowed[net] if layer is not planar]
+            if others:
+                moved.append((net, min(others, key=lambda layer: abs(stack.index(layer) - stack.index(planar)))))
+            else:
+                unmoved.append(net)
+        corridor = bounds(pin.position for pin in pins).expanded(options.corridor_margin_nm)
+        plan = PairPlan(pair.first, pair.second, planar, kept, tuple(moved), tuple(unmoved), corridor)
+        pairs.append(plan)
+        outside_in = [kept[index // 2] if index % 2 == 0 else kept[-1 - index // 2] for index in range(len(kept))]
+        order.extend(net for net in [*(net for net, _layer in moved), *outside_in, *unmoved] if net not in order)
+        for net, layer in sorted(moved):
+            biases.extend(LayerBias(net, other, corridor, options.layer_bias_rate)
+                          for other in allowed[net] if other is not layer)
+        # Only nets running purely between the two parts escape on the surface;
+        # a rail or other tree keeps its dogbone towards its further pads.
+        surface_pads.update(pin.pad for pin in pins
+                            if pin.net in kept and pin.net in crossing.nets and pin.layers == (planar,))
+    return EscapePlan(tuple(pairs), tuple(order), tuple(biases), frozenset(surface_pads))
 
 
 # --------------------------------------------------------------------------- geometry

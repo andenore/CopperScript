@@ -4,11 +4,34 @@ One fixed-event cost unit is one million integer micro-units. Planar costs
 are per millimetre (10 baseline units/mm). Keeping nanometre precision avoids
 rounding each subdivided edge and makes straight-edge splitting invariant.
 """
+from dataclasses import dataclass
 from math import isqrt
 
-from .physical import Point
+from .geometry import Bounds
+from .physical import CopperLayer, Point
 
 COST_UNIT = 1_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class LayerBias:
+    """An escape plan's soft layer assignment: ``net`` pays extra on ``layer`` inside ``area``.
+
+    ``rate`` is in cost units per millimetre (10 doubles the cost of track).
+    A penalty, never a discount, so search heuristics stay admissible.
+    """
+
+    net: str
+    layer: CopperLayer
+    area: Bounds
+    rate: int
+
+    def cost(self, first: Point, second: Point) -> int:
+        """The penalty of a track from ``first`` to ``second`` on ``layer`` whose midpoint is in ``area``."""
+        x, y = (first.x_nm + second.x_nm) // 2, (first.y_nm + second.y_nm) // 2
+        if not (self.area.min_x <= x <= self.area.max_x and self.area.min_y <= y <= self.area.max_y):
+            return 0
+        return length_cost(first, second, self.rate)
 
 
 def length_cost(first: Point, second: Point, rate: int = 10) -> int:
