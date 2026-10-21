@@ -139,6 +139,15 @@ Boards whose pins all have access keep their grid, and so their routes.
 Adding the strip row everywhere changed the grid of 45 of the 99 D3-A
 boards, and it made one of them (0054) lose a clean route.
 
+The opposite case is a last tile that overhangs the edge with its centre
+within a quarter tile of it, often inside the edge clearance. On D3-A board
+0034 (8 mm tall) the second row sat 0.5 mm from the edge, where no 0.7 mm
+track fits, so a pad between the rows had only via launches, and terminal
+registration rejected them all. The strip graph moves that centre to the
+middle of the tile's part inside the board (6.5 mm on 0034). Whether a pin
+lacks access is judged after terminal capacity registration, since
+registration can remove every launch of a pad that looked accessible.
+
 ## Enclosure-window repair
 
 A terminal can be walled in by several routed nets at once: the pins of a

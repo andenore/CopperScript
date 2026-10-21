@@ -60,6 +60,17 @@ as in the file. Footprint text, whose stored angle differs between KiCad
 versions, uses the square that holds the box at any rotation about its
 anchor. Hidden text is not copper and is ignored.
 
+A surface pad that straddles the board edge (a wire or contact pad milled
+off at fabrication) is clipped, for routing only, to its copper inside the
+outline: its centre may lie outside the board, where no access stem is
+legal. A rectangular pad, square to the board axes, whose part inside the
+outline is a rectangle, becomes that rectangle in a footprint variant of its
+own placement (`<footprint>~clipped~<reference>`), counted as "pad clipped
+to the board outline". Other straddling pads stay as they are ("pad
+straddling the board edge left unclipped"). The written board keeps the
+original footprints. D3-A board 0034 has two 5 × 10 mm wire pads on an
+8 mm tall board, centred 0.5 mm outside it.
+
 ## Placement legality
 
 Imported boards set `metadata["placement_legality"] = "external"`. The

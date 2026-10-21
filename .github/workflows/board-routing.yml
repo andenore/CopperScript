@@ -41,20 +41,22 @@ jobs:
           python -m pip install --no-build-isolation --no-deps -e .
       - name: Fetch locked URL dependencies into managed cache and record provenance
         run: python scripts/ci_board_bundle.py prepare
+      - name: Restore cached KiCad packages
+        id: kicad-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: kicad10-debs-${{ hashFiles('.github/board-toolchain.json') }}
       - name: Install KiCad 10 and bundled footprint libraries (pinned Ubuntu packages)
-        run: |
-          expected=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_ubuntu_version"])')
-          package_version=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_ubuntu_package_version"])')
-          sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends "kicad=$package_version" "kicad-footprints=$package_version" make
-          actual=$(kicad-cli version)
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::Expected KiCad $expected, installed $actual (Ubuntu package $package_version)"
-            exit 1
-          fi
-          echo 'KICAD_CLI=/usr/bin/kicad-cli' >> "$GITHUB_ENV"
-          echo 'KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints' >> "$GITHUB_ENV"
+        env:
+          KICAD_DEB_CACHE: /home/runner/kicad-debs
+        run: bash scripts/ci_install_kicad10.sh
+      - name: Save KiCad packages for later runs
+        if: steps.kicad-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: ${{ steps.kicad-cache.outputs.cache-primary-key }}
       - name: Exercise Make targets for every example
         env:
           PYTHON: python
@@ -84,7 +86,25 @@ jobs:
           echo "NGSPICE=$RUNNER_TEMP/copper-ngspice/bin/ngspice" >> "$GITHUB_ENV"
           echo 'COPPER_SIM_REQUIRED=1' >> "$GITHUB_ENV"
       - name: Run complete test suite
-        run: python -m pytest
+        run: |
+          set +e
+          python -m pytest -rfE --junitxml="$RUNNER_TEMP/pytest.xml" 2>&1 | tee "$RUNNER_TEMP/pytest.txt"
+          code=${PIPESTATUS[0]}
+          # Failing tests as annotations: the job log is not always at hand.
+          python - "$RUNNER_TEMP/pytest.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          failed = []
+          for case in ET.parse(sys.argv[1]).iter("testcase"):
+              problem = case.find("failure") if case.find("failure") is not None else case.find("error")
+              if problem is not None:
+                  name = f"{case.get('classname')}::{case.get('name')}"
+                  text = (problem.get("message") or "").splitlines()[0][:200] if problem.get("message") else ""
+                  failed.append(f"{name} | {text}")
+          if failed:
+              body = "%0A".join(item.replace("%", "%25") for item in failed[:150])
+              print(f"::error title=Failing tests ({len(failed)})::{body}")
+          PY
+          exit "$code"
       - name: Exercise language server and VS Code providers
         env:
           COPPER_TEST_PYTHON: python
@@ -147,20 +167,22 @@ jobs:
           python -m pip install --no-build-isolation --no-deps -e .
       - name: Fetch locked URL dependencies into managed cache and record provenance
         run: python scripts/ci_board_bundle.py prepare
+      - name: Restore cached KiCad packages
+        id: kicad-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: kicad10-debs-${{ hashFiles('.github/board-toolchain.json') }}
       - name: Install KiCad 10 and bundled footprint libraries (pinned Ubuntu packages)
-        run: |
-          expected=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_ubuntu_version"])')
-          package_version=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_ubuntu_package_version"])')
-          sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends "kicad=$package_version" "kicad-footprints=$package_version" make
-          actual=$(kicad-cli version)
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::Expected KiCad $expected, installed $actual (Ubuntu package $package_version)"
-            exit 1
-          fi
-          echo 'KICAD_CLI=/usr/bin/kicad-cli' >> "$GITHUB_ENV"
-          echo 'KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints' >> "$GITHUB_ENV"
+        env:
+          KICAD_DEB_CACHE: /home/runner/kicad-debs
+        run: bash scripts/ci_install_kicad10.sh
+      - name: Save KiCad packages for later runs
+        if: steps.kicad-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: ${{ steps.kicad-cache.outputs.cache-primary-key }}
       - name: Attempt complete routing (never a dry run)
         run: python scripts/ci_board_bundle.py route --minutes 270
       - name: Build source distributions and pinned library snapshot
