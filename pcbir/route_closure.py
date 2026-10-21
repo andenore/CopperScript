@@ -103,8 +103,16 @@ def close_detailed_lands(
     from .zone_geometry import distribution_zone_nets
     zone_nets = distribution_zone_nets(board)
     added = board.tracks[len(detailed.board.tracks):]
+    net_of = {reference: net.name for net in board.nets for reference in net.pads}
+    open_lands: dict[str, list[str]] = {}
+    for reference in stitch.pending:
+        if net_of.get(reference) in opens and net_of.get(reference) not in zone_nets:
+            open_lands.setdefault(net_of[reference], []).append(
+                f"lands of {reference.component}.{reference.pad} are not joined by copper; "
+                "declare internal_pad_groups if the part joins them internally")
     nets = tuple(replace(
         item, connected=item.connected and item.net not in opens,
+        diagnostics=(*item.diagnostics, *open_lands.get(item.net, ())),
         track_count=item.track_count + sum(track.net == item.net for track in added
                                           if track.net not in zone_nets),
         length_nm=item.length_nm + sum(round(hypot(

@@ -109,13 +109,13 @@
    "wirelength_mm": 238.917
   },
   "0013_crossover-schiit-stack_xover4schiit": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 4,
-   "unrouted": 1,
+   "unconnected_items": 0,
+   "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": 152.865
+   "wirelength_mm": 191.641
   },
   "0014_hardware-designs_m-trigger": {
    "clean_pass": true,
@@ -211,10 +211,10 @@
    "clean_pass": false,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 3,
+   "unconnected_items": 1,
    "unrouted": 1,
-   "vias": 2,
-   "wirelength_mm": 40.476
+   "vias": 4,
+   "wirelength_mm": 56.07
   },
   "0025_kitspace_hum_temp_sensor": {
    "clean_pass": true,
@@ -394,16 +394,16 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 4,
-   "wirelength_mm": 183.321
+   "wirelength_mm": 159.489
   },
   "0045_retroreflectors_TANGOFLOCK": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 2,
-   "unrouted": 1,
-   "vias": 1,
-   "wirelength_mm": 121.891
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 2,
+   "wirelength_mm": 141.131
   },
   "0046_mearm-base-pcb_ServoPCB": {
    "clean_pass": true,
@@ -595,13 +595,13 @@
    "wirelength_mm": 165.651
   },
   "0067_radio_saw_dcc6c": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 2,
-   "unrouted": 1,
-   "vias": 6,
-   "wirelength_mm": 95.766
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 8,
+   "wirelength_mm": 116.603
   },
   "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm": {
    "clean_pass": false,
@@ -613,13 +613,13 @@
    "wirelength_mm": 14.621
   },
   "0069_C-BISCUIT_crowbar": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 1,
-   "unrouted": 1,
+   "unconnected_items": 0,
+   "unrouted": 0,
    "vias": 7,
-   "wirelength_mm": 132.023
+   "wirelength_mm": 142.473
   },
   "0070_Raspberry-Pi-Soft-Power-Controller_Switching Supply TPS563208 MCI": {
    "clean_pass": true,
@@ -757,13 +757,13 @@
    "wirelength_mm": 166.536
   },
   "0085_mini-whip_mini-whip-power-feed": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 4,
-   "unrouted": 1,
+   "unconnected_items": 0,
+   "unrouted": 0,
    "vias": 7,
-   "wirelength_mm": 193.772
+   "wirelength_mm": 225.068
   },
   "0086_BB-PWR-8009_BB-PWR-8009_revA": {
    "clean_pass": false,
@@ -793,22 +793,22 @@
    "wirelength_mm": 206.878
   },
   "0089_cobwebb-junction-box_CobwebbJunctionBox": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 3,
-   "unrouted": 1,
+   "unconnected_items": 0,
+   "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": 441.809
+   "wirelength_mm": 469.571
   },
   "0090_keyboard_converter_adapter_ibm4704_converter_adapter_ibm4704": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 3,
-   "unrouted": 1,
-   "vias": 10,
-   "wirelength_mm": 197.537
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 7,
+   "wirelength_mm": 183.357
   },
   "0091_rufs_dra818v_breakout_board": {
    "clean_pass": true,
@@ -893,5 +893,5 @@
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run 39558357673 on ee3480c (plan 3.2), stock KiCad 9.0.9"
+ "source": "routing-benchmark run 39565426588 on 7e85ae6 (plan 3.4), stock KiCad 9.0.9"
 }

@@ -1572,6 +1572,23 @@ def _route_net(
         if not candidates:
             return _failed(name, f"no legal pin access for {pad.component}.{pad.pad}")
         access_options.append((pad, pad_position, candidates))
+        if group is None and pad not in macro_ports and (rule is None or rule.kind is RouteKind.GENERAL):
+            # Lands sharing a number are one electrical pin, but KiCad (like
+            # Altium and Eagle by default) needs copper between them unless the
+            # part declares them internally joined (``internal_pad_groups``).
+            # Each separate land is its own terminal of this net.
+            for index, (land, origin) in enumerate(_separate_lands(placement, footprint, pad.pad), 1):
+                land_candidates = tuple(
+                    candidate for candidate in _access_candidates(
+                        board, grid, pad, origin, allowed, clearance, name, width,
+                        options.pin_access_candidates, allow_movable_conflicts, physical_pad=land)
+                    if (pad, candidate) not in access_origins)
+                if not land_candidates:
+                    return _failed(name, f"no legal pin access for land {index + 1} of {pad.component}.{pad.pad}"
+                                         f" at {_mm_text(origin)}")
+                for candidate in land_candidates:
+                    access_origins[pad, candidate] = origin
+                access_options.append((pad, origin, land_candidates))
     # An escaped pin keeps the priority of its single reserved port: its
     # alternative terminals do not make a crowded package pin unconstrained.
     def constraint(item):
@@ -1726,7 +1743,7 @@ def _route_net(
         # exact grid tree for multi-terminal nets until topology-aware cleanup.
         materialized = (
             _compact_path(path, grid, clearance, name, width)
-            if options.any_angle_cleanup and len(pads) == 2
+            if options.any_angle_cleanup and len(access_options) == 2
             and not allow_movable_conflicts else path
         )
         for first, second, _ in materialized:
@@ -2482,6 +2499,49 @@ def _surface_accesses(
         ):
             result.append((candidate, origin))
     return tuple(result), len(origins) > 1
+
+
+def _separate_lands(placement: Placement, footprint, number: str) -> tuple[tuple[object, Point], ...]:
+    """Lands of one pad number not joined by their own copper to its first land.
+
+    Touching or overlapping lands (a split thermal pad, a slotted outline) are
+    already one piece of copper and need no route between them. Returns one
+    representative land and its board position per further separate piece.
+    """
+    from .drc import placed_pad_shape
+    from .geometry import shapes_clear
+    from .placement import transformed_local_point
+    lands = [land for land in footprint.pads if land.number == number
+             and land.kind not in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}]
+    if len(lands) < 2:
+        return ()
+    positions = [transformed_local_point(placement, land.position) for land in lands]
+    shapes = [placed_pad_shape(position, land, placement) for land, position in zip(lands, positions)]
+    parent = list(range(len(lands)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    # One footprint's surface lands share its side, so any overlap is contact.
+    for first in range(len(lands)):
+        for second in range(first + 1, len(lands)):
+            if not shapes_clear(shapes[first], shapes[second], 1):
+                parent[find(second)] = find(first)
+    seen = {find(0)}
+    result = []
+    for index in range(1, len(lands)):
+        root = find(index)
+        if root not in seen:
+            seen.add(root)
+            result.append((lands[index], positions[index]))
+    return tuple(result)
+
+
+def _mm_text(point: Point) -> str:
+    return f"({point.x_nm / 1_000_000:g}, {point.y_nm / 1_000_000:g}) mm"
 
 
 def _escape_terminals(
