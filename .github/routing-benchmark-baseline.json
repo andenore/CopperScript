@@ -298,13 +298,13 @@
    "wirelength_mm": 106.278
   },
   "0034_NavigationThing_NavigationThingBacklight": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 11,
-   "unrouted": 3,
-   "vias": 9,
-   "wirelength_mm": 16.191
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 4,
+   "wirelength_mm": 71.861
   },
   "0035_KiCad-Like-a-Pro-Tutorial_rf24-breakout-v1": {
    "clean_pass": true,
@@ -313,7 +313,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": 192.081
+   "wirelength_mm": 191.784
   },
   "0036_nRF24breakoutBoard_nRF24-breakout": {
    "clean_pass": true,
@@ -893,5 +893,5 @@
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run 39613681967 on c240b99 (plan 3.8 enclosure-window repair), stock KiCad 9.0.9"
+ "source": "routing-benchmark run 39634433599 on 34e0d41 (plan 3.6 edge pads), stock KiCad 9.0.9"
 }
