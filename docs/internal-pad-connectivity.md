@@ -24,3 +24,21 @@ power/thermal contacts. Prefer legal surface or off-pad ground access; a large
 contact alone does not justify a via array or waive contact finish/process review.
 Library-owned evidence and review rules are in CopperLib's internal connectivity
 guide. Board-specific current validation belongs in [the nRF52 example](nrf52-coin-cell.md).
+
+## Routing repeated lands without a declaration
+
+Repeated pad numbers without an `internal_pad_groups` declaration are one
+electrical pin, but KiCad (like Altium and, by default, Eagle) needs copper
+between the lands: its ratsnest and DRC report "missing connection" until
+they are joined. So the detailed router treats every separate land as its
+own terminal of the net and routes to it, with vias when needed. Lands that
+already touch or overlap (a split thermal pad, a slotted outline) are one
+piece of copper and get no route. Declared groups are never routed between
+their lands: one external contact satisfies them, and KiCad 10 receives
+them as `jumper_pad_groups`.
+
+The land stitcher still closes short surface gaps that remain. A land left
+open is reported on its net: "lands of J1.1 are not joined by copper; declare
+internal_pad_groups if the part joins them internally". When a part's
+drawing shows the lands joined inside it (a tactile switch's terminal pairs,
+a battery retainer), declare the group rather than routing every land.
