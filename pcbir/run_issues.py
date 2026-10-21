@@ -360,6 +360,43 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
                                    len(pads), nets=[net], objects=pads,
                                    points=[p for pad in pads for p in _pad_points(scene, pad)]))
     issues.extend(_placement_issues(report, scene))
+    issues.extend(_escape_issues(report, scene, {net for issue in issues if issue.code == "NET-UNROUTED"
+                                                 for net in issue.nets} | set(open_nets)))
+    return issues
+
+
+def _escape_issues(report: dict, scene: Scene | None, unrouted: set[str]) -> list[RunIssue]:
+    """Escape-model findings of the placed board (two-end crossings, channel overflow).
+
+    Advisory, like placement findings: they explain why nets between two parts
+    or inside a pad field may fail, and name the nets left unrouted among them.
+    """
+    escape = _section(report, "escape")
+    issues = []
+    for pair in _items(escape.get("pairs")):
+        if not isinstance(pair, dict) or not pair.get("crossing_pairs"):
+            continue
+        components = [str(c) for c in _items(pair.get("components"))]
+        nets = [str(n) for n in _items(pair.get("crossing_nets"))]
+        failed = sorted(unrouted & set(nets))
+        title = (f"{' and '.join(components)}: {pair['crossing_pairs']} crossing net pair(s) on one layer; "
+                 f"move {', '.join(str(n) for n in _items(pair.get('layer_moves')))} to another layer"
+                 + (f"; unrouted: {', '.join(failed)}" if failed else ""))
+        points = [p.center for p in (scene.pads if scene else []) if p.ref in components and p.net in set(nets)]
+        issues.append(RunIssue(f"X{len(issues) + 1}", "escape", "ESCAPE-CROSSING", title, pair["crossing_pairs"],
+                               nets=nets, objects=components, points=points))
+    for cluster in _items(escape.get("clusters")):
+        if not isinstance(cluster, dict) or not cluster.get("overflow"):
+            continue
+        pads = [str(p) for p in _items(cluster.get("inner_signal_pins"))]
+        loads = ", ".join(f"{c['layer']} {c['demand']}/{c['capacity']}" for c in _items(cluster.get("channels"))
+                          if isinstance(c, dict))
+        issue = RunIssue(f"X{len(issues) + 1}", "escape", "ESCAPE-CHANNEL-OVERFLOW",
+                         f"{cluster.get('component')}: {len(pads)} inner pin(s) against ring gap capacity "
+                         f"(demand/capacity {loads})", int(cluster["overflow"]), objects=pads,
+                         points=[p for pad in pads for p in _pad_points(scene, pad)])
+        issue.nets = sorted({pad.net for ref_pad in pads for pad in _pads(scene, ref_pad) if pad.net})
+        issues.append(issue)
     return issues
 
 

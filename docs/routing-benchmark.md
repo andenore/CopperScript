@@ -10,11 +10,13 @@ It is measurement, never signoff.
 ## Boards
 
 The board set is PCBWorld's D3 benchmark (LG AI Research, BSD-3 code),
-built from the PCBench corpus (MIT, 1,182 open hardware boards). The
-default tier is D3-A: the 99 easy test boards named in PCBWorld's
-`configs/datasets/d3.json`. Pins for both repositories, the KiCad series,
-the tier, the shard count and the per-board time limit are in
-`.github/routing-benchmark.json`.
+built from the PCBench corpus (MIT, 1,182 open hardware boards). Two tiers
+run: D3-A, the 99 easy test boards, and D3-B, the 10 medium test boards
+(PCBWorld's `easy` and `medium` test splits in `configs/datasets/d3.json`).
+Pins for both repositories, the KiCad series, the tiers, the shard count and
+the per-board time limit are in `.github/routing-benchmark.json`. The
+prepare job writes `tiers.json` (board → tier) next to the boards;
+`summarize --tiers` and `compare --tiers` report each tier separately.
 
 PCBench ships KiCad 5 boards. The workflow prepares them with PCBWorld's
 own chain under stock KiCad 9: `convert_v9.py` (re-save in KiCad 9 format,
@@ -71,7 +73,8 @@ its result record.
 outcome: status, clean pass, unrouted nets, KiCad errors, unconnected items,
 vias and length. Every run ends with
 `python -m pcbir.bench compare .github/routing-benchmark-baseline.json RESULTS`.
-It lists the boards that became clean or stopped being clean, and changes in
+It gives each tier's clean count, lists the boards that became clean or
+stopped being clean, and changes in
 unrouted nets, errors and unconnected items on boards that are still unclean.
 For boards clean in both runs, it gives total vias and length. **The job
 fails if a board that was clean in the baseline is no longer clean.** A change
@@ -86,6 +89,14 @@ same JSON.
 The workflow runs on pushes to `claude/**` branches that touch `pcbir/` or
 the benchmark files, so router changes are measured too, and on manual
 dispatch.
+
+## Failure causes
+
+Every routed record carries the placed board's escape diagnostics and a cause
+class for each unrouted net (see [escape planning](escape-planning.md)).
+`python -m pcbir.bench causes RESULTS` tabulates unrouted nets per primary
+cause for every unclean board, and marks boards that fail only KiCad's check;
+the run summary includes it.
 
 ## Baseline (2026-10-20)
 

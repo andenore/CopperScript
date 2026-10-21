@@ -6,7 +6,7 @@
   "pcbench_ref": "dec3be75cbdef74787625f9043c7391cd473bb64",
   "kicad_ppa": "ppa:kicad/kicad-9.0-releases",
   "kicad_series": "9.0",
-  "tier": "easy",
+  "tiers": ["easy", "medium"],
   "split": "test",
   "shards": 12,
   "board_seconds": 1200

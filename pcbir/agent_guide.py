@@ -96,7 +96,7 @@ _TOPICS = {
     "iteration": {
         "title": "Iterate on routing and placement failures",
         "guidance": [
-            "Start every failed run with copper issues RUN: findings grouped by cause, each with an id, nets, layers and a mm window. Fix root causes first; lines marked <- P1..Pn follow from those pending package exits. Filter with --stage, --net or --code.",
+            "Start every failed run with copper issues RUN: findings grouped by cause, each with an id, nets, layers and a mm window. Fix root causes first; lines marked <- P1..Pn follow from those pending package exits. Advisory X ids come from the placed board's escape model: nets between two parts that cross on one layer, or inner pins of a pad field with too few ring gaps. Filter with --stage, --net or --code.",
             "Look at one issue with copper view RUN --issue ID (add --filled for real zone fills). Read the printed legend first; open the PNG only when geometry matters. Use --net, --pad, --component or --window x0,y0,x1,y1 for anything else.",
             "For a blocked package exit, overlay the manufacturer layout: copper view RUN --issue P1 --reference REF.kicad_pcb --align OURS:THEIRS. The legend states matched pads and fit RMS; an overlay is a comparison aid, not proof that the reference applies.",
             "Do not read route-report.json whole or write per-failure render, plot, inspect or codec scripts. If a script is unavoidable, import pcbir.workbench (load_run, run_issues, view, save_state, load_state) and save intermediate solver states with save_state.",

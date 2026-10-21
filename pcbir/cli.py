@@ -17,6 +17,7 @@ from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .backends.kicad_project import write_kicad_project
 from .critical_review import critical_lane_review, lane_review_line
 from .erc import check, has_errors
+from .escape_plan import escape_diagnostics
 from .footprints import FootprintResolver, FootprintResolutionError, prepare_footprint_dependencies
 from .importers import KiCadModImportError, load_kicad_mod
 from .layout import PlacementPlannerOptions, placement_intent_findings, plan_placement
@@ -1888,6 +1889,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {"code": f.code, "status": f.status.value, "message": f.message,
                      **({"subject": f.subject} if f.subject is not None else {})}
                     for f in placement_intent_findings(result.placement_and_global.board)],
+                # Advisory escape model of the placed board (escape planning E0); never a gate.
+                "escape": escape_diagnostics(result.placement_and_global.board).report(),
             }
             if power_area_options is not None:
                 report["power_area_planning"] = {

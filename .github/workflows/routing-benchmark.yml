@@ -1,7 +1,8 @@
 name: Route the PCBWorld D3 benchmark boards
 
-# Routes PCBWorld's D3 evaluation boards (by default D3-A: the 99 easy test
-# boards, all from PCBench) with their placements held fixed, writes the copper
+# Routes PCBWorld's D3 evaluation boards (D3-A: the 99 easy test boards, and
+# D3-B: the 10 medium test boards, all from PCBench) with their placements held
+# fixed, writes the copper
 # back into each original KiCad board and scores it with stock kicad-cli DRC
 # under the board's own project rules. Pins live in
 # .github/routing-benchmark.json. Measurements only: never signoff,
@@ -10,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: Route only the first N boards of the tier (0 = all)
+        description: Route only the first N boards of each tier (0 = all)
         default: '0'
   push:
     branches: ['claude/**']
@@ -50,8 +51,9 @@ jobs:
           import json, sys
           pins = json.load(open("CopperScript/.github/routing-benchmark.json"))
           for key in ("pcbworld_repository", "pcbworld_ref", "pcbench_repository", "pcbench_ref",
-                      "kicad_ppa", "kicad_series", "tier", "split", "board_seconds"):
+                      "kicad_ppa", "kicad_series", "split", "board_seconds"):
               print(f"{key}={pins[key]}")
+          print("tiers=" + ",".join(pins["tiers"]))
           print("limit=" + sys.argv[1])
           print("shards=" + json.dumps(list(range(pins["shards"]))))
           print(f"shard_count={pins['shards']}")
@@ -85,13 +87,18 @@ jobs:
           }
           fetch PCBWorld "${{ steps.plan.outputs.pcbworld_repository }}" "${{ steps.plan.outputs.pcbworld_ref }}"
           git -C PCBWorld checkout --quiet FETCH_HEAD
-          python3 - PCBWorld/configs/datasets/d3.json "${{ steps.plan.outputs.tier }}" "${{ steps.plan.outputs.split }}" \
+          python3 - PCBWorld/configs/datasets/d3.json "${{ steps.plan.outputs.tiers }}" "${{ steps.plan.outputs.split }}" \
             "${{ steps.plan.outputs.limit }}" > boards.txt <<'PY'
           import json, sys
           d3 = json.load(open(sys.argv[1]))
-          names = d3[sys.argv[2]][sys.argv[3]]
-          limit = int(sys.argv[4])
-          print("\n".join(names[:limit] if limit else names))
+          labels = {"easy": "D3-A", "medium": "D3-B", "hard": "D3-C"}
+          limit = int(sys.argv[4])  # the first N boards of each tier
+          tiers = {}
+          for tier in sys.argv[2].split(","):
+              names = d3[tier][sys.argv[3]]
+              tiers.update((name, labels[tier]) for name in (names[:limit] if limit else names))
+          json.dump(tiers, open("tiers.json", "w"), indent=1, sort_keys=True)
+          print("\n".join(tiers))
           PY
           echo "$(wc -l < boards.txt) boards selected"
           fetch PCBench "${{ steps.plan.outputs.pcbench_repository }}" "${{ steps.plan.outputs.pcbench_ref }}"
@@ -134,7 +141,7 @@ jobs:
               echo "::warning title=Board not prepared::$id"; missing=$((missing + 1))
             fi
           done < boards.txt
-          cp boards.txt "$RUNNER_TEMP/kicad-version.txt" boards/
+          cp boards.txt tiers.json "$RUNNER_TEMP/kicad-version.txt" boards/
           echo "::notice title=Benchmark boards::$(ls -d boards/*/ | wc -l) prepared, $missing missing"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -262,7 +269,9 @@ jobs:
         run: |
           {
             echo "## CopperScript on PCBWorld D3 boards"
-            python -m pcbir.bench summarize ../results --markdown
+            python -m pcbir.bench summarize ../results --markdown --tiers ../boards/tiers.json
+            echo "### Unrouted nets by cause"
+            python -m pcbir.bench causes ../results
             echo "### Scorer check: the boards' own routing"
             python -m pcbir.bench summarize ../reference --markdown
             echo "### Boards"
@@ -294,7 +303,7 @@ jobs:
       - name: Compare with the committed baseline
         run: |
           set +e
-          python -m pcbir.bench compare .github/routing-benchmark-baseline.json ../results > ../compare.md
+          python -m pcbir.bench compare .github/routing-benchmark-baseline.json ../results --tiers ../boards/tiers.json > ../compare.md
           code=$?
           set -e
           cat ../compare.md >> "$GITHUB_STEP_SUMMARY"
