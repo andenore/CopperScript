@@ -388,6 +388,7 @@ Handoff, open items and the plan for merging to `main`:
 | 2026-10-20 (night) | Neck exits stay inside the breakout region; refinement swaps ignore escape differences under 0.1 mm | full-vertical 1.0 (was 0.988), asset-tracker 1.0, led-ring 1.0, nrf52 1.0, cm4 1.0, round-led-ring 0.98; all DRC-clean, 0 estimated plane opens |
 | 2026-10-21 | CopperProbe repo: candidate is `board.copper` (21 parts released), others archived; first Windows run, native refill | CopperProbe 0.878 (29/237 opens), 2 exact DRC (max length: ADC_D8, SENSE), 34 native unconnected, 3 est. plane opens, 67 min |
 | 2026-10-21 (pm, Windows) | Merged origin/main (3.2, 3.4); D3-A 89→91 clean, 0 lost; ladder unchanged. BGA escape strips (`--unified-escape-strips`, off) after comparing the FX10 kit layout | CopperProbe baseline 0.869 (31/237), DRC 1; with strips 0.886 (27/237), DRC 1, but USB_TX1*_IC lost (moved bypass copper takes its via site), so strips stay off |
+| 2026-10-21 (eve, Windows) | CopperProbe `c1d3639` releases x/y of C_FX10_G3, C_FX_E3, C_FX_L3 (placer puts them 0.8-1.5 mm from their balls, kit-like) | released 0.848 (36 opens), released+strips 0.873 (30 opens, TX1_IC lost); both worse than unreleased (0.869 / strips 0.886); bypass pending 6/10/9/12 |
 
 Open items:
 
