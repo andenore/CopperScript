@@ -35,7 +35,7 @@ _ROUTING_TAGS = ("segment", "arc", "via")
 # --------------------------------------------------------------------------- routing
 
 def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20_000,
-                     passes: int = 2, pitch_mm: str = "1") -> dict:
+                     passes: int = 2, pitch_mm: str = "1", router: str = "legacy") -> dict:
     """Import, route with fixed placement, write the routed board and a result record."""
     from .detailed import DetailedRouterOptions
     from .fanout import FanoutOptions
@@ -47,7 +47,7 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
 
     out_dir.mkdir(parents=True, exist_ok=True)
     record: dict = {"schema": RESULT_SCHEMA, "board": out_dir.name, "source": str(board_path),
-                    "status": "incomplete"}
+                    "status": "incomplete", "router": router}
     _save(out_dir, record)  # a run killed by its time limit stays "incomplete"
     started = time.perf_counter()
     try:
@@ -73,9 +73,11 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
             detailed_options=DetailedRouterOptions(
                 pitch_nm=nm_from_mm(pitch_mm), maximum_passes=passes, maximum_search_states=search_budget,
                 enable_soft_ripup=True, constrained_pins_first=True, progressive_guides=True,
-                repair_budget_multiplier=10, defer_zone_nets=bool(board.zones)),
+                enclosure_repair_radius_nm=nm_from_mm(8), enclosure_repair_orders=16,
+                repair_budget_multiplier=10, defer_zone_nets=bool(board.zones), enclosure_repair_nets=12),
             fanout_options=FanoutOptions(),
             plane_stitch_options=PlaneStitchOptions(maximum_contact_radius_nm=nm_from_mm(5)) if board.zones else None,
+            **({"unified_options": _unified_options()} if router == "unified" else {}),
         )
     except Exception as exc:  # noqa: BLE001 - a routing crash is a measured outcome, not a harness error
         record.update(status="route_crashed", error=f"{type(exc).__name__}: {exc}",
@@ -107,6 +109,11 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         shutil.copyfile(project, out_dir / Path(ROUTED_NAME).with_suffix(".kicad_pro"))
     _save(out_dir, record)
     return record
+
+
+def _unified_options():
+    from .unified_router import UnifiedRouterOptions
+    return UnifiedRouterOptions()
 
 
 def _search_note(item) -> list[str]:
@@ -545,6 +552,8 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("board", type=Path)
     route.add_argument("--out", type=Path, required=True)
     route.add_argument("--search-budget", type=int, default=20_000)
+    route.add_argument("--router", choices=("legacy", "unified"), default="legacy",
+                       help="ordinary detailed router, as copper route-board --router")
     reference = commands.add_parser("reference")
     reference.add_argument("board", type=Path)
     reference.add_argument("--out", type=Path, required=True)
@@ -573,7 +582,7 @@ def main(argv: list[str] | None = None) -> int:
     annotate.add_argument("--first", type=int, default=0, help="first chunk index (a step shows 10)")
     args = parser.parse_args(argv)
     if args.command == "route":
-        record = route_board_file(args.board, args.out, search_budget=args.search_budget)
+        record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router)
     elif args.command == "reference":
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":

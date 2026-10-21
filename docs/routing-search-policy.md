@@ -138,3 +138,42 @@ strip's width rather than a whole tile.
 Boards whose pins all have access keep their grid, and so their routes.
 Adding the strip row everywhere changed the grid of 45 of the 99 D3-A
 boards, and it made one of them (0054) lose a clean route.
+
+## Enclosure-window repair
+
+A terminal can be walled in by several routed nets at once: the pins of a
+crowded header, where each neighbour's escape blocks the next. Blocker
+transactions evict only the nets that one candidate path crosses, and fail
+when an evicted net cannot return. The enclosure window
+(`enclosure_repair_nets`, off by default; the D3 benchmark turns it on)
+moves the neighbours together:
+
+1. The open net is routed with no other routed copper. If fixed geometry
+   alone blocks it, moving routed nets cannot help and the net is skipped.
+2. Routed ordinary nets whose copper conflicts with that free path are the
+   victims, then nets with copper within `enclosure_repair_radius_nm` of the
+   unreached terminals, up to `enclosure_repair_nets`.
+3. The open net and the victims are ripped up and rerouted, open net first.
+   A net that fails goes first in the next order (at most
+   `enclosure_repair_orders` orders), so the nets hardest to place claim
+   their escape before the easy ones.
+4. The window is kept only if every net in it connects; otherwise nothing
+   changes.
+
+Other open nets with a pad in the window join it as optional companions: a
+companion that fails stays open without rejecting the window. Open nets are
+taken smallest first, so ground can connect as a signal net's companion.
+
+The repair is the last stage, after the final retry, so boards that close
+earlier never pay for it. It is still expensive: a failing search spends its
+whole budget (10 to 75 s on the D3 boards), and a window can try many
+orders. Window searches therefore use the ordinary state budget, the repair
+runs only when at most `enclosure_repair_open_nets` (2) ordinary nets are
+open, and `enclosure_repair_searches` (64) bounds all its windows. On 0050,
+with three open nets, windows took 650 s and closed nothing, so boards like
+it are skipped. On D3-A board 0049 (MySRaspiGW PA/LNA, a 2×4 radio header on an
+11.5 × 11.9 mm board), CSN routes alone but is enclosed by +3V3, CE, MISO and
+SCK; fixed orders of those four kept trading the failure among them. With
+all seven signal nets in the window, promotion settles it.
+A negotiated-congestion window (the unified router on the window's nets,
+everything else fixed) was tried and did not connect 0049; it is not used.
