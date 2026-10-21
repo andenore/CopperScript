@@ -126,6 +126,45 @@ def test_baseline_round_trips_through_the_published_record():
     record = ("board|status|clean|unrouted|drc_errors|unconnected|vias|wirelength_mm\n"
               "a|routed|1|0|0|0|3|12.5\nb|import_failed|0|None|None|None|None|None\n")
     boards = baseline_from_record(record)["boards"]
+    # Records published before the routable/seconds columns still parse.
     assert boards["a"] == {"status": "routed", "clean_pass": True, "unrouted": 0, "drc_errors": 0,
-                           "unconnected_items": 0, "vias": 3, "wirelength_mm": 12.5}
+                           "unconnected_items": 0, "vias": 3, "wirelength_mm": 12.5,
+                           "routable_nets": None, "seconds": None}
     assert boards["b"]["clean_pass"] is False and boards["b"]["vias"] is None
+
+
+def test_record_text_round_trips_with_routable_nets_and_seconds():
+    from pcbir.bench import baseline_from_record, record_text
+    baseline = _baseline(a={"status": "routed", "clean_pass": True, "unrouted": 0, "drc_errors": 0,
+                            "unconnected_items": 0, "vias": 3, "wirelength_mm": 12.5,
+                            "routable_nets": 20, "seconds": 4.25})
+    boards = baseline_from_record(record_text(baseline))["boards"]
+    assert boards["a"]["routable_nets"] == 20 and boards["a"]["seconds"] == 4.25
+
+
+def test_versus_compares_two_runs_on_every_measure():
+    from pcbir.bench import versus
+    legacy = _baseline(
+        a={"status": "routed", "clean_pass": True, "unrouted": 0, "drc_errors": 0, "unconnected_items": 0,
+           "vias": 4, "wirelength_mm": 20.0, "routable_nets": 10, "seconds": 3.0},
+        b={"status": "routed", "clean_pass": False, "unrouted": 2, "drc_errors": 1, "unconnected_items": 3,
+           "vias": 1, "wirelength_mm": 5.0, "routable_nets": 10, "seconds": 9.0},
+        c={"status": "route_crashed", "clean_pass": False, "unrouted": None, "drc_errors": None,
+           "unconnected_items": None, "vias": None, "wirelength_mm": None, "routable_nets": 10, "seconds": 1.0})
+    unified = _baseline(
+        a={"status": "routed", "clean_pass": True, "unrouted": 0, "drc_errors": 0, "unconnected_items": 0,
+           "vias": 2, "wirelength_mm": 18.0, "routable_nets": 10, "seconds": 2.0},
+        b={"status": "routed", "clean_pass": True, "unrouted": 0, "drc_errors": 0, "unconnected_items": 0,
+           "vias": 3, "wirelength_mm": 7.0, "routable_nets": 10, "seconds": 4.0},
+        c={"status": "routed", "clean_pass": False, "unrouted": 1, "drc_errors": 0, "unconnected_items": 1,
+           "vias": 0, "wirelength_mm": 1.0, "routable_nets": 10, "seconds": 1.5})
+    text = versus(legacy, unified, ("legacy", "unified"))
+    assert "| Clean (0 KiCad errors, 0 unconnected) | 1 | 2 |" in text
+    assert "| Fully routed (0 unrouted nets) | 1 | 2 |" in text
+    # Legacy's crashed board has no unrouted count: completion uses the boards that report one.
+    assert "| Net completion (all boards) | 0.9 | 0.9667 |" in text
+    # Copper is compared only where both runs are clean (board a).
+    assert "| Vias, 1 boards clean in both | 4 | 2 |" in text
+    assert "| Not routed (crash, timeout, missing) | 1 | 0 |" in text
+    assert "| Unrouted nets | 1 | 1 | 0 |" in text and "| Routing seconds | 2 | 0 | 1 |" in text
+    assert "Clean only with unified (1): b" in text and "Clean only with legacy (0): none" in text

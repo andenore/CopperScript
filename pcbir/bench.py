@@ -445,8 +445,25 @@ def baseline_records(root: Path) -> dict:
             "status": item.get("status"), "clean_pass": bool(item.get("clean_pass")),
             "unrouted": len(unrouted) if unrouted is not None else None,
             "drc_errors": item.get("drc_errors"), "unconnected_items": item.get("unconnected_items"),
-            "vias": item.get("vias"), "wirelength_mm": item.get("wirelength_mm")}
+            "vias": item.get("vias"), "wirelength_mm": item.get("wirelength_mm"),
+            "routable_nets": item.get("routable_nets"), "seconds": item.get("seconds"),
+            "router": item.get("router")}
     return {"schema": BASELINE_SCHEMA, "boards": boards}
+
+
+RECORD_COLUMNS = ("board", "status", "clean", "unrouted", "drc_errors", "unconnected", "vias", "wirelength_mm",
+                  "routable", "seconds")
+
+
+def record_text(baseline: dict) -> str:
+    """The published "Benchmark baseline record": one ``|``-separated row per board."""
+    rows = ["|".join(RECORD_COLUMNS)]
+    for name, item in sorted(baseline["boards"].items()):
+        rows.append("|".join(str(value) for value in (
+            name, item["status"], int(item["clean_pass"]), item["unrouted"], item["drc_errors"],
+            item["unconnected_items"], item["vias"], item["wirelength_mm"], item.get("routable_nets"),
+            item.get("seconds"))))
+    return "\n".join(rows) + "\n"
 
 
 def baseline_from_record(text: str, source: str = "") -> dict:
@@ -471,7 +488,9 @@ def baseline_from_record(text: str, source: str = "") -> dict:
         boards[row["board"]] = {"status": row["status"], "clean_pass": row["clean"] == "1",
                                 "unrouted": value(row["unrouted"]), "drc_errors": value(row["drc_errors"]),
                                 "unconnected_items": value(row["unconnected"]), "vias": value(row["vias"]),
-                                "wirelength_mm": value(row["wirelength_mm"])}
+                                "wirelength_mm": value(row["wirelength_mm"]),
+                                "routable_nets": value(row.get("routable", "")),
+                                "seconds": value(row.get("seconds", ""))}
     return {"schema": BASELINE_SCHEMA, "source": source, "boards": boards}
 
 
@@ -513,6 +532,90 @@ def compare_to_baseline(baseline: dict, current: dict) -> tuple[str, list[str]]:
     if changed:
         lines += ["", "Other changes on unclean boards:", *changed]
     return "\n".join(lines) + "\n", lost
+
+
+def versus(first: dict, second: dict, names: tuple[str, str] = ("A", "B")) -> str:
+    """Two runs of the same boards compared on every recorded measure (markdown).
+
+    Totals cover the boards present in both runs; vias and track length only
+    the boards clean in both, so a router that leaves nets open is not
+    rewarded for using less copper. Head-to-head counts say on how many boards
+    the second run is better, equal or worse than the first.
+    """
+    a_all, b_all = first.get("boards", {}), second.get("boards", {})
+    common = sorted(set(a_all) & set(b_all))
+    a, b = [a_all[n] for n in common], [b_all[n] for n in common]
+    first_name, second_name = names
+
+    def total(items, key):
+        known = [item.get(key) for item in items if item.get(key) is not None]
+        return round(sum(known), 3) if known else None
+
+    def count(items, test):
+        return sum(1 for item in items if test(item))
+
+    def completion(items):
+        pairs = [(item.get("routable_nets"), item.get("unrouted")) for item in items]
+        pairs = [(r, u) for r, u in pairs if r and u is not None]
+        if not pairs:
+            return None
+        return round(1 - sum(u for _, u in pairs) / sum(r for r, _ in pairs), 4)
+
+    def median(values):
+        values = sorted(value for value in values if value is not None)
+        if not values:
+            return None
+        middle = len(values) // 2
+        return values[middle] if len(values) % 2 else round((values[middle - 1] + values[middle]) / 2, 3)
+
+    def slowest(items):
+        values = [item.get("seconds") for item in items if item.get("seconds") is not None]
+        return max(values) if values else None
+
+    clean_both = [n for n in common if a_all[n].get("clean_pass") and b_all[n].get("clean_pass")]
+    a_clean, b_clean = [a_all[n] for n in clean_both], [b_all[n] for n in clean_both]
+    rows = [
+        ("Boards", len(common), len(common)),
+        ("Clean (0 KiCad errors, 0 unconnected)", count(a, lambda i: i.get("clean_pass")),
+         count(b, lambda i: i.get("clean_pass"))),
+        ("Fully routed (0 unrouted nets)", count(a, lambda i: i.get("unrouted") == 0),
+         count(b, lambda i: i.get("unrouted") == 0)),
+        ("Net completion (all boards)", completion(a), completion(b)),
+        ("Unrouted nets (total)", total(a, "unrouted"), total(b, "unrouted")),
+        ("KiCad DRC errors (total)", total(a, "drc_errors"), total(b, "drc_errors")),
+        ("Boards with 0 KiCad errors", count(a, lambda i: i.get("drc_errors") == 0),
+         count(b, lambda i: i.get("drc_errors") == 0)),
+        ("Unconnected items (total)", total(a, "unconnected_items"), total(b, "unconnected_items")),
+        (f"Vias, {len(clean_both)} boards clean in both", total(a_clean, "vias"), total(b_clean, "vias")),
+        (f"Track length mm, {len(clean_both)} boards clean in both",
+         total(a_clean, "wirelength_mm"), total(b_clean, "wirelength_mm")),
+        ("Routing seconds (total)", total(a, "seconds"), total(b, "seconds")),
+        ("Routing seconds (median board)", median([i.get("seconds") for i in a]),
+         median([i.get("seconds") for i in b])),
+        ("Routing seconds (slowest board)", slowest(a), slowest(b)),
+        ("Not routed (crash, timeout, missing)", count(a, lambda i: i.get("status") != "routed"),
+         count(b, lambda i: i.get("status") != "routed")),
+    ]
+    show = lambda value: "-" if value is None else value
+    lines = [f"| Measure | {first_name} | {second_name} |", "|---|---:|---:|"]
+    lines += [f"| {label} | {show(x)} | {show(y)} |" for label, x, y in rows]
+    lines += ["", f"Head to head: boards where {second_name} is better / equal / worse than {first_name}.", "",
+              "| Measure | better | equal | worse |", "|---|---:|---:|---:|"]
+    for key, label in (("unrouted", "Unrouted nets"), ("drc_errors", "KiCad DRC errors"),
+                       ("unconnected_items", "Unconnected items"), ("seconds", "Routing seconds")):
+        pairs = [(a_all[n].get(key), b_all[n].get(key)) for n in common]
+        pairs = [(x, y) for x, y in pairs if x is not None and y is not None]
+        better = sum(1 for x, y in pairs if y < x)
+        worse = sum(1 for x, y in pairs if y > x)
+        lines.append(f"| {label} | {better} | {len(pairs) - better - worse} | {worse} |")
+    gained = [n for n in common if b_all[n].get("clean_pass") and not a_all[n].get("clean_pass")]
+    lost = [n for n in common if a_all[n].get("clean_pass") and not b_all[n].get("clean_pass")]
+    lines += ["", f"Clean only with {second_name} ({len(gained)}): " + (", ".join(gained) or "none"),
+              f"Clean only with {first_name} ({len(lost)}): " + (", ".join(lost) or "none")]
+    only = sorted(set(a_all) ^ set(b_all))
+    if only:
+        lines.append(f"In one run only ({len(only)}): " + ", ".join(only))
+    return "\n".join(lines) + "\n"
 
 
 def annotation_chunks(text: str, limit: int = 3900) -> list[str]:
@@ -576,6 +679,12 @@ def main(argv: list[str] | None = None) -> int:
     compare = commands.add_parser("compare", help="compare results with a baseline; exit 1 if a clean board is lost")
     compare.add_argument("baseline", type=Path)
     compare.add_argument("root", type=Path)
+    record = commands.add_parser("record", help="print a baseline file as the published per-board record")
+    record.add_argument("baseline", type=Path)
+    against = commands.add_parser("versus", help="compare two baselines or published records on every measure")
+    against.add_argument("first", type=Path)
+    against.add_argument("second", type=Path)
+    against.add_argument("--names", nargs=2, default=("A", "B"), metavar=("FIRST", "SECOND"))
     annotate = commands.add_parser("annotate", help="print a file as GitHub notice annotations")
     annotate.add_argument("file", type=Path)
     annotate.add_argument("--title", required=True)
@@ -597,6 +706,15 @@ def main(argv: list[str] | None = None) -> int:
                                          baseline_records(args.root))
         print(text, end="")
         return 1 if lost else 0
+    elif args.command == "record":
+        print(record_text(json.loads(args.baseline.read_text(encoding="utf-8"))), end="")
+        return 0
+    elif args.command == "versus":
+        def load(path):
+            text = path.read_text(encoding="utf-8")
+            return json.loads(text) if text.lstrip().startswith("{") else baseline_from_record(text)
+        print(versus(load(args.first), load(args.second), tuple(args.names)), end="")
+        return 0
     elif args.command == "annotate":
         chunks = annotation_chunks(args.file.read_text(encoding="utf-8"))
         for index in range(args.first, min(args.first + 10, len(chunks))):
