@@ -78,6 +78,17 @@ class LockedModule:
 LOCK_SCHEMA = "copperscript.package-lock/v1"
 
 
+def _lock_difference(expected: LockedModule | None, actual: LockedModule) -> str:
+    """Name the first locked field that differs, so equal checksums never read as a mismatch."""
+    if expected is None:
+        return f"expected missing, got {actual.checksum}"
+    if expected.checksum != actual.checksum:
+        return f"expected {expected.checksum}, got {actual.checksum}"
+    if expected.source != actual.source:
+        return f"expected source {expected.source}, got {actual.source}"
+    return "file inventory differs"
+
+
 def find_manifest(start: Path) -> Path | None:
     """Return the nearest ``copper.mod`` at or above *start*."""
 
@@ -434,9 +445,8 @@ class PackageResolver:
         if expected == entry and (self.locked or set(self._lock_entries).issubset(declared)):
             return
         if self.locked:
-            expected_digest = expected.checksum if expected else "missing"
             raise CopperScriptError("PKG008", f"lock mismatch for {entry.module_path}@{entry.version}: "
-                f"expected {expected_digest}, got {entry.checksum}", location)
+                f"{_lock_difference(expected, entry)}", location)
         self._lock_entries[key] = entry
         self._lock_entries = {k:v for k,v in self._lock_entries.items() if k in declared}
         try:
@@ -612,7 +622,7 @@ def prepare_dependencies(source: Path, *, offline=False, locked=False, progress=
             expected = self._lock_entries.get(key)
             if expected is not None and expected != entry:
                 raise CopperScriptError("PKG008", f"lock mismatch for {entry.module_path}@{entry.version}: "
-                    f"expected {expected.checksum}, got {entry.checksum}; existing pins were preserved", location)
+                    f"{_lock_difference(expected, entry)}; existing pins were preserved", location)
             self._lock_entries[key] = entry
 
     resolver = PreparationResolver(manifest, locked=locked, offline=offline)
