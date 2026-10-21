@@ -128,3 +128,4 @@ spacing findings on imported placements no longer block package access (see
 | Plan 3.1: copper text as an obstacle | 81 | 0011 and 0026 clean; no KiCad error-level violations left on any board |
 | Plan 3.2: wide net classes neck down at narrower lands | 82 | 0078 clean; full-vertical identical |
 | Plan 3.4: every separate land of a pad number is routed unless declared internally joined | 89 | 0013, 0045, 0067, 0069, 0085, 0089 and 0090 clean; full-vertical identical |
+| Routing refactor merged (PR #15) | 91 | 0068 and 0099 clean; one inaccessible pin no longer blocks a whole board |

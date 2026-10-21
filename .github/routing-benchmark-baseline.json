@@ -301,10 +301,10 @@
    "clean_pass": false,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 14,
-   "unrouted": 4,
-   "vias": 12,
-   "wirelength_mm": 12.0
+   "unconnected_items": 11,
+   "unrouted": 3,
+   "vias": 9,
+   "wirelength_mm": 16.191
   },
   "0035_KiCad-Like-a-Pro-Tutorial_rf24-breakout-v1": {
    "clean_pass": true,
@@ -427,19 +427,19 @@
    "clean_pass": false,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 13,
-   "unrouted": 7,
-   "vias": 7,
-   "wirelength_mm": 14.0
+   "unconnected_items": 5,
+   "unrouted": 2,
+   "vias": 4,
+   "wirelength_mm": 63.286
   },
   "0049_MySRaspiGW_MySRaspiGW_PA_LNA": {
    "clean_pass": false,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 13,
-   "unrouted": 7,
-   "vias": 7,
-   "wirelength_mm": 14.5
+   "unconnected_items": 4,
+   "unrouted": 1,
+   "vias": 4,
+   "wirelength_mm": 67.626
   },
   "0050_MySRaspiGW_MySRaspiGW_PA_LNA_Pimoroni": {
    "clean_pass": false,
@@ -604,13 +604,13 @@
    "wirelength_mm": 116.603
   },
   "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 6,
-   "unrouted": 6,
-   "vias": 6,
-   "wirelength_mm": 14.621
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 0,
+   "wirelength_mm": 63.17
   },
   "0069_C-BISCUIT_crowbar": {
    "clean_pass": true,
@@ -874,13 +874,13 @@
    "wirelength_mm": 199.614
   },
   "0099_SparkSwitch_SparkProtectionSwitch": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 24,
-   "unrouted": 7,
-   "vias": 4,
-   "wirelength_mm": 7.0
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 5,
+   "wirelength_mm": 180.258
   },
   "0100_smt-zvs-driver_IH10-mc": {
    "clean_pass": true,
@@ -893,5 +893,5 @@
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run 39565426588 on 7e85ae6 (plan 3.4), stock KiCad 9.0.9"
+ "source": "routing-benchmark run 39576075376 on b05b89e (routing refactor merged with main, PR #15), stock KiCad 9.0.9"
 }
