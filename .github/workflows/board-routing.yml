@@ -72,7 +72,25 @@ jobs:
           echo "NGSPICE=$RUNNER_TEMP/copper-ngspice/bin/ngspice" >> "$GITHUB_ENV"
           echo 'COPPER_SIM_REQUIRED=1' >> "$GITHUB_ENV"
       - name: Run complete test suite
-        run: python -m pytest
+        run: |
+          set +e
+          python -m pytest -rfE --junitxml="$RUNNER_TEMP/pytest.xml" 2>&1 | tee "$RUNNER_TEMP/pytest.txt"
+          code=${PIPESTATUS[0]}
+          # Failing tests as annotations: the job log is not always at hand.
+          python - "$RUNNER_TEMP/pytest.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          failed = []
+          for case in ET.parse(sys.argv[1]).iter("testcase"):
+              problem = case.find("failure") if case.find("failure") is not None else case.find("error")
+              if problem is not None:
+                  name = f"{case.get('classname')}::{case.get('name')}"
+                  text = (problem.get("message") or "").splitlines()[0][:200] if problem.get("message") else ""
+                  failed.append(f"{name} | {text}")
+          if failed:
+              body = "%0A".join(item.replace("%", "%25") for item in failed[:150])
+              print(f"::error title=Failing tests ({len(failed)})::{body}")
+          PY
+          exit "$code"
       - name: Exercise language server and VS Code providers
         env:
           COPPER_TEST_PYTHON: python
