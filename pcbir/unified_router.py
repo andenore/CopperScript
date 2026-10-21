@@ -89,6 +89,8 @@ class UnifiedRouterOptions:
     # Route members of length-match groups (buses) among themselves first;
     # the other nets then route around their committed copper.
     buses_first: bool = True
+    # A net with a max_length that detours too far retakes its shortest path.
+    length_priority: bool = True
     full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
     # Extra cost (as history) on a ball grid's own surface layer: escapes are
     # short, so through-traffic between the balls should prefer inner layers.
@@ -1141,7 +1143,7 @@ class _Router:
 
     def _route_net(self, spec: _NetSpec, present: float) -> _NetRoute:
         route = self._route_net_budgeted(spec, present)
-        if (spec.max_length and present and route.connected
+        if (self.options.length_priority and spec.max_length and present and route.connected
                 and self._route_length_nm(route) > spec.max_length):
             # A detour around congestion broke the length rule: take the
             # shortest path through other nets' copper instead, so the
