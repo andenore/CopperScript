@@ -77,9 +77,9 @@ All in `pcbir/unified_router.py` unless noted; options are on
 - Neck exits: a node legal only at neck width is never left towards a node
   outside its breakout region (Python search and `native/astar.c`; kernels
   rebuilt for Linux and Windows).
-- Buses first (`buses_first`, on): members of a length-match group negotiate
-  among themselves first. Measured on CopperProbe replays: +2.1 points on one
-  placement, +0.9 on another (with length priority on).
+- Buses first (`buses_first`, **off**): members of a length-match group
+  negotiate among themselves first. CopperProbe replays: +2.1 points on an
+  earlier placement; a tie with two more max-length errors on the main board.
 - Length priority (`length_priority`, **off**): a max_length net that detours
   too far retakes its shortest path. It cost 2 points on CopperProbe
   (0.873 → 0.852), so it is off until it is smarter.
@@ -94,10 +94,12 @@ All in `pcbir/unified_router.py` unless noted; options are on
 
 ## Open items, in priority order
 
-1. **Buses first with length priority off.** The last A/B (buses first on,
-   length priority off) on the CopperProbe main board was still running when
-   the cloud session ended. Rerun it and keep `buses_first` on only if it
-   does not lose against 0.873.
+1. **Buses first needs length-aware bus routing.** Replays of the CopperProbe
+   main board (same router input): both off 0.873, 30 opens, DRC 1; buses
+   first on 0.873, 30 opens, DRC 3 (11 of 12 ADC lines route, but some
+   exceed max_length 35 mm and other nets fail instead). On an earlier
+   placement it gained 2 points. `buses_first` is therefore **off** by
+   default. Combine it with a length budget for bus members, then retest.
 2. **CopperProbe ADC bus (about 11 of the 30 opens).** The data lines route
    alone on F.Cu with no via, but lose the corridor south of the FX10 to
    other nets (max_vias = 2, max_length = 35 mm). Next lever: an escape plan

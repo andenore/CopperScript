@@ -275,7 +275,7 @@ def test_bus_members_route_first_and_are_reported_as_routed() -> None:
     board = replace(board, match_groups=(NetMatchGroup("bus", ("D0", "D1"), nm_from_mm("5")),))
     events = []
     global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
-    result = route_unified(board, global_route, UnifiedRouterOptions(),
+    result = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True),
                            on_progress=lambda *args, **kwargs: events.append(args))
     drc = run_physical_drc(result.board)
     summary = connection_summary(result.board, drc)

@@ -87,8 +87,11 @@ class UnifiedRouterOptions:
     # pad counted as touching a pour may have been walled off; reroute it.
     pour_recheck: bool = True
     # Route members of length-match groups (buses) among themselves first;
-    # the other nets then route around their committed copper.
-    buses_first: bool = True
+    # the other nets then route around their committed copper. Off by
+    # default: on the CopperProbe main board it ties on completion (0.873)
+    # but its bus detours break max_length (DRC 1 -> 3); on an earlier
+    # placement it gained 2 points. Needs length-aware bus routing first.
+    buses_first: bool = False
     # A net with a max_length that detours too far retakes its shortest path.
     # Off by default: on CopperProbe it cost 2 points of completion (0.873 ->
     # 0.852); the pushed-aside nets lose more than the length rule gains.
