@@ -1,0 +1,463 @@
+{
+ "about": "Shared KiCad reader conformance expectations. Identical copies live in CopperScript (tests/fixtures/kicad-conformance) and CopperReview (tests/fixtures/kicad-conformance). Values follow KiCad conventions, derived independently of both readers: pad positions are footprint-local and rotate with the footprint (x' = x cos a + y sin a, y' = -x sin a + y cos a, y down); pad angles are absolute and 0 when omitted; back footprints are already mirrored in the file; zones inside footprints use board coordinates; an arc's sampled points lie on its circle and keep exact endpoints. Footprints are listed in file order because readers name blank and duplicate references differently.",
+ "board": "conformance.kicad_pcb",
+ "board_sha256": "1c24563eab08e421d69af6f3f068271d8f6769f37e8e3fac8f2c8e4b119ed435",
+ "footprints": [
+  {
+   "native_reference": "R1",
+   "position_mm": [
+    20,
+    10
+   ],
+   "rotation_deg": 90,
+   "side": "front",
+   "pads": [
+    {
+     "number": "1",
+     "center_mm": [
+      20.0,
+      10.8
+     ],
+     "rotation_deg": 90,
+     "size_mm": [
+      0.8,
+      0.9
+     ],
+     "shape": "roundrect",
+     "layers": [
+      "F.Cu"
+     ],
+     "corners_mm": [
+      [
+       19.55,
+       11.2
+      ],
+      [
+       19.55,
+       10.4
+      ],
+      [
+       20.45,
+       10.4
+      ],
+      [
+       20.45,
+       11.2
+      ]
+     ]
+    },
+    {
+     "number": "2",
+     "center_mm": [
+      20.0,
+      9.2
+     ],
+     "rotation_deg": 0,
+     "size_mm": [
+      0.4,
+      1.2
+     ],
+     "shape": "rect",
+     "layers": [
+      "F.Cu"
+     ],
+     "corners_mm": [
+      [
+       19.8,
+       8.6
+      ],
+      [
+       20.2,
+       8.6
+      ],
+      [
+       20.2,
+       9.8
+      ],
+      [
+       19.8,
+       9.8
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "native_reference": "U2",
+   "position_mm": [
+    30,
+    20
+   ],
+   "rotation_deg": 180,
+   "side": "back",
+   "pads": [
+    {
+     "number": "1",
+     "center_mm": [
+      29.0,
+      20.95
+     ],
+     "rotation_deg": 180,
+     "size_mm": [
+      0.6,
+      1.1
+     ],
+     "shape": "rect",
+     "layers": [
+      "B.Cu"
+     ],
+     "corners_mm": [
+      [
+       29.3,
+       21.5
+      ],
+      [
+       28.7,
+       21.5
+      ],
+      [
+       28.7,
+       20.4
+      ],
+      [
+       29.3,
+       20.4
+      ]
+     ]
+    },
+    {
+     "number": "3",
+     "center_mm": [
+      31.0,
+      20.0
+     ],
+     "rotation_deg": 270,
+     "size_mm": [
+      0.6,
+      1.1
+     ],
+     "shape": "rect",
+     "layers": [
+      "B.Cu"
+     ],
+     "corners_mm": [
+      [
+       31.55,
+       19.7
+      ],
+      [
+       31.55,
+       20.3
+      ],
+      [
+       30.45,
+       20.3
+      ],
+      [
+       30.45,
+       19.7
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "native_reference": "U3",
+   "position_mm": [
+    40,
+    10
+   ],
+   "rotation_deg": 270,
+   "side": "front",
+   "pads": [
+    {
+     "number": "1",
+     "center_mm": [
+      38.0,
+      10.0
+     ],
+     "rotation_deg": 0,
+     "size_mm": [
+      1.6,
+      1.6
+     ],
+     "shape": "circle",
+     "layers": [
+      "F.Cu",
+      "B.Cu"
+     ]
+    }
+   ]
+  },
+  {
+   "native_reference": "",
+   "position_mm": [
+    5,
+    25
+   ],
+   "rotation_deg": 0,
+   "side": "front",
+   "pads": []
+  },
+  {
+   "native_reference": "",
+   "position_mm": [
+    8,
+    25
+   ],
+   "rotation_deg": 0,
+   "side": "front",
+   "pads": []
+  },
+  {
+   "native_reference": "TP1",
+   "position_mm": [
+    12,
+    28
+   ],
+   "rotation_deg": 45,
+   "side": "front",
+   "pads": [
+    {
+     "number": "1",
+     "center_mm": [
+      12.353553,
+      27.646447
+     ],
+     "rotation_deg": 45,
+     "size_mm": [
+      1,
+      0.5
+     ],
+     "shape": "rect",
+     "layers": [
+      "F.Cu"
+     ],
+     "corners_mm": [
+      [
+       11.823223,
+       27.823224
+      ],
+      [
+       12.53033,
+       27.116117
+      ],
+      [
+       12.883883,
+       27.46967
+      ],
+      [
+       12.176776,
+       28.176777
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "native_reference": "TP1",
+   "position_mm": [
+    16,
+    28
+   ],
+   "rotation_deg": 0,
+   "side": "front",
+   "pads": [
+    {
+     "number": "1",
+     "center_mm": [
+      16.5,
+      28.0
+     ],
+     "rotation_deg": 0,
+     "size_mm": [
+      1,
+      0.5
+     ],
+     "shape": "rect",
+     "layers": [
+      "F.Cu"
+     ],
+     "corners_mm": [
+      [
+       16.0,
+       27.75
+      ],
+      [
+       17.0,
+       27.75
+      ],
+      [
+       17.0,
+       28.25
+      ],
+      [
+       16.0,
+       28.25
+      ]
+     ]
+    }
+   ]
+  }
+ ],
+ "zones": [
+  {
+   "footprint_index": 2,
+   "kind": "keepout",
+   "net": "",
+   "layer": "F.Cu",
+   "points_mm": [
+    [
+     38,
+     7
+    ],
+    [
+     39,
+     7
+    ],
+    [
+     39,
+     9
+    ],
+    [
+     38,
+     9
+    ]
+   ]
+  },
+  {
+   "footprint_index": 2,
+   "kind": "outline",
+   "net": "GND",
+   "layer": "F.Cu",
+   "points_mm": [
+    [
+     41,
+     7
+    ],
+    [
+     43,
+     7
+    ],
+    [
+     43,
+     9
+    ],
+    [
+     41,
+     9
+    ]
+   ]
+  },
+  {
+   "footprint_index": 2,
+   "kind": "fill",
+   "net": "GND",
+   "layer": "F.Cu",
+   "points_mm": [
+    [
+     41.1,
+     7.1
+    ],
+    [
+     42.9,
+     7.1
+    ],
+    [
+     42.9,
+     8.9
+    ],
+    [
+     41.1,
+     8.9
+    ]
+   ]
+  },
+  {
+   "footprint_index": null,
+   "kind": "outline",
+   "net": "GND",
+   "layer": "B.Cu",
+   "points_mm": [
+    [
+     2,
+     2
+    ],
+    [
+     48,
+     2
+    ],
+    [
+     48,
+     30
+    ],
+    [
+     2,
+     30
+    ]
+   ]
+  },
+  {
+   "footprint_index": null,
+   "kind": "fill",
+   "net": "GND",
+   "layer": "B.Cu",
+   "points_mm": [
+    [
+     2.1,
+     2.1
+    ],
+    [
+     47.9,
+     2.1
+    ],
+    [
+     47.9,
+     29.9
+    ],
+    [
+     2.1,
+     29.9
+    ]
+   ]
+  }
+ ],
+ "arcs": [
+  {
+   "net": "SIG",
+   "layer": "F.Cu",
+   "start_mm": [
+    25,
+    10.8
+   ],
+   "end_mm": [
+    28,
+    13.8
+   ],
+   "center_mm": [
+    25,
+    13.8
+   ],
+   "radius_mm": 3,
+   "sweep": "clockwise on screen (quarter turn from top to right)"
+  }
+ ],
+ "vias": [
+  {
+   "net": "SIG",
+   "position_mm": [
+    28,
+    13.8
+   ],
+   "layers": [
+    "F.Cu",
+    "B.Cu"
+   ]
+  }
+ ],
+ "tolerance_mm": 1e-05,
+ "degenerate_zones_skipped": {
+  "note": "a keepout with no outline and a keepout whose outline has two points: neither is drawn or queried",
+  "count": 2
+ }
+}

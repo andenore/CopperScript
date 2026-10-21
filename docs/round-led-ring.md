@@ -1,4 +1,20 @@
-# Round MCU / CR2032 LED-ring example
+# Round LED-ring fixture (deprecated)
+
+Use [CopperLedRing](https://github.com/andenore/CopperLedRing) for the maintained
+LED-ring board project, current build instructions and routing evidence.
+The in-repository `examples/round_led_ring/` source and optional wrapper are
+deprecated as of 2026-10-20. They remain for compiler regression coverage and
+command compatibility; new board work and routing benchmarks should use the
+independently versioned project.
+
+CopperLedRing retains the same basic 50 mm, two-layer nRF52832/CR2032 circuit,
+with revised MCU/support placement, ground pours on both sides, exact parts and
+copper branding. Its 2026-10-12 snapshot records complete routing and zero native
+KiCad violations or opens. Fabrication readiness remains blocked by artwork
+qualification. Follow its pinned source and evidence rather than applying that
+result to this older fixture.
+
+The notes below describe the retained legacy fixture, not CopperLedRing.
 
 `examples/round_led_ring/board.copper` defines a small inspection design: twelve
 independent active-low LED channels, nRF52832 QFAA, Keystone 3034 CR2032 holder,
@@ -26,7 +42,10 @@ MCU/holder offset; this overlay is not copper on the viewed face. Explicit
 0.20 mm-wide, 0.40 mm-pitch pads; these are explicitly selected prototype dimensions. These prototype rules are checked by the same exact clearance gates,
 not DRC exclusions or a claim of a qualified fabrication process.
 
-## Reproduce
+## Legacy fixture commands
+
+These commands are retained for compatibility and regression investigation.
+For the board project, use CopperLedRing's own build targets and dependency pins.
 
 From the repository root, with the pinned Git footprint providers (PowerShell):
 
@@ -82,7 +101,7 @@ run cannot reuse a previous successful completion status.
 The physical DRC report can still show GND opens because it does not fabricate
 filled-zone evidence from an unfilled intent.
 
-## Latest documented status
+## Historical fixture status
 
 The placed example passes electrical ERC and placement legality. Native KiCad
 10.0.6 reports **zero geometry/library violations and 63 unconnected items**

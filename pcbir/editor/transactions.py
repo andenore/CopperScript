@@ -12,9 +12,11 @@ from dataclasses import dataclass, replace
 from difflib import unified_diff
 from hashlib import sha256
 import os
+import time
 from pathlib import Path
 import stat
 import tempfile
+from uuid import uuid4
 from typing import Callable
 
 from ..compiler import compile_design_source
@@ -54,9 +56,12 @@ def scoped_identity(board, constraint_scope=None):
         if not any(c.kind.value == kind and c.targets == tuple(targets) for kind, targets in scopes)))
 
 
-def seed_placements(board: PhysicalBoard, seeds: PhysicalBoard) -> PhysicalBoard:
-    """Retain movable session seeds without making them persistent locks."""
-    existing = {p.reference: p for p in seeds.placements}
+def seed_placements(board: PhysicalBoard, seeds: PhysicalBoard, only=None) -> PhysicalBoard:
+    """Retain movable session seeds without making them persistent locks.
+
+    ``only`` limits seeding to these references (the others keep ``board``'s poses).
+    """
+    existing = {p.reference: p for p in seeds.placements if only is None or p.reference in only}
     rules = {r.reference: r for r in board.placement_rules}
     poses = []
     for p in board.placements:
@@ -72,6 +77,48 @@ def seed_placements(board: PhysicalBoard, seeds: PhysicalBoard) -> PhysicalBoard
         poses.append(p)
     from ..clusters import apply_fixed_cluster_poses
     return apply_fixed_cluster_poses(replace(board, placements=tuple(poses)))
+
+
+# A save holds the lock while it re-checks inputs and writes the file: seconds at
+# most. A lock older than this was left by a crashed save.
+STALE_LOCK_SECONDS = 120
+
+
+def _lock_age(path: Path) -> float | None:
+    try:
+        return time.time() - path.stat().st_mtime
+    except FileNotFoundError:
+        return None
+
+
+def _break_stale_lock(lock: Path) -> None:
+    """Remove a crashed save's lock without ever removing a live one.
+
+    The rename is atomic, so only one editor claims a stale lock. If the claimed
+    file turns out to be fresh (another editor replaced it in between), it is put
+    back unless a newer lock already exists.
+    """
+    age = _lock_age(lock)
+    if age is None or age <= STALE_LOCK_SECONDS:
+        return
+    claimed = lock.with_name(f"{lock.name}.stale-{uuid4().hex}")
+    try:
+        os.rename(lock, claimed)
+    except FileNotFoundError:
+        return
+    if (_lock_age(claimed) or 0) <= STALE_LOCK_SECONDS:
+        try:
+            os.link(claimed, lock)  # fails if a newer lock exists; never overwrites one
+        except FileExistsError:
+            pass
+        except OSError:  # no hard links (some network shares): restore only if still absent
+            if not lock.exists():
+                try:
+                    os.rename(claimed, lock)
+                    return
+                except OSError:
+                    pass
+    claimed.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -161,9 +208,13 @@ class SourceWorkspace:
         lock = self.source.with_name(self.source.name + ".editor-lock")
         temporary = None
         owns_lock = False
+        _break_stale_lock(lock)
+        token = f"pid {os.getpid()} token {uuid4().hex} at {time.time():.0f}\n"
         try:
-            with lock.open("x"):
+            with lock.open("x") as marker:
                 owns_lock = True
+                marker.write(token)
+                marker.flush()
                 if self.source.read_bytes() != review.before.raw:
                     raise SourceEditError("source changed since review; reload before saving")
                 mode = stat.S_IMODE(self.source.stat().st_mode)
@@ -181,10 +232,15 @@ class SourceWorkspace:
                 os.replace(temporary, self.source)
                 temporary = None
         except FileExistsError as exc:
-            raise SourceEditError("another editor owns the source save lock") from exc
+            raise SourceEditError(f"another editor is saving this source right now ({lock.name}); retry in a "
+                                  f"moment. A lock older than {STALE_LOCK_SECONDS} s is removed automatically") from exc
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
-            # Do not remove somebody else's lock after an exclusive-create failure.
+            # Remove only our own lock: never one another editor created after a stale break.
             if owns_lock:
-                lock.unlink(missing_ok=True)
+                try:
+                    if lock.read_text(encoding="utf-8") == token:
+                        lock.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    pass

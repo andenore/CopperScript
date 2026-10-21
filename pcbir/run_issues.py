@@ -110,14 +110,38 @@ def load_run(path: str | Path) -> Run:
         if report is None:
             candidates = sorted(p for p in path.glob("*.json") if not p.name.endswith(".summary.json"))
             report = next((p for p in candidates if _schema(p).startswith("copperscript-")), None)
+    if report is not None and not report.name.endswith(".error.json"):
+        # A later run into the same place that failed leaves only an error record.
+        error = report.with_name(report.stem + ".error.json")
+        if error.is_file() and error.stat().st_mtime >= report.stat().st_mtime:
+            report = error
     board = directory / "board.kicad_pcb"
     if not board.is_file():
         board = next(iter(sorted(directory.glob("*.kicad_pcb"))), None)
-    filled = None
-    if report is not None:
-        native_dirs = sorted(directory.glob(report.stem + ".native-*/verification-*"))
-        filled = next((p for d in reversed(native_dirs) for p in sorted(d.glob("*.kicad_pcb"))), None)
+    filled = _reported_filled_board(report) if report is not None else None
     return Run(directory, report, board, filled)
+
+
+def _reported_filled_board(report: Path) -> Path | None:
+    """Use the report's exact verification, never the last attempted candidate."""
+
+    try:
+        document = json.loads(report.read_text(encoding="utf-8"))
+        native = document.get("plane_verification") if isinstance(document, dict) else None
+        if not isinstance(native, dict):
+            return None
+        location, digest = native.get("artifact_directory"), native.get("filled_board_digest")
+        if not isinstance(location, str) or not location or not isinstance(digest, str) or not digest:
+            return None
+        directory = Path(location)
+        if not directory.is_absolute():
+            directory = report.parent / directory
+        # Includes custom evidence directories and the final native-cleanup result.
+        # Missing/stale evidence is unavailable; a sibling trial is not a substitute.
+        return next((path for path in sorted(directory.glob("*.kicad_pcb"))
+                     if _sha256(path) == digest), None)
+    except (OSError, ValueError):
+        return None
 
 
 def _schema(path: Path) -> str:
@@ -195,6 +219,13 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
     issues: list[RunIssue] = []
     if str(report.get("schema", "")).startswith("copperscript-layout-report"):
         return _layout_issues(report, scene)
+    if str(report.get("schema", "")).startswith("copperscript-route-error"):
+        stage = ", ".join(report.get("open_stages") or []) or "an unknown stage (run with --progress)"
+        components = [str(c) for c in _items(report.get("components"))]
+        points = [p.center for ref in components for p in (scene.pads if scene else []) if p.ref == ref]
+        return [RunIssue("E1", "error", "RUN-ERROR",
+                         f"{report.get('error_type', 'Error')} in {stage}: {str(report.get('message', ''))[:300]}",
+                         objects=components, points=points)]
 
     access = _section(report, "package_access")
     pending = [str(p) for p in _items(access.get("pending_pads"))]
@@ -405,13 +436,28 @@ def issues_document(run: Run, issues: list[RunIssue], *, limit: int | None = Non
             "report": str(run.report_path) if run.report_path else None,
             "board": str(run.board_path) if run.board_path else None,
             "filled_board": str(run.filled_board_path) if run.filled_board_path else None,
+            # Lets a viewer (CopperReview) check the issues belong to the board it shows.
+            "board_sha256": _sha256(run.board_path), "filled_board_sha256": _sha256(run.filled_board_path),
             "status": status, "routing_complete": report.get("routing_complete"),
             "issue_count": len(issues), "omitted": len(issues) - len(shown), "finding_counts": counts,
+            "stopped_after": report.get("stopped_after"),
             "issues": [issue.document() for issue in shown]}
 
 
+def _sha256(path: Path | None) -> str | None:
+    if path is None or not path.is_file():
+        return None
+    import hashlib
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def render_issues(document: dict[str, object]) -> str:
-    lines = [f"{document['status']}  routing_complete={document['routing_complete']}  "
+    stopped = f"  stopped after {document['stopped_after']}" if document.get("stopped_after") else ""
+    lines = [f"{document['status']}{stopped}  routing_complete={document['routing_complete']}  "
              f"{document['issue_count']} grouped issue(s)",
              "findings: " + ", ".join(f"{code} {count}" for code, count in document["finding_counts"].items())]
     for issue in document["issues"]:

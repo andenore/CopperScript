@@ -427,7 +427,9 @@ function updateControls() {
   $("preview-message").textContent=preview && !preview.placement_hard_legal ? "Invalid temporary pose — drag, rotate or edit coordinates to fix it, or discard." :
     editingPreview ? "Temporary preview — keep adjusting, apply or discard." : "Temporary preview — apply or discard.";
   const poseIssues=s?.placement_validation?.issues||[];
-  $("pose-validation").hidden=!preview || !poseIssues.length;
+  // Problems in the accepted layout (e.g. overlaps on first open) are listed too, not only in previews.
+  $("pose-validation").hidden=!poseIssues.length;
+  $("pose-validation-title").textContent=preview ? "Invalid temporary pose" : "Placement problems in the current layout";
   $("pose-validation-reasons").textContent=poseIssues.map(issue=>issue.message).join("\n");
   $("move").disabled = !s?.capabilities.pose_preview || !component || blocked || frozenPreview || selectionCount>1 || component.session_locked ||
     (component.source_position_locked && component.source_rotation_locked && component.source_side_locked);
@@ -438,6 +440,7 @@ function updateControls() {
     !!component.session_locked || !!component.source_rotation_locked || component.allowed_orientations.length<2;
   if (component) {
     if(component.source_attachment && !sourceReview && !preview && !busy && !accepted?.source_stale) $("notice").textContent=`Pose owned by attachment ${component.source_attachment}; edit the attachment or its datum in Mechanical features.`;
+    else if(component.lock_owner && !sourceReview && !preview && !busy && !accepted?.source_stale) $("notice").textContent=`${component.reference} moves with macro anchor ${component.lock_owner}, whose saved source lock fixes it; edit ${component.lock_owner}'s lock to move it.`;
     $("x").disabled=$("y").disabled=blocked || frozenPreview || !!component.source_position_locked && !$("edit-locks").checked;
     $("rotation").disabled=blocked || frozenPreview || !!component.source_rotation_locked && !$("edit-locks").checked;
     $("pose-side").disabled=blocked || frozenPreview || !!component.source_side_locked && !$("edit-locks").checked;
@@ -495,6 +498,14 @@ async function operation(action, fields={}, applyImmediately=false) {
       status(preview.placement_hard_legal ? "Preview — adjust, apply or discard. Source remains unchanged." :
         "Invalid temporary pose — adjust its position or rotation. " +(preview.placement_validation?.issues||[]).map(issue=>issue.message).join("; "),!preview.placement_hard_legal);}
     else {acceptScene(result.scene);sourcePreview=result.source_preview||sourcePreview;populate();
+      if (action==="reload_source") {
+        const kept=result.placement_kept||[],dropped=result.placement_dropped||[],invalid=result.placement_invalid||[];
+        status("Source reloaded." +(kept.length ? ` Kept unsaved positions for ${kept.join(", ")}.` : "") +
+          (invalid.length ? ` ${invalid.join(", ")} now break${invalid.length===1?"s":""} a rule of the new source; adjust them.` : "") +
+          (dropped.length ? ` Reset ${dropped.join(", ")}: the new source fixes or changed them.` : ""),dropped.length>0 || invalid.length>0);
+      } else if (action==="discard") {
+        status("Preview discarded." +(accepted.outputs_stale ? " Earlier applied changes still leave route, fill and manufacturing outputs stale." : ""));
+      } else
       status(accepted.source_review ? "Source preview — inspect the exact diff, then Save or Discard." :
         action==="save_source" ? "Source saved. " +(accepted.placement_unsaved ? "Placement remains unsaved; use Review placement to save it. " : "") +"Rebuild routing, fills and manufacturing outputs." :
         accepted.outputs_stale ? "Source/session updated. Route, fill and manufacturing outputs are stale; rebuild them." : "Temporary session updated. Source remains unchanged.");}
@@ -662,7 +673,7 @@ $("prepare-lock").onclick=()=>operation("prepare_lock",{reference:selected,
 $("save-source").onclick=()=>accepted.source_review ? operation("save_source",{review_id:accepted.source_review.id}) : operation("prepare_placement");
 $("open-board").onclick=()=>api("/api/open-board").catch(e=>status(e.message,true));
 for (const [id,action] of [["discard-source","discard_source"],["undo-source","undo_source"],["redo-source","redo_source"]]) $(id).onclick=()=>operation(action);
-$("reload-source").onclick=()=>{if (confirm("Discard temporary placement, previews and history, and reload the current source?")) operation("reload_source");};
+$("reload-source").onclick=()=>{if (confirm("Reload the current source? Previews and history are discarded; unsaved positions are kept for parts the new source does not fix.")) operation("reload_source");};
 $("source-link").onclick=()=>api("/api/source-link",{reference:selected}).catch(e=>status(e.message,true));
 const featureDefaults={
   "outline:rectangle":{width:"40mm",height:"30mm",origin:"(0mm,0mm)"},

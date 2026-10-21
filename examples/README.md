@@ -21,13 +21,25 @@ packages under `packages/` are separate from these board and language examples.
 | nRF antenna hard-macro probe | `nrf_antenna_macro/board.copper` |
 | TPS62130A regulator hard-macro probe | `tps62130a_macro/board.copper` |
 | Resolved local footprint | `resolved_footprint_board/board.copper` |
-| Round LED ring | `round_led_ring/board.copper` |
 | Valid compiler fixture | `valid_board/board.copper` |
 | Analog front end and vendor-model simulations | [Source, commands and current evidence](simulation/analog_frontend/README.md) |
 
 The CM4 carrier, managed-footprint, and simulation examples already use
 multi-file directories and retain their existing folder names.
 
+For a complete LED-ring board project, use
+[CopperLedRing](https://github.com/andenore/CopperLedRing). It owns the current
+board source, exact component selections, dependency pins and routing evidence.
+Follow that project's build instructions and qualification status; its recorded
+routing pass does not imply fabrication readiness.
+
 Physical macro examples declare their bindings in `.copper` with ordinary asset
 imports. Versions and hashes use the existing dependency workflow; helper scripts
 place/materialize those declarations without separately loading macro scenes.
+
+## Deprecated fixtures
+
+`round_led_ring/board.copper` and its optional Python wrapper are deprecated in
+favor of CopperLedRing. They remain for compiler regression tests and existing
+commands, not as a second maintained LED-ring design or a routing benchmark.
+See the [legacy fixture notes](../docs/round-led-ring.md).

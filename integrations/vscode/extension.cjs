@@ -134,6 +134,9 @@ function activate(context) {
       if(config.get("placementTemplates"))args.push("--placement-templates",local(config.get("placementTemplates")));
       for(const macro of config.get("hardMacros"))args.push("--hard-macro",local(macro));
       const backend=new Backend(command,args,cwd),bridge=new DocumentBridge(document,backend);
+      // Preparation can take minutes: closing the tab meanwhile must stop the backend.
+      let closedEarly=false;
+      const early=panel.onDidDispose(()=>{closedEarly=true;backend.dispose();});
       try {
         const hello=await backend.request({method:"hello"});
         if(hello.compiler_digest!==digest||hello.protocol!=="copperscript-editor-document/v0.1")throw new Error("Compiler pin mismatch; explicitly review/update compilerDigest");
@@ -142,7 +145,9 @@ function activate(context) {
           const cancel=token.onCancellationRequested(()=>backend.dispose());
           try {await bridge.sync();} finally {cancel.dispose();}
         });
-      } catch(error) {backend.dispose();throw error;}
+      } catch(error) {early.dispose();backend.dispose();if(closedEarly)return;throw error;}
+      early.dispose();
+      if(closedEarly){backend.dispose();return;}
       active.set(document.uri.toString(),bridge);
       const media=vscode.Uri.file(path.join(__dirname,"media"));
       panel.iconPath=vscode.Uri.joinPath(media,"copper-logo.png");

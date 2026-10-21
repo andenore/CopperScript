@@ -19,6 +19,7 @@ from .model import (
     Board,
     ComponentInstance,
     ConnectionPolicy,
+    ConstraintKind,
     DeviceDefinition,
     Direction,
     DriveMode,
@@ -198,6 +199,7 @@ def check(board: Board | FlatElectricalView, *, unmarked_pins: bool = False) -> 
     diagnostics.extend(_check_package_rules(context))
     diagnostics.extend(_check_modes_and_groups(context))
     diagnostics.extend(_check_no_connects(context))
+    diagnostics.extend(_check_constraint_targets(context))
     if unmarked_pins:
         diagnostics.extend(_check_unmarked_pins(context))
     return diagnostics
@@ -248,6 +250,46 @@ def _unknown_pin(context: "_Context", endpoint: Endpoint, component: ComponentIn
         replacement=f"{endpoint.component}.{match}" if match and "/" not in endpoint.component else None,
         origin=origin,
     )
+
+
+# Constraints whose targets name components or component pins (lowered by physicalize).
+_COMPONENT_TARGET_CONSTRAINTS = frozenset({
+    ConstraintKind.MAX_DISTANCE, ConstraintKind.MIN_DISTANCE, ConstraintKind.PLACEMENT_REGION,
+    ConstraintKind.COURTYARD_GAP, ConstraintKind.FIXED_PLACEMENT, ConstraintKind.ALLOWED_ORIENTATIONS,
+    ConstraintKind.ALIGN, ConstraintKind.PLACEMENT_GROUP, ConstraintKind.VIA_IN_PAD,
+})
+
+
+def _check_constraint_targets(context: _Context) -> list[Diagnostic]:
+    """A placement constraint naming a missing component or pin would be dropped silently."""
+
+    diagnostics: list[Diagnostic] = []
+    instances = {item.path for item in getattr(context.board, "module_instances", ())}
+    for constraint in context.board.constraints:
+        if constraint.kind not in _COMPONENT_TARGET_CONSTRAINTS:
+            continue
+        for target in constraint.targets:
+            reference, separator, pin = target.partition(".")
+            if reference in instances:
+                continue  # module instances are grouped elsewhere; not a component target
+            component = context.components.get(reference)
+            if component is None:
+                match = None if "/" in reference else _suggest(reference, _source_names(context))
+                diagnostics.append(Diagnostic(
+                    Severity.ERROR, "UNKNOWN_CONSTRAINT_TARGET",
+                    f"{constraint.kind.value} constraint names unknown component {reference!r}", target,
+                    hint=f"did you mean {match!r}?" if match else "constraint targets are component references",
+                    replacement=(f"{match}{separator}{pin}" if match else None)))
+                continue
+            if separator and context.resolve_pin(Endpoint(reference, pin)) is None:
+                part = context.board.library.get(component.part)
+                match = _suggest(pin, _pin_candidates(context, component, part)) if part else None
+                diagnostics.append(Diagnostic(
+                    Severity.ERROR, "UNKNOWN_CONSTRAINT_TARGET",
+                    f"{constraint.kind.value} constraint names unknown pin {pin!r} of {reference}", target,
+                    hint=f"did you mean {match!r}?" if match else f"run `copper query BOARD pins {reference}`",
+                    replacement=(f"{reference}.{match}" if match and "/" not in reference else None)))
+    return diagnostics
 
 
 def _check_no_connects(context: _Context) -> list[Diagnostic]:

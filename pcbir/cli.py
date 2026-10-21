@@ -38,7 +38,7 @@ from .fanout import FanoutOptions
 from .package_access import PackageAccessOptions
 from .boundary_access import BoundaryAccessOptions
 from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
-from .pad_stitch import stitch_duplicate_pads
+from .pad_stitch import DuplicatePadStitchResult, stitch_duplicate_pads
 from .pad_via_arrays import via_in_pad_array_report
 from .plane import PlaneStitchOptions, stitch_zone_pads
 from .plane_verify import verify_filled_planes
@@ -470,7 +470,7 @@ def _parser() -> argparse.ArgumentParser:
         "issues", help="list a run's failures grouped by cause, each with an id, nets, layers and window")
     issues_parser.add_argument("target", type=Path, help="run directory or route/layout report")
     issues_parser.add_argument("--net", help="only issues touching this net")
-    issues_parser.add_argument("--stage", choices=("access", "critical", "native", "physical", "routing"))
+    issues_parser.add_argument("--stage", choices=("access", "critical", "native", "physical", "routing", "layout", "error"))
     issues_parser.add_argument("--code", help="only this issue code, e.g. UNCONNECTED_ITEMS")
     issues_parser.add_argument("--limit", type=int, default=15, help="maximum issues listed (0 = all)")
     issues_parser.add_argument("--cluster-mm", type=float, default=3.0, help="spatial grouping distance")
@@ -950,6 +950,16 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum expanded states per native-driven bridge search (default: 4000)")
     board_route_parser.add_argument("--native-evidence-directory", type=Path,
         help="new directory for recoverable native candidates/reports; default: fresh sibling of route report")
+    from .flow import STOP_STAGES
+    board_route_parser.add_argument("--stop-after", choices=STOP_STAGES,
+        help="end the run at this stage boundary and write the report (status fail, stopped_after set); "
+             "skips zone-escape, filled-copper and final native verification; package-* stops need fanout "
+             "(on unless --no-fanout)")
+    board_route_parser.add_argument("--checkpoint-dir", type=Path,
+        help="write stage checkpoints here (placement.state.json) for a later --reuse-placement")
+    board_route_parser.add_argument("--reuse-placement", type=Path,
+        help="start from a placement checkpoint; refused when the physical board or placement/global/"
+             "feedback options differ; a compiler code change is allowed and recorded in the report")
 
     footprint_parser = subparsers.add_parser(
         "check-footprint", help="validate and inspect a KiCad .kicad_mod footprint"
@@ -1144,13 +1154,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .editor.dependencies import prepare_editor_dependencies
         try:
             progress = (lambda message: print(message, flush=True)) if not args.scene_output else None
+            # Large boards take seconds to open: say what is happening before the URL appears.
+            if progress:
+                progress("Opening board: checking source and dependencies...")
             prepare_editor_dependencies(args.board, offline=args.offline, locked=args.locked, progress=progress,
                                         project=args.project)
             from .editor.overlay import RoutedOverlay
+            if progress:
+                progress("Opening board: resolving footprints and building the physical board...")
             session = document_session(args.board, None, footprint_roots=args.footprint_root,
                 layers=args.layers, fab_profile=args.fab_profile, templates=args.placement_templates,
                 macros=args.hard_macro, allow_proxy=args.allow_proxy_footprints,
                 overlay=RoutedOverlay.load(args.overlay) if args.overlay else None, project=args.project)
+            if progress:
+                progress("Opening board: editor session ready.")
             if args.scene_output:
                 if args.scene_output.resolve() == args.board.resolve():
                     raise ValueError("scene output cannot overwrite the source board")
@@ -1405,6 +1422,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(diagnostic)
                 print("Board routing stopped because ERC reported errors.")
                 return 1
+            stage_tracker, placement_reuse, checkpoints = None, None, {}
             try:
                 physical_options = PrototypePhysicalOptions(
                     copper_layers=args.layers, fabrication_profile=args.fab_profile,
@@ -1550,8 +1568,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                         preparation_invocations.append(stage)
                         return verify_filled_planes(candidate, kicad_cli=args.verify_plane_fill,
                             artifact_directory=preparation_directory / f'{len(preparation_invocations):03d}-{stage}')
+                from .iteration_checkpoints import (StageTracker, load_placement_checkpoint, placement_key,
+                                                    save_placement_checkpoint)
+                if progress is not None:
+                    # Remember the open stage so a failure leaves a located record.
+                    stage_tracker = progress = StageTracker(progress)
+                checkpoint_key = (placement_key(physical_board, placement_options, router_options,
+                                                feedback_options)
+                                  if args.checkpoint_dir or args.reuse_placement else None)
+                initial_placement = None
+                if args.reuse_placement:
+                    initial_placement, placement_reuse = load_placement_checkpoint(args.reuse_placement,
+                                                                                   checkpoint_key)
+                    print(f"Reusing placement {placement_reuse['candidate']} from {args.reuse_placement}"
+                          + (" (compiler code changed since it was saved)" if placement_reuse["code_changed"] else ""))
+
+                def on_stage(name, value):
+                    if args.checkpoint_dir and name == "placement" and initial_placement is None:
+                        try:
+                            path = save_placement_checkpoint(args.checkpoint_dir / "placement.state.json", value,
+                                                             checkpoint_key)
+                        except (OSError, ValueError) as exc:
+                            checkpoints["placement_error"] = f"{type(exc).__name__}: {exc}"[:500]
+                            print(f"Placement checkpoint not saved: {exc}", flush=True)
+                        else:
+                            checkpoints["placement"] = str(path)
+                            print(f"Placement checkpoint -> {path}", flush=True)
+
                 result = run_routing_pipeline(
                     physical_board,
+                    stop_after=args.stop_after,
+                    initial_placement=initial_placement,
+                    on_stage=on_stage,
                     placement_options=placement_options,
                     global_options=router_options,
                     feedback_options=feedback_options,
@@ -1609,27 +1657,49 @@ def main(argv: Sequence[str] | None = None) -> int:
                                              or args.zone_local_ripup_trials)
                       # The unified router joins plane pads itself; the legacy
                       # late-escape repair reruns the legacy pipeline.
-                      and getattr(args, "router", "legacy") != "unified" else None
+                      and getattr(args, "router", "legacy") != "unified"
+                      and result.stopped_after is None else None
                 )
                 if escape_feedback is not None:
                     result = escape_feedback.pipeline
-            except ValueError as exc:
-                _print_error(args, "ROUTING ERROR", exc)
-                return 2
-            emit(progress, "final_contacts_native_drc", "started")
-            stitch = (escape_feedback.plane_stitch if escape_feedback is not None
+            except Exception as exc:
+                # Expected failures (ValueError) exit 2; anything else is a bug and keeps its
+                # traceback. Both leave a located record next to --report.
+                if isinstance(exc, ValueError):
+                    _print_error(args, "ROUTING ERROR", exc)
+                if args.report is not None:
+                    from .iteration_checkpoints import write_error_record
+                    try:
+                        record = write_error_record(args.report,
+                            board_name=board.name, error=exc, tracker=stage_tracker,
+                            args_summary={"stop_after": args.stop_after,
+                                          "reuse_placement": str(args.reuse_placement) if args.reuse_placement else None,
+                                          "routing_profile": args.routing_profile})
+                        print(f"Error record -> {record} (copper issues {record.parent} lists it)", flush=True)
+                    except OSError:
+                        pass
+                if isinstance(exc, ValueError):
+                    return 2
+                raise
+            # Export a stopped run's exact stage geometry; no later copper mutation.
+            native_cli = None if result.stopped_after else args.verify_plane_fill
+            if not result.stopped_after:
+                emit(progress, "final_contacts_native_drc", "started")
+            stitch = (result.plane_stitch if result.stopped_after
+                      else escape_feedback.plane_stitch if escape_feedback is not None
                       else stitch_zone_pads(result.board, plane_options) if stitch_enabled
                       else result.plane_stitch)
             plane_repair = None
-            if stitch_enabled and stitch is not None and stitch.board.zones:
+            if stitch_enabled and stitch is not None and stitch.board.zones and not result.stopped_after:
                 # Routing after stitching can wall a pour-contact pad off; re-stitch those explicitly.
                 from .plane import repair_cut_off_plane_pads
                 before = stitch.added_track_count + stitch.added_via_count
                 stitch, still_cut_off = repair_cut_off_plane_pads(stitch, plane_options)
                 plane_repair = {"added_copper": stitch.added_track_count + stitch.added_via_count - before,
                                 "still_cut_off": [f"{p.component}.{p.pad}" for p in still_cut_off]}
-            output_board = stitch.board if stitch_enabled else result.board
-            duplicate_stitch = stitch_duplicate_pads(output_board)
+            output_board = stitch.board if stitch_enabled and not result.stopped_after else result.board
+            duplicate_stitch = (DuplicatePadStitchResult(output_board, (), (), 0) if result.stopped_after
+                                else stitch_duplicate_pads(output_board))
             output_board = duplicate_stitch.board
             from collections import Counter
             from .hard_macros import resolved_macro_geometry
@@ -1640,28 +1710,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             for macro in output_board.hard_macros:
                 if macro.cluster in output_board.materialized_macros:
                     fixed.update(resolved_macro_geometry(output_board, macro)[0])
-            swept = trim_dangling_overhangs(output_board, fixed)
+            swept = output_board if result.stopped_after else trim_dangling_overhangs(output_board, fixed)
             trimmed_overhangs = swept is not output_board
             output_board = swept
             output_drc = (
                 run_physical_drc(output_board)
-                if stitch_enabled
+                if not result.stopped_after and (stitch_enabled
                 or duplicate_stitch.added_track_count
-                or trimmed_overhangs
+                or trimmed_overhangs)
                 else result.drc
             )
-            emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
+            if not result.stopped_after:
+                emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
             filled_feedback = None
             try:
-                if args.verify_plane_fill:
+                if native_cli:
                     emit(progress, "independent_kicad", "started")
                 plane_verification = None
-                if args.verify_plane_fill:
+                if native_cli:
                     report_location = args.report or Path(f"{board.name}.route-report.json")
                     evidence_directory = args.native_evidence_directory or report_location.with_name(
                         report_location.stem + ".native-" + uuid4().hex[:12])
                     filled_feedback = improve_filled_copper(result, output_board,
-                        kicad_cli=args.verify_plane_fill,
+                        kicad_cli=native_cli,
                         options=FilledCopperFeedbackOptions(maximum_trials=args.filled_copper_trials,
                             maximum_search_states=args.filled_copper_search_states,
                             maximum_blockers=args.maximum_ripup_blockers,
@@ -1676,7 +1747,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     from .plane_verify import remove_native_dangling_tracks
                     output_board, plane_verification = remove_native_dangling_tracks(
                         output_board, plane_verification, fixed,
-                        kicad_cli=args.verify_plane_fill,
+                        kicad_cli=native_cli,
                         artifact_directory=evidence_directory / "native-cleanup")
                     if not plane_verification.matches(output_board):
                         raise RuntimeError("native cleanup verification is stale")
@@ -1716,7 +1787,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_board, plane_verification, power_area_options)
             closure_status = (
                 PhysicalFlowStatus.PASS
-                if routing_complete_with_fill(result, output_board, output_drc, plane_verification)
+                if result.stopped_after is None
+                and routing_complete_with_fill(result, output_board, output_drc, plane_verification)
                 and (not args.verify_plane_fill or plane_verification is not None and plane_verification.passed)
                 and not duplicate_pending
                 and not plane_pending
@@ -1738,6 +1810,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
                     "filled_copper_search_states")},
                 "erc_diagnostics": [str(item) for item in diagnostics],
+                **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run",
+                    "final_copper_processing": "skipped_for_stopped_run"}
+                   if result.stopped_after else {}),
+                # Later stages (package-access moves, zone-escape trials) may still move parts.
+                **({"placement_reuse": {**placement_reuse,
+                                        "final_candidate": result.placement_and_global.placement_candidate}}
+                   if placement_reuse else {}),
+                **({"checkpoints": checkpoints} if checkpoints else {}),
                 "fabrication_ready": False,
                 "routing_complete": closure_status is PhysicalFlowStatus.PASS,
                 "placement_candidate": result.placement_and_global.placement_candidate,
@@ -1797,7 +1877,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                        for trial in access.pattern_trials],
                     "trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
                                for trial in access.trials],
-                    "ordinary_area_started": access.ready,
+                    "ordinary_area_started": access.ready and result.stopped_after is None,
                 }
                 if access.boundary is not None:
                     boundary = access.boundary
@@ -2008,6 +2088,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "added_via_count": result.plane_stitch.added_via_count,
                 }
             report["duplicate_pad_stitch"] = {
+                **({"status": "not_run"} if result.stopped_after else {}),
                 "stitched_pads": [
                     f"{item.component}.{item.pad}" for item in duplicate_stitch.stitched
                 ],
@@ -2047,6 +2128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 emit(progress, "export", "started")
                 report_path.parent.mkdir(parents=True, exist_ok=True)
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                report_path.with_name(report_path.stem + ".error.json").unlink(missing_ok=True)
                 summary_path, compact_summary = write_summary(report_path)
                 if args.output:
                     pcb_manifest = KiCadPcbBackend().generate(output_board)
@@ -2059,6 +2141,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             except (OSError, ValueError) as exc:
                 _print_error(args, "OUTPUT ERROR", exc)
                 return 2
+            if result.stopped_after:
+                print(f"STOPPED after {result.stopped_after} (--stop-after): partial run, open nets below are expected")
             print(
                 f"BOARD ROUTE: {closure_status.value} - "
                 f"ordinary routed={connectivity['routed_ordinary_net_count']}, "

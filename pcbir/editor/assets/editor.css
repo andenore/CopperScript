@@ -313,6 +313,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 #net-cost-summary {white-space:pre-line;font-size:12px;}
 #constraint-warnings {white-space:pre-line;color:#ffbf93;}
 #overlay-status.error {color:#ff9e9e;}
+/* SVG focus outlines scale with the board view; the courtyard highlight shows focus instead. */
+.component:focus {outline:none;}
 .component:focus-visible .courtyard {stroke:#ffd17d;stroke-width:.22;stroke-dasharray:none;}
 @media (prefers-reduced-motion:reduce) {* {scroll-behavior:auto;}}
 .datum line,.named-edge line {stroke:#84d5e3;stroke-width:.15;}

@@ -1,1 +1,1 @@
-"""Round LED ring CopperScript example."""
+"""Deprecated LED-ring regression fixture; use the CopperLedRing board project."""

@@ -1,11 +1,14 @@
 """Source-owned physical feature inventory and bounded token patches."""
 from __future__ import annotations
 
+import copy
+from functools import lru_cache
+
 from ..lexer import tokenize
 from ..parser import parse
 from ..syntax import ConstraintDecl, MechanicalDecl, SilkscreenDecl, SilkscreenItemDecl
 from ..mechanical_stackup import StackupDecl
-from .source import (SourceEditError, SourceSnapshot, SourcePatch, SourceSpan, TextEdit,
+from .source import (insert_member, SourceEditError, SourceSnapshot, SourcePatch, SourceSpan, TextEdit,
                      declaration_index, declaration_spans, _erase_tokens)
 
 CONSTRAINTS = frozenset({'max_distance', 'min_distance', 'placement_region',
@@ -34,6 +37,13 @@ def _inventory(snapshot):
 
 
 def source_features(snapshot):
+    # The scene asks for this on every move; the source changes far less often.
+    return copy.deepcopy(_source_features(snapshot.raw, snapshot.filename))
+
+
+@lru_cache(maxsize=8)
+def _source_features(raw, filename):
+    snapshot = SourceSnapshot(raw, filename)
     _, tokens, _, entries = _inventory(snapshot)
     result = []
     for category, kind, name, item, container in entries:
@@ -140,8 +150,7 @@ def feature_patch(snapshot, *, category, kind, name='', parameters=None, targets
                 parent = parents[0]
             else:
                 literal = wrapper
-        offset = parent.span.end - 1
-        edits.append(TextEdit(SourceSpan(offset, offset), snapshot.newline + '    ' + literal + snapshot.newline))
+        edits.append(insert_member(snapshot, parent.span.end - 1, literal))
     patch = SourcePatch(snapshot.revision, tuple(edits))
     parse(SourceSnapshot(patch.apply(snapshot)).text, snapshot.filename)
     return patch, scope

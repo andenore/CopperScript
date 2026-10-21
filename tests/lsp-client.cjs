@@ -104,3 +104,67 @@ test("untrusted workspaces never start an interpreter", () => {
   try {assert.equal(activateLsp(vscode, {subscriptions}).clients.size, 0);}
   finally {cp.spawn = original; for (const s of subscriptions) s.dispose();}
 });
+
+test("quick fixes, severities and automatic restart after a crash", {skip: !python}, async () => {
+  const providers = {}, subscriptions = [], sets = [];
+  const disposable = {dispose() {}};
+  const uri = s => ({scheme: "file", fsPath: fileURLToPath(s), toString: () => s});
+  const folder = {uri: uri(pathToFileURL(root).href)};
+  const text = 'board D {\n    use library "tiny";\n    component R1: RESISTOR { value = 100ohm; }\n    net N { R1.1; R1.22; }\n}';
+  const doc = {uri: uri(pathToFileURL(path.join(root, "build/quickfix-unsaved.copper")).href), languageId: "copper", version: 1, getText: () => text};
+  class Range {constructor(a, b, c, d) {this.start = {line: a, character: b}; this.end = {line: c, character: d};}}
+  class Diagnostic {constructor(range, message, severity) {Object.assign(this, {range, message, severity});}}
+  class Item {constructor(...args) {this.args = args;}}
+  class CodeAction {constructor(title, kind) {Object.assign(this, {title, kind});}}
+  class WorkspaceEdit {constructor() {this.edits = [];} replace(u, r, text) {this.edits.push({uri: u.toString(), range: r, text});}}
+  const status = {...disposable, show() {}};
+  const vscode = {
+    Uri: {parse: uri}, Range, CompletionItem: Item, Diagnostic, DocumentSymbol: Item, Hover: Item, Location: Item,
+    DiagnosticRelatedInformation: Item, CodeAction, WorkspaceEdit, CodeActionKind: {QuickFix: "quickfix"},
+    DiagnosticSeverity: {Error: 0, Warning: 1, Information: 2, Hint: 3}, StatusBarAlignment: {Left: 1},
+    languages: {
+      createDiagnosticCollection: () => ({...disposable, clear() {}, delete() {}, set(u, d) {sets.push(d);}}),
+      ...Object.fromEntries(["CompletionItem", "Hover", "Definition", "DocumentSymbol", "CodeActions"].map(kind =>
+        [`register${kind}Provider`, (selector, provider) => {providers[kind] = provider; return disposable;}]))
+    },
+    window: {createOutputChannel: () => ({...disposable, appendLine() {}}), createStatusBarItem: () => status,
+      async showWarningMessage() {}},
+    workspace: {
+      isTrusted: true, textDocuments: [doc], getWorkspaceFolder: () => folder,
+      getConfiguration: () => ({get: name => name === "compilerCommand" ? [python] : true}),
+      ...Object.fromEntries(["OpenTextDocument", "ChangeTextDocument", "SaveTextDocument", "CloseTextDocument", "ChangeConfiguration"].map(kind =>
+        [`onDid${kind}`, () => disposable])),
+      createFileSystemWatcher: () => ({...disposable, onDidCreate: () => disposable, onDidChange: () => disposable, onDidDelete: () => disposable})
+    }
+  };
+  const api = activateLsp(vscode, {subscriptions});
+  try {
+    const first = [...api.clients.values()][0];
+    await first.ready;
+    while (!sets.some(d => d.some(x => x.code === "UNKNOWN_PIN"))) await new Promise(r => setTimeout(r, 50));
+    const shown = sets.at(-1);
+    assert.equal(shown.find(d => d.code === "UNMARKED_PIN").severity, vscode.DiagnosticSeverity.Warning);
+    const actions = await providers.CodeActions.provideCodeActions(doc, shown[0].range, {diagnostics: shown});
+    const replace = actions.find(a => a.isPreferred);
+    assert.equal(replace.edit.edits[0].text, "R1.2");
+    assert.ok(actions.some(a => a.title.startsWith("Declare no_connect")));
+    assert.match(status.text, /Copper/);
+    // A crash restarts the server instead of leaving every provider silent.
+    first.connection.child.kill("SIGKILL");
+    for (let i = 0; i < 100 && api.clients.size; i++) await new Promise(r => setTimeout(r, 20));
+    // During the backoff a request does not start a server early.
+    assert.equal(await providers.DocumentSymbol.provideDocumentSymbols(doc), undefined);
+    assert.equal(api.clients.size, 0);
+    let next;
+    for (let i = 0; i < 200; i++) {
+      next = [...api.clients.values()][0];
+      if (next && next !== first) break;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    assert.ok(next && next !== first);
+    await next.ready;
+    const symbols = await providers.DocumentSymbol.provideDocumentSymbols(doc);
+    assert.equal(symbols[0].args[0], "R1");
+    await next.connection.stop();
+  } finally {for (const d of subscriptions) d.dispose();}
+});

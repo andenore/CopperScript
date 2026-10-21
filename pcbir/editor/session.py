@@ -160,8 +160,11 @@ class EditorSession:
             from ..syntax import MechanicalDecl, MechanicalItemDecl, ConstraintDecl
             from .source import declaration_spans
             snapshot = SourceSnapshot(self.source_raw, str(self.source))
-            document = parse(snapshot.text, snapshot.filename)
-            tokens = tokenize(snapshot.text, snapshot.filename)
+            # Parsed once per source revision, not on every move.
+            if getattr(self, "_parsed_source", (None,))[0] != self.source_raw:
+                self._parsed_source = (self.source_raw, parse(snapshot.text, snapshot.filename),
+                                       tokenize(snapshot.text, snapshot.filename))
+            _, document, tokens = self._parsed_source
             scene["mechanical_features"] = []
             for block in document.declarations:
                 if not isinstance(block, MechanicalDecl):
@@ -178,6 +181,8 @@ class EditorSession:
                        and d.kind == "fixed_placement" and component["reference"] in d.targets]
                 component["source_lock_owned"] = len(own) == 1 and own[0].targets == (component["reference"],)
         for component in scene["components"]:
+            if component.get("lock_owner"):
+                continue  # rigid-macro member: locks come from its anchor (board_scene)
             rule = next((r for r in state.board.placement_rules if r.reference == component["reference"]), None)
             component["source_side_locked"] = bool(rule and rule.side is not None)
         return scene
@@ -261,14 +266,35 @@ class EditorSession:
                 raise StaleRevision("session changed; reload the current scene")
             if self.workspace is None:
                 raise EditorError("source workspace is read-only")
-            # Explicit reload discards local previews/history; never auto-merges.
+            # Explicit reload discards previews and history. Unsaved poses are carried onto
+            # the new source for parts that still exist with the same footprint and that
+            # the new source does not fix; nothing is merged into the source itself.
+            draft = (self.pending or self.state).board
+            draft_poses = self._poses(draft)
+            moved = {ref for ref, pose in draft_poses.items() if self.source_poses.get(ref) != pose}
             raw = self.read_source()
             from ..compiler import compile_design_source
             design = compile_design_source(SourceSnapshot(raw).text, str(self.source), locked=True, offline=True)
             from ..erc import check, has_errors
             if has_errors(check(design.electrical)):
                 raise EditorError("external source fails ERC")
-            board = self.workspace.build(design)
+            source_board = self.workspace.build(design)
+            board = source_board
+            if moved:
+                from .transactions import seed_placements
+                # Only parts moved in this session carry their draft pose onto the new source.
+                board = seed_placements(source_board, draft, only=moved)
+            reloaded_poses = self._poses(board)
+            kept = sorted(ref for ref in moved if reloaded_poses.get(ref) == draft_poses[ref])
+            dropped = sorted(moved - set(kept))
+            # Kept poses that break a rule of the new source (orientation, region, overlap)
+            # stay for the user to fix, and are reported.
+            invalid = []
+            if kept:
+                from ..placement import placement_rejection_reasons
+                reasons = placement_rejection_reasons(board, {p.reference: p for p in board.placements}, self.options)
+                named = {ref for message in reasons for ref in message.partition(":")[0].split(" / ")}
+                invalid = [ref for ref in kept if ref in named]
             from .transactions import electrical_identity
             self.workspace.identity = electrical_identity(design.electrical)
             self.workspace.inputs = self.workspace._inputs()
@@ -276,14 +302,16 @@ class EditorSession:
             self.source_revision = sha256(raw).hexdigest()
             self.source_raw = raw
             self.state = State(board)
-            self.source_poses = self._poses(board)
+            # The reloaded source's poses: kept draft poses remain unsaved changes.
+            self.source_poses = self._poses(source_board)
             self.pending = self.source_pending = None
             self.undo_stack.clear(); self.redo_stack.clear()
             self.source_undo.clear(); self.source_redo.clear()
             self.outputs_stale = True
             self.close()
             self.revision += 1
-            return {"scene": self.scene(), "accepted": True}
+            return {"scene": self.scene(), "accepted": True,
+                    "placement_kept": kept, "placement_dropped": dropped, "placement_invalid": invalid}
         self._check(request["revision"])
         if self.job and self.job.poll()["status"] == "running":
             self.job.cancel("stale", "session edited; old placement cancelled")

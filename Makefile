@@ -5,6 +5,8 @@ include $(COPPER_ROOT)/make/examples/$(EXAMPLE).mk
 include $(COPPER_ROOT)/make/board.mk
 
 # Negative fixtures deliberately do not belong in this success aggregate.
+# Deprecated round-led-ring stays here for compatibility/regression checks;
+# the maintained LED-ring board and routing benchmark live in CopperLedRing.
 EXAMPLES := valid hierarchical cm4 full-vertical nrf52 round-led-ring \
  mechanical-outline mechanical-editor mechanical-anchors mechanical-curves mechanical-reference mechanical-profile device-model \
  resolved-footprint rc-filter inrush

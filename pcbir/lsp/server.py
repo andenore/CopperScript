@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Timer
 
 from .analysis import Workspace
+from .text import uri_for
 
 MAX_MESSAGE = 16 * 1024 * 1024
 MAX_HEADER = 8192
@@ -110,7 +111,7 @@ class Server:
                 if self.workspace.generation != generation or self.shutting_down or self.exited:
                     return
             try:
-                findings = self.workspace.analysis(path.as_uri(), snapshot).diagnostics()
+                findings = self.workspace.analysis(uri_for(path), snapshot).diagnostics()
             except Exception as exc:
                 findings = [{'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 0}},
                              'severity': 1, 'code': 'LSP_ANALYSIS', 'source': 'CopperScript',
@@ -119,7 +120,7 @@ class Server:
             with self.workspace.lock:
                 if self.workspace.generation == generation and not self.shutting_down and not self.exited:
                     self.writer.notify('textDocument/publishDiagnostics',
-                                       {'uri': path.as_uri(), 'version': version, 'diagnostics': findings})
+                                       {'uri': uri_for(path), 'version': version, 'diagnostics': findings})
 
     def handle(self, method, params):
         if method == 'initialize':
@@ -131,6 +132,7 @@ class Server:
                 'textDocumentSync': {'openClose': True, 'change': 2, 'save': {'includeText': False}},
                 'completionProvider': {'triggerCharacters': ['.'], 'resolveProvider': False},
                 'hoverProvider': True, 'definitionProvider': True, 'documentSymbolProvider': True,
+                'codeActionProvider': {'codeActionKinds': ['quickfix']},
             }, 'serverInfo': {'name': 'CopperScript', 'version': '0.1.0'}}
         if method == 'exit':
             self.exited = True
@@ -142,7 +144,7 @@ class Server:
             return None
         if self.shutting_down:
             raise ValueError('server is shutting down')
-        if method in {'initialized', '$/cancelRequest', '$/setTrace'}:
+        if method in {'initialized', '$/cancelRequest', '$/setTrace', 'workspace/didChangeConfiguration'}:
             return
         if method == 'textDocument/didOpen':
             doc = params['textDocument']
@@ -164,6 +166,8 @@ class Server:
             self.workspace.invalidate()
             self.schedule()
             return
+        if method == 'textDocument/codeAction':
+            return self.workspace.analysis(params['textDocument']['uri']).code_actions(params)
         if method in {'textDocument/completion', 'textDocument/hover',
                       'textDocument/definition', 'textDocument/documentSymbol'}:
             analysis = self.workspace.analysis(params['textDocument']['uri'])
@@ -193,6 +197,8 @@ class Server:
                     -32602 if isinstance(exc, (ValueError, KeyError, TypeError, OSError)) else -32603)
             if request:
                 self.writer.send({'jsonrpc': '2.0', 'id': message['id'], 'error': {'code': code, 'message': str(exc)}})
+            elif isinstance(exc, NotImplementedError):
+                return  # Unknown notifications are ignored, as LSP requires.
             else:
                 self.writer.notify('window/logMessage', {'type': 1, 'message': f'{message["method"]}: {exc}'})
 

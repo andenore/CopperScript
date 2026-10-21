@@ -47,4 +47,7 @@ pass, STEP view or unfilled zone outline cannot close them.
 
 The IR-only probe is `uv run python -m examples.mechanical_probe.mechanical_example`.
 It uses synthetic terminals to exercise geometry; it is not a functional circuit.
-Real example status lives in each board guide, including the [LED ring](round-led-ring.md).
+Real board status lives with each project, including
+[CopperLedRing](https://github.com/andenore/CopperLedRing).
+The [old LED-ring fixture](round-led-ring.md) is deprecated and retained for
+compiler regression coverage.

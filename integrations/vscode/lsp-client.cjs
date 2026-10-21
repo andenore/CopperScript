@@ -98,10 +98,27 @@ function activateLsp(vscode, context) {
   const position = p => ({line: p.line, character: p.character});
   const range = r => new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character);
   const key = uri => { const p = path.resolve(uri.fsPath); return process.platform === "win32" ? p.toLowerCase() : p; };
+  // Server diagnostics by document, so code actions can send back their `data` (fixes);
+  // vscode.Diagnostic objects do not carry it across the extension host boundary.
+  const published = new Map();
+  const severity = s => [vscode.DiagnosticSeverity.Error, vscode.DiagnosticSeverity.Warning,
+    vscode.DiagnosticSeverity.Information ?? vscode.DiagnosticSeverity.Warning,
+    vscode.DiagnosticSeverity.Hint ?? vscode.DiagnosticSeverity.Warning][(s || 1) - 1] ?? vscode.DiagnosticSeverity.Warning;
+  // Automatic restart after a crash or timeout of a server that had started.
+  const restarts = new Map(), restartAt = new Map(), RESTART_LIMIT = 5, RESTART_WINDOW = 5 * 60 * 1000;
+  const status = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Left ?? 1, 0);
+  if (status) { status.command = "copperscript.restartLanguageServer"; context.subscriptions.push(status); }
+  const showStatus = (state, detail) => {
+    if (!status) return;
+    status.text = {starting: "$(sync~spin) Copper", ready: "$(check) Copper", restarting: "$(sync~spin) Copper",
+      failed: "$(error) Copper"}[state] || "Copper";
+    status.tooltip = `CopperScript language server: ${detail || state}. Click to restart.`;
+    status.show();
+  };
   let disposed = false;
   function retire() {
     for (const c of clients.values()) { c.retired = true; if (c.connection) void c.connection.stop(); }
-    clients.clear(); diagnostics.clear();
+    clients.clear(); diagnostics.clear(); published.clear(); restarts.clear(); restartAt.clear();
   }
   function restart() {
     retire();
@@ -120,8 +137,9 @@ function activateLsp(vscode, context) {
     const document = vscode.workspace.textDocuments.find(d => key(d.uri) === key(uri));
     if (document && vscode.workspace.getWorkspaceFolder(document.uri)?.uri.toString() !== entry.folderId) return;
     if (params.version !== undefined && (!document || document.version !== params.version)) return;
+    published.set(key(uri), params.diagnostics);
     diagnostics.set(uri, params.diagnostics.map(item => {
-      const d = new vscode.Diagnostic(range(item.range), item.message, item.severity === 1 ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning);
+      const d = new vscode.Diagnostic(range(item.range), item.message, severity(item.severity));
       d.code = item.code; d.source = item.source;
       if (item.relatedInformation) d.relatedInformation = item.relatedInformation.map(info =>
         new vscode.DiagnosticRelatedInformation(new vscode.Location(vscode.Uri.parse(info.location.uri), range(info.location.range)), info.message));
@@ -142,11 +160,33 @@ function activateLsp(vscode, context) {
     if (!folder) return null;
     const id = folder.uri.toString();
     if (clients.has(id)) return clients.get(id);
+    if ((restartAt.get(id) || 0) > Date.now()) return null;
     const entry = {versions: new Map(), folderId: id};
     const config = vscode.workspace.getConfiguration("copperscript.lsp", document.uri);
     const report = error => {
       if (entry.retired || disposed) return;
       output.appendLine(`${folder.uri.fsPath}: ${error.message}`);
+      if (entry.started && !/timed out/.test(error.message)) {
+        // A running server crashed: restart it with backoff instead of going silent. A timeout
+        // is not retried automatically (a slow board would only time out again).
+        const now = Date.now(), recent = (restarts.get(id) || []).filter(t => now - t < RESTART_WINDOW);
+        if (recent.length < RESTART_LIMIT) {
+          restarts.set(id, [...recent, now]);
+          entry.retired = true; clients.delete(id);
+          const delay = Math.min(30000, 1000 * 2 ** recent.length);
+          restartAt.set(id, Date.now() + delay);  // client() waits until then, whatever the user does
+          showStatus("restarting", `${error.message}; restarting in ${delay / 1000} s`);
+          const timer = setTimeout(() => {
+            restartAt.delete(id);
+            if (disposed) return;
+            for (const doc of vscode.workspace.textDocuments)
+              if (vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() === id) client(doc);
+          }, delay);
+          timer.unref?.();
+          return;
+        }
+        showStatus("failed", `stopped after ${RESTART_LIMIT} restarts in 5 minutes: ${error.message}`);
+      } else showStatus("failed", error.message);
       for (const doc of vscode.workspace.textDocuments)
         if (vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() === id) diagnostics.delete(doc.uri);
       if (!entry.warned) {
@@ -156,6 +196,7 @@ function activateLsp(vscode, context) {
       }
     };
     clients.set(id, entry);
+    showStatus("starting");
     entry.ready = resolveCompiler(config.get("compilerCommand", []), folder.uri.fsPath).then(async compiler => {
         if (entry.retired || disposed) return;
         entry.compiler = compiler;
@@ -166,6 +207,8 @@ function activateLsp(vscode, context) {
           capabilities: {general: {positionEncodings: ["utf-16"]}, textDocument: {publishDiagnostics: {versionSupport: true}}}});
         if (entry.retired || disposed) return;
         entry.connection.notify("initialized", {});
+        entry.started = true;
+        showStatus("ready", `${compiler.source}, CopperScript ${compiler.compilerVersion}`);
         for (const doc of vscode.workspace.textDocuments) sync(entry, doc);
       });
     entry.ready.catch(report);
@@ -206,6 +249,31 @@ function activateLsp(vscode, context) {
       const items = await query(doc, "textDocument/documentSymbol", null, token);
       return items?.map(item => new vscode.DocumentSymbol(item.name, item.detail || "", item.kind - 1, range(item.range), range(item.selectionRange)));
     }}),
+    ...(vscode.languages.registerCodeActionsProvider ? [vscode.languages.registerCodeActionsProvider(selector, {
+      async provideCodeActions(doc, _range, context, token) {
+        const raw = published.get(key(doc.uri)) || [];
+        // Match VS Code's copies to the server's diagnostics by code, message and range.
+        const same = (d, item) => String(d.code) === String(item.code) && d.message === item.message &&
+          d.range?.start?.line === item.range.start.line && d.range?.start?.character === item.range.start.character;
+        const chosen = raw.filter(item => item.data && (context.diagnostics || []).some(d => same(d, item)));
+        if (!chosen.length) return [];
+        const entry = client(doc); if (!entry) return [];
+        try { await entry.ready; } catch (_) { return []; }
+        if (!entry.connection || entry.connection.closed || token?.isCancellationRequested) return [];
+        sync(entry, doc);
+        let actions;
+        try { actions = await entry.connection.request("textDocument/codeAction", {textDocument: {uri: doc.uri.toString()},
+          range: chosen[0].range, context: {diagnostics: chosen}}, token); } catch (_) { return []; }
+        return (actions || []).map(item => {
+          const action = new vscode.CodeAction(item.title, vscode.CodeActionKind.QuickFix);
+          action.isPreferred = !!item.isPreferred;
+          action.edit = new vscode.WorkspaceEdit();
+          for (const [target, edits] of Object.entries(item.edit?.changes || {}))
+            for (const e of edits) action.edit.replace(vscode.Uri.parse(target), range(e.range), e.newText);
+          action.diagnostics = (context.diagnostics || []).filter(d => (item.diagnostics || []).some(x => same(d, x)));
+          return action;
+        });
+      }}, {providedCodeActionKinds: [vscode.CodeActionKind.QuickFix]})] : []),
     vscode.workspace.onDidOpenTextDocument(syncAll),
     vscode.workspace.onDidChangeTextDocument(event => syncAll(event.document)),
     vscode.workspace.onDidSaveTextDocument(doc => {
@@ -217,7 +285,7 @@ function activateLsp(vscode, context) {
       }).catch(error => output.appendLine(error.message));
     }),
     vscode.workspace.onDidCloseTextDocument(doc => {
-      diagnostics.delete(doc.uri);
+      diagnostics.delete(doc.uri); published.delete(key(doc.uri));
       for (const c of clients.values()) c.ready.then(() => { const uri = doc.uri.toString(); if (!c.retired && c.versions.delete(uri) && c.connection && !c.connection.closed) c.connection.notify("textDocument/didClose", {textDocument: {uri}}); }).catch(error => output.appendLine(error.message));
     }),
     vscode.workspace.onDidChangeConfiguration(event => {
@@ -226,10 +294,11 @@ function activateLsp(vscode, context) {
     })
   );
   const watcher = vscode.workspace.createFileSystemWatcher("**/{*.copper,copper.mod,copper.lock}");
-  const changed = uri => { for (const c of clients.values()) c.ready.then(() => {
-    if (!c.retired && c.connection && !c.connection.closed) c.connection.notify("workspace/didChangeWatchedFiles", {changes: [{uri: uri.toString(), type: 2}]});
+  // LSP FileChangeType: 1 created, 2 changed, 3 deleted.
+  const changed = type => uri => { for (const c of clients.values()) c.ready.then(() => {
+    if (!c.retired && c.connection && !c.connection.closed) c.connection.notify("workspace/didChangeWatchedFiles", {changes: [{uri: uri.toString(), type}]});
   }).catch(error => output.appendLine(error.message)); };
-  context.subscriptions.push(watcher, watcher.onDidCreate(changed), watcher.onDidChange(changed), watcher.onDidDelete(changed));
+  context.subscriptions.push(watcher, watcher.onDidCreate(changed(1)), watcher.onDidChange(changed(2)), watcher.onDidDelete(changed(3)));
   for (const doc of vscode.workspace.textDocuments) client(doc);
   return {clients, diagnostics, output, restart};
 }

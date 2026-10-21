@@ -116,18 +116,31 @@ Code. Close discards that buffer and restores disk-backed import analysis.
 - Completion offers a useful subset of properties and keywords, not every
   mechanical/constraint property or mode-dependent legal peripheral choice.
   Hovers show source declarations; inherited device-mode profiles are follow-up.
-- ERC subjects map to source tokens/declarations when identifiable. Findings
-  without a precise source subject use the document start. Imported compiler
-  errors attach their original location as related information.
+- ERC findings use the same locator as `copper check --json` (a finding's
+  declaration and repeat occurrence pick the exact token: a duplicate net points
+  at the duplicate). Findings without a precise source subject use the document
+  start. Imported compiler errors attach their original location as related
+  information.
+- Quick fixes (code actions) apply machine-applicable replacements (`U3.SDAA` ->
+  `U3.SDA`, `componnet` -> `component`, unknown constraint targets) and declare
+  `no_connect` for every pin of an UNMARKED_PIN warning, inserted as the last
+  board member with a TODO reason. Fix data travels in each diagnostic's `data`.
+- The VS Code client restarts a crashed server with backoff (at most five times in
+  five minutes) and shows its state in the status bar; a request timeout (30 s) is
+  not retried automatically. Quick fixes are offered only while the text they
+  were computed for is unchanged, and a `no_connect` insertion only if it parses.
+- File URIs: VS Code's `file:///c%3A/...` drive encoding is decoded on Windows,
+  and replies (diagnostics, definitions) use the URI the client opened, so files
+  reached through a symlink, junction or `subst` drive work.
 - Document analysis caches are invalidated conservatively across open documents.
   Verified dependency snapshots are reused while typing in a board, then
   discarded on import-buffer, save, manifest, lock or watched-file changes. Imports
   are indexed from the packages actually used; the server does not scan every
   library or build directory. Finer dependency invalidation, incremental
   parsing, background indexing and large-project latency measurements are next.
-- Add scope-aware reference indexing before references/rename. Then add tested
-  code actions, semantic tokens and comment-preserving formatting. These
-  capabilities are deliberately not advertised by this release.
+- Add scope-aware reference indexing before references/rename. Then add
+  semantic tokens and comment-preserving formatting. These capabilities are
+  deliberately not advertised by this release.
 - Requests are served serially; cancellation notifications are accepted. The
   VS Code client suppresses canceled and superseded responses. Cooperative
   cancellation inside long package analysis remains follow-up work.

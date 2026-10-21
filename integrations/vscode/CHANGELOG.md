@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+- Quick fixes: apply suggested replacements for misspelled pins, components, keywords and constraint targets, and declare `no_connect` for unconnected pins.
+- Fix diagnostics on Windows, where VS Code encodes the drive colon in file URIs, and for files opened through symlinks, junctions or `subst` drives.
+- Restart the language server automatically (with backoff) after a crash or timeout, and show its state in the status bar.
+- Stop the mechanical editor backend when its tab is closed while it is still preparing.
+- Highlight `no_connect`; report information/hint severities and created/deleted files correctly; treat `-` as part of identifiers.
+
 ## 0.3.1
 
 - Add theme-aware syntax highlighting for declarations, types, properties, comments, strings, numbers and engineering units.

@@ -37,7 +37,9 @@ package-access preflight, `<- P1..P17`). Layout reports list failed gates (`L`)
 and non-passing findings (`F`). `--cluster-mm` changes grouping and ids, so
 pass the same value to `view`. Lists are balanced across stages; use
 `--stage`, `--net`, `--code` or `--limit 0`. `--json` emits
-`copperscript.run-issues/v1`.
+`copperscript.run-issues/v1`, including the SHA-256 of the run's board and
+refilled board; CopperReview's **Load issues** draws those issues on the
+matching board so review notes can cite their ids.
 
 `view` draws pads, tracks, vias and copper areas in a millimetre window, one
 panel per copper layer (`--layers auto` keeps layers with highlighted copper),
@@ -51,6 +53,40 @@ pads, rotation and fit RMS. Targets may be a run directory, a report, a
 Native issues are drawn on the run's refilled board when present. When an
 issue's markers spread wider than 40 mm, the densest group is framed and the
 legend says so. Trapezoid and custom pads are drawn as their anchor rectangle.
+
+### Shorter reruns
+
+Placement and global routing can take a large part of a run, and an early
+blocker (a package exit that cannot be reached) is known long before the
+detailed stages finish. Stop at the stage you are fixing and keep placement
+fixed while you change later stages:
+
+```console
+copper route-board BOARD --progress --stop-after placement --checkpoint-dir CK -o RUN/board.kicad_pcb --report RUN/route-report.json
+copper route-board BOARD --progress --reuse-placement CK/placement.state.json --stop-after package-preflight ...
+copper route-board BOARD --progress --reuse-placement CK/placement.state.json ...
+```
+
+`--stop-after` accepts `placement`, `package-preflight` and `package-access`
+(runs the package-access improvement trials, then stops). The package stops
+need fanout, which is on unless `--no-fanout`. A stopped run writes its report and
+draft board, is marked `stopped_after`, skips zone-escape, filled-copper and
+final native verification, and never passes; its open nets read "run stopped
+after ...". `copper issues` shows the stop in its header.
+
+`--checkpoint-dir DIR` saves `DIR/placement.state.json`, keyed on the physical
+board, the placement/global/feedback options and the compiler code. A failed save is reported and the run continues.
+`--reuse-placement` refuses a checkpoint whose board or options differ; a
+compiler change is allowed (that is the point of holding placement fixed) and
+recorded as `placement_reuse.code_changed` in the report. Rerun placement
+before signoff whenever placement code or inputs changed.
+
+When `route-board --report RUN/route-report.json` fails with an error, it
+writes `RUN/route-report.error.json`: error type, message, the components it
+names and, with `--progress`, the stage that was running and those that
+finished. `copper issues RUN` prefers it over an older report in the same
+directory and lists it as `E1` with a window on those components; the next
+successful run removes it.
 
 For scripts, `pcbir.workbench` provides `load_run`, `run_issues`, `view`,
 `scene_from_physical`, `save_state` and `load_state`. State files round-trip

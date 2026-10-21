@@ -615,6 +615,16 @@ def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
         return materialize_via_in_pad_arrays(board)  # idempotent; no duplicate owner copper
     if not board.hard_macros:
         return materialize_via_in_pad_arrays(board)
+    return materialize_via_in_pad_arrays(materialize_macro_copper(board))
+
+
+def materialize_macro_copper(board: PhysicalBoard) -> PhysicalBoard:
+    """Macro copper plus its physical acceptance, before via-in-pad arrays.
+
+    The result depends only on the macros, their member poses and the board's
+    fixed inputs (outline, zones, stackup, rules, nets), plus a whole-board DRC
+    of the new copper. Callers that cache it must say what they leave out.
+    """
     if board.tracks or board.vias or board.polygons or board.zone_fills:
         raise ValueError("macro materialization must precede all routing and fill")
     poses = {p.reference: p for p in board.placements}
@@ -716,7 +726,7 @@ def materialize_hard_macros(board: PhysicalBoard) -> PhysicalBoard:
                 raise ValueError("macro port has no owner copper contact")
             if len(root_ids) != 1 or any(not graph.pad_nodes.get(pad) or any(graph.roots[n] not in root_ids for n in graph.pad_nodes[pad]) for pad in port.pads):
                 raise ValueError("macro port is not connected to its declared private pads")
-    return materialize_via_in_pad_arrays(result)
+    return result
 
 
 def macro_routing_pads(board, net):

@@ -54,6 +54,7 @@ class PlacementJob:
             raise ValueError("editor placement supports at most 5000 components")
         self.revision, self.source_revision = revision, source_revision
         self.started = monotonic()
+        self.finished = None  # frozen when the job stops, so elapsed time stops counting
         self.status = "running"
         self.progress = {"phase": "starting", "candidate": 0, "candidates": max(2, options.candidate_count)}
         self.profile = None
@@ -86,10 +87,11 @@ class PlacementJob:
                 if self.status == "running" and not self.process.is_alive():
                     self.status, self.error = "failed", "placement process exited without a result"
                 if self.status != "running":
+                    self.finished = self.finished or monotonic()
                     self.process.join(timeout=.1)
                     self.pipe.close()
             return {"status": self.status, "progress": self.progress, "error": self.error,
-                    "elapsed_seconds": round(monotonic() - self.started, 3),
+                    "elapsed_seconds": round((self.finished or monotonic()) - self.started, 3),
                     "profile": self.profile,
                     "input_revision": self.revision}
 
@@ -98,6 +100,7 @@ class PlacementJob:
             if self.status != "running":
                 return
             self.status, self.error = status, error
+            self.finished = monotonic()
             if self.process.is_alive():
                 self.process.terminate()
                 self.process.join(timeout=1)

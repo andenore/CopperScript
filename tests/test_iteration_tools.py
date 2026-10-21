@@ -152,6 +152,8 @@ def test_cli_issues_and_view(run_dir, tmp_path):
                             text=True, capture_output=True, check=True)
     document = json.loads(listed.stdout)
     assert document["schema"] == "copperscript.run-issues/v1" and document["issue_count"] == 5
+    import hashlib
+    assert document["board_sha256"] == hashlib.sha256((run_dir / "board.kicad_pcb").read_bytes()).hexdigest()
     output = tmp_path / "p1.png"
     viewed = subprocess.run([sys.executable, "-m", "copperscript", "view", str(run_dir), "--issue", "P1",
                              "-o", str(output)], text=True, capture_output=True)
