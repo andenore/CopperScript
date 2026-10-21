@@ -68,3 +68,28 @@ def test_summary_counts_failures_against_the_clean_pass_rate(tmp_path):
     assert summary["boards"] == 3 and summary["clean_pass_rate"] == 0.333
     assert summary["net_completion_mean"] == 0.875
     assert summary["statuses"] == {"import_failed": 1, "routed": 2}
+
+
+def test_annotation_chunks_fit_and_keep_every_character():
+    from pcbir.bench import annotation_chunks
+    text = "".join(f"line {i} " + "x" * (i * 37 % 300) + "\n" for i in range(400)) + "y" * 9000 + "\n"
+    chunks = annotation_chunks(text, limit=1000)
+    assert all(len(chunk) <= 1000 for chunk in chunks)
+    assert "".join(chunks) == text
+
+
+def test_failure_report_lists_only_unclean_boards_with_their_causes(tmp_path):
+    from pcbir.bench import failure_report
+    for name, record in {
+        "ok": {"board": "ok", "clean_pass": True},
+        "bad": {"board": "bad", "clean_pass": False, "status": "routed",
+                "unrouted_details": {"N1": ["detailed search cannot reach U1.2"]},
+                "drc_findings": [{"kind": "violation", "type": "clearance", "description": "Clearance violation",
+                                  "items": [{"description": "Track [N1]", "pos": {"x": 1, "y": 2}}]}]},
+    }.items():
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "result.json").write_text(json.dumps(record))
+    report = failure_report(tmp_path)
+    assert "#### bad" in report and "#### ok" not in report
+    assert "unrouted N1: detailed search cannot reach U1.2" in report
+    assert "KiCad violation clearance" in report and "Track [N1]" in report

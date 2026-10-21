@@ -244,19 +244,15 @@ jobs:
             python -m pcbir.bench boards ../results
           } > ../summary.md
           cat ../summary.md >> "$GITHUB_STEP_SUMMARY"
-          # Annotations hold 4 KB each and a step shows at most 10, so the summary goes out in line-aligned chunks.
-          python - ../summary.md <<'PY'
-          import sys
-          chunks, current = [], ""
-          for line in open(sys.argv[1], encoding="utf-8").read().splitlines(keepends=True):
-              if len(current) + len(line) > 3900:
-                  chunks.append(current); current = ""
-              current += line
-          chunks.append(current)
-          for index, chunk in enumerate(chunks[:10], 1):
-              text = chunk.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-              print(f"::notice title=Routing benchmark {index}/{len(chunks)}::{text}")
-          PY
+          # Annotations hold 4 KB each and a step shows at most 10, so text goes out in line-aligned chunks.
+          python -m pcbir.bench annotate ../summary.md --title "Routing benchmark"
+          python -m pcbir.bench failures ../results > ../failures.md
+      - name: Failure details 1
+        run: python -m pcbir.bench annotate ../failures.md --title "Benchmark failures" --first 0
+      - name: Failure details 2
+        run: python -m pcbir.bench annotate ../failures.md --title "Benchmark failures" --first 10
+      - name: Failure details 3
+        run: python -m pcbir.bench annotate ../failures.md --title "Benchmark failures" --first 20
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -265,4 +261,5 @@ jobs:
             results
             reference
             summary.md
+            failures.md
           if-no-files-found: warn
