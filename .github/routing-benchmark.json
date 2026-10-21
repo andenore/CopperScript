@@ -10,5 +10,6 @@
   "split": "test",
   "shards": 12,
   "board_seconds": 1200,
-  "router": "legacy"
+  "router": "legacy",
+  "route_args": []
 }
