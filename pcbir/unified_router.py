@@ -86,6 +86,9 @@ class UnifiedRouterOptions:
     # After commit, re-check pours with the committed signal copper: a plane
     # pad counted as touching a pour may have been walled off; reroute it.
     pour_recheck: bool = True
+    # Route members of length-match groups (buses) among themselves first;
+    # the other nets then route around their committed copper.
+    buses_first: bool = True
     full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
     # Extra cost (as history) on a ball grid's own surface layer: escapes are
     # short, so through-traffic between the balls should prefer inner layers.
@@ -2082,6 +2085,22 @@ def route_unified(
                and (only_nets is None or net.name in only_nets)
                and (rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
                and connectivity.net_connected(net)]
+    original_board, all_nets = board, nets
+    bus_accepted: dict = {}
+    bus_complete: set[str] = set()
+    bus_names = {name for group in board.match_groups for name in group.nets} & {net.name for net in nets}
+    if options.buses_first and bus_names and len(bus_names) < len(nets):
+        # A bus needs a shared corridor; negotiated together with every other
+        # net it loses it piecemeal. Its members route first, among themselves.
+        bus_router = _Router(board, options, [net for net in nets if net.name in bus_names], on_progress)
+        bus_routes, bus_conflicts, used = bus_router.negotiate(deadline)
+        bus_accepted, _, bus_complete = bus_router.commit(bus_routes, bus_conflicts)
+        bus_accepted = {name: value for name, value in bus_accepted.items() if name in bus_complete}
+        emit(on_progress, "unified_buses", "finished", nets=len(bus_names), complete=len(bus_complete),
+             iterations=used)
+        if bus_accepted:
+            board = _with(board, bus_accepted)
+            nets = [net for net in nets if net.name not in bus_complete]
     emit(on_progress, "unified_setup", "started", nets=len(nets))
     router = _Router(board, options, nets, on_progress)
     emit(on_progress, "unified_setup", "finished", nets=len(router.specs),
@@ -2171,7 +2190,12 @@ def route_unified(
             board, nets, plane_nets, accepted, set(complete), options, deadline, on_progress)
         iterations += recheck.pop("iterations", 0)
         emit(on_progress, "unified_pour_recheck", "finished", **recheck)
-    spec_names = {s.name for s in router.specs}
+    if bus_accepted:
+        # Report bus copper as this call's own routing, on the original board.
+        accepted = _merge(bus_accepted, accepted)
+        complete = set(complete) | bus_complete
+        board, nets = original_board, all_nets
+    spec_names = {s.name for s in router.specs} | bus_complete
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
     all_tracks = (*board.tracks, *new_tracks)

@@ -267,3 +267,19 @@ def test_a_neck_only_node_is_left_inside_its_region_native(monkeypatch) -> None:
         pytest.skip("no native kernel for this platform")
     path, region = _neck_exit_path(monkeypatch, kernel=True)
     assert path[1] in region
+
+
+def test_bus_members_route_first_and_are_reported_as_routed() -> None:
+    from pcbir.physical import NetMatchGroup
+    board = _board({"D0": ((2, 7), (18, 7)), "D1": ((2, 9), (18, 9)), "X": ((10, 2), (10, 16))})
+    board = replace(board, match_groups=(NetMatchGroup("bus", ("D0", "D1"), nm_from_mm("5")),))
+    events = []
+    global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    result = route_unified(board, global_route, UnifiedRouterOptions(),
+                           on_progress=lambda *args, **kwargs: events.append(args))
+    drc = run_physical_drc(result.board)
+    summary = connection_summary(result.board, drc)
+    assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0
+    assert any(e and e[0] == "unified_buses" and e[2]["complete"] == 2 for e in events)
+    by_name = {net.net: net for net in result.nets}
+    assert by_name["D0"].connected and by_name["D1"].connected and by_name["D0"].track_count > 0
