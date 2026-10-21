@@ -124,8 +124,8 @@ All in `pcbir/unified_router.py` unless noted; options are on
 The aim is one PR, `refactor/routing` → `main`, merged once the checks hold.
 
 1. Rebase or merge `origin/main` again right before the PR (it moves fast).
-2. Tests: the full suite has about 153 failures that were already failing on
-   the branch before this work (power-transition repair, autonomous plane
+2. Tests: the full suite (2026-10-21, after the merge with `origin/main`) has
+   149 failures, all already failing on the branch before this work (power-transition repair, autonomous plane
    access, CAM corpus, CI bundle). Check which of them also fail on `main`;
    any that fail only on the branch must be fixed or explained before merging.
 3. Default router: `copper route-board` still defaults to `--router legacy`.
