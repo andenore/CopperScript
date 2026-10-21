@@ -398,11 +398,14 @@ Open items:
     vias.
   - Next levers are placement feedback driven by these hotspots (the
     `routeflow` outer loop) and a part-owned FX10 fanout macro (P4).
-- **CopperProbe source pins parts far from their pins.** `copper issues`
-  flags 16 fixed parts (REMOTE_FIXED_PART), e.g. R_CC_DET 65.7 mm and C_CLKP
-  40 mm from their nearest partner. Releasing 14 of them (side kept) in a copy
-  gave 0.857 (34 opens), the best so far, with every critical net routed.
-  Releasing them in the real source is the owner's call.
+- **The benchmarked CopperProbe is a design candidate, not the base board.**
+  `copper-probe` is `design-candidates/hybrid-reference-inward-escape` (166
+  fixed placements, made in earlier agent sessions); the owner's top-level
+  board.copper has 109 and fixes none of the parts below. `copper issues`
+  flagged 16 of the candidate's fixed parts (REMOTE_FIXED_PART), e.g. R_CC_DET
+  65.7 mm and C_CLKP 40 mm from their nearest partner. On 2026-10-21 the owner
+  approved releasing 21 (side kept) in that candidate; a copy with the same
+  change gave 0.857 (34 opens) with every critical net routed.
 - **CopperProbe ADC bus (11 nets) at the FX10 south edge.** max_vias=2 and a
   length limit; F.Cu just south of the package is full of other copper, so
   the bus drops to inner layers and runs out of vias or length.
