@@ -1,0 +1,13 @@
+{
+  "description": "PCBWorld D3 boards from PCBench, prepared with stock KiCad 9 and scored by kicad-cli DRC. Measurements only.",
+  "pcbworld_repository": "https://github.com/LGAI-Research/PCBWorld.git",
+  "pcbworld_ref": "ed39f6fd69c7c85ef14ad5131b95b7be97add6b0",
+  "pcbench_repository": "https://github.com/PCBench/PCBench.git",
+  "pcbench_ref": "dec3be75cbdef74787625f9043c7391cd473bb64",
+  "kicad_ppa": "ppa:kicad/kicad-9.0-releases",
+  "kicad_series": "9.0",
+  "tier": "easy",
+  "split": "test",
+  "shards": 12,
+  "board_seconds": 1200
+}

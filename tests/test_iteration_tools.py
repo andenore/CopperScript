@@ -256,3 +256,28 @@ def test_estimated_plane_opens_are_located_when_no_native_check_ran(tmp_path, ru
     assert issue.code == "PLANE-ESTIMATED-OPEN" and issue.nets == ["GND"] and issue.window() is not None
     # A native fill check supersedes the estimate.
     assert all(i.stage != "plane" for i in run_issues(load_run(run_dir)))
+
+
+def test_unconnected_global_routes_explain_a_blocked_access_stage(run_dir, tmp_path):
+    report = json.loads((run_dir / "route-report.json").read_text())
+    report["package_access"] = {"pending_pads": [], "failed_critical_nets": []}
+    report["global"] = {"status": "unreachable", "routes": [
+        {"net": "N1", "connected": False, "deferred_to_zone": False,
+         "diagnostics": ["no legal bounded local/global access for R1.1"]},
+        {"net": "N2", "connected": False, "deferred_to_zone": False,
+         "diagnostics": ["no legal bounded local/global access for R1.1"]},
+        {"net": "GND", "connected": False, "deferred_to_zone": True, "diagnostics": []},
+        {"net": "N3", "connected": True, "deferred_to_zone": False, "diagnostics": []}]}
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "board.kicad_pcb").write_text((run_dir / "board.kicad_pcb").read_text())
+    (run / "route-report.json").write_text(json.dumps(report))
+
+    issues = run_issues(load_run(run))
+
+    global_issue = find_issue(issues, "G1")
+    assert global_issue.code == "GLOBAL-UNROUTED" and global_issue.stage == "global"
+    assert global_issue.nets == ["N1", "N2"] and global_issue.objects == ["R1.1"]
+    assert "GND" not in global_issue.nets
+    assert find_issue(issues, "R1").caused_by == "G1"
+    assert [i.id for i in filter_issues(issues, stage="global")] == ["G1"]

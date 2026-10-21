@@ -410,7 +410,17 @@ def route_global(
         for pad in macro_routing_pads(board, net)
     }
     from .global_terminals import register_terminal_capacity
-    graph, access_options = register_terminal_capacity(board, graph, access_options)
+    wider = replace(options, pin_access_candidates=4 * options.pin_access_candidates)
+
+    def expand(key: tuple[str, PadReference]) -> tuple[PinAccess, ...]:
+        name, pad = key
+        return _pin_access_candidates(
+            board, graph, pad, name,
+            routing_layers(board, name, rules.get(name)),
+            rules.get(name), clearance, wider,
+        )
+
+    graph, access_options = register_terminal_capacity(board, graph, access_options, expand)
     if on_progress is not None:
         emit(on_progress, "global_pin_access", "finished", terminal_count=len(access_options))
     capacities = {

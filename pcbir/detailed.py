@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from collections import Counter, OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from functools import partial
@@ -14,7 +16,7 @@ import json
 from math import hypot, isqrt
 from time import perf_counter
 from types import MappingProxyType
-from typing import Iterable, Mapping
+from typing import Iterable, Iterator, Mapping
 
 from .geometry import (RoundedConvexShape, orientation, point_on_segment, point_in_polygon,
                        segment_in_polygon, shape_distance_squared)
@@ -49,7 +51,7 @@ from .breakout import BreakoutRegions
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
 from .routing_costs import COST_UNIT, length_cost, preference_cost
-from .routing_guides import GuideExposure, guide_transition_cost
+from .routing_guides import GuideDistance, GuideExposure, guide_transition_cost
 from .surface_path import _track_inside_board
 from .pin_escape import (RoutingAccess, access_position, launch_position, checked_access_path,
                          verified_fanout_path, verified_routing_access)
@@ -88,6 +90,85 @@ class DetailedSearchPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class DetailedSearchStats:
+    """Search work counters: telemetry, never geometry, ordering or signoff.
+
+    One *call* is one bounded A* search for one terminal connection in one
+    stage. Stages are tried in order: the guide corridor, wider corridors,
+    the corridor projected onto other allowed layers, then the whole board.
+    ``failed_expanded_states`` counts states expanded by calls that found no
+    path, whether they exhausted their budget or their queue. Counts are
+    deterministic for fixed inputs; they never enter comparisons, route
+    fingerprints, candidate selection or acceptance.
+    """
+
+    search_calls: int = 0
+    expanded_states: int = 0
+    failed_expanded_states: int = 0
+    budget_exhausted_calls: int = 0
+    no_path_calls: int = 0
+    corridor_successes: int = 0
+    widened_corridor_successes: int = 0
+    projected_corridor_successes: int = 0
+    full_board_successes: int = 0
+    maximum_target_count: int = 0
+
+
+class _SearchWork:
+    """Mutable accumulator behind ``DetailedSearchStats``; see ``_observe_search``."""
+
+    __slots__ = tuple(DetailedSearchStats.__dataclass_fields__)
+    _SUCCESS_FIELD = {
+        "corridor": "corridor_successes",
+        "widened": "widened_corridor_successes",
+        "projected": "projected_corridor_successes",
+        "full": "full_board_successes",
+    }
+
+    def __init__(self) -> None:
+        for name in self.__slots__:
+            setattr(self, name, 0)
+
+    def record(self, stage: str, outcome: str, expanded: int, target_count: int) -> None:
+        self.search_calls += 1
+        self.expanded_states += expanded
+        self.maximum_target_count = max(self.maximum_target_count, target_count)
+        if outcome == "found":
+            success = self._SUCCESS_FIELD[stage]
+            setattr(self, success, getattr(self, success) + 1)
+            return
+        self.failed_expanded_states += expanded
+        if outcome == "budget":
+            self.budget_exhausted_calls += 1
+        else:
+            self.no_path_calls += 1
+
+    def freeze(self) -> DetailedSearchStats:
+        return DetailedSearchStats(**{name: getattr(self, name) for name in self.__slots__})
+
+
+# Accumulators of the enclosing observed scopes (a whole detailed run, one net
+# attempt). Every bounded search records into each of them; none affects search.
+_ACTIVE_SEARCH_WORK: ContextVar[tuple[_SearchWork, ...]] = ContextVar(
+    "copperscript_detailed_search_work", default=())
+
+
+def _record_search(stage: str, outcome: str, expanded: int, target_count: int) -> None:
+    for work in _ACTIVE_SEARCH_WORK.get():
+        work.record(stage, outcome, expanded, target_count)
+
+
+@contextmanager
+def _observe_search() -> Iterator[_SearchWork]:
+    work = _SearchWork()
+    token = _ACTIVE_SEARCH_WORK.set((*_ACTIVE_SEARCH_WORK.get(), work))
+    try:
+        yield work
+    finally:
+        _ACTIVE_SEARCH_WORK.reset(token)
+
+
+@dataclass(frozen=True, slots=True)
 class DetailedNetResult:
     net: str
     connected: bool
@@ -101,6 +182,9 @@ class DetailedNetResult:
     resumed_branch_count: int = 0
     search_budget_exhausted: bool = False
     retry_heuristic_weight_percent: int | None = None
+    # Work of the attempt that produced this result; a reused search reports
+    # the original attempt's work. Telemetry only (see DetailedSearchStats).
+    search_stats: DetailedSearchStats | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +232,9 @@ class DetailedRoutingResult:
     global_routing_fingerprint: str
     routing_fingerprint: str
     repair_trials: tuple[DetailedRepairTrial, ...] = ()
+    # All bounded searches of this run, including rejected passes, repair
+    # trials and probes. Telemetry only (see DetailedSearchStats).
+    search_work: DetailedSearchStats | None = field(default=None, compare=False)
 
     def to_json(self) -> str:
         document = {
@@ -159,6 +246,7 @@ class DetailedRoutingResult:
             "repair_trial_report_limit": 256,
             "locked_track_count": self.locked_track_count,
             "locked_via_count": self.locked_via_count,
+            "search_work": asdict(self.search_work) if self.search_work else None,
             "metrics": {
                 "routed_net_count": self.metrics.routed_net_count,
                 "unrouted_net_count": self.metrics.unrouted_net_count,
@@ -183,6 +271,7 @@ class DetailedRoutingResult:
                     "resumed_branch_count": item.resumed_branch_count,
                     "search_budget_exhausted": item.search_budget_exhausted,
                     "retry_heuristic_weight_percent": item.retry_heuristic_weight_percent,
+                    "search_stats": asdict(item.search_stats) if item.search_stats else None,
                 }
                 for item in self.nets
             ],
@@ -208,6 +297,9 @@ class DetailedRouterOptions:
     pin_access_candidates: int = 8
     maximum_search_states: int = 50_000
     heuristic_weight_percent: int = 100
+    # Add the guide-deviation cost that any path to the target must pay
+    # (``GuideDistance``) to the octile heuristic. Still a lower bound.
+    guide_distance_heuristic: bool = False
     enable_soft_ripup: bool = False
     constrained_pins_first: bool = False
     progressive_guides: bool = False
@@ -493,8 +585,31 @@ def route_detailed(
 
     Optional progress describes tentative searches, including rejected repair
     work. It is not part of the result, fingerprint or closure evidence.
+    ``search_work`` totals every bounded search of this call; an enclosing
+    observed run also counts it.
     """
 
+    with _observe_search() as work:
+        result = _route_detailed(
+            board, global_route, options, fanout_accesses=fanout_accesses,
+            fanout_created_vias=fanout_created_vias,
+            fanout_created_tracks=fanout_created_tracks,
+            only_nets=only_nets, on_progress=on_progress,
+        )
+    return replace(result, search_work=work.freeze())
+
+
+def _route_detailed(
+    board: PhysicalBoard,
+    global_route: GlobalRoutingResult,
+    options: DetailedRouterOptions | None = None,
+    *,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
+    fanout_created_vias: frozenset[tuple[str, Point]] | None = None,
+    fanout_created_tracks: tuple[TrackSegment, ...] | None = None,
+    only_nets: frozenset[str] | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> DetailedRoutingResult:
     options = options or DetailedRouterOptions()
     if board.hard_macros and set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:
         raise ValueError("materialize hard-macro copper before detailed routing")
@@ -793,13 +908,20 @@ def _search_detailed_net(
         telemetry.update(search_reuse="hit", reused_search_seconds=round(cached[1], 3))
     else:
         started = perf_counter()
-        grid = _build_grid(board, options, net.pads, fanout_accesses, reuse)
-        search = partial(_route_repair_net, reuse=reuse) if repair else _route_net
-        attempt = search(board, grid, net.name, net.pads, rule, guide, usage, history,
-            clearance, options, fanout_accesses=fanout_accesses,
-            allow_movable_conflicts=allow_movable_conflicts, resume=resume)
+        with _observe_search() as work:
+            grid = _build_grid(board, options, net.pads, fanout_accesses, reuse)
+            search = partial(_route_repair_net, reuse=reuse) if repair else _route_net
+            attempt = search(board, grid, net.name, net.pads, rule, guide, usage, history,
+                clearance, options, fanout_accesses=fanout_accesses,
+                allow_movable_conflicts=allow_movable_conflicts, resume=resume)
+        attempt = replace(attempt, result=replace(attempt.result, search_stats=work.freeze()))
+        elapsed = perf_counter() - started
+        # Only work done now: a reuse hit repeats no search, so summing these
+        # events over a log counts each executed search once.
+        telemetry.update(search_seconds=round(elapsed, 3),
+                         search_stats=asdict(attempt.result.search_stats))
         if reuse is not None:
-            reuse.store(key, attempt, perf_counter() - started)
+            reuse.store(key, attempt, elapsed)
             telemetry["search_reuse"] = "miss"
     emit(on_progress, "detailed_net", "finished", net=net.name, stage=stage,
          connected=attempt.result.connected, track_count=len(attempt.tracks),
@@ -1767,6 +1889,7 @@ def _search(
                     guide_margin_nm=options.guide_margin_nm * scale,
                     allow_movable_conflicts=allow_movable_conflicts,
                     forbidden_via_positions=forbidden_via_positions,
+                    stage="corridor" if scale == 1 else "widened",
                 )
             except _SearchBudgetExceeded:
                 guided = None
@@ -1786,7 +1909,7 @@ def _search(
                     guide_margin_nm=options.guide_margin_nm * 2,
                     allow_movable_conflicts=allow_movable_conflicts,
                     forbidden_via_positions=forbidden_via_positions,
-                    project_guide_layers=True,
+                    project_guide_layers=True, stage="projected",
                 )
             except _SearchBudgetExceeded:
                 projected = None
@@ -1821,6 +1944,7 @@ def _search_once(
     allow_movable_conflicts: bool,
     forbidden_via_positions: frozenset[Point],
     project_guide_layers: bool = False,
+    stage: str = "full",
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     allowed_indexes = {grid.layers.index(layer) for layer in allowed}
     queue: list[tuple[int, int, int, int, DetailedNode, str, int]] = []
@@ -1838,10 +1962,35 @@ def _search_once(
     guide_exposure = GuideExposure(guide, guide_margin_nm,
                                    ignore_layer=project_guide_layers)
 
+    guide_distance = (GuideDistance(guide, guide_margin_nm)
+                      if options.guide_distance_heuristic and options.allow_guide_deviation else None)
+    target_points = tuple((target, grid.point(target)) for target in targets)
+    target_distances = ({target: guide_distance.distance_nm(point) for target, point in target_points}
+                        if guide_distance is not None else {})
+
+    weight = options.heuristic_weight_percent
+
     def heuristic(node: DetailedNode) -> int:
+        """Queue estimate: the weighted octile bound, plus the unweighted guide bound.
+
+        Weighted passes (``heuristic_weight_percent`` > 100) trade optimality
+        for speed through the octile term only. The guide-deviation bound is
+        added unweighted so it prunes without making those searches greedier.
+        """
         value = heuristic_cache.get(node)
         if value is None:
-            value = min(_heuristic(grid, node, target, options) for target in targets)
+            if guide_distance is None:
+                value = _queue_estimate(
+                    min(_heuristic(grid, node, target, options) for target in targets), 0, weight)
+            else:
+                point = grid.point(node)
+                distance = guide_distance.distance_nm(point)
+                value = min(_queue_estimate(
+                                _heuristic(grid, node, target, options),
+                                guide_distance.exposed_length_bound_nm(
+                                    point, distance, target_point, target_distances[target]),
+                                weight)
+                            for target, target_point in target_points)
             heuristic_cache[node] = value
         return value
 
@@ -1887,7 +2036,7 @@ def _search_once(
         best[node_id(start), ""] = 0
         previous[state] = None
         heappush(queue, (
-            options.heuristic_weight_percent * heuristic(start) // 100,
+            heuristic(start),
             0, 0, 0, start, "", serial,
         ))
         serial += 1
@@ -1901,6 +2050,7 @@ def _search_once(
             continue
         expanded += 1
         if expanded > state_budget:
+            _record_search(stage, "budget", state_budget, len(targets))
             raise _SearchBudgetExceeded
         if node in targets:
             final = state
@@ -2009,7 +2159,7 @@ def _search_once(
                 queue,
                 (
                     candidate_cost + (
-                        options.heuristic_weight_percent * heuristic(neighbor) // 100
+                        heuristic(neighbor)
                     ),
                     candidate_cost,
                     next_vias,
@@ -2020,6 +2170,7 @@ def _search_once(
                 ),
             )
             serial += 1
+    _record_search(stage, "no_path" if final is None else "found", expanded, len(targets))
     if final is None:
         return None
     edges: list[tuple[DetailedNode, DetailedNode, int]] = []
@@ -2690,6 +2841,17 @@ def _merge_collinear_tracks(
             if index not in {first_index, second_index}
         ]
         active.append(joined)
+
+
+def _queue_estimate(octile_cost: int, exposed_guide_nm: int, weight_percent: int) -> int:
+    """A* queue estimate: weighted octile bound plus the unweighted guide bound.
+
+    ``heuristic_weight_percent`` above 100 deliberately inflates the octile
+    term so later passes and repairs search greedily. Guide deviation costs 50
+    units per exposed nanometre; that admissible bound is never inflated, so
+    it prunes without making weighted searches accept worse paths.
+    """
+    return weight_percent * octile_cost // 100 + 50 * exposed_guide_nm
 
 
 def _heuristic(

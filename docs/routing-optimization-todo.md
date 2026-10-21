@@ -5,8 +5,9 @@ Require current profiles and exact-output/quality comparisons before optimizatio
 
 - [ ] Capture a matched uninstrumented comparison run.
 
-- [ ] Record expanded states, affected-net count, local/probe searches, full-pipeline
-  evaluations and peak memory; distinguish selected work from rejected trials.
+- [ ] Record affected-net count, full-pipeline evaluations and peak memory. Expanded
+  states, including rejected and probe searches, are now in `search_work`; per-net
+  `search_stats` covers only the selected attempt.
 
 - [ ] Retain representative dense-package, power-tree and repair fixtures so
   optimization work does not depend on a single large consumer board.
@@ -30,9 +31,16 @@ Require current profiles and exact-output/quality comparisons before optimizatio
 
 - [ ] Benchmark each change and run tangency, rotated-pad, drill and full-span-via tests.
 
-- [ ] Record guide expansions, budget exhaustion, no-path failures and target-set sizes.
+- [x] Record guide expansions, budget exhaustion, no-path failures and target-set sizes
+  (`DetailedSearchStats`; see [search policy](routing-search-policy.md#search-work-counters)).
 
-- [ ] Add cheap feasible-port/layer reachability screening before costly repairs.
+- [x] ~~Add cheap feasible-port/layer reachability screening before costly repairs.~~
+  Measured and rejected (2026-10-20, full-vertical, 321 failed A* calls): a
+  static-obstacle reachability screen (blocked nodes and keepouts, ignoring
+  other nets' copper) is the only exact cheap relaxation, and it proves 6 calls
+  unreachable, saving 916 of 1.41M states while costing 62 s of BFS. Other
+  nets' copper causes the no-path failures, and 56 of 76 budget-exhausted calls
+  are reachable with more states, so the lever is the search heuristic.
 
 - [ ] Evaluate tighter adaptive/coarse-to-fine corridors with wide/neutral fallback.
 

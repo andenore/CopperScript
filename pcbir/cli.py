@@ -470,7 +470,7 @@ def _parser() -> argparse.ArgumentParser:
         "issues", help="list a run's failures grouped by cause, each with an id, nets, layers and window")
     issues_parser.add_argument("target", type=Path, help="run directory or route/layout report")
     issues_parser.add_argument("--net", help="only issues touching this net")
-    issues_parser.add_argument("--stage", choices=("access", "critical", "native", "physical", "routing", "layout", "error"))
+    issues_parser.add_argument("--stage", choices=("global", "access", "critical", "native", "physical", "routing", "layout", "error"))
     issues_parser.add_argument("--code", help="only this issue code, e.g. UNCONNECTED_ITEMS")
     issues_parser.add_argument("--limit", type=int, default=15, help="maximum issues listed (0 = all)")
     issues_parser.add_argument("--cluster-mm", type=float, default=3.0, help="spatial grouping distance")
@@ -877,6 +877,10 @@ def _parser() -> argparse.ArgumentParser:
         help="retry maze search in gradually wider guide corridors",
     )
     board_route_parser.add_argument(
+        "--guide-distance-heuristic", action="store_true",
+        help="add the unavoidable guide-deviation cost to the maze search lower bound",
+    )
+    board_route_parser.add_argument(
         "--repair-budget-multiplier", type=int, default=1,
         help="multiply the search limit only when retrying nets left open after all passes",
     )
@@ -1039,7 +1043,7 @@ def _unified_options(args):
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["bench"]:
-        from .bench import main as bench_main
+        from .ladder import main as bench_main
         return bench_main(argv[1:])
     args = _parser().parse_args(argv)
     _apply_routing_profile(args, argv)
@@ -1539,6 +1543,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     enable_soft_ripup=args.soft_ripup,
                     constrained_pins_first=args.constrained_pins_first,
                     progressive_guides=args.progressive_guides,
+                    guide_distance_heuristic=args.guide_distance_heuristic,
                     repair_budget_multiplier=args.repair_budget_multiplier,
                     defer_zone_nets=bool(physical_board.zones) or args.defer_zone_nets,
                     maximum_ripup_blockers=args.maximum_ripup_blockers,

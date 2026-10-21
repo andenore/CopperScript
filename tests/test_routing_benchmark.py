@@ -341,3 +341,63 @@ def test_status_and_exit_code_must_agree_before_comparison(tmp_path):
     manifest["status"] = "passed"
     (tmp_path / "run/run.json").write_text(json.dumps(manifest), encoding="utf-8")
     assert not benchmark.summarize_run(tmp_path / "run")["completed"]
+
+
+def test_detailed_search_work_sums_executed_attempts_and_skips_reuse_hits(tmp_path):
+    save_run(tmp_path / "run")
+    stats = {"search_calls": 3, "expanded_states": 900, "failed_expanded_states": 700,
+             "budget_exhausted_calls": 1, "no_path_calls": 1, "corridor_successes": 0,
+             "widened_corridor_successes": 0, "projected_corridor_successes": 0,
+             "full_board_successes": 1, "maximum_target_count": 4}
+    finished = (
+        {"net": "A", "connected": True, "search_seconds": 1.5, "search_stats": stats},
+        {"net": "B", "connected": False, "search_seconds": 0.5,
+         "search_stats": dict(stats, search_calls=1, expanded_states=50, failed_expanded_states=50,
+                              budget_exhausted_calls=0, full_board_successes=0, maximum_target_count=9)},
+        {"net": "A", "connected": True, "search_reuse": "hit", "reused_search_seconds": 1.5},
+    )
+    events = []
+    for details in finished:
+        events.extend([
+            {"phase": "detailed_net", "event": "started", "elapsed_seconds": len(events),
+             "details": {"net": details["net"], "stage": "pass"}},
+            {"phase": "detailed_net", "event": "finished", "elapsed_seconds": len(events) + 1,
+             "details": details}])
+    (tmp_path / "run/routing.log").write_text(
+        "".join("PROGRESS " + json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+    work = benchmark.summarize_run(tmp_path / "run")["work"]["detailed_search"]
+
+    assert work["executed_attempts"] == 2
+    assert work["search_calls"] == 4 and work["expanded_states"] == 950
+    assert work["failed_expanded_states"] == 750 and work["budget_exhausted_calls"] == 1
+    assert work["maximum_target_count"] == 9 and work["search_seconds"] == 2.0
+
+
+def test_runs_without_search_telemetry_report_no_detailed_search_work(tmp_path):
+    save_run(tmp_path / "run")
+    events = [{"phase": "detailed_net", "event": "started", "elapsed_seconds": 0, "details": {"net": "A"}},
+              {"phase": "detailed_net", "event": "finished", "elapsed_seconds": 1,
+               "details": {"net": "A", "connected": True}}]
+    (tmp_path / "run/routing.log").write_text(
+        "".join("PROGRESS " + json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+    assert benchmark.summarize_run(tmp_path / "run")["work"]["detailed_search"] is None
+
+
+def test_comparison_table_shows_side_by_side_measurements_without_a_verdict(tmp_path):
+    save_run(tmp_path / "before")
+    save_run(tmp_path / "after", seconds=80)
+    table = benchmark.comparison_table(benchmark.summarize_run(tmp_path / "before"),
+                                       benchmark.summarize_run(tmp_path / "after"))
+    rows = {line.split(" | ")[0].lstrip("| "): line for line in table.splitlines() if line.startswith("| ")}
+    assert rows["Elapsed seconds"] == "| Elapsed seconds | 100 | 80 |"
+    assert rows["Vias"] == "| Vias | 10 | 10 |"
+    assert rows["Area states expanded"].endswith("| – | – |")
+    assert "not signoff" in table
+
+
+def test_table_command_prints_markdown(tmp_path):
+    save_run(tmp_path / "before")
+    save_run(tmp_path / "after")
+    assert benchmark.main(["table", str(tmp_path / "before"), str(tmp_path / "after")]) == 0

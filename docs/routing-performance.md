@@ -138,6 +138,50 @@ regression and native-verification results apply to the retained profiled
 revision; they do not verify those later export changes. See
 `post-profile-edits.json` for the recorded boundary.
 
+## Branch comparison runs
+
+`.github/workflows/routing-comparison.yml` runs on pushes to `claude/plan-*`
+branches (and on manual dispatch). It routes full-vertical twice on matched
+GitHub runners, unprofiled and with the release route job's settings: once at
+the commit named by `baseline_ref` in `.github/routing-comparison.json` and
+once at the pushed commit. Each run directory is kept as an artifact; the
+compare job writes `python -m pcbir.routing_benchmark table` to the run
+summary and keeps `summarize`/`compare` JSON. A plan step sets
+`baseline_ref` to the commit it builds on.
+
+Expanded states, outcomes and copper are deterministic and compare exactly.
+Wall times on shared runners vary between jobs, so a timing claim needs the
+same direction on repeated runs. Results are measurements, never signoff or
+an automatic acceptance gate. The 2026-10-12 profile above used KiCad 10.0.6
+on Windows; branch comparisons use KiCad 10.0.7 on Ubuntu and are not
+comparable with it.
+
+### Phase 1 baseline (2026-10-20)
+
+Run 39459011927 routed full-vertical at 15f94b4 (KiCad 10.0.7 pin plus the
+terminal-capacity fix) and at the search-telemetry commit on matched Ubuntu
+runners. Global, critical and detailed fingerprints were identical, so the
+telemetry does not change copper. Both runs: global success, package access
+ready, 0 failed signal nets, 2 zone nets awaiting fill, 366 tracks, 46 vias,
+1,572.318 mm of track, 0 KiCad unconnected items and 4 other independent
+findings (2 silkscreen clipped by mask, 1 silkscreen clearance, 1 dangling
+track).
+
+| Area search work (telemetry run) | Value |
+| --- | ---: |
+| Executed `detailed_net` attempts | 113 |
+| A* calls | 453 |
+| Calls that found a path | 132 |
+| Calls with no path | 245 |
+| Calls out of state budget | 76 |
+| States expanded | 1,412,850 |
+| States expanded by calls that found nothing | 943,086 (67 %) |
+| Search seconds | 135.7 |
+
+Elapsed times were 370.3 s and 267.9 s for identical copper, so runner
+variance alone exceeds 30 %. Phase 1 changes are judged on expanded states
+and on routed outcome; timing claims need repeated matched runs.
+
 ## Package-access via search
 
 The preferred plane-contact search stops considering farther via rings once
