@@ -26,6 +26,14 @@ Rules come from `.kicad_pro` net classes (KiCad 6 member lists, 7+
 assignments, 8+ patterns) or KiCad 5 `net_class` blocks, otherwise KiCad's
 defaults. Non-default classes become per-net width and clearance rules.
 
+KiCad's DRC enforces only the minimum track width (the project's
+`min_track_width`, or `trace_min` in a KiCad 5 board); a class width is the
+width new tracks start with, and real designs narrow at fine-pitch lands. A
+class wider than both that minimum and the default width therefore gets a
+neck-down region (`breakout_width` at the minimum, `breakout_length` twice
+the class width and at least 1 mm): the router keeps the class width where
+it fits and narrows only next to the net's lands.
+
 ## Approximations
 
 Board-only constructs the strict importer rejects are replaced by a superset

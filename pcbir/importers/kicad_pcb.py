@@ -91,6 +91,8 @@ _KICAD_DEFAULT_CLEARANCE_NM = nm_from_mm("0.2")
 _KICAD_DEFAULT_TRACK_NM = nm_from_mm("0.25")
 _KICAD_DEFAULT_VIA_NM = nm_from_mm("0.8")
 _KICAD_DEFAULT_VIA_DRILL_NM = nm_from_mm("0.4")
+# Neck-down region of a wide net class: twice its width from each land, at least 1 mm.
+_NECK_DOWN_MIN_LENGTH_NM = nm_from_mm("1")
 _SUPPORTED_ATTRIBUTES = {"smd", "through_hole", "exclude_from_bom", "exclude_from_pos_files"}
 _ROUTING_ITEMS = {"segment", "arc", "via"}
 _DROPPED_BOARD_ITEMS = {
@@ -1237,12 +1239,21 @@ def _design_rules(root: list[SExpr], project: dict | None, net_pads: dict[str, l
         default_via_size_nm=max(2, default.via_nm),
         default_via_drill_nm=max(1, via_drill),
     )
+    # KiCad's DRC enforces only the minimum track width; a net class width is
+    # the width new tracks start with. Designs neck down at fine-pitch lands,
+    # so wider classes may narrow to the board minimum next to their lands.
+    neck_width = max(track_floor, rules.minimum_track_width_nm) if track_floor > 0 else rules.minimum_track_width_nm
     net_rules = []
     for net in sorted(net_pads):
         cls = classes.get(assignments.get(net, "Default"))
         if cls is None or cls.name == "Default" or (cls.track_nm, cls.clearance_nm) == (default.track_nm, default.clearance_nm):
             continue
-        net_rules.append(NetRoutingRule(net, width_nm=cls.track_nm or None, clearance_nm=cls.clearance_nm or None))
+        rule = NetRoutingRule(net, width_nm=cls.track_nm or None, clearance_nm=cls.clearance_nm or None)
+        if cls.track_nm and cls.track_nm > max(neck_width, default.track_nm):
+            rule = replace(rule, breakout_width_nm=neck_width,
+                           breakout_length_nm=max(_NECK_DOWN_MIN_LENGTH_NM, 2 * cls.track_nm))
+            log.approx("wide net class narrows to the board minimum width next to its lands")
+        net_rules.append(rule)
     return rules, tuple(net_rules)
 
 
@@ -1290,7 +1301,11 @@ def _legacy_classes(root: list[SExpr]):
         for add in _children(node, "add_net"):
             if _atom(add, 1):
                 assignments[_atom(add, 1)] = name
-    return classes, assignments, {}
+    floors = {}
+    trace_min = _first(_first(root, "setup") or [], "trace_min")
+    if trace_min is not None and _nm(trace_min[1], "setup") > 0:
+        floors["min_track_width"] = _nm(trace_min[1], "setup")
+    return classes, assignments, floors
 
 
 def _wildcard(pattern: str) -> re.Pattern[str]:
