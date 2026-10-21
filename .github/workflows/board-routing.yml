@@ -42,19 +42,7 @@ jobs:
       - name: Fetch locked URL dependencies into managed cache and record provenance
         run: python scripts/ci_board_bundle.py prepare
       - name: Install KiCad 10 and bundled footprint libraries (pinned Ubuntu packages)
-        run: |
-          expected=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_ubuntu_version"])')
-          package_version=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_ubuntu_package_version"])')
-          sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends "kicad=$package_version" "kicad-footprints=$package_version" make
-          actual=$(kicad-cli version)
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::Expected KiCad $expected, installed $actual (Ubuntu package $package_version)"
-            exit 1
-          fi
-          echo 'KICAD_CLI=/usr/bin/kicad-cli' >> "$GITHUB_ENV"
-          echo 'KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints' >> "$GITHUB_ENV"
+        run: bash scripts/ci_install_kicad10.sh
       - name: Exercise Make targets for every example
         env:
           PYTHON: python
@@ -148,19 +136,7 @@ jobs:
       - name: Fetch locked URL dependencies into managed cache and record provenance
         run: python scripts/ci_board_bundle.py prepare
       - name: Install KiCad 10 and bundled footprint libraries (pinned Ubuntu packages)
-        run: |
-          expected=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_ubuntu_version"])')
-          package_version=$(python -c 'import json; print(json.load(open(".github/board-toolchain.json"))["kicad_ubuntu_package_version"])')
-          sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends "kicad=$package_version" "kicad-footprints=$package_version" make
-          actual=$(kicad-cli version)
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::Expected KiCad $expected, installed $actual (Ubuntu package $package_version)"
-            exit 1
-          fi
-          echo 'KICAD_CLI=/usr/bin/kicad-cli' >> "$GITHUB_ENV"
-          echo 'KICAD10_FOOTPRINT_DIR=/usr/share/kicad/footprints' >> "$GITHUB_ENV"
+        run: bash scripts/ci_install_kicad10.sh
       - name: Attempt complete routing (never a dry run)
         run: python scripts/ci_board_bundle.py route --minutes 270
       - name: Build source distributions and pinned library snapshot
