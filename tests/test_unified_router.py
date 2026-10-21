@@ -291,7 +291,7 @@ def test_a_length_limited_net_takes_the_short_path_through_congestion() -> None:
     board = _board({"L": ((3, 10), (17, 10))})
     rules = (NetRoutingRule("L", RouteKind.GENERAL, max_length_nm=nm_from_mm("15")),)
     def detoured(board):
-        router = _Router(board, UnifiedRouterOptions(), list(board.nets), None)
+        router = _Router(board, UnifiedRouterOptions(length_priority=True), list(board.nets), None)
         spec, g = router.specs[0], router.grid
         # A congested wall across the straight path on every layer, open only far away.
         x = (13_000_000 - g.x0) // g.pitch

@@ -90,7 +90,9 @@ class UnifiedRouterOptions:
     # the other nets then route around their committed copper.
     buses_first: bool = True
     # A net with a max_length that detours too far retakes its shortest path.
-    length_priority: bool = True
+    # Off by default: on CopperProbe it cost 2 points of completion (0.873 ->
+    # 0.852); the pushed-aside nets lose more than the length rule gains.
+    length_priority: bool = False
     full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
     # Extra cost (as history) on a ball grid's own surface layer: escapes are
     # short, so through-traffic between the balls should prefer inner layers.
