@@ -318,7 +318,7 @@ class DetailedRouterOptions:
     enclosure_repair_radius_nm: int = nm_from_mm("3")
     enclosure_repair_orders: int = 8
     enclosure_repair_open_nets: int = 4
-    enclosure_repair_searches: int = 96
+    enclosure_repair_searches: int = 64
     minimum_repair_pitch_nm: int = nm_from_mm("0.1")
     # Bound of the per-run memo of exactly repeated repair searches; 0 disables
     # it. A hit returns the identical earlier attempt, never different copper.
@@ -1455,7 +1455,10 @@ def _enclosure_repair(
     def ordinary(name: str) -> bool:
         return not (rules.get(name) and rules[name].kind is not RouteKind.GENERAL)
 
-    open_nets = [net for net in nets if not selected[net.name].result.connected and ordinary(net.name)]
+    # Smallest nets first: a signal net's window is cheap, and a large net
+    # (ground) may connect as its companion.
+    open_nets = sorted((net for net in nets if not selected[net.name].result.connected and ordinary(net.name)),
+                       key=lambda net: (len(net.pads), net.name))
     for net in open_nets[:options.enclosure_repair_open_nets]:
         if selected[net.name].result.connected or remaining <= 0:
             continue  # an earlier window connected it too, or the search allowance is spent
@@ -1496,10 +1499,18 @@ def _enclosure_repair(
         victims = (crossing + nearby)[:options.enclosure_repair_nets]
         if not victims:
             continue
+        # Other open nets with a pad in the window are routed in it too: they
+        # compete for the same escapes, so leaving them for a later window
+        # repeats the same rip-up. They are optional: one that fails is left
+        # open and does not reject the window.
+        companions = tuple(sorted(
+            other.name for other in open_nets
+            if other.name != net.name and not selected[other.name].result.connected
+            and any(_in_box(_pad_position(board, pad), window) for pad in other.pads)))
         # Sequential rip-up with promotion: a net that fails in one order goes
         # first in the next, so the nets that are hardest to place claim their
         # escape before the easier ones. Orders already tried are skipped.
-        order = (net.name, *victims)
+        order = (net.name, *victims, *companions)
         tried: list[tuple[str, ...]] = []
         accepted = None
         searches = 1
@@ -1525,6 +1536,8 @@ def _enclosure_repair(
                     trial_clearance, options, fanout_accesses=fanout_accesses,
                     on_progress=on_progress, stage="enclosure_window", repair_owner=net.name, reuse=reuse)
                 if not attempt.result.connected:
+                    if name in companions:
+                        continue
                     failed = name
                     break
                 rerouted[name] = attempt
