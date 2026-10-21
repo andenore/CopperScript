@@ -322,3 +322,18 @@ def test_a_length_limited_net_takes_the_short_path_through_congestion() -> None:
     assert connected and free_length > nm_from_mm("15")       # without the rule: a detour
     connected, limited_length = detoured(replace(board, net_routing_rules=rules))
     assert connected and limited_length <= nm_from_mm("15")   # with it: straight through
+
+
+def test_replay_cli_routes_saved_inputs_with_overrides(tmp_path, capsys) -> None:
+    import json
+    from pcbir.cli import main
+    board = _board({"A": ((3, 10), (17, 10))})
+    state = tmp_path / "inputs.json"
+    global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    route_unified(board, global_route, UnifiedRouterOptions(save_inputs_path=str(state)))
+    assert main(["replay-unified", str(state), "--set", "maximum_iterations=3",
+                 "--report", str(tmp_path / "replay.json")]) == 0
+    document = json.loads((tmp_path / "replay.json").read_text(encoding="utf-8"))
+    assert document["overrides"] == {"maximum_iterations": 3}
+    assert document["signal"]["opens"] == 0 and document["unrouted"] == []
+    assert main(["replay-unified", str(state), "--set", "no_such_option=1"]) == 2
