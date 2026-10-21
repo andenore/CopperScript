@@ -119,3 +119,22 @@ quality never improved and twice became worse, so the option stays off. The
 search budget also filters quality: a net whose detour exceeds it is retried
 by rip-up and repair, which can find better copper than a long whole-board
 detour accepted in a normal pass. A faster search accepts more such detours.
+
+## Global tiles at the board edge
+
+The global router places tile centres half a tile (2.5 mm) in from the low
+edge of each axis and steps by whole tiles. A board whose size is not a
+multiple of the tile therefore ends with a partial tile, and its last
+centre can sit up to a full tile from the far edge. On the 11.9 mm-tall
+MySRaspiGW boards of the D3 benchmark, a module pad in that 4.4 mm strip
+was beyond pin-access reach of every node, so its net had no global route.
+When a pin has no global access, the graph is rebuilt once with edge
+strips: where the last centre is more than three quarters of a tile from
+the edge, one more row (or column) of centres sits in the middle of the
+uncovered strip. The strip graph is kept only if fewer pins lack access.
+Edges along that row cross only the strip, so their capacity counts the
+strip's width rather than a whole tile.
+
+Boards whose pins all have access keep their grid, and so their routes.
+Adding the strip row everywhere changed the grid of 45 of the 99 D3-A
+boards, and it made one of them (0054) lose a clean route.
