@@ -101,7 +101,7 @@ def test_physical_drc_names_unmet_pad_distance():
         (PlacementTarget('U1', '1'), PlacementTarget('J1', '1')),
         distance_nm=nm_from_mm(2)),))
     finding = next(f for f in run_physical_drc(board).findings if f.code == 'DRC-PLACEMENT')
-    assert 'U1 to J1: maximum distance 2000000 nm, actual' in finding.message
+    assert 'U1 to J1: maximum distance 2 mm, actual' in finding.message
 
 
 def test_fixed_pad_distance_fails_before_soft_placement():
