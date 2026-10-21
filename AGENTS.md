@@ -8,6 +8,10 @@ that plan conflicts with the rules below, the plan wins:
 - Don't add gate-driven recovery modules.
 - Keep CopperAssetTracker, CopperLedRing and the examples working.
 
+Escape-planning work (joint escape side, layer and order per package) follows
+[the escape planning plan](docs/escape-planning-plan.md): one PR per step, with
+the verification and status updates it describes.
+
 Start with `copper agent-guide` in the active CLI environment. Request individual
 topics and selected library contracts as needed. For contributor work, use the
 [task index](docs/README.md) to choose the relevant reference; consult
