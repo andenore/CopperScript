@@ -923,16 +923,29 @@ class PhysicalPowerDomain:
     net: str
     members: tuple[PadReference, ...]
     sources: tuple[PadReference, ...] = ()
+    source_ports: tuple[str, ...] = ()  # Declared hierarchical power-output boundaries.
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "members", tuple(self.members))
         object.__setattr__(self, "sources", tuple(self.sources))
+        object.__setattr__(self, "source_ports", tuple(self.source_ports))
         if not self.net or not self.members:
             raise ValueError("physical power domain requires a net and members")
         if len(set(self.members)) != len(self.members) or len(set(self.sources)) != len(self.sources):
             raise ValueError("physical power domain terminals must be unique")
         if not set(self.sources) <= set(self.members):
             raise ValueError("physical power domain sources must be members")
+
+
+@dataclass(frozen=True, slots=True)
+class PowerFeedBoundary:
+    """Directed, source-backed passive DC boundary; never an ideal source."""
+
+    net: str
+    terminal: PadReference
+    upstream_net: str
+    upstream_terminal: PadReference
+    provenance: str = "dc_power_path"
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -1122,8 +1135,8 @@ class RigidPlacementCluster:
         object.__setattr__(self, "keepouts", tuple(self.keepouts))
         object.__setattr__(self, "edge_openings", tuple(self.edge_openings))
         references = [member.reference for member in self.members]
-        if not self.name or not self.source or len(references) < 2:
-            raise ValueError("rigid cluster requires a name, evidence source and two members")
+        if not self.name or not self.source or not references:
+            raise ValueError("rigid cluster requires a name, evidence source and at least one member")
         if len(set(references)) != len(references) or self.anchor.reference not in references:
             raise ValueError("rigid cluster requires unique members including its anchor")
         rotations = tuple(Decimal(str(value)) for value in self.allowed_rotations)
@@ -1627,6 +1640,7 @@ class PhysicalBoard:
     component_hole_clearances: tuple[ComponentHoleClearance, ...] = ()
     decoupling_links: tuple[DecouplingLink, ...] = ()
     silkscreen: tuple["SilkscreenArtwork", ...] = ()
+    power_feeds: tuple[PowerFeedBoundary, ...] = ()
 
     def __post_init__(self) -> None:
         from .silkscreen import validate_artwork, copper_artwork_keepouts
@@ -1649,6 +1663,14 @@ class PhysicalBoard:
         object.__setattr__(self, "relative_rules", tuple(self.relative_rules))
         object.__setattr__(self, "placement_groups", tuple(self.placement_groups))
         object.__setattr__(self, "power_domains", tuple(self.power_domains))
+        object.__setattr__(self, "power_feeds", tuple(self.power_feeds))
+        net_members = {n.name: set(n.pads) for n in self.nets}
+        for feed in self.power_feeds:
+            if (feed.net == feed.upstream_net or feed.provenance != "dc_power_path"
+                    or feed.terminal not in net_members.get(feed.net, ())
+                    or feed.upstream_terminal not in net_members.get(feed.upstream_net, ())
+                    or feed.terminal.component != feed.upstream_terminal.component):
+                raise ValueError("invalid passive power feed boundary")
         object.__setattr__(self, "net_routing_rules", tuple(self.net_routing_rules))
         object.__setattr__(self, "zones", tuple(self.zones))
         object.__setattr__(self, "polygons", tuple(self.polygons))

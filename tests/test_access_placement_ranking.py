@@ -104,9 +104,11 @@ def test_standard_pipeline_uses_ranked_contact_placement_before_area():
     # movable unit. Its nearest legal site is the same 7.5 mm / 7 mm trap.
     board = replace(board, placements=(replace(board.placements[0], position=Point.mm("8.5", 6)),
                                       *board.placements[1:]))
+    # The trap relies on the source-position jitter, so satellite seeding
+    # (which would start the unit at its connected pads) is off here.
     placement = replace(placement, candidate_count=1, analytical_iterations=0,
         refinement_passes=0, escape_spacing_passes=0,
-        grid_step_nm=nm_from_mm("0.5"), legalization_candidates=1)
+        grid_step_nm=nm_from_mm("0.5"), legalization_candidates=1, satellite_seeding=False)
     result = run_routing_pipeline(board, placement_options=placement,
         global_options=global_options,
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1,

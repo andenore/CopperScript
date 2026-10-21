@@ -12,9 +12,30 @@ from .quantities import Length
 
 
 def distribution_zone_nets(board: PhysicalBoard) -> set[str]:
-    """Local macro pours do not replace routing to a net's external terminals."""
+    """Declared distribution intent, also used by soft placement heuristics.
+
+    This inventory does not authorize skipping explicit feeder routing.
+    """
     local_ids = {zone.id for macro in board.hard_macros for zone in macro.zones}
     return {zone.net for zone in board.zones if zone.id not in local_ids}
+
+
+def deferred_zone_nets(board: PhysicalBoard) -> set[str]:
+    """Defer only nets whose terminals share one prospective distribution area.
+
+    This is routing intent, never filled connectivity. Regional islands must
+    not suppress external source feeders or bridges between separate islands.
+    """
+    from .placement import transformed_pad_position
+    local_ids = {zone.id for macro in board.hard_macros for zone in macro.zones}
+    poses = {p.reference: p for p in board.placements}
+    members = {n.name: tuple(transformed_pad_position(board, poses[p.component], p.pad)
+                            for p in n.pads) for n in board.nets}
+    return {zone.net for zone in board.zones if zone.id not in local_ids
+            and members.get(zone.net)
+            and all(point_in_polygon(p, zone.outline.outer.vertices)
+                    and not any(point_in_polygon(p, hole.vertices) for hole in zone.outline.holes)
+                    for p in members[zone.net])}
 
 
 def _length(parameters, name, default=None):

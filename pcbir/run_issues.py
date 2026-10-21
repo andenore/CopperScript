@@ -348,6 +348,36 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
         issues.append(RunIssue(f"R{index}", "routing", "NET-UNROUTED", f"{len(nets)} net(s): {reason}",
                                len(nets), nets=nets, points=_net_points(scene, nets) if len(nets) <= 6 else [],
                                caused_by=caused))
+    if not native.get("native_findings"):
+        # Without a native fill check, the raster plane estimate is the only plane evidence.
+        estimated = _section(_section(report, "summary"), "plane").get("estimated_open_pads")
+        for index, (net, pads) in enumerate(sorted((estimated or {}).items()), 1):
+            pads = [str(p) for p in _items(pads)]
+            issues.append(RunIssue(f"E{index}", "plane", "PLANE-ESTIMATED-OPEN",
+                                   f"{len(pads)} {net} pad(s) cut off from the rest of the net "
+                                   f"(estimate, zones unfilled): " + ", ".join(pads[:6])
+                                   + (f" +{len(pads) - 6}" if len(pads) > 6 else ""),
+                                   len(pads), nets=[net], objects=pads,
+                                   points=[p for pad in pads for p in _pad_points(scene, pad)]))
+    issues.extend(_placement_issues(report, scene))
+    return issues
+
+
+def _placement_issues(report: dict, scene: Scene | None) -> list[RunIssue]:
+    """Placement intent warnings (fixed parts far from their partners, parts in pair corridors).
+
+    Not failures: they point at authored poses that likely caused routing issues above.
+    """
+    issues = []
+    for finding in _items(report.get("placement_findings")):
+        if not isinstance(finding, dict) or finding.get("status") in {"pass", "passed", "ok"}:
+            continue
+        subject = str(finding.get("subject") or "")
+        points = ([p.center for p in scene.pads if p.ref == subject]
+                  if scene is not None and subject else [])
+        issues.append(RunIssue(f"W{len(issues) + 1}", "placement", str(finding.get("code", "PLACEMENT")),
+                               f"{subject + ': ' if subject else ''}{finding.get('message', '')}",
+                               objects=[subject] if subject else [], points=points))
     return issues
 
 

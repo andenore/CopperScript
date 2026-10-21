@@ -42,6 +42,32 @@ def test_cam_qualification_requires_pinned_tools_and_agreement(tmp_path: Path) -
     assert failed.status is CamGateStatus.FAIL
 
 
+def test_cam_qualification_names_mismatched_fields(tmp_path: Path) -> None:
+    (tmp_path / "top.gbr").write_text("gerber", encoding="ascii")
+    one, two = _tool("parser-a"), _tool("parser-b")
+    baseline = NormalizedCamLayer("Copper,L1,Top", "Positive", "mm", (0, 0, 1, 1), "same")
+    candidate = NormalizedCamLayer("Copper,L1,Top", "Positive", "mm", (0, 0, 2, 1), "different")
+
+    class FixedAdapter:
+        def __init__(self, identity, layer):
+            self.identity = identity
+            self.layer = layer
+
+        def parse_gerber(self, path: Path) -> NormalizedCamLayer:
+            return self.layer
+
+    profile = CamQualificationProfile("field-diagnostics", "2026.05", "2021.11", (one, two))
+    result = qualify_cam_artifacts(
+        tmp_path, profile, (FixedAdapter(one, baseline), FixedAdapter(two, candidate))
+    )
+
+    assert result.status is CamGateStatus.FAIL
+    assert result.findings == (
+        "independent parser disagreement: top.gbr: bounds_nm: parser-a=(0, 0, 1, 1), "
+        "parser-b=(0, 0, 2, 1); render_digest: parser-a=same, parser-b=different",
+    )
+
+
 def test_unsafe_artifact_fails_even_when_second_tool_is_missing(tmp_path: Path) -> None:
     (tmp_path / "top.gbr").write_bytes(b"oversized")
     one, two = _tool("parser-a"), _tool("parser-b")
@@ -81,6 +107,28 @@ def test_pinned_pygerber_adapter_and_strict_xnc_parser(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="unsupported XNC body command"):
         parse_xnc(drill)
+
+
+def test_pygerber_region_bounds_are_contour_bounds_not_aperture_strokes(tmp_path: Path) -> None:
+    fixture = ROOT / "tests" / "fixtures" / "cam" / "positive_region.gbr"
+    layer = PyGerberAdapter().parse_gerber(fixture)
+    assert layer.bounds_nm == (0, 0, 10_000_000, 10_000_000)
+
+    # The semicircle's upper extremum lies between its endpoints. The large
+    # aperture must not inflate the region, but the curved contour must count.
+    arc_region = tmp_path / "arc-region.gbr"
+    arc_region.write_text(
+        "G04 region semicircle with deliberately wide aperture*\n"
+        "%FSLAX46Y46*%\n%MOMM*%\n"
+        "%TF.FileFunction,Copper,L1,Top*%\n%TF.FilePolarity,Positive*%\n"
+        "%ADD10C,2.0*%\nD10*\nG36*\n"
+        "X0010000000Y0000000000D02*\nG75*\n"
+        "G03X-0010000000Y0000000000I-0010000000J0000000000D01*\n"
+        "G01*\nX0010000000Y0000000000D01*\nG37*\nM02*\n",
+        encoding="ascii",
+    )
+    arc_layer = PyGerberAdapter().parse_gerber(arc_region)
+    assert arc_layer.bounds_nm == (-10_000_000, 0, 10_000_000, 10_000_000)
 
 
 def test_committed_cam_corpus_qualifies_pinned_pygerber() -> None:

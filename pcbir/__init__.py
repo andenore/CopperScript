@@ -35,6 +35,8 @@ from .package_access import (PackageAccessOptions, PackageAccessResult, PackageA
 from .boundary_access import (BoundaryAccessOptions, BoundaryAccessResult, BoundaryPort,
                               PackageCollar, analyze_boundary_access, reserve_boundary_access)
 from .pin_escape import RoutingAccess
+from .support_patterns import (SupportPatternOptions, SupportPattern, SupportPlacementResult,
+                               support_pattern_candidates, improve_support_placement)
 from .filled_feedback import (FilledCopperFeedbackOptions, FilledCopperFeedbackResult,
                               FilledCopperTrial, improve_filled_copper)
 from .detailed import (
@@ -497,6 +499,11 @@ __all__ = [
     "PlacementMetrics",
     "PlacementPlan",
     "PlacementPlannerOptions",
+    "SupportPatternOptions",
+    "SupportPattern",
+    "SupportPlacementResult",
+    "support_pattern_candidates",
+    "improve_support_placement",
     "PlacementPlanningError",
     "PlacementRoutingFeedbackOptions",
     "PlacementRoutingResult",

@@ -27,14 +27,16 @@ def dedicated_plane_layers(board: PhysicalBoard) -> dict[CopperLayer, str]:
     result: dict[CopperLayer, str] = {}
     for layer in board.stackup.copper_layers[1:-1]:
         zones = tuple(zone for zone in board.zones if layer in zone.layers)
-        if len({zone.net for zone in zones}) != 1:
+        wide = [zone for zone in zones if not zone.outline.holes
+                and 5 * _area_twice(zone.outline.outer.vertices) >= 4 * board_area]
+        if len({zone.net for zone in wide}) != 1:
             continue
-        if any(
-            not zone.outline.holes
-            and 5 * _area_twice(zone.outline.outer.vertices) >= 4 * board_area
-            for zone in zones
-        ):
-            result[layer] = zones[0].net
+        net = wide[0].net
+        base = min(zone.priority for zone in wide)
+        # A split plane stays a plane: other nets may only carve islands out
+        # of it with a higher fill priority (see power_islands.py).
+        if all(zone.net == net or zone.priority > base for zone in zones):
+            result[layer] = net
     return result
 
 

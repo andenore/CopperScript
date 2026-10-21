@@ -91,12 +91,24 @@ negative, metamorphic and resource-limit corpora.
 
 The current implementation hashes a small committed positive/negative corpus
 and runs it for every required adapter immediately before a CAM-required
-release. PyGerber is exercised locally; libgerbv is not installed or qualified
-on the Windows host. Its subprocess adapter re-exports RS-274X, then uses the
+release. PyGerber is exercised locally. A task-local official libgerbv v2.11.0
+Windows build was tested on 12 October 2026, but is not qualified. Its
+subprocess adapter re-exports RS-274X, then uses the
 same PyGerber rendering normalizer as the original file so byte-identical PNG
 encodings from different renderers are not mistaken for geometry agreement.
 The independent parser path and real production export remain unqualified
 until a pinned libgerbv build passes a broader official and adversarial corpus.
+The v2.11.0 experiment passed six of the eight committed cases, accepted
+`negative_missing_end`, and failed to re-export `positive_polarity`. PyGerber
+2.4.3 passed all eight. Retain both failed matrix cells: removing them or
+calling re-export normalization two independent connectivity extractors would
+misstate qualification. Investigate strict envelope validation and clear-
+polarity support (or a different independent geometry adapter), then rerun
+the full pinned corpus and actual exports. The official archive SHA256 was
+`19a5bf4a681f7df89d9bc6ea6b3447d8efe0f08c5eb1c4ddea5d8c27b69584f7`;
+the executable reported v2.11.0 and hashed to
+`e0887849731457ff651e173caef0ee8aca303336a22f0103ff2092c83b030936`.
+Source: [official release](https://github.com/gerbv/gerbv/releases/tag/v2.11.0).
 KiCad 10's own exported files were used to validate the coordinate boundary:
 Excellon and IPC-D-356 use Cartesian-up Y, while the PCB/physical IR is
 Y-down. The release gate now reconciles drill hits, pad positions/nets, and

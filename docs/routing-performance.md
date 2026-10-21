@@ -531,6 +531,12 @@ by new launch length and deterministic coordinates. Existing contained
 source tracks add no new length to that score. This is a local ranking
 heuristic, not a shortest-path or electrical loop-quality proof.
 
+The ranked list is interleaved with the original outward candidate inventory,
+deduplicating exact choices before spending a launch slot. Compact choices keep
+the first opportunity, while outward alternatives remain represented when
+shorter launches cannot reach the destination surface. Neither ordering receives
+an extra launch allowance.
+
 Exact verified existing launches still consume their original slots first.
 Each radial/two-leg sampling pass retains the site cap, and launch,
 complete-proposal, shared local-path and inner-bridge allowances are unchanged.

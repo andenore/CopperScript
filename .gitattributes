@@ -5,5 +5,10 @@ copper.mod text eol=lf
 *.dxf -text
 # Hard-macro/reference JSON needs stable inventory and provenance bytes.
 *.json text eol=lf
+# The analog model registry pins the authored wrapper's exact bytes.
+examples/simulation/analog_frontend/models/opa2197.lib text eol=lf
 # Showcase illustration hashes describe exact SVG bytes on every platform.
 site/assets/*.svg text eol=lf
+# Prebuilt native router kernels (tools/build_kernel.py).
+pcbir/native/*.so -text
+pcbir/native/*.dll -text

@@ -618,8 +618,8 @@ def _route_detailed(
     fanout_accesses = fanout_accesses or {}
     rules = {item.net: item for item in board.net_routing_rules}
     guides = {item.net: item for item in global_route.routes}
-    from .zone_geometry import distribution_zone_nets
-    zone_nets = distribution_zone_nets(board) if options.defer_zone_nets else set()
+    from .zone_geometry import deferred_zone_nets
+    zone_nets = deferred_zone_nets(board) if options.defer_zone_nets else set()
     if only_nets is not None:
         unknown = only_nets - {net.name for net in board.nets}
         if unknown:

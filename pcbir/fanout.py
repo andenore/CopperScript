@@ -15,7 +15,9 @@ if TYPE_CHECKING:
     from .fanout_bypass_completion import LateBypassCompletionReport
     from .released_exit_retry import ReleasedExitRetryReport
 
-from .drc import placed_pad_shape, run_physical_drc
+from .drc import placed_pad_shape, run_physical_drc, physical_board_digest
+from .access_diagnostics import AccessDiagnostics, AccessRecorder
+from .access_sites import circular_array_depth, circular_cell_sites, obstacle_boundary_sites
 from .geometry import RoundedConvexShape, shapes_clear, point_in_polygon, point_segment_distance_at_least
 from .physical import (
     BoardSide, CopperLayer, DecouplingLink, FootprintPad, PadKind, PadReference, PhysicalBoard,
@@ -48,8 +50,25 @@ class FanoutOptions:
     maze_escapes: bool = False
     maze_state_budget: int = 12_000
     surface_fallback: bool = True
+    # Runtime planning policy for early ordinary reservations. Prefer a checked
+    # surface channel before adding a transition; keep via alternatives for
+    # joint conflicts. Source layer/width/length rules remain authoritative.
+    prefer_surface_escapes: bool = False
+    surface_preference_depth: int | None = None
+    # Runtime policy: keep these source associations pending for the native
+    # power-preparation ledger. This alone never certifies a bypass connection.
+    plane_return_nets: frozenset[str] = frozenset()
+    diagnostic_samples_per_pad: int = 24
+    # Experimental extra site family. Zero retains established generation work.
+    maximum_geometry_candidates: int = 0
 
     def __post_init__(self) -> None:
+        if type(self.prefer_surface_escapes) is not bool or self.prefer_surface_escapes and not self.surface_fallback:
+            raise ValueError('surface preference requires enabled surface fallback')
+        if self.surface_preference_depth is not None and (
+                type(self.surface_preference_depth) is not int or self.surface_preference_depth < 0):
+            raise ValueError('surface preference depth must be a nonnegative integer or None')
+        object.__setattr__(self, 'plane_return_nets', frozenset(self.plane_return_nets))
         if min(self.minimum_component_pads, self.maximum_neighbor_distance_nm,
                self.step_nm, self.maximum_radius_nm, self.maximum_two_leg_candidates,
                self.refinement_step_nm, self.maximum_refined_two_leg_candidates,
@@ -57,6 +76,10 @@ class FanoutOptions:
             raise ValueError("fanout options must be positive")
         if self.refinement_step_nm > self.step_nm:
             raise ValueError("fanout refinement step must not exceed coarse step")
+        if type(self.diagnostic_samples_per_pad) is not int or self.diagnostic_samples_per_pad < 0:
+            raise ValueError("fanout diagnostic samples must be a nonnegative integer")
+        if type(self.maximum_geometry_candidates) is not int or self.maximum_geometry_candidates < 0:
+            raise ValueError("fanout geometry candidates must be a nonnegative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +92,7 @@ class FanoutPinAnalysis:
     diagnostic: str = ""
     two_leg_candidate_count: int = 0
     refined_candidate_count: int = 0
+    access_diagnostics: AccessDiagnostics | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +212,7 @@ def route_fanout(
     pin_by_ref = {}
     for item in pads:
         pin_by_ref.setdefault(item[1], []).append(item)
+    recorders = {reference: AccessRecorder(options.diagnostic_samples_per_pad) for reference in pin_by_ref}
     outline = _OutlineSites(board.outline.vertices)
     # A pin whose net may not change layer gets no dogbone: it escapes on its
     # own layer beyond the package collar, as a boundary witness does (R13).
@@ -200,6 +225,7 @@ def route_fanout(
         # Collar and port bounds are the boundary stage defaults.
         from .boundary_access import BoundaryAccessOptions, package_collar, surface_escapes
         settings = BoundaryAccessOptions()
+        recorders[reference].unobserved_phases.add("surface_refined" if refined else "surface")
         choices = []
         for _, _, position, placement, _ in pin_by_ref[reference]:
             if placement.reference not in collars:
@@ -209,13 +235,15 @@ def route_fanout(
                 board, index, net_by_pad[reference], position, surface[reference],
                 collars[placement.reference], settings, refined=refined))
         return tuple(dict.fromkeys(choices))
-    def choices_for(reference, index, candidate_options, *, elbows=False, multiple_orders=False):
+    def choices_for(reference, index, candidate_options, *, elbows=False, multiple_orders=False,
+                    phase="coarse"):
         choices = []
         for _, _, position, placement, pad in pin_by_ref[reference]:
             sites = (_two_leg_candidates(position, placement.position, candidate_options) if elbows else
                      _package_candidates(board, placement, pad, candidate_options))
             choices.extend(_legal_choices(board, index, net_by_pad[reference], position,
-                placement, pad, sites, multiple_orders=multiple_orders, outline=outline))
+                placement, pad, sites, multiple_orders=multiple_orders, outline=outline,
+                recorder=recorders[reference], phase=phase))
         return tuple(dict.fromkeys(choices))
     refinement_cache = {}
     def refine(reference):
@@ -226,11 +254,35 @@ def route_fanout(
         fine = replace(options, step_nm=options.refinement_step_nm,
                        maximum_two_leg_candidates=options.maximum_refined_two_leg_candidates)
         index = RoutingClearanceIndex(board)
-        radial = choices_for(reference, index, fine)
-        elbows = (choices_for(reference, index, fine, elbows=True, multiple_orders=True)
+        radial = choices_for(reference, index, fine, phase="refined")
+        elbows = (choices_for(reference, index, fine, elbows=True, multiple_orders=True, phase="refined_two_leg")
                   if options.two_leg_escapes else ())
         refinement_cache[reference] = tuple(dict.fromkeys((*radial, *elbows)))
         return refinement_cache[reference]
+    geometry_cache = {}
+    def geometry_choices(reference):
+        if reference in geometry_cache:
+            return geometry_cache[reference]
+        choices = []
+        net = net_by_pad[reference]
+        # Greedy reservations mutate ``clearance`` later. Domain regeneration
+        # must always use the immutable input, never freeze selected exits.
+        index = RoutingClearanceIndex(board)
+        for _, _, start, pose, pad in pin_by_ref[reference]:
+            side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
+            allowed = routing_layers(board, net, rules.get(net))
+            other = next((layer for layer in allowed if layer is not side), None)
+            span = physical_via_span(board, side, other) if other is not None else None
+            if side not in allowed or span is None:
+                continue
+            sites = obstacle_boundary_sites(index, net, start,
+                board.rules.default_via_size_nm, board.rules.default_via_drill_nm, span[:2],
+                options.maximum_radius_nm, options.maximum_geometry_candidates,
+                seeds=_interstitial_sites(board, pose, pad, options))
+            choices.extend(_legal_choices(board, index, net, start, pose, pad, sites,
+                multiple_orders=True, outline=outline, recorder=recorders[reference], phase="geometry"))
+        geometry_cache[reference] = tuple(dict.fromkeys(choices))
+        return geometry_cache[reference]
     for reference in pin_by_ref:
         if reference in surface:
             choices = surface_choices(reference, clearance)
@@ -239,13 +291,33 @@ def route_fanout(
                 refined_counts[reference] = len(choices)
             domains[reference] = choices
             continue
+        prefer_surface = options.prefer_surface_escapes
+        if prefer_surface and options.surface_preference_depth is not None:
+            pose, pad = pin_by_ref[reference][0][3:5]
+            depth = circular_array_depth(board, pose, pad, options.maximum_neighbor_distance_nm)
+            prefer_surface = depth is not None and depth <= options.surface_preference_depth
+        if prefer_surface:
+            pose = pin_by_ref[reference][0][3]
+            side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
+            if side in routing_layers(board, net_by_pad[reference], rules.get(net_by_pad[reference])):
+                surface[reference] = side
+                choices = surface_choices(reference, clearance)
+                if not choices:
+                    choices = surface_choices(reference, clearance, refined=True)
+                    refined_counts[reference] = len(choices)
+                if choices:
+                    domains[reference] = choices
+                    continue
         choices = choices_for(reference, clearance, options)
         if options.two_leg_escapes and not choices:
-            choices = choices_for(reference, clearance, options, elbows=True)
+            choices = choices_for(reference, clearance, options, elbows=True, phase="two_leg")
         if not choices:
             choices = refine(reference)
             refined_counts[reference] = len(choices)
+        if not choices and options.maximum_geometry_candidates:
+            choices = geometry_choices(reference)
         if not choices and options.maze_escapes:
+            recorders[reference].unobserved_phases.add("maze")
             choices = _maze_choices(board, clearance, net_by_pad[reference],
                                     pin_by_ref[reference], options)
         if not choices and options.surface_fallback:
@@ -282,12 +354,15 @@ def route_fanout(
                 refined_counts[reference] = len(fine)
                 return tuple(dict.fromkeys((*surface_choices(reference, index), *fine)))
             coarse = (choices_for(reference, RoutingClearanceIndex(board), options,
-                                  elbows=True, multiple_orders=True) if options.two_leg_escapes else ())
+                                  elbows=True, multiple_orders=True, phase="two_leg") if options.two_leg_escapes else ())
             fine = refine(reference)
             refined_counts[reference] = len(fine)
+            if options.maze_escapes:
+                recorders[reference].unobserved_phases.add("maze")
             maze = (_maze_choices(board, RoutingClearanceIndex(board), net_by_pad[reference],
                                  pin_by_ref[reference], options) if options.maze_escapes else ())
-            return tuple(dict.fromkeys((*coarse, *fine, *maze)))
+            geometry = geometry_choices(reference) if options.maximum_geometry_candidates else ()
+            return tuple(dict.fromkeys((*coarse, *fine, *maze, *geometry)))
         def expand_surface(reference):
             alternative_surface = ()
             if options.surface_fallback:
@@ -339,12 +414,29 @@ def route_fanout(
         routed, tracks, vias, accesses = materialize(selected)
         after = run_physical_drc(routed)
     pending = tuple(reference for reference in ordered_refs if reference not in accesses)
+    analysis_digest = physical_board_digest(board)
+    proposal_digest = physical_board_digest(routed)
+    pending_index = RoutingClearanceIndex(routed) if pending else None
+    for reference in pending:
+        recorder = recorders[reference]
+        for path, via in domains[reference][:options.diagnostic_samples_per_pad]:
+            def blockers(path=path, via=via):
+                records = [item for track in path for item in pending_index.track_blocker_records(track)]
+                if via is not None:
+                    records.extend(pending_index.via_blocker_records(via))
+                return tuple(dict.fromkeys(records))
+            recorder.record(path[-1].end, "assignment", "selected_escape_conflict",
+                            tracks=path, via=via, blockers=blockers, context_digest=proposal_digest)
+    trial_diagnostics = {trial.pad: trial.diagnostic for trial in assignment.trials} if assignment else {}
     analysis = tuple(FanoutPinAnalysis(reference, len(domains[reference]),
         selected.get(reference) if reference in accesses else None,
         ("no legal candidate against immutable input" if not domains[reference]
          else "all initial candidates blocked by selected escapes") if reference not in accesses else "",
         sum(len(path) == 2 for path, _ in domains[reference]),
-        refined_counts.get(reference, 0)) for reference in ordered_refs)
+        refined_counts.get(reference, 0), recorders[reference].finish(analysis_digest,
+            "candidate_selected" if reference in accesses else
+            "sampled_sites_exhausted" if not domains[reference] else
+            trial_diagnostics.get(reference, "selected_escape_conflict"))) for reference in ordered_refs)
     if failed_gate(after.findings, routed):
         return FanoutResult(board, MappingProxyType(dict(bypass.accesses or {})),
                             tuple(item[1] for item in pads), len(bypass.created_tracks), len(bypass.created_vias),
@@ -435,22 +527,31 @@ def _maze_choices(board, clearance, net, pins, options) -> tuple[EscapeCandidate
 def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
                    position: Point, placement: Placement, pad: FootprintPad,
                    endpoints, *, multiple_orders: bool = False,
-                   outline: "_OutlineSites | None" = None) -> tuple[EscapeCandidate, ...]:
+                   outline: "_OutlineSites | None" = None,
+                   recorder: AccessRecorder | None = None, phase: str = "coarse") -> tuple[EscapeCandidate, ...]:
     outline = outline or _OutlineSites(board.outline.vertices)
     rule = next((r for r in board.net_routing_rules if r.net == net), None)
     side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
     allowed = routing_layers(board, net, rule)
     if side not in allowed or len(allowed) < 2:
+        if recorder is not None:
+            recorder.record(position, phase, "layer_access_unavailable")
         return ()
     span = physical_via_span(board, side, next(layer for layer in allowed if layer is not side))
     if span is None:
+        if recorder is not None:
+            recorder.record(position, phase, "physical_span_unavailable")
         return ()
     width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
     size, drill = board.rules.default_via_size_nm, board.rules.default_via_drill_nm
     choices = []
     for endpoint in endpoints:
+        if recorder is not None:
+            recorder.site_queries += 1
         margin = size // 2 + board.rules.minimum_clearance_nm
         if not outline.admits(endpoint, margin):
+            if recorder is not None:
+                recorder.record(endpoint, phase, "outside_outline_margin")
             continue
         # can_via checks the complete annulus against exact placed pad shapes;
         # do not reject a circular-pad corner gap by its rectangular bounds.
@@ -458,15 +559,31 @@ def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: 
         existing = next((v for v in coincident if v.net == net
                          and (v.from_layer, v.to_layer) == span[:2]), None)
         if coincident and existing is None:
+            if recorder is not None:
+                proposal = Via(net, endpoint, size, drill, *span)
+                recorder.record(endpoint, phase, "different_coincident_via", via=proposal,
+                    blockers=lambda: clearance.via_blocker_records(proposal))
             continue
         via = None if existing else Via(net, endpoint, size, drill, *span)
         if via is not None and not clearance.can_via(net, endpoint, size, span[0], span[1], drill_nm=drill):
+            if recorder is not None:
+                recorder.record(endpoint, phase, "via_blocked", via=via,
+                    blockers=lambda: clearance.via_blocker_records(via))
             continue
+        def rejected(path, track, reason):
+            recorder.record(endpoint, phase, reason, tracks=path, via=via,
+                blockers=lambda: clearance.track_blocker_records(track))
         paths = (checked_access_paths(board, clearance, net, position, endpoint, width, side,
-                                     allow_orthogonal=False) if multiple_orders else
+                                     allow_orthogonal=False,
+                                     on_rejected=rejected if recorder is not None else None) if multiple_orders else
                  (checked_access_path(board, clearance, net, position, endpoint, width, side,
-                                      allow_orthogonal=False),))
-        choices.extend((path, via) for path in paths if path)
+                                      allow_orthogonal=False,
+                                      on_rejected=rejected if recorder is not None else None),))
+        for path in paths:
+            if path:
+                choices.append((path, via))
+                if recorder is not None:
+                    recorder.record(endpoint, phase, "legal_candidate", tracks=path, via=via)
     return tuple(dict.fromkeys(choices))
 
 
@@ -503,26 +620,8 @@ def _interstitial_sites(board, placement, pad, options):
     assumed. These are proposals only. Ordinary annulus/drill, all-layer pad
     exclusions, source budgets and path checks still apply in _legal_choices.
     """
-    if pad.kind is not PadKind.SMD or pad.shape is not PadShape.CIRCLE:
-        return ()
-    points = {p.position for p in board.footprints[placement.footprint].pads
-              if p.kind is PadKind.SMD and p.shape is PadShape.CIRCLE}
-    x, y = pad.position.x_nm, pad.position.y_nm
-    sites = []
-    for sx, sy in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
-        dx = min((sx*(p.x_nm-x) for p in points if p.y_nm == y
-                  and sx*(p.x_nm-x) > 0), default=0)
-        dy = min((sy*(p.y_nm-y) for p in points if p.x_nm == x
-                  and sy*(p.y_nm-y) > 0), default=0)
-        if (not dx or dx != dy or dx > options.maximum_neighbor_distance_nm
-                or dx*dx > 2*options.maximum_radius_nm**2
-                or Point(x+sx*dx, y+sy*dy) not in points):
-            continue
-        sites.append(transformed_local_point(placement, Point(x+sx*(dx//2), y+sy*(dy//2))))
-    start = transformed_local_point(placement, pad.position)
-    return tuple(sorted(set(sites), key=lambda p: (
-        -((p.x_nm-start.x_nm)*(start.x_nm-placement.position.x_nm)
-          +(p.y_nm-start.y_nm)*(start.y_nm-placement.position.y_nm)), p.x_nm, p.y_nm)))
+    return circular_cell_sites(board, placement, pad, options.maximum_neighbor_distance_nm,
+                               options.maximum_radius_nm)
 
 
 def _package_candidates(board, placement, pad, options):

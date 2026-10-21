@@ -18,7 +18,13 @@ Use `--ngspice /path/to/ngspice` or the `NGSPICE` environment variable to select
 copper sim run examples/simulation/inrush.copper --plan examples/simulation/inrush.json --ngspice "C:\Program Files\KiCad\10.0\bin\ngspice.dll"
 ```
 
-DLL runs use a disposable Python child process; native simulator state never enters the compiler process. Every run uses controlled startup files and records the engine version, binary hash and mode. Models in this release use native ngspice syntax; PSpice/LTspice compatibility profiles and external code models are not yet supported.
+DLL runs use a disposable Python child process; native simulator state never enters the compiler process. Every run uses controlled startup files and records the engine version, binary hash and mode. Models may declare `dialect: "native"` (default) or `"pspice"`. The latter enables ngspice's checked-include compatibility mode. LTspice profiles remain unsupported.
+
+PSpice bundles can declare `code_models: ["analog", "xtradev"]`, using only these named engine-owned libraries. They are resolved from `../lib/ngspice` relative to the selected engine's bin directory, or the host's explicit `--code-model-root`. Their bytes are hashed, checked again and copied into each run's controlled initialization. Model data cannot choose a library path, binary or startup command. Native and PSpice model bundles currently require separate plans; native passive primitives can accompany either profile.
+
+Exports retain the requested dialect and library names in each case's `circuit.json`. Standalone replay needs that initialization profile; `copper sim run` prepares it automatically. Convergence warnings and recovery messages appear in the report and retained solver logs.
+
+The [analog front end example](../examples/simulation/analog_frontend/README.md) uses an unmodified, separately fetched TI model. Its biased-step evidence passes; bias/AC and cold-start convergence are still unresolved. It is not part of the passing bounded CI examples yet.
 
 The default output is a new directory under `build/sim/<plan-name>/`. Use `-o <empty-directory>` for an explicit location. Existing nonempty directories are rejected to prevent stale waveforms from being mistaken for a successful new run. `--timeout` bounds each engine process, including each analysis/case. `--locked` and `--offline` retain their normal package-resolution behavior.
 
@@ -104,7 +110,7 @@ A registry file has `schema_version: 1` and a `models` object. Each model record
 
 Native card terminal names and order are `A, K` for a diode, `C, B, E` for a BJT, and `D, G, S, B` for a MOSFET. The `pin_map` binds those terminals to the actual package pins.
 
-All includes must stay inside the explicitly hashed bundle. Files are copied into the output with deterministic names, and checked includes are rewritten to those copies. Control scripts and unsupported directives are rejected as model data. Encrypted models and binary code models are outside this release. A vendor model must be qualified for its engine version and intended analysis; merely converging does not establish startup, protection or thermal validity.
+All includes must stay inside the explicitly hashed bundle. Files are copied into the output with deterministic names, and checked includes are rewritten to those copies. Control scripts and unsupported directives are rejected as model data. Encrypted models and model-supplied binary code models are unsupported. Only the named host-engine libraries described above can be loaded. A vendor model must be qualified for its engine version and intended analysis; merely converging does not establish startup, protection or thermal validity.
 
 ## Measurements, graphs and exports
 
@@ -117,6 +123,10 @@ Open `report.html` for zoom/pan, hover values, legend toggles, case overlays, li
 Solver errors, timeout, missing vectors, invalid values, incomplete grids and requirement failures remain distinct from graph rendering failures. A completed but out-of-spec solve still produces its graphs and data. Failed runs produce a diagnostic report; partial/truncated traces are not presented as valid measurement evidence.
 
 ## CI and Python API
+
+For planned active-device coverage and a proposed analog example board, see
+[SPICE simulation research](simulation-analog-research.md). That proposal does
+not extend the supported plan or model contracts described here.
 
 Commit CI builds the source/hash-pinned ngspice release in `.github/simulation-toolchain.json`, installs pinned reporting tools, runs the complete suite with simulator integration required, and uploads the bounded example reports. Long example routing remains restricted to release tags.
 

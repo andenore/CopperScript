@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict
-from decimal import InvalidOperation
+from decimal import Decimal, InvalidOperation
 from math import isqrt
 from pathlib import Path
 import traceback
@@ -19,7 +19,7 @@ from .critical_review import critical_lane_review, lane_review_line
 from .erc import check, has_errors
 from .footprints import FootprintResolver, FootprintResolutionError, prepare_footprint_dependencies
 from .importers import KiCadModImportError, load_kicad_mod
-from .layout import PlacementPlannerOptions, plan_placement
+from .layout import PlacementPlannerOptions, placement_intent_findings, plan_placement
 from .placement_templates import apply_placement_templates
 from .loader import BoardLoadError, load_board, load_design
 from .power import analyze_power_states
@@ -32,6 +32,7 @@ from .physicalize import (
 from .physical import PadReference, nm_from_mm
 from .detailed import DetailedRouterOptions
 from .drc import DrcDecision, run_physical_drc
+from .route_summary import connection_summary
 from .flow import PhysicalFlowStatus, run_routing_pipeline
 from .fanout import FanoutOptions
 from .package_access import PackageAccessOptions
@@ -424,7 +425,7 @@ def _parser() -> argparse.ArgumentParser:
     qualification.add_argument("--report", type=Path, required=True)
     assembly_parser = subparsers.add_parser("assembly", help="pin and check explicit assembly selections offline")
     assembly_commands = assembly_parser.add_subparsers(dest="assembly_command", required=True)
-    for action in ("snapshot", "check", "bom"):
+    for action in ("snapshot", "check", "bom", "candidate-bom"):
         assembly = assembly_commands.add_parser(action)
         assembly.add_argument("board", type=Path, help="a .copper source file")
         _add_resolution_options(assembly)
@@ -436,8 +437,11 @@ def _parser() -> argparse.ArgumentParser:
             assembly.add_argument("--report", type=Path, help="write offline selection diagnostics as JSON")
         if action == "bom":
             assembly.add_argument("-o", "--output", type=Path, required=True, help="JLCPCB selection BOM CSV")
-            assembly.add_argument("--hand-assembly", type=Path,
-                                  help="also write the consigned/not-fitted components the supplier will not place")
+        if action == "candidate-bom":
+            assembly.add_argument("-o", "--output", type=Path, required=True,
+                                  help="new unapproved human-review bundle directory; never overwritten")
+            assembly.add_argument("--positions", type=Path,
+                                  help="optional final native KiCad position CSV; generates unapproved matched CPL")
     sim_parser = subparsers.add_parser("sim", help="export or run a separate analog/power simulation plan")
     sim_commands = sim_parser.add_subparsers(dest="sim_command", required=True)
     for action in ("export", "run"):
@@ -449,6 +453,7 @@ def _parser() -> argparse.ArgumentParser:
         if action == "run":
             sim.add_argument("--engine", choices=("ngspice",), default="ngspice")
             sim.add_argument("--ngspice", help="ngspice executable or Windows DLL; defaults to NGSPICE or PATH")
+            sim.add_argument("--code-model-root", type=Path, help="selected engine's analog.cm/xtradev.cm directory (default: ../lib/ngspice relative to engine bin)")
             sim.add_argument("--timeout", type=float, default=60, help="maximum seconds per simulator process")
     check_parser = subparsers.add_parser("check", help="run electrical-rules checks")
     check_parser.add_argument("board", type=Path, help="a .copper source file")
@@ -689,6 +694,12 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--report", type=Path, help="physical routing and DRC report JSON")
     board_route_parser.add_argument("--routing-profile", choices=("quick", "balanced", "thorough"),
         help="bounded generic work profile; explicit numerical CLI options override the profile")
+    board_route_parser.add_argument("--plan-power-areas", action="store_true",
+        help="evaluate bounded distribution areas during placement and after package access")
+    board_route_parser.add_argument("--power-area-net", action="append", default=[],
+        help="restrict power area planning to this net; repeat for joint allocation")
+    board_route_parser.add_argument("--power-area-config", type=Path,
+        help="exact material/load models, protected corridors and bounded planner settings JSON")
     board_route_parser.add_argument("--no-check", action="store_true", help="attempt routing despite ERC errors")
     board_route_parser.add_argument("--footprint-root", action="append", default=[], type=Path)
     board_route_parser.add_argument("--allow-proxy-footprints", action="store_true")
@@ -706,6 +717,10 @@ def _parser() -> argparse.ArgumentParser:
             help="ordinary trace lanes estimated between facing escape banks")
         placement_parser.add_argument("--power-domain-weight", type=float, default=0.25,
             help="soft supply-domain placement weight in [0, 1]; 0 disables domain attraction")
+        placement_parser.add_argument("--support-pattern-trials", type=int, default=0,
+            help="bounded joint capacitor-bank placement checks per seed (default: disabled)")
+        placement_parser.add_argument("--package-support-trials", type=int, default=0,
+            help="bounded via-first BGA/support placement checks per seed (default: disabled)")
     for physical_parser in (pcb_parser, layout_parser, global_route_parser, board_route_parser):
         physical_parser.add_argument("--width-mm", type=float, default=100)
         physical_parser.add_argument("--height-mm", type=float, default=80)
@@ -718,6 +733,8 @@ def _parser() -> argparse.ArgumentParser:
     for router_parser in (global_route_parser, board_route_parser):
         router_parser.add_argument("--pin-access-step-mm", default="0.5", type=_positive_mm,
             help="computational pin-to-global-guide escape grid (default: 0.5 mm)")
+        router_parser.add_argument("--critical-pin-access-step-mm", type=_positive_mm,
+            help="one finer access retry for a critical terminal whose ordinary grid found no access")
     board_route_parser.add_argument(
         "--placement-candidate", help="select a named legal candidate, e.g. candidate-01",
     )
@@ -758,6 +775,23 @@ def _parser() -> argparse.ArgumentParser:
         "--fanout", action=argparse.BooleanOptionalAction, default=True,
         help="reserve and negotiate package exits and plane access before area routing (default; --no-fanout opts out)",
     )
+    board_route_parser.add_argument("--router", choices=("legacy", "unified"), default="legacy",
+        help="ordinary detailed router: the pass-based legacy router or the unified negotiated router")
+    board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
+        help="grid pitch of the unified router (default: 0.25 mm, finer to align with ball grids)")
+    board_route_parser.add_argument("--unified-iterations", type=int, default=40,
+        help="maximum negotiation iterations of the unified router (default: 40)")
+    board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
+        help="wall-time budget for the unified router; it returns its best result when exceeded")
+    board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
+        help="unified router: save its inputs as a state file for replay_unified")
+    board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
+        help="unified router: route decoupling capacitors with everything else instead of first")
+    board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
+        help="unified router: carve islands for decoupled supply rails out of a spare plane layer "
+             "(auto picks the outermost layer of a net with two plane layers)")
+    board_route_parser.add_argument("--legacy-gates", action="store_true",
+        help="stop before ordinary routing when package access or power preparation is incomplete (pre-refactor behaviour)")
     board_route_parser.add_argument("--package-access-trials", type=int, default=8,
         help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
     board_route_parser.add_argument("--package-placement-probes", type=_nonnegative_int, default=16,
@@ -776,6 +810,8 @@ def _parser() -> argparse.ArgumentParser:
         help="coarse package escape candidate step (default: 0.5 mm)")
     board_route_parser.add_argument("--fanout-maze", action="store_true",
         help="bounded exact-clearance multi-bend package escapes when straight/elbow candidates fail")
+    board_route_parser.add_argument("--fanout-geometry-candidates", type=_nonnegative_int, default=0,
+        help="opt-in extra obstacle-boundary via-site proposals per physical land (default: 0)")
     board_route_parser.add_argument("--fanout-refinement-step-mm", type=_positive_mm, default="0.1",
         help="adaptive step for empty/conflicting escape domains; <= coarse step (default: 0.1 mm)")
     board_route_parser.add_argument("--package-access-movement-mm", type=_positive_mm, default="0.5",
@@ -971,7 +1007,9 @@ def _planner_options(args) -> PlacementPlannerOptions:
         grid_step_nm=nm_from_mm(args.placement_grid_mm),
         escape_margin_nm=nm_from_mm(args.escape_margin_mm),
         escape_transit_lanes=args.escape_transit_lanes,
-        power_domain_weight=args.power_domain_weight)
+        power_domain_weight=args.power_domain_weight,
+        support_pattern_trials=getattr(args,'support_pattern_trials',0),
+        package_support_trials=getattr(args,'package_support_trials',0))
 
 
 def _apply_routing_profile(args, argv):
@@ -990,8 +1028,23 @@ def _apply_routing_profile(args, argv):
             setattr(args, name, value)
 
 
+def _unified_options(args):
+    if getattr(args, "router", "legacy") != "unified":
+        return None
+    from .unified_router import UnifiedRouterOptions
+    return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
+                                maximum_iterations=args.unified_iterations,
+                                time_budget_s=args.unified_time_budget_s,
+                                power_islands=None if args.power_islands == "off" else args.power_islands,
+                                pre_route_decouplers=not args.unified_no_decouplers,
+                                save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["bench"]:
+        from .ladder import main as bench_main
+        return bench_main(argv[1:])
     args = _parser().parse_args(argv)
     _apply_routing_profile(args, argv)
     if args.command == "compile-macro":
@@ -1179,8 +1232,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"MANUFACTURING EXPORT ERROR: {exc}")
             return 2
     if args.command == "assembly":
-        from .assembly import (AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_hand_assembly_list,
-                               write_jlcpcb_bom)
+        from .assembly import AssemblyError, check_assembly, load_lock, lock_to_json, snapshot, write_jlcpcb_bom, write_candidate_bom
         try:
             board = load_board(args.board, locked=args.locked, offline=args.offline)
             diagnostics = check(board)
@@ -1198,31 +1250,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             lock = load_lock(args.lock)
             report = check_assembly(board, lock)
+            if args.assembly_command == "candidate-bom":
+                write_candidate_bom(board, lock, args.output, native_positions=args.positions)
+                print(f"Created UNAPPROVED assembly review candidate -> {args.output}; not an ordering certificate")
+                return 0
             if args.assembly_command == "check":
                 if args.report:
                     args.report.parent.mkdir(parents=True, exist_ok=True)
                     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 print(f"Assembly selections: {report['exact_selection_count']}/{report['component_count']} exact; "
                       f"{report['reviewed_count']} reviewed; availability not checked")
-                # Never let an exclusion from the supplier BOM/CPL pass silently.
-                for label, key in (("consigned", "consigned"), ("not fitted", "not_fitted")):
-                    names = report[key]
-                    if names:
-                        shown = ", ".join(names[:12]) + (f", +{len(names) - 12} more" if len(names) > 12 else "")
-                        print(f"Outside the supplier BOM/CPL, {label}: {len(names)} ({shown})")
                 for issue in report["issues"]:
                     print(f"{issue['code']}: {issue['reference'] or board.name}: {issue['message']}")
                 return 0 if report["passed"] else 1
             write_jlcpcb_bom(board, lock, args.output)
-            left_out = report["consigned_count"] + report["not_fitted_count"]
-            print(f"Generated selection BOM -> {args.output}; "
-                  f"{report['supplier_assembled_count']} supplier-assembled"
-                  + (f", {report['consigned_count']} consigned and {report['not_fitted_count']} "
-                     "not fitted left out" if left_out else "")
-                  + "; stock and manufacturing signoff not checked")
-            if args.hand_assembly:
-                count = write_hand_assembly_list(board, lock, args.hand_assembly)
-                print(f"Generated hand-assembly list -> {args.hand_assembly}; {count} component(s) to fit or leave empty by hand")
+            print(f"Generated selection BOM -> {args.output}; stock and manufacturing signoff not checked")
             return 0
         except (AssemblyError, BoardLoadError, OSError) as exc:
             print(f"ASSEMBLY ERROR: {exc}")
@@ -1240,7 +1282,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 export_simulation(board, plan, output)
                 print(f"Exported simulation decks: {output}")
                 return 0
-            result = run_simulation(board, plan, output, ngspice=args.ngspice, timeout=args.timeout, source_path=args.board)
+            result = run_simulation(board, plan, output, ngspice=args.ngspice, timeout=args.timeout, source_path=args.board,
+                                    code_model_root=args.code_model_root)
             print(f"Simulation {result['status']}: {result['report']}")
             for run in result["runs"]:
                 if run.get("error"):
@@ -1477,6 +1520,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
                     escape_step_nm=nm_from_mm(args.pin_access_step_mm),
+                    critical_escape_step_nm=nm_from_mm(args.critical_pin_access_step_mm) if args.critical_pin_access_step_mm else None,
                     maximum_iterations=args.router_iterations,
                     layer_preference_cost=max(0, args.layer_preference_cost // 2),
                     direction_preference_cost=max(0, args.direction_preference_cost // 2),
@@ -1514,8 +1558,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     step_nm=nm_from_mm(args.fanout_step_mm),
                     refinement_step_nm=nm_from_mm(args.fanout_refinement_step_mm),
                     maze_escapes=args.fanout_maze,
+                    maximum_geometry_candidates=args.fanout_geometry_candidates,
                 ) if args.fanout else None
                 progress = console_progress() if args.progress else None
+                from .power_config import load_power_area_options
+                power_area_options = (load_power_area_options(args.power_area_config, nets=args.power_area_net)
+                    if args.plan_power_areas or args.power_area_config or args.power_area_net else None)
+                power_native_verifier = None
+                if power_area_options is not None and power_area_options.plane_return_nets and args.verify_plane_fill:
+                    preparation_directory = (args.report or Path(f'{board.name}.route-report.json')).with_name(
+                        'power-return-native-' + uuid4().hex[:12])
+                    preparation_invocations = []
+                    def power_native_verifier(candidate, stage):
+                        preparation_invocations.append(stage)
+                        return verify_filled_planes(candidate, kicad_cli=args.verify_plane_fill,
+                            artifact_directory=preparation_directory / f'{len(preparation_invocations):03d}-{stage}')
                 from .iteration_checkpoints import (StageTracker, load_placement_checkpoint, placement_key,
                                                     save_placement_checkpoint)
                 if progress is not None:
@@ -1568,6 +1625,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                             destination_ports=args.package_destination_ports,
                             refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
                     on_progress=progress,
+                    legacy_gates=args.legacy_gates,
+                    unified_options=_unified_options(args),
+                    **({"power_area_options": power_area_options} if power_area_options is not None else {}),
+                    **({"power_native_verifier": power_native_verifier} if power_native_verifier is not None else {}),
                 )
                 escape_feedback = (
                     improve_zone_escapes(
@@ -1599,7 +1660,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         on_progress=progress,
                     ) if stitch_enabled and (args.zone_escape_trials
                                              or args.zone_local_ripup_trials)
-                    and result.stopped_after is None else None
+                      # The unified router joins plane pads itself; the legacy
+                      # late-escape repair reruns the legacy pipeline.
+                      and getattr(args, "router", "legacy") != "unified"
+                      and result.stopped_after is None else None
                 )
                 if escape_feedback is not None:
                     result = escape_feedback.pipeline
@@ -1630,6 +1694,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                       else escape_feedback.plane_stitch if escape_feedback is not None
                       else stitch_zone_pads(result.board, plane_options) if stitch_enabled
                       else result.plane_stitch)
+            plane_repair = None
+            if stitch_enabled and stitch is not None and stitch.board.zones and not result.stopped_after:
+                # Routing after stitching can wall a pour-contact pad off; re-stitch those explicitly.
+                from .plane import repair_cut_off_plane_pads
+                before = stitch.added_track_count + stitch.added_via_count
+                stitch, still_cut_off = repair_cut_off_plane_pads(stitch, plane_options)
+                plane_repair = {"added_copper": stitch.added_track_count + stitch.added_via_count - before,
+                                "still_cut_off": [f"{p.component}.{p.pad}" for p in still_cut_off]}
             output_board = stitch.board if stitch_enabled and not result.stopped_after else result.board
             duplicate_stitch = (DuplicatePadStitchResult(output_board, (), (), 0) if result.stopped_after
                                 else stitch_duplicate_pads(output_board))
@@ -1638,6 +1710,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .hard_macros import resolved_macro_geometry
             from .route_cleanup import trim_dangling_overhangs
             fixed = Counter(physical_board.tracks)
+            from .power_geometry import owned_power_copper
+            fixed.update(owned_power_copper(result)[0])
             for macro in output_board.hard_macros:
                 if macro.cluster in output_board.materialized_macros:
                     fixed.update(resolved_macro_geometry(output_board, macro)[0])
@@ -1695,6 +1769,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             plane_pending, plane_verified = reconcile_zone_lands(
                 output_board, stitch.pending_pads if stitch is not None else (),
                 plane_verification)
+            power_observation, power_plan = None, None
+            if power_area_options is not None:
+                from .power_extract import assess_power_plan_fill
+                power_plan = result.power_area_plan or result.placement_and_global.power_area_plan
+                baseline_evidence = None
+                if (power_plan is not None and plane_verification is not None
+                        and result.power_area_status == "contact_routed_native_pending"):
+                    try:
+                        baseline_evidence = verify_filled_planes(power_plan.source_board,
+                            kicad_cli=args.verify_plane_fill, artifact_directory=evidence_directory / "power-area-baseline")
+                    except (RuntimeError, ValueError, OSError) as exc:
+                        power_observation = {"status": "native_baseline_unavailable", "detail": str(exc)}
+                if power_observation is None:
+                    power_observation = (assess_power_plan_fill(output_board, power_plan, plane_verification,
+                        power_area_options, baseline_evidence=baseline_evidence) if power_plan is not None
+                        else {"status": "plan_unavailable"})
+            final_power_preparation = None
+            if result.power_preparation is not None:
+                from .power_preparation import validate_power_preparation
+                final_power_preparation = validate_power_preparation(result.power_preparation,
+                    output_board, plane_verification, power_area_options)
             closure_status = (
                 PhysicalFlowStatus.PASS
                 if result.stopped_after is None
@@ -1702,6 +1797,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 and (not args.verify_plane_fill or plane_verification is not None and plane_verification.passed)
                 and not duplicate_pending
                 and not plane_pending
+                and (power_plan is None or result.power_area_status != "contact_routed_native_pending"
+                     or power_observation["status"] == "native_connected")
+                and (result.power_preparation is None or result.power_preparation.accepted
+                     and final_power_preparation['status'] == 'native_connected')
                 else PhysicalFlowStatus.FAIL
             )
             report_path = args.report or Path(f"{board.name}.route-report.json")
@@ -1711,7 +1810,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
-                    "passes", "search_budget", "pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
+                    "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
                     "filled_copper_search_states")},
@@ -1732,7 +1831,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "critical": json.loads(result.critical.to_json()),
                 "detailed": json.loads(result.detailed.to_json()),
                 "drc": json.loads(output_drc.to_json()),
+                "summary": connection_summary(output_board, output_drc, native=plane_verification),
+                "placement_findings": [
+                    {"code": f.code, "status": f.status.value, "message": f.message,
+                     **({"subject": f.subject} if f.subject is not None else {})}
+                    for f in placement_intent_findings(result.placement_and_global.board)],
             }
+            if power_area_options is not None:
+                report["power_area_planning"] = {
+                    "adoption_status": result.power_area_status,
+                    "plan": power_plan.report() if power_plan is not None else None,
+                    "final_observation": power_observation,
+                    "return_preparation": result.power_preparation.report() if result.power_preparation else None,
+                    "return_preservation": final_power_preparation,
+                }
             if result.critical_feedback is not None:
                 report["critical_placement_feedback"] = {
                     "accepted_moves": result.critical_feedback.accepted_moves,
@@ -1742,7 +1854,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 access = result.package_access
                 report["package_access"] = {
                     "status": "ready" if access.ready else "blocked",
-                    "stage_order": ["ordinary_package_exits", "critical_routes", "selected_plane_contacts", "package_boundary_access", "ordinary_area"],
+                    "stage_order": (["critical_routes", "power_return_preparation", "ordinary_package_exits",
+                        "selected_plane_contacts", "package_boundary_access", "native_return_preservation", "ordinary_area"]
+                        if result.power_preparation else
+                        ["ordinary_package_exits", "critical_routes", "selected_plane_contacts", "package_boundary_access",
+                         *(["power_area_planning"] if power_area_options is not None else []), "ordinary_area"]),
                     "pending_pads": [f"{pad.component}.{pad.pad}" for pad in sorted(access.pending_pads)],
                     "failed_critical_nets": sorted(access.failed_critical_nets),
                     "hard_findings": access.hard_findings,
@@ -1880,6 +1996,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report["fanout"] = {
                     "step_nm": fanout_options.step_nm,
                     "refinement_step_nm": fanout_options.refinement_step_nm,
+                    "maximum_geometry_candidates": fanout_options.maximum_geometry_candidates,
+                    "diagnostic_samples_per_pad": fanout_options.diagnostic_samples_per_pad,
                     "added_track_count": result.fanout.added_track_count,
                     "added_via_count": result.fanout.added_via_count,
                     "escaped_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.accesses],
@@ -1905,6 +2023,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "diagnostic": item.diagnostic,
                         "two_leg_candidate_count": item.two_leg_candidate_count,
                         "refined_candidate_count": item.refined_candidate_count,
+                        "access_diagnostics": (asdict(item.access_diagnostics)
+                            if item.access_diagnostics is not None and item.pad in result.fanout.pending_pads else None),
                     } for item in result.fanout.pin_analysis],
                 }
                 if result.fanout.assignment is not None:
@@ -1954,6 +2074,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                     "zone_fill_verified": False,
                 }
+                if plane_repair is not None:
+                    report["plane_stitch"]["cut_off_repair"] = plane_repair
             if result.plane_stitch is not None:
                 report["early_plane_stitch"] = {
                     "selected_pads": [
@@ -2071,6 +2193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 router_options = GlobalRouterOptions(
                     tile_size_nm=nm_from_mm(args.tile_size_mm),
                     escape_step_nm=nm_from_mm(args.pin_access_step_mm),
+                    critical_escape_step_nm=nm_from_mm(args.critical_pin_access_step_mm) if args.critical_pin_access_step_mm else None,
                     maximum_iterations=args.router_iterations,
                 )
                 if args.placement_templates:

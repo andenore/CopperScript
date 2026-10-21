@@ -15,6 +15,8 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Read compact reports or requirement coverage | [LLM workflow](llm-workflow.md) |
 | Iterate on routing or placement failures | [LLM workflow: iteration](llm-workflow.md#routing-and-placement-iteration); `copper agent-guide iteration` |
 | Change routing or native repair | [Filled-copper feedback](filled-copper-feedback.md); follow linked specialized references only as needed |
+| Investigate blocked package exits | [Required reference-layout comparison](component-integration-guidelines.md#package-escape-faults-reference-comparison-is-required) |
+| Plan power/ground distribution areas | [Power area planning](power-area-planning-plan.md) |
 | Profile or compare routing | [Routing performance](routing-performance.md) |
 | Add components or reusable circuits | [Integration guidelines](component-integration-guidelines.md) |
 | Author or bind physical macros | [Physical hard macros](physical-hard-macros.md); [definition syntax](macro-definitions.md); [binding syntax](physical-macro-syntax-plan.md); [definition requirements](macro-definition-plan.md) |

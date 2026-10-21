@@ -46,8 +46,8 @@ def hard_findings(board):
         {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"})
 
 
-def pipeline(board, *, movable=(), defer_zones=True, plane_options=None):
-    return run_routing_pipeline(board,
+def pipeline(board, *, movable=(), defer_zones=True, plane_options=None, legacy_gates=False):
+    return run_routing_pipeline(board, legacy_gates=legacy_gates,
         placement_options=PlacementPlannerOptions(candidate_count=1,
             analytical_iterations=0, refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in board.placements
@@ -202,7 +202,7 @@ def test_blocked_area_keeps_reserved_exits_instead_of_treating_them_as_redundant
     board = adjacent_board(0, renamed)
     board = replace(board, copper_keepouts=(CopperKeepout("uncrossable-divider",
         board.stackup.copper_layers, rectangle("11.5", 0, "12.5", 20)),))
-    result = pipeline(board)
+    result = pipeline(board, legacy_gates=True)
     assert not result.package_access.ready and result.detailed.metrics.passes == 0
     assert not result.detailed.nets[0].connected
     launches = result.package_access.fanout

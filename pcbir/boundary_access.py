@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, replace
 from heapq import heappop, heappush
+from math import isqrt
 from types import MappingProxyType
 
 from .drc import physical_board_digest, placed_pad_shape, run_physical_drc
@@ -146,16 +147,25 @@ def _maze_path(board, clearance, net, start, width, layer, area, extension, opti
     goal = Bounds(min(area.min_x, start.x_nm)-extension, min(area.min_y, start.y_nm)-extension,
                   max(area.max_x, start.x_nm)+extension, max(area.max_y, start.y_nm)+extension)
     search = goal.expanded(options.maximum_detour_nm)
+    edge_distances = dict(left=start.x_nm-goal.min_x, right=goal.max_x-start.x_nm,
+                          top=start.y_nm-goal.min_y, bottom=goal.max_y-start.y_nm)
+    maximum_length = min(edge_distances.values()) + options.maximum_detour_nm
+    eligible_edges = {edge for edge, distance in edge_distances.items() if distance <= maximum_length}
     directions = ((1,0), (1,1), (0,1), (-1,1), (-1,0), (-1,-1), (0,-1), (1,-1))
     def point(x, y):
         return Point(start.x_nm+x*step, start.y_nm+y*step)
     def heuristic(p):
-        distance = max(0, min(p.x_nm-goal.min_x, goal.max_x-p.x_nm,
-                              p.y_nm-goal.min_y, goal.max_y-p.y_nm))
+        remaining = dict(left=p.x_nm-goal.min_x, right=goal.max_x-p.x_nm,
+                         top=p.y_nm-goal.min_y, bottom=goal.max_y-p.y_nm)
+        distance = max(0, min(remaining[edge] for edge in eligible_edges))
         return 10 * ((distance+step-1)//step)
     queue = [(heuristic(start), 0, 0, 0, -1)]
     best = {(0,0,-1): 0}
     parent = {(0,0,-1): None}
+    lengths = {(0,0,-1): 0}
+    diagonal_length = isqrt(2*step*step)
+    if diagonal_length*diagonal_length < 2*step*step:
+        diagonal_length += 1
     # Different arrival headings revisit identical undirected copper edges.
     # The domain board is immutable: cache only this layer/search's exact
     # predicate, never reuse it across different geometry or reservations.
@@ -168,8 +178,10 @@ def _maze_path(board, clearance, net, start, width, layer, area, extension, opti
             continue
         states += 1
         p = point(x, y)
-        edge = ("left" if p.x_nm <= goal.min_x else "right" if p.x_nm >= goal.max_x
-                else "top" if p.y_nm <= goal.min_y else "bottom" if p.y_nm >= goal.max_y else None)
+        edge = next((edge for edge, reached in (
+            ('left', p.x_nm <= goal.min_x), ('right', p.x_nm >= goal.max_x),
+            ('top', p.y_nm <= goal.min_y), ('bottom', p.y_nm >= goal.max_y))
+            if reached and edge in eligible_edges), None)
         if edge is not None and (x or y):
             nodes = []
             cursor = state
@@ -194,14 +206,24 @@ def _maze_path(board, clearance, net, start, width, layer, area, extension, opti
             ends = ((x,y), (x+dx,y+dy))
             key = min(ends), max(ends)
             if key not in legal_edges:
-                legal_edges[key] = (_track_inside_board(board, p, q, width)
-                                    and clearance.can_track(net, p, q, width, layer))
+                # Search the same source-authorized width pieces that will be
+                # emitted. A preferred-width probe can falsely close a narrow
+                # package channel whose declared breakout neckdown is legal.
+                pieces = clearance.route_pieces(net, p, q, width, layer)
+                legal_edges[key] = bool(pieces) and all(
+                    _track_inside_board(board, t.start, t.end, t.width_nm)
+                    and clearance.can_track(net, t.start, t.end, t.width_nm, layer)
+                    for t in pieces)
             if not legal_edges[key]:
                 continue
             next_state = x+dx, y+dy, direction
+            next_length = lengths[state] + (diagonal_length if dx and dy else step)
+            if next_length > maximum_length:
+                continue
             next_cost = cost + (14 if dx and dy else 10) + (3 if heading not in {-1,direction} else 0)
             if next_cost < best.get(next_state, 10**30):
                 best[next_state], parent[next_state] = next_cost, state
+                lengths[next_state] = next_length
                 heappush(queue, (next_cost+heuristic(q), next_cost, x+dx, y+dy, direction))
     return None, states
 

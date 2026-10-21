@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "models": {
+    "ti/opa2197-sboma34d": {
+      "kind": "subcircuit",
+      "name": "COPPER_OPA2197",
+      "terminals": [
+        "OUTA",
+        "INA_N",
+        "INA_P",
+        "VN",
+        "INB_P",
+        "INB_N",
+        "OUTB",
+        "VP"
+      ],
+      "pin_map": {
+        "OUTA": "OUTA",
+        "INA_N": "INA_N",
+        "INA_P": "INA_P",
+        "VN": "VN",
+        "INB_P": "INB_P",
+        "INB_N": "INB_N",
+        "OUTB": "OUTB",
+        "VP": "VP"
+      },
+      "supported_parts": [
+        "OPA2197ID",
+        "amps.OPA2197ID"
+      ],
+      "analyses": [
+        "op",
+        "ac",
+        "transient"
+      ],
+      "ngspice_versions": [
+        46,
+        47
+      ],
+      "dialect": "pspice",
+      "code_models": [
+        "analog",
+        "xtradev"
+      ],
+      "entrypoint": "opa2197.lib",
+      "files": [
+        {
+          "path": "opa2197.lib",
+          "sha256": "34672c55b9cc61ef5f082107c062572ded43c4d7f1f27a53e4653a7e7f291d44"
+        },
+        {
+          "path": "vendor/OPAx197.LIB",
+          "sha256": "fc5b020e63346e511bd808bf41c856b0150b000bcf8a41fe00eeececb1f422a5"
+        }
+      ],
+      "source_url": "https://www.ti.com/lit/zip/SBOMA34",
+      "license": "TI vendor model usage/copyright notice; original bytes fetched separately. Dual wiring wrapper: MIT.",
+      "assumptions": [
+        "Unmodified TI OPAx197 Final 1.3 typical core, SBOMA34D; two instances share supply pins.",
+        "No channel interaction, thermal or production corner qualification. Noise is not analyzed.",
+        "Startup below the 4.5 V operating supply is illustrative, not device startup qualification."
+      ]
+    }
+  }
+}

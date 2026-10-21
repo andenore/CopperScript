@@ -63,6 +63,8 @@ class PlacementPlannerOptions:
     component_clearance_nm: Nanometres = DEFAULT_ADDITIONAL_COURTYARD_GAP_NM
     congestion_bin_nm: Nanometres = nm_from_mm("5")
     analytical_iterations: int = 40
+    satellite_seeding: bool = True       # seed ungrouped parts at their connected pads
+    auto_pair_corridors: bool = True     # keep movable parts out of fixed differential pairs' paths
     analytical_step_mm: float = 0.08
     analytical_momentum: float = 0.85
     refinement_passes: int = 2
@@ -77,8 +79,14 @@ class PlacementPlannerOptions:
     escape_spacing_passes: int = 2
     escape_max_movement_nm: Nanometres = nm_from_mm("16")
     power_domain_weight: float = 0.25
+    support_pattern_trials: int = 0
+    package_support_trials: int = 0
 
     def __post_init__(self) -> None:
+        if type(self.support_pattern_trials) is not int or self.support_pattern_trials < 0:
+            raise ValueError('support pattern trials must be a nonnegative integer')
+        if type(self.package_support_trials) is not int or self.package_support_trials < 0:
+            raise ValueError('package support trials must be a nonnegative integer')
         positive = (
             self.grid_step_nm,
             self.edge_clearance_nm,
@@ -177,6 +185,8 @@ class PlacementStatistics:
     refinement_swap_count: int
     routing_feedback_passes: int
     failed_seed_attempts: tuple[PlacementSeedFailure, ...] = ()
+    support_patterns: object = None
+    package_patterns: tuple = ()
 
 
 class PlacementAlgorithmError(ValueError):
@@ -234,7 +244,8 @@ class CorridorReservation:
 def generate_placement_candidates(
     board: PhysicalBoard,
     options: PlacementPlannerOptions | None = None,
-    *, progress=None,
+    *, progress=None, power_area_options=None, power_native_verifier=None,
+    global_router_options=None, fanout_options=None, pair_state_limit=None,
 ) -> tuple[PlacementCandidate, ...]:
     """Return a deterministic Pareto frontier of legal placement candidates."""
 
@@ -249,6 +260,17 @@ def generate_placement_candidates(
         raise PlacementAlgorithmError(
             f"fixed placement references unknown component {unknown_fixed[0]!r}"
         )
+    # Diagnose contradictory source/session locks before a soft placement
+    # phase tries to reserve decoupling paths through immutable macro copper.
+    # A fixed origin without a fixed angle does not prove a pin's location.
+    rules = _rules(board)
+    fixed_poses = {ref: pose for ref, pose in _fixed_placements(board, placements, options).items()
+                   if ref in options.fixed_references
+                   or rules[ref].fixed_rotation_degrees is not None}
+    fixed_violations = relative_placement_violations(board, fixed_poses)
+    if fixed_violations:
+        raise PlacementAlgorithmError("conflicting fixed placement constraints: "
+            + "; ".join(str(item["message"]) for item in fixed_violations))
     conflicts = reserved_corridor_conflicts(
         board, _fixed_placements(board, placements, options)
     )
@@ -302,6 +324,28 @@ def generate_placement_candidates(
         bypass_board = replace(board, placements=tuple(refined[p.reference] for p in board.placements))
         refined, bypass_moves = improve_decoupling_placement(bypass_board, refined, phase_options)
         moves += bypass_moves
+        support_report = None
+        if options.support_pattern_trials:
+            from .support_patterns import improve_support_placement, SupportPatternOptions
+            if progress:
+                progress('support_patterns', seed, seeds)
+            support_source = replace(board, placements=tuple(refined[p.reference] for p in board.placements))
+            support = improve_support_placement(support_source, refined, phase_options,
+                options=SupportPatternOptions(maximum_complete_checks=options.support_pattern_trials),
+                **(dict(power_area_options=power_area_options,power_native_verifier=power_native_verifier,
+                        global_router_options=global_router_options,fanout_options=fanout_options,
+                        pair_state_limit=pair_state_limit)
+                   if power_area_options is not None else {}))
+            support_report = support.report()
+            updated = {p.reference:p for p in support.board.placements}
+            moves += sum(updated[r] != p for r,p in refined.items())
+            refined = updated
+        package_report=()
+        if options.package_support_trials:
+            from .package_support import improve_package_support_placement
+            package_source=replace(board,placements=tuple(refined[p.reference] for p in board.placements))
+            updated,package_report=improve_package_support_placement(package_source,refined,phase_options)
+            moves+=sum(updated[r]!=p for r,p in refined.items());refined=updated
         metrics = placement_metrics(board, refined, options, spacing_model=spacing)
         if metrics.constraint_penalty_nm or not placement_solution_is_legal(board, refined, options):
             if closest_rejected is None or metrics.constraint_penalty_nm < closest_rejected[0]:
@@ -320,6 +364,8 @@ def generate_placement_candidates(
                     moves,
                     swaps,
                     feedback_passes,
+                    support_patterns=support_report,
+                    package_patterns=package_report,
                 ),
             )
         )
@@ -648,6 +694,34 @@ def reserved_corridors(board: PhysicalBoard) -> CorridorReservation:
     return result
 
 
+_AUTO_CORRIDOR_CACHE: dict[int, tuple[PhysicalBoard, tuple[ReservedCorridor, ...]]] = {}
+
+
+def automatic_pair_corridors(board: PhysicalBoard) -> tuple[ReservedCorridor, ...]:
+    """Corridors for every differential pair whose terminals are all fixed.
+
+    The same geometry as ``reserve_corridor`` (hull of the pair's lands plus
+    width, gap and clearance), derived without the rule. They keep movable,
+    unrelated parts out of a critical pair's path; authored fixed placements
+    are never checked against them. Pairs that already reserve a corridor,
+    or whose terminals are not fixed, are left out.
+    """
+    cached = _AUTO_CORRIDOR_CACHE.get(id(board))
+    if cached is not None and cached[0] is board:
+        return cached[1]
+    reserved = {rule.net for rule in board.net_routing_rules if rule.reserve_corridor}
+    pairs = sorted({tuple(sorted((rule.net, rule.differential_partner)))
+                    for rule in board.net_routing_rules
+                    if rule.differential_partner and rule.net not in reserved
+                    and rule.differential_partner not in reserved})
+    corridors = tuple(result for result in (_derive_corridor(board, members) for members in pairs)
+                      if not isinstance(result, str))
+    if len(_AUTO_CORRIDOR_CACHE) >= _CORRIDOR_CACHE_SIZE:
+        _AUTO_CORRIDOR_CACHE.clear()
+    _AUTO_CORRIDOR_CACHE[id(board)] = (board, corridors)
+    return corridors
+
+
 def reserved_corridor_conflicts(
     board: PhysicalBoard, poses: Mapping[str, Placement]
 ) -> tuple[str, ...]:
@@ -871,6 +945,7 @@ def _initial_seed(
             reference,
         ),
     )
+    anchors = _satellite_anchors(board, fixed, movable) if options.satellite_seeding else {}
     for index, reference in enumerate(movable):
         original = source[reference]
         group = primary_group.get(reference)
@@ -884,11 +959,57 @@ def _initial_seed(
                 target.y_nm + dy * options.grid_step_nm * 2,
             )
         else:
-            point = _seed_transform(original.position, bounds, seed, index)
+            point = anchors.get(reference) or _seed_transform(original.position, bounds, seed, index)
+            if reference in anchors:
+                dx, dy = _spiral_offset(index + seed, max(1, len(movable)))
+                point = Point(point.x_nm + dx * options.grid_step_nm, point.y_nm + dy * options.grid_step_nm)
         orientations = _allowed_orientations(board, reference)
         rotation = orientations[(seed + index) % len(orientations)]
         result[reference] = replace(original, position=point, rotation_degrees=rotation)
     return result
+
+
+def _satellite_anchors(board: PhysicalBoard, fixed: Mapping[str, Placement],
+                       movable: Iterable[str]) -> dict[str, Point]:
+    """Seed points for ungrouped movable parts at their connected pads.
+
+    A part joined by signal nets to already-located parts starts at the mean
+    of those pads (plane and power-rail nets excluded: they connect almost
+    everything). Two passes let chains of passives follow their anchor.
+    Without this, parts start wherever the prototype pass put them, and the
+    bounded analytical pass cannot bring a far seed home (CopperProbe's crystal
+    and FX10 strap resistors stayed 20-30 mm from their pins).
+    """
+    from .zone_geometry import distribution_zone_nets
+    excluded = set(distribution_zone_nets(board))
+    excluded |= {domain.net for domain in board.power_domains}
+    excluded |= {link.return_net for link in board.decoupling_links}
+    movable = [reference for reference in movable if reference not in fixed]
+    located: dict[str, Point] = {reference: pose.position for reference, pose in fixed.items()}
+    nets_of: dict[str, list] = {}
+    for net in board.nets:
+        if net.name in excluded or len(net.pads) > 12:
+            continue
+        for pad in net.pads:
+            nets_of.setdefault(pad.component, []).append(net)
+    poses = {pose.reference: pose for pose in board.placements}
+    anchors: dict[str, Point] = {}
+    for _ in range(2):
+        for reference in movable:
+            points = []
+            for net in nets_of.get(reference, ()):
+                for pad in net.pads:
+                    if pad.component == reference or pad.component not in located:
+                        continue
+                    if pad.component in fixed:
+                        points.append(transformed_pad_position(board, fixed[pad.component], pad.pad))
+                    else:
+                        points.append(located[pad.component])
+            if points:
+                anchors[reference] = Point(round(sum(p.x_nm for p in points) / len(points)),
+                                           round(sum(p.y_nm for p in points) / len(points)))
+        located.update(anchors)
+    return anchors
 
 
 def _spiral_offset(index: int, count: int) -> tuple[int, int]:
@@ -1978,7 +2099,8 @@ def _detailed_refine(
             if not _legal(swapped_b, trial, board, options):
                 continue
             trial[right] = swapped_b
-            if _fast_score(board, trial, spacing, options.power_domain_weight) < _fast_score(board, placements, spacing, options.power_domain_weight):
+            if _meaningfully_better(_fast_score(board, trial, spacing, options.power_domain_weight),
+                                    _fast_score(board, placements, spacing, options.power_domain_weight)):
                 placements = trial
                 changed = True
                 swap_count += 1
@@ -2400,6 +2522,12 @@ def _legal(
         if (candidate.reference not in corridor.terminal_references
                 and _keepout_blocks(board, corridor.keepout, candidate, polygon)):
             return False
+    if options.auto_pair_corridors and (rule is None or rule.fixed_position is None):
+        # Movable parts only: an authored fixed pose is the author's call.
+        for corridor in automatic_pair_corridors(board):
+            if (candidate.reference not in corridor.terminal_references
+                    and _keepout_blocks(board, corridor.keepout, candidate, polygon)):
+                return False
     if cluster_keepouts is None:
         cluster_keepouts = resolved_cluster_keepouts(board, {**placed, candidate.reference: candidate})
     for keepout in (*board.copper_keepouts, *cluster_keepouts):
@@ -3076,6 +3204,21 @@ def _spread_escape_components(
         if not changed:
             break
     return placements, moves
+
+
+_ESCAPE_SCORE_STEP_NM = 100_000
+
+
+def _meaningfully_better(new: tuple, old: tuple, step_nm: int = _ESCAPE_SCORE_STEP_NM) -> bool:
+    """``new < old`` for :func:`_fast_score`, with escape-width differences under
+    ``step_nm`` treated as ties. A swap may move parts far apart: a few
+    micrometres of escape width must not outrank millimetres of wirelength
+    (a crystal load capacitor traded 12 mm away for 10 um of escape width)."""
+    if new[0] != old[0]:
+        return new[0] < old[0]
+    if abs(new[1] - old[1]) >= step_nm:
+        return new[1] < old[1]
+    return new[2:] < old[2:]
 
 
 def _fast_score(board: PhysicalBoard, placements: Mapping[str, Placement],

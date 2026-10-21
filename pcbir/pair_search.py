@@ -199,6 +199,72 @@ def _collinear_fork(first, second, center, heading, sign, offset, expansion=1):
     return tuple(paths)
 
 
+def _converging_port(index, first_name, second_name, first, second,
+                     component, middle, heading, sign, distance, width, offset, layer):
+    """Converge end-on round lands before turning both lanes outward.
+
+    This is an analytic proposal for the existing heading/order/length slot,
+    not extra maze work or acceptance authority. A round-land breakout and
+    its actual local width/gap determine the narrow stems. Both lanes turn
+    to one side of the land row, then taper to the requested port pitch only
+    beyond the farther land. All emitted copper still needs the joint exact
+    checks, including companion lands and opposite-face copper for transitions.
+    """
+    if heading % 2 or not index.breakout.pair(first_name, second_name):
+        return None
+    dx, dy = _HEADS[heading]
+    nx, ny = -dy, dx
+    if (first.x_nm-second.x_nm)*nx+(first.y_nm-second.y_nm)*ny:
+        return None
+    lands = tuple(index.breakout.region(net, (point,))
+                  for net, point in ((first_name, first), (second_name, second)))
+    for identity, point in zip(lands, (first, second)):
+        if identity is None or not identity.startswith(f"pad:{component}."):
+            return None
+        shape = index.breakout.land(identity).shape
+        if shape.spine != (point,) or shape.radius_nm <= 0:
+            return None  # Not an actual round terminal; never reinterpret a via port.
+    widths = tuple(index.breakout.track_width_nm(net, land, width)
+                   for net, land in zip((first_name, second_name), lands))
+    if widths[0] != widths[1]:
+        return None
+    gap = index.breakout.spacing_nm(first_name, lands[0], second_name, lands[1])
+    neck = (widths[0]+gap+1)//2
+    pitch = abs((first.x_nm-second.x_nm)*dx+(first.y_nm-second.y_nm)*dy)
+    converge = pitch//2-neck
+    diagonal = converge//3
+    transverse = pitch//2-widths[0]//4
+    if (diagonal <= 0 or offset < neck
+            or transverse < diagonal+2*neck):
+        return None
+    lead = converge-diagonal
+    far = max((p.x_nm-middle.x_nm)*dx+(p.y_nm-middle.y_nm)*dy
+              for p in (first, second))
+    run = far+pitch//2
+    taper = offset-neck
+    if distance <= run+taper:
+        return None  # Preserve the selected length; never extend a short slot.
+    first_near = ((first.x_nm-middle.x_nm)*dx+(first.y_nm-middle.y_nm)*dy) < 0
+    side = sign if first_near else -sign
+    center = Point(middle.x_nm+dx*distance+nx*side*transverse,
+                   middle.y_nm+dy*distance+ny*side*transverse)
+    paths = []
+    for point, lane in ((first, sign), (second, -sign)):
+        u = (point.x_nm-middle.x_nm)*dx+(point.y_nm-middle.y_nm)*dy
+        inward = 1 if u < 0 else -1
+        stem = u+inward*converge
+        v = side*transverse+lane*neck
+        def at(a, b):
+            return Point(middle.x_nm+dx*a+nx*b, middle.y_nm+dy*a+ny*b)
+        points = (point, at(u+inward*lead, 0), at(stem, side*diagonal),
+                  at(stem, v-side*neck), at(stem+neck, v), at(run, v),
+                  at(run+taper, side*transverse+lane*offset),
+                  at(distance, side*transverse+lane*offset))
+        paths.append(_tracks((first_name, second_name)[len(paths)], points,
+                             width, layer, index.breakout))
+    return _Port(center, heading, sign, *paths, -1)
+
+
 def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
            second_name: str, first: Point, second: Point, component: str,
            width: int, offset: int, clearance: int, layer: CopperLayer, *,
@@ -229,6 +295,13 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
         for sign, length in product(signs, lengths):
             step = nm_from_mm(length)
             dx, dy = _HEADS[heading]
+            if dot == 0 and dx*outward.x_nm+dy*outward.y_nm > 0:
+                converging = _converging_port(index, first_name, second_name,
+                    first, second, component, middle, heading, sign, step, width, offset, layer)
+                if converging is not None and _legal(
+                        board, index, converging.first, converging.second, clearance):
+                    ports.append(converging)
+                    continue  # One admitted collar per existing slot, as before.
             center = Point(middle.x_nm + dx * step, middle.y_nm + dy * step)
             targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
             admitted = False
