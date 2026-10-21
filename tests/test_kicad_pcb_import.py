@@ -320,6 +320,9 @@ def test_wide_net_classes_neck_down_to_the_board_minimum_at_their_lands():
     assert rule.breakout_width_nm == nm_from_mm("0.15") == board.rules.minimum_track_width_nm
     assert rule.breakout_length_nm == nm_from_mm("3")
     assert any(item.startswith("wide net class narrows") for item in result.approximations)
+    # A net whose lands are all wider than its class width keeps one width.
+    wide_land = parse_kicad_pcb(text.replace("(trace_width 1.5)", "(trace_width 0.9)"), source="wide").board
+    assert next(item for item in wide_land.net_routing_rules if item.net == "SIG").breakout_width_nm is None
     # Without a legacy minimum the narrowest class width is the floor; a net at the default width gets no rule.
     plain = parse_kicad_pcb(TEXT, source="plain").board
     assert not [item for item in plain.net_routing_rules if item.net == "SIG"]

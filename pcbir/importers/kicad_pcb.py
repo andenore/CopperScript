@@ -227,7 +227,12 @@ def parse_kicad_pcb(text: str, *, source: str = "<memory>", name: str = "importe
         keepouts.append(CopperKeepout(zone.id, zone.layers, zone.outline))
         log.approx("zone on a net without pads as keepout")
     outline = _outline(edges, placements, footprints, source, log)
-    rules, net_rules = _design_rules(root, project, net_pads, log)
+    footprint_of = {placement.reference: footprints[placement.footprint] for placement in placements}
+    smallest_land = {
+        net: min((min(pad.size.width_nm, pad.size.height_nm) for reference in pads
+                  for pad in footprint_of[reference.component].pads if pad.number == reference.pad), default=None)
+        for net, pads in net_pads.items()}
+    rules, net_rules = _design_rules(root, project, net_pads, log, smallest_land)
     # Copper graphics and text have no net: every routed net keeps its own
     # clearance from them, so the obstacle is grown by the largest one.
     margin = max([rules.minimum_clearance_nm] + [rule.clearance_nm for rule in net_rules if rule.clearance_nm])
@@ -1217,7 +1222,8 @@ class _NetClass:
 
 
 def _design_rules(root: list[SExpr], project: dict | None, net_pads: dict[str, list[PadReference]],
-                  log: _Log) -> tuple[DesignRules, tuple[NetRoutingRule, ...]]:
+                  log: _Log, smallest_land: dict[str, int | None] | None = None,
+                  ) -> tuple[DesignRules, tuple[NetRoutingRule, ...]]:
     classes, assignments, floors = _project_classes(project, net_pads) if project else _legacy_classes(root)
     default = classes.get("Default") or _NetClass("Default", _KICAD_DEFAULT_CLEARANCE_NM, _KICAD_DEFAULT_TRACK_NM,
                                                   _KICAD_DEFAULT_VIA_NM, _KICAD_DEFAULT_VIA_DRILL_NM)
@@ -1240,8 +1246,10 @@ def _design_rules(root: list[SExpr], project: dict | None, net_pads: dict[str, l
         default_via_drill_nm=max(1, via_drill),
     )
     # KiCad's DRC enforces only the minimum track width; a net class width is
-    # the width new tracks start with. Designs neck down at fine-pitch lands,
-    # so wider classes may narrow to the board minimum next to their lands.
+    # the width new tracks start with. Designs neck down at lands narrower
+    # than their net's tracks, so such classes may narrow to the board
+    # minimum next to their lands. Nets whose lands are all wider keep one
+    # width (neck-down regions cost search time).
     neck_width = max(track_floor, rules.minimum_track_width_nm) if track_floor > 0 else rules.minimum_track_width_nm
     net_rules = []
     for net in sorted(net_pads):
@@ -1249,7 +1257,9 @@ def _design_rules(root: list[SExpr], project: dict | None, net_pads: dict[str, l
         if cls is None or cls.name == "Default" or (cls.track_nm, cls.clearance_nm) == (default.track_nm, default.clearance_nm):
             continue
         rule = NetRoutingRule(net, width_nm=cls.track_nm or None, clearance_nm=cls.clearance_nm or None)
-        if cls.track_nm and cls.track_nm > max(neck_width, default.track_nm):
+        land = (smallest_land or {}).get(net)
+        if (cls.track_nm and cls.track_nm > max(neck_width, default.track_nm)
+                and land is not None and cls.track_nm >= land):
             rule = replace(rule, breakout_width_nm=neck_width,
                            breakout_length_nm=max(_NECK_DOWN_MIN_LENGTH_NM, 2 * cls.track_nm))
             log.approx("wide net class narrows to the board minimum width next to its lands")

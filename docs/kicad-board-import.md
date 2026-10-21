@@ -28,11 +28,14 @@ defaults. Non-default classes become per-net width and clearance rules.
 
 KiCad's DRC enforces only the minimum track width (the project's
 `min_track_width`, or `trace_min` in a KiCad 5 board); a class width is the
-width new tracks start with, and real designs narrow at fine-pitch lands. A
-class wider than both that minimum and the default width therefore gets a
-neck-down region (`breakout_width` at the minimum, `breakout_length` twice
+width new tracks start with, and real designs narrow at lands narrower
+than the track. A class wider than both that minimum and the default width,
+and at least as wide as the smallest land on one of its nets, gives that net
+a neck-down region (`breakout_width` at the minimum, `breakout_length` twice
 the class width and at least 1 mm): the router keeps the class width where
-it fits and narrows only next to the net's lands.
+it fits and narrows only next to the net's lands. Nets whose lands are all
+wider than their tracks keep one width, because neck-down regions cost
+search time (2.6 times on a 1.25 mm supply net whose lands are all wider).
 
 ## Approximations
 
