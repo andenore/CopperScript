@@ -337,3 +337,5 @@ def test_replay_cli_routes_saved_inputs_with_overrides(tmp_path, capsys) -> None
     assert document["overrides"] == {"maximum_iterations": 3}
     assert document["signal"]["opens"] == 0 and document["unrouted"] == {}
     assert main(["replay-unified", str(state), "--set", "no_such_option=1"]) == 2
+    assert main(["replay-unified", str(state), "--only", "A", "-o", str(tmp_path / "replay.kicad_pcb")]) == 0
+    assert (tmp_path / "replay.kicad_pcb").is_file()

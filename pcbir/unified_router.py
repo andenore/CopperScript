@@ -2287,14 +2287,18 @@ def route_unified(
                                  len(board.vias), global_route.routing_fingerprint, fingerprint)
 
 
-def replay_unified(path, on_progress: ProgressCallback | None = None, **overrides) -> DetailedRoutingResult:
+def replay_unified(path, on_progress: ProgressCallback | None = None, *,
+                   only_nets: frozenset[str] | None = None, **overrides) -> DetailedRoutingResult:
     """Route the inputs saved by ``save_inputs_path`` again, with option overrides.
 
+    ``only_nets`` narrows the saved net selection (to study a net alone).
     Without the pipeline's escape seeder (repair rounds run unseeded).
     """
     from .state_codec import load_state
     saved = load_state(path)
     options = replace(saved["options"], **overrides)
+    if only_nets is not None:
+        saved["only_nets"] = only_nets if saved["only_nets"] is None else saved["only_nets"] & only_nets
     return route_unified(saved["board"], saved["global_route"], options,
                          fanout_accesses=saved["fanout_accesses"],
                          fanout_created_vias=saved["fanout_created_vias"],
