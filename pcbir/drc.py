@@ -495,6 +495,10 @@ def physical_board_digest(board: PhysicalBoard) -> str:
                 "track": board.rules.default_track_width_nm,
                 "via": board.rules.default_via_size_nm,
                 "drill": board.rules.default_via_drill_nm,
+                **({"minimum_via": board.rules.minimum_via_size_nm}
+                   if board.rules.minimum_via_size_nm is not None else {}),
+                **({"minimum_via_drill": board.rules.minimum_via_drill_nm}
+                   if board.rules.minimum_via_drill_nm is not None else {}),
             },
             "placements": [
                 (p.reference, p.footprint, p.position.x_nm, p.position.y_nm, str(p.rotation_degrees), p.side.value)

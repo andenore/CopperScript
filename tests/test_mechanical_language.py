@@ -52,6 +52,29 @@ def test_polygon_cutout_and_hole_lower_to_physical_not_bom():
     assert manifest.artifacts
 
 
+def test_jlcpcb_profiles_declare_via_minima_and_rules_override_them():
+    outline = "outline rectangle { width = 40mm; height = 30mm; }"
+    jlc = PrototypePhysicalOptions(copper_layers=4, fabrication_profile="jlcpcb-four-layer")
+    generic = prototype_physicalize(design(outline))
+    assert generic.rules.minimum_via_size_nm is None
+    assert generic.rules.minimum_via_drill_nm is None
+    profile = prototype_physicalize(design(outline), jlc)
+    assert profile.rules.minimum_via_size_nm == nm_from_mm("0.45")
+    assert profile.rules.minimum_via_drill_nm == nm_from_mm("0.20")
+    override = prototype_physicalize(design(outline + """
+        rules { minimum_via_size = 0.4mm; default_via_size = 0.4mm; default_via_drill = 0.2mm; }"""), jlc)
+    assert override.rules.minimum_via_size_nm == nm_from_mm("0.4")
+    assert override.rules.default_via_size_nm == nm_from_mm("0.4")
+
+
+def test_default_via_below_the_profile_minimum_is_rejected():
+    small = design("""outline rectangle { width = 40mm; height = 30mm; }
+        rules { default_via_size = 0.35mm; default_via_drill = 0.2mm; }""")
+    with pytest.raises(ValueError, match="below the minimum via size"):
+        prototype_physicalize(small, PrototypePhysicalOptions(
+            copper_layers=4, fabrication_profile="jlcpcb-four-layer"))
+
+
 @pytest.mark.parametrize("body, message", [
     ("", "requires exactly one outline"),
     ("outline circle { diameter = -1mm; }", "positive"),
@@ -65,6 +88,8 @@ def test_polygon_cutout_and_hole_lower_to_physical_not_bom():
     ("outline circle { diameter = 50mm; } hole H { position = (50mm,50mm); diameter = 3mm; }", "material|outline|outside"),
     ("outline circle { diameter = 50mm; } hole H { position = (20mm,20mm); diameter = 3mm; } hole H { position = (30mm,30mm); diameter = 3mm; }", "duplicate mechanical"),
     ("outline rectangle { width = 50mm; height = 50mm; } rules { minimum_clearance = 0mm; }", "positive"),
+    ("outline rectangle { width = 50mm; height = 50mm; } rules { minimum_via_size = 1mm; }", "below the minimum via size"),
+    ("outline rectangle { width = 50mm; height = 50mm; } rules { minimum_via_drill = 0mm; }", "positive"),
 ])
 def test_bad_geometry_is_source_located_even_electrical_projection(body, message):
     with pytest.raises(CopperScriptError, match=message) as error:

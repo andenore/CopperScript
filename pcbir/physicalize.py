@@ -267,11 +267,16 @@ def _physicalize(
     if options.fabrication_profile in {"jlcpcb-four-layer", "jlcpcb-six-layer"}:
         # JLCPCB's published multilayer minimum is 0.09 mm; this is an
         # escape-rule floor, not a recommendation for every signal or a
-        # substitute for impedance/current/assembly qualification.
+        # substitute for impedance/current/assembly qualification. Its
+        # multilayer via minimum is 0.45 mm diameter (0.4 mm limitation) on a
+        # 0.2 mm hole (capabilities page); without it KiCad applies its own
+        # 0.5 mm project default.
         rules = DesignRules(
             minimum_clearance_nm=nm_from_mm("0.09"),
             minimum_track_width_nm=nm_from_mm("0.09"),
             default_track_width_nm=nm_from_mm("0.20"),
+            minimum_via_size_nm=nm_from_mm("0.45"),
+            minimum_via_drill_nm=nm_from_mm("0.20"),
         )
         metadata["fabrication_profile"] = options.fabrication_profile
     else:

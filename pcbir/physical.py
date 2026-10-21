@@ -680,6 +680,11 @@ class DesignRules:
     default_via_size_nm: Nanometres = nm_from_mm("0.8")
     default_via_drill_nm: Nanometres = nm_from_mm("0.4")
     minimum_slot_width_nm: Nanometres = nm_from_mm('1')
+    # Fabrication minima for plated vias; None leaves the check to the
+    # downstream tool's own default. Fabrication profiles set them, and
+    # mechanical ``rules`` may override them.
+    minimum_via_size_nm: Nanometres | None = None
+    minimum_via_drill_nm: Nanometres | None = None
 
     def __post_init__(self) -> None:
         values = (
@@ -697,6 +702,17 @@ class DesignRules:
             raise ValueError("minimum track width cannot exceed default track width")
         if self.default_via_drill_nm >= self.default_via_size_nm:
             raise ValueError("default via drill must be smaller than via size")
+        minima = (self.minimum_via_size_nm, self.minimum_via_drill_nm)
+        if any(value is not None and value <= 0 for value in minima):
+            raise ValueError("physical design rules must be positive")
+        if self.minimum_via_size_nm is not None and self.default_via_size_nm < self.minimum_via_size_nm:
+            raise ValueError(
+                f"default via size {self.default_via_size_nm / 1_000_000:g} mm is below the minimum "
+                f"via size {self.minimum_via_size_nm / 1_000_000:g} mm")
+        if self.minimum_via_drill_nm is not None and self.default_via_drill_nm < self.minimum_via_drill_nm:
+            raise ValueError(
+                f"default via drill {self.default_via_drill_nm / 1_000_000:g} mm is below the minimum "
+                f"via drill {self.minimum_via_drill_nm / 1_000_000:g} mm")
 
 
 @dataclass(frozen=True, slots=True)

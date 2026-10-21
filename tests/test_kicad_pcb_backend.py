@@ -107,6 +107,21 @@ def test_filled_capped_via_exports_qualified_kicad_minima() -> None:
     assert rules["min_via_annular_width"] == 0.05
 
 
+def test_declared_via_minima_replace_the_board_derived_minima() -> None:
+    from dataclasses import replace
+
+    board = _routed_board()
+    plain = json.loads(KiCadPcbBackend().generate(board).artifacts[1].content)
+    derived = min([board.rules.default_via_size_nm, *(v.size_nm for v in board.vias)]) / 1_000_000
+    assert plain["board"]["design_settings"]["rules"]["min_via_diameter"] == derived
+    declared = replace(board, rules=replace(
+        board.rules, minimum_via_size_nm=nm_from_mm("0.45"), minimum_via_drill_nm=nm_from_mm("0.20")))
+    rules = json.loads(KiCadPcbBackend().generate(declared).artifacts[1].content)[
+        "board"]["design_settings"]["rules"]
+    assert rules["min_via_diameter"] == 0.45
+    assert rules["min_through_hole_diameter"] == 0.20
+
+
 def test_kicad_pcb_backend_marks_proxy_board_as_non_fabrication_ready() -> None:
     electrical = compile_file(ROOT / "examples/valid_board/board.copper")
     physical = prototype_physicalize(electrical)

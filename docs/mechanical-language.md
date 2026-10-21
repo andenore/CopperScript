@@ -57,8 +57,20 @@ clearances must fit material and satisfy the existing hole topology checks.
 Optional rules override physicalizer defaults, not electrical ERC. Allowed
 length properties are `minimum_clearance`, `minimum_hole_clearance`,
 `minimum_track_width`, `default_track_width`, `default_via_size`,
-`default_via_drill`, `minimum_slot_width`. Omitted values keep the selected fabrication profile's
+`default_via_drill`, `minimum_slot_width`, `minimum_via_size`,
+`minimum_via_drill`. Omitted values keep the selected fabrication profile's
 defaults. This is design intent, not manufacturing qualification.
+
+`minimum_via_size` and `minimum_via_drill` are the fabricator's smallest
+plated via diameter and drill. The JLCPCB profiles set 0.45 mm and 0.2 mm
+(JLCPCB's published multilayer minimum); the generic profile sets none. The
+board's `default_via_size` and `default_via_drill` may not be smaller, and the
+KiCad export writes them as the project's minimum via diameter and minimum
+through-hole (which KiCad also applies to plated pad holes), so native DRC
+checks every ordinary via against the fabricator. Without them the export uses
+the smallest via the board itself declares or contains. A board with
+filled-and-capped vias keeps the qualified 0.30 / 0.20 mm via-in-pad minima
+instead.
 
 `minimum_hole_clearance` applies to all copper near every non-plated hole. A
 vendor land pattern whose pads sit closer to the part's own holes takes a

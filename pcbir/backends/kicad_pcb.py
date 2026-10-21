@@ -204,6 +204,23 @@ def _uses_internal_connections(board: PhysicalBoard) -> bool:
     return any(board.footprints[p.footprint].internal_pad_groups for p in board.placements)
 
 
+def _via_minima(board: PhysicalBoard) -> dict[str, float]:
+    """The fabrication via minima the board declares, as KiCad project rules.
+
+    They replace the minima derived from the board's own vias, so native DRC
+    checks vias against the fabricator rather than against themselves.
+    Undeclared minima keep the derived values. KiCad's minimum through-hole
+    also covers plated pad holes.
+    """
+    rules = board.rules
+    out = {}
+    if rules.minimum_via_size_nm is not None:
+        out["min_via_diameter"] = float(rules.minimum_via_size_nm) / 1_000_000
+    if rules.minimum_via_drill_nm is not None:
+        out["min_through_hole_diameter"] = float(rules.minimum_via_drill_nm) / 1_000_000
+    return out
+
+
 def _render_project(board: PhysicalBoard) -> str:
     """Pin KiCad's board-wide DRC rules to the signed physical IR.
 
@@ -247,7 +264,7 @@ def _render_project(board: PhysicalBoard) -> str:
                         "min_via_diameter": 0.30,
                         "min_through_hole_diameter": 0.20,
                         "min_via_annular_width": 0.05,
-                    } if filled_capped else ordinary_minima),
+                    } if filled_capped else {**ordinary_minima, **_via_minima(board)}),
                 }
             }
         },
