@@ -119,3 +119,10 @@ Fixing the importer before this baseline raised the clean pass from 0.697:
 surface custom pads now use their copper's own bounding box, and pad-only
 spacing findings on imported placements no longer block package access (see
 [KiCad board import](kicad-board-import.md)).
+
+## Progress
+
+| Change | Clean boards | Notes |
+|---|---:|---|
+| Baseline (2026-10-20) | 79 | |
+| Plan 3.1: copper text as an obstacle | 81 | 0011 and 0026 clean; no KiCad error-level violations left on any board |
