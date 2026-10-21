@@ -282,11 +282,12 @@ def test_copper_text_is_an_obstacle_grown_by_the_clearance():
     result = parse_kicad_pcb(TEXT, source="text")
     keepouts = {item.id: item for item in result.board.copper_keepouts}
     board_text = [item for key, item in keepouts.items() if key.startswith("text-")]
-    # Five 3 mm characters plus the 0.6 mm stroke, centred, grown by the 0.2 mm clearance.
-    assert _box(board_text[0]) == (nm_from_mm("12"), nm_from_mm("8"), nm_from_mm("28"), nm_from_mm("12"))
+    # "AC_IN" advances 4.1 font widths (I is narrow): 12.3 mm plus the 0.6 mm stroke,
+    # centred on (20, 10) and grown by the 0.2 mm clearance.
+    assert _box(board_text[0]) == (nm_from_mm("13.35"), nm_from_mm("8"), nm_from_mm("26.65"), nm_from_mm("12"))
     # Rotated 90 degrees, left-justified, two lines: the box extends up (-y) from the anchor.
     x0, y0, x1, y1 = _box(board_text[1])
-    assert y1 == nm_from_mm("20.2") and y0 == nm_from_mm("17.6")
+    assert y1 == nm_from_mm("20.2") and y0 == nm_from_mm("17.8")
     assert x1 - x0 == round(nm_from_mm("1") + nm_from_mm("1") * 1.62) + nm_from_mm("0.2") + 2 * nm_from_mm("0.2")
     # Silkscreen text and hidden copper text are not copper.
     assert len(board_text) == 2
