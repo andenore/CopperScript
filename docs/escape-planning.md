@@ -4,8 +4,10 @@ The implemented contract of `pcbir/escape_plan.py`. The steps, research and
 open questions are in the [escape planning plan](escape-planning-plan.md);
 this page describes only what exists.
 
-Status: steps E0 (diagnostics) and E1 (pad fields and channel model).
-Nothing here changes placement or routing.
+Status: steps E0 (diagnostics), E1 (pad fields and channel model) and E3
+(two-end ordering and layer assignment). Diagnostics never change routing;
+the E3 plan does only when `EscapePlanOptions(two_end_order=True)` is passed
+(off by default).
 
 ## Escape diagnostics
 
@@ -136,6 +138,46 @@ breakout width says so; clearances never fall below the board minimum.
 Cluster reports in `escape` carry a summary per field: kind, lattice size
 and pitch, gap counts and the narrowest gap of each kind in tracks at the
 cluster's widest escape rule, tiles and via sites.
+
+## Two-end plan
+
+`plan_two_end_escapes(board, options)` plans every cluster pair whose bundle
+crosses (`crossing_pairs > 0`). It covers every signal net joining the two
+parts, rails and other trees included: they cross the bundle too, and an
+unplanned net routed last finds its lane taken.
+
+- **Planar layer**: the surface of the part whose bundle pins are all
+  surface lands (the end that needs a via to change layer), else the first
+  layer all the nets may use. A bundle with surface pins on both outer
+  layers, or with no common layer, is not planned.
+- **Kept nets**: one largest non-crossing subset (the LIS of the boundary
+  orders) stays on the planar layer.
+- **Moved nets**: the rest move to the legal layer nearest the planar layer
+  in the stackup; a net with no other legal layer is listed as `unmoved`.
+- **Corridor**: the box of both parts' bundle pins, grown by
+  `corridor_margin_nm` (1 mm).
+
+An `EscapePlan` carries what the routers use:
+
+| Field | Used by | Effect |
+|---|---|---|
+| `surface_pads` | Fanout (`FanoutOptions.surface_pads`) | A kept net's surface pin tries a checked surface escape before a dogbone via, so the bundle's channel is not walled by vias |
+| `net_order` | Detailed router (`DetailedRouterOptions.escape_net_order`) | Planned nets route first in passes 1 and 2: moved nets, then kept nets from the outside of the bundle in, then unmoved nets |
+| `layer_biases` | Detailed router (`DetailedRouterOptions.escape_layer_biases`) | Inside the corridor a moved net pays `layer_bias_rate` (20 cost units per mm; 10 doubles the cost of track) on any layer but its own, and its corridor searches cover every allowed layer, not only its global guide's |
+
+Kept nets carry no layer bias: they start on the planar layer anyway, and at
+a through-hole end every layer is theirs. Holding them to one layer there
+squeezes the bundle through that layer's gaps. Biases are penalties, never
+discounts, so the search heuristic stays admissible.
+
+`run_routing_pipeline(..., escape_plan_options=...)` plans once on the
+placed board before package access, then gives fanout and the ordinary
+detailed router the plan; detailed-feedback trials re-plan their moved
+board. The unified router owns its own access and does not read the plan
+yet (step E4). `python -m pcbir.bench route --escape-plan` routes a board
+with the plan and records it under `escape_plan`, with `moved_on_layer`: for
+each moved net, whether its routed copper used the planned layer inside the
+corridor.
 
 ## Where diagnostics appear
 

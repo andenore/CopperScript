@@ -55,6 +55,9 @@ class FanoutOptions:
     # joint conflicts. Source layer/width/length rules remain authoritative.
     prefer_surface_escapes: bool = False
     surface_preference_depth: int | None = None
+    # Pins an escape plan keeps on their own surface (escape planning E3):
+    # a checked surface escape first, as ``prefer_surface_escapes``, at any depth.
+    surface_pads: frozenset[PadReference] = frozenset()
     # Runtime policy: keep these source associations pending for the native
     # power-preparation ledger. This alone never certifies a bypass connection.
     plane_return_nets: frozenset[str] = frozenset()
@@ -292,7 +295,9 @@ def route_fanout(
             domains[reference] = choices
             continue
         prefer_surface = options.prefer_surface_escapes
-        if prefer_surface and options.surface_preference_depth is not None:
+        if reference in options.surface_pads:
+            prefer_surface = True
+        elif prefer_surface and options.surface_preference_depth is not None:
             pose, pad = pin_by_ref[reference][0][3:5]
             depth = circular_array_depth(board, pose, pad, options.maximum_neighbor_distance_nm)
             prefer_surface = depth is not None and depth <= options.surface_preference_depth

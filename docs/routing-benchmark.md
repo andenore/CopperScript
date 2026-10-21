@@ -17,6 +17,9 @@ Pins for both repositories, the KiCad series, the tiers, the shard count and
 the per-board time limit are in `.github/routing-benchmark.json`. The
 prepare job writes `tiers.json` (board → tier) next to the boards;
 `summarize --tiers` and `compare --tiers` report each tier separately.
+`route_args` in the same file are appended to every `pcbir.bench route`
+call; it stays empty on `main` and is set only on a branch that measures an
+opt-in option (for example `["--escape-plan"]`).
 
 PCBench ships KiCad 5 boards. The workflow prepares them with PCBWorld's
 own chain under stock KiCad 9: `convert_v9.py` (re-save in KiCad 9 format,

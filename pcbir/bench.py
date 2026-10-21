@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import time
 
-from .escape_plan import escape_diagnostics
+from .escape_plan import EscapePlanOptions, escape_diagnostics, plan_two_end_escapes
 from .physical import PhysicalBoard, nm_from_mm
 
 RESULT_SCHEMA = "copperscript-bench-board/v0.1"
@@ -38,7 +38,8 @@ _ROUTING_TAGS = ("segment", "arc", "via")
 # --------------------------------------------------------------------------- routing
 
 def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20_000,
-                     passes: int = 2, pitch_mm: str = "1", router: str = "legacy") -> dict:
+                     passes: int = 2, pitch_mm: str = "1", router: str = "legacy",
+                     escape_plan: bool = False) -> dict:
     """Import, route with fixed placement, write the routed board and a result record."""
     from .detailed import DetailedRouterOptions
     from .fanout import FanoutOptions
@@ -83,6 +84,7 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
             fanout_options=FanoutOptions(),
             plane_stitch_options=PlaneStitchOptions(maximum_contact_radius_nm=nm_from_mm(5)) if board.zones else None,
             **({"unified_options": _unified_options()} if router == "unified" else {}),
+            **({"escape_plan_options": EscapePlanOptions(two_end_order=True)} if escape_plan else {}),
         )
     except Exception as exc:  # noqa: BLE001 - a routing crash is a measured outcome, not a harness error
         record.update(status="route_crashed", error=f"{type(exc).__name__}: {exc}",
@@ -111,6 +113,9 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
                              if (a.position, a.rotation_degrees, a.side) != (b.position, b.rotation_degrees, b.side)),
     )
     record["unrouted_causes"] = unrouted_causes(record)
+    if escape_plan:
+        record["escape_plan"] = _plan_outcome(plan_two_end_escapes(board, EscapePlanOptions(two_end_order=True),
+                                                                   escape), routed)
     text = board_path.read_bytes().decode("utf-8-sig")
     (out_dir / ROUTED_NAME).write_text(write_back_routing(text, routed), encoding="utf-8")
     project = board_path.with_suffix(".kicad_pro")
@@ -118,6 +123,23 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         shutil.copyfile(project, out_dir / Path(ROUTED_NAME).with_suffix(".kicad_pro"))
     _save(out_dir, record)
     return record
+
+
+def _plan_outcome(plan, routed) -> dict:
+    """The plan, and for each moved net whether its routed copper used its planned layer in the corridor."""
+    outcome = plan.report()
+    for pair, report in zip(plan.pairs, outcome["pairs"]):
+        report["moved_on_layer"] = {
+            net: any(track.net == net and track.layer is layer and pair.corridor.intersects(_track_box(track))
+                     for track in routed.tracks)
+            for net, layer in pair.moved}
+    return outcome
+
+
+def _track_box(track):
+    from .geometry import Bounds
+    return Bounds(min(track.start.x_nm, track.end.x_nm), min(track.start.y_nm, track.end.y_nm),
+                  max(track.start.x_nm, track.end.x_nm), max(track.start.y_nm, track.end.y_nm))
 
 
 def _pending_nets(board, access) -> list[str]:
@@ -680,6 +702,8 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("board", type=Path)
     route.add_argument("--out", type=Path, required=True)
     route.add_argument("--search-budget", type=int, default=20_000)
+    route.add_argument("--escape-plan", action="store_true",
+                       help="give the ordinary router a two-end escape plan (escape planning E3)")
     route.add_argument("--router", choices=("legacy", "unified"), default="legacy",
                        help="ordinary detailed router, as copper route-board --router")
     reference = commands.add_parser("reference")
@@ -714,7 +738,8 @@ def main(argv: list[str] | None = None) -> int:
     annotate.add_argument("--first", type=int, default=0, help="first chunk index (a step shows 10)")
     args = parser.parse_args(argv)
     if args.command == "route":
-        record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router)
+        record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router,
+                                  escape_plan=args.escape_plan)
     elif args.command == "reference":
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":

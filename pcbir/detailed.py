@@ -50,7 +50,7 @@ from .routing_clearance import RoutingBlocker, RoutingClearanceIndex
 from .breakout import BreakoutRegions
 from .routing_layers import routing_layers, signal_layer_preferences
 from .routing_vias import physical_via_span
-from .routing_costs import COST_UNIT, length_cost, preference_cost
+from .routing_costs import COST_UNIT, LayerBias, length_cost, preference_cost
 from .routing_guides import GuideDistance, GuideExposure, guide_transition_cost
 from .surface_path import _track_inside_board
 from .pin_escape import (RoutingAccess, access_position, launch_position, checked_access_path,
@@ -323,6 +323,10 @@ class DetailedRouterOptions:
     # Bound of the per-run memo of exactly repeated repair searches; 0 disables
     # it. A hit returns the identical earlier attempt, never different copper.
     search_reuse_entries: int = 128
+    # An escape plan (``escape_plan.plan_two_end_escapes``): nets routed first,
+    # in this order, in the first two passes, and soft layer assignments.
+    escape_net_order: tuple[str, ...] = ()
+    escape_layer_biases: tuple[LayerBias, ...] = ()
 
     def __post_init__(self) -> None:
         if min(
@@ -340,7 +344,7 @@ class DetailedRouterOptions:
             self.direction_preference_cost,
             self.guide_margin_nm,
             self.guide_escape_nm,
-        ) < 0:
+        ) < 0 or any(bias.rate < 0 for bias in self.escape_layer_biases):
             raise ValueError("detailed router costs cannot be negative")
         if not 100 <= self.heuristic_weight_percent <= 300:
             raise ValueError("detailed router heuristic weight must be 100..300 percent")
@@ -683,6 +687,10 @@ def _route_detailed(
         )
         if pass_index == 2:
             ordered_nets.reverse()
+        if pass_index <= 2 and options.escape_net_order:
+            # Planned bundles go first, in plan order, ahead of either sort.
+            planned = {name: rank for rank, name in enumerate(options.escape_net_order)}
+            ordered_nets.sort(key=lambda item: planned.get(item.name, len(planned)))
         elif pass_index >= 3 and best is not None:
             if pass_index <= 4:
                 ordered_nets.sort(key=lambda item: (
@@ -2075,6 +2083,9 @@ def _search(
 ) -> tuple[tuple[tuple[DetailedNode, DetailedNode, int], ...], DetailedNode, DetailedNode] | None:
     if options.allow_guide_deviation:
         scales = (1, 2, 4) if options.progressive_guides else (1,)
+        # A net with a planned layer may need a layer its guide does not use:
+        # its corridor searches cover every allowed layer.
+        planned = any(bias.net == net for bias in options.escape_layer_biases)
         for scale in scales:
             corridor_budget = min(
                 5_000, max(1, options.maximum_search_states // (5 if scale == 1 else 2)),
@@ -2087,6 +2098,7 @@ def _search(
                     guide_margin_nm=options.guide_margin_nm * scale,
                     allow_movable_conflicts=allow_movable_conflicts,
                     forbidden_via_positions=forbidden_via_positions,
+                    project_guide_layers=planned,
                     stage="corridor" if scale == 1 else "widened",
                 )
             except _SearchBudgetExceeded:
@@ -2157,6 +2169,7 @@ def _search_once(
     # the symmetric edge cost once, independently of arrival direction/bends.
     edge_cost_cache: dict[tuple[int, int], int] = {}
     layer_ranks, headings = signal_layer_preferences(grid.board)
+    layer_biases = tuple(bias for bias in options.escape_layer_biases if bias.net == net)
     guide_exposure = GuideExposure(guide, guide_margin_nm,
                                    ignore_layer=project_guide_layers)
 
@@ -2328,6 +2341,8 @@ def _search_once(
                             wrong_way = options.direction_preference_cost
                     preference = preference_cost(first_point, second_point, layer_ranks[layer],
                                                  options.layer_preference_cost, wrong_way, diagonal)
+                    preference += sum(bias.cost(first_point, second_point) for bias in layer_biases
+                                      if bias.layer is layer)
                 edge_cost = (base + preference + deviation + COST_UNIT * (congestion
                              + 2 * options.present_penalty * movable_edge_cache[edge]))
                 edge_cost_cache[edge] = edge_cost

@@ -184,13 +184,15 @@ jobs:
       - name: Route this shard's boards with fixed placement
         run: |
           shards=${{ needs.prepare.outputs.shard_count }}
+          # Extra route options pinned with the benchmark (e.g. an opt-in planner under measurement).
+          mapfile -t route_args < <(python3 -c 'import json; [print(a) for a in json.load(open(".github/routing-benchmark.json")).get("route_args", [])]')
           index=0
           for dir in ../boards/*/; do
             id=$(basename "$dir")
             if [ $((index % shards)) = "${{ matrix.shard }}" ]; then
               timeout --kill-after=30 "${{ needs.prepare.outputs.board_seconds }}" \
                 python -m pcbir.bench route "$dir/processed_v9_guide_v3.kicad_pcb" --out "../results/$id" \
-                > "../results-$id.log" 2>&1 || echo "$id exited $?"
+                "${route_args[@]}" > "../results-$id.log" 2>&1 || echo "$id exited $?"
               tail -n 1 "../results-$id.log"
               mkdir -p "../results/$id" && mv "../results-$id.log" "../results/$id/route.log"
             fi
