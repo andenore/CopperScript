@@ -168,6 +168,47 @@ def _run_issues(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_replay_unified(args: argparse.Namespace) -> int:
+    from dataclasses import fields
+    from time import perf_counter
+    from .drc import run_physical_drc
+    from .route_summary import connection_summary
+    from .state_codec import StateError
+    from .unified_router import UnifiedRouterOptions, replay_unified
+    known = {field.name for field in fields(UnifiedRouterOptions)}
+    overrides = {}
+    for item in args.overrides:
+        name, separator, text = item.partition("=")
+        if not separator or name not in known:
+            print(f"REPLAY ERROR: unknown option {name!r}; expected one of UnifiedRouterOptions")
+            return 2
+        try:
+            overrides[name] = json.loads(text)
+        except json.JSONDecodeError:
+            overrides[name] = text
+    started = perf_counter()
+    try:
+        result = replay_unified(args.state, only_nets=frozenset(args.only) if args.only else None, **overrides)
+    except (StateError, OSError, ValueError) as exc:
+        print(f"REPLAY ERROR: {exc}")
+        return 2
+    seconds = round(perf_counter() - started, 1)
+    drc = run_physical_drc(result.board)
+    summary = connection_summary(result.board, drc)
+    document = {"state": str(args.state), "overrides": overrides, "seconds": seconds,
+                "unrouted": {net.net: list(net.diagnostics) for net in sorted(result.nets, key=lambda n: n.net)
+                             if not net.connected}, **summary}
+    text = json.dumps(document, indent=1, sort_keys=True)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(text + "\n", encoding="utf-8")
+    if args.output:
+        from .hard_macros import materialize_hard_macros
+        write_kicad_project(KiCadPcbBackend().generate(materialize_hard_macros(result.board)), args.output)
+    print(text)
+    return 0
+
+
 def _run_view(args: argparse.Namespace) -> int:
     from .run_issues import find_issue, load_run, run_issues
     from .scene import scene_from_kicad_pcb
@@ -499,6 +540,15 @@ def _parser() -> argparse.ArgumentParser:
     state_parser = subparsers.add_parser("state", help="inspect copperscript.state files written by pcbir.workbench")
     state_parser.add_argument("action", choices=("show",))
     state_parser.add_argument("file", type=Path)
+    replay_parser = subparsers.add_parser(
+        "replay-unified", help="route a --unified-save-inputs state again with option overrides and summarise it")
+    replay_parser.add_argument("state", type=Path)
+    replay_parser.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="overrides",
+        help="UnifiedRouterOptions field; the value is JSON (true, 40, 0.6, null) or a plain string")
+    replay_parser.add_argument("--report", type=Path, help="also write the summary JSON here")
+    replay_parser.add_argument("--only", action="append", default=[], metavar="NET",
+        help="route only this net (repeatable); the other nets keep their saved copper, if any")
+    replay_parser.add_argument("-o", "--output", type=Path, help="write the routed board as .kicad_pcb (for copper view)")
     from .design_query import QUERY_KINDS
     query_parser = subparsers.add_parser(
         "query", help="answer compact questions about the compiled design (pins, nets, components, open pins)")
@@ -1080,6 +1130,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_issues(args)
     if args.command == "view":
         return _run_view(args)
+    if args.command == "replay-unified":
+        return _run_replay_unified(args)
     if args.command == "state":
         from .state_codec import StateError, describe_state
         try:

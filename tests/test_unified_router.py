@@ -285,6 +285,23 @@ def test_bus_members_route_first_and_are_reported_as_routed() -> None:
     assert by_name["D0"].connected and by_name["D1"].connected and by_name["D0"].track_count > 0
 
 
+def test_bus_members_over_their_length_leave_the_bus_phase_and_still_route() -> None:
+    from pcbir.physical import NetMatchGroup, NetRoutingRule, RouteKind
+    board = _board({"D0": ((2, 7), (18, 7)), "D1": ((2, 9), (18, 9)), "X": ((10, 2), (10, 16))})
+    rules = (NetRoutingRule("D0", RouteKind.GENERAL, max_length_nm=nm_from_mm("10")),)
+    board = replace(board, match_groups=(NetMatchGroup("bus", ("D0", "D1"), nm_from_mm("5")),),
+                    net_routing_rules=rules)
+    events = []
+    global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    result = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_length_budget=True),
+                           on_progress=lambda *args, **kwargs: events.append(args))
+    buses = [e[2] for e in events if e and e[0] == "unified_buses"]
+    # D0 needs 16 mm against a 10 mm limit: no bus copper, the main negotiation routes it.
+    assert buses and buses[0]["complete"] == 1 and buses[0]["over_length"] == 1
+    by_name = {net.net: net for net in result.nets}
+    assert by_name["D0"].connected and by_name["D1"].connected
+
+
 def test_a_length_limited_net_takes_the_short_path_through_congestion() -> None:
     from pcbir.physical import NetRoutingRule, RouteKind
     from pcbir.unified_router import _Router
@@ -305,3 +322,20 @@ def test_a_length_limited_net_takes_the_short_path_through_congestion() -> None:
     assert connected and free_length > nm_from_mm("15")       # without the rule: a detour
     connected, limited_length = detoured(replace(board, net_routing_rules=rules))
     assert connected and limited_length <= nm_from_mm("15")   # with it: straight through
+
+
+def test_replay_cli_routes_saved_inputs_with_overrides(tmp_path, capsys) -> None:
+    import json
+    from pcbir.cli import main
+    board = _board({"A": ((3, 10), (17, 10))})
+    state = tmp_path / "inputs.json"
+    global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    route_unified(board, global_route, UnifiedRouterOptions(save_inputs_path=str(state)))
+    assert main(["replay-unified", str(state), "--set", "maximum_iterations=3",
+                 "--report", str(tmp_path / "replay.json")]) == 0
+    document = json.loads((tmp_path / "replay.json").read_text(encoding="utf-8"))
+    assert document["overrides"] == {"maximum_iterations": 3}
+    assert document["signal"]["opens"] == 0 and document["unrouted"] == {}
+    assert main(["replay-unified", str(state), "--set", "no_such_option=1"]) == 2
+    assert main(["replay-unified", str(state), "--only", "A", "-o", str(tmp_path / "replay.kicad_pcb")]) == 0
+    assert (tmp_path / "replay.kicad_pcb").is_file()

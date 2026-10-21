@@ -65,7 +65,8 @@ def load_ladder(path: Path) -> list[dict]:
 
 def run_board(board: dict, out: Path, *, kicad_cli: str | None = None,
               python: str = sys.executable, extra_args: tuple[str, ...] = ()) -> dict:
-    directory = out / board["name"]
+    # route-board runs in the project directory: report paths must not be relative.
+    directory = out.resolve() / board["name"]
     record = {"name": board["name"], "project": str(board["project"]), "tags": board["tags"]}
     source = board["project"] / board["source"]
     if not source.is_file():

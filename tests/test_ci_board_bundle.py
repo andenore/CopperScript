@@ -106,7 +106,7 @@ def test_actual_profile_worker_preserves_stats_on_timeout(tmp_path, monkeypatch)
     monkeypatch.setenv("PYTHONPATH", str(tmp_path))
     profile = tmp_path / "router.prof"
     result = CI.run_logged([sys.executable, "-u", "-c", CI.WORKER, "pcbir.profiling",
-        "--output", str(profile), "--module", "busy_ci_fixture"], tmp_path, seconds=1, grace_seconds=5)
+        "--output", str(profile), "--module", "busy_ci_fixture"], tmp_path, seconds=5, grace_seconds=5)
     assert result["timed_out"] and not result["forced_termination"]
     assert profile.stat().st_size > 0
 

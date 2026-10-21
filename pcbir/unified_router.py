@@ -92,6 +92,11 @@ class UnifiedRouterOptions:
     # but its bus detours break max_length (DRC 1 -> 3); on an earlier
     # placement it gained 2 points. Needs length-aware bus routing first.
     buses_first: bool = False
+    # With buses_first: bus members contest only each other, so they retake
+    # their shortest path when a detour breaks max_length (as length_priority),
+    # and only members within max_length keep their bus copper; the rest
+    # route with the other nets.
+    bus_length_budget: bool = False
     # A net with a max_length that detours too far retakes its shortest path.
     # Off by default: on CopperProbe it cost 2 points of completion (0.873 ->
     # 0.852); the pushed-aside nets lose more than the length rule gains.
@@ -1871,6 +1876,12 @@ def _with(board: PhysicalBoard, accepted, *, without=frozenset()) -> PhysicalBoa
         vias=(*board.vias, *(v for name in names for v in accepted[name][1])))
 
 
+def _net_track_length(board: PhysicalBoard, name: str, new_tracks) -> int:
+    """Routed length of a net as DRC measures it: its existing and new tracks."""
+    return sum(round(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm))
+               for t in (*(t for t in board.tracks if t.net == name), *new_tracks))
+
+
 def _merge(accepted, more):
     merged = {name: (list(tracks), list(vias)) for name, (tracks, vias) in accepted.items()}
     for name, (tracks, vias) in more.items():
@@ -2119,12 +2130,22 @@ def route_unified(
     if options.buses_first and bus_names and len(bus_names) < len(nets):
         # A bus needs a shared corridor; negotiated together with every other
         # net it loses it piecemeal. Its members route first, among themselves.
-        bus_router = _Router(board, options, [net for net in nets if net.name in bus_names], on_progress)
+        bus_options = replace(options, length_priority=True) if options.bus_length_budget else options
+        bus_router = _Router(board, bus_options, [net for net in nets if net.name in bus_names], on_progress)
         bus_routes, bus_conflicts, used = bus_router.negotiate(deadline)
         bus_accepted, _, bus_complete = bus_router.commit(bus_routes, bus_conflicts)
+        over_length = set()
+        if options.bus_length_budget:
+            # The DRC measure: every track of the net, existing copper included.
+            for name in bus_complete:
+                rule = rules.get(name)
+                if rule is not None and rule.max_length_nm is not None and _net_track_length(
+                        board, name, bus_accepted.get(name, ((), ()))[0]) > rule.max_length_nm:
+                    over_length.add(name)
+            bus_complete = set(bus_complete) - over_length
         bus_accepted = {name: value for name, value in bus_accepted.items() if name in bus_complete}
         emit(on_progress, "unified_buses", "finished", nets=len(bus_names), complete=len(bus_complete),
-             iterations=used)
+             over_length=len(over_length), iterations=used)
         if bus_accepted:
             board = _with(board, bus_accepted)
             nets = [net for net in nets if net.name not in bus_complete]
@@ -2266,14 +2287,18 @@ def route_unified(
                                  len(board.vias), global_route.routing_fingerprint, fingerprint)
 
 
-def replay_unified(path, on_progress: ProgressCallback | None = None, **overrides) -> DetailedRoutingResult:
+def replay_unified(path, on_progress: ProgressCallback | None = None, *,
+                   only_nets: frozenset[str] | None = None, **overrides) -> DetailedRoutingResult:
     """Route the inputs saved by ``save_inputs_path`` again, with option overrides.
 
+    ``only_nets`` narrows the saved net selection (to study a net alone).
     Without the pipeline's escape seeder (repair rounds run unseeded).
     """
     from .state_codec import load_state
     saved = load_state(path)
     options = replace(saved["options"], **overrides)
+    if only_nets is not None:
+        saved["only_nets"] = only_nets if saved["only_nets"] is None else saved["only_nets"] & only_nets
     return route_unified(saved["board"], saved["global_route"], options,
                          fanout_accesses=saved["fanout_accesses"],
                          fanout_created_vias=saved["fanout_created_vias"],

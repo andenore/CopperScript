@@ -393,6 +393,10 @@ Handoff, open items and the plan for merging to `main`:
 | 2026-10-20 (eve) | Automatic diff-pair corridors, satellite seeding, placement and plane-estimate diagnostics in `copper issues` | asset-tracker 1.0, led-ring 1.0, nrf52 1.0, cm4 1.0, full-vertical 0.99, round-led-ring 0.98; all DRC-clean. CopperProbe (7 parts unfixed) 0.844: USB_DM/DP now route |
 | 2026-10-20 (late) | Pour re-check in the unified router (walled-off plane pads get explicit copper) | asset-tracker 1.0 and 0 estimated plane opens (was 1: U_CC.3), others unchanged; all DRC-clean |
 | 2026-10-20 (night) | Neck exits stay inside the breakout region; refinement swaps ignore escape differences under 0.1 mm | full-vertical 1.0 (was 0.988), asset-tracker 1.0, led-ring 1.0, nrf52 1.0, cm4 1.0, round-led-ring 0.98; all DRC-clean, 0 estimated plane opens |
+| 2026-10-21 | CopperProbe repo: candidate is `board.copper` (21 parts released), others archived; first Windows run, native refill | CopperProbe 0.878 (29/237 opens), 2 exact DRC (max length: ADC_D8, SENSE), 34 native unconnected, 3 est. plane opens, 67 min |
+| 2026-10-21 (pm, Windows) | Merged origin/main (3.2, 3.4); D3-A 89→91 clean, 0 lost; ladder unchanged. BGA escape strips (`--unified-escape-strips`, off) after comparing the FX10 kit layout | CopperProbe baseline 0.869 (31/237), DRC 1; with strips 0.886 (27/237), DRC 1, but USB_TX1*_IC lost (moved bypass copper takes its via site), so strips stay off |
+| 2026-10-21 (eve, Windows) | CopperProbe `c1d3639` releases x/y of C_FX10_G3, C_FX_E3, C_FX_L3 (placer puts them 0.8-1.5 mm from their balls, kit-like) | released 0.848 (36 opens), released+strips 0.873 (30 opens, TX1_IC lost); both worse than unreleased (0.869 / strips 0.886); bypass pending 6/10/9/12 |
+| 2026-10-21 (late) | Owner decision: escape strips dropped from the branch (reverted; they cost the TX1_IC pair) and the cap release reverted in CopperProbe (`09d8c0d`) | CopperProbe back to 0.869 (31/237) |
 
 Open items:
 
@@ -408,7 +412,8 @@ Open items:
     vias.
   - Next levers are placement feedback driven by these hotspots (the
     `routeflow` outer loop) and a part-owned FX10 fanout macro (P4).
-- **The benchmarked CopperProbe is a design candidate, not the base board.**
+- **(Resolved 2026-10-21: the candidate is now CopperProbe's `board.copper`.)**
+  **The benchmarked CopperProbe is a design candidate, not the base board.**
   `copper-probe` is `design-candidates/hybrid-reference-inward-escape` (166
   fixed placements, made in earlier agent sessions); the owner's top-level
   board.copper has 109 and fixes none of the parts below. `copper issues`
@@ -416,6 +421,14 @@ Open items:
   65.7 mm and C_CLKP 40 mm from their nearest partner. On 2026-10-21 the owner
   approved releasing 21 (side kept) in that candidate; a copy with the same
   change gave 0.857 (34 opens) with every critical net routed.
+- **FX10 south edge vs the Infineon kit (2026-10-21).** Aligned on all 169 balls, the kit carries its
+  Port0 bus out of that edge on TOP and SIG1 with 2 vias in the strip below the outer rows; ours had 11
+  (outward GND dogbones of grounded P0D13-15 and south-bank bypass vias). The kit's supply vias are
+  in-field diagonal dogbones and its VDDIO_P0 caps sit under the outer rows about 1.1 mm from their balls.
+  Escape strips (via keepouts outside a signal edge while supply vias are placed) emptied the strip and
+  routed 4 more ADC lines, but the re-planned bypass copper took the TX1_IC pair's via site; releasing
+  the south-bank caps made routing worse. Both were dropped on 2026-10-21; the comparison stands as the
+  reference for a future FX10 fanout (P4).
 - **CopperProbe ADC bus (11 nets) at the FX10 south edge.** max_vias=2 and a
   length limit; F.Cu just south of the package is full of other copper, so
   the bus drops to inner layers and runs out of vias or length.
@@ -425,7 +438,9 @@ Open items:
   swapped 12 mm away for 10 um of escape width; fixed, now about 3.3 mm.)
 - **Freerouting comparison (D2)** is blocked here: the sandbox can't download
   the jar.
-- **Windows DLL** is built but not yet run on Windows.
+- **Windows DLL** verified 2026-10-20: it loads, matches the Python search, and the
+  small/medium ladder reproduces the Linux numbers (round-led-ring 0.98, nrf52 1.0,
+  full-vertical 0.99, cm4 1.0; 0 DRC).
 
 ## 6. Decisions (owner, 2026-10-19)
 
