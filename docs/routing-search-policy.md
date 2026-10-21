@@ -128,8 +128,13 @@ multiple of the tile therefore ends with a partial tile, and its last
 centre can sit up to a full tile from the far edge. On the 11.9 mm-tall
 MySRaspiGW boards of the D3 benchmark, a module pad in that 4.4 mm strip
 was beyond pin-access reach of every node, so its net had no global route.
-When the last centre is more than three quarters of a tile from the edge,
-one more row (or column) of centres now sits in the middle of the uncovered
-strip. Edges along that row cross only the strip, so their capacity counts
-the strip's width rather than a whole tile. Boards whose size leaves at
-most three quarters of a tile keep their grid unchanged.
+When a pin has no global access, the graph is rebuilt once with edge
+strips: where the last centre is more than three quarters of a tile from
+the edge, one more row (or column) of centres sits in the middle of the
+uncovered strip. The strip graph is kept only if fewer pins lack access.
+Edges along that row cross only the strip, so their capacity counts the
+strip's width rather than a whole tile.
+
+Boards whose pins all have access keep their grid, and so their routes.
+Adding the strip row everywhere changed the grid of 45 of the 99 D3-A
+boards, and it made one of them (0054) lose a clean route.

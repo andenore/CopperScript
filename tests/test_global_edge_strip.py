@@ -26,3 +26,8 @@ def test_an_edge_along_the_strip_counts_only_the_strip_width():
     strip = _planar_capacity(first, second, TILE, pitch, 0, CopperLayer.FRONT, (), (),
                              band=(nm_from_mm("44.1"), nm_from_mm(46)))
     assert (full, strip) == (10, 3)
+
+
+def test_the_strip_row_is_added_only_on_request():
+    assert _axis_layout(nm_from_mm("34.1"), nm_from_mm("46"), TILE, edge_strip=False) == (
+        (nm_from_mm("36.6"), nm_from_mm("41.6")), None)

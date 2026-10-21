@@ -400,15 +400,30 @@ def route_global(
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
     owner_connected = {net.name for net in board.nets if owner_graph is not None and owner_graph.net_connected(net)}
-    access_options = {
-        (net.name, pad): _global_pin_access_candidates(
-            board, graph, pad, net.name,
-            routing_layers(board, net.name, rules.get(net.name)),
-            rules.get(net.name), clearance, options,
-        )
-        for net in board.nets if len(net.pads) >= 2 and net.name not in zone_nets and net.name not in owner_connected
-        for pad in macro_routing_pads(board, net)
-    }
+    def pin_access(graph):
+        return {
+            (net.name, pad): _global_pin_access_candidates(
+                board, graph, pad, net.name,
+                routing_layers(board, net.name, rules.get(net.name)),
+                rules.get(net.name), clearance, options,
+            )
+            for net in board.nets if len(net.pads) >= 2 and net.name not in zone_nets and net.name not in owner_connected
+            for pad in macro_routing_pads(board, net)
+        }
+
+    access_options = pin_access(graph)
+    if any(not choices for choices in access_options.values()):
+        # A pad in a partial edge tile can be beyond reach of every node. Only
+        # then does the graph gain a row or column in that strip, so boards
+        # whose pins all have access keep their grid (and their routes).
+        strip_graph = _build_graph(board, options, edge_strips=True)
+        if (strip_graph.xs, strip_graph.ys) != (graph.xs, graph.ys):
+            strip_access = pin_access(strip_graph)
+            if (sum(not choices for choices in strip_access.values())
+                    < sum(not choices for choices in access_options.values())):
+                graph, access_options = strip_graph, strip_access
+                emit(on_progress, "global_graph", "edge_strips",
+                     node_count=len(graph.legal_nodes), resource_count=len(graph.resources))
     from .global_terminals import register_terminal_capacity
     wider = replace(options, pin_access_candidates=4 * options.pin_access_candidates)
 
@@ -931,13 +946,13 @@ def _preference_cost(
     )
 
 
-def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
+def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions, *, edge_strips: bool = False) -> _Graph:
     min_x = min(point.x_nm for point in board.outline.vertices)
     max_x = max(point.x_nm for point in board.outline.vertices)
     min_y = min(point.y_nm for point in board.outline.vertices)
     max_y = max(point.y_nm for point in board.outline.vertices)
-    xs, x_strip = _axis_layout(min_x, max_x, options.tile_size_nm)
-    ys, y_strip = _axis_layout(min_y, max_y, options.tile_size_nm)
+    xs, x_strip = _axis_layout(min_x, max_x, options.tile_size_nm, edge_strip=edge_strips)
+    ys, y_strip = _axis_layout(min_y, max_y, options.tile_size_nm, edge_strip=edge_strips)
     # Courtyards are assembly geometry; they are not copper obstructions.
     from .hard_macros import macro_reservations
     copper_keepouts = (*resolved_copper_keepouts(board), *macro_reservations(board))
@@ -1529,7 +1544,8 @@ def _axis_centers(start: int, end: int, step: int) -> tuple[int, ...]:
     return _axis_layout(start, end, step)[0]
 
 
-def _axis_layout(start: int, end: int, step: int) -> tuple[tuple[int, ...], tuple[int, int] | None]:
+def _axis_layout(start: int, end: int, step: int, *,
+                 edge_strip: bool = True) -> tuple[tuple[int, ...], tuple[int, int] | None]:
     """Tile centres along one board axis, and the band of a partial edge tile.
 
     Centres start half a tile in from ``start`` and step by whole tiles, so the
@@ -1544,7 +1560,7 @@ def _axis_layout(start: int, end: int, step: int) -> tuple[tuple[int, ...], tupl
     if not values:
         return ((start + end) // 2,), None
     covered = values[-1] + step // 2
-    if end - values[-1] > 3 * step // 4 and covered < end:
+    if edge_strip and end - values[-1] > 3 * step // 4 and covered < end:
         return (*values, (covered + end) // 2), (covered, end)
     return values, None
 
