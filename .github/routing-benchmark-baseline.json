@@ -427,19 +427,19 @@
    "clean_pass": false,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 5,
+   "unconnected_items": 2,
    "unrouted": 2,
-   "vias": 4,
-   "wirelength_mm": 63.286
+   "vias": 6,
+   "wirelength_mm": 84.295
   },
   "0049_MySRaspiGW_MySRaspiGW_PA_LNA": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 4,
-   "unrouted": 1,
-   "vias": 4,
-   "wirelength_mm": 67.626
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 5,
+   "wirelength_mm": 98.284
   },
   "0050_MySRaspiGW_MySRaspiGW_PA_LNA_Pimoroni": {
    "clean_pass": false,
@@ -769,10 +769,10 @@
    "clean_pass": false,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 7,
-   "unrouted": 2,
-   "vias": 6,
-   "wirelength_mm": 60.507
+   "unconnected_items": 4,
+   "unrouted": 1,
+   "vias": 9,
+   "wirelength_mm": 70.235
   },
   "0087_solar-lanterns_proto1": {
    "clean_pass": true,
@@ -893,5 +893,5 @@
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run 39576075376 on b05b89e (routing refactor merged with main, PR #15), stock KiCad 9.0.9"
+ "source": "routing-benchmark run 39613681967 on c240b99 (plan 3.8 enclosure-window repair), stock KiCad 9.0.9"
 }
