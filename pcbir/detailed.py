@@ -317,7 +317,7 @@ class DetailedRouterOptions:
     enclosure_repair_nets: int = 0
     enclosure_repair_radius_nm: int = nm_from_mm("3")
     enclosure_repair_orders: int = 8
-    enclosure_repair_open_nets: int = 4
+    enclosure_repair_open_nets: int = 2
     enclosure_repair_searches: int = 64
     minimum_repair_pitch_nm: int = nm_from_mm("0.1")
     # Bound of the per-run memo of exactly repeated repair searches; 0 disables
@@ -1442,8 +1442,10 @@ def _enclosure_repair(
     ``enclosure_repair_radius_nm`` of its unreached terminals, at most
     ``enclosure_repair_nets`` in all. The open net and its victims are rerouted
     in deterministic orders, open net first; a net that fails goes first in
-    the next order. ``enclosure_repair_searches`` bounds the net searches of
-    all windows of one run. The window is kept only if every net in it
+    the next order. Other open nets with a pad in the window join it as
+    optional companions. The repair runs only when at most
+    ``enclosure_repair_open_nets`` ordinary nets are open, and
+    ``enclosure_repair_searches`` bounds the net searches of all its windows. The window is kept only if every net in it
     connects; otherwise nothing changes.
     """
     net_by_name = {net.name: net for net in nets}
@@ -1459,7 +1461,11 @@ def _enclosure_repair(
     # (ground) may connect as its companion.
     open_nets = sorted((net for net in nets if not selected[net.name].result.connected and ordinary(net.name)),
                        key=lambda net: (len(net.pads), net.name))
-    for net in open_nets[:options.enclosure_repair_open_nets]:
+    if len(open_nets) > options.enclosure_repair_open_nets:
+        # Many open nets: each window would retry many orders for little
+        # chance of closing the board, at a cost of minutes per window.
+        return selected, clearance
+    for net in open_nets:
         if selected[net.name].result.connected or remaining <= 0:
             continue  # an earlier window connected it too, or the search allowance is spent
         remaining -= 1

@@ -160,10 +160,18 @@ moves the neighbours together:
 4. The window is kept only if every net in it connects; otherwise nothing
    changes.
 
-Window searches use the ordinary state budget, because a failing search
-spends its whole budget and a window can try many orders.
-`enclosure_repair_open_nets` and `enclosure_repair_searches` bound the work
-of one run. On D3-A board 0049 (MySRaspiGW PA/LNA, a 2×4 radio header on an
+Other open nets with a pad in the window join it as optional companions: a
+companion that fails stays open without rejecting the window. Open nets are
+taken smallest first, so ground can connect as a signal net's companion.
+
+The repair is the last stage, after the final retry, so boards that close
+earlier never pay for it. It is still expensive: a failing search spends its
+whole budget (10 to 75 s on the D3 boards), and a window can try many
+orders. Window searches therefore use the ordinary state budget, the repair
+runs only when at most `enclosure_repair_open_nets` (2) ordinary nets are
+open, and `enclosure_repair_searches` (64) bounds all its windows. On 0050,
+with three open nets, windows took 650 s and closed nothing, so boards like
+it are skipped. On D3-A board 0049 (MySRaspiGW PA/LNA, a 2×4 radio header on an
 11.5 × 11.9 mm board), CSN routes alone but is enclosed by +3V3, CE, MISO and
 SCK; fixed orders of those four kept trading the failure among them. With
 all seven signal nets in the window, promotion settles it.

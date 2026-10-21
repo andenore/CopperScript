@@ -92,6 +92,17 @@ def test_segment_crossing_a_box_counts_even_with_both_ends_outside():
     assert not _segment_meets_box(Point(-5, 12), Point(15, 30), box)
 
 
+def test_repair_is_skipped_when_too_many_nets_are_open(monkeypatch):
+    calls = []
+    monkeypatch.setattr(D, "_search_detailed_net", lambda *args, **kwargs: calls.append(1))
+    board = _board()
+    selected = {name: _attempt(name, False) for name in PADS}
+    options = DetailedRouterOptions(enclosure_repair_nets=4, enclosure_repair_open_nets=2)
+    result, _ = D._enclosure_repair(board, list(board.nets), {}, {}, selected, RoutingClearanceIndex(board),
+                                    options, {}, on_progress=None, reuse=None, repair_trials=[])
+    assert result == selected and calls == []
+
+
 def test_options_reject_out_of_range_enclosure_settings():
     for bad in ({"enclosure_repair_nets": 13}, {"enclosure_repair_orders": 0},
                 {"enclosure_repair_radius_nm": 0}, {"enclosure_repair_open_nets": -1}):
