@@ -201,3 +201,162 @@ def test_diagnostics_are_deterministic_and_leave_the_board_unchanged():
     board = two_rows({1: 3, 2: 1, 3: 4, 4: 2})
     assert escape_diagnostics(board) == escape_diagnostics(board)
     assert escape_diagnostics(board).report() == escape_diagnostics(board).report()
+
+
+# --------------------------------------------------------------------------- channel model (E1)
+
+from pcbir.escape_plan import Gap, Tile, channel_rules, pad_fields  # noqa: E402
+
+FINE = DesignRules(minimum_clearance_nm=100000, minimum_hole_clearance_nm=100000, minimum_track_width_nm=100000,
+                   default_track_width_nm=100000, default_via_size_nm=450000, default_via_drill_nm=200000)
+
+
+def placed(footprint: PhysicalFootprint, *, rotation=0, rules=RULES) -> PhysicalBoard:
+    nets = tuple(PhysicalNet(f"N{pad.number}", (PadReference("U", pad.number),)) for pad in footprint.pads)
+    return PhysicalBoard("field", BoardOutline.rectangle(40, 40), {footprint.name: footprint},
+                         (Placement("U", footprint.name, Point.mm(20, 20), Decimal(rotation)),), nets, rules=rules)
+
+
+def lattice(columns: int, rows: int, pitch: str, land: str, *, shape=PadShape.CIRCLE, kind=PadKind.SMD,
+            missing=()) -> PhysicalFootprint:
+    pads = tuple(FootprintPad(str(y * columns + x + 1), Point.mm(Decimal(pitch) * x, Decimal(pitch) * y),
+                              Size.mm(land, land), kind=kind, shape=shape,
+                              drill=Size.mm("1.016", "1.016") if kind is PadKind.THROUGH_HOLE else None)
+                 for y in range(rows) for x in range(columns) if y * columns + x + 1 not in missing)
+    return PhysicalFootprint("lattice", pads, Size.mm(10, 10))
+
+
+def minimum(field, kind, rules=(nm_from_mm("0.254"), nm_from_mm("0.254"))):
+    return field.report(*rules)["minimum_capacity"][kind]
+
+
+@pytest.mark.parametrize("rotation", (0, 45, 90))
+def test_header_lattice_capacities_match_hand_calculation(rotation):
+    # 2×4 header, 2.54 mm pitch, 1.7272 mm square lands, 0.254 mm track and clearance:
+    # orthogonal gaps 0.8128 mm hold ⌊(0.8128 − 0.254)/0.508⌋ = 1 track; the diagonal gap runs
+    # corner to corner, √2 × 0.8128 = 1.1495 mm, and also holds 1.
+    header = lattice(2, 4, "2.54", "1.7272", shape=PadShape.RECTANGLE, kind=PadKind.THROUGH_HOLE)
+    (field,) = pad_fields(placed(header, rotation=rotation), "U")
+    assert (field.kind, field.columns, field.rows, field.pitch_nm) == ("lattice", 2, 4, (2540000, 2540000))
+    assert {kind: sum(gap.kind == kind for gap in field.gaps) for kind in ("row", "column", "diagonal")} == {
+        "row": 4, "column": 6, "diagonal": 6}
+    assert (minimum(field, "row"), minimum(field, "column"), minimum(field, "diagonal")) == (1, 1, 1)
+    assert len(field.tiles) == 3
+    assert all(set(gap.layers) == {CopperLayer.FRONT, CopperLayer.BACK} for gap in field.gaps)
+
+
+def test_round_lands_leave_more_room_on_the_diagonal():
+    # Round 1.7272 mm lands: diagonal gap √2 × 2.54 − 1.7272 = 1.8649 mm holds 3 tracks.
+    (field,) = pad_fields(placed(lattice(2, 4, "2.54", "1.7272", kind=PadKind.THROUGH_HOLE)), "U")
+    assert (minimum(field, "row"), minimum(field, "diagonal")) == (1, 3)
+
+
+def test_bga_capacities_and_via_sites():
+    # 0.8 mm pitch, 0.4 mm balls, 0.1 mm track and clearance: orthogonal gap 0.4 mm holds 1 track,
+    # diagonal gap 0.7314 mm holds 3. A 0.45 mm via at a tile centre is 0.3657 mm from each ball
+    # edge, more than its 0.225 mm radius and 0.1 mm clearance; a 0.6 mm via is not.
+    bga = lattice(4, 4, "0.8", "0.4")
+    (field,) = pad_fields(placed(bga, rules=FINE), "U")
+    fine = (100000, 100000)
+    assert (minimum(field, "row", fine), minimum(field, "diagonal", fine)) == (1, 3)
+    assert len(field.tiles) == 9 and all(tile.via_site for tile in field.tiles)
+    wide_via = DesignRules(minimum_clearance_nm=100000, minimum_hole_clearance_nm=100000,
+                           minimum_track_width_nm=100000, default_track_width_nm=100000,
+                           default_via_size_nm=600000, default_via_drill_nm=300000)
+    (field,) = pad_fields(placed(bga, rules=wide_via), "U")
+    assert not any(tile.via_site for tile in field.tiles)
+
+
+def test_missing_balls_leave_corners_and_their_gaps_open():
+    (field,) = pad_fields(placed(lattice(4, 4, "0.8", "0.4", missing=(6,)), rules=FINE), "U")
+    assert field.kind == "lattice" and len(field.pads) == 15
+    first = next(t for t in field.tiles if (t.column, t.row) == (0, 0))
+    assert first.corners[2] is None  # SE corner: lattice position (1, 1), pad 6
+    assert first.sides[2] is None and first.sides[3] is None  # E and S sides end at the missing ball
+    assert first.diagonals[0] is None and first.diagonals[1] is not None
+    # Fewer than half the positions filled is not a lattice: a 4×4 pitch holding its ring and no more
+    # than a corner of the middle reads as the outline it is.
+    (sparse,) = pad_fields(placed(lattice(4, 4, "0.8", "0.4", missing=(6, 7, 8, 10, 11, 12, 14, 15, 16)),
+                                  rules=FINE), "U")
+    assert sparse.kind == "perimeter" and sparse.tiles == ()
+
+
+def test_perimeter_row_and_split_fields():
+    sides = ([Point.mm(Decimal("0.5") * k - 1, -2) for k in range(5)]
+             + [Point.mm(Decimal("0.5") * k - 1, 2) for k in range(5)]
+             + [Point.mm(-2, Decimal("0.5") * k - 1) for k in range(5)]
+             + [Point.mm(2, Decimal("0.5") * k - 1) for k in range(5)])
+    qfn = PhysicalFootprint("qfn", tuple(FootprintPad(str(i + 1), position, Size.mm("0.25", "0.25"))
+                                         for i, position in enumerate(sides)), Size.mm(5, 5))
+    (field,) = pad_fields(placed(qfn), "U")
+    assert field.kind == "perimeter" and {gap.kind for gap in field.gaps} == {"ring"} and len(field.gaps) == 20
+    (single,) = pad_fields(placed(row("row", 4)), "U")
+    assert single.kind == "row" and len(single.gaps) == 3
+    # Two 1 mm-pitch columns 12 mm apart (a module's opposite edges) are separate fields; 2 mm apart, one.
+    far = PhysicalFootprint("edges", tuple(FootprintPad(str(i + 1), Point.mm(12 * (i // 3), i % 3),
+                                                        Size.mm("0.5", "0.5")) for i in range(6)), Size.mm(14, 4))
+    assert [len(f.pads) for f in pad_fields(placed(far), "U")] == [3, 3]
+    near = PhysicalFootprint("edges", tuple(FootprintPad(str(i + 1), Point.mm(2 * (i // 3), i % 3),
+                                                         Size.mm("0.5", "0.5")) for i in range(6)), Size.mm(4, 4))
+    assert [f.kind for f in pad_fields(placed(near), "U")] == ["lattice"]
+    with pytest.raises(ValueError):
+        pad_fields(placed(near), "missing")
+
+
+def test_escape_rules_neck_down_inside_the_breakout_region():
+    board = placed(row("row", 2))
+    assert channel_rules(board, "N1") == (nm_from_mm("0.254"), nm_from_mm("0.254"))
+    wide = NetRoutingRule("N1", width_nm=nm_from_mm("0.5"), clearance_nm=nm_from_mm("0.3"))
+    assert channel_rules(board, "N1", wide) == (nm_from_mm("0.5"), nm_from_mm("0.3"))
+    necked = NetRoutingRule("N1", width_nm=nm_from_mm("0.5"), clearance_nm=nm_from_mm("0.3"),
+                            breakout_length_nm=nm_from_mm(1), breakout_width_nm=nm_from_mm("0.15"),
+                            breakout_clearance_nm=nm_from_mm("0.1"))
+    # The breakout clearance is still floored at the board minimum.
+    assert channel_rules(board, "N1", necked) == (nm_from_mm("0.15"), nm_from_mm("0.254"))
+
+
+def tile(sides=(1, 1, 1, 1), diagonals=(1, 1), corners=True) -> Tile:
+    def gap(capacity, kind):
+        # 0.1 mm track and clearance: capacity n needs a (0.2n + 0.1) mm gap.
+        return Gap(PadReference("U", "1"), PadReference("U", "2"), kind, 200000 * capacity + 100000,
+                   (CopperLayer.FRONT,))
+    pad = PadReference("U", "1")
+    return Tile(0, 0, (pad,) * 4 if corners else (None,) * 4, tuple(gap(c, "row") for c in sides),
+                tuple(gap(c, "diagonal") for c in diagonals), Point(0, 0), False)
+
+
+def admits(t, flows):
+    return t.admits(flows, CopperLayer.FRONT, 100000, 100000)
+
+
+def test_tile_diagonal_gaps_bound_tracks_between_their_halves():
+    # Each side holds one track. Turning round opposite corners (W→N round NW, S→E round SE)
+    # both tracks pass between NW and SE: two tracks for a one-track diagonal.
+    assert not admits(tile(), {("W", "N"): 1, ("S", "E"): 1})
+    assert admits(tile(diagonals=(2, 1)), {("W", "N"): 1, ("S", "E"): 1})
+    # Two tracks from a two-track west side turning north and south use different diagonals:
+    # a tile capped at its one-track diagonal capacity would refuse them.
+    assert admits(tile(sides=(2, 1, 1, 1)), {("W", "N"): 1, ("W", "S"): 1})
+    # A straight track crosses both diagonals.
+    assert admits(tile(), {("W", "E"): 1})
+    assert not admits(tile(diagonals=(1, 0)), {("W", "E"): 1})
+    # Side gaps bound every track through them; a pin starts one track, a missing pin none.
+    assert not admits(tile(), {("W", "N"): 1, ("W", "E"): 1})
+    assert admits(tile(), {("NW", "E"): 1}) and not admits(tile(), {("NW", "E"): 1, ("NW", "S"): 1})
+    assert not admits(tile(corners=False), {("NW", "E"): 1})
+    # The NW pin lies on the NW–SE diagonal: its track to S crosses only NE–SW.
+    assert admits(tile(diagonals=(0, 1)), {("NW", "S"): 1})
+    # Gaps on another layer do not bound this one.
+    assert tile(sides=(0, 0, 0, 0), diagonals=(0, 0)).admits({("W", "E"): 1}, CopperLayer.BACK, 100000, 100000)
+    with pytest.raises(ValueError):
+        admits(tile(), {("W", "W"): 1})
+
+
+def test_cluster_reports_carry_field_summaries():
+    # 1 mm pitch, 0.5 mm balls: orthogonal 0.5 mm gaps hold no 0.254 mm track, diagonal 0.914 mm gaps one.
+    report = escape_diagnostics(grid_board(grid("1", "0.5"))).report()
+    (cluster,) = report["clusters"]
+    assert cluster["fields"] == [{"pads": 9, "kind": "lattice", "columns": 3, "rows": 3,
+                                  "pitch_nm": [1000000, 1000000], "gaps": {"column": 6, "diagonal": 8, "row": 6},
+                                  "minimum_capacity": {"column": 0, "diagonal": 1, "row": 0},
+                                  "tiles": 4, "via_sites": 0}]
