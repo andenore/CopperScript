@@ -936,8 +936,8 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
     max_x = max(point.x_nm for point in board.outline.vertices)
     min_y = min(point.y_nm for point in board.outline.vertices)
     max_y = max(point.y_nm for point in board.outline.vertices)
-    xs = _axis_centers(min_x, max_x, options.tile_size_nm)
-    ys = _axis_centers(min_y, max_y, options.tile_size_nm)
+    xs, x_strip = _axis_layout(min_x, max_x, options.tile_size_nm)
+    ys, y_strip = _axis_layout(min_y, max_y, options.tile_size_nm)
     # Courtyards are assembly geometry; they are not copper obstructions.
     from .hard_macros import macro_reservations
     copper_keepouts = (*resolved_copper_keepouts(board), *macro_reservations(board))
@@ -993,11 +993,14 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
                         Point(xs[neighbor.x_index], ys[neighbor.y_index])))):
                     continue
                 layer = board.stackup.copper_layers[node.layer_index]
+                # An edge along a partial edge tile crosses only that strip.
+                band = (y_strip if dx and y_strip and node.y_index == len(ys) - 1 else
+                        x_strip if dy and x_strip and node.x_index == len(xs) - 1 else None)
                 capacity = _planar_capacity(
                     Point(xs[node.x_index], ys[node.y_index]),
                     Point(xs[neighbor.x_index], ys[neighbor.y_index]),
                     options.tile_size_nm, pitch, board.rules.minimum_clearance_nm,
-                    layer, pad_obstacles, track_keepouts,
+                    layer, pad_obstacles, track_keepouts, band=band,
                 )
                 if capacity:
                     _add_resource(resources, node, neighbor, capacity, layer)
@@ -1053,12 +1056,16 @@ def _planar_capacity(
     clearance_nm: int, layer: CopperLayer,
     pads: Iterable[tuple[tuple[CopperLayer, ...], tuple[int, int, int, int]]],
     keepouts: Iterable[tuple[tuple[CopperLayer, ...], tuple[int, int, int, int]]],
+    *, band: tuple[int, int] | None = None,
 ) -> int:
-    """Count usable crossing lanes, conservatively clipping copper obstacles."""
+    """Count usable crossing lanes, conservatively clipping copper obstacles.
+
+    ``band`` replaces the tile's span across the edge (a partial edge tile).
+    """
     horizontal = first.y_nm == second.y_nm
     crossing = (first.x_nm + second.x_nm) // 2 if horizontal else (first.y_nm + second.y_nm) // 2
     center = first.y_nm if horizontal else first.x_nm
-    low, high = center - tile_size_nm // 2, center + tile_size_nm // 2
+    low, high = band if band is not None else (center - tile_size_nm // 2, center + tile_size_nm // 2)
     blocked: list[tuple[int, int]] = []
     for layers, box in (*pads, *keepouts):
         if layer not in layers:
@@ -1519,9 +1526,27 @@ def _hotspots(
 
 
 def _axis_centers(start: int, end: int, step: int) -> tuple[int, ...]:
+    return _axis_layout(start, end, step)[0]
+
+
+def _axis_layout(start: int, end: int, step: int) -> tuple[tuple[int, ...], tuple[int, int] | None]:
+    """Tile centres along one board axis, and the band of a partial edge tile.
+
+    Centres start half a tile in from ``start`` and step by whole tiles, so the
+    far edge can keep an uncovered strip up to a tile wide. Pads there were
+    beyond pin-access reach of every node (D3-A boards 0048/0049: 4.4 mm). When
+    the last centre is more than three quarters of a tile from ``end``, one
+    more centre sits in the middle of the uncovered strip; its band is that
+    strip, so its crossing capacity counts only the strip's width.
+    """
     first = start + min(step // 2, max(0, end - start) // 2)
     values = tuple(range(first, end, step))
-    return values or ((start + end) // 2,)
+    if not values:
+        return ((start + end) // 2,), None
+    covered = values[-1] + step // 2
+    if end - values[-1] > 3 * step // 4 and covered < end:
+        return (*values, (covered + end) // 2), (covered, end)
+    return values, None
 
 
 def _edge_key(first: GridNode, second: GridNode) -> tuple[GridNode, GridNode]:
