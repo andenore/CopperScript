@@ -14,18 +14,28 @@ diagnostics only. For the placed board it reports, per component:
   non-decreasing subsequence (Ozdal & Wong); the remaining nets need another
   layer or a detour around a part.
 
+Step E1 adds the channel model the escape solvers build on: each component's
+pads split into *pad fields* by spacing; a field is a lattice (BGA, header),
+a row, a perimeter (QFN, SOIC) or irregular, with the gaps between
+neighbouring pins and, for a lattice, the tiles between them with their
+diagonal gaps (Yan & Wong) and via sites. Capacities use each net's escape
+rule, necked down where its breakout rule says so.
+
 The model is advisory and never changes routing. Every number is computed
 from integer pad geometry with deterministic tie-breaks.
 """
 from __future__ import annotations
 
 from bisect import bisect_right
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import atan2, isqrt, pi
+from statistics import median_low
 
 from .drc import placed_pad_shape
-from .geometry import Bounds, bounds, orientation, point_on_segment, shape_distance_squared
-from .physical import BoardSide, CopperLayer, PadKind, PadReference, PhysicalBoard, Point
+from .geometry import (Bounds, RoundedConvexShape, bounds, orientation, point_on_segment,
+                       shape_distance_squared)
+from .physical import (BoardSide, CopperLayer, NetRoutingRule, PadKind, PadReference, PhysicalBoard, Point)
 from .placement import transformed_local_point
 from .zone_geometry import distribution_zone_nets
 
@@ -36,6 +46,10 @@ class EscapePlanOptions:
     cluster_pair_minimum_nets: int = 2
     # Pairs with more shared nets are reported without an order analysis.
     maximum_pair_nets: int = 256
+    # Pads of one component closer than this many times their median neighbour
+    # distance, or than the minimum, form one pad field.
+    field_spacing_factor: int = 3
+    field_spacing_minimum_nm: int = 3_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +82,9 @@ class ClusterEscape:
     bounds: Bounds
     inner_signal_pins: tuple[PadReference, ...]
     channels: tuple[ChannelLoad, ...]
+    fields: tuple[PadField, ...] = ()
+    # Escape track width and clearance of the component's signal nets (the widest), for field reports.
+    rules: tuple[int, int] = (0, 0)
 
     @property
     def overflow(self) -> int:
@@ -87,7 +104,8 @@ class ClusterEscape:
                 "inner_signal_pins": [_pad_text(pad) for pad in self.inner_signal_pins],
                 "channels": [{"layer": item.layer.value, "demand": item.demand, "capacity": item.capacity,
                               "gaps": item.gaps, "overflow": item.overflow} for item in self.channels],
-                "overflow": self.overflow}
+                "overflow": self.overflow,
+                "fields": [field.report(*self.rules) for field in self.fields]}
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +165,7 @@ def escape_diagnostics(board: PhysicalBoard, options: EscapePlanOptions | None =
     pad_nets = {pad: net.name for net in board.nets if len(net.pads) >= 2 for pad in net.pads}
     signal = {net for net in pad_nets.values() if net not in zone_nets}
     clusters = tuple(cluster for placement in sorted(board.placements, key=lambda item: item.reference)
-                     if (cluster := _cluster(board, placement, pad_nets, signal)) is not None)
+                     if (cluster := _cluster(board, placement, pad_nets, signal, options)) is not None)
     by_component = {cluster.component: cluster for cluster in clusters}
     # A bundle is the signal nets whose pads all lie on the two components;
     # nets reaching further parts are trees, free to leave the pair elsewhere.
@@ -165,17 +183,10 @@ def escape_diagnostics(board: PhysicalBoard, options: EscapePlanOptions | None =
 # --------------------------------------------------------------------------- clusters
 
 def _cluster(board: PhysicalBoard, placement, pad_nets: dict[PadReference, str],
-             signal: set[str]) -> ClusterEscape | None:
-    footprint = board.footprints[placement.footprint]
-    pads = [pad for pad in footprint.pads if pad.kind not in {PadKind.NON_PLATED_THROUGH_HOLE, PadKind.APERTURE}]
-    if not pads:
+             signal: set[str], options: EscapePlanOptions) -> ClusterEscape | None:
+    placed = _placed_pads(board, placement)
+    if not placed:
         return None
-    surface = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
-    placed = []
-    for pad in pads:
-        position = transformed_local_point(placement, pad.position)
-        layers = (surface,) if pad.kind is PadKind.SMD else tuple(board.stackup.copper_layers)
-        placed.append((pad, position, layers, placed_pad_shape(position, pad, placement)))
     hull = _hull([position for _pad, position, _layers, _shape in placed])
     pins = tuple(ClusterPin(PadReference(placement.reference, pad.number),
                             pad_nets.get(PadReference(placement.reference, pad.number)), position, layers,
@@ -186,7 +197,10 @@ def _cluster(board: PhysicalBoard, placement, pad_nets: dict[PadReference, str],
                  if len(layers) == 1 and min(pad.size.width_nm, pad.size.height_nm) >= board.rules.default_via_size_nm}
     inner = tuple(pin.pad for pin in pins if not pin.outer and pin.net in signal and pin.pad not in via_lands)
     channels = _channels(board, placement.reference, placed, pins, inner, pad_nets) if inner else ()
-    return ClusterEscape(placement.reference, pins, bounds(pin.position for pin in pins), inner, channels)
+    nets = {pin.net for pin in pins if pin.net in signal}
+    rules = _net_rules(board, nets) if nets else channel_rules(board, "")
+    return ClusterEscape(placement.reference, pins, bounds(pin.position for pin in pins), inner, channels,
+                         _pad_fields(board, placement, placed, options), rules)
 
 
 def _channels(board: PhysicalBoard, reference: str, placed: list, pins: tuple[ClusterPin, ...],
@@ -215,19 +229,275 @@ def _channels(board: PhysicalBoard, reference: str, placed: list, pins: tuple[Cl
 
 
 def _net_rules(board: PhysicalBoard, nets: set[str]) -> tuple[int, int]:
-    """The widest track and clearance among ``nets`` (each net's own rule, else the board default)."""
+    """The widest escape track and largest escape clearance among ``nets`` (see ``channel_rules``)."""
     rules = {rule.net: rule for rule in board.net_routing_rules}
-    width = max(max(board.rules.minimum_track_width_nm,
-                    (rules[net].width_nm if net in rules and rules[net].width_nm else
-                     board.rules.default_track_width_nm)) for net in nets)
-    clearance = max(max(board.rules.minimum_clearance_nm,
-                        (rules[net].clearance_nm or 0) if net in rules else 0) for net in nets)
-    return width, clearance
+    widths, clearances = zip(*(channel_rules(board, net, rules.get(net)) for net in sorted(nets)))
+    return max(widths), max(clearances)
+
+
+def channel_rules(board: PhysicalBoard, net: str, rule: NetRoutingRule | None = None) -> tuple[int, int]:
+    """Track width and clearance of ``net`` between a pad field's pins.
+
+    A net with breakout properties necks down there, as the routers do inside
+    its terminal regions (``breakout.BreakoutRegions``); any other net uses its
+    own rule, else the board default, never below the board minimums.
+    """
+    breakout = rule is not None and rule.breakout_length_nm is not None
+    if breakout and rule.breakout_width_nm is not None:
+        width = rule.breakout_width_nm
+    else:
+        width = max(board.rules.minimum_track_width_nm,
+                    rule.width_nm if rule is not None and rule.width_nm else board.rules.default_track_width_nm)
+    if breakout and rule.breakout_clearance_nm is not None:
+        clearance = rule.breakout_clearance_nm
+    else:
+        clearance = (rule.clearance_nm or 0) if rule is not None else 0
+    return width, max(board.rules.minimum_clearance_nm, clearance)
 
 
 def _edge_gap(first, second) -> int:
     distance = isqrt(int(shape_distance_squared(first, second)))
     return max(0, distance - first.radius_nm - second.radius_nm)
+
+
+# --------------------------------------------------------------------------- channel model (E1)
+
+@dataclass(frozen=True, slots=True)
+class Gap:
+    """The copper gap between two neighbouring pins of a pad field, on the layers both lands occupy."""
+
+    first: PadReference
+    second: PadReference
+    kind: str  # "row", "column" or "diagonal" in a lattice; "ring" along any other field's outline
+    gap_nm: int
+    layers: tuple[CopperLayer, ...]
+
+    def capacity(self, width_nm: int, clearance_nm: int) -> int:
+        """Tracks of ``width_nm`` side by side at ``clearance_nm``: ⌊(gap − s)/(w + s)⌋."""
+        return max(0, (self.gap_nm - clearance_nm) // (width_nm + clearance_nm))
+
+
+TILE_SIDES = ("W", "N", "E", "S")
+TILE_CORNERS = ("NW", "NE", "SE", "SW")
+# Each diagonal of a tile splits its terminals (sides, and corner pins off that
+# diagonal) into two halves. A track joining the halves passes between the
+# diagonal's two pins and uses that diagonal gap; one within a half does not.
+_DIAGONAL_HALVES = (({"N", "E", "NE"}, {"W", "S", "SW"}),  # NW–SE
+                    ({"W", "N", "NW"}, {"E", "S", "SE"}))  # NE–SW
+
+
+@dataclass(frozen=True, slots=True)
+class Tile:
+    """The cell between four neighbouring lattice positions.
+
+    Directions are in the footprint's own frame (x to the east, y to the
+    south) before placement. A missing pin leaves its corner ``None`` and the
+    sides and diagonal through it unbounded.
+    """
+
+    column: int
+    row: int
+    corners: tuple[PadReference | None, PadReference | None, PadReference | None, PadReference | None]
+    sides: tuple[Gap | None, Gap | None, Gap | None, Gap | None]  # W, N, E, S
+    diagonals: tuple[Gap | None, Gap | None]  # NW–SE, NE–SW
+    centre: Point
+    via_site: bool  # the board's default via fits at the centre, clear of every corner land
+
+    def admits(self, flows: Mapping[tuple[str, str], int], layer: CopperLayer, width_nm: int,
+               clearance_nm: int) -> bool:
+        """Whether tracks between the given terminals fit through the tile on ``layer``.
+
+        ``flows`` counts tracks per (terminal, terminal), each a side or a
+        corner pin. Every side gap bounds the tracks through it, every pin
+        starts at most one, and each diagonal gap bounds the tracks joining
+        its two halves (Yan & Wong): counting tracks per tile instead loses
+        tracks that turn round different corners, and ignoring diagonals
+        admits tracks that do not fit between two diagonal pins.
+        """
+        use = dict.fromkeys(TILE_SIDES + TILE_CORNERS, 0)
+        for (first, second), count in flows.items():
+            if count < 0 or first == second or first not in use or second not in use:
+                raise ValueError(f"invalid tile flow {first}->{second}: {count}")
+            use[first] += count
+            use[second] += count
+        for index, corner in enumerate(TILE_CORNERS):
+            if use[corner] > (1 if self.corners[index] is not None else 0):
+                return False
+        for index, side in enumerate(TILE_SIDES):
+            gap = self.sides[index]
+            if gap is not None and layer in gap.layers and use[side] > gap.capacity(width_nm, clearance_nm):
+                return False
+        for gap, (one, other) in zip(self.diagonals, _DIAGONAL_HALVES):
+            if gap is None or layer not in gap.layers:
+                continue
+            crossing = sum(count for (first, second), count in flows.items()
+                           if (first in one and second in other) or (first in other and second in one))
+            if crossing > gap.capacity(width_nm, clearance_nm):
+                return False
+        return True
+
+
+@dataclass(frozen=True, slots=True)
+class PadField:
+    """Pads of one component that escape together, with their channel graph."""
+
+    component: str
+    pads: tuple[PadReference, ...]
+    kind: str  # "lattice", "row", "perimeter" or "irregular"
+    columns: int  # lattice positions per row (0 unless a lattice)
+    rows: int
+    pitch_nm: tuple[int, int] | None  # lattice (x, y) pitch in the footprint frame
+    gaps: tuple[Gap, ...]
+    tiles: tuple[Tile, ...]
+
+    def report(self, width_nm: int, clearance_nm: int) -> dict:
+        """Counts and the narrowest gap of each kind, in tracks at the given rules."""
+        kinds = sorted({gap.kind for gap in self.gaps})
+        return {"pads": len(self.pads), "kind": self.kind,
+                **({"columns": self.columns, "rows": self.rows, "pitch_nm": list(self.pitch_nm)}
+                   if self.pitch_nm else {}),
+                "gaps": {kind: sum(gap.kind == kind for gap in self.gaps) for kind in kinds},
+                "minimum_capacity": {kind: min(gap.capacity(width_nm, clearance_nm) for gap in self.gaps
+                                               if gap.kind == kind) for kind in kinds},
+                "tiles": len(self.tiles), "via_sites": sum(tile.via_site for tile in self.tiles)}
+
+
+def pad_fields(board: PhysicalBoard, component: str,
+               options: EscapePlanOptions | None = None) -> tuple[PadField, ...]:
+    """The pad fields of a placed component, largest first."""
+    options = options or EscapePlanOptions()
+    placement = next((item for item in board.placements if item.reference == component), None)
+    if placement is None:
+        raise ValueError(f"unknown component {component!r}")
+    return _pad_fields(board, placement, _placed_pads(board, placement), options)
+
+
+def _placed_pads(board: PhysicalBoard, placement) -> list[tuple]:
+    """(pad, world position, copper layers, placed shape) of every copper pad."""
+    surface = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+    placed = []
+    for pad in board.footprints[placement.footprint].pads:
+        if pad.kind in {PadKind.NON_PLATED_THROUGH_HOLE, PadKind.APERTURE}:
+            continue
+        position = transformed_local_point(placement, pad.position)
+        layers = (surface,) if pad.kind is PadKind.SMD else tuple(board.stackup.copper_layers)
+        placed.append((pad, position, layers, placed_pad_shape(position, pad, placement)))
+    return placed
+
+
+def _pad_fields(board: PhysicalBoard, placement, placed: list[tuple],
+                options: EscapePlanOptions) -> tuple[PadField, ...]:
+    if options.field_spacing_factor < 1 or options.field_spacing_minimum_nm < 0:
+        raise ValueError("pad field spacing must be positive")
+    groups = _spacing_groups([item[0].position for item in placed], options)
+    return tuple(_pad_field(board, placement, [placed[index] for index in group]) for group in groups)
+
+
+def _spacing_groups(points: list[Point], options: EscapePlanOptions) -> list[list[int]]:
+    """Single-linkage groups of footprint-local pad centres, largest first."""
+    if len(points) <= 1:
+        return [list(range(len(points)))]
+
+    def squared(a: Point, b: Point) -> int:
+        return (a.x_nm - b.x_nm) ** 2 + (a.y_nm - b.y_nm) ** 2
+
+    nearest = [min(squared(point, other) for j, other in enumerate(points) if j != i)
+               for i, point in enumerate(points)]
+    link = max(options.field_spacing_factor * isqrt(median_low(nearest)), options.field_spacing_minimum_nm)
+    parent = list(range(len(points)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(points)):
+        for j in range(i + 1, len(points)):
+            if squared(points[i], points[j]) <= link * link:
+                parent[root(i)] = root(j)
+    groups: dict[int, list[int]] = {}
+    for index in range(len(points)):
+        groups.setdefault(root(index), []).append(index)
+    return sorted(groups.values(), key=lambda group: (-len(group), group[0]))
+
+
+def _pad_field(board: PhysicalBoard, placement, placed: list[tuple]) -> PadField:
+    reference = placement.reference
+    pads = tuple(PadReference(reference, item[0].number) for item in placed)
+    lattice = _lattice([item[0].position for item in placed])
+    if lattice is not None:
+        xs, ys = lattice
+        return _lattice_field(board, placement, placed, pads, xs, ys)
+    hull = _hull([item[1] for item in placed])
+    outer = [index for index, item in enumerate(placed) if _on_boundary(item[1], hull)]
+    kind = "row" if len(hull) <= 2 else "perimeter" if len(outer) == len(placed) else "irregular"
+    if kind == "row":  # neighbours along the line, which runs between the hull's two ends
+        start = hull[0]
+        ring = sorted(range(len(placed)), key=lambda index: ((placed[index][1].x_nm - start.x_nm) ** 2
+                                                             + (placed[index][1].y_nm - start.y_nm) ** 2, pads[index]))
+        links = list(zip(ring, ring[1:]))
+    else:
+        centre = _centre([item[1] for item in placed])
+        ring = sorted(outer, key=lambda index: (_angle(placed[index][1], centre, 0.0), pads[index]))
+        links = [(index, ring[(position + 1) % len(ring)]) for position, index in enumerate(ring)]
+    gaps = [_gap(placed, pads, first, second, "ring") for first, second in links]
+    return PadField(reference, pads, kind, 0, 0, None, tuple(gaps), ())
+
+
+def _lattice(points: list[Point]) -> tuple[list[int], list[int]] | None:
+    """Uniform footprint-frame columns and rows holding at least half their positions, else None."""
+    xs = sorted({point.x_nm for point in points})
+    ys = sorted({point.y_nm for point in points})
+    if len(xs) < 2 or len(ys) < 2 or len({(p.x_nm, p.y_nm) for p in points}) != len(points):
+        return None
+    if 2 * len(points) < len(xs) * len(ys):
+        return None
+    for values in (xs, ys):
+        steps = [b - a for a, b in zip(values, values[1:])]
+        if max(steps) - min(steps) > _LATTICE_TOLERANCE_NM:
+            return None
+    return xs, ys
+
+
+# Footprint coordinates within this of a uniform pitch still form a lattice.
+_LATTICE_TOLERANCE_NM = 1_000
+
+
+def _lattice_field(board: PhysicalBoard, placement, placed: list[tuple], pads: tuple[PadReference, ...],
+                   xs: list[int], ys: list[int]) -> PadField:
+    at = {(xs.index(item[0].position.x_nm), ys.index(item[0].position.y_nm)): index
+          for index, item in enumerate(placed)}
+    gaps: dict[tuple[tuple[int, int], tuple[int, int]], Gap] = {}
+    for (column, row), index in sorted(at.items()):
+        for step, kind in (((1, 0), "row"), ((0, 1), "column"), ((1, 1), "diagonal"), ((1, -1), "diagonal")):
+            neighbour = (column + step[0], row + step[1])
+            if neighbour in at:
+                gaps[((column, row), neighbour)] = _gap(placed, pads, index, at[neighbour], kind)
+
+    def gap(a: tuple[int, int], b: tuple[int, int]) -> Gap | None:
+        return gaps.get((a, b)) or gaps.get((b, a))
+
+    via_radius = board.rules.default_via_size_nm // 2
+    tiles = []
+    for column in range(len(xs) - 1):
+        for row in range(len(ys) - 1):
+            nw, ne, se, sw = (column, row), (column + 1, row), (column + 1, row + 1), (column, row + 1)
+            corners = tuple(pads[at[spot]] if spot in at else None for spot in (nw, ne, se, sw))
+            centre = transformed_local_point(placement, Point((xs[column] + xs[column + 1]) // 2,
+                                                              (ys[row] + ys[row + 1]) // 2))
+            point = RoundedConvexShape((centre,), 0)
+            via_site = all(_edge_gap(point, placed[at[spot]][3]) >= via_radius + board.rules.minimum_clearance_nm
+                           for spot in (nw, ne, se, sw) if spot in at)
+            tiles.append(Tile(column, row, corners, (gap(nw, sw), gap(nw, ne), gap(ne, se), gap(sw, se)),
+                              (gap(nw, se), gap(ne, sw)), centre, via_site))
+    return PadField(placement.reference, pads, "lattice", len(xs), len(ys), (xs[1] - xs[0], ys[1] - ys[0]),
+                    tuple(gaps[key] for key in sorted(gaps)), tuple(tiles))
+
+
+def _gap(placed: list[tuple], pads: tuple[PadReference, ...], first: int, second: int, kind: str) -> Gap:
+    layers = tuple(layer for layer in placed[first][2] if layer in placed[second][2])
+    return Gap(pads[first], pads[second], kind, _edge_gap(placed[first][3], placed[second][3]), layers)
 
 
 # --------------------------------------------------------------------------- pairs
