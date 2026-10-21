@@ -124,10 +124,13 @@ def test_a_hemmed_bundle_is_bent_as_one_group_while_routing(monkeypatch) -> None
     again = route_critical_nets(board, guides)
     assert again == result and again.to_json() == result.to_json()
 
-    # Pair by pair, LANE_A is hemmed in by the wall and LANE_B.
+    # Pair by pair, the routes leave LANE_A more room since the refactor
+    # snapshot (ceda96c): it tunes alone too, legally and within the skew.
     alone = route_critical_nets(_group_board(group=None), guides)
     (tuning,) = alone.match_tuning
-    assert tuning.status == "failed" and "insufficient tuning room" in tuning.reason
+    assert tuning.status == "tuned" and not _hard(alone.board)
+    (check,) = verify_match_groups(alone.board)
+    assert check.status == "pass"
 
     # The final pass bends the group the same way when nothing ran while routing.
     _final_pass_only(monkeypatch)
