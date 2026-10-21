@@ -58,7 +58,6 @@ def _repair(monkeypatch, fails):
         return _attempt(net.name, True, (_track(net.name),) if net.name == "A" else ())
 
     monkeypatch.setattr(D, "_search_detailed_net", search)
-    monkeypatch.setattr(D, "_negotiate_window", lambda *args: None)
     selected = {"A": _attempt("A", False), "B": _attempt("B", True, (_track("B"),)),
                 "C": _attempt("C", True, (_track("C"),))}
     clearance = RoutingClearanceIndex(board)
