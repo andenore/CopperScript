@@ -42,8 +42,9 @@ footprints on non-copper layers, are rejected.
 
 Copper graphics and text have no net, so their keepouts are grown by the
 largest net-class clearance: any routed net then keeps its own clearance
-from them. Text uses its glyph box (characters at most one font width
-apart, lines 1.62 heights apart, plus the stroke), rotated and justified
+from them. Text uses its glyph box (each character advances 0.9 font
+widths, 0.5 for narrow glyphs such as `I`, `1` and `.`, 1.15 for wide ones
+such as `M` and `W`; lines are 1.62 heights apart; plus the stroke), rotated and justified
 as in the file. Footprint text, whose stored angle differs between KiCad
 versions, uses the square that holds the box at any rotation about its
 anchor. Hidden text is not copper and is ignored.
