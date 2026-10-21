@@ -158,15 +158,26 @@ def escape_strips(board: PhysicalBoard, *, rings: int = 2,
     wide as those balls' span, is closed to vias. Signal balls there leave on
     the surface layer between the outer lands (as manufacturer layouts route
     a bus out of a BGA edge); supply and return vias placed meanwhile then
-    take sites inside the ball field instead. Supply and return nets are
-    plane (zone) nets and the targets and returns of decoupling links.
+    take sites inside the ball field instead. Only unrouted ordinary signal
+    balls count: supply and return nets (plane nets, decoupling targets and
+    returns), critical nets and balls already launched by copper do not.
     The strips are temporary: callers hold them only while placing supply
     and return copper.
     """
+    from .drc import explicit_copper_connectivity
     supply = {zone.net for zone in board.zones}
     supply |= {link.net for link in board.decoupling_links}
     supply |= {link.return_net for link in board.decoupling_links}
-    net_of = {pad: net.name for net in board.nets for pad in net.pads if len(net.pads) >= 2}
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    # Critical nets own their escapes (they route before this), and a ball
+    # whose escape copper already exists needs no channel.
+    supply |= {net for net, rule in rules.items() if rule.kind is not RouteKind.GENERAL}
+    connectivity = explicit_copper_connectivity(board)
+    copper_roots = {root for key, root in connectivity.roots.items() if not key.startswith("pad:")}
+    launched = {pad for pad, nodes in connectivity.pad_nodes.items()
+                if any(connectivity.roots[node] in copper_roots for node in nodes)}
+    net_of = {pad: net.name for net in board.nets for pad in net.pads
+              if len(net.pads) >= 2 and pad not in launched}
     layers = board.stackup.copper_layers
     strips: list[CopperKeepout] = []
     for pose in sorted(board.placements, key=lambda p: p.reference):

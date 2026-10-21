@@ -51,3 +51,16 @@ def test_an_edge_without_signal_balls_gets_no_strip() -> None:
     board = _board()
     only_ground = replace(board, nets=tuple(n for n in board.nets if n.name == "GND"))
     assert escape_strips(only_ground) == ()
+
+
+def test_critical_or_already_launched_signal_balls_need_no_strip() -> None:
+    from pcbir.physical import NetRoutingRule, RouteKind, TrackSegment
+    board = _board()
+    critical = replace(board, net_routing_rules=tuple(
+        NetRoutingRule(f"S{n}", RouteKind.CLOCK) for n in (21, 22, 24, 25)))
+    assert "bga-escape-strip-U-bottom" not in {s.id for s in escape_strips(critical)}
+    stubs = tuple(TrackSegment(f"S{n}", Point.mm(str(6 + (n - 23) * 0.75), "7.5"),
+                               Point.mm(str(6 + (n - 23) * 0.75), "9"), 100_000, CopperLayer.FRONT)
+                  for n in (21, 22, 24, 25))
+    launched = replace(board, tracks=stubs)
+    assert "bga-escape-strip-U-bottom" not in {s.id for s in escape_strips(launched)}
