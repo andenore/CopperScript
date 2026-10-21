@@ -255,3 +255,54 @@ def test_project_net_classes_become_per_net_rules(exported, tmp_path):
     board = load_kicad_pcb(tmp_path / "board.kicad_pcb").board
     rule = next(rule for rule in board.net_routing_rules if rule.net == first_net)
     assert (rule.width_nm, rule.clearance_nm) == (nm_from_mm("0.5"), nm_from_mm("0.3"))
+
+
+TEXT = """(kicad_pcb (version 20171130) (host pcbnew "(5.1.12)")
+  (layers (0 F.Cu signal) (31 B.Cu signal) (37 F.SilkS user) (44 Edge.Cuts user))
+  (net 0 "") (net 1 SIG)
+  (net_class Default "default" (clearance 0.2) (trace_width 0.25) (via_dia 0.6) (via_drill 0.3) (add_net SIG))
+  (module TP (layer F.Cu) (tedit 0) (tstamp 1) (at 5 5)
+    (fp_text reference TP1 (at 0 0) (layer F.Cu) hide (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value LOGO (at 0 2) (layer F.Cu) (effects (font (size 1 1) (thickness 0.2))))
+    (pad 1 smd circle (at 0 0) (size 1 1) (layers F.Cu F.Mask) (net 1 SIG)))
+  (gr_text AC_IN (at 20 10) (layer F.Cu) (effects (font (size 3 3) (thickness 0.6))))
+  (gr_text "A\\nBB" (at 20 20 90) (layer F.Cu) (effects (font (size 1 1) (thickness 0.2)) (justify left)))
+  (gr_text SILK (at 20 30) (layer F.SilkS) (effects (font (size 1 1) (thickness 0.15))))
+  (gr_rect (start 0 0) (end 40 40) (layer Edge.Cuts) (width 0.1))
+)"""
+
+
+def _box(keepout):
+    xs = [p.x_nm for p in keepout.outline.outer.vertices]
+    ys = [p.y_nm for p in keepout.outline.outer.vertices]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def test_copper_text_is_an_obstacle_grown_by_the_clearance():
+    result = parse_kicad_pcb(TEXT, source="text")
+    keepouts = {item.id: item for item in result.board.copper_keepouts}
+    board_text = [item for key, item in keepouts.items() if key.startswith("text-")]
+    # "AC_IN" advances 4.1 font widths (I is narrow): 12.3 mm plus the 0.6 mm stroke,
+    # centred on (20, 10) and grown by the 0.2 mm clearance.
+    assert _box(board_text[0]) == (nm_from_mm("13.35"), nm_from_mm("8"), nm_from_mm("26.65"), nm_from_mm("12"))
+    # Rotated 90 degrees, left-justified, two lines: the box extends up (-y) from the anchor.
+    x0, y0, x1, y1 = _box(board_text[1])
+    assert y1 == nm_from_mm("20.2") and y0 == nm_from_mm("17.8")
+    assert x1 - x0 == round(nm_from_mm("1") + nm_from_mm("1") * 1.62) + nm_from_mm("0.2") + 2 * nm_from_mm("0.2")
+    # Silkscreen text and hidden copper text are not copper.
+    assert len(board_text) == 2
+    # Visible footprint text on copper becomes an orientation-free square around its anchor.
+    logo = next(item for key, item in keepouts.items() if key.startswith("TP1/text-"))
+    x0, y0, x1, y1 = _box(logo)
+    assert x1 - x0 == y1 - y0 and (x0 + x1) // 2 == nm_from_mm(5) and (y0 + y1) // 2 == nm_from_mm(7)
+    assert any(item.startswith("copper text as keepout") for item in result.approximations)
+
+
+def test_a_track_over_copper_text_is_a_keepout_violation():
+    from pcbir.physical import TrackSegment
+    board = parse_kicad_pcb(TEXT, source="text").board
+    track = TrackSegment("SIG", Point(nm_from_mm(5), nm_from_mm("12.1")), Point(nm_from_mm(35), nm_from_mm("12.1")),
+                         nm_from_mm("0.25"), CopperLayer.FRONT)
+    policy = PhysicalDrcPolicy(require_completed_detailed_route=False)
+    findings = run_physical_drc(replace(board, tracks=(track,)), policy=policy).findings
+    assert any(item.code == "DRC-COPPER-KEEPOUT" for item in findings)

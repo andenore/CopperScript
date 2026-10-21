@@ -91,13 +91,13 @@
    "wirelength_mm": 79.841
   },
   "0011_PixyWirelessShield_Shield PIXY": {
-   "clean_pass": false,
-   "drc_errors": 6,
+   "clean_pass": true,
+   "drc_errors": 0,
    "status": "routed",
    "unconnected_items": 0,
    "unrouted": 0,
-   "vias": 2,
-   "wirelength_mm": 159.662
+   "vias": 1,
+   "wirelength_mm": 157.444
   },
   "0012_kitspace_ir_sensor": {
    "clean_pass": true,
@@ -226,13 +226,13 @@
    "wirelength_mm": 120.342
   },
   "0026_PCB_constant_current_ac_hv": {
-   "clean_pass": false,
-   "drc_errors": 2,
+   "clean_pass": true,
+   "drc_errors": 0,
    "status": "routed",
    "unconnected_items": 0,
    "unrouted": 0,
-   "vias": 0,
-   "wirelength_mm": 134.295
+   "vias": 2,
+   "wirelength_mm": 134.466
   },
   "0027_ID-FIX_scanConnect": {
    "clean_pass": true,
@@ -591,8 +591,8 @@
    "status": "routed",
    "unconnected_items": 0,
    "unrouted": 0,
-   "vias": 12,
-   "wirelength_mm": 174.126
+   "vias": 11,
+   "wirelength_mm": 165.651
   },
   "0067_radio_saw_dcc6c": {
    "clean_pass": false,
@@ -893,5 +893,5 @@
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run 39546443058 on 54bcb03 (routes as main beaebe9), stock KiCad 9.0.9"
+ "source": "routing-benchmark run 39546943898 on 4cf9526 (plan 3.1), stock KiCad 9.0.9"
 }
