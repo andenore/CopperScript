@@ -31,3 +31,14 @@ def test_an_edge_along_the_strip_counts_only_the_strip_width():
 def test_the_strip_row_is_added_only_on_request():
     assert _axis_layout(nm_from_mm("34.1"), nm_from_mm("46"), TILE, edge_strip=False) == (
         (nm_from_mm("36.6"), nm_from_mm("41.6")), None)
+
+
+def test_a_last_centre_inside_the_edge_clearance_moves_into_the_board():
+    # 8 mm (D3-A 0034): the second centre sits 0.5 mm from the edge; with strips it
+    # moves to the middle of its tile's part inside the board (5..8 mm).
+    assert _axis_layout(0, nm_from_mm(8), TILE, edge_strip=False) == (
+        (nm_from_mm("2.5"), nm_from_mm("7.5")), None)
+    assert _axis_layout(0, nm_from_mm(8), TILE) == (
+        (nm_from_mm("2.5"), nm_from_mm("6.5")), (nm_from_mm(5), nm_from_mm(8)))
+    # 9 mm: the last centre is 1.5 mm from the edge, more than a quarter tile: unchanged.
+    assert _axis_layout(0, nm_from_mm(9), TILE) == ((nm_from_mm("2.5"), nm_from_mm("7.5")), None)
