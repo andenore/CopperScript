@@ -89,12 +89,76 @@ def validate_cutouts(outline: BoardOutline) -> None:
                 raise ValueError("board cutouts cannot touch, intersect or nest")
 
 
+# Interior cells: an outline-sized cache of 1 mm cells known to lie wholly
+# inside the outline polygon. A shape whose box, grown by the required
+# distance, covers only such cells is inside with that distance, so the exact
+# test (rational arithmetic, about 40% of a detailed search's time) is skipped.
+# The answer never differs from the exact one; it only comes sooner.
+_INTERIOR_CELL_NM = 1_000_000
+_interior_cells: dict[int, tuple[BoardOutline, dict[tuple[int, int], bool]]] = {}
+
+
+def _segment_touches_box(a: Point, b: Point, box: tuple[int, int, int, int]) -> bool:
+    """Closed segment against closed box (Liang-Barsky, exact rationals)."""
+    from fractions import Fraction
+    x0, y0, x1, y1 = box
+    dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
+    low, high = Fraction(0), Fraction(1)
+    for step, room in ((-dx, a.x_nm - x0), (dx, x1 - a.x_nm), (-dy, a.y_nm - y0), (dy, y1 - a.y_nm)):
+        if step == 0:
+            if room < 0:
+                return False
+            continue
+        t = Fraction(room, step)
+        if step < 0:
+            low = max(low, t)
+        else:
+            high = min(high, t)
+        if low > high:
+            return False
+    return True
+
+
+def _cell_inside(outline: BoardOutline, cell: tuple[int, int]) -> bool:
+    size = _INTERIOR_CELL_NM
+    box = (cell[0] * size, cell[1] * size, (cell[0] + 1) * size, (cell[1] + 1) * size)
+    # No outline edge meets the closed cell, and its centre is inside: the
+    # whole cell is in the open interior.
+    if any(_segment_touches_box(a, b, box) for a, b in ring_edges(outline.vertices)):
+        return False
+    return point_in_polygon(Point((box[0] + box[2]) // 2, (box[1] + box[3]) // 2), outline.vertices)
+
+
+def _box_in_interior(outline: BoardOutline, x0: int, y0: int, x1: int, y1: int) -> bool:
+    entry = _interior_cells.get(id(outline))
+    if entry is None or entry[0] is not outline:
+        if len(_interior_cells) >= 32:
+            _interior_cells.clear()
+        entry = (outline, {})
+        _interior_cells[id(outline)] = entry
+    cells = entry[1]
+    size = _INTERIOR_CELL_NM
+    for i in range(x0 // size, x1 // size + 1):
+        for j in range(y0 // size, y1 // size + 1):
+            inside = cells.get((i, j))
+            if inside is None:
+                inside = cells[(i, j)] = _cell_inside(outline, (i, j))
+            if not inside:
+                return False
+    return True
+
+
 def shape_in_outline(shape: RoundedConvexShape, outline: BoardOutline,
                      clearance_nm: int = 0) -> bool:
     if clearance_nm < 0:
         raise ValueError("mechanical query clearance must be nonnegative")
     required = shape.radius_nm + clearance_nm
     circle = outline.circular_boundary
+    if circle is None and _box_in_interior(
+            outline, min(p.x_nm for p in shape.spine) - required, min(p.y_nm for p in shape.spine) - required,
+            max(p.x_nm for p in shape.spine) + required, max(p.y_nm for p in shape.spine) + required):
+        return all(shapes_clear(shape, RoundedConvexShape(cutout.vertices), max(1, clearance_nm))
+                   for cutout in outline.cutouts)
     if circle is not None:
         available = circle.radius_nm - required
         if available < 0 or any((p.x_nm - circle.center.x_nm) ** 2
