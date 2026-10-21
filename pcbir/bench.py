@@ -424,6 +424,90 @@ def failure_report(root: Path) -> str:
     return "\n".join(out) + "\n"
 
 
+BASELINE_SCHEMA = "copperscript-bench-baseline/v0.1"
+_BASELINE_FIELDS = ("status", "clean_pass", "unrouted", "drc_errors", "unconnected_items", "vias", "wirelength_mm")
+
+
+def baseline_records(root: Path) -> dict:
+    """Per-board outcome, compact enough to commit as the comparison baseline."""
+    boards = {}
+    for path in sorted(root.rglob("result.json")):
+        item = json.loads(path.read_text(encoding="utf-8"))
+        unrouted = item.get("unrouted_nets")
+        boards[item.get("board") or path.parent.name] = {
+            "status": item.get("status"), "clean_pass": bool(item.get("clean_pass")),
+            "unrouted": len(unrouted) if unrouted is not None else None,
+            "drc_errors": item.get("drc_errors"), "unconnected_items": item.get("unconnected_items"),
+            "vias": item.get("vias"), "wirelength_mm": item.get("wirelength_mm")}
+    return {"schema": BASELINE_SCHEMA, "boards": boards}
+
+
+def baseline_from_record(text: str, source: str = "") -> dict:
+    """Rebuild a baseline from a run's published "Benchmark baseline record" annotation text."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    header = lines[0].split("|")
+
+    def value(raw: str):
+        if raw in {"None", ""}:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            try:
+                return float(raw)
+            except ValueError:
+                return raw
+
+    boards = {}
+    for line in lines[1:]:
+        row = dict(zip(header, line.split("|")))
+        boards[row["board"]] = {"status": row["status"], "clean_pass": row["clean"] == "1",
+                                "unrouted": value(row["unrouted"]), "drc_errors": value(row["drc_errors"]),
+                                "unconnected_items": value(row["unconnected"]), "vias": value(row["vias"]),
+                                "wirelength_mm": value(row["wirelength_mm"])}
+    return {"schema": BASELINE_SCHEMA, "source": source, "boards": boards}
+
+
+def compare_to_baseline(baseline: dict, current: dict) -> tuple[str, list[str]]:
+    """Markdown comparison and the boards that were clean in the baseline but are not now."""
+    before, after = baseline.get("boards", {}), current.get("boards", {})
+    lost = sorted(name for name, item in before.items() if item.get("clean_pass")
+                  and not (after.get(name) or {}).get("clean_pass"))
+    gained = sorted(name for name, item in after.items() if item.get("clean_pass")
+                    and not (before.get(name) or {}).get("clean_pass"))
+    changed = []
+    for name in sorted(set(before) | set(after)):
+        old, new = before.get(name) or {}, after.get(name) or {}
+        if name in lost or name in gained:
+            continue
+        diffs = [f"{key} {old.get(key)} → {new.get(key)}" for key in ("unrouted", "drc_errors", "unconnected_items")
+                 if old.get(key) != new.get(key) and old.get(key) is not None]
+        if diffs:
+            changed.append(f"- {name}: " + ", ".join(diffs))
+    both = [name for name in after if (before.get(name) or {}).get("clean_pass") and after[name].get("clean_pass")]
+
+    def total(items, key):
+        values = [item.get(key) for item in items]
+        return round(sum(values), 3) if values and all(value is not None for value in values) else None
+
+    clean_before = sum(bool(item.get("clean_pass")) for item in before.values())
+    clean_after = sum(bool(item.get("clean_pass")) for item in after.values())
+    lines = ["### Compared with the committed baseline",
+             f"Clean boards: {clean_before} → {clean_after} (gained {len(gained)}, lost {len(lost)})", ""]
+    if gained:
+        lines += ["Now clean: " + ", ".join(gained), ""]
+    if lost:
+        lines += ["**No longer clean: " + ", ".join(lost) + "**", ""]
+    for key, label in (("vias", "Vias"), ("wirelength_mm", "Track length (mm)")):
+        old_total = total([before[name] for name in both], key)
+        new_total = total([after[name] for name in both], key)
+        if old_total is not None and new_total is not None:
+            lines.append(f"{label} on the {len(both)} boards clean in both: {old_total} → {new_total}")
+    if changed:
+        lines += ["", "Other changes on unclean boards:", *changed]
+    return "\n".join(lines) + "\n", lost
+
+
 def annotation_chunks(text: str, limit: int = 3900) -> list[str]:
     """Line-aligned pieces that fit GitHub's 4 KB annotation message."""
     chunks, current = [], ""
@@ -475,6 +559,14 @@ def main(argv: list[str] | None = None) -> int:
     boards.add_argument("root", type=Path)
     failures = commands.add_parser("failures")
     failures.add_argument("root", type=Path)
+    baseline = commands.add_parser("baseline", help="write per-board outcomes as a comparison baseline")
+    baseline.add_argument("root", type=Path, help="a results directory, or with --from-record a record file")
+    baseline.add_argument("--from-record", action="store_true",
+                          help="read a published 'Benchmark baseline record' instead of result files")
+    baseline.add_argument("--source", default="", help="provenance note stored in the baseline")
+    compare = commands.add_parser("compare", help="compare results with a baseline; exit 1 if a clean board is lost")
+    compare.add_argument("baseline", type=Path)
+    compare.add_argument("root", type=Path)
     annotate = commands.add_parser("annotate", help="print a file as GitHub notice annotations")
     annotate.add_argument("file", type=Path)
     annotate.add_argument("--title", required=True)
@@ -486,6 +578,16 @@ def main(argv: list[str] | None = None) -> int:
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":
         record = score_result(args.directory, args.kicad_cli, pcbnew_python=args.pcbnew_python)
+    elif args.command == "baseline":
+        document = (baseline_from_record(args.root.read_text(encoding="utf-8"), args.source) if args.from_record
+                    else {**baseline_records(args.root), "source": args.source})
+        print(json.dumps(document, indent=1, sort_keys=True))
+        return 0
+    elif args.command == "compare":
+        text, lost = compare_to_baseline(json.loads(args.baseline.read_text(encoding="utf-8")),
+                                         baseline_records(args.root))
+        print(text, end="")
+        return 1 if lost else 0
     elif args.command == "annotate":
         chunks = annotation_chunks(args.file.read_text(encoding="utf-8"))
         for index in range(args.first, min(args.first + 10, len(chunks))):

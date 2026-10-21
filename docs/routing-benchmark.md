@@ -58,12 +58,34 @@ since `drc_fix_v9.py` kept only boards whose original routing passes.
 ## CI
 
 `.github/workflows/routing-benchmark.yml` runs on manual dispatch (with an
-optional board limit) and on pushes to `claude/**` that touch the benchmark
-or the importer. It prepares the boards once, routes them across matrix
+optional board limit) and on pushes to `claude/**` that touch `pcbir/` or the
+benchmark files. It prepares the boards once, routes them across matrix
 shards, then scores every board and its reference and publishes the
 aggregate and per-board tables in the run summary and as a notice
 annotation. Artifacts keep each routed board, its KiCad DRC report and
 its result record.
+
+## Board-by-board comparison
+
+`.github/routing-benchmark-baseline.json` holds each board's committed
+outcome: status, clean pass, unrouted nets, KiCad errors, unconnected items,
+vias and length. Every run ends with
+`python -m pcbir.bench compare .github/routing-benchmark-baseline.json RESULTS`.
+It lists the boards that became clean or stopped being clean, and changes in
+unrouted nets, errors and unconnected items on boards that are still unclean.
+For boards clean in both runs, it gives total vias and length. **The job
+fails if a board that was clean in the baseline is no longer clean.** A change
+that improves the benchmark refreshes the baseline in the same pull request.
+Each run publishes its own record as the "Benchmark baseline record"
+annotations. To refresh the baseline from a run, save those annotations'
+text to a file and run
+`python -m pcbir.bench baseline FILE --from-record --source "run ID on COMMIT"`;
+from local results, `python -m pcbir.bench baseline RESULTS` writes the
+same JSON.
+
+The workflow runs on pushes to `claude/**` branches that touch `pcbir/` or
+the benchmark files, so router changes are measured too, and on manual
+dispatch.
 
 ## Baseline (2026-10-20)
 

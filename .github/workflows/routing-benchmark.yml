@@ -15,9 +15,9 @@ on:
   push:
     branches: ['claude/**']
     paths:
-      - pcbir/bench.py
-      - pcbir/importers/kicad_pcb.py
+      - pcbir/**
       - .github/routing-benchmark.json
+      - .github/routing-benchmark-baseline.json
       - .github/workflows/routing-benchmark.yml
 
 permissions:
@@ -253,6 +253,28 @@ jobs:
         run: python -m pcbir.bench annotate ../failures.md --title "Benchmark failures" --first 10
       - name: Failure details 3
         run: python -m pcbir.bench annotate ../failures.md --title "Benchmark failures" --first 20
+      - name: Record this run as a possible baseline
+        run: |
+          python -m pcbir.bench baseline ../results > ../baseline.json
+          python - ../baseline.json > ../baseline.txt <<'PY'
+          import json, sys
+          boards = json.load(open(sys.argv[1]))["boards"]
+          print("board|status|clean|unrouted|drc_errors|unconnected|vias|wirelength_mm")
+          for name, item in sorted(boards.items()):
+              print("|".join(str(value) for value in (name, item["status"], int(item["clean_pass"]), item["unrouted"],
+                    item["drc_errors"], item["unconnected_items"], item["vias"], item["wirelength_mm"])))
+          PY
+          python -m pcbir.bench annotate ../baseline.txt --title "Benchmark baseline record"
+      # Last, so a lost clean board fails the job only after everything above is published.
+      - name: Compare with the committed baseline
+        run: |
+          set +e
+          python -m pcbir.bench compare .github/routing-benchmark-baseline.json ../results > ../compare.md
+          code=$?
+          set -e
+          cat ../compare.md >> "$GITHUB_STEP_SUMMARY"
+          python -m pcbir.bench annotate ../compare.md --title "Benchmark comparison"
+          exit $code
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -262,4 +284,6 @@ jobs:
             reference
             summary.md
             failures.md
+            compare.md
+            baseline.json
           if-no-files-found: warn
