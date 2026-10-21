@@ -18,6 +18,16 @@ attempts=${KICAD_INSTALL_ATTEMPTS:-6}
 versions() { apt-cache madison "$1" | awk '{print $3}' | sort -u | tr '\n' ' '; }
 annotate() { sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
 
+cache=${KICAD_DEB_CACHE:-}
+if [ -n "$cache" ] && [ -f "$cache/version" ] && [ "$(cat "$cache/version")" = "$package" ]; then
+  # Packages saved by an earlier run: no Launchpad needed.
+  sudo apt-get -o Acquire::Retries=3 update || true
+  if sudo apt-get install --yes --no-install-recommends "$cache"/*.deb make; then
+    echo "::notice title=KiCad 10::installed $package from the CI package cache"
+    from_cache=1
+  fi
+fi
+if [ -z "${from_cache:-}" ]; then
 # Adding the PPA asks Launchpad for its signing key, so it can fail too.
 for attempt in $(seq 1 "$attempts"); do
   if sudo add-apt-repository --yes --no-update ppa:kicad/kicad-10.0-releases; then
@@ -34,7 +44,7 @@ for attempt in $(seq 1 "$attempts"); do
   offered=$(versions kicad)
   echo "::notice title=KiCad 10 PPA (attempt $attempt)::kicad: ${offered:-none}; kicad-footprints: $(versions kicad-footprints)"
   if apt-cache madison kicad | awk '{print $3}' | grep -qxF "$package"; then
-    if sudo apt-get -o Acquire::Retries=3 install --yes --no-install-recommends \
+    if sudo apt-get -o Acquire::Retries=3 -o APT::Keep-Downloaded-Packages=true install --yes --no-install-recommends \
          "kicad=$package" "kicad-footprints=$package" make >"$log" 2>&1; then
       cat "$log"
       break
@@ -55,6 +65,13 @@ for attempt in $(seq 1 "$attempts"); do
   echo "attempt $attempt: $failure; retrying in 60 s"
   sleep 60
 done
+if [ -n "$cache" ]; then
+  # Keep this install's packages for later runs (the workflow saves the folder).
+  mkdir -p "$cache"
+  cp /var/cache/apt/archives/*.deb "$cache"/ 2>/dev/null || true
+  echo "$package" > "$cache/version"
+fi
+fi
 actual=$(kicad-cli version)
 if [ "$actual" != "$expected" ]; then
   echo "::error title=KiCad version::Expected KiCad $expected, installed $actual (Ubuntu package $package)"

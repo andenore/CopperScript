@@ -41,8 +41,22 @@ jobs:
           python -m pip install --no-build-isolation --no-deps -e .
       - name: Fetch locked URL dependencies into managed cache and record provenance
         run: python scripts/ci_board_bundle.py prepare
+      - name: Restore cached KiCad packages
+        id: kicad-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: kicad10-debs-${{ hashFiles('.github/board-toolchain.json') }}
       - name: Install KiCad 10 and bundled footprint libraries (pinned Ubuntu packages)
+        env:
+          KICAD_DEB_CACHE: /home/runner/kicad-debs
         run: bash scripts/ci_install_kicad10.sh
+      - name: Save KiCad packages for later runs
+        if: steps.kicad-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: ${{ steps.kicad-cache.outputs.cache-primary-key }}
       - name: Exercise Make targets for every example
         env:
           PYTHON: python
@@ -153,8 +167,22 @@ jobs:
           python -m pip install --no-build-isolation --no-deps -e .
       - name: Fetch locked URL dependencies into managed cache and record provenance
         run: python scripts/ci_board_bundle.py prepare
+      - name: Restore cached KiCad packages
+        id: kicad-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: kicad10-debs-${{ hashFiles('.github/board-toolchain.json') }}
       - name: Install KiCad 10 and bundled footprint libraries (pinned Ubuntu packages)
+        env:
+          KICAD_DEB_CACHE: /home/runner/kicad-debs
         run: bash scripts/ci_install_kicad10.sh
+      - name: Save KiCad packages for later runs
+        if: steps.kicad-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: ${{ steps.kicad-cache.outputs.cache-primary-key }}
       - name: Attempt complete routing (never a dry run)
         run: python scripts/ci_board_bundle.py route --minutes 270
       - name: Build source distributions and pinned library snapshot

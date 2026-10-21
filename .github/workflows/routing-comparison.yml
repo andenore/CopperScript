@@ -76,10 +76,23 @@ jobs:
           python -m pip install --no-build-isolation --no-deps -e .
       - name: Fetch locked URL dependencies into managed cache and record provenance
         run: python scripts/ci_board_bundle.py prepare
+      - name: Restore cached KiCad packages
+        id: kicad-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: kicad10-debs-${{ hashFiles('ci-tools/.github/board-toolchain.json') }}
       - name: Install KiCad 10 and bundled footprint libraries
         env:
+          KICAD_DEB_CACHE: /home/runner/kicad-debs
           KICAD_PINS: ${{ github.workspace }}/ci-tools/.github/board-toolchain.json
         run: bash "$GITHUB_WORKSPACE/ci-tools/scripts/ci_install_kicad10.sh"
+      - name: Save KiCad packages for later runs
+        if: steps.kicad-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: ${{ steps.kicad-cache.outputs.cache-primary-key }}
       - name: Route full-vertical without profiling
         run: |
           set +e

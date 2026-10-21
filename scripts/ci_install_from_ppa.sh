@@ -10,6 +10,20 @@ set -euo pipefail
 ppa=$1 series=$2
 shift 2
 attempts=${KICAD_INSTALL_ATTEMPTS:-6}
+cache=${KICAD_DEB_CACHE:-}
+if [ -n "$cache" ] && ls "$cache"/kicad_"$series".*.deb >/dev/null 2>&1; then
+  # Packages saved by an earlier run: no Launchpad needed.
+  sudo apt-get -o Acquire::Retries=3 update || true
+  extra=()
+  for name in "$@"; do ls "$cache"/"${name}"_*.deb >/dev/null 2>&1 || extra+=("$name"); done
+  if sudo apt-get install --yes --no-install-recommends "$cache"/*.deb "${extra[@]}"; then
+    echo "::notice title=KiCad $series::installed from the CI package cache"
+    exit 0
+  fi
+fi
+save() {
+  if [ -n "$cache" ]; then mkdir -p "$cache"; cp /var/cache/apt/archives/*.deb "$cache"/ 2>/dev/null || true; fi
+}
 for attempt in $(seq 1 "$attempts"); do
   if sudo add-apt-repository --yes --no-update "$ppa"; then break; fi
   if [ "$attempt" = "$attempts" ]; then
@@ -23,7 +37,10 @@ for attempt in $(seq 1 "$attempts"); do
   echo "::notice title=KiCad PPA $ppa (attempt $attempt)::candidate kicad $candidate"
   case "$candidate" in
     "$series".*)
-      if sudo apt-get -o Acquire::Retries=3 install --yes --no-install-recommends "$@"; then exit 0; fi
+      if sudo apt-get -o Acquire::Retries=3 -o APT::Keep-Downloaded-Packages=true install --yes --no-install-recommends "$@"; then
+        save
+        exit 0
+      fi
       failure="install failed" ;;
     *) failure="candidate kicad is $candidate, not $series.x (Launchpad unreachable?)" ;;
   esac
