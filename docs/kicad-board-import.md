@@ -34,11 +34,19 @@ trapezoid pads become bounding rectangles (a surface custom pad's rectangle
 is its copper's own box, which may sit off the anchor; a plated one stays
 centred on its drill), chamfers and pad-level clearance
 overrides are dropped, plated pads listed on some layers are treated as on
-all layers, copper graphics and zones on nets without pads become keepouts
-for every net, and an outline that does not close falls back to its bounding
+all layers, copper graphics, copper text and zones on nets without pads
+become keepouts for every net, and an outline that does not close falls back to its bounding
 box. Each is counted in `BoardImportResult.approximations` and the board's
 `import_approximations` metadata. Surface pads on both outer layers, and
 footprints on non-copper layers, are rejected.
+
+Copper graphics and text have no net, so their keepouts are grown by the
+largest net-class clearance: any routed net then keeps its own clearance
+from them. Text uses its glyph box (characters at most one font width
+apart, lines 1.62 heights apart, plus the stroke), rotated and justified
+as in the file. Footprint text, whose stored angle differs between KiCad
+versions, uses the square that holds the box at any rotation about its
+anchor. Hidden text is not copper and is ignored.
 
 ## Placement legality
 

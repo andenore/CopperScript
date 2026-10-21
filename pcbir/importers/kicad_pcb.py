@@ -29,7 +29,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from hashlib import sha256
 import json
-from math import atan2, cos, hypot, radians, sin
+from math import atan2, ceil, cos, hypot, radians, sin
 from pathlib import Path
 import re
 
@@ -194,6 +194,11 @@ def parse_kicad_pcb(text: str, *, source: str = "<memory>", name: str = "importe
                     pad = PadReference(companion_reference, number)
                     if pad not in pads:
                         pads.append(pad)
+        elif tag == "gr_text" and _atom(_first(item, "layer"), 1) in {layer.value for layer in copper}:
+            keepout = _text_keepout(item, _atom(item, 1) or "", lambda point: point, True,
+                                    f"text-{len(keepouts)}", source, log)
+            if keepout is not None:
+                keepouts.append(keepout)
         elif tag in _BOARD_GRAPHIC_TAGS:
             layer = _atom(_first(item, "layer"), 1)
             if layer == "Edge.Cuts":
@@ -221,6 +226,10 @@ def parse_kicad_pcb(text: str, *, source: str = "<memory>", name: str = "importe
         log.approx("zone on a net without pads as keepout")
     outline = _outline(edges, placements, footprints, source, log)
     rules, net_rules = _design_rules(root, project, net_pads, log)
+    # Copper graphics and text have no net: every routed net keeps its own
+    # clearance from them, so the obstacle is grown by the largest one.
+    margin = max([rules.minimum_clearance_nm] + [rule.clearance_nm for rule in net_rules if rule.clearance_nm])
+    keepouts = [_inflated(item, margin) if _is_foreign_copper(item.id) else item for item in keepouts]
     nets = tuple(PhysicalNet(net, tuple(pads)) for net, pads in sorted(net_pads.items()) if net)
     metadata = {
         "source_format": "kicad_pcb",
@@ -503,6 +512,15 @@ def _import_footprint(node: list[SExpr], source: str, copper: tuple[CopperLayer,
             (companion_library if on_opposite else library).append(pad)
             if net and _has_copper(pad):
                 (companion_nets if on_opposite else pad_nets).append((pad[1], net))
+        elif tag in {"fp_text", "property"} and (_atom(_first(child, "layer"), 1) or "") in {
+                item.value for item in copper}:
+            text = _atom(child, 2) or ""
+            # Footprint text angles are relative in KiCad 5 and absolute later,
+            # so its box is taken over every orientation about the anchor.
+            keepout = _text_keepout(child, text, lambda point: _to_board(point, position, angle), False,
+                                    f"text-{len(obstacles)}", where, log)
+            if keepout is not None:
+                obstacles.append(replace(keepout, layers=(CopperLayer(_atom(_first(child, "layer"), 1)),)))
         elif tag in _GRAPHIC_TAGS:
             graphic_layer = _atom(_first(child, "layer"), 1) or ""
             if graphic_layer == "Edge.Cuts":
@@ -1103,6 +1121,86 @@ def _copper_graphic_keepouts(node: list[SExpr], layer: CopperLayer, identifier: 
         result.append(CopperKeepout(f"{identifier}-{index}", (layer,), PolygonWithHoles(PolygonRing((
             Point(x0, y0), Point(x1, y0), Point(x1, y1), Point(x0, y1))))))
     return result
+
+
+# Character advance in font widths for KiCad's stroke font, including side
+# bearings, so a line's box holds its glyphs: narrow, wide and the rest.
+# Lines are 1.62 heights apart.
+_TEXT_LINE_PITCH = 1.62
+_NARROW_GLYPHS = frozenset("Iijl1.,:;'!|`")
+_WIDE_GLYPHS = frozenset("MWmw@%")
+
+
+def _text_advance(line: str) -> float:
+    return sum(0.5 if ch in _NARROW_GLYPHS else 1.15 if ch in _WIDE_GLYPHS else 0.9 for ch in line)
+
+
+def _text_keepout(node: list[SExpr], text: str, transform, angle_known: bool, identifier: str,
+                  source: str, log: _Log) -> CopperKeepout | None:
+    """A copper-layer text item as an obstacle for every net: its glyph box, rotated and justified.
+
+    Without a known board angle the obstacle is the axis square that holds
+    the box at any rotation about its anchor.
+    """
+    hidden = "hide" in [item for item in node[1:] if isinstance(item, str)] or \
+        _atom(_first(node, "hide"), 1) == "yes"
+    effects = _first(node, "effects")
+    if hidden or effects is None or _atom(_first(effects, "hide"), 1) == "yes" or \
+            "hide" in [item for item in effects[1:] if isinstance(item, str)]:
+        return None
+    lines = text.replace("\\n", "\n").split("\n")
+    if not any(line.strip() for line in lines):
+        return None
+    font = _first(effects, "font")
+    size = _first(font, "size") if font is not None else None
+    height = _nm(size[1], source) if size is not None else nm_from_mm("1")
+    width = _nm(size[2], source) if size is not None and len(size) > 2 else height
+    thickness_node = _first(font, "thickness") if font is not None else None
+    stroke = _nm(thickness_node[1], source) if thickness_node is not None else height // 8
+    justify = [item for item in (_first(effects, "justify") or [])[1:] if isinstance(item, str)]
+    box_w = round(max(_text_advance(line) for line in lines) * width) + stroke
+    box_h = height + round((len(lines) - 1) * height * _TEXT_LINE_PITCH) + stroke
+    left = -box_w // 2 if not ({"left", "right"} & set(justify)) else (0 if "left" in justify else -box_w)
+    if "mirror" in justify:
+        left = -left - box_w
+    top = -box_h // 2 if not ({"top", "bottom"} & set(justify)) else (0 if "top" in justify else -box_h)
+    at = _first(node, "at")
+    anchor = transform(_xy(at, source) if at is not None else Point(0, 0))
+    text_angle = _angle(at) if at is not None else Decimal(0)
+    corners = [Point(left, top), Point(left + box_w, top), Point(left + box_w, top + box_h), Point(left, top + box_h)]
+    if angle_known:
+        ring = [_to_board(corner, anchor, text_angle) for corner in corners]
+    else:
+        reach = max(ceil(hypot(corner.x_nm, corner.y_nm)) for corner in corners)
+        ring = [Point(anchor.x_nm + dx * reach, anchor.y_nm + dy * reach) for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    layer = CopperLayer(_atom(_first(node, "layer"), 1))
+    log.approx("copper text as keepout for all nets")
+    return CopperKeepout(identifier, (layer,), PolygonWithHoles(PolygonRing(tuple(ring))))
+
+
+def _is_foreign_copper(identifier: str) -> bool:
+    name = identifier.rsplit("/", 1)[-1]
+    return name.startswith(("graphic-", "copper-graphic-", "text-"))
+
+
+def _inflated(keepout: CopperKeepout, margin: int) -> CopperKeepout:
+    """Mitred outward offset of a convex keepout polygon (a superset of the rounded offset)."""
+    points = list(keepout.outline.outer.vertices)
+    area = sum(a.x_nm * b.y_nm - b.x_nm * a.y_nm for a, b in zip(points, points[1:] + points[:1]))
+    if margin <= 0 or len(points) < 3 or area == 0:
+        return keepout
+    sign = 1 if area > 0 else -1
+    normals = []
+    for a, b in zip(points, points[1:] + points[:1]):
+        dx, dy = b.x_nm - a.x_nm, b.y_nm - a.y_nm
+        length = hypot(dx, dy)
+        normals.append((sign * dy / length, -sign * dx / length) if length else (0.0, 0.0))
+    grown = []
+    for index, point in enumerate(points):
+        (ax, ay), (bx, by) = normals[index - 1], normals[index]
+        scale = margin / max(0.5, 1 + ax * bx + ay * by)
+        grown.append(Point(round(point.x_nm + (ax + bx) * scale), round(point.y_nm + (ay + by) * scale)))
+    return replace(keepout, outline=PolygonWithHoles(PolygonRing(tuple(grown))))
 
 
 # --------------------------------------------------------------------------- rules
