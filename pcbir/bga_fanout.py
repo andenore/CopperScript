@@ -24,8 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .package_patterns import circular_array
-from .physical import (BoardSide, CopperLayer, PadReference, PhysicalBoard, Point, RouteKind,
-                       TrackSegment, Via)
+from .physical import (BoardSide, CopperKeepout, CopperLayer, PadReference, PhysicalBoard, Point,
+                       PolygonRing, PolygonWithHoles, RouteKind, TrackSegment, Via)
 from .pin_escape import checked_access_path
 from .placement import transformed_local_point
 from .routing_clearance import RoutingClearanceIndex
@@ -144,3 +144,64 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
     result = replace(board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias))
     return BgaFanoutResult(result, tuple(tracks), tuple(vias), tuple(packages), tuple(fanned),
                            tuple(blocked), tuple(surface))
+
+
+ESCAPE_STRIP_PREFIX = "bga-escape-strip"
+
+
+def escape_strips(board: PhysicalBoard, *, rings: int = 2,
+                  depth_nm: int = 2_000_000) -> tuple[CopperKeepout, ...]:
+    """Via keepouts that hold a ball array's surface escape channels open.
+
+    For each edge of a full-grid ball array whose outer ``rings`` carry signal
+    balls, the strip just outside the outer lands, ``depth_nm`` deep and as
+    wide as those balls' span, is closed to vias. Signal balls there leave on
+    the surface layer between the outer lands (as manufacturer layouts route
+    a bus out of a BGA edge); supply and return vias placed meanwhile then
+    take sites inside the ball field instead. Supply and return nets are
+    plane (zone) nets and the targets and returns of decoupling links.
+    The strips are temporary: callers hold them only while placing supply
+    and return copper.
+    """
+    supply = {zone.net for zone in board.zones}
+    supply |= {link.net for link in board.decoupling_links}
+    supply |= {link.return_net for link in board.decoupling_links}
+    net_of = {pad: net.name for net in board.nets for pad in net.pads if len(net.pads) >= 2}
+    layers = board.stackup.copper_layers
+    strips: list[CopperKeepout] = []
+    for pose in sorted(board.placements, key=lambda p: p.reference):
+        try:
+            array = circular_array(board, pose.reference)
+        except ValueError:
+            array = None
+        if array is None:
+            continue
+        xs, ys = array.xs_nm, array.ys_nm
+        half, radius = array.pitch_nm // 2, array.land_diameter_nm // 2
+        signal = []
+        for land in board.footprints[pose.footprint].pads:
+            net = net_of.get(PadReference(pose.reference, land.number))
+            if net is not None and net not in supply:
+                signal.append((xs.index(land.position.x_nm), ys.index(land.position.y_nm)))
+        nx, ny = len(xs), len(ys)
+        # (edge, balls in its outer rings as (along-axis index), outward local box)
+        edges = (
+            ("left", [iy for ix, iy in signal if ix < rings], lambda a, b: (
+                xs[0] - radius - depth_nm, ys[a] - half, xs[0] - radius, ys[b] + half)),
+            ("right", [iy for ix, iy in signal if ix >= nx - rings], lambda a, b: (
+                xs[-1] + radius, ys[a] - half, xs[-1] + radius + depth_nm, ys[b] + half)),
+            ("top", [ix for ix, iy in signal if iy < rings], lambda a, b: (
+                xs[a] - half, ys[0] - radius - depth_nm, xs[b] + half, ys[0] - radius)),
+            ("bottom", [ix for ix, iy in signal if iy >= ny - rings], lambda a, b: (
+                xs[a] - half, ys[-1] + radius, xs[b] + half, ys[-1] + radius + depth_nm)),
+        )
+        for name, along, box in edges:
+            if not along:
+                continue
+            x0, y0, x1, y1 = box(min(along), max(along))
+            corners = tuple(transformed_local_point(pose, Point(x, y))
+                            for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)))
+            strips.append(CopperKeepout(f"{ESCAPE_STRIP_PREFIX}-{pose.reference}-{name}", layers,
+                                        PolygonWithHoles(PolygonRing(corners)),
+                                        block_tracks=False, block_vias=True, block_zones=False))
+    return tuple(strips)

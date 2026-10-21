@@ -342,6 +342,17 @@ def run_routing_pipeline(
                 tracks.append(track)
         critical = replace(critical, board=replace(
             board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias)))
+    strip_ids = frozenset()
+    if unified_options is not None and getattr(unified_options, "bga_escape_strips", False):
+        # Supply and return vias stay out of ball arrays' surface escape
+        # channels while decouplers, BGA fanout and plane stitching place them.
+        from .bga_fanout import escape_strips
+        strips = escape_strips(critical.board)
+        strip_ids = frozenset(strip.id for strip in strips)
+        if strips:
+            critical = replace(critical, board=replace(
+                critical.board, copper_keepouts=(*critical.board.copper_keepouts, *strips)))
+            emit(on_progress, "bga_escape_strips", "finished", strips=sorted(strip_ids))
     if access is None and critical.board.decoupling_links and getattr(
             unified_options, "pre_route_decouplers", True):
         from .decoupling import route_decouplers
@@ -393,6 +404,14 @@ def run_routing_pipeline(
         if plane_stitch_options else None
     )
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
+    if strip_ids:
+        def released(board):
+            return replace(board, copper_keepouts=tuple(
+                k for k in board.copper_keepouts if k.id not in strip_ids))
+        critical = replace(critical, board=released(critical.board))
+        pre_fanout = released(pre_fanout)
+        if plane_stitch is not None:
+            plane_stitch = replace(plane_stitch, board=pre_fanout)
     power_plan = preparation.plan if preparation else None
     power_status = 'contact_routed_native_pending' if preparation else 'disabled'
     def plan_distribution(source, held_fanout=None):

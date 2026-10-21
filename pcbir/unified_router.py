@@ -108,6 +108,9 @@ class UnifiedRouterOptions:
     reuse_plane_vias: bool = False           # plane pads may join an existing via of their net
     ball_field_via_sites: bool = False       # new vias inside a ball array only at cell centres
     bga_fanout: bool = True
+    # Hold ball arrays' surface escape strips free of supply/return vias while
+    # decouplers, BGA fanout and plane stitching place them (bga_fanout.escape_strips).
+    bga_escape_strips: bool = False
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
     # Supply islands carved from a spare plane layer before routing
