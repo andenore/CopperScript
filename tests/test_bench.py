@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+from pathlib import Path
 
 from pcbir.bench import _top_level_spans, net_codes, score_drc_report, summarize, write_back_routing
 from pcbir.importers.kicad_mod import _parse_sexpr
@@ -93,3 +94,28 @@ def test_failure_report_lists_only_unclean_boards_with_their_causes(tmp_path):
     assert "#### bad" in report and "#### ok" not in report
     assert "unrouted N1: detailed search cannot reach U1.2" in report
     assert "KiCad violation clearance" in report and "Track [N1]" in report
+
+
+def _baseline(**boards):
+    return {"schema": "copperscript-bench-baseline/v0.1", "boards": boards}
+
+
+def test_compare_reports_gained_and_lost_clean_boards():
+    from pcbir.bench import compare_to_baseline
+    before = _baseline(a={"clean_pass": True, "vias": 2, "wirelength_mm": 10.0},
+                       b={"clean_pass": False, "unrouted": 1}, c={"clean_pass": True, "vias": 1, "wirelength_mm": 5.0},
+                       d={"clean_pass": False, "unrouted": 3, "unconnected_items": 6})
+    after = _baseline(a={"clean_pass": True, "vias": 3, "wirelength_mm": 11.0},
+                      b={"clean_pass": True}, c={"clean_pass": False, "unrouted": 1},
+                      d={"clean_pass": False, "unrouted": 1, "unconnected_items": 2})
+    text, lost = compare_to_baseline(before, after)
+    assert lost == ["c"]
+    assert "Clean boards: 2 → 2 (gained 1, lost 1)" in text and "Now clean: b" in text
+    assert "Vias on the 1 boards clean in both: 2 → 3" in text
+    assert "- d: unrouted 3 → 1, unconnected_items 6 → 2" in text
+
+
+def test_committed_baseline_matches_the_published_result():
+    baseline = json.loads((Path(__file__).parents[1] / ".github/routing-benchmark-baseline.json").read_text())
+    assert len(baseline["boards"]) == 99
+    assert sum(item["clean_pass"] for item in baseline["boards"].values()) == 79
