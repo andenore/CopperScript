@@ -77,7 +77,11 @@ For boards clean in both runs, it gives total vias and length. **The job
 fails if a board that was clean in the baseline is no longer clean.** A change
 that improves the benchmark refreshes the baseline in the same pull request.
 Each run publishes its own record as the "Benchmark baseline record"
-annotations (`python -m pcbir.bench baseline RESULTS` writes the JSON).
+annotations. To refresh the baseline from a run, save those annotations'
+text to a file and run
+`python -m pcbir.bench baseline FILE --from-record --source "run ID on COMMIT"`;
+from local results, `python -m pcbir.bench baseline RESULTS` writes the
+same JSON.
 
 The workflow runs on pushes to `claude/**` branches that touch `pcbir/` or
 the benchmark files, so router changes are measured too, and on manual

@@ -7,7 +7,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 51.76
   },
   "0002_rufs_simple_kicad_schema_and_pcb_v1": {
    "clean_pass": true,
@@ -16,7 +16,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 51.76
   },
   "0003_kitspace_grove_adaptor": {
    "clean_pass": true,
@@ -25,7 +25,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 17.414
   },
   "0004_S1G-Mod_JST_Adapter": {
    "clean_pass": true,
@@ -34,7 +34,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 62.292
   },
   "0005_AVR-Playground_hello_world": {
    "clean_pass": true,
@@ -43,7 +43,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 147.4
   },
   "0006_raspberry_pi_pullup_button_pullup_shutdown_button": {
    "clean_pass": true,
@@ -52,7 +52,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 56.471
   },
   "0007_raspberry_pi_pullup_button_pullup_shutdown_button(revB)": {
    "clean_pass": true,
@@ -61,7 +61,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 66.01
   },
   "0008_CapPCB_CapPcb": {
    "clean_pass": true,
@@ -70,7 +70,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 87.657
   },
   "0009_SmartLaserCO2-PCB_WaterCool": {
    "clean_pass": true,
@@ -79,7 +79,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 112.152
   },
   "0010_SmartLaserCO2-PCB_OptAdjust": {
    "clean_pass": true,
@@ -88,7 +88,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 79.841
   },
   "0011_PixyWirelessShield_Shield PIXY": {
    "clean_pass": false,
@@ -97,7 +97,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 159.662
   },
   "0012_kitspace_ir_sensor": {
    "clean_pass": true,
@@ -106,7 +106,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 238.917
   },
   "0013_crossover-schiit-stack_xover4schiit": {
    "clean_pass": false,
@@ -115,7 +115,7 @@
    "unconnected_items": 4,
    "unrouted": 1,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 152.865
   },
   "0014_hardware-designs_m-trigger": {
    "clean_pass": true,
@@ -124,7 +124,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 105.589
   },
   "0015_kitspace_tt_opt101_module_b1": {
    "clean_pass": true,
@@ -133,7 +133,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 58.023
   },
   "0016_breakout-boards_avr-isp-x2": {
    "clean_pass": true,
@@ -142,7 +142,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 45.282
   },
   "0017_Blink-Eras_AVR_ISP_Pogo": {
    "clean_pass": true,
@@ -151,7 +151,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 121.56
   },
   "0018_Hardware_Playground_hy_adapter": {
    "clean_pass": true,
@@ -160,7 +160,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 7,
-   "wirelength_mm": null
+   "wirelength_mm": 60.929
   },
   "0019_CubeSAT-Reaction-Wheel_Edison_Motor_Servo": {
    "clean_pass": true,
@@ -169,7 +169,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 117.323
   },
   "0020_Cherry-Mx-Bitboard_Cherry Mx Bitboard": {
    "clean_pass": true,
@@ -178,7 +178,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 77.807
   },
   "0021_RPi-PWM-Fan-interface_RPi PWM Fan interface": {
    "clean_pass": true,
@@ -187,7 +187,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 67.505
   },
   "0022_OpenVNAVI_motor unit": {
    "clean_pass": true,
@@ -196,7 +196,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 65.329
   },
   "0023_hardware-designs_si7021-board": {
    "clean_pass": true,
@@ -205,7 +205,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 111.905
   },
   "0024_memsarray_mems_modules": {
    "clean_pass": false,
@@ -214,7 +214,7 @@
    "unconnected_items": 3,
    "unrouted": 1,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 40.476
   },
   "0025_kitspace_hum_temp_sensor": {
    "clean_pass": true,
@@ -223,7 +223,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 120.342
   },
   "0026_PCB_constant_current_ac_hv": {
    "clean_pass": false,
@@ -232,7 +232,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 134.295
   },
   "0027_ID-FIX_scanConnect": {
    "clean_pass": true,
@@ -241,7 +241,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 55.169
   },
   "0028_hardware-designs_c-trigger": {
    "clean_pass": true,
@@ -250,7 +250,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 86.58
   },
   "0029_espeverywhere__autosave-espeverywhere_breakout": {
    "clean_pass": true,
@@ -259,7 +259,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 3,
-   "wirelength_mm": null
+   "wirelength_mm": 146.959
   },
   "0030_kitspace_sop8breakout": {
    "clean_pass": true,
@@ -268,7 +268,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 8,
-   "wirelength_mm": null
+   "wirelength_mm": 41.692
   },
   "0031_kitspace_Potentiometer_mount_4LED": {
    "clean_pass": true,
@@ -277,7 +277,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 217.27
   },
   "0032_kitspace_Potentiometer_mount_8LED": {
    "clean_pass": true,
@@ -286,7 +286,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 341.483
   },
   "0033_breakout-boards_swd-to-wires": {
    "clean_pass": true,
@@ -295,7 +295,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 3,
-   "wirelength_mm": null
+   "wirelength_mm": 106.278
   },
   "0034_NavigationThing_NavigationThingBacklight": {
    "clean_pass": false,
@@ -304,7 +304,7 @@
    "unconnected_items": 14,
    "unrouted": 4,
    "vias": 12,
-   "wirelength_mm": null
+   "wirelength_mm": 12.0
   },
   "0035_KiCad-Like-a-Pro-Tutorial_rf24-breakout-v1": {
    "clean_pass": true,
@@ -313,7 +313,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 192.081
   },
   "0036_nRF24breakoutBoard_nRF24-breakout": {
    "clean_pass": true,
@@ -322,7 +322,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 3,
-   "wirelength_mm": null
+   "wirelength_mm": 137.516
   },
   "0037_hardware-designs_spsgrf-board": {
    "clean_pass": true,
@@ -331,7 +331,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 17,
-   "wirelength_mm": null
+   "wirelength_mm": 201.09
   },
   "0038_PCB_serie_led_strip": {
    "clean_pass": true,
@@ -340,7 +340,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 57.06
   },
   "0039_drawduino_drawduino": {
    "clean_pass": true,
@@ -349,7 +349,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 248.195
   },
   "0040_oshtimer_transponder": {
    "clean_pass": true,
@@ -358,7 +358,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 4,
-   "wirelength_mm": null
+   "wirelength_mm": 81.103
   },
   "0041_FogDrive_attiny45_slim": {
    "clean_pass": true,
@@ -367,7 +367,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 54.82
   },
   "0042_starsynctrackers_reset_switch": {
    "clean_pass": true,
@@ -376,7 +376,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 81.104
   },
   "0043_breakout-boards_swd-and-uart": {
    "clean_pass": true,
@@ -385,7 +385,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 3,
-   "wirelength_mm": null
+   "wirelength_mm": 124.237
   },
   "0044_blink-errr_blink-errr": {
    "clean_pass": true,
@@ -394,7 +394,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 4,
-   "wirelength_mm": null
+   "wirelength_mm": 183.321
   },
   "0045_retroreflectors_TANGOFLOCK": {
    "clean_pass": false,
@@ -403,7 +403,7 @@
    "unconnected_items": 2,
    "unrouted": 1,
    "vias": 3,
-   "wirelength_mm": null
+   "wirelength_mm": 111.661
   },
   "0046_mearm-base-pcb_ServoPCB": {
    "clean_pass": true,
@@ -412,7 +412,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 5,
-   "wirelength_mm": null
+   "wirelength_mm": 419.241
   },
   "0047_LoLin_Designs_LoLin": {
    "clean_pass": true,
@@ -421,7 +421,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 224.458
   },
   "0048_MySRaspiGW_MySRaspiGW": {
    "clean_pass": false,
@@ -430,7 +430,7 @@
    "unconnected_items": 13,
    "unrouted": 7,
    "vias": 7,
-   "wirelength_mm": null
+   "wirelength_mm": 14.0
   },
   "0049_MySRaspiGW_MySRaspiGW_PA_LNA": {
    "clean_pass": false,
@@ -439,7 +439,7 @@
    "unconnected_items": 13,
    "unrouted": 7,
    "vias": 7,
-   "wirelength_mm": null
+   "wirelength_mm": 14.5
   },
   "0050_MySRaspiGW_MySRaspiGW_PA_LNA_Pimoroni": {
    "clean_pass": false,
@@ -448,7 +448,7 @@
    "unconnected_items": 6,
    "unrouted": 3,
    "vias": 5,
-   "wirelength_mm": null
+   "wirelength_mm": 89.956
   },
   "0051_MySRaspiGW_MySRaspiGW_Pimoroni": {
    "clean_pass": false,
@@ -457,7 +457,7 @@
    "unconnected_items": 6,
    "unrouted": 3,
    "vias": 6,
-   "wirelength_mm": null
+   "wirelength_mm": 92.455
   },
   "0052_breakout-boards_50-to-100": {
    "clean_pass": true,
@@ -466,7 +466,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 6,
-   "wirelength_mm": null
+   "wirelength_mm": 138.912
   },
   "0053_mechkeys_lfk78-jtag": {
    "clean_pass": true,
@@ -475,7 +475,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 150.193
   },
   "0054_induction-hob_temperature-sensor": {
    "clean_pass": true,
@@ -484,7 +484,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 11,
-   "wirelength_mm": null
+   "wirelength_mm": 62.367
   },
   "0055_dustbox_Dustbox": {
    "clean_pass": true,
@@ -493,7 +493,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 260.025
   },
   "0056_nrf2rfm69_nrf2rfm69": {
    "clean_pass": true,
@@ -502,7 +502,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 7,
-   "wirelength_mm": null
+   "wirelength_mm": 198.863
   },
   "0057_tepmachcha_tepmachcha": {
    "clean_pass": true,
@@ -511,7 +511,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 220.139
   },
   "0058_scimpy_powersupply": {
    "clean_pass": true,
@@ -520,7 +520,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 241.766
   },
   "0059_marlin-neopixel-bridge_ATtiny85_Marneo": {
    "clean_pass": true,
@@ -529,7 +529,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 160.304
   },
   "0060_Paperino_HW_paperino_breakout": {
    "clean_pass": true,
@@ -538,7 +538,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 168.162
   },
   "0061_kitspace_temp_breakout": {
    "clean_pass": true,
@@ -547,7 +547,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 287.237
   },
   "0062_I2CTempsensor_sensors": {
    "clean_pass": true,
@@ -556,7 +556,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 3,
-   "wirelength_mm": null
+   "wirelength_mm": 150.532
   },
   "0063_stlinkv2_breakout_stlink_breakout": {
    "clean_pass": true,
@@ -565,7 +565,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 71.853
   },
   "0064_kicad-guitar-preamp_Preamp-Instructables": {
    "clean_pass": true,
@@ -574,7 +574,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 151.375
   },
   "0065_DiscoDanceFloorV1_BusTerminator": {
    "clean_pass": true,
@@ -583,7 +583,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 7,
-   "wirelength_mm": null
+   "wirelength_mm": 97.977
   },
   "0066_ESP8266-WS2811-LEDs_ws2811controller_panels": {
    "clean_pass": true,
@@ -592,7 +592,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 12,
-   "wirelength_mm": null
+   "wirelength_mm": 174.126
   },
   "0067_radio_saw_dcc6c": {
    "clean_pass": false,
@@ -601,7 +601,7 @@
    "unconnected_items": 2,
    "unrouted": 1,
    "vias": 8,
-   "wirelength_mm": null
+   "wirelength_mm": 93.99
   },
   "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm": {
    "clean_pass": false,
@@ -610,7 +610,7 @@
    "unconnected_items": 6,
    "unrouted": 6,
    "vias": 6,
-   "wirelength_mm": null
+   "wirelength_mm": 14.621
   },
   "0069_C-BISCUIT_crowbar": {
    "clean_pass": false,
@@ -619,7 +619,7 @@
    "unconnected_items": 1,
    "unrouted": 1,
    "vias": 7,
-   "wirelength_mm": null
+   "wirelength_mm": 132.023
   },
   "0070_Raspberry-Pi-Soft-Power-Controller_Switching Supply TPS563208 MCI": {
    "clean_pass": true,
@@ -628,7 +628,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 5,
-   "wirelength_mm": null
+   "wirelength_mm": 162.901
   },
   "0071_hackyflasher_Flasher": {
    "clean_pass": true,
@@ -637,7 +637,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 683.079
   },
   "0072_esp8266_wi07_3_adapter_esp": {
    "clean_pass": true,
@@ -646,7 +646,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 4,
-   "wirelength_mm": null
+   "wirelength_mm": 110.65
   },
   "0073_z2amiller_sensorboard_programmer": {
    "clean_pass": true,
@@ -655,7 +655,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 158.623
   },
   "0074_kitspace_12V5A_breakout": {
    "clean_pass": true,
@@ -664,7 +664,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 250.601
   },
   "0075_RPi-ATtiny85-Programmer_rpi_attiny85_programmer": {
    "clean_pass": true,
@@ -673,7 +673,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 227.837
   },
   "0076_breakout-boards_usb-5v-3v3": {
    "clean_pass": true,
@@ -682,7 +682,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 96.289
   },
   "0077_HaveSome_PCB_HaveSomePCB": {
    "clean_pass": false,
@@ -691,7 +691,7 @@
    "unconnected_items": 4,
    "unrouted": 1,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 61.392
   },
   "0078_Hardware_Playground_buck_led_driver": {
    "clean_pass": false,
@@ -700,7 +700,7 @@
    "unconnected_items": 15,
    "unrouted": 8,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 0.0
   },
   "0079_Inkjet_InkjetBreakout": {
    "clean_pass": true,
@@ -709,7 +709,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 11,
-   "wirelength_mm": null
+   "wirelength_mm": 334.316
   },
   "0080_kitspace_RPi_shield": {
    "clean_pass": true,
@@ -718,7 +718,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 4,
-   "wirelength_mm": null
+   "wirelength_mm": 369.278
   },
   "0081_everled_everled": {
    "clean_pass": true,
@@ -727,7 +727,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 6,
-   "wirelength_mm": null
+   "wirelength_mm": 139.223
   },
   "0082_firefly-jar_solar_lamp": {
    "clean_pass": true,
@@ -736,7 +736,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": null
+   "wirelength_mm": 308.324
   },
   "0083_DustSensorShield_DustSensorShield": {
    "clean_pass": true,
@@ -745,7 +745,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 27,
-   "wirelength_mm": null
+   "wirelength_mm": 619.708
   },
   "0084_kitspace__autosave-nunchuk_breakout": {
    "clean_pass": true,
@@ -754,7 +754,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 3,
-   "wirelength_mm": null
+   "wirelength_mm": 166.536
   },
   "0085_mini-whip_mini-whip-power-feed": {
    "clean_pass": false,
@@ -763,7 +763,7 @@
    "unconnected_items": 4,
    "unrouted": 1,
    "vias": 7,
-   "wirelength_mm": null
+   "wirelength_mm": 193.772
   },
   "0086_BB-PWR-8009_BB-PWR-8009_revA": {
    "clean_pass": false,
@@ -772,7 +772,7 @@
    "unconnected_items": 7,
    "unrouted": 2,
    "vias": 6,
-   "wirelength_mm": null
+   "wirelength_mm": 55.664
   },
   "0087_solar-lanterns_proto1": {
    "clean_pass": true,
@@ -781,7 +781,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 6,
-   "wirelength_mm": null
+   "wirelength_mm": 199.054
   },
   "0088_DA_Lamp_attiny44a_servo_i2c": {
    "clean_pass": true,
@@ -790,7 +790,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 11,
-   "wirelength_mm": null
+   "wirelength_mm": 206.878
   },
   "0089_cobwebb-junction-box_CobwebbJunctionBox": {
    "clean_pass": false,
@@ -799,7 +799,7 @@
    "unconnected_items": 3,
    "unrouted": 1,
    "vias": 0,
-   "wirelength_mm": null
+   "wirelength_mm": 441.809
   },
   "0090_keyboard_converter_adapter_ibm4704_converter_adapter_ibm4704": {
    "clean_pass": false,
@@ -808,7 +808,7 @@
    "unconnected_items": 3,
    "unrouted": 1,
    "vias": 10,
-   "wirelength_mm": null
+   "wirelength_mm": 197.537
   },
   "0091_rufs_dra818v_breakout_board": {
    "clean_pass": true,
@@ -817,7 +817,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 11,
-   "wirelength_mm": null
+   "wirelength_mm": 339.027
   },
   "0092_DerKnopf_power-supply": {
    "clean_pass": true,
@@ -826,7 +826,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 4,
-   "wirelength_mm": null
+   "wirelength_mm": 191.802
   },
   "0093_kitspace_nunchuk_breakout": {
    "clean_pass": true,
@@ -835,7 +835,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 3,
-   "wirelength_mm": null
+   "wirelength_mm": 174.313
   },
   "0094_kitspace_gas_sensor": {
    "clean_pass": true,
@@ -844,7 +844,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 4,
-   "wirelength_mm": null
+   "wirelength_mm": 266.93
   },
   "0095_PsuFanController_FanController": {
    "clean_pass": true,
@@ -853,7 +853,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 199.826
   },
   "0097_bristle_bot_light_follow_bristle_bot": {
    "clean_pass": true,
@@ -862,7 +862,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 6,
-   "wirelength_mm": null
+   "wirelength_mm": 374.834
   },
   "0098_MSGEQ7-Breakout-Board_MSGEQ7_Breakout_Board": {
    "clean_pass": true,
@@ -871,7 +871,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": null
+   "wirelength_mm": 199.614
   },
   "0099_SparkSwitch_SparkProtectionSwitch": {
    "clean_pass": false,
@@ -880,7 +880,7 @@
    "unconnected_items": 24,
    "unrouted": 7,
    "vias": 4,
-   "wirelength_mm": null
+   "wirelength_mm": 7.0
   },
   "0100_smt-zvs-driver_IH10-mc": {
    "clean_pass": true,
@@ -889,9 +889,9 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 4,
-   "wirelength_mm": null
+   "wirelength_mm": 216.752
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run on e893c46 (main beaebe9 routes identically), stock KiCad 9.0.9; wirelength not recorded in that run"
+ "source": "routing-benchmark run 39546443058 on 54bcb03 (routes as main beaebe9), stock KiCad 9.0.9"
 }

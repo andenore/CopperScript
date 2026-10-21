@@ -442,6 +442,32 @@ def baseline_records(root: Path) -> dict:
     return {"schema": BASELINE_SCHEMA, "boards": boards}
 
 
+def baseline_from_record(text: str, source: str = "") -> dict:
+    """Rebuild a baseline from a run's published "Benchmark baseline record" annotation text."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    header = lines[0].split("|")
+
+    def value(raw: str):
+        if raw in {"None", ""}:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            try:
+                return float(raw)
+            except ValueError:
+                return raw
+
+    boards = {}
+    for line in lines[1:]:
+        row = dict(zip(header, line.split("|")))
+        boards[row["board"]] = {"status": row["status"], "clean_pass": row["clean"] == "1",
+                                "unrouted": value(row["unrouted"]), "drc_errors": value(row["drc_errors"]),
+                                "unconnected_items": value(row["unconnected"]), "vias": value(row["vias"]),
+                                "wirelength_mm": value(row["wirelength_mm"])}
+    return {"schema": BASELINE_SCHEMA, "source": source, "boards": boards}
+
+
 def compare_to_baseline(baseline: dict, current: dict) -> tuple[str, list[str]]:
     """Markdown comparison and the boards that were clean in the baseline but are not now."""
     before, after = baseline.get("boards", {}), current.get("boards", {})
@@ -534,7 +560,10 @@ def main(argv: list[str] | None = None) -> int:
     failures = commands.add_parser("failures")
     failures.add_argument("root", type=Path)
     baseline = commands.add_parser("baseline", help="write per-board outcomes as a comparison baseline")
-    baseline.add_argument("root", type=Path)
+    baseline.add_argument("root", type=Path, help="a results directory, or with --from-record a record file")
+    baseline.add_argument("--from-record", action="store_true",
+                          help="read a published 'Benchmark baseline record' instead of result files")
+    baseline.add_argument("--source", default="", help="provenance note stored in the baseline")
     compare = commands.add_parser("compare", help="compare results with a baseline; exit 1 if a clean board is lost")
     compare.add_argument("baseline", type=Path)
     compare.add_argument("root", type=Path)
@@ -550,7 +579,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "score":
         record = score_result(args.directory, args.kicad_cli, pcbnew_python=args.pcbnew_python)
     elif args.command == "baseline":
-        print(json.dumps(baseline_records(args.root), indent=1, sort_keys=True))
+        document = (baseline_from_record(args.root.read_text(encoding="utf-8"), args.source) if args.from_record
+                    else {**baseline_records(args.root), "source": args.source})
+        print(json.dumps(document, indent=1, sort_keys=True))
         return 0
     elif args.command == "compare":
         text, lost = compare_to_baseline(json.loads(args.baseline.read_text(encoding="utf-8")),

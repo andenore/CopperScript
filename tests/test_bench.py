@@ -119,3 +119,13 @@ def test_committed_baseline_matches_the_published_result():
     baseline = json.loads((Path(__file__).parents[1] / ".github/routing-benchmark-baseline.json").read_text())
     assert len(baseline["boards"]) == 99
     assert sum(item["clean_pass"] for item in baseline["boards"].values()) == 79
+
+
+def test_baseline_round_trips_through_the_published_record():
+    from pcbir.bench import baseline_from_record
+    record = ("board|status|clean|unrouted|drc_errors|unconnected|vias|wirelength_mm\n"
+              "a|routed|1|0|0|0|3|12.5\nb|import_failed|0|None|None|None|None|None\n")
+    boards = baseline_from_record(record)["boards"]
+    assert boards["a"] == {"status": "routed", "clean_pass": True, "unrouted": 0, "drc_errors": 0,
+                           "unconnected_items": 0, "vias": 3, "wirelength_mm": 12.5}
+    assert boards["b"]["clean_pass"] is False and boards["b"]["vias"] is None
