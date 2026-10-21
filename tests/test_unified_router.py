@@ -283,3 +283,25 @@ def test_bus_members_route_first_and_are_reported_as_routed() -> None:
     assert any(e and e[0] == "unified_buses" and e[2]["complete"] == 2 for e in events)
     by_name = {net.net: net for net in result.nets}
     assert by_name["D0"].connected and by_name["D1"].connected and by_name["D0"].track_count > 0
+
+
+def test_a_length_limited_net_takes_the_short_path_through_congestion() -> None:
+    from pcbir.physical import NetRoutingRule, RouteKind
+    from pcbir.unified_router import _Router
+    board = _board({"L": ((3, 10), (17, 10))})
+    rules = (NetRoutingRule("L", RouteKind.GENERAL, max_length_nm=nm_from_mm("15")),)
+    def detoured(board):
+        router = _Router(board, UnifiedRouterOptions(), list(board.nets), None)
+        spec, g = router.specs[0], router.grid
+        # A congested wall across the straight path on every layer, open only far away.
+        x = (13_000_000 - g.x0) // g.pitch
+        for layer in range(g.nl):
+            for y in range(g.ny):
+                if abs(y * g.pitch + g.y0 - 13_000_000) < 2_000_000:
+                    router.occupancy.occ[g.index(layer, x, y)] = 50
+        route = router._route_net(spec, 10.0)
+        return route.connected, router._route_length_nm(route)
+    connected, free_length = detoured(board)
+    assert connected and free_length > nm_from_mm("15")       # without the rule: a detour
+    connected, limited_length = detoured(replace(board, net_routing_rules=rules))
+    assert connected and limited_length <= nm_from_mm("15")   # with it: straight through

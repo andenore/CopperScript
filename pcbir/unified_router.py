@@ -384,6 +384,7 @@ class _NetSpec:
     target_only: tuple[int, ...] = ()        # layers entered only on target nodes (plane layers)
     optional: int = 0                        # trailing components that may stay unjoined
     via_budget: int | None = None            # new vias allowed (max_vias minus existing ones)
+    max_length: int | None = None            # nm, the net's maximum routed length rule
     islands: int = 0                         # trailing components that are plane pieces
     explicit: dict = field(default_factory=dict)  # component index -> layers its plane path may not end on
 
@@ -645,6 +646,8 @@ class _Router:
             spec.via_factor = 4.0
             existing = sum(1 for via in board.vias if via.net == net.name)
             spec.via_budget = max(0, rule.max_vias - existing)
+        if rule is not None and rule.max_length_nm:
+            spec.max_length = rule.max_length_nm
         # Breakout rules let a net narrow next to its own lands (see breakout.py).
         if rule is not None and rule.breakout_length_nm and rule.breakout_width_nm \
                 and rule.breakout_width_nm < width:
@@ -1131,7 +1134,24 @@ class _Router:
         self._finish_route(route, spec)
         return route
 
+    def _route_length_nm(self, route: _NetRoute) -> float:
+        leads = sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
+                    for lead in route.leads for t in lead)
+        return route.length * self.grid.pitch + leads
+
     def _route_net(self, spec: _NetSpec, present: float) -> _NetRoute:
+        route = self._route_net_budgeted(spec, present)
+        if (spec.max_length and present and route.connected
+                and self._route_length_nm(route) > spec.max_length):
+            # A detour around congestion broke the length rule: take the
+            # shortest path through other nets' copper instead, so the
+            # negotiation moves them rather than this net.
+            direct = self._route_net_budgeted(spec, 0.0)
+            if direct.connected and self._route_length_nm(direct) < self._route_length_nm(route):
+                route = direct
+        return route
+
+    def _route_net_budgeted(self, spec: _NetSpec, present: float) -> _NetRoute:
         route = self._route_net_once(spec, present)
         if spec.via_budget is not None and len(route.via_xy) > spec.via_budget:
             # Over the net's via budget: search again with vias priced far
