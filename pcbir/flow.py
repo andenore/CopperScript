@@ -275,12 +275,7 @@ def run_routing_pipeline(
                 and getattr(unified_options, "pre_route_decouplers", True)):
             # Bypasses route before critical nets (as package access did), so
             # a critical route cannot take a capacitor's short surface feed.
-            early_strips = ()
-            if getattr(unified_options, "bga_escape_strips", False):
-                from .bga_fanout import escape_strips
-                early_strips = escape_strips(placement.board)
-            held = _plan_decouplers(placement.board, reserved[2] if reserved else (), on_progress,
-                                    strips=early_strips)
+            held = _plan_decouplers(placement.board, reserved[2] if reserved else (), on_progress)
             if reserved is not None and held[3]:
                 dropped = {keepout.id for keepout in held[3]}
                 reserved = (reserved[0], reserved[1], tuple(k for k in reserved[2] if k.id not in dropped))
@@ -347,17 +342,6 @@ def run_routing_pipeline(
                 tracks.append(track)
         critical = replace(critical, board=replace(
             board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias)))
-    strip_ids = frozenset()
-    if unified_options is not None and getattr(unified_options, "bga_escape_strips", False):
-        # Supply and return vias stay out of ball arrays' surface escape
-        # channels while decouplers, BGA fanout and plane stitching place them.
-        from .bga_fanout import escape_strips
-        strips = escape_strips(critical.board)
-        strip_ids = frozenset(strip.id for strip in strips)
-        if strips:
-            critical = replace(critical, board=replace(
-                critical.board, copper_keepouts=(*critical.board.copper_keepouts, *strips)))
-            emit(on_progress, "bga_escape_strips", "finished", strips=sorted(strip_ids))
     if access is None and critical.board.decoupling_links and getattr(
             unified_options, "pre_route_decouplers", True):
         from .decoupling import route_decouplers
@@ -409,14 +393,6 @@ def run_routing_pipeline(
         if plane_stitch_options else None
     )
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
-    if strip_ids:
-        def released(board):
-            return replace(board, copper_keepouts=tuple(
-                k for k in board.copper_keepouts if k.id not in strip_ids))
-        critical = replace(critical, board=released(critical.board))
-        pre_fanout = released(pre_fanout)
-        if plane_stitch is not None:
-            plane_stitch = replace(plane_stitch, board=pre_fanout)
     power_plan = preparation.plan if preparation else None
     power_status = 'contact_routed_native_pending' if preparation else 'disabled'
     def plan_distribution(source, held_fanout=None):
@@ -711,20 +687,19 @@ def _copper_keepouts(board, tracks, vias, prefix, fixed=None):
     return tuple(keepouts)
 
 
-def _plan_decouplers(board, reserved_keepouts, on_progress, strips=()):
+def _plan_decouplers(board, reserved_keepouts, on_progress):
     """Bypass copper routed before critical nets, held as keepouts meanwhile.
 
     The critical router needs a board without ordinary copper, so bypasses are
-    planned on the macro-materialized frame (respecting escape reservations
-    and ball-array escape ``strips``), reserved as keepouts while critical
-    nets route, and added back afterwards.
+    planned on the macro-materialized frame (respecting escape reservations),
+    reserved as keepouts while critical nets route, and added back afterwards.
     """
     from collections import Counter
     from .decoupling import route_decouplers
     from .hard_macros import macro_source, materialize_hard_macros
     emit(on_progress, "bypass_reservation", "started", links=len(board.decoupling_links))
     frame = materialize_hard_macros(macro_source(board))
-    frame = replace(frame, copper_keepouts=(*frame.copper_keepouts, *reserved_keepouts, *strips))
+    frame = replace(frame, copper_keepouts=(*frame.copper_keepouts, *reserved_keepouts))
     result = route_decouplers(frame)
     released = ()
     pending = frozenset(link for link, _ in result.pending)

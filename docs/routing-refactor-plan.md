@@ -396,6 +396,7 @@ Handoff, open items and the plan for merging to `main`:
 | 2026-10-21 | CopperProbe repo: candidate is `board.copper` (21 parts released), others archived; first Windows run, native refill | CopperProbe 0.878 (29/237 opens), 2 exact DRC (max length: ADC_D8, SENSE), 34 native unconnected, 3 est. plane opens, 67 min |
 | 2026-10-21 (pm, Windows) | Merged origin/main (3.2, 3.4); D3-A 89→91 clean, 0 lost; ladder unchanged. BGA escape strips (`--unified-escape-strips`, off) after comparing the FX10 kit layout | CopperProbe baseline 0.869 (31/237), DRC 1; with strips 0.886 (27/237), DRC 1, but USB_TX1*_IC lost (moved bypass copper takes its via site), so strips stay off |
 | 2026-10-21 (eve, Windows) | CopperProbe `c1d3639` releases x/y of C_FX10_G3, C_FX_E3, C_FX_L3 (placer puts them 0.8-1.5 mm from their balls, kit-like) | released 0.848 (36 opens), released+strips 0.873 (30 opens, TX1_IC lost); both worse than unreleased (0.869 / strips 0.886); bypass pending 6/10/9/12 |
+| 2026-10-21 (late) | Owner decision: escape strips dropped from the branch (reverted; they cost the TX1_IC pair) and the cap release reverted in CopperProbe (`09d8c0d`) | CopperProbe back to 0.869 (31/237) |
 
 Open items:
 
@@ -424,9 +425,10 @@ Open items:
   Port0 bus out of that edge on TOP and SIG1 with 2 vias in the strip below the outer rows; ours had 11
   (outward GND dogbones of grounded P0D13-15 and south-bank bypass vias). The kit's supply vias are
   in-field diagonal dogbones and its VDDIO_P0 caps sit under the outer rows about 1.1 mm from their balls.
-  Escape strips empty the strip (0 vias) and route 4 more ADC lines; the bypass re-planning then blocks
-  the TX1_IC pair's via site. Next: coordinate bypass re-planning with critical pair via sites, and the
-  CopperProbe source change for the south-bank caps.
+  Escape strips (via keepouts outside a signal edge while supply vias are placed) emptied the strip and
+  routed 4 more ADC lines, but the re-planned bypass copper took the TX1_IC pair's via site; releasing
+  the south-bank caps made routing worse. Both were dropped on 2026-10-21; the comparison stands as the
+  reference for a future FX10 fanout (P4).
 - **CopperProbe ADC bus (11 nets) at the FX10 south edge.** max_vias=2 and a
   length limit; F.Cu just south of the package is full of other copper, so
   the bus drops to inner layers and runs out of vias or length.

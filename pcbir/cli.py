@@ -837,9 +837,6 @@ def _parser() -> argparse.ArgumentParser:
         help="unified router: save its inputs as a state file for replay_unified")
     board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
         help="unified router: route decoupling capacitors with everything else instead of first")
-    board_route_parser.add_argument("--unified-escape-strips", action="store_true",
-        help="unified flow: keep ball arrays' surface escape strips free of supply/return vias, "
-             "which then take sites inside the ball field")
     board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
         help="unified router: carve islands for decoupled supply rails out of a spare plane layer "
              "(auto picks the outermost layer of a net with two plane layers)")
@@ -1090,7 +1087,6 @@ def _unified_options(args):
                                 time_budget_s=args.unified_time_budget_s,
                                 power_islands=None if args.power_islands == "off" else args.power_islands,
                                 pre_route_decouplers=not args.unified_no_decouplers,
-                                bga_escape_strips=args.unified_escape_strips,
                                 save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
 
 
