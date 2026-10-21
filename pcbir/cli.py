@@ -196,7 +196,8 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
     drc = run_physical_drc(result.board)
     summary = connection_summary(result.board, drc)
     document = {"state": str(args.state), "overrides": overrides, "seconds": seconds,
-                "unrouted": sorted(net.net for net in result.nets if not net.connected), **summary}
+                "unrouted": {net.net: list(net.diagnostics) for net in sorted(result.nets, key=lambda n: n.net)
+                             if not net.connected}, **summary}
     text = json.dumps(document, indent=1, sort_keys=True)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

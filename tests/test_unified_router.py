@@ -335,5 +335,5 @@ def test_replay_cli_routes_saved_inputs_with_overrides(tmp_path, capsys) -> None
                  "--report", str(tmp_path / "replay.json")]) == 0
     document = json.loads((tmp_path / "replay.json").read_text(encoding="utf-8"))
     assert document["overrides"] == {"maximum_iterations": 3}
-    assert document["signal"]["opens"] == 0 and document["unrouted"] == []
+    assert document["signal"]["opens"] == 0 and document["unrouted"] == {}
     assert main(["replay-unified", str(state), "--set", "no_such_option=1"]) == 2
