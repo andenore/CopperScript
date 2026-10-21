@@ -386,6 +386,7 @@ Handoff, open items and the plan for merging to `main`:
 | 2026-10-20 (eve) | Automatic diff-pair corridors, satellite seeding, placement and plane-estimate diagnostics in `copper issues` | asset-tracker 1.0, led-ring 1.0, nrf52 1.0, cm4 1.0, full-vertical 0.99, round-led-ring 0.98; all DRC-clean. CopperProbe (7 parts unfixed) 0.844: USB_DM/DP now route |
 | 2026-10-20 (late) | Pour re-check in the unified router (walled-off plane pads get explicit copper) | asset-tracker 1.0 and 0 estimated plane opens (was 1: U_CC.3), others unchanged; all DRC-clean |
 | 2026-10-20 (night) | Neck exits stay inside the breakout region; refinement swaps ignore escape differences under 0.1 mm | full-vertical 1.0 (was 0.988), asset-tracker 1.0, led-ring 1.0, nrf52 1.0, cm4 1.0, round-led-ring 0.98; all DRC-clean, 0 estimated plane opens |
+| 2026-10-21 | CopperProbe repo: candidate is `board.copper` (21 parts released), others archived; first Windows run, native refill | CopperProbe 0.878 (29/237 opens), 2 exact DRC (max length: ADC_D8, SENSE), 34 native unconnected, 3 est. plane opens, 67 min |
 
 Open items:
 
@@ -401,7 +402,8 @@ Open items:
     vias.
   - Next levers are placement feedback driven by these hotspots (the
     `routeflow` outer loop) and a part-owned FX10 fanout macro (P4).
-- **The benchmarked CopperProbe is a design candidate, not the base board.**
+- **(Resolved 2026-10-21: the candidate is now CopperProbe's `board.copper`.)**
+  **The benchmarked CopperProbe is a design candidate, not the base board.**
   `copper-probe` is `design-candidates/hybrid-reference-inward-escape` (166
   fixed placements, made in earlier agent sessions); the owner's top-level
   board.copper has 109 and fixes none of the parts below. `copper issues`
