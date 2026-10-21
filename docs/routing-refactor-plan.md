@@ -375,6 +375,9 @@ whole-board CopperProbe result within the first week.
 
 ## 5a. Progress (branch `refactor/routing`)
 
+Handoff, open items and the plan for merging to `main`:
+[routing-refactor-handoff.md](routing-refactor-handoff.md) (2026-10-21).
+
 | Date | Phase | Ladder (completion, unified router) |
 | --- | --- | --- |
 | 2026-10-19 | P0–P2 done; P5 prototype | legacy: round-led-ring 0.57, nrf52 1.0, full-vertical 0.88, cm4 0.76 |
