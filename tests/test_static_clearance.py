@@ -30,12 +30,10 @@ def board_fixture(keepouts=()):
 def linear_oracle(index, shape, layers, for_via):
     """The pre-optimization implementation, deliberately without the index."""
     board = index.board
-    if (board.outline.circular_boundary or board.outline.boundary_path or board.outline.cutouts
-            or board.mechanical_holes or board.mechanical_slots):
-        from pcbir.mechanical import shape_in_board
-        if not shape_in_board(board, shape, board.rules.minimum_clearance_nm,
-                              board.rules.minimum_hole_clearance_nm):
-            return False
+    from pcbir.mechanical import shape_in_board
+    if not shape_in_board(board, shape, board.rules.minimum_clearance_nm,
+                          board.rules.minimum_hole_clearance_nm):
+        return False
     selected = set(layers)
     if any(selected.intersection(region_layers) and not shapes_clear(shape, region, 1)
            for region_layers, region in index._macro_regions):
@@ -173,3 +171,18 @@ def test_local_query_reduces_bound_checks_without_changing_answer(monkeypatch):
     counts[0] = 0
     assert index._keepout_clear(shape, (CopperLayer.FRONT,), for_via=False) == expected
     assert linear_checks == 1000 and counts[0] < 10
+
+
+def test_plain_rectangle_edge_keeps_copper_at_the_edge_clearance():
+    # The detailed grid includes nodes on the outline itself; a plain
+    # rectangle must reject copper there exactly as a complex outline does.
+    index = RoutingClearanceIndex(board_fixture())
+    clearance = index.board.rules.minimum_clearance_nm
+    width = nm_from_mm("0.15")
+    along_edge = lambda y: index.can_track("N", Point(nm_from_mm(10), y), Point(nm_from_mm(20), y),
+                                           width, CopperLayer.FRONT)
+    assert not along_edge(0)
+    assert not along_edge(width // 2 + clearance - 1)
+    assert along_edge(width // 2 + clearance)
+    assert not index.can_via("N", Point(nm_from_mm(50), 0), nm_from_mm("0.45"),
+                             CopperLayer.FRONT, CopperLayer.BACK)

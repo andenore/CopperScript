@@ -413,11 +413,13 @@ class RoutingClearanceIndex:
     def _keepout_clear(
         self, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...], *, for_via: bool
     ) -> bool:
-        if self.board.outline.circular_boundary or self.board.outline.boundary_path or self.board.outline.cutouts or self.board.mechanical_holes or self.board.mechanical_slots:
-            from .mechanical import shape_in_board
-            if not shape_in_board(self.board, shape, self.board.rules.minimum_clearance_nm,
-                                  self.board.rules.minimum_hole_clearance_nm):
-                return False  # Always locked, including speculative soft rip-up.
+        # Every outline, plain polygons included: the detailed grid spans the
+        # outline's bounds inclusively, so edge nodes would otherwise admit
+        # copper the exported copper-to-edge clearance rejects.
+        from .mechanical import shape_in_board
+        if not shape_in_board(self.board, shape, self.board.rules.minimum_clearance_nm,
+                              self.board.rules.minimum_hole_clearance_nm):
+            return False  # Always locked, including speculative soft rip-up.
         if not self._static_regions:
             return True
         # Unsupported keepout holes fail closed even far from the query, as in
