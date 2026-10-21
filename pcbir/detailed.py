@@ -311,6 +311,14 @@ class DetailedRouterOptions:
     # (see _escape_terminals); unused escape copper is released afterwards.
     escape_terminals: bool = False
     maximum_ripup_blockers: int = 4
+    # Window repair of a net whose terminal stays unreachable: rip up it and
+    # up to this many routed nets with copper near the terminal, then route
+    # them again together in a few orders (0 disables).
+    enclosure_repair_nets: int = 0
+    enclosure_repair_radius_nm: int = nm_from_mm("3")
+    enclosure_repair_orders: int = 8
+    enclosure_repair_open_nets: int = 2
+    enclosure_repair_searches: int = 64
     minimum_repair_pitch_nm: int = nm_from_mm("0.1")
     # Bound of the per-run memo of exactly repeated repair searches; 0 disables
     # it. A hit returns the identical earlier attempt, never different copper.
@@ -340,6 +348,10 @@ class DetailedRouterOptions:
             raise ValueError("detailed router repair budget multiplier must be 1..10")
         if not 1 <= self.maximum_ripup_blockers <= 8:
             raise ValueError("maximum rip-up blockers must be 1..8")
+        if (not 0 <= self.enclosure_repair_nets <= 12 or self.enclosure_repair_radius_nm <= 0
+                or not 1 <= self.enclosure_repair_orders <= 32 or self.enclosure_repair_open_nets < 0
+                or self.enclosure_repair_searches < 1):
+            raise ValueError("enclosure repair needs 0..12 nets and a positive radius")
         if self.orthogonal_first_min_pads < 3:
             raise ValueError("orthogonal-first threshold must be at least 3 pads")
         if self.search_reuse_entries < 0:
@@ -1388,6 +1400,12 @@ def _repair_from_passes(
         for via in attempt.vias:
             clearance.add_via(via)
 
+    if options.enclosure_repair_nets:
+        selected, clearance = _enclosure_repair(
+            board, nets, rules, guides, selected, clearance, options, fanout_accesses,
+            on_progress=on_progress, reuse=reuse, repair_trials=repair_trials)
+        usage = _attempt_usage(selected.values())
+
     ordinary_names = {net.name for net in nets}
     attempts = tuple(selected[net.name] for net in nets) + tuple(
         item for item in best.nets if item.result.net not in ordinary_names
@@ -1404,6 +1422,169 @@ def _repair_from_passes(
         passes=best.metrics.passes,
     )
     return _Pass(attempts, usage, metrics)
+
+
+def _enclosure_repair(
+    board: PhysicalBoard, nets: list[PhysicalNet], rules: Mapping[str, NetRoutingRule],
+    guides: Mapping[str, GlobalNetRoute], selected: dict[str, _NetAttempt],
+    clearance: RoutingClearanceIndex, options: DetailedRouterOptions,
+    fanout_accesses: Mapping[PadReference, Point | RoutingAccess],
+    *, on_progress: ProgressCallback | None, reuse: _SearchReuse | None,
+    repair_trials: list[DetailedRepairTrial] | None,
+) -> tuple[dict[str, _NetAttempt], RoutingClearanceIndex]:
+    """Reroute an open net together with the routed nets that wall it in.
+
+    Blocker transactions evict only the nets one candidate path crosses and
+    fail when an evicted net cannot return. A terminal enclosed by several
+    routed nets needs them moved together. The open net is first routed with
+    no other routed copper; every routed ordinary net whose copper conflicts
+    with that free path is a victim, then nets with copper within
+    ``enclosure_repair_radius_nm`` of its unreached terminals, at most
+    ``enclosure_repair_nets`` in all. The open net and its victims are rerouted
+    in deterministic orders, open net first; a net that fails goes first in
+    the next order. Other open nets with a pad in the window join it as
+    optional companions. The repair runs only when at most
+    ``enclosure_repair_open_nets`` ordinary nets are open, and
+    ``enclosure_repair_searches`` bounds the net searches of all its windows. The window is kept only if every net in it
+    connects; otherwise nothing changes.
+    """
+    net_by_name = {net.name: net for net in nets}
+    radius = options.enclosure_repair_radius_nm
+    # Window searches keep the ordinary state budget: a window tries many
+    # orders, and a failing search spends its whole budget.
+    remaining = options.enclosure_repair_searches
+
+    def ordinary(name: str) -> bool:
+        return not (rules.get(name) and rules[name].kind is not RouteKind.GENERAL)
+
+    # Smallest nets first: a signal net's window is cheap, and a large net
+    # (ground) may connect as its companion.
+    open_nets = sorted((net for net in nets if not selected[net.name].result.connected and ordinary(net.name)),
+                       key=lambda net: (len(net.pads), net.name))
+    if len(open_nets) > options.enclosure_repair_open_nets:
+        # Many open nets: each window would retry many orders for little
+        # chance of closing the board, at a cost of minutes per window.
+        return selected, clearance
+    for net in open_nets:
+        if selected[net.name].result.connected or remaining <= 0:
+            continue  # an earlier window connected it too, or the search allowance is spent
+        remaining -= 1
+        free = _search_detailed_net(
+            board, net, rules.get(net.name), guides.get(net.name), {}, {},
+            RoutingClearanceIndex(board), options, fanout_accesses=fanout_accesses,
+            on_progress=on_progress, stage="enclosure_window", repair_owner=net.name, reuse=reuse)
+        if not free.result.connected:
+            continue  # fixed geometry alone blocks it: moving routed nets cannot help
+        free_index = RoutingClearanceIndex(board)
+        for track in free.tracks:
+            free_index.add_track(track)
+        for via in free.vias:
+            free_index.add_via(via)
+
+        def conflicts(name: str, item: _NetAttempt) -> bool:
+            return (any(not free_index.can_track(name, track.start, track.end, track.width_nm, track.layer)
+                        for track in item.tracks)
+                    or any(not free_index.can_via(name, via.position, via.size_nm, via.from_layer,
+                                                  via.to_layer, via.drill_nm) for via in item.vias))
+
+        targets = [pad for pad in net.pads if any(
+            f"cannot reach {pad.component}.{pad.pad}" in text for text in selected[net.name].result.diagnostics)]
+        points = [_pad_position(board, pad) for pad in (targets or list(net.pads))]
+        window = (min(p.x_nm for p in points) - radius, min(p.y_nm for p in points) - radius,
+                  max(p.x_nm for p in points) + radius, max(p.y_nm for p in points) + radius)
+
+        def near(item: _NetAttempt) -> int:
+            hits = sum(1 for track in item.tracks if _segment_meets_box(track.start, track.end, window))
+            return hits + sum(1 for via in item.vias if _in_box(via.position, window))
+
+        candidates = [name for name, item in selected.items()
+                      if name != net.name and name in net_by_name and item.result.connected and ordinary(name)]
+        crossing = sorted(name for name in candidates if conflicts(name, selected[name]))
+        nearby = sorted((name for name in candidates if name not in crossing and near(selected[name])),
+                        key=lambda name: (-near(selected[name]), name))
+        victims = (crossing + nearby)[:options.enclosure_repair_nets]
+        if not victims:
+            continue
+        # Other open nets with a pad in the window are routed in it too: they
+        # compete for the same escapes, so leaving them for a later window
+        # repeats the same rip-up. They are optional: one that fails is left
+        # open and does not reject the window.
+        companions = tuple(sorted(
+            other.name for other in open_nets
+            if other.name != net.name and not selected[other.name].result.connected
+            and any(_in_box(_pad_position(board, pad), window) for pad in other.pads)))
+        # Sequential rip-up with promotion: a net that fails in one order goes
+        # first in the next, so the nets that are hardest to place claim their
+        # escape before the easier ones. Orders already tried are skipped.
+        order = (net.name, *victims, *companions)
+        tried: list[tuple[str, ...]] = []
+        accepted = None
+        searches = 1
+        while order not in tried and len(tried) < options.enclosure_repair_orders and remaining > 0:
+            tried.append(order)
+            trial_clearance = RoutingClearanceIndex(board)
+            for name, item in selected.items():
+                if item.result.connected and name not in victims and name != net.name:
+                    for track in item.tracks:
+                        trial_clearance.add_track(track)
+                    for via in item.vias:
+                        trial_clearance.add_via(via)
+            rerouted: dict[str, _NetAttempt] = {}
+            failed = None
+            for name in order:
+                if remaining <= 0:
+                    failed = name
+                    break
+                searches += 1
+                remaining -= 1
+                attempt = _search_detailed_net(
+                    board, net_by_name[name], rules.get(name), guides.get(name), {}, {},
+                    trial_clearance, options, fanout_accesses=fanout_accesses,
+                    on_progress=on_progress, stage="enclosure_window", repair_owner=net.name, reuse=reuse)
+                if not attempt.result.connected:
+                    if name in companions:
+                        continue
+                    failed = name
+                    break
+                rerouted[name] = attempt
+                for track in attempt.tracks:
+                    trial_clearance.add_track(track)
+                for via in attempt.vias:
+                    trial_clearance.add_via(via)
+            if failed is None:
+                accepted = (rerouted, trial_clearance)
+                break
+            order = (failed, *(name for name in order if name != failed))
+        outcome = "enclosure_window_accepted" if accepted else "enclosure_window_failed"
+        if repair_trials is not None and len(repair_trials) < 256:
+            repair_trials.append(DetailedRepairTrial(net.name, "", (), tuple(victims), outcome,
+                                                     len(tried), searches))
+        emit(on_progress, "detailed_blocker_transaction", "finished", stage="enclosure_window",
+             owner=net.name, displaced_nets=list(victims), outcome=outcome)
+        if accepted:
+            selected = {**selected, **accepted[0]}
+            clearance = accepted[1]
+    return selected, clearance
+
+
+def _segment_meets_box(start: Point, end: Point, box: tuple[int, int, int, int]) -> bool:
+    """Whether a segment touches an axis-aligned box (Liang-Barsky clipping)."""
+    x0, y0, x1, y1 = box
+    dx, dy = end.x_nm - start.x_nm, end.y_nm - start.y_nm
+    low, high = 0.0, 1.0
+    for p, q in ((-dx, start.x_nm - x0), (dx, x1 - start.x_nm), (-dy, start.y_nm - y0), (dy, y1 - start.y_nm)):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        t = q / p
+        if p < 0:
+            low = max(low, t)
+        else:
+            high = min(high, t)
+        if low > high:
+            return False
+    return True
 
 
 def _route_repair_net(

@@ -373,6 +373,13 @@ evidence bundle.
 Rough total: 6–8 weeks of focused work. P2 alone should produce the first
 whole-board CopperProbe result within the first week.
 
+### After the refactor · Escape planning
+
+Joint planning of escape side, layer and order per package and package pair,
+before global routing: [escape-planning-plan.md](escape-planning-plan.md)
+(steps E0–E6). It builds on P4's fanout generator and feeds P5's unified
+router through reservations; it is a planning stage, not a recovery gate.
+
 ## 5a. Progress (branch `refactor/routing`)
 
 Handoff, open items and the plan for merging to `main`:
