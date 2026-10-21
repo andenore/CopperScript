@@ -45,7 +45,9 @@ from ..physical import (
     CopperZone,
     DesignRules,
     NetRoutingRule,
+    PadKind,
     PadReference,
+    PadShape,
     PhysicalBoard,
     PhysicalFootprint,
     PhysicalNet,
@@ -53,6 +55,7 @@ from ..physical import (
     Point,
     PolygonRing,
     PolygonWithHoles,
+    Size,
     Stackup,
     nm_from_mm,
 )
@@ -227,6 +230,7 @@ def parse_kicad_pcb(text: str, *, source: str = "<memory>", name: str = "importe
         keepouts.append(CopperKeepout(zone.id, zone.layers, zone.outline))
         log.approx("zone on a net without pads as keepout")
     outline = _outline(edges, placements, footprints, source, log)
+    placements = _clip_pads_to_outline(placements, footprints, outline, log)
     footprint_of = {placement.reference: footprints[placement.footprint] for placement in placements}
     smallest_land = {
         net: min((min(pad.size.width_nm, pad.size.height_nm) for reference in pads
@@ -590,6 +594,117 @@ def _import_footprint(node: list[SExpr], source: str, copper: tuple[CopperLayer,
     return _ImportedFootprint(reference, value, position, rotation,
                               BoardSide.BACK if back else BoardSide.FRONT, library_name,
                               imported.footprint, library_text, pad_nets, edges, obstacles, companion)
+
+
+def _clip_pads_to_outline(placements: list[Placement], footprints: dict[str, PhysicalFootprint],
+                          outline: BoardOutline, log) -> list[Placement]:
+    """Clip surface pads that straddle the board edge to their copper inside the board.
+
+    Some designs let a contact pad run past the edge (battery or card-edge
+    contacts, milled off at fabrication). Such a pad's centre can lie outside
+    the board, so no access stem from it is legal, though the copper inside
+    the board is a fine place to connect. A rectangular pad, square to the
+    board axes, whose part inside the outline is a rectangle, is replaced by
+    that part, in a footprint variant of its own placement. Other straddling
+    pads are left as they are. Only routing sees the clip: the written board
+    keeps the original footprints.
+    """
+    from ..placement import _transform_local
+
+    clipped_any = False
+    result = []
+    for placement in placements:
+        footprint = footprints[placement.footprint]
+        pads = list(footprint.pads)
+        changed = False
+        for index, pad in enumerate(pads):
+            if pad.kind is not PadKind.SMD or pad.shape not in {PadShape.RECTANGLE, PadShape.ROUNDRECT}:
+                continue
+            turn = (Decimal(str(placement.rotation_degrees)) + pad.rotation_degrees) % 90
+            if turn != 0:
+                continue
+            offset = _transform_local(pad.position, Decimal(str(placement.rotation_degrees)), placement.side)
+            centre = Point(placement.position.x_nm + offset.x_nm, placement.position.y_nm + offset.y_nm)
+            quarter = int((Decimal(str(placement.rotation_degrees)) + pad.rotation_degrees) % 180 // 90)
+            half_w, half_h = ((pad.size.height_nm, pad.size.width_nm) if quarter else
+                              (pad.size.width_nm, pad.size.height_nm))
+            box = (centre.x_nm - half_w // 2, centre.y_nm - half_h // 2,
+                   centre.x_nm + half_w // 2, centre.y_nm + half_h // 2)
+            corners = [(box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3])]
+            ring = [(v.x_nm, v.y_nm) for v in outline.vertices]
+            if all(_point_in_ring(corner, ring) for corner in corners):
+                continue
+            inside = _clip_ring_to_box(ring, box)
+            if len(inside) < 3:
+                continue
+            xs = [x for x, _ in inside]
+            ys = [y for _, y in inside]
+            kept = (round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys)))
+            width, height = kept[2] - kept[0], kept[3] - kept[1]
+            if width <= 0 or height <= 0 or abs(_ring_area(inside)) < 0.99 * width * height:
+                log.approx("pad straddling the board edge left unclipped")
+                continue
+            new_centre = Point((kept[0] + kept[2]) // 2, (kept[1] + kept[3]) // 2)
+            local = _inverse_local(Point(new_centre.x_nm - placement.position.x_nm,
+                                         new_centre.y_nm - placement.position.y_nm),
+                                   Decimal(str(placement.rotation_degrees)), placement.side)
+            size = Size(height, width) if quarter else Size(width, height)
+            pads[index] = replace(pad, position=local, size=size)
+            changed = True
+            log.approx("pad clipped to the board outline")
+        if changed:
+            name = f"{placement.footprint}~clipped~{placement.reference}"
+            footprints[name] = replace(footprint, name=name, pads=tuple(pads))
+            placement = replace(placement, footprint=name)
+            clipped_any = True
+        result.append(placement)
+    return result if clipped_any else placements
+
+
+def _inverse_local(offset: Point, rotation: Decimal, side: BoardSide) -> Point:
+    """Footprint-local point whose placed offset is ``offset`` (inverse of ``_transform_local``)."""
+    angle = radians(float(rotation))
+    x = round(offset.x_nm * cos(angle) - offset.y_nm * sin(angle))
+    y = round(offset.x_nm * sin(angle) + offset.y_nm * cos(angle))
+    return Point(-x if side is BoardSide.BACK else x, y)
+
+
+def _point_in_ring(point: tuple[int, int], ring: list[tuple[int, int]]) -> bool:
+    """Even-odd test; points on the boundary count as inside."""
+    x, y = point
+    inside = False
+    for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+        if min(x0, x1) <= x <= max(x0, x1) and min(y0, y1) <= y <= max(y0, y1) \
+                and (x1 - x0) * (y - y0) == (y1 - y0) * (x - x0):
+            return True
+        if (y0 > y) != (y1 > y) and x < x0 + (x1 - x0) * (y - y0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def _clip_ring_to_box(ring: list[tuple[int, int]], box: tuple[int, int, int, int]) -> list[tuple[float, float]]:
+    """Sutherland-Hodgman: the part of a polygon inside an axis-aligned box."""
+    points: list[tuple[float, float]] = [(float(x), float(y)) for x, y in ring]
+    for axis, limit, keep_low in ((0, box[0], False), (0, box[2], True), (1, box[1], False), (1, box[3], True)):
+        if not points:
+            break
+        def inside(point, axis=axis, limit=limit, keep_low=keep_low):
+            return point[axis] <= limit if keep_low else point[axis] >= limit
+        out: list[tuple[float, float]] = []
+        for current, following in zip(points, points[1:] + points[:1]):
+            if inside(current):
+                out.append(current)
+            if inside(current) != inside(following):
+                t = (limit - current[axis]) / (following[axis] - current[axis])
+                crossing = [current[0] + t * (following[0] - current[0]), current[1] + t * (following[1] - current[1])]
+                crossing[axis] = float(limit)
+                out.append((crossing[0], crossing[1]))
+        points = out
+    return points
+
+
+def _ring_area(ring: list[tuple[float, float]]) -> float:
+    return sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1])) / 2
 
 
 def _unique_footprint_name(imported: _ImportedFootprint, footprints: dict[str, PhysicalFootprint],

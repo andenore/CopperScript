@@ -411,31 +411,34 @@ def route_global(
             for pad in macro_routing_pads(board, net)
         }
 
-    access_options = pin_access(graph)
+    from .global_terminals import register_terminal_capacity
+    wider = replace(options, pin_access_candidates=4 * options.pin_access_candidates)
+
+    def registered_access(graph):
+        """Pin access after terminal capacity registration, which can drop launches."""
+        def expand(key: tuple[str, PadReference]) -> tuple[PinAccess, ...]:
+            name, pad = key
+            return _pin_access_candidates(
+                board, graph, pad, name,
+                routing_layers(board, name, rules.get(name)),
+                rules.get(name), clearance, wider,
+            )
+        return register_terminal_capacity(board, graph, pin_access(graph), expand)
+
+    graph, access_options = registered_access(graph)
     if any(not choices for choices in access_options.values()):
-        # A pad in a partial edge tile can be beyond reach of every node. Only
-        # then does the graph gain a row or column in that strip, so boards
-        # whose pins all have access keep their grid (and their routes).
+        # A pad near a partial edge tile can be beyond reach of every node, or
+        # reach only nodes whose launches cannot be registered. Only then
+        # does the graph gain or move an edge row or column, so boards whose
+        # pins all have access keep their grid (and their routes).
         strip_graph = _build_graph(board, options, edge_strips=True)
         if (strip_graph.xs, strip_graph.ys) != (graph.xs, graph.ys):
-            strip_access = pin_access(strip_graph)
+            strip_graph, strip_access = registered_access(strip_graph)
             if (sum(not choices for choices in strip_access.values())
                     < sum(not choices for choices in access_options.values())):
                 graph, access_options = strip_graph, strip_access
                 emit(on_progress, "global_graph", "edge_strips",
                      node_count=len(graph.legal_nodes), resource_count=len(graph.resources))
-    from .global_terminals import register_terminal_capacity
-    wider = replace(options, pin_access_candidates=4 * options.pin_access_candidates)
-
-    def expand(key: tuple[str, PadReference]) -> tuple[PinAccess, ...]:
-        name, pad = key
-        return _pin_access_candidates(
-            board, graph, pad, name,
-            routing_layers(board, name, rules.get(name)),
-            rules.get(name), clearance, wider,
-        )
-
-    graph, access_options = register_terminal_capacity(board, graph, access_options, expand)
     if on_progress is not None:
         emit(on_progress, "global_pin_access", "finished", terminal_count=len(access_options))
     capacities = {
@@ -1554,6 +1557,12 @@ def _axis_layout(start: int, end: int, step: int, *,
     the last centre is more than three quarters of a tile from ``end``, one
     more centre sits in the middle of the uncovered strip; its band is that
     strip, so its crossing capacity counts only the strip's width.
+
+    The opposite case: the last tile overhangs ``end`` and its centre lies
+    within a quarter tile of it, often inside the edge clearance, where no
+    track fits (D3-A board 0034, 8 mm tall: a row 0.5 mm from the edge). With
+    edge strips, that centre moves to the middle of the tile's part inside
+    the board, and its band is that part.
     """
     first = start + min(step // 2, max(0, end - start) // 2)
     values = tuple(range(first, end, step))
@@ -1562,6 +1571,9 @@ def _axis_layout(start: int, end: int, step: int, *,
     covered = values[-1] + step // 2
     if edge_strip and end - values[-1] > 3 * step // 4 and covered < end:
         return (*values, (covered + end) // 2), (covered, end)
+    if edge_strip and covered > end and end - values[-1] < step // 4 and len(values) > 1:
+        low = values[-1] - step // 2
+        return (*values[:-1], (low + end) // 2), (low, end)
     return values, None
 
 
