@@ -126,3 +126,4 @@ spacing findings on imported placements no longer block package access (see
 |---|---:|---|
 | Baseline (2026-10-20) | 79 | |
 | Plan 3.1: copper text as an obstacle | 81 | 0011 and 0026 clean; no KiCad error-level violations left on any board |
+| Plan 3.2: wide net classes neck down at narrower lands | 82 | 0078 clean; full-vertical identical |

@@ -34,7 +34,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 1,
-   "wirelength_mm": 62.292
+   "wirelength_mm": 61.305
   },
   "0005_AVR-Playground_hello_world": {
    "clean_pass": true,
@@ -402,8 +402,8 @@
    "status": "routed",
    "unconnected_items": 2,
    "unrouted": 1,
-   "vias": 3,
-   "wirelength_mm": 111.661
+   "vias": 1,
+   "wirelength_mm": 121.891
   },
   "0046_mearm-base-pcb_ServoPCB": {
    "clean_pass": true,
@@ -600,8 +600,8 @@
    "status": "routed",
    "unconnected_items": 2,
    "unrouted": 1,
-   "vias": 8,
-   "wirelength_mm": 93.99
+   "vias": 6,
+   "wirelength_mm": 95.766
   },
   "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm": {
    "clean_pass": false,
@@ -682,7 +682,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 2,
-   "wirelength_mm": 96.289
+   "wirelength_mm": 95.894
   },
   "0077_HaveSome_PCB_HaveSomePCB": {
    "clean_pass": false,
@@ -690,17 +690,17 @@
    "status": "routed",
    "unconnected_items": 4,
    "unrouted": 1,
-   "vias": 1,
-   "wirelength_mm": 61.392
+   "vias": 2,
+   "wirelength_mm": 71.001
   },
   "0078_Hardware_Playground_buck_led_driver": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 15,
-   "unrouted": 8,
-   "vias": 0,
-   "wirelength_mm": 0.0
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 4,
+   "wirelength_mm": 119.297
   },
   "0079_Inkjet_InkjetBreakout": {
    "clean_pass": true,
@@ -744,8 +744,8 @@
    "status": "routed",
    "unconnected_items": 0,
    "unrouted": 0,
-   "vias": 27,
-   "wirelength_mm": 619.708
+   "vias": 26,
+   "wirelength_mm": 614.208
   },
   "0084_kitspace__autosave-nunchuk_breakout": {
    "clean_pass": true,
@@ -772,7 +772,7 @@
    "unconnected_items": 7,
    "unrouted": 2,
    "vias": 6,
-   "wirelength_mm": 55.664
+   "wirelength_mm": 60.507
   },
   "0087_solar-lanterns_proto1": {
    "clean_pass": true,
@@ -781,7 +781,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 6,
-   "wirelength_mm": 199.054
+   "wirelength_mm": 197.014
   },
   "0088_DA_Lamp_attiny44a_servo_i2c": {
    "clean_pass": true,
@@ -893,5 +893,5 @@
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run 39546943898 on 4cf9526 (plan 3.1), stock KiCad 9.0.9"
+ "source": "routing-benchmark run 39558357673 on ee3480c (plan 3.2), stock KiCad 9.0.9"
 }
