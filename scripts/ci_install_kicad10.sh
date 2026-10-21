@@ -18,7 +18,16 @@ attempts=${KICAD_INSTALL_ATTEMPTS:-6}
 versions() { apt-cache madison "$1" | awk '{print $3}' | sort -u | tr '\n' ' '; }
 annotate() { sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
 
-sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
+# Adding the PPA asks Launchpad for its signing key, so it can fail too.
+for attempt in $(seq 1 "$attempts"); do
+  if sudo add-apt-repository --yes --no-update ppa:kicad/kicad-10.0-releases; then
+    break
+  elif [ "$attempt" = "$attempts" ]; then
+    echo "::error title=KiCad install failed::could not add ppa:kicad/kicad-10.0-releases after $attempts attempts"
+    exit 1
+  fi
+  sleep 60
+done
 log=$(mktemp)
 for attempt in $(seq 1 "$attempts"); do
   sudo apt-get -o Acquire::Retries=3 update || true
