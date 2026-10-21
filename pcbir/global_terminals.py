@@ -140,5 +140,8 @@ def register_terminal_capacity(board, graph, access_options, expand=None):
             for second in range(first+1,high+1):
                 a,b=GridNode(first,x,y),GridNode(second,x,y)
                 if a in graph.legal_nodes and b in graph.legal_nodes:
-                    resources[_edge_key(a,b)]=_Resource(identifier,a,b,capacity,None)
+                    if capacity:
+                        resources[_edge_key(a,b)]=_Resource(identifier,a,b,capacity,None)
+                    elif getattr(resources.get(_edge_key(a,b)),'identifier',None)==identifier:
+                        del resources[_edge_key(a,b)]
     return replace(graph,via_sites=MappingProxyType(sites),resources=MappingProxyType(resources)),accepted
