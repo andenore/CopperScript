@@ -15,6 +15,8 @@ Fabrication/prototype measurements remain deferred until a later request.
 
 Choose only the relevant focused record for detailed acceptance criteria:
 
+- [Escape planning plan](docs/escape-planning-plan.md): joint escape side, layer
+  and order per package and package pair (steps E0–E6), with its status table.
 - [Routing backlog](docs/routing-backlog.md): access/ownership, joint decoupling,
   ordinary topology, bounded quality and path extraction.
 - [Routing quality contracts](docs/routing-quality-todo.md): implemented behavior
