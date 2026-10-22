@@ -469,3 +469,63 @@ def test_negative_escape_bias_is_refused() -> None:
     import pytest
     with pytest.raises(ValueError):
         UnifiedRouterOptions(escape_layer_biases=(_escape_bias("A", rate=-1),))
+
+
+def _bus_board(*, amplitude: str | None = "1", max_length: str | None = None):
+    from pcbir.physical import NetMatchGroup, NetRoutingRule
+    board = _board({"A": ((3, 6), (11, 6)), "B": ((3, 14), (17, 14))})
+    rules = tuple(NetRoutingRule(net, width_nm=nm_from_mm("0.2"),
+                                 tuning_amplitude_limit_nm=nm_from_mm(amplitude) if amplitude else None,
+                                 max_length_nm=nm_from_mm(max_length) if max_length else None)
+                  for net in ("A", "B"))
+    return replace(board, net_routing_rules=rules,
+                   match_groups=(NetMatchGroup("bus", ("A", "B"), nm_from_mm(2)),))
+
+
+def _straight(net, start, end):
+    return TrackSegment(net, Point.mm(start[0] + 3, start[1] + 3), Point.mm(end[0] + 3, end[1] + 3),
+                        nm_from_mm("0.2"), CopperLayer.FRONT)
+
+
+def test_bus_skew_tuning_lengthens_the_short_member_within_max_skew() -> None:
+    from math import hypot
+    from pcbir.unified_router import _tune_bus_skew
+    board = _bus_board()
+    accepted = {"A": ([_straight("A", (3, 10), (11, 10))], []), "B": ([_straight("B", (3, 14), (17, 14))], [])}
+    tuned, notes = _tune_bus_skew(board, accepted, {rule.net: rule for rule in board.net_routing_rules})
+    length = lambda net: sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm) for t in tuned[net][0])
+    # 8 mm against 14 mm: 6 mm of skew over a 2 mm limit; A gains at least 4 mm and B is untouched.
+    assert notes == [] and tuned["B"] == accepted["B"]
+    assert nm_from_mm(14) - length("A") <= nm_from_mm(2) and length("A") > nm_from_mm(12)
+    drc = run_physical_drc(replace(board, tracks=(*tuned["A"][0], *tuned["B"][0])))
+    assert not [f for f in drc.findings if f.severity.value == "error" and f.code not in ("DRC-OPEN-NET",
+                                                                                        "DRC-ROUTE-INCOMPLETE")]
+
+
+def test_bus_skew_tuning_needs_an_amplitude_contract_and_room_under_max_length() -> None:
+    from pcbir.unified_router import _tune_bus_skew
+    accepted = {"A": ([_straight("A", (3, 10), (11, 10))], []), "B": ([_straight("B", (3, 14), (17, 14))], [])}
+    for board, reason in ((_bus_board(amplitude=None), "no tuning_amplitude_limit is declared"),
+                          (_bus_board(max_length="9"), "max_length leaves no room")):
+        tuned, notes = _tune_bus_skew(board, accepted, {rule.net: rule for rule in board.net_routing_rules})
+        assert tuned == accepted and len(notes) == 1 and reason in notes[0] and "bus: A is" in notes[0]
+    # A group within its limit, or one with a member still unrouted, is left alone.
+    board = _bus_board()
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    close = {"A": ([_straight("A", (3, 10), (16, 10))], []), "B": ([_straight("B", (3, 14), (17, 14))], [])}
+    assert _tune_bus_skew(board, close, rules) == (close, [])
+    assert _tune_bus_skew(board, {"B": accepted["B"]}, rules) == ({"B": accepted["B"]}, [])
+
+
+def test_buses_first_with_skew_tuning_reports_untunable_members_on_the_board() -> None:
+    board = _bus_board(amplitude=None)
+    # A third net keeps the bus a proper subset, so buses_first routes it on its own.
+    extra = _board({"C": ((3, 18), (17, 18))})
+    board = replace(board, footprints={**board.footprints, **extra.footprints},
+                    placements=(*board.placements, *extra.placements), nets=(*board.nets, *extra.nets))
+    global_route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    result = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_skew_tuning=True))
+    assert all(net.connected for net in result.nets)
+    assert "no tuning_amplitude_limit is declared" in result.board.metadata["bus_skew"]
+    plain = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True))
+    assert "bus_skew" not in plain.board.metadata

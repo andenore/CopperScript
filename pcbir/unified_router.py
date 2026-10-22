@@ -104,6 +104,10 @@ class UnifiedRouterOptions:
     # and only members within max_length keep their bus copper; the rest
     # route with the other nets.
     bus_length_budget: bool = False
+    # With buses_first: lengthen short members of a length-match group over
+    # its max_skew with checked bumps or serpentines, as the critical router
+    # does, only for nets that declare tuning_amplitude_limit.
+    bus_skew_tuning: bool = False
     # A net with a max_length that detours too far retakes its shortest path.
     # Off by default: on CopperProbe it cost 2 points of completion (0.873 ->
     # 0.852); the pushed-aside nets lose more than the length rule gains.
@@ -2005,6 +2009,62 @@ def _with(board: PhysicalBoard, accepted, *, without=frozenset()) -> PhysicalBoa
         vias=(*board.vias, *(v for name in names for v in accepted[name][1])))
 
 
+def _tune_bus_skew(board: PhysicalBoard, accepted: dict, rules: Mapping) -> tuple[dict, list[str]]:
+    """Lengthen short bus members so each length-match group meets its ``max_skew``.
+
+    A group is checked once every member has copper (DRC's rule). A member
+    shorter than the longest minus ``max_skew`` is lengthened with checked
+    bumps or serpentines (``critical_tuning.UnitTuner``) against all other
+    copper: to the longest when that fits, else by the least that brings it
+    within the limit, never past its own ``max_length``. Like the critical
+    router, only a net that declares ``tuning_amplitude_limit`` is tuned;
+    every member left over the limit is reported with its reason.
+    """
+    from .critical_tuning import UnitTuner
+    accepted = dict(accepted)
+    notes: list[str] = []
+    for group in board.match_groups:
+        if group.max_skew_nm is None:
+            continue
+        lengths = {name: _net_track_length(board, name, accepted.get(name, ((), ()))[0]) for name in group.nets}
+        if any(not length for length in lengths.values()):
+            continue  # a member without copper: the group is not complete yet
+        longest = max(lengths.values())
+        for name in sorted(group.nets, key=lambda item: (lengths[item], item)):
+            need = longest - group.max_skew_nm - lengths[name]
+            if need <= 0:
+                continue
+            rule = rules.get(name)
+            if name not in accepted:
+                notes.append(f"{group.id}: {name} is {need} nm short; its copper is not the bus router's")
+                continue
+            if rule is None or rule.tuning_amplitude_limit_nm is None:
+                notes.append(f"{group.id}: {name} is {need} nm short; no tuning_amplitude_limit is declared")
+                continue
+            tracks, vias = accepted[name]
+            others = [*(t for t in board.tracks), *(t for other, (items, _) in accepted.items()
+                                                    if other != name for t in items)]
+            other_vias = [*board.vias, *(v for other, (_, items) in accepted.items() if other != name for v in items)]
+            index = RoutingClearanceIndex(replace(board, tracks=tuple(others), vias=(*other_vias, *vias)))
+            clearance = max(board.rules.minimum_clearance_nm, rule.clearance_nm or 0)
+            tuner = UnitTuner(board, index, tuple(tracks), (name,), 0, rule.tuning_amplitude_limit_nm, clearance,
+                              style=rule.tuning_style, leg_gap_nm=rule.tuning_spacing_nm, vias=tuple(vias))
+            room = (rule.max_length_nm - lengths[name]) if rule.max_length_nm is not None else None
+            full, least = longest - lengths[name], need + need % 2
+            targets = [target - target % 2 for target in dict.fromkeys((full, least))
+                       if target - target % 2 >= need and (room is None or target - target % 2 <= room)]
+            for target in targets:
+                plan = tuner.plan(target)
+                if plan.tracks is not None:
+                    width = rule.width_nm or board.rules.default_track_width_nm
+                    accepted[name] = (list(index.breakout.split_tracks(plan.tracks, width)), vias)
+                    break
+            else:
+                notes.append(f"{group.id}: {name} is {need} nm short; "
+                             + (plan.reason if targets else "max_length leaves no room"))
+    return accepted, notes
+
+
 def _net_track_length(board: PhysicalBoard, name: str, new_tracks) -> int:
     """Routed length of a net as DRC measures it: its existing and new tracks."""
     return sum(round(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm))
@@ -2266,6 +2326,7 @@ def route_unified(
     original_board, all_nets = board, nets
     bus_accepted: dict = {}
     bus_complete: set[str] = set()
+    skew_notes: list[str] = []
     bus_names = {name for group in board.match_groups for name in group.nets} & {net.name for net in nets}
     if options.buses_first and bus_names and len(bus_names) < len(nets):
         # A bus needs a shared corridor; negotiated together with every other
@@ -2284,8 +2345,10 @@ def route_unified(
                     over_length.add(name)
             bus_complete = set(bus_complete) - over_length
         bus_accepted = {name: value for name, value in bus_accepted.items() if name in bus_complete}
+        if options.bus_skew_tuning and bus_accepted:
+            bus_accepted, skew_notes = _tune_bus_skew(board, bus_accepted, rules)
         emit(on_progress, "unified_buses", "finished", nets=len(bus_names), complete=len(bus_complete),
-             over_length=len(over_length), iterations=used)
+             over_length=len(over_length), iterations=used, skew_notes=skew_notes)
         if bus_accepted:
             board = _with(board, bus_accepted)
             nets = [net for net in nets if net.name not in bus_complete]
@@ -2398,6 +2461,9 @@ def route_unified(
                      "detailed_router": "unified",
                      "global_routing_fingerprint": global_route.routing_fingerprint,
                      "fabrication_ready": "false"})
+    if skew_notes:
+        # Bus members bus skew tuning left over max_skew, with the reason (DRC reports the skew itself).
+        metadata["bus_skew"] = " | ".join(skew_notes)
     routed = replace(board, tracks=tuple(all_tracks), vias=tuple(all_vias),
                      metadata=MappingProxyType(metadata))
     results = []

@@ -228,6 +228,32 @@ reversed bundle of four on four layers keeps one net on F.Cu and puts one on
 each of In1.Cu, In2.Cu and B.Cu; the single-layer move puts three crossing
 nets on In1.Cu.
 
+### Bus skew (E5, unified router)
+
+A length-match group (a bus) routed with `UnifiedRouterOptions(buses_first=True)`
+negotiates among its own members first, so it keeps a shared corridor
+instead of losing it piece by piece to other nets. On CopperProbe this
+leaves 3 of 12 ADC nets open instead of 12. Its members then still differ in
+length: routed alone on their shortest paths, the ADC members span 26.5 to
+32.4 mm against a 5 mm `max_skew`, so no route order or detour control can
+meet the limit; the short members must be lengthened.
+
+With `bus_skew_tuning=True` (also `route-board --unified-set
+bus_skew_tuning=true`), once every member of a group has copper, each
+member shorter than the longest minus `max_skew` is lengthened with checked
+bumps or serpentines (`critical_tuning.UnitTuner`) against all other copper:
+to the longest when that fits, else by the least that meets the limit,
+never past its own `max_length`. As in the critical router, only a net that
+declares `tuning_amplitude_limit` is tuned: the amplitude is a design
+contract, not a router choice. Every member left over the limit is listed,
+with its reason, in the routed board's `bus_skew` metadata; DRC reports the
+skew itself.
+
+CopperProbe's ADC rules declare no amplitude, so its bus stays 8.0 mm over
+5 mm and `bus_skew` names each short member. With a hypothetical 1 mm
+amplitude (an experiment, not a design fact), every member but the shortest
+was tuned; ADC_D7 needs 4.4 mm and its run had room for 2.2 mm of bumps.
+
 Kept nets carry no layer bias: they start on the planar layer anyway, and at
 a through-hole end every layer is theirs. Holding them to one layer there
 squeezes the bundle through that layer's gaps. Biases are penalties, never
