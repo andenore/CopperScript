@@ -79,3 +79,16 @@ def test_parallel_jobs_keep_the_ladder_order(tmp_path, monkeypatch):
     assert ladder.main([str(path), "--out", str(tmp_path / "out"), "--jobs", "3"]) == 0
     results = json.loads((tmp_path / "out" / "results.json").read_text(encoding="utf-8"))["results"]
     assert [item["name"] for item in results] == ["c", "a", "b"] and len(calls) == 3
+
+
+def test_route_board_unified_set_reaches_any_unified_option():
+    import pytest
+    from pcbir.cli import _parser, _unified_options
+    args = _parser().parse_args(["route-board", "board.copper", "--router", "unified",
+                                 "--unified-set", "buses_first=true", "--unified-set", "present_growth=2.0"])
+    options = _unified_options(args)
+    assert options.buses_first is True and options.present_growth == 2.0
+    assert _unified_options(_parser().parse_args(["route-board", "board.copper"])) is None
+    with pytest.raises(ValueError):
+        _unified_options(_parser().parse_args(["route-board", "board.copper", "--router", "unified",
+                                               "--unified-set", "no_such_option=1"]))
