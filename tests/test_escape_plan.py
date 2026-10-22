@@ -653,3 +653,13 @@ def test_closed_tile_diagonals_stop_inner_balls_even_through_open_side_gaps():
     signal = set(field.pads)
     assert len(_array_flow("U", field, CopperLayer.FRONT, signal, 100000, 100000).surface) == 16
     assert len(_array_flow("U", blocked, CopperLayer.FRONT, signal, 100000, 100000).surface) == 12
+
+
+def test_a_part_without_copper_pads_has_no_pad_field():
+    hole = PhysicalFootprint("hole", (FootprintPad("", Point(0, 0), Size.mm(3, 3), kind=PadKind.NON_PLATED_THROUGH_HOLE,
+                                                   shape=PadShape.CIRCLE, drill=Size.mm(3, 3)),), Size.mm(4, 4))
+    board = two_rows({1: 2, 2: 1})
+    board = PhysicalBoard("holes", board.outline, {**board.footprints, "hole": hole},
+                          (*board.placements, Placement("H1", "hole", Point.mm(20, 25))), board.nets, rules=RULES)
+    assert pad_fields(board, "H1") == ()
+    assert escape_diagnostics(board).pairs  # the rest of the board is still analysed
