@@ -61,8 +61,11 @@ class EscapePlanOptions:
     two_end_order: bool = False
     # The corridor of a bundle is its pins' box grown by this much.
     corridor_margin_nm: int = 1_000_000
-    # Extra cost per millimetre for a bundle net off its planned layer in the
-    # corridor, in routing cost units (10 doubles the cost of track).
+    # Extra cost per millimetre for a moved net off its planned layer in the
+    # corridor, in routing cost units (10 doubles the cost of track). Weaker
+    # biases leave a moved net on the planar layer, where it takes the gap a
+    # kept net needs (D3 0049 and led-ring lose nets at 0, 5 and 10); the
+    # price is a via where a planar detour existed.
     layer_bias_rate: int = 20
 
 

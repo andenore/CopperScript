@@ -54,6 +54,7 @@ from .physical import (
 from .progress import ProgressCallback, emit
 from .routing import GlobalRoutingResult
 from .routing_clearance import RoutingClearanceIndex
+from .routing_costs import LayerBias
 from .routing_layers import routing_layers, signal_layer_preferences
 
 _FOREIGN = -2  # Obstacle owned by another net, by several nets or by none.
@@ -133,10 +134,18 @@ class UnifiedRouterOptions:
     pre_route_decouplers: bool = True
     # Escape crowded ordinary pins (fanout.route_fanout) before critical routing.
     escapes_first: bool = True
+    # An escape plan (``escape_plan.plan_two_end_escapes``): nets negotiated
+    # first, in this order, and soft layer assignments. A bias of rate r adds
+    # r/10 to the history of its area's nodes on its layer while that net
+    # searches (10 doubles the cost of track there, as in the detailed router).
+    escape_net_order: tuple[str, ...] = ()
+    escape_layer_biases: tuple[LayerBias, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0:
             raise ValueError("unified router pitch and iterations must be positive")
+        if any(bias.rate < 0 for bias in self.escape_layer_biases):
+            raise ValueError("escape layer biases cannot be negative")
 
 
 # ---------------------------------------------------------------------------
@@ -1393,6 +1402,55 @@ class _Router:
 
     def _search(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
                 target_extra=None):
+        bias = self._escape_bias(spec.name)
+        if bias is None:
+            return self._search_unbiased(spec, sources, targets, present, target_extra)
+        nodes, amount = bias
+        history = self.occupancy.history
+        if self.occupancy.arrays:
+            saved = history[nodes].copy()
+            history[nodes] += amount
+        else:
+            saved = [history[node] for node in nodes]
+            for node, extra in zip(nodes, amount):
+                history[node] += extra
+        try:
+            return self._search_unbiased(spec, sources, targets, present, target_extra)
+        finally:
+            if self.occupancy.arrays:
+                history[nodes] = saved
+            else:
+                for node, value in zip(nodes, saved):
+                    history[node] = value
+
+    def _escape_bias(self, net: str):
+        """(nodes, extra history) of ``net``'s escape-plan layer biases, cached per net."""
+        cache = self.__dict__.setdefault("_escape_bias_cache", {})
+        if net in cache:
+            return cache[net]
+        g = self.grid
+        extra: dict[int, float] = {}
+        for bias in self.options.escape_layer_biases:
+            if bias.net != net or bias.layer not in g.layers or not bias.rate:
+                continue
+            layer = g.layers.index(bias.layer)
+            ix0, iy0, ix1, iy1 = g.window(bias.area.min_x, bias.area.min_y, bias.area.max_x, bias.area.max_y)
+            for iy in range(iy0, iy1 + 1):
+                for ix in range(ix0, ix1 + 1):
+                    node = g.index(layer, ix, iy)
+                    extra[node] = extra.get(node, 0.0) + bias.rate / 10
+        if not extra:
+            cache[net] = None
+        elif self.occupancy.arrays:
+            nodes = np.fromiter(sorted(extra), dtype=np.int64, count=len(extra))
+            cache[net] = (nodes, np.array([extra[int(node)] for node in nodes], dtype=np.float64))
+        else:
+            nodes = sorted(extra)
+            cache[net] = (nodes, [extra[node] for node in nodes])
+        return cache[net]
+
+    def _search_unbiased(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
+                         target_extra=None):
         g, options = self.grid, self.options
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self.rasters.via(spec.via_size, spec.via_drill, spec.clearance)
@@ -1694,7 +1752,8 @@ class _Router:
     def negotiate(self, deadline: float | None, only: set[str] | None = None):
         """PathFinder loop. Routes persist on the router between calls."""
         options = self.options
-        specs = sorted(self.specs, key=lambda s: (s.span, s.name))
+        planned = {name: rank for rank, name in enumerate(options.escape_net_order)}
+        specs = sorted(self.specs, key=lambda s: (planned.get(s.name, len(planned)), s.span, s.name))
         routes = self.routes
         present = self.present
         best_snapshot = None

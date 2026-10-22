@@ -492,3 +492,52 @@ def test_fanout_keeps_planned_surface_pins_off_dogbone_vias():
     assert not any(via.net == "N2" and via.position.x_nm < nm_from_mm(20) for via in planned.created_vias)
     assert PadReference("A", "2") not in planned.pending_pads
     assert any(via.net == "N3" and via.position.x_nm < nm_from_mm(20) for via in planned.created_vias)
+
+
+# --------------------------------------------------------------------------- pipeline (E4)
+
+@pytest.mark.parametrize("router", ("legacy", "unified"))
+def test_pipeline_gives_the_plan_to_escapes_and_router(router, monkeypatch):
+    import pcbir.fanout as fanout_module
+    import pcbir.flow as flow
+    import pcbir.unified_router as unified_module
+    from pcbir.fanout import FanoutOptions
+    from pcbir.routeflow import FeedbackStatus, PlacementRoutingResult
+    from pcbir.unified_router import UnifiedRouterOptions
+    board = two_rows({1: 2, 2: 1, 3: 3, 4: 4})
+    seen = {}
+    original_fanout = fanout_module.route_fanout
+
+    def fanout_spy(board, options=None, **kwargs):
+        seen.setdefault("surface_pads", set()).update(options.surface_pads if options else ())
+        return original_fanout(board, options, **kwargs)
+
+    import pcbir.package_access as package_access
+    monkeypatch.setattr(fanout_module, "route_fanout", fanout_spy)
+    monkeypatch.setattr(package_access, "route_fanout", fanout_spy)
+    if router == "legacy":
+        original = flow.route_detailed
+
+        def detailed_spy(board, guide, options, **kwargs):
+            seen["order"], seen["biases"] = options.escape_net_order, options.escape_layer_biases
+            return original(board, guide, options, **kwargs)
+
+        monkeypatch.setattr(flow, "route_detailed", detailed_spy)
+    else:
+        original = unified_module.route_unified
+
+        def unified_spy(board, guide, options, **kwargs):
+            seen["order"], seen["biases"] = options.escape_net_order, options.escape_layer_biases
+            return original(board, guide, options, **kwargs)
+
+        monkeypatch.setattr(unified_module, "route_unified", unified_spy)
+    fixed = PlacementRoutingResult(FeedbackStatus.PASS, board, route_global(board, GlobalRouterOptions()),
+                                   "imported", (), 0, False)
+    plan = plan_two_end_escapes(board)
+    flow.run_routing_pipeline(
+        board, initial_placement=fixed, fanout_options=FanoutOptions(),
+        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=1),
+        escape_plan_options=EscapePlanOptions(two_end_order=True),
+        **({"unified_options": UnifiedRouterOptions(maximum_iterations=2)} if router == "unified" else {}))
+    assert seen["order"] == plan.net_order and seen["biases"] == plan.layer_biases
+    assert plan.surface_pads and plan.surface_pads <= seen["surface_pads"]
