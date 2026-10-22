@@ -175,6 +175,7 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
     from .drc import run_physical_drc
     from .route_summary import connection_summary
     from .state_codec import StateError
+    from .progress import console_progress
     from .unified_router import UnifiedRouterOptions, replay_unified
     known = {field.name for field in fields(UnifiedRouterOptions)}
     overrides = {}
@@ -201,7 +202,8 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
     try:
         result = replay_unified(args.state, only_nets=frozenset(args.only) if args.only else None,
                                 only_components=frozenset(args.component) if args.component else None,
-                                bga_fanout=fanout, **overrides)
+                                bga_fanout=fanout, on_progress=console_progress() if args.progress else None,
+                                **overrides)
     except (StateError, OSError, ValueError) as exc:
         print(f"REPLAY ERROR: {exc}")
         return 2
@@ -573,6 +575,7 @@ def _parser() -> argparse.ArgumentParser:
         dest="fanout_overrides",
         help="fan-out option for --refanout: surface_rings, stub_width_nm, or array_flow (plan escapes by flow)")
     replay_parser.add_argument("-o", "--output", type=Path, help="write the routed board as .kicad_pcb (for copper view)")
+    replay_parser.add_argument("--progress", action="store_true", help="print PROGRESS lines while routing")
     from .design_query import QUERY_KINDS
     query_parser = subparsers.add_parser(
         "query", help="answer compact questions about the compiled design (pins, nets, components, open pins)")
