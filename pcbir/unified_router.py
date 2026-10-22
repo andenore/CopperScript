@@ -835,6 +835,7 @@ class _Router:
         ports = macro_routing_ports(board, net.name)
         owned = macro_owned_pads(board) if net.name in self.zone_nets else frozenset()
         components = []
+        separate: list[list] = []
         for root, members in sorted(groups.items(), key=lambda item: str(item[1][0])):
             if owned and all(pad in owned for pad in members):
                 # A hard macro proves its own plane returns at materialization.
@@ -847,7 +848,15 @@ class _Router:
                     layers = tuple(self.grid.layers.index(l) for l in macro_port_layers(board, port))
                     anchors.append((port.position, layers))
                     continue
-                anchors.extend(self._pad_anchors(pad, spec))
+                pad_anchors = self._pad_anchors(pad, spec)
+                # Lands sharing a number are one pin, but KiCad needs copper
+                # between them unless the part declares them internally joined
+                # (internal_pad_groups): each separate land is its own terminal,
+                # as in the legacy router (plan 3.4).
+                for piece in self._separate_land_pieces(pad):
+                    separate.append([anchor for anchor in pad_anchors if anchor[0] in piece])
+                    pad_anchors = [anchor for anchor in pad_anchors if anchor[0] not in piece]
+                anchors.extend(pad_anchors)
             if not root.startswith("pad:"):
                 # Existing copper of this group (fanout, plane taps, partial routes).
                 for index, via in enumerate(board.vias):
@@ -861,7 +870,18 @@ class _Router:
             components.append(self._attach(anchors, spec))
             if self.explicit_pads and set(members) & self.explicit_pads:
                 spec.explicit[len(components) - 1] = self._explicit_exclusion(members, spec)
+        components.extend(self._attach(anchors, spec) for anchors in separate)
         return components
+
+    def _separate_land_pieces(self, pad: PadReference) -> tuple[frozenset[Point], ...]:
+        """Land positions of each piece of ``pad`` not joined by copper to its first land."""
+        from .detailed import land_pieces
+        pose = next(p for p in self.board.placements if p.reference == pad.component)
+        footprint = self.board.footprints[pose.footprint]
+        if any(pad.pad in group.numbers for group in footprint.internal_pad_groups):
+            return ()
+        return tuple(frozenset(position for _, position in piece)
+                     for piece in land_pieces(pose, footprint, pad.pad)[1:])
 
     def _explicit_exclusion(self, pads, spec: _NetSpec) -> frozenset[int]:
         """The surface layers of these pads: a plane path from an explicit pad
