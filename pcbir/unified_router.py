@@ -130,6 +130,7 @@ class UnifiedRouterOptions:
     # Rasterize obstacles in and around full ball arrays exactly (without
     # raster_margin_nm): their single-track channels survive (escape plan E8).
     ball_field_exact: bool = False
+    ball_field_exact_reach_nm: int | None = None  # how far around the array (None: one pitch)
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
@@ -622,7 +623,7 @@ class _Router:
                     hist[g.index(layer, ix, iy)] += cost
 
     def _ball_field_boxes(self) -> tuple[tuple[int, int, int, int], ...]:
-        """Each full ball array's land box grown by one pitch (its escape band).
+        """Each full ball array's land box grown by ``ball_field_exact_reach_nm`` (one pitch by default).
 
         choose_pitch puts the grid on every ball and channel centre line there,
         so the raster can be exact: a minimum-width channel between dogbone
@@ -639,7 +640,7 @@ class _Router:
             if array is None or self.grid.pitch > array.pitch_nm // 2:
                 continue
             points = [transformed_local_point(pose, p.position) for p in self.board.footprints[pose.footprint].pads]
-            grow = array.pitch_nm
+            grow = self.options.ball_field_exact_reach_nm or array.pitch_nm
             boxes.append((min(p.x_nm for p in points) - grow, min(p.y_nm for p in points) - grow,
                           max(p.x_nm for p in points) + grow, max(p.y_nm for p in points) + grow))
         return tuple(boxes)
