@@ -125,6 +125,8 @@ class UnifiedRouterOptions:
     ball_field_cost: float = 2.0
     reuse_plane_vias: bool = False           # plane pads may join an existing via of their net
     ball_field_via_sites: bool = False       # new vias inside a ball array only at cell centres
+    # With ball_field_via_sites: the outer this-many cell rings get no new vias.
+    ball_field_band: int = 0
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
@@ -637,6 +639,15 @@ class _Router:
                 return np.abs(cells - np.round(cells)) * array.pitch_nm <= g.pitch / 4
             on_x = centred(np.asarray(g.xs[ix0:ix1 + 1]), x0)
             on_y = centred(np.asarray(g.ys[iy0:iy1 + 1]), y0)
+            band = self.options.ball_field_band
+            if band:
+                # The outer cell rings stay via-free: the surface escapes of
+                # the edge balls pass there (the FX10 kit keeps rings 0-1 free).
+                def inner(values, origin, count):
+                    cell = np.floor((values - origin) / array.pitch_nm).astype(int)
+                    return (cell >= band) & (cell <= count - 2 - band)
+                on_x &= inner(np.asarray(g.xs[ix0:ix1 + 1]), x0, len(array.xs_nm))
+                on_y &= inner(np.asarray(g.ys[iy0:iy1 + 1]), y0, len(array.ys_nm))
             mask[iy0:iy1 + 1, ix0:ix1 + 1] |= np.outer(on_y, on_x)
         return mask
 

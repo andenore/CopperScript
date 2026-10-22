@@ -190,6 +190,29 @@ def test_ball_field_via_mask_keeps_only_cell_centres() -> None:
     assert at(15, 15)                               # outside the field
 
 
+def test_ball_field_band_keeps_the_outer_cell_rings_via_free() -> None:
+    from pcbir.unified_router import _Router
+    # 5x5 ball array at 1 mm pitch centred on (10, 6): cell centres at +-0.5 and +-1.5 mm.
+    footprint = PhysicalFootprint("test/bga25", tuple(
+        FootprintPad(str(i), Point.mm(x, y), Size.mm("0.4", "0.4"), shape=PadShape.CIRCLE)
+        for i, (x, y) in enumerate(((x, y) for y in range(-2, 3) for x in range(-2, 3)), 1)), Size.mm(5, 5))
+    base = _board({"A": ((3, 15), (17, 15))})
+    board = replace(base, footprints={**base.footprints, footprint.name: footprint},
+                    placements=(*base.placements, Placement("U", footprint.name, Point.mm(10, 6))))
+    def mask_at(band):
+        router = _Router(board, UnifiedRouterOptions(pitch_nm=nm_from_mm("0.25"), ball_field_via_sites=True,
+                                                     ball_field_band=band), list(board.nets), None)
+        mask, g = router._ball_field_via_mask(), router.grid
+        def at(x, y):
+            return bool(mask[int(round((nm_from_mm(y) - g.y0) / g.pitch)), int(round((nm_from_mm(x) - g.x0) / g.pitch))])
+        return at
+    plain, banded = mask_at(0), mask_at(1)
+    assert plain(8.5, 4.5) and plain(9.5, 5.5)       # outer and inner cell centres
+    assert not banded(8.5, 4.5) and not banded(11.5, 5.5)  # the outer ring of cells is closed
+    assert banded(9.5, 5.5) and banded(10.5, 6.5)    # the inner 2x2 cells stay open
+    assert banded(15, 15)                            # outside the field
+
+
 def test_via_budget_is_never_exceeded() -> None:
     from pcbir.physical import NetRoutingRule, RouteKind
     # V may not use vias and H only one: whatever H does, it stays in budget.
