@@ -161,7 +161,7 @@ From a code survey of `main` (2026-10-21, after PR #18):
 - **Model against real geometry.** Rotated parts, octilinear routes and irregular pads may not match the channel graph. The plan is advisory, and every stub still passes `checked_access_path` and DRC. Unplannable pins fall back to today's per-pin path and are reported.
 - **Over-constraining the routers.** Start with cost biases and measure before any hard reservation.
 - **Defining cluster pairs.** Module plus header is clear; a pin cluster with nets spread to many parts is not. E0's classification decides the threshold.
-- **Unified router per-land gap.** This is still open from the refactor; E4 needs it closed before the unified path uses plan reservations.
+- **Unified router per-land gap.** Closed on 2026-10-22: the unified router routes every separate land of a pad number, as the legacy router does. MySRaspiGW (D3-A 0049) is still open with the unified router: its header gaps fit one track only on the exact pad midline (±0.025 mm), which the 0.25 mm grid never reaches, so it needs E1's channel model.
 - **Solver dependency.** E2 and E3 need none. E5 may want an exact solver; keep it optional and offline-checkable.
 - **Expected gain is unmeasured** on CopperScript's own boards. E0 decides the order of E2 and E3: E3 first if two-end crossings dominate, as the D3 evidence suggests.
 

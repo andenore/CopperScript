@@ -613,10 +613,14 @@ class _Router:
         obstacles: list[_Obstacle] = []
         for item in index._objects:
             netless = item.net.startswith("<")
+            # The exact check spaces two nets by the larger of their rule
+            # clearances: an obstacle's own net rule is part of its floor.
+            rule = None if netless else self.rules.get(item.net)
+            floor = max(item.clearance_nm, rule.clearance_nm or 0 if rule else 0)
             obstacles.append(_Obstacle(
                 _FOREIGN if netless else self._net_id(item.net),
                 tuple(layer_index[l] for l in item.layers if l in layer_index),
-                item.shape.spine, item.shape.radius_nm, item.clearance_nm, is_pad=item.is_pad))
+                item.shape.spine, item.shape.radius_nm, floor, is_pad=item.is_pad))
         for keepout in index._keepouts:
             obstacles.append(_Obstacle(
                 _FOREIGN, tuple(layer_index[l] for l in keepout.layers if l in layer_index),
@@ -1276,9 +1280,13 @@ class _Router:
         claims: set[int] = set()
         via_claims: set[int] = set()
         body: dict = {}
-        wide = (spec.width - self.default_width) / 2 / g.pitch
         via_body = (spec.via_size - self.default_width) / 2 / g.pitch
-        track_radius = (spec.width / 2 + spec.clearance + self.default_width / 2) / g.pitch
+        # Claims assume a neighbour at least as wide as this net. Grid nodes
+        # cannot carry a wide net's extra half-width below one pitch, and two
+        # wider-than-default nets would otherwise pass negotiation closer than
+        # the exact check allows (each claimed only a default-width neighbour).
+        neighbour = max(self.default_width, spec.width)
+        track_radius = (spec.width / 2 + spec.clearance + neighbour / 2) / g.pitch
         via_radius = (spec.via_size / 2 + spec.clearance + self.default_width / 2) / g.pitch
         via_via_radius = (spec.via_size + spec.clearance) / g.pitch
         length = 0.0
@@ -1296,11 +1304,6 @@ class _Router:
                     x, y = xa + ox, ya + oy
                     if 0 <= x < g.nx and 0 <= y < g.ny:
                         claims.add(la * g.plane + y * g.nx + x)
-                if wide >= 0.5:
-                    for ox, oy in _segment_offsets_cached(dx, dy, wide):
-                        x, y = xa + ox, ya + oy
-                        if 0 <= x < g.nx and 0 <= y < g.ny:
-                            body.setdefault(la * g.plane + y * g.nx + x, a)
             nodes.update(path)
             if len(path) == 1:
                 la, xa, ya = g.unpack(path[0])
@@ -1314,7 +1317,7 @@ class _Router:
         for leads in route.leads:
             for track in leads:
                 layer = layer_of[track.layer]
-                radius_nm = track.width_nm / 2 + spec.clearance + self.default_width / 2
+                radius_nm = track.width_nm / 2 + spec.clearance + max(self.default_width, track.width_nm) / 2
                 near = g.pitch / 2
                 for node, distance in self._segment_nodes(track.start, track.end, layer, radius_nm):
                     claims.add(node)

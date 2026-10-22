@@ -352,3 +352,27 @@ def test_route_smoothing_straightens_staircases_without_losing_connectivity() ->
     assert all(net.connected for net in smoothed.nets)
     assert track_bends(smoothed.board.tracks)["bends"] < track_bends(plain.board.tracks)["bends"]
     assert smoothed.metrics.total_length_nm <= plain.metrics.total_length_nm
+
+
+def test_fixed_copper_keeps_its_own_net_clearance_on_the_grid() -> None:
+    from pcbir.physical import NetRoutingRule
+    # S passes 0.7 mm from a pad of P: enough for S's own 0.15 mm clearance,
+    # not for P's 0.4 mm. The exact check spaces them by the larger one.
+    board = replace(_board({"S": ((2, 10), (18, 10)), "P": ((10, 10.7),)}),
+                    net_routing_rules=(NetRoutingRule("P", clearance_nm=nm_from_mm("0.4")),))
+    result, drc, summary = _route(board)
+    assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0
+    assert all(net.connected for net in result.nets)
+
+
+def test_wide_nets_negotiate_room_for_each_others_width() -> None:
+    from pcbir.physical import NetRoutingRule
+    # Three converging 0.5 mm nets on a 0.2 mm default board: each must claim
+    # room for a neighbour as wide as itself, or two of them pass negotiation
+    # closer than the exact check allows.
+    nets = {f"N{i}": ((2, 3 + 2.5 * i), (18, 12 - 2 * i)) for i in range(3)}
+    board = replace(_board(nets), net_routing_rules=tuple(
+        NetRoutingRule(name, width_nm=nm_from_mm("0.5")) for name in nets))
+    result, drc, summary = _route(board)
+    assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0
+    assert all(net.connected for net in result.nets)
