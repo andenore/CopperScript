@@ -564,8 +564,17 @@ def _stitch_land_choices(
             consider(path, candidate, via)
     if choices:
         work['ranked_selection'] = True
+        outward = (position.x_nm - placement.position.x_nm, position.y_nm - placement.position.y_nm)
+
+        def alignment(target: Point) -> float:
+            # Equal-cost sites: continue the part's axis away from its centre
+            # rather than turning beside the land, which crowds the neighbours.
+            dx, dy = target.x_nm - position.x_nm, target.y_nm - position.y_nm
+            span = hypot(dx, dy) * hypot(*outward)
+            return (dx * outward[0] + dy * outward[1]) / span if span else 0.0
+
         ranked = sorted(choices, key=lambda item: (
-            item[0], item[3] is not None, item[1].x_nm, item[1].y_nm,
+            item[0], item[3] is not None, -alignment(item[1]), item[1].x_nm, item[1].y_nm,
         ))
         return tuple(dict.fromkeys((path, via) for _, _, path, via in ranked))[:maximum_alternatives]
     if work['exhausted']:
