@@ -24,12 +24,16 @@ from .plane import PlaneStitchOptions
 
 from .engineering import EvidenceGrade, propagation_delay
 from .physical import (
+    BoardSide,
+    CopperKeepout,
     CopperLayer,
     NetMatchGroup,
     NetRoutingRule,
     PadKind,
     PhysicalBoard,
     Point,
+    PolygonRing,
+    PolygonWithHoles,
     RouteKind,
     StackupLayerKind,
     TrackSegment,
@@ -661,7 +665,10 @@ def route_critical_nets(
                 as_routed.pop(entry, None)
                 for net in entry:
                     routed.pop(net, None)
-            if _tune_bundle_pairs(board, rules, base_tracks, base_vias, committed, results, result_index,
+            # Tuning bumps stay out of the lanes of bundle pairs still to route.
+            lanes = _unrouted_lanes(board, bundles[bundle_of[group]], [entry for entry, _, _ in committed], rules)
+            tune_board = replace(board, copper_keepouts=(*board.copper_keepouts, *lanes)) if lanes else board
+            if _tune_bundle_pairs(tune_board, rules, base_tracks, base_vias, committed, results, result_index,
                                   set(bundles[bundle_of[group]].order), match_group, early, routed,
                                   failed_targets, as_routed, group_failures) or regrouped:
                 tracks = [*base_tracks, *(t for _, items, _ in committed for t in items)]
@@ -1641,6 +1648,64 @@ def _bundle_neighbours(
         ranked.append((sum(hypot(own[ref].x_nm - lands[ref].x_nm, own[ref].y_nm - lands[ref].y_nm)
                            for ref in own), position, entry))
     return [entry for _, _, entry in sorted(ranked)[:2]]
+
+
+def _unrouted_lanes(
+    board: PhysicalBoard, bundle: CriticalBundle, routed: Iterable[tuple[str, ...]],
+    rules: dict[str, NetRoutingRule],
+) -> tuple[CopperKeepout, ...]:
+    """Temporary keepouts over the lanes of a bundle's pairs not yet routed.
+
+    Each pair owns the strip between the midlines to its neighbours' lands at
+    both bundle ends. Tuning while routing claims room for accepted pairs'
+    bumps (plan R12); a bump in an unrouted neighbour's strip pushes that pair
+    off its direct lane, and its detour can take the lane of the pair beyond.
+    The strips never become copper. A bundle whose pairs change order between
+    its ends (a package-corner wrap) gets none.
+    """
+    from .critical_bundles import _group_lands
+
+    nets = {item.name: item for item in board.nets}
+    placements = {item.reference: item for item in board.placements}
+    lands = {group: _group_lands(board, nets, placements, group) for group in bundle.order}
+    if len(lands) < 2 or any(item is None or set(item) != set(bundle.components) for item in lands.values()):
+        return ()
+    first, second = bundle.components
+    groups = tuple(lands)
+    dx = sum(lands[g][second].x_nm - lands[g][first].x_nm for g in groups)
+    dy = sum(lands[g][second].y_nm - lands[g][first].y_nm for g in groups)
+    across = lambda point: point.y_nm * dx - point.x_nm * dy
+    ordered = sorted(groups, key=lambda g: across(lands[g][first]))
+    if ordered != sorted(groups, key=lambda g: across(lands[g][second])):
+        return ()
+
+    def bounds(index: int, component: str) -> tuple[Point, Point]:
+        own = lands[ordered[index]][component]
+        sides = []
+        for step in (-1, 1):
+            other = (lands[ordered[index + step]][component] if 0 <= index + step < len(ordered)
+                     else Point(2 * own.x_nm - lands[ordered[index - step]][component].x_nm,
+                                2 * own.y_nm - lands[ordered[index - step]][component].y_nm))
+            sides.append(Point((own.x_nm + other.x_nm) // 2, (own.y_nm + other.y_nm) // 2))
+        return sides[0], sides[1]
+
+    done = set(routed)
+    keepouts = []
+    for index, group in enumerate(ordered):
+        if group in done:
+            continue
+        (left_first, right_first), (left_second, right_second) = bounds(index, first), bounds(index, second)
+        declared = {layer for net in group if net in rules for layer in rules[net].allowed_layers}
+        sides = {CopperLayer.FRONT if placements[component].side is BoardSide.FRONT else CopperLayer.BACK
+                 for component in bundle.components}
+        try:
+            outline = PolygonWithHoles(PolygonRing((left_first, right_first, right_second, left_second)))
+        except ValueError:
+            continue
+        keepouts.append(CopperKeepout(f"unrouted-lane:{'/'.join(group)}",
+                                      tuple(sorted(declared or sides, key=lambda layer: layer.value)),
+                                      outline, block_zones=False))
+    return tuple(keepouts)
 
 
 def _bundle_repair(
