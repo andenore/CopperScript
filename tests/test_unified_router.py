@@ -346,8 +346,8 @@ def test_route_smoothing_straightens_staircases_without_losing_connectivity() ->
     # Three converging nets: grid search has no turn cost, so around each
     # other's copper equal-length staircases of 45-degree jogs survive.
     board = _board({f"N{i}": ((2, 3 + 2.5 * i), (18, 12 - 2 * i)) for i in range(3)})
-    plain, _, plain_summary = _route(board)
-    smoothed, drc, summary = _route(board, route_smoothing=True)
+    plain, _, plain_summary = _route(board, route_smoothing=False)
+    smoothed, drc, summary = _route(board)  # on by default
     assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0
     assert all(net.connected for net in smoothed.nets)
     assert track_bends(smoothed.board.tracks)["bends"] < track_bends(plain.board.tracks)["bends"]
