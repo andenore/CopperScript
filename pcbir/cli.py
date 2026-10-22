@@ -192,8 +192,9 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
         fanout = {}
         for item in args.fanout_overrides:
             name, separator, text = item.partition("=")
-            if not separator or name not in ("surface_rings", "stub_width_nm"):
-                print(f"REPLAY ERROR: unknown fanout option {name!r}; expected surface_rings or stub_width_nm")
+            if not separator or name not in ("surface_rings", "stub_width_nm", "array_flow"):
+                print(f"REPLAY ERROR: unknown fanout option {name!r}; "
+                      "expected surface_rings, stub_width_nm or array_flow")
                 return 2
             fanout[name] = json.loads(text)
     started = perf_counter()
@@ -569,7 +570,8 @@ def _parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("--refanout", action="store_true",
         help="take the saved ball-grid fanout out (STATE.bga.json) and fan out again first")
     replay_parser.add_argument("--fanout-set", action="append", default=[], metavar="OPTION=VALUE",
-        dest="fanout_overrides", help="plan_bga_fanouts option for --refanout (surface_rings, stub_width_nm)")
+        dest="fanout_overrides",
+        help="fan-out option for --refanout: surface_rings, stub_width_nm, or array_flow (plan escapes by flow)")
     replay_parser.add_argument("-o", "--output", type=Path, help="write the routed board as .kicad_pcb (for copper view)")
     from .design_query import QUERY_KINDS
     query_parser = subparsers.add_parser(

@@ -2512,7 +2512,8 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
     escape as a fast case: the other nets keep only their saved copper).
     ``bga_fanout`` (keyword arguments of ``plan_bga_fanouts``, ``{}`` for
     its defaults) takes the saved ball-grid fanout copper out (``PATH.bga.json``)
-    and fans out again first, re-planning array escapes when the run did.
+    and fans out again first, re-planning array escapes when the run did
+    (``array_flow`` in the dict overrides that).
     Stages between fanout and routing (plane stitch, power areas) keep their
     saved result. Without the pipeline's escape seeder (repair rounds run
     unseeded).
@@ -2534,9 +2535,11 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
         board = saved["board"]
         board = replace(board, tracks=tuple(t for t in board.tracks if t not in tracks),
                         vias=tuple(v for v in board.vias if v not in vias))
+        options_of = dict(bga_fanout)
+        array_flow = options_of.pop("array_flow", fanout["array_flow"])
         plans = ({item.component: item for item in plan_array_escapes(board, fanout["escape_plan_options"])}
-                 if fanout["array_flow"] else None)
-        bga = plan_bga_fanouts(board, array_plans=plans, **bga_fanout)
+                 if array_flow else None)
+        bga = plan_bga_fanouts(board, array_plans=plans, **options_of)
         emit(on_progress, "bga_fanout", "finished", **bga.report())
         saved["board"] = bga.board
     return route_unified(saved["board"], saved["global_route"], options,
