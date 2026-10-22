@@ -49,6 +49,16 @@ def test_external_fill_can_complete_routing_without_changing_physical_signoff():
     assert not routing_complete_with_fill(pipeline,board,drc,None)
 
 
+def test_verified_fill_closes_a_zone_net_whatever_its_router_reported():
+    pipeline,board,drc,evidence = _deferred_plane_fixture()
+    for diagnostics in (("unified: 2 of 150 pad groups cannot reach the plane",), ()):
+        zone = replace(pipeline.detailed.nets[-1], diagnostics=diagnostics)
+        pipeline.detailed = replace(pipeline.detailed, nets=(*pipeline.detailed.nets[:-1], zone))
+        assert routing_complete_with_fill(pipeline,board,drc,evidence)
+        assert not routing_complete_with_fill(pipeline,board,drc,replace(evidence,unconnected_count=1))
+        assert not routing_complete_with_fill(pipeline,board,drc,None)
+
+
 def test_routing_closure_rejects_stale_native_findings_search_failures_and_blocked_preflight():
     from pcbir.drc import DrcFinding,DrcSeverity
     from pcbir.critical import CriticalRoutingStatus

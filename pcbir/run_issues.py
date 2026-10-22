@@ -110,7 +110,12 @@ def load_run(path: str | Path) -> Run:
         report = next((p for p in (path / "route-report.json", path / "layout-report.json") if p.is_file()), None)
         if report is None:
             candidates = sorted(p for p in path.glob("*.json") if not p.name.endswith(".summary.json"))
-            report = next((p for p in candidates if _schema(p).startswith("copperscript-")), None)
+            # A route run also holds other CopperScript records (board.editor-
+            # intent.json sorts first); the route or layout report is the run's.
+            report = next((p for p in candidates if _schema(p).startswith(
+                ("copperscript-route-board", "copperscript-layout-report"))), None)
+            if report is None:
+                report = next((p for p in candidates if _schema(p).startswith("copperscript-")), None)
     if report is not None and not report.name.endswith(".error.json"):
         # A later run into the same place that failed leaves only an error record.
         error = report.with_name(report.stem + ".error.json")
@@ -150,8 +155,14 @@ def _schema(path: Path) -> str:
         with path.open(encoding="utf-8") as handle:
             head = handle.read(4096)
         start = head.find('"schema"')
-        return head[start:start + 80].split('"')[3] if start >= 0 else ""
-    except (OSError, IndexError):
+        if start >= 0:
+            return head[start:start + 80].split('"')[3]
+        # Reports are written with sorted keys, so a large one's schema sits
+        # far past the head; read the whole document then.
+        document = json.loads(path.read_text(encoding="utf-8"))
+        schema = document.get("schema") if isinstance(document, dict) else None
+        return schema if isinstance(schema, str) else ""
+    except (OSError, IndexError, ValueError):
         return ""
 
 
