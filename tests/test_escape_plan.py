@@ -541,3 +541,115 @@ def test_pipeline_gives_the_plan_to_escapes_and_router(router, monkeypatch):
         **({"unified_options": UnifiedRouterOptions(maximum_iterations=2)} if router == "unified" else {}))
     assert seen["order"] == plan.net_order and seen["biases"] == plan.layer_biases
     assert plan.surface_pads and plan.surface_pads <= seen["surface_pads"]
+
+
+# --------------------------------------------------------------------------- array escape (E2)
+
+from pcbir.escape_plan import plan_array_escapes  # noqa: E402
+from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles  # noqa: E402
+
+
+def ball_grid(size: int, ball: str, *, plane: frozenset[int] = frozenset(), rules=FINE) -> PhysicalBoard:
+    """A size×size 0.8 mm BGA of round SMD balls; every ball's net reaches a far connector pad.
+
+    Balls numbered in ``plane`` are on the GND plane net instead.
+    """
+    count = size * size
+    bga = PhysicalFootprint("bga", tuple(
+        FootprintPad(str(y * size + x + 1), Point.mm(Decimal("0.8") * x, Decimal("0.8") * y), Size.mm(ball, ball),
+                     shape=PadShape.CIRCLE) for y in range(size) for x in range(size)), Size.mm(8, 8))
+    far = PhysicalFootprint("far", tuple(FootprintPad(str(n + 1), Point.mm(Decimal("0.5") * n, 0), Size.mm("0.3", "0.3"))
+                                         for n in range(count)), Size.mm(40, 1))
+    nets = [PhysicalNet(f"N{n}", (PadReference("U", str(n)), PadReference("J", str(n))))
+            for n in range(1, count + 1) if n not in plane]
+    zones = ()
+    if plane:
+        nets.append(PhysicalNet("GND", tuple(PadReference("U", str(n)) for n in sorted(plane))))
+        ring = PolygonRing((Point.mm(0, 0), Point.mm(60, 0), Point.mm(60, 40), Point.mm(0, 40)))
+        zones = (CopperZone("gnd", "GND", (CopperLayer.BACK,), PolygonWithHoles(ring)),)
+    return PhysicalBoard("bga", BoardOutline.rectangle(60, 40), {"bga": bga, "far": far},
+                         (Placement("U", "bga", Point.mm(10, 10)), Placement("J", "far", Point.mm(10, 30))),
+                         tuple(nets), rules=rules, zones=zones)
+
+
+def array_plan(board):
+    (plan,) = plan_array_escapes(board)
+    return plan
+
+
+def test_one_track_per_gap_lets_a_four_by_four_grid_escape_on_the_surface():
+    # 0.8 mm pitch, 0.45 mm balls, 0.1 mm track and clearance: orthogonal gaps of 0.35 mm hold one
+    # track. The 12 edge balls leave directly; the 4 inner balls each reach one of 12 outer gaps.
+    plan = array_plan(ball_grid(4, "0.45"))
+    assert plan.layer is CopperLayer.FRONT and len(plan.surface) == 16 and plan.vias == ()
+    assert sum(plan.tile_load.values()) >= 4
+
+
+def test_closed_gaps_leave_only_the_edge_balls_on_the_surface():
+    # 0.55 mm balls leave 0.25 mm gaps: no track fits, so every inner ball needs a via.
+    plan = array_plan(ball_grid(4, "0.55"))
+    assert len(plan.surface) == 12
+    assert {pad.pad for pad in plan.vias} == {"6", "7", "10", "11"}
+    assert not any(plan.tile_load.values())
+
+
+def test_outer_gaps_bound_the_surface_escapes_of_an_eight_by_eight_grid():
+    # 28 edge balls leave directly; the 36 inner balls must cross the 28 outer gaps, one track each,
+    # so exactly 8 of them need a via.
+    plan = array_plan(ball_grid(8, "0.45"))
+    assert len(plan.surface) == 56 and len(plan.vias) == 8
+    # The flow keeps the outer balls on the surface: every ball needing a via is in the inner 4x4.
+    inner = {str(y * 8 + x + 1) for y in range(2, 6) for x in range(2, 6)}
+    assert {pad.pad for pad in plan.vias} <= inner
+
+
+def test_plane_balls_do_not_count_and_free_their_gaps():
+    # With the four centre balls on the plane (they take a via anyway), the 32 inner signal balls
+    # still compete for 28 outer gaps.
+    plan = array_plan(ball_grid(8, "0.45", plane=frozenset({28, 29, 36, 37})))
+    assert len(plan.surface) + len(plan.vias) == 60 and len(plan.vias) == 4
+    assert not {pad.pad for pad in (*plan.surface, *plan.vias)} & {"28", "29", "36", "37"}
+
+
+def test_array_plans_are_deterministic_and_skip_other_fields():
+    board = ball_grid(8, "0.45")
+    assert plan_array_escapes(board) == plan_array_escapes(board)
+    assert plan_array_escapes(two_rows({1: 1, 2: 2})) == ()  # single rows are no ball grids
+
+
+def test_bga_fanout_follows_the_array_plan():
+    from pcbir.bga_fanout import plan_bga_fanouts
+    board = ball_grid(8, "0.45")
+    plan = array_plan(board)
+    rings = plan_bga_fanouts(board)
+    planned = plan_bga_fanouts(board, array_plans={"U": plan})
+    # The ring rule fans out every ball deeper than two rings (16); the plan only the 8 it needs.
+    assert len(rings.fanned) == 16
+    assert set(planned.fanned) == set(plan.vias) and set(planned.surface) == set(plan.surface)
+    # Every planned via sits in a cell no planned surface track crosses, when one is free.
+    from pcbir.placement import transformed_local_point
+    pose = board.placements[0]
+    origin = transformed_local_point(pose, Point(0, 0))
+    def loaded(result, plan):
+        return [via for via in result.vias if plan.tile_load.get(
+            ((via.position.x_nm - origin.x_nm) // nm_from_mm("0.8"),
+             (via.position.y_nm - origin.y_nm) // nm_from_mm("0.8")), 0)]
+
+    assert not loaded(planned, plan)
+    # With a large plane block in the middle, the outward-first cell of some plane balls carries a
+    # planned surface track; those vias move to a free cell.
+    plane_board = ball_grid(8, "0.45", plane=frozenset(range(19, 47)))
+    plane_plan = array_plan(plane_board)
+    assert not loaded(plan_bga_fanouts(plane_board, array_plans={"U": plane_plan}), plane_plan)
+
+
+def test_closed_tile_diagonals_stop_inner_balls_even_through_open_side_gaps():
+    from dataclasses import replace as replaced
+    from pcbir.escape_plan import _array_flow, pad_fields
+    board = ball_grid(4, "0.45")
+    (field,) = pad_fields(board, "U")
+    closed = Gap(PadReference("U", "1"), PadReference("U", "6"), "diagonal", 0, (CopperLayer.FRONT,))
+    blocked = replaced(field, tiles=tuple(replaced(tile, diagonals=(closed, closed)) for tile in field.tiles))
+    signal = set(field.pads)
+    assert len(_array_flow("U", field, CopperLayer.FRONT, signal, 100000, 100000).surface) == 16
+    assert len(_array_flow("U", blocked, CopperLayer.FRONT, signal, 100000, 100000).surface) == 12

@@ -187,6 +187,21 @@ def run_routing_pipeline(
         critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
         return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
                                      stopped_after="placement")
+    array_plans = None
+    if escape_plan_options is not None and escape_plan_options.array_flow:
+        # Ball grids: which balls escape on the surface (min-cost flow); the
+        # rest take vias. Fanout tries a surface escape first for those balls.
+        from .escape_plan import plan_array_escapes
+        array_plans = {item.component: item for item in plan_array_escapes(placement.board, escape_plan_options)}
+        emit(on_progress, "array_escape_plan", "finished", arrays=len(array_plans),
+             surface=sum(len(item.surface) for item in array_plans.values()),
+             vias=sum(len(item.vias) for item in array_plans.values()))
+        surface_balls = frozenset(pad for item in array_plans.values() for pad in item.surface)
+        if unified_fanout is not None:
+            unified_fanout = replace(unified_fanout, surface_pads=unified_fanout.surface_pads | surface_balls)
+            route_ordinary = partial(_route_unified_compat, unified_options, escape_options=unified_fanout)
+        elif fanout_options is not None:
+            fanout_options = replace(fanout_options, surface_pads=fanout_options.surface_pads | surface_balls)
     if escape_plan_options is not None and escape_plan_options.two_end_order:
         # Plan once on the placed board: escape generation keeps kept nets'
         # surface pins off dogbone vias, and the router follows the plan's
@@ -410,7 +425,7 @@ def run_routing_pipeline(
     if unified_options is not None and getattr(unified_options, "bga_fanout", True):
         from .bga_fanout import plan_bga_fanouts
         emit(on_progress, "bga_fanout", "started")
-        bga = plan_bga_fanouts(critical.board)
+        bga = plan_bga_fanouts(critical.board, array_plans=array_plans)
         critical = replace(critical, board=bga.board)
         emit(on_progress, "bga_fanout", "finished", **bga.report())
     plane_stitch = access.plane_stitch if access else (

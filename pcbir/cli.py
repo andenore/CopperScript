@@ -17,7 +17,7 @@ from .backends import KiCadPcbBackend, KiCadSchematicBackend
 from .backends.kicad_project import write_kicad_project
 from .critical_review import critical_lane_review, lane_review_line
 from .erc import check, has_errors
-from .escape_plan import EscapePlanOptions, escape_diagnostics, plan_two_end_escapes
+from .escape_plan import EscapePlanOptions, escape_diagnostics, plan_array_escapes, plan_two_end_escapes
 from .footprints import FootprintResolver, FootprintResolutionError, prepare_footprint_dependencies
 from .importers import KiCadModImportError, load_kicad_mod
 from .layout import PlacementPlannerOptions, placement_intent_findings, plan_placement
@@ -835,6 +835,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--escape-plan", action=argparse.BooleanOptionalAction, default=False,
         help="plan crossing bundles between two parts (layer per net, route order) and give the plan "
              "to escape generation and the router (docs/escape-planning.md)")
+    board_route_parser.add_argument("--array-flow", action=argparse.BooleanOptionalAction, default=False,
+        help="choose which ball-grid balls escape on the surface by min-cost flow; the rest take vias "
+             "(docs/escape-planning.md)")
     board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
         help="grid pitch of the unified router (default: 0.25 mm, finer to align with ball grids)")
     board_route_parser.add_argument("--unified-iterations", type=int, default=40,
@@ -1707,7 +1710,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     on_progress=progress,
                     legacy_gates=args.legacy_gates,
                     unified_options=_unified_options(args),
-                    escape_plan_options=EscapePlanOptions(two_end_order=True) if args.escape_plan else None,
+                    escape_plan_options=(EscapePlanOptions(two_end_order=args.escape_plan, array_flow=args.array_flow)
+                                         if args.escape_plan or args.array_flow else None),
                     **({"power_area_options": power_area_options} if power_area_options is not None else {}),
                     **({"power_native_verifier": power_native_verifier} if power_native_verifier is not None else {}),
                 )
@@ -1922,6 +1926,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 **({"escape_plan": plan_two_end_escapes(result.placement_and_global.board,
                                                         EscapePlanOptions(two_end_order=True)).report()}
                    if args.escape_plan else {}),
+                **({"array_escape": [item.report() for item in plan_array_escapes(
+                    result.placement_and_global.board, EscapePlanOptions(array_flow=True))]}
+                   if args.array_flow else {}),
             }
             if power_area_options is not None:
                 report["power_area_planning"] = {

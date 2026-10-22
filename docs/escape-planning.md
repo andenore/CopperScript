@@ -4,9 +4,9 @@ The implemented contract of `pcbir/escape_plan.py`. The steps, research and
 open questions are in the [escape planning plan](escape-planning-plan.md);
 this page describes only what exists.
 
-Status: steps E0 (diagnostics), E1 (pad fields and channel model), E3
-(two-end ordering and layer assignment) and E4 (the unified router and
-`route-board`). Diagnostics never change routing;
+Status: steps E0 (diagnostics), E1 (pad fields and channel model), E2
+(ball-grid escape by min-cost flow), E3 (two-end ordering and layer
+assignment) and E4 (the unified router and `route-board`). Diagnostics never change routing;
 the E3 plan does only when `EscapePlanOptions(two_end_order=True)` is passed
 (off by default).
 
@@ -139,6 +139,42 @@ breakout width says so; clearances never fall below the board minimum.
 Cluster reports in `escape` carry a summary per field: kind, lattice size
 and pitch, gap counts and the narrowest gap of each kind in tracks at the
 cluster's widest escape rule, tiles and via sites.
+
+## Array escape (E2)
+
+`plan_array_escapes(board, options)` decides, for every surface-mount ball
+grid (a `lattice` pad field on one surface layer), which signal balls escape
+on that layer and which need a via. It solves an integer min-cost max-flow on
+the field's channel graph:
+
+- every signal ball is a source of one track; plane (zone) balls do not
+  count, they take a via to their plane;
+- an edge ball (on the lattice's outer columns or rows) leaves directly;
+- an inner ball enters one of its four tiles; a track crosses from tile to
+  tile through a side gap, at most the gap's capacity, and leaves the field
+  through an outer side gap;
+- a tile passes at most as many tracks as its narrower diagonal holds. That
+  is exact for straight tracks and conservative for turning ones: Yan & Wong
+  couple the two diagonals exactly, which a plain flow cannot;
+- each tile step costs one, so the flow keeps the most balls on the surface
+  and, among those, the shortest escapes.
+
+The solver is successive shortest paths with potentials, deterministic
+(edges in insertion order, ties to the lower node), with no solver
+dependency. Example: an 8×8 grid at one track per gap has 28 outer gaps, so
+28 of its 36 inner balls escape on the surface and exactly 8 need vias; the
+ring rule below fans out 16.
+
+`ArrayEscape` lists `surface` and `vias` balls and `tile_load`, the planned
+surface tracks per tile. With `EscapePlanOptions(array_flow=True)`
+(`route-board --array-flow`, `bench route --array-flow`):
+
+- the unified path's BGA fanout (`plan_bga_fanouts(..., array_plans=...)`)
+  fans out exactly the plan's `vias` balls (and plane balls) instead of every
+  ball deeper than two rings, and puts each via preferably in a cell no
+  planned surface track crosses;
+- the ordinary path's fanout tries a checked surface escape first for the
+  plan's `surface` balls (`FanoutOptions.surface_pads`).
 
 ## Two-end plan
 

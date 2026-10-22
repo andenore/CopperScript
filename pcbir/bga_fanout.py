@@ -11,7 +11,10 @@ Which balls get a via:
 
 * balls of plane (zone) nets, so they reach their planes;
 * signal balls deeper than ``surface_rings`` from the array edge, which cannot
-  escape on the surface layer;
+  escape on the surface layer; with an array escape plan
+  (``escape_plan.plan_array_escapes``), instead every signal ball the plan's
+  flow cannot take out on the surface, and its via goes preferably to a cell
+  no planned surface track crosses;
 * never balls without a net, balls already joined by existing copper, or
   balls whose net may only use the surface layer.
 
@@ -49,7 +52,7 @@ class BgaFanoutResult:
 
 
 def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
-                     stub_width_nm: int | None = None) -> BgaFanoutResult:
+                     stub_width_nm: int | None = None, array_plans=None) -> BgaFanoutResult:
     from .drc import explicit_copper_connectivity
     from .hard_macros import macro_owned_pads
     from .zone_geometry import deferred_zone_nets
@@ -76,6 +79,8 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
         if array is None:
             continue
         packages.append(pose.reference)
+        plan = (array_plans or {}).get(pose.reference)
+        planned_surface = set(plan.surface) if plan is not None else set()
         side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
         footprint = board.footprints[pose.footprint]
         nx, ny = len(array.xs_nm), len(array.ys_nm)
@@ -96,7 +101,8 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
             if not any(layer != side for layer in allowed) and net not in plane_nets:
                 continue
             ring = depth(land)
-            if net not in plane_nets and ring < surface_rings:
+            if net not in plane_nets and (reference in planned_surface if plan is not None
+                                          else ring < surface_rings):
                 surface.append(reference)
                 continue
             if any(connectivity.roots[node] in copper_roots
@@ -109,6 +115,10 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
             # The four adjacent cell centres (outward first), then the next
             # ring of cell centres reached by a checked octilinear stub.
             options = [(sx, sy), (sx, -sy), (-sx, sy), (-sx, -sy)]
+            if plan is not None:
+                # A cell centre no planned surface track crosses first; the
+                # tile of corner offset (dx, dy) is (ix - (dx < 0), iy - (dy < 0)).
+                options.sort(key=lambda d: plan.tile_load.get((ix - (d[0] < 0), iy - (d[1] < 0)), 0) > 0)
             options += sorted(((dx, dy) for dx in (-3, -1, 1, 3) for dy in (-3, -1, 1, 3)
                                if max(abs(dx), abs(dy)) == 3),
                               key=lambda d: (-(d[0] * sx + d[1] * sy), d))

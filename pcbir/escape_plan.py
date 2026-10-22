@@ -36,6 +36,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from math import atan2, isqrt, pi
 from statistics import median_low
+from types import MappingProxyType
 
 from .drc import placed_pad_shape
 from .geometry import (Bounds, RoundedConvexShape, bounds, orientation, point_on_segment,
@@ -67,6 +68,8 @@ class EscapePlanOptions:
     # kept net needs (D3 0049 and led-ring lose nets at 0, 5 and 10); the
     # price is a via where a planar detour existed.
     layer_bias_rate: int = 20
+    # Array escape (E2): plan surface escapes of ball grids by min-cost flow.
+    array_flow: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,6 +709,180 @@ def plan_two_end_escapes(board: PhysicalBoard, options: EscapePlanOptions | None
         surface_pads.update(pin.pad for pin in pins
                             if pin.net in kept and pin.net in crossing.nets and pin.layers == (planar,))
     return EscapePlan(tuple(pairs), tuple(order), tuple(biases), frozenset(surface_pads))
+
+
+# --------------------------------------------------------------------------- array escape (E2)
+
+@dataclass(frozen=True, slots=True)
+class ArrayEscape:
+    """Which signal balls of a surface ball grid escape on its surface layer (min-cost max-flow).
+
+    ``surface`` balls leave between the other balls on ``layer``; ``vias``
+    are the signal balls the surface channels cannot take, which need a via.
+    ``tile_load`` counts the planned surface tracks through each tile
+    ((column, row) in the footprint frame); a via is best placed in a tile
+    without load.
+    """
+
+    component: str
+    layer: CopperLayer
+    surface: tuple[PadReference, ...]
+    vias: tuple[PadReference, ...]
+    tile_load: Mapping[tuple[int, int], int]
+
+    def report(self) -> dict:
+        return {"component": self.component, "layer": self.layer.value, "surface": len(self.surface),
+                "vias": len(self.vias), "loaded_tiles": sum(1 for load in self.tile_load.values() if load)}
+
+
+# A side or diagonal through a missing pin is unbounded; this many tracks stands in for it.
+_OPEN_CAPACITY = 1_000
+
+
+def plan_array_escapes(board: PhysicalBoard, options: EscapePlanOptions | None = None) -> tuple[ArrayEscape, ...]:
+    """Surface escapes of every surface-mount ball grid, by integer min-cost max-flow (Yan & Wong).
+
+    Edge balls leave directly. An inner ball enters one of its four tiles;
+    tracks cross from tile to tile through side gaps at the gap's capacity
+    and leave the field through the outer gaps. A tile passes at most as many
+    tracks as its narrower diagonal holds: exact for straight tracks and
+    conservative for turning ones (Yan & Wong couple the two diagonals
+    exactly; a plain flow cannot). Each tile step costs one, so the flow
+    keeps the most balls on the surface and, among those, the shortest
+    escapes. Plane (zone) balls never count: they take a via to their plane.
+    """
+    options = options or EscapePlanOptions()
+    zone_nets = distribution_zone_nets(board)
+    pad_nets = {pad: net.name for net in board.nets if len(net.pads) >= 2 for pad in net.pads}
+    result = []
+    for placement in sorted(board.placements, key=lambda item: item.reference):
+        placed = _placed_pads(board, placement)
+        for field in _pad_fields(board, placement, placed, options):
+            if field.kind != "lattice" or not field.tiles:
+                continue
+            layers = {item[2] for item in placed if PadReference(placement.reference, item[0].number) in field.pads}
+            if len(layers) != 1 or len(next(iter(layers))) != 1:
+                continue  # through-hole or mixed fields escape on every layer
+            layer = next(iter(layers))[0]
+            signal = {pad for pad in field.pads if pad in pad_nets and pad_nets[pad] not in zone_nets}
+            if not signal:
+                continue
+            width, clearance = _net_rules(board, {pad_nets[pad] for pad in signal})
+            result.append(_array_flow(placement.reference, field, layer, signal, width, clearance))
+    return tuple(result)
+
+
+def _array_flow(component: str, field: "PadField", layer: CopperLayer, signal: set[PadReference],
+                width: int, clearance: int) -> ArrayEscape:
+    def capacity(gap) -> int:
+        if gap is None or layer not in gap.layers:
+            return _OPEN_CAPACITY
+        return gap.capacity(width, clearance)
+
+    tiles = {(tile.column, tile.row): tile for tile in field.tiles}
+    columns, rows = field.columns, field.rows
+    balls: dict[PadReference, tuple[int, int]] = {}
+    for (column, row), tile in tiles.items():
+        for corner, (dx, dy) in zip(tile.corners, ((0, 0), (1, 0), (1, 1), (0, 1))):
+            if corner is not None:
+                balls[corner] = (column + dx, row + dy)
+    ordered_balls = sorted(pad for pad in balls if pad in signal)
+    ordered_tiles = sorted(tiles)
+    source, sink = 0, 1
+    ball_node = {pad: 2 + index for index, pad in enumerate(ordered_balls)}
+    tile_in = {key: 2 + len(ordered_balls) + 2 * index for index, key in enumerate(ordered_tiles)}
+    flow = _MinCostFlow(2 + len(ordered_balls) + 2 * len(ordered_tiles))
+    for pad in ordered_balls:
+        column, row = balls[pad]
+        node = ball_node[pad]
+        flow.add(source, node, 1, 0)
+        if column in (0, columns - 1) or row in (0, rows - 1):
+            flow.add(node, sink, 1, 0)
+        for key in ((column - 1, row - 1), (column, row - 1), (column - 1, row), (column, row)):
+            if key in tiles:
+                flow.add(node, tile_in[key], 1, 0)
+    through: dict[tuple[int, int], int] = {}
+    for key in ordered_tiles:
+        tile = tiles[key]
+        diagonal = min(capacity(gap) for gap in tile.diagonals)
+        through[key] = flow.add(tile_in[key], tile_in[key] + 1, diagonal, 0)
+        column, row = key
+        # W, N, E, S: the neighbouring tile across each side, or the outside of the field.
+        for side, neighbour in zip(tile.sides, ((column - 1, row), (column, row - 1), (column + 1, row),
+                                                (column, row + 1))):
+            target = tile_in.get(neighbour, sink)
+            flow.add(tile_in[key] + 1, target, capacity(side), 1)
+    flow.run(source, sink)
+    surface = tuple(pad for pad in ordered_balls if flow.used(source, ball_node[pad]))
+    vias = tuple(pad for pad in ordered_balls if pad not in set(surface))
+    load = {key: flow.edge_flow(tile_in[key], through[key]) for key in ordered_tiles}
+    return ArrayEscape(component, layer, surface, vias, MappingProxyType(load))
+
+
+class _MinCostFlow:
+    """Integer min-cost max-flow by successive shortest paths (Dijkstra with potentials).
+
+    Deterministic: edges are kept in insertion order and ties go to the lower node.
+    """
+
+    def __init__(self, nodes: int) -> None:
+        self.graph: list[list[list[int]]] = [[] for _ in range(nodes)]
+
+    def add(self, start: int, end: int, capacity: int, cost: int) -> int:
+        """Add an edge; returns its index in ``start``'s list."""
+        self.graph[start].append([end, capacity, cost, len(self.graph[end]), capacity])
+        self.graph[end].append([start, 0, -cost, len(self.graph[start]) - 1, 0])
+        return len(self.graph[start]) - 1
+
+    def edge_flow(self, start: int, index: int) -> int:
+        edge = self.graph[start][index]
+        return edge[4] - edge[1]
+
+    def used(self, start: int, end: int) -> bool:
+        return any(edge[0] == end and edge[4] and edge[1] == 0 for edge in self.graph[start])
+
+    def run(self, source: int, sink: int) -> tuple[int, int]:
+        from heapq import heappop, heappush
+        size = len(self.graph)
+        potential = [0] * size
+        total_flow = total_cost = 0
+        while True:
+            distance = [None] * size
+            parent: list[tuple[int, int] | None] = [None] * size
+            distance[source] = 0
+            heap = [(0, source)]
+            while heap:
+                cost, node = heappop(heap)
+                if cost > distance[node]:
+                    continue
+                for index, (end, residual, edge_cost, _reverse, _capacity) in enumerate(self.graph[node]):
+                    if residual <= 0:
+                        continue
+                    candidate = cost + edge_cost + potential[node] - potential[end]
+                    if distance[end] is None or candidate < distance[end]:
+                        distance[end] = candidate
+                        parent[end] = (node, index)
+                        heappush(heap, (candidate, end))
+            if distance[sink] is None:
+                return total_flow, total_cost
+            for node in range(size):
+                if distance[node] is not None:
+                    potential[node] += distance[node]
+            push, node = None, sink
+            while node != source:
+                previous, index = parent[node]
+                residual = self.graph[previous][index][1]
+                push = residual if push is None else min(push, residual)
+                node = previous
+            node = sink
+            while node != source:
+                previous, index = parent[node]
+                edge = self.graph[previous][index]
+                edge[1] -= push
+                self.graph[node][edge[3]][1] += push
+                total_cost += push * edge[2]
+                node = previous
+            total_flow += push
 
 
 # --------------------------------------------------------------------------- geometry

@@ -50,7 +50,7 @@ _ROUTING_TAGS = ("segment", "arc", "via")
 def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20_000,
                      passes: int = 2, pitch_mm: str = "1", router: str = "legacy",
                      unified: dict | None = None,
-                     escape_plan: bool = False) -> dict:
+                     escape_plan: bool = False, array_flow: bool = False) -> dict:
     """Import, route with fixed placement, write the routed board and a result record."""
     from .detailed import DetailedRouterOptions
     from .fanout import FanoutOptions
@@ -97,7 +97,8 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
             fanout_options=FanoutOptions(),
             plane_stitch_options=PlaneStitchOptions(maximum_contact_radius_nm=nm_from_mm(5)) if board.zones else None,
             **({"unified_options": _unified_options(unified)} if router == "unified" else {}),
-            **({"escape_plan_options": EscapePlanOptions(two_end_order=True)} if escape_plan else {}),
+            **({"escape_plan_options": EscapePlanOptions(two_end_order=escape_plan, array_flow=array_flow)}
+               if escape_plan or array_flow else {}),
         )
     except Exception as exc:  # noqa: BLE001 - a routing crash is a measured outcome, not a harness error
         record.update(status="route_crashed", error=f"{type(exc).__name__}: {exc}",
@@ -929,6 +930,8 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("board", type=Path)
     route.add_argument("--out", type=Path, required=True)
     route.add_argument("--search-budget", type=int, default=20_000)
+    route.add_argument("--array-flow", action="store_true",
+                       help="choose ball-grid surface escapes by min-cost flow (escape planning E2)")
     route.add_argument("--escape-plan", action="store_true",
                        help="give the ordinary router a two-end escape plan (escape planning E3)")
     route.add_argument("--router", choices=("legacy", "unified"), default="legacy",
@@ -992,7 +995,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"BENCH ERROR: {exc}")
             return 2
         record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router,
-                                  unified=unified, escape_plan=args.escape_plan)
+                                  unified=unified, escape_plan=args.escape_plan, array_flow=args.array_flow)
     elif args.command == "reference":
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":
