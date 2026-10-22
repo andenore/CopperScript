@@ -841,6 +841,9 @@ def _parser() -> argparse.ArgumentParser:
         help="wall-time budget for the unified router; it returns its best result when exceeded")
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
         help="unified router: save its inputs as a state file for replay_unified")
+    board_route_parser.add_argument("--unified-set", action="append", default=[], metavar="OPTION=VALUE",
+        help="unified router: set any UnifiedRouterOptions field (JSON value, else text; repeatable), "
+             "e.g. --unified-set buses_first=true")
     board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
         help="unified router: route decoupling capacitors with everything else instead of first")
     board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
@@ -1088,14 +1091,18 @@ def _apply_routing_profile(args, argv):
 def _unified_options(args):
     if getattr(args, "router", "legacy") != "unified":
         return None
+    from .bench import unified_overrides
     from .unified_router import UnifiedRouterOptions
-    return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
-                                maximum_iterations=args.unified_iterations,
-                                time_budget_s=args.unified_time_budget_s,
-                                power_islands=None if args.power_islands == "off" else args.power_islands,
-                                pre_route_decouplers=not args.unified_no_decouplers,
-                                route_smoothing=not args.no_route_smoothing,
-                                save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
+    options = dict(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
+                   maximum_iterations=args.unified_iterations,
+                   time_budget_s=args.unified_time_budget_s,
+                   power_islands=None if args.power_islands == "off" else args.power_islands,
+                   pre_route_decouplers=not args.unified_no_decouplers,
+                   route_smoothing=not args.no_route_smoothing,
+                   save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
+    # --unified-set reaches every option; it wins over the dedicated flags above.
+    options.update(unified_overrides(getattr(args, "unified_set", ())))
+    return UnifiedRouterOptions(**options)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
