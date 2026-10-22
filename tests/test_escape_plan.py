@@ -541,3 +541,13 @@ def test_pipeline_gives_the_plan_to_escapes_and_router(router, monkeypatch):
         **({"unified_options": UnifiedRouterOptions(maximum_iterations=2)} if router == "unified" else {}))
     assert seen["order"] == plan.net_order and seen["biases"] == plan.layer_biases
     assert plan.surface_pads and plan.surface_pads <= seen["surface_pads"]
+
+
+def test_a_part_without_copper_pads_has_no_pad_field():
+    hole = PhysicalFootprint("hole", (FootprintPad("", Point(0, 0), Size.mm(3, 3), kind=PadKind.NON_PLATED_THROUGH_HOLE,
+                                                   shape=PadShape.CIRCLE, drill=Size.mm(3, 3)),), Size.mm(4, 4))
+    board = two_rows({1: 2, 2: 1})
+    board = PhysicalBoard("holes", board.outline, {**board.footprints, "hole": hole},
+                          (*board.placements, Placement("H1", "hole", Point.mm(20, 25))), board.nets, rules=RULES)
+    assert pad_fields(board, "H1") == ()
+    assert escape_diagnostics(board).pairs  # the rest of the board is still analysed

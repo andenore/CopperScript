@@ -415,7 +415,7 @@ def _pad_fields(board: PhysicalBoard, placement, placed: list[tuple],
 def _spacing_groups(points: list[Point], options: EscapePlanOptions) -> list[list[int]]:
     """Single-linkage groups of footprint-local pad centres, largest first."""
     if len(points) <= 1:
-        return [list(range(len(points)))]
+        return [list(range(len(points)))] if points else []  # a part with no copper pads has no field
 
     def squared(a: Point, b: Point) -> int:
         return (a.x_nm - b.x_nm) ** 2 + (a.y_nm - b.y_nm) ** 2
