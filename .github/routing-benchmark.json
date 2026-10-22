@@ -10,5 +10,5 @@
   "split": "test",
   "shards": 12,
   "board_seconds": 1200,
-  "route_args": []
+  "route_args": ["--escape-plan"]
 }
