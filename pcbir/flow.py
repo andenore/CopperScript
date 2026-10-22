@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from functools import partial
 
 from .critical import CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets
 from .critical_feedback import CriticalPlacementFeedbackResult, improve_critical_placement
@@ -116,12 +117,12 @@ def run_routing_pipeline(
     FAIL result carrying ``stopped_after``. ``initial_placement`` replaces the
     placement/global stage with an earlier, explicitly supplied result.
     ``on_stage(name, value)`` observes completed stages (e.g. for checkpoints).
-    ``escape_plan_options`` with ``two_end_order`` gives the ordinary detailed
-    router a two-end escape plan of the board it routes (escape planning E3).
+    ``escape_plan_options`` with ``two_end_order`` plans crossing bundles on
+    the placed board and gives the plan to escape generation and to the
+    ordinary or unified router (escape planning E3, E4).
     """
     unified_fanout = None
     if unified_options is not None:
-        from functools import partial
         route_ordinary = partial(_route_unified_compat, unified_options,
                                  escape_options=fanout_options)
         # The unified router owns terminal access itself: no package-access
@@ -186,19 +187,27 @@ def run_routing_pipeline(
         critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
         return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
                                      stopped_after="placement")
-    if escape_plan_options is not None and escape_plan_options.two_end_order and unified_options is None:
-        # Plan once on the placed board: fanout keeps kept nets' surface pins
-        # off dogbone vias, and the detailed router follows the plan's order
-        # and layers. The unified router owns its own access and ignores it.
+    if escape_plan_options is not None and escape_plan_options.two_end_order:
+        # Plan once on the placed board: escape generation keeps kept nets'
+        # surface pins off dogbone vias, and the router follows the plan's
+        # order and layers (the ordinary router and the unified router alike).
         from .escape_plan import plan_two_end_escapes
         escape_plan = plan_two_end_escapes(placement.board, escape_plan_options)
         emit(on_progress, "escape_plan", "finished", bundles=len(escape_plan.pairs),
              planned_nets=len(escape_plan.net_order), surface_pads=len(escape_plan.surface_pads))
-        if fanout_options is not None:
-            fanout_options = replace(fanout_options,
-                                     surface_pads=fanout_options.surface_pads | escape_plan.surface_pads)
-        detailed_options = replace(detailed_options, escape_net_order=escape_plan.net_order,
-                                   escape_layer_biases=escape_plan.layer_biases)
+        if unified_options is not None:
+            unified_options = replace(unified_options, escape_net_order=escape_plan.net_order,
+                                      escape_layer_biases=escape_plan.layer_biases)
+            if unified_fanout is not None:
+                unified_fanout = replace(unified_fanout,
+                                         surface_pads=unified_fanout.surface_pads | escape_plan.surface_pads)
+            route_ordinary = partial(_route_unified_compat, unified_options, escape_options=unified_fanout)
+        else:
+            if fanout_options is not None:
+                fanout_options = replace(fanout_options,
+                                         surface_pads=fanout_options.surface_pads | escape_plan.surface_pads)
+            detailed_options = replace(detailed_options, escape_net_order=escape_plan.net_order,
+                                       escape_layer_biases=escape_plan.layer_biases)
     access = None
     preparation, preparation_validation = None, None
     if power_area_options is not None and power_area_options.plane_return_nets:

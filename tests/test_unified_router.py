@@ -339,3 +339,96 @@ def test_replay_cli_routes_saved_inputs_with_overrides(tmp_path, capsys) -> None
     assert main(["replay-unified", str(state), "--set", "no_such_option=1"]) == 2
     assert main(["replay-unified", str(state), "--only", "A", "-o", str(tmp_path / "replay.kicad_pcb")]) == 0
     assert (tmp_path / "replay.kicad_pcb").is_file()
+
+
+def _escape_bias(net: str, rate: int = 200):
+    from pcbir.geometry import Bounds
+    from pcbir.routing_costs import LayerBias
+    # Board coordinates: pads at x = 6 and 20 mm (the fixture adds 3 mm).
+    return LayerBias(net, CopperLayer.FRONT, Bounds(nm_from_mm(9), 0, nm_from_mm(17), nm_from_mm(26)), rate)
+
+
+def _biased_layers(native_kernel: bool, monkeypatch) -> tuple[set, set, list]:
+    import pcbir.native as native
+    import pcbir.unified_router as unified
+    if not native_kernel:
+        monkeypatch.setattr(native, "astar", lambda: None)
+    histories = []
+    original = unified._Router._search_unbiased
+
+    def spy(self, *args, **kwargs):
+        histories.append(float(sum(self.occupancy.history)))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(unified._Router, "_search_unbiased", spy)
+    board = _board({"A": ((3, 10), (17, 10))})
+    plain, _, _ = _route(board)
+    biased, drc, summary = _route(board, escape_layer_biases=(_escape_bias("A"),))
+    assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0
+    middle = {track.layer for track in biased.board.tracks
+              if nm_from_mm(10) < (track.start.x_nm + track.end.x_nm) // 2 < nm_from_mm(16)}
+    return {track.layer for track in plain.board.tracks}, middle, histories
+
+
+def test_escape_bias_moves_a_net_off_the_layer_inside_its_area_python(monkeypatch) -> None:
+    plain, middle, histories = _biased_layers(False, monkeypatch)
+    assert plain == {CopperLayer.FRONT} and middle == {CopperLayer.BACK}
+    # The bias exists only while the net searches: every search starts from untouched history
+    # except for the biased one, which sees it.
+    assert histories[0] == 0.0 and max(histories) > 0.0
+
+
+def test_escape_bias_moves_a_net_off_the_layer_inside_its_area_native(monkeypatch) -> None:
+    import pcbir.native as native
+    if native.astar() is None:
+        import pytest
+        pytest.skip("no native kernel for this platform")
+    plain, middle, _ = _biased_layers(True, monkeypatch)
+    assert plain == {CopperLayer.FRONT} and middle == {CopperLayer.BACK}
+
+
+def test_escape_bias_is_restored_after_each_search() -> None:
+    import pcbir.unified_router as unified
+    board = _board({"A": ((3, 10), (17, 10)), "B": ((3, 14), (17, 14))})
+    global_route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    seen = []
+    original = unified._Router._search_unbiased
+
+    def spy(self, spec, *args, **kwargs):
+        seen.append((spec.name, float(self.occupancy.history.sum()) if self.occupancy.arrays
+                     else float(sum(self.occupancy.history))))
+        return original(self, spec, *args, **kwargs)
+
+    unified._Router._search_unbiased = spy
+    try:
+        route_unified(board, global_route, UnifiedRouterOptions(escape_layer_biases=(_escape_bias("A"),),
+                                                                maximum_iterations=1))
+    finally:
+        unified._Router._search_unbiased = original
+    assert any(name == "A" and total > 0 for name, total in seen)
+    assert all(total == 0.0 for name, total in seen if name == "B")
+
+
+def test_planned_nets_negotiate_first() -> None:
+    import pcbir.unified_router as unified
+    board = _board({"A": ((3, 10), (17, 10)), "B": ((3, 14), (17, 14)), "C": ((3, 18), (17, 18))})
+    global_route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    order = []
+    original = unified._Router._route_net
+
+    def spy(self, spec, present):
+        order.append(spec.name)
+        return original(self, spec, present)
+
+    unified._Router._route_net = spy
+    try:
+        route_unified(board, global_route, UnifiedRouterOptions(escape_net_order=("C", "A"), maximum_iterations=1))
+    finally:
+        unified._Router._route_net = original
+    assert order[:3] == ["C", "A", "B"]
+
+
+def test_negative_escape_bias_is_refused() -> None:
+    import pytest
+    with pytest.raises(ValueError):
+        UnifiedRouterOptions(escape_layer_biases=(_escape_bias("A", rate=-1),))

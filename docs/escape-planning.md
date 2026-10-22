@@ -4,8 +4,9 @@ The implemented contract of `pcbir/escape_plan.py`. The steps, research and
 open questions are in the [escape planning plan](escape-planning-plan.md);
 this page describes only what exists.
 
-Status: steps E0 (diagnostics), E1 (pad fields and channel model) and E3
-(two-end ordering and layer assignment). Diagnostics never change routing;
+Status: steps E0 (diagnostics), E1 (pad fields and channel model), E3
+(two-end ordering and layer assignment) and E4 (the unified router and
+`route-board`). Diagnostics never change routing;
 the E3 plan does only when `EscapePlanOptions(two_end_order=True)` is passed
 (off by default).
 
@@ -161,9 +162,15 @@ An `EscapePlan` carries what the routers use:
 
 | Field | Used by | Effect |
 |---|---|---|
-| `surface_pads` | Fanout (`FanoutOptions.surface_pads`) | A kept net's surface pin tries a checked surface escape before a dogbone via, so the bundle's channel is not walled by vias |
-| `net_order` | Detailed router (`DetailedRouterOptions.escape_net_order`) | Planned nets route first in passes 1 and 2: moved nets, then kept nets from the outside of the bundle in, then unmoved nets |
-| `layer_biases` | Detailed router (`DetailedRouterOptions.escape_layer_biases`) | Inside the corridor a moved net pays `layer_bias_rate` (20 cost units per mm; 10 doubles the cost of track) on any layer but its own, and its corridor searches cover every allowed layer, not only its global guide's |
+| `surface_pads` | Fanout (`FanoutOptions.surface_pads`), for the ordinary path and the unified router's escape reservations | A kept net's surface pin tries a checked surface escape before a dogbone via, so the bundle's channel is not walled by vias; a moved net keeps its dogbone, which is its layer change |
+| `net_order` | Detailed router (`DetailedRouterOptions.escape_net_order`); unified router (`UnifiedRouterOptions.escape_net_order`) | Planned nets route first: in passes 1 and 2 of the detailed router, and in the unified router's negotiation order. Moved nets, then kept nets from the outside of the bundle in, then unmoved nets |
+| `layer_biases` | Detailed router (`DetailedRouterOptions.escape_layer_biases`); unified router (`UnifiedRouterOptions.escape_layer_biases`) | Inside the corridor a moved net pays `layer_bias_rate` per mm on any layer but its own (detailed router: added to the planar edge cost; unified router: `rate/10` added to those nodes' history while that net searches). In the detailed router a moved net's corridor searches also cover every allowed layer, not only its global guide's |
+
+`layer_bias_rate` is 0 by default: the dogbones already carry the layer
+assignment, and a bias trades planar detours for vias. On D3 a rate of 20
+added 33 vias to boards that were already clean (0035: 0 → 9, 0060: 0 → 6);
+locally, on seven crossing boards, rate 0 left 4 nets open with 27 vias
+against 6 open with 32 vias without the plan (rate 20: 3 open, 58 vias).
 
 Kept nets carry no layer bias: they start on the planar layer anyway, and at
 a through-hole end every layer is theirs. Holding them to one layer there
@@ -171,10 +178,12 @@ squeezes the bundle through that layer's gaps. Biases are penalties, never
 discounts, so the search heuristic stays admissible.
 
 `run_routing_pipeline(..., escape_plan_options=...)` plans once on the
-placed board before package access, then gives fanout and the ordinary
-detailed router the plan; detailed-feedback trials re-plan their moved
-board. The unified router owns its own access and does not read the plan
-yet (step E4). `python -m pcbir.bench route --escape-plan` routes a board
+placed board before package access, then gives escape generation and the
+ordinary or unified router the plan; detailed-feedback trials re-plan their
+moved board. `copper route-board --escape-plan` turns it on and adds the plan
+to the report as `escape_plan`. The global router does not read the plan:
+global routing runs inside placement, before the placed board exists to plan
+from. `python -m pcbir.bench route --escape-plan` routes a board
 with the plan and records it under `escape_plan`, with `moved_on_layer`: for
 each moved net, whether its routed copper used the planned layer inside the
 corridor.
