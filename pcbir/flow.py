@@ -428,6 +428,14 @@ def run_routing_pipeline(
         bga = plan_bga_fanouts(critical.board, array_plans=array_plans)
         critical = replace(critical, board=bga.board)
         emit(on_progress, "bga_fanout", "finished", **bga.report())
+        if getattr(unified_options, "save_inputs_path", None):
+            # Beside the router inputs: the fanout copper, so a replay can
+            # take it out and fan out again (replay_unified(bga_fanout=...)).
+            from .state_codec import save_state
+            save_state(unified_options.save_inputs_path + ".bga.json",
+                       {"tracks": bga.tracks, "vias": bga.vias, "array_flow": array_plans is not None,
+                        "escape_plan_options": escape_plan_options},
+                       note="bga_fanout output")
     plane_stitch = access.plane_stitch if access else (
         stitch_zone_pads(critical.board, plane_stitch_options)
         if plane_stitch_options else None

@@ -736,3 +736,31 @@ def test_a_part_without_copper_pads_has_no_pad_field():
                           (*board.placements, Placement("H1", "hole", Point.mm(20, 25))), board.nets, rules=RULES)
     assert pad_fields(board, "H1") == ()
     assert escape_diagnostics(board).pairs  # the rest of the board is still analysed
+
+
+def test_replay_takes_the_saved_fanout_out_and_fans_out_again(tmp_path):
+    from pcbir.bga_fanout import plan_bga_fanouts
+    from pcbir.state_codec import save_state
+    from pcbir.unified_router import UnifiedRouterOptions, replay_unified, route_unified
+    board = ball_grid(6, "0.45")
+    fanout = plan_bga_fanouts(board)
+    assert len(fanout.vias) == 4  # the inner 2x2, deeper than two rings
+    state = tmp_path / "inputs.json"
+    global_route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    route_unified(fanout.board, global_route, UnifiedRouterOptions(save_inputs_path=str(state), maximum_iterations=2))
+    save_state(str(state) + ".bga.json", {"tracks": fanout.tracks, "vias": fanout.vias, "array_flow": False,
+                                          "escape_plan_options": None})
+    again = replay_unified(state, only_components=frozenset({"U"}), bga_fanout={}, maximum_iterations=2)
+    assert set(fanout.vias) <= set(again.board.vias)
+    events = []
+    replay_unified(state, bga_fanout={"surface_rings": 1}, maximum_iterations=2,
+                   on_progress=lambda *args, **kwargs: events.append(args))
+    (report,) = [e[2] for e in events if e and e[0] == "bga_fanout"]
+    # The saved four vias are taken out first: one ring on the surface fans out the inner 4x4.
+    assert report["fanned"] == 16 and report["surface"] == 20
+    import json
+    from pcbir.cli import main
+    assert main(["replay-unified", str(state), "--component", "U", "--fanout-set", "surface_rings=1",
+                 "--set", "maximum_iterations=2", "--report", str(tmp_path / "replay.json")]) == 0
+    assert json.loads((tmp_path / "replay.json").read_text(encoding="utf-8"))["fanout"] == {"surface_rings": 1}
+    assert main(["replay-unified", str(state), "--fanout-set", "depth=1"]) == 2

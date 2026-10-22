@@ -2503,17 +2503,42 @@ def route_unified(
 
 
 def replay_unified(path, on_progress: ProgressCallback | None = None, *,
-                   only_nets: frozenset[str] | None = None, **overrides) -> DetailedRoutingResult:
+                   only_nets: frozenset[str] | None = None, only_components: frozenset[str] | None = None,
+                   bga_fanout: dict | None = None, **overrides) -> DetailedRoutingResult:
     """Route the inputs saved by ``save_inputs_path`` again, with option overrides.
 
-    ``only_nets`` narrows the saved net selection (to study a net alone).
-    Without the pipeline's escape seeder (repair rounds run unseeded).
+    ``only_nets`` narrows the saved net selection (to study a net alone);
+    ``only_components`` to the nets with a pad on these parts (a package's
+    escape as a fast case: the other nets keep only their saved copper).
+    ``bga_fanout`` (keyword arguments of ``plan_bga_fanouts``, ``{}`` for
+    its defaults) takes the saved ball-grid fanout copper out (``PATH.bga.json``)
+    and fans out again first, re-planning array escapes when the run did.
+    Stages between fanout and routing (plane stitch, power areas) keep their
+    saved result. Without the pipeline's escape seeder (repair rounds run
+    unseeded).
     """
     from .state_codec import load_state
     saved = load_state(path)
     options = replace(saved["options"], **overrides)
+    if only_components is not None:
+        touching = frozenset(net.name for net in saved["board"].nets
+                             if any(pad.component in only_components for pad in net.pads))
+        only_nets = touching if only_nets is None else only_nets | touching
     if only_nets is not None:
         saved["only_nets"] = only_nets if saved["only_nets"] is None else saved["only_nets"] & only_nets
+    if bga_fanout is not None:
+        from .bga_fanout import plan_bga_fanouts
+        from .escape_plan import plan_array_escapes
+        fanout = load_state(str(path) + ".bga.json")
+        tracks, vias = set(fanout["tracks"]), set(fanout["vias"])
+        board = saved["board"]
+        board = replace(board, tracks=tuple(t for t in board.tracks if t not in tracks),
+                        vias=tuple(v for v in board.vias if v not in vias))
+        plans = ({item.component: item for item in plan_array_escapes(board, fanout["escape_plan_options"])}
+                 if fanout["array_flow"] else None)
+        bga = plan_bga_fanouts(board, array_plans=plans, **bga_fanout)
+        emit(on_progress, "bga_fanout", "finished", **bga.report())
+        saved["board"] = bga.board
     return route_unified(saved["board"], saved["global_route"], options,
                          fanout_accesses=saved["fanout_accesses"],
                          fanout_created_vias=saved["fanout_created_vias"],

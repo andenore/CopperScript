@@ -187,16 +187,27 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
             overrides[name] = json.loads(text)
         except json.JSONDecodeError:
             overrides[name] = text
+    fanout = None
+    if args.refanout or args.fanout_overrides:
+        fanout = {}
+        for item in args.fanout_overrides:
+            name, separator, text = item.partition("=")
+            if not separator or name not in ("surface_rings", "stub_width_nm"):
+                print(f"REPLAY ERROR: unknown fanout option {name!r}; expected surface_rings or stub_width_nm")
+                return 2
+            fanout[name] = json.loads(text)
     started = perf_counter()
     try:
-        result = replay_unified(args.state, only_nets=frozenset(args.only) if args.only else None, **overrides)
+        result = replay_unified(args.state, only_nets=frozenset(args.only) if args.only else None,
+                                only_components=frozenset(args.component) if args.component else None,
+                                bga_fanout=fanout, **overrides)
     except (StateError, OSError, ValueError) as exc:
         print(f"REPLAY ERROR: {exc}")
         return 2
     seconds = round(perf_counter() - started, 1)
     drc = run_physical_drc(result.board)
     summary = connection_summary(result.board, drc)
-    document = {"state": str(args.state), "overrides": overrides, "seconds": seconds,
+    document = {"state": str(args.state), "overrides": overrides, "fanout": fanout, "seconds": seconds,
                 "unrouted": {net.net: list(net.diagnostics) for net in sorted(result.nets, key=lambda n: n.net)
                              if not net.connected}, **summary}
     text = json.dumps(document, indent=1, sort_keys=True)
@@ -553,6 +564,12 @@ def _parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("--report", type=Path, help="also write the summary JSON here")
     replay_parser.add_argument("--only", action="append", default=[], metavar="NET",
         help="route only this net (repeatable); the other nets keep their saved copper, if any")
+    replay_parser.add_argument("--component", action="append", default=[], metavar="REF",
+        help="route only the nets with a pad on this part (repeatable; adds to --only)")
+    replay_parser.add_argument("--refanout", action="store_true",
+        help="take the saved ball-grid fanout out (STATE.bga.json) and fan out again first")
+    replay_parser.add_argument("--fanout-set", action="append", default=[], metavar="OPTION=VALUE",
+        dest="fanout_overrides", help="plan_bga_fanouts option for --refanout (surface_rings, stub_width_nm)")
     replay_parser.add_argument("-o", "--output", type=Path, help="write the routed board as .kicad_pcb (for copper view)")
     from .design_query import QUERY_KINDS
     query_parser = subparsers.add_parser(
