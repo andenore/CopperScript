@@ -149,8 +149,8 @@ def test_compare_reports_gained_and_lost_clean_boards():
 
 def test_committed_baseline_matches_the_published_result():
     baseline = json.loads((Path(__file__).parents[1] / ".github/routing-benchmark-baseline.json").read_text())
-    assert len(baseline["boards"]) == 99
-    assert sum(item["clean_pass"] for item in baseline["boards"].values()) == 93
+    assert len(baseline["boards"]) == 109  # D3-A 99, D3-B 10
+    assert sum(item["clean_pass"] for item in baseline["boards"].values()) == 100  # D3-A 93, D3-B 7
 
 
 def test_baseline_round_trips_through_the_published_record():

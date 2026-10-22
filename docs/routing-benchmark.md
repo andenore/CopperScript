@@ -173,3 +173,4 @@ spacing findings on imported placements no longer block package access (see
 | Plan 3.2: wide net classes neck down at narrower lands | 82 | 0078 clean; full-vertical identical |
 | Plan 3.4: every separate land of a pad number is routed unless declared internally joined | 89 | 0013, 0045, 0067, 0069, 0085, 0089 and 0090 clean; full-vertical identical |
 | Routing refactor merged (PR #15) | 91 | 0068 and 0099 clean; one inaccessible pin no longer blocks a whole board |
+| Escape planning E0: D3-B tier added (D3-A unchanged) | 93 + 7 | D3-B: 0113, 0144, 0174, 0260, 0316, 0344, 0376 clean; 0203, 0232, 0288 not |

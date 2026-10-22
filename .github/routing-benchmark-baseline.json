@@ -890,8 +890,98 @@
    "unrouted": 0,
    "vias": 4,
    "wirelength_mm": 216.752
+  },
+  "0113_maytal_Maytal": {
+   "clean_pass": true,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 21,
+   "wirelength_mm": 556.616
+  },
+  "0144_ottawa-badges-2016_ottawa-badge-tagger-2016": {
+   "clean_pass": true,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 16,
+   "wirelength_mm": 352.786
+  },
+  "0174_sensorboard_DiffIR": {
+   "clean_pass": true,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 16,
+   "wirelength_mm": 310.314
+  },
+  "0203_MOD-MPU9150_mod-mpu9150": {
+   "clean_pass": false,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 12,
+   "unrouted": 1,
+   "vias": 16,
+   "wirelength_mm": 224.178
+  },
+  "0232_ATtiny461Breakout_ATTiny461DevBoard": {
+   "clean_pass": false,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 14,
+   "unrouted": 2,
+   "vias": 10,
+   "wirelength_mm": 232.031
+  },
+  "0260_NiMH-Charger_NiMH Charger": {
+   "clean_pass": true,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 11,
+   "wirelength_mm": 975.565
+  },
+  "0288_raspberrypi-3-usb-hub_usb_hub": {
+   "clean_pass": false,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 8,
+   "unrouted": 0,
+   "vias": 10,
+   "wirelength_mm": 882.947
+  },
+  "0316_kicad-workshop_fancyboard": {
+   "clean_pass": true,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 33,
+   "wirelength_mm": 645.792
+  },
+  "0344_mavbridge_mavbridge": {
+   "clean_pass": true,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 49,
+   "wirelength_mm": 682.157
+  },
+  "0376_cat-trainer_teensy_base_pcb": {
+   "clean_pass": true,
+   "drc_errors": 0,
+   "status": "routed",
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 19,
+   "wirelength_mm": 1078.109
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run 39634433599 on 34e0d41 (plan 3.6 edge pads), stock KiCad 9.0.9"
+ "source": "routing-benchmark run 39634433599 on 34e0d41 (plan 3.6 edge pads), stock KiCad 9.0.9; D3-B boards from routing-benchmark run 39748603644 (D3-A entries unchanged)"
 }

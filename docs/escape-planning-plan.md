@@ -1,6 +1,6 @@
 # Escape planning: research and integration plan
 
-Status: accepted plan, not started (2026-10-21). Background research lives in the
+Status: accepted plan, in progress (E0, E1, E3, E4 implemented; 2026-10-22). Background research lives in the
 Copper project notes (SOTA review Tier 2.1, D3-A fix plan); this file is the
 working copy for contributors and agents in this repository.
 
@@ -8,11 +8,11 @@ working copy for contributors and agents in this repository.
 
 | Step | Branch / PR | Result |
 |---|---|---|
-| E0 | | |
-| E1 | | |
+| E0 | #24 | Diagnostics only; D3-A routing identical (93 clean). D3-B added: 7 of 10 clean. Remaining D3 failures by cause: two-end crossings 6 of 17 unrouted nets (every failing signal net on 0048, 0050, 0051), channel overflow 1 (0024). CopperProbe: 12 of 28 open nets are the ADC bus bundle (U_ADC–U_USB, 72 crossing pairs). So E3 came before E2 |
+| E1 | #25 (re-landed in `claude/plan-escape-e1-e3`) | Model only; routing identical |
 | E2 | | |
-| E3 | | |
-| E4 | | |
+| E3 | #26 (re-landed in `claude/plan-escape-e1-e3`) | Opt-in (`--escape-plan`). Off: routing identical. On (CI, bias 20): no clean board lost; 0050 3 → 2 and 0051 3 → 1 unrouted; +33 vias on boards already clean |
+| E4 | `claude/plan-escape-e4-router-integration` | Unified router and `route-board --escape-plan`; plan stays opt-in. Ladder: no completion change; vias both ways (cm4 84 → 69, led-ring 36 → 52). Global access bias not done |
 | E5 | | |
 | E6 | | |
 
