@@ -77,9 +77,12 @@ All in `pcbir/unified_router.py` unless noted; options are on
 - Neck exits: a node legal only at neck width is never left towards a node
   outside its breakout region (Python search and `native/astar.c`; kernels
   rebuilt for Linux and Windows).
-- Buses first (`buses_first`, **off**): members of a length-match group
-  negotiate among themselves first. CopperProbe replays: +2.1 points on an
-  earlier placement; a tie with two more max-length errors on the main board.
+- Buses first (`buses_first`, **on**) with bus skew tuning
+  (`bus_skew_tuning`, **on**): members of a length-match group negotiate
+  among themselves first, then short members are tuned within their
+  declared `tuning_amplitude_limit` (see [escape planning](escape-planning.md#bus-skew-e5-unified-router)).
+  A board without match groups routes identical copper (D3 and the small
+  ladder). CopperProbe replay: 3 of 12 ADC lines open instead of 12.
 - Length priority (`length_priority`, **off**): a max_length net that detours
   too far retakes its shortest path. It cost 2 points on CopperProbe
   (0.873 → 0.852), so it is off until it is smarter.
@@ -94,12 +97,12 @@ All in `pcbir/unified_router.py` unless noted; options are on
 
 ## Open items, in priority order
 
-1. **Buses first needs length-aware bus routing.** Replays of the CopperProbe
-   main board (same router input): both off 0.873, 30 opens, DRC 1; buses
-   first on 0.873, 30 opens, DRC 3 (11 of 12 ADC lines route, but some
-   exceed max_length 35 mm and other nets fail instead). On an earlier
-   placement it gained 2 points. `buses_first` is therefore **off** by
-   default. Combine it with a length budget for bus members, then retest.
+1. **Bus skew needs declared tuning amplitudes.** `buses_first` and
+   `bus_skew_tuning` are on by default. Routed alone, the CopperProbe ADC
+   members span 26.5 to 32.4 mm against a 5 mm `max_skew`; its rules
+   declare no `tuning_amplitude_limit`, so the router lists each short
+   member in `bus_skew` and DRC reports the skew. That amplitude is the
+   consumer's design decision.
 2. **CopperProbe ADC bus (about 11 of the 30 opens).** The data lines route
    alone on F.Cu with no via, but lose the corridor south of the FX10 to
    other nets (max_vias = 2, max_length = 35 mm). Next lever: an escape plan

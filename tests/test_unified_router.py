@@ -285,6 +285,16 @@ def test_bus_members_route_first_and_are_reported_as_routed() -> None:
     assert by_name["D0"].connected and by_name["D1"].connected and by_name["D0"].track_count > 0
 
 
+def test_bus_defaults_leave_a_board_without_match_groups_unchanged() -> None:
+    assert UnifiedRouterOptions().buses_first and UnifiedRouterOptions().bus_skew_tuning
+    board = _board({"D0": ((2, 7), (18, 7)), "D1": ((2, 9), (18, 9)), "X": ((10, 2), (10, 16))})
+    global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    default = route_unified(board, global_route, UnifiedRouterOptions())
+    off = route_unified(board, global_route, UnifiedRouterOptions(buses_first=False, bus_skew_tuning=False))
+    assert default.board.tracks == off.board.tracks and default.board.vias == off.board.vias
+    assert "bus_skew" not in default.board.metadata
+
+
 def test_bus_members_over_their_length_leave_the_bus_phase_and_still_route() -> None:
     from pcbir.physical import NetMatchGroup, NetRoutingRule, RouteKind
     board = _board({"D0": ((2, 7), (18, 7)), "D1": ((2, 9), (18, 9)), "X": ((10, 2), (10, 16))})
@@ -527,8 +537,10 @@ def test_buses_first_with_skew_tuning_reports_untunable_members_on_the_board() -
     result = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_skew_tuning=True))
     assert all(net.connected for net in result.nets)
     assert "no tuning_amplitude_limit is declared" in result.board.metadata["bus_skew"]
-    plain = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True))
+    plain = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_skew_tuning=False))
     assert "bus_skew" not in plain.board.metadata
+    default = route_unified(board, global_route, UnifiedRouterOptions())
+    assert default.board.metadata["bus_skew"] == result.board.metadata["bus_skew"]
 
 
 def test_tuned_bus_copper_survives_route_smoothing() -> None:
@@ -540,7 +552,8 @@ def test_tuned_bus_copper_survives_route_smoothing() -> None:
     global_route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
     length = lambda result, net: sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
                                      for t in result.board.tracks if t.net == net)
-    plain = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, route_smoothing=True))
+    plain = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_skew_tuning=False,
+                                                                    route_smoothing=True))
     assert length(plain, "B") - length(plain, "A") > nm_from_mm(2)
     tuned = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_skew_tuning=True,
                                                                     route_smoothing=True))

@@ -94,11 +94,11 @@ class UnifiedRouterOptions:
     # pad counted as touching a pour may have been walled off; reroute it.
     pour_recheck: bool = True
     # Route members of length-match groups (buses) among themselves first;
-    # the other nets then route around their committed copper. Off by
-    # default: on the CopperProbe main board it ties on completion (0.873)
-    # but its bus detours break max_length (DRC 1 -> 3); on an earlier
-    # placement it gained 2 points. Needs length-aware bus routing first.
-    buses_first: bool = False
+    # the other nets then route around their committed copper. A board
+    # without length-match groups is unaffected (D3 and the small ladder
+    # route identical copper); on CopperProbe 3 of 12 ADC lines stay open
+    # instead of 12. bus_skew_tuning then handles the members' skew.
+    buses_first: bool = True
     # With buses_first: bus members contest only each other, so they retake
     # their shortest path when a detour breaks max_length (as length_priority),
     # and only members within max_length keep their bus copper; the rest
@@ -106,8 +106,9 @@ class UnifiedRouterOptions:
     bus_length_budget: bool = False
     # With buses_first: lengthen short members of a length-match group over
     # its max_skew with checked bumps or serpentines, as the critical router
-    # does, only for nets that declare tuning_amplitude_limit.
-    bus_skew_tuning: bool = False
+    # does, only for nets that declare tuning_amplitude_limit; members left
+    # over the limit are listed in the board's bus_skew metadata.
+    bus_skew_tuning: bool = True
     # A net with a max_length that detours too far retakes its shortest path.
     # Off by default: on CopperProbe it cost 2 points of completion (0.873 ->
     # 0.852); the pushed-aside nets lose more than the length rule gains.
