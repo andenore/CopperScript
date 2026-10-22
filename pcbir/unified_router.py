@@ -68,7 +68,13 @@ _MOVES = ((1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
 @dataclass(frozen=True, slots=True)
 class UnifiedRouterOptions:
     pitch_nm: int | None = None    # None: 0.25 mm, finer where a ball grid needs it
-    maximum_iterations: int = 40
+    maximum_iterations: int = 150
+    # Stop negotiating once this many iterations in a row have not improved
+    # the best result (0: run to maximum_iterations). Boards that converge
+    # stop when conflict-free; boards that cannot stop early. Conflicts can
+    # plateau for dozens of iterations before the last ones clear, so a short
+    # limit cuts off negotiations that would converge.
+    stall_iterations: int = 60
     present_factor: float = 0.6
     present_growth: float = 1.5
     history_increment: float = 0.8
@@ -146,6 +152,8 @@ class UnifiedRouterOptions:
             raise ValueError("unified router pitch and iterations must be positive")
         if any(bias.rate < 0 for bias in self.escape_layer_biases):
             raise ValueError("escape layer biases cannot be negative")
+        if self.stall_iterations < 0:
+            raise ValueError("unified router stall iterations must not be negative")
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +188,17 @@ def _spine_distance(spine: tuple[Point, ...], px, py):
         inside_pos &= cross >= 0
         inside_neg &= cross <= 0
     return np.where(inside_pos | inside_neg, 0.0, best)
+
+
+def _polygon_distance(vertices: tuple[Point, ...], px, py):
+    """Distance from points to a simple polygon of any shape (0 inside)."""
+    xs = [float(p.x_nm) for p in vertices]
+    ys = [float(p.y_nm) for p in vertices]
+    best = None
+    for i in range(len(vertices)):
+        d = _segment_distance(px, py, xs[i], ys[i], xs[(i + 1) % len(xs)], ys[(i + 1) % len(ys)])
+        best = d if best is None else np.minimum(best, d)
+    return np.where(_polygon_inside(vertices, px, py), 0.0, best)
 
 
 def _polygon_inside(vertices: tuple[Point, ...], px, py):
@@ -250,6 +269,7 @@ class _Obstacle:
     is_pad: bool = False
     blocks_tracks: bool = True
     blocks_vias: bool = True
+    polygon: bool = False      # spine is a simple polygon, not a convex hull
 
 
 class _Rasters:
@@ -316,7 +336,9 @@ class _Rasters:
         key = (size, drill, clearance)
         if key not in self._via:
             g = self.grid
-            stacked = self._build(size / 2, clearance, self.px, self.py, self.inside_nodes,
+            # Copper spacing, or the drill's hole clearance to copper if larger.
+            half = max(size / 2, drill / 2 + self.board.rules.minimum_hole_clearance_nm - clearance)
+            stacked = self._build(half, clearance, self.px, self.py, self.inside_nodes,
                                   self.edge_nodes, for_via=True, as_array=True)
             owner = stacked[0].copy()
             for layer in range(1, g.nl):
@@ -368,7 +390,9 @@ class _Rasters:
                 continue
             wx = px[iy0:iy1 + 1, ix0:ix1 + 1]
             wy = py[iy0:iy1 + 1, ix0:ix1 + 1]
-            hit = _spine_distance(item.spine, wx, wy) < reach
+            distance = (_polygon_distance(item.spine, wx, wy) if item.polygon
+                        else _spine_distance(item.spine, wx, wy))
+            hit = distance < reach
             if not hit.any():
                 continue
             for layer in item.layers:
@@ -640,6 +664,15 @@ class _Router:
             obstacles.append(_Obstacle(
                 _FOREIGN, tuple(layer_index[l] for l in layers if l in layer_index),
                 shape.spine, shape.radius_nm, 0))
+        # A routing-reserved zone keeps other nets' tracks out, as the exact
+        # check does; its own net and every net's vias may still enter it.
+        reservations = index.zone_reservations
+        for zone, outer in reservations.zones:
+            floor = max(reservations.minimum_clearance_nm, zone.clearance_nm or 0,
+                        reservations.clearances.get(zone.net, 0))
+            obstacles.append(_Obstacle(
+                self._net_id(zone.net), tuple(layer_index[l] for l in zone.layers if l in layer_index),
+                outer.spine, outer.radius_nm, floor, blocks_vias=False, polygon=True))
         holes = [(_FOREIGN if hole.net.startswith("<") else self._net_id(hole.net),
                   float(hole.position.x_nm), float(hole.position.y_nm), float(hole.radius_nm))
                  for hole in index._holes]
@@ -1297,8 +1330,12 @@ class _Router:
         # the exact check allows (each claimed only a default-width neighbour).
         neighbour = max(self.default_width, spec.width)
         track_radius = (spec.width / 2 + spec.clearance + neighbour / 2) / g.pitch
-        via_radius = (spec.via_size / 2 + spec.clearance + self.default_width / 2) / g.pitch
-        via_via_radius = (spec.via_size + spec.clearance) / g.pitch
+        # Each via's copper keeps the clearance and its drill the hole clearance
+        # from foreign copper, as the exact check requires; the larger decides.
+        via_reach = max(spec.via_size / 2 + spec.clearance,
+                        spec.via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
+        via_radius = (via_reach + self.default_width / 2) / g.pitch
+        via_via_radius = (via_reach + spec.via_size / 2) / g.pitch
         length = 0.0
         for path in route.paths:
             for a, b in zip(path, path[1:]):
@@ -1757,6 +1794,7 @@ class _Router:
         routes = self.routes
         present = self.present
         best_snapshot = None
+        best_iteration = 0
         pending = [s.name for s in specs if only is None or s.name in only or s.name not in routes]
         by_name = {s.name: s for s in specs}
         iteration = 0
@@ -1780,9 +1818,12 @@ class _Router:
             score = (len(failed) + len(conflicts), sum(r.length for r in routes.values()))
             if best_snapshot is None or score < best_snapshot[0]:
                 best_snapshot = (score, dict(routes), set(conflicts))
+                best_iteration = iteration
             emit(self.on_progress, "unified_iteration", "finished", iteration=iteration,
                  conflicted=len(conflicts), failed=len(failed))
             if not conflicts:
+                break
+            if options.stall_iterations and iteration - best_iteration >= options.stall_iterations:
                 break
             if deadline is not None and perf_counter() > deadline:
                 break

@@ -308,3 +308,18 @@ def test_unconnected_global_routes_explain_a_blocked_access_stage(run_dir, tmp_p
     assert "GND" not in global_issue.nets
     assert find_issue(issues, "R1").caused_by == "G1"
     assert [i.id for i in filter_issues(issues, stage="global")] == ["G1"]
+
+
+def test_run_folder_picks_the_route_report_over_other_records(tmp_path):
+    # A route-board run also writes board.editor-intent.json and
+    # board.via-process.json, which sort first; the route report is written
+    # with sorted keys, so its schema sits past the first 4 KB.
+    (tmp_path / "board.editor-intent.json").write_text(json.dumps(
+        {"schema": "copperscript-editor-route-intent/v0.1"}), encoding="utf-8")
+    (tmp_path / "board.via-process.json").write_text(json.dumps(
+        {"schema": "copperscript-via-process/v0.1"}), encoding="utf-8")
+    report = {"detailed": {"nets": [{"net": f"N{i}", "padding": "x" * 64} for i in range(200)]},
+              "routing_complete": True, "schema": "copperscript-route-board/v0.1", "status": "pass"}
+    (tmp_path / "route.json").write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
+    assert (tmp_path / "route.json").read_text(encoding="utf-8").find('"schema"') > 4096
+    assert load_run(tmp_path).report_path == tmp_path / "route.json"
