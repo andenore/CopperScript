@@ -319,7 +319,9 @@ class _Rasters:
         key = (size, drill, clearance)
         if key not in self._via:
             g = self.grid
-            stacked = self._build(size / 2, clearance, self.px, self.py, self.inside_nodes,
+            # Copper spacing, or the drill's hole clearance to copper if larger.
+            half = max(size / 2, drill / 2 + self.board.rules.minimum_hole_clearance_nm - clearance)
+            stacked = self._build(half, clearance, self.px, self.py, self.inside_nodes,
                                   self.edge_nodes, for_via=True, as_array=True)
             owner = stacked[0].copy()
             for layer in range(1, g.nl):
@@ -1311,8 +1313,12 @@ class _Router:
         # the exact check allows (each claimed only a default-width neighbour).
         neighbour = max(self.default_width, spec.width)
         track_radius = (spec.width / 2 + spec.clearance + neighbour / 2) / g.pitch
-        via_radius = (spec.via_size / 2 + spec.clearance + self.default_width / 2) / g.pitch
-        via_via_radius = (spec.via_size + spec.clearance) / g.pitch
+        # Each via's copper keeps the clearance and its drill the hole clearance
+        # from foreign copper, as the exact check requires; the larger decides.
+        via_reach = max(spec.via_size / 2 + spec.clearance,
+                        spec.via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
+        via_radius = (via_reach + self.default_width / 2) / g.pitch
+        via_via_radius = (via_reach + spec.via_size / 2) / g.pitch
         length = 0.0
         for path in route.paths:
             for a, b in zip(path, path[1:]):
