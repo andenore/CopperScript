@@ -14,17 +14,26 @@ Usage: python -m pcbir.bench route BOARD.kicad_pcb --out DIR
        python -m pcbir.bench score DIR --kicad-cli kicad-cli
        python -m pcbir.bench summarize RESULTS_ROOT
        python -m pcbir.bench causes RESULTS_ROOT    (unrouted nets per cause class)
+       python -m pcbir.bench run BOARDS --out RESULTS --router unified --kicad-cli kicad-cli --pcbnew-python python
+       python -m pcbir.bench versus LEGACY/baseline.json UNIFIED/baseline.json --names legacy unified
+
+``run`` is the local benchmark: it routes and scores every prepared board in
+BOARDS (``BOARDS/<id>/processed_v9_guide_v3.kicad_pcb`` with its
+``.kicad_pro``, as the CI's ``bench-boards`` artifact holds them) in parallel,
+each in its own process under a time limit, and writes per-board records,
+``summary.md``, ``baseline.json`` and ``record.txt`` like the CI run.
 """
 from __future__ import annotations
 
 import argparse
 from dataclasses import replace
 import json
-from math import hypot
+from math import atan2, degrees, hypot
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 from .escape_plan import escape_diagnostics
@@ -32,13 +41,15 @@ from .physical import PhysicalBoard, nm_from_mm
 
 RESULT_SCHEMA = "copperscript-bench-board/v0.1"
 ROUTED_NAME = "routed.kicad_pcb"
+PREPARED_NAME = "processed_v9_guide_v3.kicad_pcb"  # PCBWorld's prepared board, as the CI collects it
 _ROUTING_TAGS = ("segment", "arc", "via")
 
 
 # --------------------------------------------------------------------------- routing
 
 def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20_000,
-                     passes: int = 2, pitch_mm: str = "1", router: str = "legacy") -> dict:
+                     passes: int = 2, pitch_mm: str = "1", router: str = "legacy",
+                     unified: dict | None = None) -> dict:
     """Import, route with fixed placement, write the routed board and a result record."""
     from .detailed import DetailedRouterOptions
     from .fanout import FanoutOptions
@@ -51,6 +62,8 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
     out_dir.mkdir(parents=True, exist_ok=True)
     record: dict = {"schema": RESULT_SCHEMA, "board": out_dir.name, "source": str(board_path),
                     "status": "incomplete", "router": router}
+    if unified:
+        record["unified_options"] = dict(unified)
     _save(out_dir, record)  # a run killed by its time limit stays "incomplete"
     started = time.perf_counter()
     try:
@@ -82,7 +95,7 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
                 repair_budget_multiplier=10, defer_zone_nets=bool(board.zones), enclosure_repair_nets=12),
             fanout_options=FanoutOptions(),
             plane_stitch_options=PlaneStitchOptions(maximum_contact_radius_nm=nm_from_mm(5)) if board.zones else None,
-            **({"unified_options": _unified_options()} if router == "unified" else {}),
+            **({"unified_options": _unified_options(unified)} if router == "unified" else {}),
         )
     except Exception as exc:  # noqa: BLE001 - a routing crash is a measured outcome, not a harness error
         record.update(status="route_crashed", error=f"{type(exc).__name__}: {exc}",
@@ -100,6 +113,7 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         tracks=len(routed.tracks), vias=len(routed.vias),
         wirelength_mm=round(sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
                                 for t in routed.tracks) / 1_000_000, 3),
+        **track_bends(routed.tracks),
         stages=_stage_summary(result),
         unrouted_details={item.net: list(item.diagnostics[:4]) + _search_note(item)
                           for item in detailed.nets if not item.connected} if detailed else {},
@@ -207,9 +221,50 @@ def cause_table(root: Path) -> str:
     return "\n".join(rows) + "\n"
 
 
-def _unified_options():
+def track_bends(tracks) -> dict:
+    """Direction changes where exactly two same-net tracks meet on one layer.
+
+    ``bends`` counts every such vertex; ``bends_90`` those turning 90 degrees
+    or more (a 45-degree chamfer is not one).
+    """
+    far_ends: dict = {}
+    for track in tracks:
+        if track.start != track.end:
+            far_ends.setdefault((track.net, track.layer, track.start), []).append(track.end)
+            far_ends.setdefault((track.net, track.layer, track.end), []).append(track.start)
+    bends = sharp = 0
+    for (_, _, node), ends in far_ends.items():
+        if len(ends) != 2:
+            continue
+        ux, uy = node.x_nm - ends[0].x_nm, node.y_nm - ends[0].y_nm
+        vx, vy = ends[1].x_nm - node.x_nm, ends[1].y_nm - node.y_nm
+        angle = degrees(atan2(abs(ux * vy - uy * vx), ux * vx + uy * vy))
+        if angle > 1:
+            bends += 1
+            sharp += angle > 89
+    return {"bends": bends, "bends_90": sharp}
+
+
+def _unified_options(overrides: dict | None = None):
     from .unified_router import UnifiedRouterOptions
-    return UnifiedRouterOptions()
+    return UnifiedRouterOptions(**(overrides or {}))
+
+
+def unified_overrides(items) -> dict:
+    """``OPTION=VALUE`` strings as UnifiedRouterOptions overrides (JSON values, else text)."""
+    from dataclasses import fields
+    from .unified_router import UnifiedRouterOptions
+    known = {field.name for field in fields(UnifiedRouterOptions)}
+    overrides = {}
+    for item in items:
+        name, separator, text = item.partition("=")
+        if not separator or name not in known:
+            raise ValueError(f"unknown unified option {name!r}")
+        try:
+            overrides[name] = json.loads(text)
+        except json.JSONDecodeError:
+            overrides[name] = text
+    return overrides
 
 
 def _search_note(item) -> list[str]:
@@ -443,6 +498,62 @@ def score_drc_report(report: dict) -> dict:
             "clean_pass": not errors and not unconnected}
 
 
+# --------------------------------------------------------------------------- local runs
+
+def run_boards(boards: Path, out_root: Path, *, router: str = "legacy", unified_set=(), workers: int = 4,
+               board_seconds: int = 1200, kicad_cli: str | None = None, pcbnew_python: str | None = None,
+               only: tuple[str, ...] = (), limit: int = 0, python: str = sys.executable,
+               progress=print) -> dict:
+    """Route (and with ``kicad_cli`` score) every prepared board under ``boards`` in parallel.
+
+    Each board routes in its own ``python -m pcbir.bench route`` process,
+    killed after ``board_seconds`` (its record then stays "incomplete", as in
+    CI). Scoring runs in the same worker right after routing.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    unified_overrides(unified_set)  # reject a mistyped option before routing anything
+    candidates = sorted(path for path in boards.iterdir() if (path / PREPARED_NAME).is_file())
+    if only:
+        wanted = set(only)
+        candidates = [path for path in candidates if path.name in wanted or path.name.split("_", 1)[0] in wanted]
+    if limit:
+        candidates = candidates[:limit]
+    if not candidates:
+        raise ValueError(f"no prepared boards ({PREPARED_NAME}) under {boards}")
+    out_root.mkdir(parents=True, exist_ok=True)
+    if any(out_root.iterdir()):
+        raise ValueError(f"{out_root} is not empty; give each run its own directory")
+
+    def one(board_dir: Path) -> dict:
+        out = out_root / board_dir.name
+        out.mkdir()
+        command = [python, "-m", "pcbir.bench", "route", str(board_dir / PREPARED_NAME), "--out", str(out),
+                   "--router", router, *(arg for item in unified_set for arg in ("--set", item))]
+        with (out / "route.log").open("w", encoding="utf-8") as log:
+            try:
+                subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=board_seconds, check=False)
+            except subprocess.TimeoutExpired:
+                log.write(f"\nkilled after {board_seconds} s\n")
+        if not (out / "result.json").is_file():
+            _save(out, {"schema": RESULT_SCHEMA, "board": board_dir.name, "status": "missing", "router": router})
+        record = json.loads((out / "result.json").read_text(encoding="utf-8"))
+        if kicad_cli:
+            record = score_result(out, kicad_cli, pcbnew_python=pcbnew_python)
+        progress(f"{board_dir.name}: {record.get('status')} clean={record.get('clean_pass')} "
+                 f"unrouted={len(record.get('unrouted_nets') or [])} seconds={record.get('seconds')}")
+        return record
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        list(pool.map(one, candidates))
+    baseline = {**baseline_records(out_root), "source": f"local {router} run of {boards}"}
+    (out_root / "baseline.json").write_text(json.dumps(baseline, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    (out_root / "record.txt").write_text(record_text(baseline), encoding="utf-8")
+    summary = summarize(out_root)
+    (out_root / "summary.md").write_text(f"## CopperScript ({router} router), local run\n\n" + summary_table(summary)
+                                         + "\n" + board_table(out_root), encoding="utf-8")
+    return summary
+
+
 # --------------------------------------------------------------------------- summary
 
 def summarize(root: Path, boards: set[str] | None = None) -> dict:
@@ -551,8 +662,26 @@ def baseline_records(root: Path) -> dict:
             "status": item.get("status"), "clean_pass": bool(item.get("clean_pass")),
             "unrouted": len(unrouted) if unrouted is not None else None,
             "drc_errors": item.get("drc_errors"), "unconnected_items": item.get("unconnected_items"),
-            "vias": item.get("vias"), "wirelength_mm": item.get("wirelength_mm")}
+            "vias": item.get("vias"), "wirelength_mm": item.get("wirelength_mm"),
+            "routable_nets": item.get("routable_nets"), "seconds": item.get("seconds"),
+            "bends": item.get("bends"), "bends_90": item.get("bends_90"),
+            "router": item.get("router")}
     return {"schema": BASELINE_SCHEMA, "boards": boards}
+
+
+RECORD_COLUMNS = ("board", "status", "clean", "unrouted", "drc_errors", "unconnected", "vias", "wirelength_mm",
+                  "routable", "seconds", "bends", "bends_90")
+
+
+def record_text(baseline: dict) -> str:
+    """The published "Benchmark baseline record": one ``|``-separated row per board."""
+    rows = ["|".join(RECORD_COLUMNS)]
+    for name, item in sorted(baseline["boards"].items()):
+        rows.append("|".join(str(value) for value in (
+            name, item["status"], int(item["clean_pass"]), item["unrouted"], item["drc_errors"],
+            item["unconnected_items"], item["vias"], item["wirelength_mm"], item.get("routable_nets"),
+            item.get("seconds"), item.get("bends"), item.get("bends_90"))))
+    return "\n".join(rows) + "\n"
 
 
 def baseline_from_record(text: str, source: str = "") -> dict:
@@ -577,7 +706,10 @@ def baseline_from_record(text: str, source: str = "") -> dict:
         boards[row["board"]] = {"status": row["status"], "clean_pass": row["clean"] == "1",
                                 "unrouted": value(row["unrouted"]), "drc_errors": value(row["drc_errors"]),
                                 "unconnected_items": value(row["unconnected"]), "vias": value(row["vias"]),
-                                "wirelength_mm": value(row["wirelength_mm"])}
+                                "wirelength_mm": value(row["wirelength_mm"]),
+                                "routable_nets": value(row.get("routable", "")),
+                                "seconds": value(row.get("seconds", "")),
+                                "bends": value(row.get("bends", "")), "bends_90": value(row.get("bends_90", ""))}
     return {"schema": BASELINE_SCHEMA, "source": source, "boards": boards}
 
 
@@ -639,6 +771,101 @@ def compare_to_baseline(baseline: dict, current: dict,
     return "\n".join(lines) + "\n", lost
 
 
+def versus(first: dict, second: dict, names: tuple[str, str] = ("A", "B")) -> str:
+    """Two runs of the same boards compared on every recorded measure (markdown).
+
+    Totals cover the boards present in both runs; vias and track length only
+    the boards clean in both, so a router that leaves nets open is not
+    rewarded for using less copper. Head-to-head counts say on how many boards
+    the second run is better, equal or worse than the first.
+    """
+    a_all, b_all = first.get("boards", {}), second.get("boards", {})
+    common = sorted(set(a_all) & set(b_all))
+    a, b = [a_all[n] for n in common], [b_all[n] for n in common]
+    first_name, second_name = names
+
+    def total(items, key):
+        known = [item.get(key) for item in items if item.get(key) is not None]
+        return round(sum(known), 3) if known else None
+
+    def count(items, test):
+        return sum(1 for item in items if test(item))
+
+    def completion(items):
+        pairs = [(item.get("routable_nets"), item.get("unrouted")) for item in items]
+        pairs = [(r, u) for r, u in pairs if r and u is not None]
+        if not pairs:
+            return None
+        return round(1 - sum(u for _, u in pairs) / sum(r for r, _ in pairs), 4)
+
+    def median(values):
+        values = sorted(value for value in values if value is not None)
+        if not values:
+            return None
+        middle = len(values) // 2
+        return values[middle] if len(values) % 2 else round((values[middle - 1] + values[middle]) / 2, 3)
+
+    def per_100mm(items):
+        pairs = [(item.get("bends"), item.get("wirelength_mm")) for item in items]
+        pairs = [(b, w) for b, w in pairs if b is not None and w]
+        length = sum(w for _, w in pairs)
+        return round(100 * sum(b for b, _ in pairs) / length, 2) if length else None
+
+    def slowest(items):
+        values = [item.get("seconds") for item in items if item.get("seconds") is not None]
+        return max(values) if values else None
+
+    clean_both = [n for n in common if a_all[n].get("clean_pass") and b_all[n].get("clean_pass")]
+    a_clean, b_clean = [a_all[n] for n in clean_both], [b_all[n] for n in clean_both]
+    rows = [
+        ("Boards", len(common), len(common)),
+        ("Clean (0 KiCad errors, 0 unconnected)", count(a, lambda i: i.get("clean_pass")),
+         count(b, lambda i: i.get("clean_pass"))),
+        ("Fully routed (0 unrouted nets)", count(a, lambda i: i.get("unrouted") == 0),
+         count(b, lambda i: i.get("unrouted") == 0)),
+        ("Net completion (all boards)", completion(a), completion(b)),
+        ("Unrouted nets (total)", total(a, "unrouted"), total(b, "unrouted")),
+        ("KiCad DRC errors (total)", total(a, "drc_errors"), total(b, "drc_errors")),
+        ("Boards with 0 KiCad errors", count(a, lambda i: i.get("drc_errors") == 0),
+         count(b, lambda i: i.get("drc_errors") == 0)),
+        ("Unconnected items (total)", total(a, "unconnected_items"), total(b, "unconnected_items")),
+        (f"Vias, {len(clean_both)} boards clean in both", total(a_clean, "vias"), total(b_clean, "vias")),
+        (f"Track length mm, {len(clean_both)} boards clean in both",
+         total(a_clean, "wirelength_mm"), total(b_clean, "wirelength_mm")),
+        (f"Bends, {len(clean_both)} boards clean in both", total(a_clean, "bends"), total(b_clean, "bends")),
+        (f"Bends of 90 degrees or more, {len(clean_both)} boards clean in both",
+         total(a_clean, "bends_90"), total(b_clean, "bends_90")),
+        ("Bends per 100 mm of track (all routed boards)", per_100mm(a), per_100mm(b)),
+        ("Routing seconds (total)", total(a, "seconds"), total(b, "seconds")),
+        ("Routing seconds (median board)", median([i.get("seconds") for i in a]),
+         median([i.get("seconds") for i in b])),
+        ("Routing seconds (slowest board)", slowest(a), slowest(b)),
+        ("Not routed (crash, timeout, missing)", count(a, lambda i: i.get("status") != "routed"),
+         count(b, lambda i: i.get("status") != "routed")),
+    ]
+    show = lambda value: "-" if value is None else value
+    lines = [f"| Measure | {first_name} | {second_name} |", "|---|---:|---:|"]
+    lines += [f"| {label} | {show(x)} | {show(y)} |" for label, x, y in rows]
+    lines += ["", f"Head to head: boards where {second_name} is better / equal / worse than {first_name}.", "",
+              "| Measure | better | equal | worse |", "|---|---:|---:|---:|"]
+    for key, label in (("unrouted", "Unrouted nets"), ("drc_errors", "KiCad DRC errors"),
+                       ("unconnected_items", "Unconnected items"), ("bends", "Bends"),
+                       ("seconds", "Routing seconds")):
+        pairs = [(a_all[n].get(key), b_all[n].get(key)) for n in common]
+        pairs = [(x, y) for x, y in pairs if x is not None and y is not None]
+        better = sum(1 for x, y in pairs if y < x)
+        worse = sum(1 for x, y in pairs if y > x)
+        lines.append(f"| {label} | {better} | {len(pairs) - better - worse} | {worse} |")
+    gained = [n for n in common if b_all[n].get("clean_pass") and not a_all[n].get("clean_pass")]
+    lost = [n for n in common if a_all[n].get("clean_pass") and not b_all[n].get("clean_pass")]
+    lines += ["", f"Clean only with {second_name} ({len(gained)}): " + (", ".join(gained) or "none"),
+              f"Clean only with {first_name} ({len(lost)}): " + (", ".join(lost) or "none")]
+    only = sorted(set(a_all) ^ set(b_all))
+    if only:
+        lines.append(f"In one run only ({len(only)}): " + ", ".join(only))
+    return "\n".join(lines) + "\n"
+
+
 def annotation_chunks(text: str, limit: int = 3900) -> list[str]:
     """Line-aligned pieces that fit GitHub's 4 KB annotation message."""
     chunks, current = [], ""
@@ -682,6 +909,8 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("--search-budget", type=int, default=20_000)
     route.add_argument("--router", choices=("legacy", "unified"), default="legacy",
                        help="ordinary detailed router, as copper route-board --router")
+    route.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="unified_set",
+                       help="UnifiedRouterOptions override for --router unified (repeatable)")
     reference = commands.add_parser("reference")
     reference.add_argument("board", type=Path)
     reference.add_argument("--out", type=Path, required=True)
@@ -707,6 +936,25 @@ def main(argv: list[str] | None = None) -> int:
     compare = commands.add_parser("compare", help="compare results with a baseline; exit 1 if a clean board is lost")
     compare.add_argument("baseline", type=Path)
     compare.add_argument("root", type=Path)
+    run = commands.add_parser("run", help="route and score every prepared board in a directory (local benchmark)")
+    run.add_argument("boards", type=Path, help="directory of <id>/processed_v9_guide_v3.kicad_pcb boards")
+    run.add_argument("--out", type=Path, required=True, help="new, empty results directory")
+    run.add_argument("--router", choices=("legacy", "unified"), default="legacy")
+    run.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="unified_set",
+                     help="UnifiedRouterOptions override for --router unified (repeatable)")
+    run.add_argument("--workers", type=int, default=4)
+    run.add_argument("--board-seconds", type=int, default=1200, help="time limit per board (CI: 1200)")
+    run.add_argument("--kicad-cli", help="score with this kicad-cli (no scoring without it)")
+    run.add_argument("--pcbnew-python", help="interpreter importing KiCad's pcbnew, to refill zones before DRC")
+    run.add_argument("--only", nargs="*", default=(), help="board ids or their number prefixes")
+    run.add_argument("--limit", type=int, default=0, help="first N boards only")
+    record = commands.add_parser("record", help="print a baseline file as the published per-board record")
+    record.add_argument("baseline", type=Path)
+    against = commands.add_parser("versus", help="compare two baselines or published records on every measure")
+    against.add_argument("first", type=Path)
+    against.add_argument("second", type=Path)
+    against.add_argument("--names", nargs=2, default=("A", "B"), metavar=("FIRST", "SECOND"))
+
     compare.add_argument("--tiers", type=Path, help="tiers.json (board -> tier): clean counts per tier")
     annotate = commands.add_parser("annotate", help="print a file as GitHub notice annotations")
     annotate.add_argument("file", type=Path)
@@ -714,7 +962,13 @@ def main(argv: list[str] | None = None) -> int:
     annotate.add_argument("--first", type=int, default=0, help="first chunk index (a step shows 10)")
     args = parser.parse_args(argv)
     if args.command == "route":
-        record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router)
+        try:
+            unified = unified_overrides(args.unified_set)
+        except ValueError as exc:
+            print(f"BENCH ERROR: {exc}")
+            return 2
+        record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router,
+                                  unified=unified)
     elif args.command == "reference":
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":
@@ -729,6 +983,26 @@ def main(argv: list[str] | None = None) -> int:
                                          baseline_records(args.root), _read_tiers(args.tiers))
         print(text, end="")
         return 1 if lost else 0
+    elif args.command == "run":
+        try:
+            summary = run_boards(args.boards, args.out, router=args.router, unified_set=tuple(args.unified_set),
+                                 workers=args.workers,
+                                 board_seconds=args.board_seconds, kicad_cli=args.kicad_cli,
+                                 pcbnew_python=args.pcbnew_python, only=tuple(args.only), limit=args.limit)
+        except (ValueError, OSError) as exc:
+            print(f"BENCH ERROR: {exc}")
+            return 2
+        print(summary_table(summary), end="")
+        return 0
+    elif args.command == "record":
+        print(record_text(json.loads(args.baseline.read_text(encoding="utf-8"))), end="")
+        return 0
+    elif args.command == "versus":
+        def load(path):
+            text = path.read_text(encoding="utf-8")
+            return json.loads(text) if text.lstrip().startswith("{") else baseline_from_record(text)
+        print(versus(load(args.first), load(args.second), tuple(args.names)), end="")
+        return 0
     elif args.command == "annotate":
         chunks = annotation_chunks(args.file.read_text(encoding="utf-8"))
         for index in range(args.first, min(args.first + 10, len(chunks))):

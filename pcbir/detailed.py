@@ -2689,6 +2689,16 @@ def _separate_lands(placement: Placement, footprint, number: str) -> tuple[tuple
     already one piece of copper and need no route between them. Returns one
     representative land and its board position per further separate piece.
     """
+    return tuple(piece[0] for piece in land_pieces(placement, footprint, number)[1:])
+
+
+def land_pieces(placement: Placement, footprint, number: str) -> tuple[tuple[tuple[object, Point], ...], ...]:
+    """The lands of one pad number grouped into pieces of touching copper.
+
+    The piece holding the first land comes first; each piece lists its lands
+    with their board positions in footprint order. A single piece needs no
+    route between its lands.
+    """
     from .drc import placed_pad_shape
     from .geometry import shapes_clear
     from .placement import transformed_local_point
@@ -2711,14 +2721,10 @@ def _separate_lands(placement: Placement, footprint, number: str) -> tuple[tuple
         for second in range(first + 1, len(lands)):
             if not shapes_clear(shapes[first], shapes[second], 1):
                 parent[find(second)] = find(first)
-    seen = {find(0)}
-    result = []
-    for index in range(1, len(lands)):
-        root = find(index)
-        if root not in seen:
-            seen.add(root)
-            result.append((lands[index], positions[index]))
-    return tuple(result)
+    pieces: dict[int, list[tuple[object, Point]]] = {}
+    for index in range(len(lands)):
+        pieces.setdefault(find(index), []).append((lands[index], positions[index]))
+    return tuple(tuple(piece) for piece in pieces.values())
 
 
 def _mm_text(point: Point) -> str:

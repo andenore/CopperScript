@@ -102,6 +102,11 @@ class UnifiedRouterOptions:
     # 0.852); the pushed-aside nets lose more than the length rule gains.
     length_priority: bool = False
     full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
+    # Straighten this call's accepted copper afterwards with the ownership-safe
+    # pass the legacy router uses (route_smoothing.smooth_owned_tracks): grid
+    # search has no turn cost, so equal-length staircases of 45-degree jogs
+    # survive. Existing board copper is never an input. Off while measured.
+    route_smoothing: bool = False
     # Extra cost (as history) on a ball grid's own surface layer: escapes are
     # short, so through-traffic between the balls should prefer inner layers.
     ball_field_cost: float = 2.0
@@ -608,10 +613,14 @@ class _Router:
         obstacles: list[_Obstacle] = []
         for item in index._objects:
             netless = item.net.startswith("<")
+            # The exact check spaces two nets by the larger of their rule
+            # clearances: an obstacle's own net rule is part of its floor.
+            rule = None if netless else self.rules.get(item.net)
+            floor = max(item.clearance_nm, rule.clearance_nm or 0 if rule else 0)
             obstacles.append(_Obstacle(
                 _FOREIGN if netless else self._net_id(item.net),
                 tuple(layer_index[l] for l in item.layers if l in layer_index),
-                item.shape.spine, item.shape.radius_nm, item.clearance_nm, is_pad=item.is_pad))
+                item.shape.spine, item.shape.radius_nm, floor, is_pad=item.is_pad))
         for keepout in index._keepouts:
             obstacles.append(_Obstacle(
                 _FOREIGN, tuple(layer_index[l] for l in keepout.layers if l in layer_index),
@@ -830,6 +839,7 @@ class _Router:
         ports = macro_routing_ports(board, net.name)
         owned = macro_owned_pads(board) if net.name in self.zone_nets else frozenset()
         components = []
+        separate: list[list] = []
         for root, members in sorted(groups.items(), key=lambda item: str(item[1][0])):
             if owned and all(pad in owned for pad in members):
                 # A hard macro proves its own plane returns at materialization.
@@ -842,7 +852,15 @@ class _Router:
                     layers = tuple(self.grid.layers.index(l) for l in macro_port_layers(board, port))
                     anchors.append((port.position, layers))
                     continue
-                anchors.extend(self._pad_anchors(pad, spec))
+                pad_anchors = self._pad_anchors(pad, spec)
+                # Lands sharing a number are one pin, but KiCad needs copper
+                # between them unless the part declares them internally joined
+                # (internal_pad_groups): each separate land is its own terminal,
+                # as in the legacy router (plan 3.4).
+                for piece in self._separate_land_pieces(pad):
+                    separate.append([anchor for anchor in pad_anchors if anchor[0] in piece])
+                    pad_anchors = [anchor for anchor in pad_anchors if anchor[0] not in piece]
+                anchors.extend(pad_anchors)
             if not root.startswith("pad:"):
                 # Existing copper of this group (fanout, plane taps, partial routes).
                 for index, via in enumerate(board.vias):
@@ -856,7 +874,18 @@ class _Router:
             components.append(self._attach(anchors, spec))
             if self.explicit_pads and set(members) & self.explicit_pads:
                 spec.explicit[len(components) - 1] = self._explicit_exclusion(members, spec)
+        components.extend(self._attach(anchors, spec) for anchors in separate)
         return components
+
+    def _separate_land_pieces(self, pad: PadReference) -> tuple[frozenset[Point], ...]:
+        """Land positions of each piece of ``pad`` not joined by copper to its first land."""
+        from .detailed import land_pieces
+        pose = next(p for p in self.board.placements if p.reference == pad.component)
+        footprint = self.board.footprints[pose.footprint]
+        if any(pad.pad in group.numbers for group in footprint.internal_pad_groups):
+            return ()
+        return tuple(frozenset(position for _, position in piece)
+                     for piece in land_pieces(pose, footprint, pad.pad)[1:])
 
     def _explicit_exclusion(self, pads, spec: _NetSpec) -> frozenset[int]:
         """The surface layers of these pads: a plane path from an explicit pad
@@ -1251,9 +1280,13 @@ class _Router:
         claims: set[int] = set()
         via_claims: set[int] = set()
         body: dict = {}
-        wide = (spec.width - self.default_width) / 2 / g.pitch
         via_body = (spec.via_size - self.default_width) / 2 / g.pitch
-        track_radius = (spec.width / 2 + spec.clearance + self.default_width / 2) / g.pitch
+        # Claims assume a neighbour at least as wide as this net. Grid nodes
+        # cannot carry a wide net's extra half-width below one pitch, and two
+        # wider-than-default nets would otherwise pass negotiation closer than
+        # the exact check allows (each claimed only a default-width neighbour).
+        neighbour = max(self.default_width, spec.width)
+        track_radius = (spec.width / 2 + spec.clearance + neighbour / 2) / g.pitch
         via_radius = (spec.via_size / 2 + spec.clearance + self.default_width / 2) / g.pitch
         via_via_radius = (spec.via_size + spec.clearance) / g.pitch
         length = 0.0
@@ -1271,11 +1304,6 @@ class _Router:
                     x, y = xa + ox, ya + oy
                     if 0 <= x < g.nx and 0 <= y < g.ny:
                         claims.add(la * g.plane + y * g.nx + x)
-                if wide >= 0.5:
-                    for ox, oy in _segment_offsets_cached(dx, dy, wide):
-                        x, y = xa + ox, ya + oy
-                        if 0 <= x < g.nx and 0 <= y < g.ny:
-                            body.setdefault(la * g.plane + y * g.nx + x, a)
             nodes.update(path)
             if len(path) == 1:
                 la, xa, ya = g.unpack(path[0])
@@ -1289,7 +1317,7 @@ class _Router:
         for leads in route.leads:
             for track in leads:
                 layer = layer_of[track.layer]
-                radius_nm = track.width_nm / 2 + spec.clearance + self.default_width / 2
+                radius_nm = track.width_nm / 2 + spec.clearance + max(self.default_width, track.width_nm) / 2
                 near = g.pitch / 2
                 for node, distance in self._segment_nodes(track.start, track.end, layer, radius_nm):
                     claims.add(node)
@@ -1882,6 +1910,17 @@ def _net_track_length(board: PhysicalBoard, name: str, new_tracks) -> int:
                for t in (*(t for t in board.tracks if t.net == name), *new_tracks))
 
 
+def _smoothed(board: PhysicalBoard, accepted):
+    """``accepted`` with its tracks straightened against the complete final board."""
+    from .detailed import _smooth_owned
+    owned = tuple(t for name in sorted(accepted) for t in accepted[name][0])
+    vias = (*board.vias, *(v for name in sorted(accepted) for v in accepted[name][1]))
+    by_net: dict[str, list[TrackSegment]] = {name: [] for name in accepted}
+    for track in _smooth_owned(board, board.tracks, owned, vias):
+        by_net[track.net].append(track)
+    return {name: (tuple(by_net[name]), accepted[name][1]) for name in accepted}
+
+
 def _merge(accepted, more):
     merged = {name: (list(tracks), list(vias)) for name, (tracks, vias) in accepted.items()}
     for name, (tracks, vias) in more.items():
@@ -2244,6 +2283,8 @@ def route_unified(
         complete = set(complete) | bus_complete
         board, nets = original_board, all_nets
     spec_names = {s.name for s in router.specs} | bus_complete
+    if options.route_smoothing and accepted:
+        accepted = _smoothed(board, accepted)
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
     all_tracks = (*board.tracks, *new_tracks)

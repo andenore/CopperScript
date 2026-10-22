@@ -9,5 +9,6 @@
   "tiers": ["easy", "medium"],
   "split": "test",
   "shards": 12,
-  "board_seconds": 1200
+  "board_seconds": 1200,
+  "router": "legacy"
 }

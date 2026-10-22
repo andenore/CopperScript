@@ -13,6 +13,9 @@ on:
       limit:
         description: Route only the first N boards of each tier (0 = all)
         default: '0'
+      router:
+        description: Ordinary router to measure (empty = the pinned router in routing-benchmark.json)
+        default: ''
   push:
     branches: ['claude/**']
     paths:
@@ -36,6 +39,7 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
       shard_count: ${{ steps.plan.outputs.shard_count }}
       board_seconds: ${{ steps.plan.outputs.board_seconds }}
+      router: ${{ steps.plan.outputs.router }}
     defaults:
       run:
         shell: bash
@@ -47,9 +51,12 @@ jobs:
       - name: Read benchmark pins
         id: plan
         run: |
-          python3 - "${{ github.event.inputs.limit || '0' }}" <<'PY' >> "$GITHUB_OUTPUT"
+          python3 - "${{ github.event.inputs.limit || '0' }}" "${{ github.event.inputs.router || '' }}" <<'PY' >> "$GITHUB_OUTPUT"
           import json, sys
           pins = json.load(open("CopperScript/.github/routing-benchmark.json"))
+          router = sys.argv[2] or pins.get("router", "legacy")
+          assert router in ("legacy", "unified"), router
+          print("router=" + router)
           for key in ("pcbworld_repository", "pcbworld_ref", "pcbench_repository", "pcbench_ref",
                       "kicad_ppa", "kicad_series", "split", "board_seconds"):
               print(f"{key}={pins[key]}")
@@ -173,9 +180,9 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ steps.pins.outputs.python }}
-      - name: Install pinned build tools and local package
+      - name: Install pinned build tools, numpy and local package
         run: |
-          python -m pip install setuptools==80.9.0 wheel==0.45.1
+          python -m pip install setuptools==80.9.0 wheel==0.45.1 numpy==2.3.3
           python -m pip install --no-build-isolation --no-deps -e .
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -190,6 +197,7 @@ jobs:
             if [ $((index % shards)) = "${{ matrix.shard }}" ]; then
               timeout --kill-after=30 "${{ needs.prepare.outputs.board_seconds }}" \
                 python -m pcbir.bench route "$dir/processed_v9_guide_v3.kicad_pcb" --out "../results/$id" \
+                  --router "${{ needs.prepare.outputs.router }}" \
                 > "../results-$id.log" 2>&1 || echo "$id exited $?"
               tail -n 1 "../results-$id.log"
               mkdir -p "../results/$id" && mv "../results-$id.log" "../results/$id/route.log"
@@ -268,7 +276,7 @@ jobs:
       - name: Summarize
         run: |
           {
-            echo "## CopperScript on PCBWorld D3 boards"
+            echo "## CopperScript (${{ needs.prepare.outputs.router }} router) on PCBWorld D3 boards"
             python -m pcbir.bench summarize ../results --markdown --tiers ../boards/tiers.json
             echo "### Unrouted nets by cause"
             python -m pcbir.bench causes ../results
@@ -290,14 +298,7 @@ jobs:
       - name: Record this run as a possible baseline
         run: |
           python -m pcbir.bench baseline ../results > ../baseline.json
-          python - ../baseline.json > ../baseline.txt <<'PY'
-          import json, sys
-          boards = json.load(open(sys.argv[1]))["boards"]
-          print("board|status|clean|unrouted|drc_errors|unconnected|vias|wirelength_mm")
-          for name, item in sorted(boards.items()):
-              print("|".join(str(value) for value in (name, item["status"], int(item["clean_pass"]), item["unrouted"],
-                    item["drc_errors"], item["unconnected_items"], item["vias"], item["wirelength_mm"])))
-          PY
+          python -m pcbir.bench record ../baseline.json > ../baseline.txt
           python -m pcbir.bench annotate ../baseline.txt --title "Benchmark baseline record"
       # Last, so a lost clean board fails the job only after everything above is published.
       - name: Compare with the committed baseline
