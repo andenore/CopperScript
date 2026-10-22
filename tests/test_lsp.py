@@ -83,6 +83,19 @@ def test_recovery_resynchronizes_after_missing_inner_brace():
     assert parsed.errors
 
 
+def test_recovery_keeps_nested_items_of_a_block_opened_mid_line():
+    # polygon/track/via/zone also start macro-definition declarations; inside a
+    # block opened after the board header they are its items, not siblings.
+    text = '\n'.join([
+        'board D { silkscreen {',
+        '    polygon P { vertices = [(1mm, 1mm), (2mm, 1mm), (1mm, 2mm)]; }',
+        '    text T { text = "x"; position = (5mm, 5mm); }',
+        '} }'])
+    parsed = parse_recovering(text, 'test.copper')
+    assert not parsed.errors
+    parse(text)
+
+
 @pytest.mark.parametrize('source', ['board D { @ net N {} }', 'board D { component R: X;', 'not a root', 'board D { value = "unterminated'])
 def test_incomplete_lexical_or_root_input_always_terminates(source):
     assert parse_recovering(source, 'test.copper').errors

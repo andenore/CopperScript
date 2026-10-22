@@ -42,12 +42,21 @@ def parse_recovering(text: str, filename: str) -> Parsed:
             i += 1
             break
         start, depth = i, 0
+        # A sibling starts at the indentation of the line the declaration
+        # starts on. A block opened mid-line (``board B { silkscreen {``) keeps
+        # its own indented items: nested polygon/track/via/zone/keepout items
+        # share names with macro-definition declarations.
+        indent = tokens[start].location.column
+        for earlier in reversed(tokens[:start]):
+            if earlier.location.line != tokens[start].location.line:
+                break
+            indent = earlier.location.column
         while i < len(tokens) - 1:
             t = tokens[i]
             # An unclosed declaration must not swallow subsequent siblings.
             if (i > start and t.kind is TokenKind.IDENTIFIER and t.text in starters
                     and t.location.line > tokens[start].location.line
-                    and t.location.column <= tokens[start].location.column):
+                    and t.location.column <= indent):
                 break
             if t.kind is TokenKind.SYMBOL:
                 if t.text == '{':

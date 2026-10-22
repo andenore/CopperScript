@@ -91,6 +91,14 @@ class FilledCopperFeedbackResult:
             indent=2, sort_keys=True) + "\n"
 
 
+def _hard_violations(evidence) -> Counter:
+    """Native violations other than library-copy findings, keyed by type and exact objects."""
+    return Counter((finding.type, tuple(sorted(item.uuid for item in finding.items)))
+                   for finding in evidence.native_findings
+                   if finding.category == "violation"
+                   and finding.type not in {"lib_footprint_issues", "lib_footprint_mismatch"})
+
+
 def _hard_findings(board):
     return tuple(item for item in run_physical_drc(board).findings
                  if item.severity.value == "error"
@@ -449,9 +457,12 @@ def improve_filled_copper(
                                 return replace(failure, board=board, pipeline=pipeline, verification=evidence,
                                                trials=tuple(records))
                             old_nets, new_nets = _open_nets(evidence), _open_nets(checked)
-                            hard_native = [finding for finding in checked.native_findings
-                                if finding.category == "violation" and finding.type not in
-                                {"lib_footprint_issues", "lib_footprint_mismatch"}]
+                            # A trial may not add a violation. One the board already
+                            # had (footprint artwork, say) is the same finding on
+                            # the same objects and does not block a trial that only
+                            # removes opens; library-copy findings never block.
+                            hard_native = list((_hard_violations(checked)
+                                                - _hard_violations(evidence)).elements())
                             outcome = "native_not_improved"
                             if (checked.matches(candidate) and not hard_native and not checked.island_count
                                     and new_nets is not None and new_nets <= old_nets

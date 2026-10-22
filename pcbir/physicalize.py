@@ -450,7 +450,7 @@ def _physicalize(
                else Stackup(copper_layers=copper_layers))
     physical = PhysicalBoard(
         name=board.name,
-        silkscreen=physical_artwork(silkscreen, outline),
+        silkscreen=physical_artwork(silkscreen, outline, _fixed_pad_shapes(placements, footprints, fixed_rules)),
         outline=outline,
         stackup=stackup,
         rules=rules,
@@ -516,6 +516,22 @@ def _lower_decoupling(flat, nets):
         links.append(DecouplingLink(feed[0], target, returns[0], net, assigned[returns[0]]))
     return tuple(links)
 
+
+
+def _fixed_pad_shapes(placements, footprints, fixed_rules):
+    """Placed copper of every pad of a part with a fixed position (known before placement)."""
+    from .drc import placed_pad_shape
+    from .placement import transformed_local_point
+    shapes = []
+    for pose in placements:
+        rule = fixed_rules.get(pose.reference)
+        if rule is None or rule.fixed_position is None:
+            continue
+        for pad in footprints[pose.footprint].pads:
+            if pad.kind in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}:
+                continue
+            shapes.append(placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose))
+    return tuple(shapes)
 
 def _bind_profile_connectors(mechanical, flat, footprints, placements, rules):
     from .placement import transformed_local_point

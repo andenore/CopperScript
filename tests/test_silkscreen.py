@@ -65,6 +65,26 @@ def test_default_mark_fits_curved_outline_material_when_space_allows():
     assert shape_in_outline(RoundedConvexShape(frame.points, (frame.width_nm+1)//2), board.outline, 0)
 
 
+def test_default_mark_keeps_clear_of_fixed_part_copper():
+    from pcbir.geometry import RoundedConvexShape, shapes_clear
+    from pcbir.mechanical import shape_in_outline
+    from pcbir.silkscreen import BRANDING_COPPER_GAP_NM, SilkscreenDesign, physical_artwork
+    outline = BoardOutline.rectangle(40, 30)
+
+    def frame(artwork):
+        item = next(item.graphic for item in artwork if item.id == "__copperscript:frame")
+        return RoundedConvexShape(item.points, (item.width_nm + 1) // 2)
+
+    corner = frame(physical_artwork(SilkscreenDesign(), outline))
+    # A fixed connector's pad where the mark would go by default (as J_CELL
+    # sat under it on the asset tracker): the mark moves, clear of the pad.
+    xs, ys = [p.x_nm for p in corner.spine], [p.y_nm for p in corner.spine]
+    pad = RoundedConvexShape((Point((min(xs) + max(xs)) // 2, max(ys)),), 600_000)
+    moved = frame(physical_artwork(SilkscreenDesign(), outline, (pad,)))
+    assert not shapes_clear(corner, pad) and shapes_clear(moved, pad, BRANDING_COPPER_GAP_NM - 200_000)
+    assert shape_in_outline(moved, outline, 0)
+
+
 def test_explicit_opt_out_does_not_remove_user_or_footprint_artwork():
     board = physical('''silkscreen { branding { enabled = false; }
         text LABEL { text = "Mine"; position = (5mm, 5mm); } }''')

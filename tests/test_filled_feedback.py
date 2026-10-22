@@ -415,3 +415,35 @@ def test_native_feedback_preserves_macro_and_required_array_copper(native_cli, t
         assert result.verification.passed, (result.stop_reason, result.verification.findings,
                                            [trial.outcome for trial in result.trials])
         assert result.verification.matches(result.board)
+
+
+def _scripted(reports):
+    """Native runner returning the first report, then the second for every later check."""
+    calls = []
+    def run(command, cwd):
+        if command[1:] == ("--version",):
+            return CommandResult(0, "10.0.6")
+        calls.append(command)
+        report = reports[0] if len(calls) == 1 else reports[1]
+        Path(command[command.index("--output")+1]).write_text(json.dumps(report), encoding="utf-8")
+        return CommandResult(0)
+    return run
+
+
+@pytest.mark.parametrize("new_violation", (False, True))
+def test_repair_is_judged_on_violations_it_adds(new_violation):
+    initial = pipeline(fragmented())
+    items = [i for i in native_object_map(initial.board).values() if i.kind == "pad"]
+    open_fill = {"type": "unconnected_items", "items": [{"uuid": i.uuid} for i in items]}
+    # Board artwork over a pad's mask opening: present before and after the
+    # bridge, on the same objects, so it does not block a bridge that only
+    # removes the open. A violation on other objects is new and does.
+    artwork = {"type": "silk_over_copper", "severity": "warning", "items": [{"uuid": items[0].uuid}]}
+    added = {"type": "clearance", "severity": "error", "items": [{"uuid": items[1].uuid}]}
+    after = [artwork, added] if new_violation else [artwork]
+    result = improve_filled_copper(initial, kicad_cli=Path("fake"), runner=_scripted((
+        {"violations": [artwork], "unconnected_items": [open_fill]},
+        {"violations": after, "unconnected_items": []})),
+        options=FilledCopperFeedbackOptions(maximum_trials=1))
+    assert [t.outcome for t in result.trials] == (["native_not_improved"] if new_violation else ["accepted"])
+    assert result.verification.unconnected_count == (1 if new_violation else 0)
