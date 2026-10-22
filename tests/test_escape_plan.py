@@ -653,3 +653,64 @@ def test_closed_tile_diagonals_stop_inner_balls_even_through_open_side_gaps():
     signal = set(field.pads)
     assert len(_array_flow("U", field, CopperLayer.FRONT, signal, 100000, 100000).surface) == 16
     assert len(_array_flow("U", blocked, CopperLayer.FRONT, signal, 100000, 100000).surface) == 12
+
+
+# --------------------------------------------------------------------------- bus layers (E5)
+
+from pcbir.physical import Stackup  # noqa: E402
+
+FOUR = Stackup(copper_layers=(CopperLayer.FRONT, CopperLayer("In1.Cu"), CopperLayer("In2.Cu"), CopperLayer.BACK))
+
+
+def test_bus_layers_give_each_layer_a_non_crossing_subset():
+    # A fully reversed bundle of four: one net stays on F.Cu; E3 sends the other three to one layer,
+    # where they still cross each other. Bus layers put one on each further layer instead.
+    board = replace(two_rows({1: 4, 2: 3, 3: 2, 4: 1}), stackup=FOUR)
+    single = plan_two_end_escapes(board).pairs[0]
+    assert {layer for _net, layer in single.moved} == {CopperLayer("In1.Cu")} and len(single.moved) == 3
+    layered = plan_two_end_escapes(board, EscapePlanOptions(two_end_order=True, bus_layers=True)).pairs[0]
+    assert len(layered.kept) == 1 and layered.unmoved == ()
+    assert sorted(layer.value for _net, layer in layered.moved) == ["B.Cu", "In1.Cu", "In2.Cu"]
+
+
+def test_bus_layers_keep_each_layer_free_of_crossings():
+    # Two interleaved halves: N1..N3 parallel, N4..N6 reversed among themselves.
+    board = replace(two_rows({1: 1, 2: 2, 3: 3, 4: 4}), stackup=FOUR)
+    footprints = {"row": row("row", 6)}
+    nets = tuple(PhysicalNet(f"N{a}", (PadReference("A", str(a)), PadReference("B", str(b))))
+                 for a, b in {1: 1, 2: 3, 3: 5, 4: 6, 5: 4, 6: 2}.items())
+    board = PhysicalBoard("rows", board.outline, footprints, board.placements, nets, rules=RULES, stackup=FOUR)
+    plan = plan_two_end_escapes(board, EscapePlanOptions(two_end_order=True, bus_layers=True))
+    (pair,) = plan.pairs
+    by_layer = {CopperLayer.FRONT: list(pair.kept)}
+    for net, layer in pair.moved:
+        by_layer.setdefault(layer, []).append(net)
+    diagnostics = escape_diagnostics(board).pairs[0]
+    second = dict(zip(diagnostics.order, diagnostics.second_keys))
+    for nets_on_layer in by_layer.values():
+        ranked = [net for net in diagnostics.order if net in nets_on_layer]
+        assert [second[net] for net in ranked] == sorted(second[net] for net in ranked)
+    assert sum(map(len, by_layer.values())) == 6 and pair.unmoved == ()
+
+
+def test_bus_layers_respect_the_via_budget():
+    # Both ends are surface lands: any other layer costs two vias.
+    board = replace(two_rows({1: 4, 2: 3, 3: 2, 4: 1}), stackup=FOUR)
+    one_via = tuple(NetRoutingRule(net.name, max_vias=1) for net in board.nets)
+    plan = plan_two_end_escapes(replace(board, net_routing_rules=one_via),
+                                EscapePlanOptions(two_end_order=True, bus_layers=True)).pairs[0]
+    assert plan.moved == () and len(plan.unmoved) == 3
+    two_vias = tuple(NetRoutingRule(net.name, max_vias=2) for net in board.nets)
+    plan = plan_two_end_escapes(replace(board, net_routing_rules=two_vias),
+                                EscapePlanOptions(two_end_order=True, bus_layers=True)).pairs[0]
+    assert len(plan.moved) == 3 and plan.unmoved == ()
+
+
+def test_bus_layer_groups_route_layer_by_layer():
+    board = replace(two_rows({1: 4, 2: 3, 3: 2, 4: 1}), stackup=FOUR)
+    plan = plan_two_end_escapes(board, EscapePlanOptions(two_end_order=True, bus_layers=True))
+    (pair,) = plan.pairs
+    layer_of = dict(pair.moved)
+    moved_order = [net for net in plan.net_order if net in layer_of]
+    assert [layer_of[net].value for net in moved_order] == ["In1.Cu", "In2.Cu", "B.Cu"]
+    assert plan.net_order[-1] == pair.kept[0]

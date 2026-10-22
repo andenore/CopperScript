@@ -70,6 +70,9 @@ class EscapePlanOptions:
     layer_bias_rate: int = 20
     # Array escape (E2): plan surface escapes of ball grids by min-cost flow.
     array_flow: bool = False
+    # Bus layers (E5): spread a crossing bundle's moved nets over successive
+    # layers, each a largest non-crossing subset, within each net's via budget.
+    bus_layers: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +144,8 @@ class ClusterPairEscape:
     analysed: bool = True
     # The bundle along the first component's boundary, from its far side.
     order: tuple[str, ...] = ()
+    # Each net of ``order``'s place along the second component's boundary.
+    second_keys: tuple[tuple, ...] = ()
 
     def report(self) -> dict:
         return {"components": [self.first, self.second], "nets": list(self.nets),
@@ -544,7 +549,8 @@ def _pair(first: ClusterEscape, second: ClusterEscape, nets: tuple[str, ...],
                 crossing_nets.update((net, other))
     kept = _longest_chain(ranked, second_order)
     return ClusterPairEscape(first.component, second.component, nets, crossings, tuple(sorted(crossing_nets)),
-                             tuple(net for net in nets if net not in kept), order=tuple(ranked))
+                             tuple(net for net in nets if net not in kept), order=tuple(ranked),
+                             second_keys=tuple(second_order[net] for net in ranked))
 
 
 def _boundary_order(cluster: ClusterEscape, nets: tuple[str, ...], centre: tuple[float, float],
@@ -688,7 +694,9 @@ def plan_two_end_escapes(board: PhysicalBoard, options: EscapePlanOptions | None
         moves = set(pair.layer_moves)
         kept = tuple(net for net in pair.order if net not in moves)
         moved, unmoved = [], []
-        for net in pair.order:
+        if options.bus_layers:
+            moved, unmoved = _layered_moves(pair, kept, planar, allowed, rules, pins, stack)
+        for net in pair.order if not options.bus_layers else ():
             if net not in moves:
                 continue
             others = [layer for layer in allowed[net] if layer is not planar]
@@ -699,8 +707,9 @@ def plan_two_end_escapes(board: PhysicalBoard, options: EscapePlanOptions | None
         corridor = bounds(pin.position for pin in pins).expanded(options.corridor_margin_nm)
         plan = PairPlan(pair.first, pair.second, planar, kept, tuple(moved), tuple(unmoved), corridor)
         pairs.append(plan)
-        outside_in = [kept[index // 2] if index % 2 == 0 else kept[-1 - index // 2] for index in range(len(kept))]
-        order.extend(net for net in [*(net for net, _layer in moved), *outside_in, *unmoved] if net not in order)
+        groups = [[net for net, assigned in moved if assigned is layer] for layer in dict.fromkeys(l for _n, l in moved)]
+        order.extend(net for net in [*(net for group in groups for net in _outside_in(group)), *_outside_in(kept),
+                                     *unmoved] if net not in order)
         for net, layer in sorted(moved):
             biases.extend(LayerBias(net, other, corridor, options.layer_bias_rate)
                           for other in allowed[net] if other is not layer)
@@ -709,6 +718,40 @@ def plan_two_end_escapes(board: PhysicalBoard, options: EscapePlanOptions | None
         surface_pads.update(pin.pad for pin in pins
                             if pin.net in kept and pin.net in crossing.nets and pin.layers == (planar,))
     return EscapePlan(tuple(pairs), tuple(order), tuple(biases), frozenset(surface_pads))
+
+
+def _outside_in(nets) -> list[str]:
+    """A bundle's nets from both outer edges towards the middle."""
+    nets = list(nets)
+    return [nets[index // 2] if index % 2 == 0 else nets[-1 - index // 2] for index in range(len(nets))]
+
+
+def _layered_moves(pair: ClusterPairEscape, kept, planar: CopperLayer, allowed, rules, pins, stack):
+    """Moved nets over successive layers, each a largest non-crossing subset (Ozdal & Wong).
+
+    Layers are tried nearest the planar layer first. A net joins a layer only
+    if it may use it and its ``max_vias`` covers the layer changes at its
+    surface lands (a through-hole land changes layer for free). Nets that fit
+    no layer stay unmoved.
+    """
+    second = dict(zip(pair.order, pair.second_keys))
+    remaining = [net for net in pair.order if net not in kept]
+    surface_ends = {net: [pin.layers[0] for pin in pins if pin.net == net and len(pin.layers) == 1]
+                    for net in remaining}
+
+    def fits(net: str, layer: CopperLayer) -> bool:
+        rule = rules.get(net)
+        changes = sum(end is not layer for end in surface_ends[net])
+        return layer in allowed[net] and (rule is None or rule.max_vias is None or changes <= rule.max_vias)
+
+    moved = []
+    for layer in sorted((layer for layer in stack if layer is not planar),
+                        key=lambda layer: (abs(stack.index(layer) - stack.index(planar)), stack.index(layer))):
+        candidates = [net for net in remaining if fits(net, layer)]
+        chain = _longest_chain(candidates, second)
+        moved.extend((net, layer) for net in candidates if net in chain)
+        remaining = [net for net in remaining if net not in chain]
+    return moved, remaining
 
 
 # --------------------------------------------------------------------------- array escape (E2)

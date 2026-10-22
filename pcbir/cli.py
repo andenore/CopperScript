@@ -835,6 +835,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--escape-plan", action=argparse.BooleanOptionalAction, default=False,
         help="plan crossing bundles between two parts (layer per net, route order) and give the plan "
              "to escape generation and the router (docs/escape-planning.md)")
+    board_route_parser.add_argument("--bus-layers", action=argparse.BooleanOptionalAction, default=False,
+        help="with the escape plan, spread a crossing bundle over successive layers, each a largest "
+             "non-crossing subset within each net's via budget (implies --escape-plan)")
     board_route_parser.add_argument("--array-flow", action=argparse.BooleanOptionalAction, default=False,
         help="choose which ball-grid balls escape on the surface by min-cost flow; the rest take vias "
              "(docs/escape-planning.md)")
@@ -1710,8 +1713,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     on_progress=progress,
                     legacy_gates=args.legacy_gates,
                     unified_options=_unified_options(args),
-                    escape_plan_options=(EscapePlanOptions(two_end_order=args.escape_plan, array_flow=args.array_flow)
-                                         if args.escape_plan or args.array_flow else None),
+                    escape_plan_options=(EscapePlanOptions(two_end_order=args.escape_plan or args.bus_layers,
+                                                           bus_layers=args.bus_layers, array_flow=args.array_flow)
+                                         if args.escape_plan or args.bus_layers or args.array_flow else None),
                     **({"power_area_options": power_area_options} if power_area_options is not None else {}),
                     **({"power_native_verifier": power_native_verifier} if power_native_verifier is not None else {}),
                 )
@@ -1923,9 +1927,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     for f in placement_intent_findings(result.placement_and_global.board)],
                 # Advisory escape model of the placed board (escape planning E0); never a gate.
                 "escape": escape_diagnostics(result.placement_and_global.board).report(),
-                **({"escape_plan": plan_two_end_escapes(result.placement_and_global.board,
-                                                        EscapePlanOptions(two_end_order=True)).report()}
-                   if args.escape_plan else {}),
+                **({"escape_plan": plan_two_end_escapes(result.placement_and_global.board, EscapePlanOptions(
+                    two_end_order=True, bus_layers=args.bus_layers)).report()}
+                   if args.escape_plan or args.bus_layers else {}),
                 **({"array_escape": [item.report() for item in plan_array_escapes(
                     result.placement_and_global.board, EscapePlanOptions(array_flow=True))]}
                    if args.array_flow else {}),

@@ -209,6 +209,25 @@ route completely. The price is a via where a planar detour existed: on D3,
 rate 20 added 33 vias to boards that were already clean (0035: 0 → 9,
 0060: 0 → 6).
 
+### Bus layers (E5)
+
+With `EscapePlanOptions(bus_layers=True)` (`route-board --bus-layers`,
+`bench route --bus-layers`; it implies the two-end plan) the nets outside the
+planar subset are not all moved to one layer, where they may still cross each
+other. Following Ozdal & Wong, each further layer takes a largest
+non-crossing subset of the nets still left, nearest the planar layer first:
+
+- a net joins a layer only if its rule allows the layer and its `max_vias`
+  covers the layer changes at its surface lands (a through-hole land changes
+  layer for free);
+- nets that fit no layer stay `unmoved`;
+- each layer's group routes together, outside-in, before the kept nets.
+
+Every layer then carries a crossing-free part of the bundle. Example: a fully
+reversed bundle of four on four layers keeps one net on F.Cu and puts one on
+each of In1.Cu, In2.Cu and B.Cu; the single-layer move puts three crossing
+nets on In1.Cu.
+
 Kept nets carry no layer bias: they start on the planar layer anyway, and at
 a through-hole end every layer is theirs. Holding them to one layer there
 squeezes the bundle through that layer's gaps. Biases are penalties, never

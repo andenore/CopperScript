@@ -50,7 +50,7 @@ _ROUTING_TAGS = ("segment", "arc", "via")
 def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20_000,
                      passes: int = 2, pitch_mm: str = "1", router: str = "legacy",
                      unified: dict | None = None,
-                     escape_plan: bool = False, array_flow: bool = False) -> dict:
+                     escape_plan: bool = False, array_flow: bool = False, bus_layers: bool = False) -> dict:
     """Import, route with fixed placement, write the routed board and a result record."""
     from .detailed import DetailedRouterOptions
     from .fanout import FanoutOptions
@@ -97,8 +97,9 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
             fanout_options=FanoutOptions(),
             plane_stitch_options=PlaneStitchOptions(maximum_contact_radius_nm=nm_from_mm(5)) if board.zones else None,
             **({"unified_options": _unified_options(unified)} if router == "unified" else {}),
-            **({"escape_plan_options": EscapePlanOptions(two_end_order=escape_plan, array_flow=array_flow)}
-               if escape_plan or array_flow else {}),
+            **({"escape_plan_options": EscapePlanOptions(two_end_order=escape_plan or bus_layers,
+                                                         bus_layers=bus_layers, array_flow=array_flow)}
+               if escape_plan or array_flow or bus_layers else {}),
         )
     except Exception as exc:  # noqa: BLE001 - a routing crash is a measured outcome, not a harness error
         record.update(status="route_crashed", error=f"{type(exc).__name__}: {exc}",
@@ -128,9 +129,9 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
                              if (a.position, a.rotation_degrees, a.side) != (b.position, b.rotation_degrees, b.side)),
     )
     record["unrouted_causes"] = unrouted_causes(record)
-    if escape_plan:
-        record["escape_plan"] = _plan_outcome(plan_two_end_escapes(board, EscapePlanOptions(two_end_order=True),
-                                                                   escape), routed)
+    if escape_plan or bus_layers:
+        record["escape_plan"] = _plan_outcome(plan_two_end_escapes(
+            board, EscapePlanOptions(two_end_order=True, bus_layers=bus_layers), escape), routed)
     text = board_path.read_bytes().decode("utf-8-sig")
     (out_dir / ROUTED_NAME).write_text(write_back_routing(text, routed), encoding="utf-8")
     project = board_path.with_suffix(".kicad_pro")
@@ -930,6 +931,8 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("board", type=Path)
     route.add_argument("--out", type=Path, required=True)
     route.add_argument("--search-budget", type=int, default=20_000)
+    route.add_argument("--bus-layers", action="store_true",
+                       help="spread crossing bundles over successive layers (escape planning E5)")
     route.add_argument("--array-flow", action="store_true",
                        help="choose ball-grid surface escapes by min-cost flow (escape planning E2)")
     route.add_argument("--escape-plan", action="store_true",
@@ -995,7 +998,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"BENCH ERROR: {exc}")
             return 2
         record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router,
-                                  unified=unified, escape_plan=args.escape_plan, array_flow=args.array_flow)
+                                  unified=unified, escape_plan=args.escape_plan, array_flow=args.array_flow,
+                                  bus_layers=args.bus_layers)
     elif args.command == "reference":
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":
