@@ -82,7 +82,10 @@ All in `pcbir/unified_router.py` unless noted; options are on
   among themselves first, then short members are tuned within their
   declared `tuning_amplitude_limit` (see [escape planning](escape-planning.md#bus-skew-e5-unified-router)).
   A board without match groups routes identical copper (D3 and the small
-  ladder). CopperProbe replay: 3 of 12 ADC lines open instead of 12.
+  ladder). CopperProbe ladder, same placement: 21 opens with both on, 24
+  with both off; every ADC data line routes (10 open when off), but the
+  bus skew is 8.0 mm over its 5 mm limit (no declared amplitude) and
+  XTALIN, SWCLK, BOOT and a few FX nets lose their corridors instead.
 - Length priority (`length_priority`, **off**): a max_length net that detours
   too far retakes its shortest path. It cost 2 points on CopperProbe
   (0.873 → 0.852), so it is off until it is smarter.
