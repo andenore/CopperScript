@@ -13,6 +13,7 @@ Usage: python -m pcbir.bench route BOARD.kicad_pcb --out DIR
        python -m pcbir.bench reference BOARD.kicad_pcb --out DIR   (score the board's own routing)
        python -m pcbir.bench score DIR --kicad-cli kicad-cli
        python -m pcbir.bench summarize RESULTS_ROOT
+       python -m pcbir.bench causes RESULTS_ROOT    (unrouted nets per cause class)
        python -m pcbir.bench run BOARDS --out RESULTS --router unified --kicad-cli kicad-cli --pcbnew-python python
        python -m pcbir.bench versus LEGACY/baseline.json UNIFIED/baseline.json --names legacy unified
 
@@ -29,11 +30,13 @@ from dataclasses import replace
 import json
 from math import atan2, degrees, hypot
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import time
 
+from .escape_plan import escape_diagnostics
 from .physical import PhysicalBoard, nm_from_mm
 
 RESULT_SCHEMA = "copperscript-bench-board/v0.1"
@@ -70,11 +73,13 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         _save(out_dir, record)
         return record
     board = imported.board
+    escape = escape_diagnostics(board)  # placement is fixed: the imported board is the placed board
     record.update(import_approximations=list(imported.approximations),
                   dropped_items=dict(imported.dropped),
                   components=len(board.placements),
                   routable_nets=sum(len(net.pads) >= 2 for net in board.nets),
-                  copper_layers=len(board.stackup.copper_layers))
+                  copper_layers=len(board.stackup.copper_layers),
+                  escape=_escape_summary(escape))
     global_options = GlobalRouterOptions(maximum_iterations=5)
     try:
         fixed = PlacementRoutingResult(FeedbackStatus.PASS, board, route_global(board, global_options),
@@ -112,10 +117,14 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         stages=_stage_summary(result),
         unrouted_details={item.net: list(item.diagnostics[:4]) + _search_note(item)
                           for item in detailed.nets if not item.connected} if detailed else {},
+        escape_causes={net: causes for net, causes in escape.net_causes().items()
+                       if detailed and net in {item.net for item in detailed.nets if not item.connected}},
+        package_pending_nets=_pending_nets(board, result.package_access),
         moved_placements=sum(1 for a, b in zip(sorted(board.placements, key=lambda p: p.reference),
                                                sorted(routed.placements, key=lambda p: p.reference))
                              if (a.position, a.rotation_degrees, a.side) != (b.position, b.rotation_degrees, b.side)),
     )
+    record["unrouted_causes"] = unrouted_causes(record)
     text = board_path.read_bytes().decode("utf-8-sig")
     (out_dir / ROUTED_NAME).write_text(write_back_routing(text, routed), encoding="utf-8")
     project = board_path.with_suffix(".kicad_pro")
@@ -123,6 +132,93 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         shutil.copyfile(project, out_dir / Path(ROUTED_NAME).with_suffix(".kicad_pro"))
     _save(out_dir, record)
     return record
+
+
+def _pending_nets(board, access) -> list[str]:
+    """Nets with a pad whose package exit stayed pending."""
+    if access is None:
+        return []
+    pads = {*access.fanout.pending_pads, *(access.boundary.pending_pads if access.boundary else ()),
+            *(access.plane_stitch.pending_pads if access.plane_stitch else ())}
+    return sorted({net.name for net in board.nets if pads.intersection(net.pads)})
+
+
+def _escape_summary(escape) -> dict:
+    """Escape diagnostics compact enough for a result record: only what is loaded or crossing."""
+    report = escape.report()
+    return {"crossing_pairs": report["crossing_pairs"], "overflow_clusters": report["overflow_clusters"],
+            "pairs": [pair for pair in report["pairs"] if pair["crossing_pairs"] or not pair["analysed"]],
+            "clusters": [cluster for cluster in report["clusters"] if cluster["overflow"]]}
+
+
+# Cause classes of an unrouted net, most specific first. Escape classes come
+# from the placed board's escape diagnostics and rank first: a pending package
+# exit or a failed search is usually their symptom. The others come from the
+# router's own diagnostics; ``unlocated`` means the router gave none.
+CAUSE_CLASSES = ("two_end_crossing", "channel_overflow", "package_access", "search_budget", "no_path",
+                 "other", "unlocated")
+
+
+_SEARCH_NOTE = re.compile(r"^search: \d+ calls, (\d+) out of budget, (\d+) no path")
+
+
+def unrouted_causes(record: dict) -> dict[str, list[str]]:
+    """Every unrouted net's cause classes, primary first (see ``CAUSE_CLASSES``)."""
+    escape = record.get("escape_causes") or {}
+    pending = set(record.get("package_pending_nets") or ())
+    causes = {}
+    for net in record.get("unrouted_nets") or ():
+        details = (record.get("unrouted_details") or {}).get(net) or []
+        notes = [line for line in details if not _SEARCH_NOTE.match(line)]
+        text = " ".join(notes).lower()
+        tags = set(escape.get(net) or ())
+        if net in pending or "package-access" in text or "package access" in text:
+            tags.add("package_access")
+        for line in details:
+            if match := _SEARCH_NOTE.match(line):
+                if int(match.group(1)):
+                    tags.add("search_budget")
+                if int(match.group(2)):
+                    tags.add("no_path")
+        if "budget" in text:
+            tags.add("search_budget")
+        if "no path" in text or "cannot reach" in text or "unreachable" in text:
+            tags.add("no_path")
+        if not details:
+            tags.add("unlocated")
+        elif not tags:
+            tags.add("other")
+        causes[net] = [name for name in CAUSE_CLASSES if name in tags]
+    return causes
+
+
+def cause_table(root: Path) -> str:
+    """Unrouted nets per cause class, per unclean board and in total."""
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(root.rglob("result.json"))]
+    totals = dict.fromkeys(CAUSE_CLASSES, 0)
+    rows = ["| Board | Unrouted | " + " | ".join(CAUSE_CLASSES) + " | Escape |",
+            "|---|---|" + "---|" * len(CAUSE_CLASSES) + "---|"]
+    for item in records:
+        causes = item.get("unrouted_causes") or unrouted_causes(item)  # older records lack them
+        if item.get("clean_pass") or not causes and not item.get("scored") and item.get("status") == "routed":
+            continue  # clean, or routed completely and not yet scored
+        counts = dict.fromkeys(CAUSE_CLASSES, 0)
+        for tags in causes.values():
+            if tags:
+                counts[tags[0]] += 1
+                totals[tags[0]] += 1
+        escape = item.get("escape") or {}
+        note = "; ".join([f"{'-'.join(pair['components'])} crossings {pair['crossing_pairs']}, move "
+                          + ",".join(pair["layer_moves"]) for pair in escape.get("pairs") or ()]
+                         + [f"{cluster['component']} overflow {cluster['overflow']}"
+                            for cluster in escape.get("clusters") or ()])
+        if not causes and item.get("scored"):
+            note = "KiCad only: " + (note or "no unrouted net")
+        rows.append(f"| {item.get('board')} | {len(causes)} | " + " | ".join(str(counts[name]) for name in CAUSE_CLASSES)
+                    + f" | {note.replace('|', '/')[:200]} |")
+    rows.append("| **Total (primary cause)** | " + str(sum(totals.values())) + " | "
+                + " | ".join(str(totals[name]) for name in CAUSE_CLASSES) + " | |")
+    return "\n".join(rows) + "\n"
 
 
 def track_bends(tracks) -> dict:
@@ -460,8 +556,11 @@ def run_boards(boards: Path, out_root: Path, *, router: str = "legacy", unified_
 
 # --------------------------------------------------------------------------- summary
 
-def summarize(root: Path) -> dict:
+def summarize(root: Path, boards: set[str] | None = None) -> dict:
+    """Averages over the results under ``root``, or over the named ``boards`` only."""
     records = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(root.rglob("result.json"))]
+    if boards is not None:
+        records = [item for item in records if item.get("board") in boards]
     routed = [item for item in records if item.get("status") == "routed"]
     scored = [item for item in records if item.get("scored")]
 
@@ -533,8 +632,15 @@ def failure_report(root: Path) -> str:
         stages = item.get("stages") or {}
         if stages:
             out.append(f"stages: {json.dumps(stages, sort_keys=True)[:700]}")
+        causes = item.get("unrouted_causes") or {}
         for net, diagnostics in (item.get("unrouted_details") or {}).items():
-            out.append(f"- unrouted {net}: {' | '.join(diagnostics)[:300]}")
+            cause = f"[{', '.join(causes[net])}] " if causes.get(net) else ""
+            out.append(f"- unrouted {net}: {cause}{' | '.join(diagnostics)[:300]}")
+        for pair in (item.get("escape") or {}).get("pairs") or ():
+            out.append(f"- escape: {' and '.join(pair['components'])} cross {pair['crossing_pairs']} time(s) "
+                       f"on one layer; move {', '.join(pair['layer_moves'])}")
+        for cluster in (item.get("escape") or {}).get("clusters") or ():
+            out.append(f"- escape: {cluster['component']} channel overflow {cluster['overflow']}")
         for finding in item.get("drc_findings") or []:
             parts = "; ".join(f"{part.get('description')} @ {part.get('pos')}" for part in finding["items"])
             out.append(f"- KiCad {finding['kind']} {finding.get('type')}: {finding.get('description')} :: {parts}"[:400])
@@ -607,7 +713,16 @@ def baseline_from_record(text: str, source: str = "") -> dict:
     return {"schema": BASELINE_SCHEMA, "source": source, "boards": boards}
 
 
-def compare_to_baseline(baseline: dict, current: dict) -> tuple[str, list[str]]:
+def _tier_boards(tiers: dict[str, str] | None) -> dict[str, list[str]]:
+    """Board names per tier label (``tiers.json`` maps board → tier), tiers in name order."""
+    grouped: dict[str, list[str]] = {}
+    for board, tier in sorted((tiers or {}).items()):
+        grouped.setdefault(tier, []).append(board)
+    return dict(sorted(grouped.items()))
+
+
+def compare_to_baseline(baseline: dict, current: dict,
+                        tiers: dict[str, str] | None = None) -> tuple[str, list[str]]:
     """Markdown comparison and the boards that were clean in the baseline but are not now."""
     before, after = baseline.get("boards", {}), current.get("boards", {})
     lost = sorted(name for name, item in before.items() if item.get("clean_pass")
@@ -633,6 +748,15 @@ def compare_to_baseline(baseline: dict, current: dict) -> tuple[str, list[str]]:
     clean_after = sum(bool(item.get("clean_pass")) for item in after.values())
     lines = ["### Compared with the committed baseline",
              f"Clean boards: {clean_before} → {clean_after} (gained {len(gained)}, lost {len(lost)})", ""]
+    for tier, names in _tier_boards(tiers).items():
+        tier_before = [name for name in names if name in before]
+        clean = (sum(bool(before[name].get("clean_pass")) for name in tier_before),
+                 sum(bool((after.get(name) or {}).get("clean_pass")) for name in names))
+        lines.append(f"- {tier}: {clean[0]} of {len(tier_before)} → {clean[1]} of {len(names)}"
+                     + ("" if len(tier_before) == len(names) else
+                        f" ({len(names) - len(tier_before)} board(s) not in the baseline)"))
+    if tiers:
+        lines.append("")
     if gained:
         lines += ["Now clean: " + ", ".join(gained), ""]
     if lost:
@@ -768,6 +892,10 @@ def _note(item: dict) -> str:
     return " ".join(str(text).split()).replace("|", "/")[-160:]
 
 
+def _read_tiers(path: Path | None) -> dict[str, str] | None:
+    return json.loads(path.read_text(encoding="utf-8")) if path is not None else None
+
+
 def _save(out_dir: Path, record: dict) -> None:
     (out_dir / "result.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -793,10 +921,13 @@ def main(argv: list[str] | None = None) -> int:
     summary = commands.add_parser("summarize")
     summary.add_argument("root", type=Path)
     summary.add_argument("--markdown", action="store_true")
+    summary.add_argument("--tiers", type=Path, help="tiers.json (board -> tier): one table per tier")
     boards = commands.add_parser("boards")
     boards.add_argument("root", type=Path)
     failures = commands.add_parser("failures")
     failures.add_argument("root", type=Path)
+    causes = commands.add_parser("causes", help="unrouted nets per cause class, per unclean board")
+    causes.add_argument("root", type=Path)
     baseline = commands.add_parser("baseline", help="write per-board outcomes as a comparison baseline")
     baseline.add_argument("root", type=Path, help="a results directory, or with --from-record a record file")
     baseline.add_argument("--from-record", action="store_true",
@@ -823,6 +954,8 @@ def main(argv: list[str] | None = None) -> int:
     against.add_argument("first", type=Path)
     against.add_argument("second", type=Path)
     against.add_argument("--names", nargs=2, default=("A", "B"), metavar=("FIRST", "SECOND"))
+
+    compare.add_argument("--tiers", type=Path, help="tiers.json (board -> tier): clean counts per tier")
     annotate = commands.add_parser("annotate", help="print a file as GitHub notice annotations")
     annotate.add_argument("file", type=Path)
     annotate.add_argument("--title", required=True)
@@ -847,7 +980,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     elif args.command == "compare":
         text, lost = compare_to_baseline(json.loads(args.baseline.read_text(encoding="utf-8")),
-                                         baseline_records(args.root))
+                                         baseline_records(args.root), _read_tiers(args.tiers))
         print(text, end="")
         return 1 if lost else 0
     elif args.command == "run":
@@ -882,9 +1015,17 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "boards":
         print(board_table(args.root), end="")
         return 0
+    elif args.command == "causes":
+        print(cause_table(args.root), end="")
+        return 0
     else:
-        result = summarize(args.root)
-        print(summary_table(result) if args.markdown else json.dumps(result, indent=2))
+        groups = _tier_boards(_read_tiers(args.tiers)) or {None: None}
+        for tier, names in groups.items():
+            result = summarize(args.root, set(names) if names is not None else None)
+            if args.markdown:
+                print((f"#### {tier}\n\n" if tier else "") + summary_table(result))
+            else:
+                print(json.dumps({**result, "tier": tier} if tier else result, indent=2))
         return 0
     print(json.dumps({key: record.get(key) for key in ("board", "status", "seconds", "clean_pass", "drc_errors",
                                                        "unconnected_items", "unrouted_nets")}))

@@ -243,6 +243,33 @@ def test_route_report_placement_findings_become_located_warnings(tmp_path, run_d
     assert [i.id for i in issues if i.stage == "placement"] == ["W1"]
 
 
+def test_route_report_escape_findings_become_located_issues(tmp_path, run_dir):
+    run_copy = tmp_path / "escape"
+    run_copy.mkdir()
+    (run_copy / "board.kicad_pcb").write_text((run_dir / "board.kicad_pcb").read_text())
+    report = json.loads((run_dir / "route-report.json").read_text())
+    pads = [p for p in load_run(run_dir).scene().pads if p.net][:2]
+    first, second = pads[0], pads[1]
+    report["escape"] = {
+        "pairs": [{"components": [first.ref, second.ref], "nets": [first.net, "N3"], "crossing_pairs": 1,
+                   "crossing_nets": [first.net, "N3"], "layer_moves": ["N3"], "analysed": True},
+                  {"components": ["A", "B"], "nets": ["X"], "crossing_pairs": 0, "crossing_nets": [],
+                   "layer_moves": [], "analysed": True}],
+        "clusters": [{"component": second.ref, "inner_signal_pins": [f"{second.ref}.{second.pad}"],
+                      "channels": [{"layer": "F.Cu", "demand": 1, "capacity": 0, "gaps": 8, "overflow": 1}],
+                      "overflow": 1},
+                     {"component": "Z", "inner_signal_pins": ["Z.1"], "channels": [], "overflow": 0}]}
+    (run_copy / "route-report.json").write_text(json.dumps(report))
+    issues = [i for i in run_issues(load_run(run_copy)) if i.stage == "escape"]
+    assert [(i.id, i.code) for i in issues] == [("X1", "ESCAPE-CROSSING"), ("X2", "ESCAPE-CHANNEL-OVERFLOW")]
+    crossing, overflow = issues
+    assert "move N3 to another layer" in crossing.title and "unrouted: N3" in crossing.title
+    assert crossing.window() is not None and crossing.objects == [first.ref, second.ref]
+    assert overflow.objects == [f"{second.ref}.{second.pad}"] and overflow.nets == [second.net]
+    assert "F.Cu 1/0" in overflow.title and overflow.window() is not None
+    assert all(i.stage != "escape" for i in run_issues(load_run(run_dir)))
+
+
 def test_estimated_plane_opens_are_located_when_no_native_check_ran(tmp_path, run_dir):
     run_copy = tmp_path / "estimated"
     run_copy.mkdir()
