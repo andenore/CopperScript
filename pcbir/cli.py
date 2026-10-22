@@ -834,8 +834,9 @@ def _parser() -> argparse.ArgumentParser:
         help="ordinary detailed router: the pass-based legacy router or the unified negotiated router")
     board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
         help="grid pitch of the unified router (default: 0.25 mm, finer to align with ball grids)")
-    board_route_parser.add_argument("--unified-iterations", type=int, default=40,
-        help="maximum negotiation iterations of the unified router (default: 40)")
+    board_route_parser.add_argument("--unified-iterations", type=int, default=150,
+        help="maximum negotiation iterations of the unified router; it also stops after 60 "
+             "iterations without improvement (default: 150)")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
         help="wall-time budget for the unified router; it returns its best result when exceeded")
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",

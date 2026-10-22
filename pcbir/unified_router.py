@@ -67,7 +67,13 @@ _MOVES = ((1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
 @dataclass(frozen=True, slots=True)
 class UnifiedRouterOptions:
     pitch_nm: int | None = None    # None: 0.25 mm, finer where a ball grid needs it
-    maximum_iterations: int = 40
+    maximum_iterations: int = 150
+    # Stop negotiating once this many iterations in a row have not improved
+    # the best result (0: run to maximum_iterations). Boards that converge
+    # stop when conflict-free; boards that cannot stop early. Conflicts can
+    # plateau for dozens of iterations before the last ones clear, so a short
+    # limit cuts off negotiations that would converge.
+    stall_iterations: int = 60
     present_factor: float = 0.6
     present_growth: float = 1.5
     history_increment: float = 0.8
@@ -137,6 +143,8 @@ class UnifiedRouterOptions:
     def __post_init__(self) -> None:
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0:
             raise ValueError("unified router pitch and iterations must be positive")
+        if self.stall_iterations < 0:
+            raise ValueError("unified router stall iterations must not be negative")
 
 
 # ---------------------------------------------------------------------------
@@ -1727,6 +1735,7 @@ class _Router:
         routes = self.routes
         present = self.present
         best_snapshot = None
+        best_iteration = 0
         pending = [s.name for s in specs if only is None or s.name in only or s.name not in routes]
         by_name = {s.name: s for s in specs}
         iteration = 0
@@ -1750,9 +1759,12 @@ class _Router:
             score = (len(failed) + len(conflicts), sum(r.length for r in routes.values()))
             if best_snapshot is None or score < best_snapshot[0]:
                 best_snapshot = (score, dict(routes), set(conflicts))
+                best_iteration = iteration
             emit(self.on_progress, "unified_iteration", "finished", iteration=iteration,
                  conflicted=len(conflicts), failed=len(failed))
             if not conflicts:
+                break
+            if options.stall_iterations and iteration - best_iteration >= options.stall_iterations:
                 break
             if deadline is not None and perf_counter() > deadline:
                 break
