@@ -173,6 +173,17 @@ def _spine_distance(spine: tuple[Point, ...], px, py):
     return np.where(inside_pos | inside_neg, 0.0, best)
 
 
+def _polygon_distance(vertices: tuple[Point, ...], px, py):
+    """Distance from points to a simple polygon of any shape (0 inside)."""
+    xs = [float(p.x_nm) for p in vertices]
+    ys = [float(p.y_nm) for p in vertices]
+    best = None
+    for i in range(len(vertices)):
+        d = _segment_distance(px, py, xs[i], ys[i], xs[(i + 1) % len(xs)], ys[(i + 1) % len(ys)])
+        best = d if best is None else np.minimum(best, d)
+    return np.where(_polygon_inside(vertices, px, py), 0.0, best)
+
+
 def _polygon_inside(vertices: tuple[Point, ...], px, py):
     """Even-odd point-in-polygon for arrays of points."""
     inside = np.zeros(np.broadcast(px, py).shape, dtype=bool)
@@ -241,6 +252,7 @@ class _Obstacle:
     is_pad: bool = False
     blocks_tracks: bool = True
     blocks_vias: bool = True
+    polygon: bool = False      # spine is a simple polygon, not a convex hull
 
 
 class _Rasters:
@@ -359,7 +371,9 @@ class _Rasters:
                 continue
             wx = px[iy0:iy1 + 1, ix0:ix1 + 1]
             wy = py[iy0:iy1 + 1, ix0:ix1 + 1]
-            hit = _spine_distance(item.spine, wx, wy) < reach
+            distance = (_polygon_distance(item.spine, wx, wy) if item.polygon
+                        else _spine_distance(item.spine, wx, wy))
+            hit = distance < reach
             if not hit.any():
                 continue
             for layer in item.layers:
@@ -631,6 +645,15 @@ class _Router:
             obstacles.append(_Obstacle(
                 _FOREIGN, tuple(layer_index[l] for l in layers if l in layer_index),
                 shape.spine, shape.radius_nm, 0))
+        # A routing-reserved zone keeps other nets' tracks out, as the exact
+        # check does; its own net and every net's vias may still enter it.
+        reservations = index.zone_reservations
+        for zone, outer in reservations.zones:
+            floor = max(reservations.minimum_clearance_nm, zone.clearance_nm or 0,
+                        reservations.clearances.get(zone.net, 0))
+            obstacles.append(_Obstacle(
+                self._net_id(zone.net), tuple(layer_index[l] for l in zone.layers if l in layer_index),
+                outer.spine, outer.radius_nm, floor, blocks_vias=False, polygon=True))
         holes = [(_FOREIGN if hole.net.startswith("<") else self._net_id(hole.net),
                   float(hole.position.x_nm), float(hole.position.y_nm), float(hole.radius_nm))
                  for hole in index._holes]
