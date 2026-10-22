@@ -863,6 +863,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--array-flow", action=argparse.BooleanOptionalAction, default=False,
         help="choose which ball-grid balls escape on the surface by min-cost flow; the rest take vias "
              "(docs/escape-planning.md)")
+    board_route_parser.add_argument("--via-lattice", action=argparse.BooleanOptionalAction, default=False,
+        help="before any other copper, give every ball-grid ball that needs a via one site of its own, "
+             "chosen jointly per package (escape plan E7, docs/escape-planning.md)")
     board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
         help="grid pitch of the unified router (default: 0.25 mm, finer to align with ball grids)")
     board_route_parser.add_argument("--unified-iterations", type=int, default=150,
@@ -1737,8 +1740,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     legacy_gates=args.legacy_gates,
                     unified_options=_unified_options(args),
                     escape_plan_options=(EscapePlanOptions(two_end_order=args.escape_plan or args.bus_layers,
-                                                           bus_layers=args.bus_layers, array_flow=args.array_flow)
-                                         if args.escape_plan or args.bus_layers or args.array_flow else None),
+                                                           bus_layers=args.bus_layers, array_flow=args.array_flow,
+                                                           via_lattice=args.via_lattice)
+                                         if args.escape_plan or args.bus_layers or args.array_flow
+                                         or args.via_lattice else None),
                     **({"power_area_options": power_area_options} if power_area_options is not None else {}),
                     **({"power_native_verifier": power_native_verifier} if power_native_verifier is not None else {}),
                 )

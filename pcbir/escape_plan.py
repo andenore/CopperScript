@@ -73,6 +73,11 @@ class EscapePlanOptions:
     # Bus layers (E5): spread a crossing bundle's moved nets over successive
     # layers, each a largest non-crossing subset, within each net's via budget.
     bus_layers: bool = False
+    # Via lattice (E7): before any other copper, one via site per ball grid
+    # ball that needs one, chosen jointly (via_lattice.plan_via_lattices); the
+    # outer this-many cell rings stay free of signal vias.
+    via_lattice: bool = False
+    lattice_band_rings: int = 1
 
 
 @dataclass(frozen=True, slots=True)

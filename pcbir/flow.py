@@ -187,7 +187,7 @@ def run_routing_pipeline(
         critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
         return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
                                      stopped_after="placement")
-    array_plans = None
+    array_plans = surface_balls = None
     if escape_plan_options is not None and escape_plan_options.array_flow:
         # Ball grids: which balls escape on the surface (min-cost flow); the
         # rest take vias. Fanout tries a surface escape first for those balls.
@@ -202,6 +202,23 @@ def run_routing_pipeline(
             route_ordinary = partial(_route_unified_compat, unified_options, escape_options=unified_fanout)
         elif fanout_options is not None:
             fanout_options = replace(fanout_options, surface_pads=fanout_options.surface_pads | surface_balls)
+    lattice = None
+    if escape_plan_options is not None and escape_plan_options.via_lattice:
+        # Ball grids: one via site per ball that needs one, before escapes,
+        # bypasses and critical routes can take them. Escapes and bypasses
+        # plan with the lattice copper in their frame (a bypass reaches its
+        # ball's via); critical routing sees it as keepouts; it joins the
+        # board after critical routing.
+        from .hard_macros import macro_source, materialize_hard_macros
+        from .via_lattice import plan_via_lattices
+        frame = materialize_hard_macros(macro_source(placement.board))
+        planned = plan_via_lattices(frame, surface=surface_balls,
+                                    band_rings=escape_plan_options.lattice_band_rings)
+        emit(on_progress, "via_lattice", "finished", **planned.report())
+        if planned.vias:
+            lattice = (planned.tracks, planned.vias,
+                       _copper_keepouts(placement.board, planned.tracks, planned.vias, "lattice-reserve",
+                                        fixed=frame))
     if escape_plan_options is not None and escape_plan_options.two_end_order:
         # Plan once on the placed board: escape generation keeps kept nets'
         # surface pins off dogbone vias, and the router follows the plan's
@@ -310,17 +327,19 @@ def run_routing_pipeline(
             # Ordinary pins of crowded packages get escapes planned before the
             # critical router runs; the critical router sees them as keepouts,
             # so it cannot wall those pins in (one exact pass, no gate).
-            reserved = _plan_ordinary_escapes(placement.board, unified_fanout, on_progress)
+            reserved = _plan_ordinary_escapes(placement.board, unified_fanout, on_progress,
+                                              prefix=lattice[:2] if lattice else ((), ()))
         if (unified_options is not None and placement.board.decoupling_links
                 and getattr(unified_options, "pre_route_decouplers", True)):
             # Bypasses route before critical nets (as package access did), so
             # a critical route cannot take a capacitor's short surface feed.
-            held = _plan_decouplers(placement.board, reserved[2] if reserved else (), on_progress)
+            held = _plan_decouplers(placement.board, reserved[2] if reserved else (), on_progress,
+                                    prefix=lattice[:2] if lattice else ((), ()))
             if reserved is not None and held[3]:
                 dropped = {keepout.id for keepout in held[3]}
                 reserved = (reserved[0], reserved[1], tuple(k for k in reserved[2] if k.id not in dropped))
         source = placement.board
-        extra = (*(reserved[2] if reserved else ()), *(held[2] if held else ()))
+        extra = (*(reserved[2] if reserved else ()), *(held[2] if held else ()), *(lattice[2] if lattice else ()))
         if extra:
             source = replace(source, copper_keepouts=(*source.copper_keepouts, *extra))
         critical = route_critical_nets(source, placement.global_route,
@@ -337,7 +356,8 @@ def run_routing_pipeline(
                          nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
                     retry = route_critical_nets(
                         replace(placement.board, copper_keepouts=(*placement.board.copper_keepouts, *kept,
-                                                                  *(held[2] if held else ()))),
+                                                                  *(held[2] if held else ()),
+                                                                  *(lattice[2] if lattice else ()))),
                         placement.global_route, on_progress=critical_progress(on_progress))
                     if sum(not item.connected for item in retry.nets) < len(
                             [item for item in critical.nets if not item.connected]):
@@ -356,6 +376,14 @@ def run_routing_pipeline(
                                 status=FeedbackStatus.PASS,
                                 full_route_certified=True,
                                 placement_candidate=placement.placement_candidate + "-critical")
+    if lattice is not None and critical_feedback is not None and critical_feedback.accepted_moves:
+        lattice = None  # placement moved: the lattice no longer applies
+        critical = replace(critical, board=replace(critical.board, copper_keepouts=tuple(
+            k for k in critical.board.copper_keepouts if not k.id.startswith("lattice-reserve"))))
+    if lattice is not None:
+        # The lattice copper joins the board first (bypasses were planned on it).
+        held = (*lattice[:2], lattice[2], ()) if held is None else (
+            (*lattice[0], *held[0]), (*lattice[1], *held[1]), (*held[2], *lattice[2]), held[3])
     if held is not None and critical_feedback is not None and critical_feedback.accepted_moves:
         held = None  # placement moved: the planned bypass copper no longer applies
         critical = replace(critical, board=replace(critical.board, copper_keepouts=tuple(
@@ -646,10 +674,12 @@ def run_routing_pipeline(
     )
 
 
-def _plan_ordinary_escapes(board, fanout_options, on_progress):
+def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ())):
     """Escapes for crowded ordinary pins, and keepouts that reserve them.
 
     Returns (tracks, vias, keepouts) on the macro-materialized frame, or None.
+    ``prefix`` (tracks, vias) is planned copper the frame already holds (a
+    via lattice); it is not part of the result.
     """
     from collections import Counter
     from .fanout import route_fanout
@@ -666,6 +696,7 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress):
         return None
     emit(on_progress, "ordinary_escapes", "started", nets=len(ordinary))
     frame = materialize_hard_macros(macro_source(board))
+    frame = replace(frame, tracks=(*frame.tracks, *prefix[0]), vias=(*frame.vias, *prefix[1]))
     try:
         escapes = route_fanout(frame, fanout_options, only_nets=ordinary)
     except ValueError as error:
@@ -736,7 +767,7 @@ def _copper_keepouts(board, tracks, vias, prefix, fixed=None):
     return tuple(keepouts)
 
 
-def _plan_decouplers(board, reserved_keepouts, on_progress):
+def _plan_decouplers(board, reserved_keepouts, on_progress, *, prefix=((), ())):
     """Bypass copper routed before critical nets, held as keepouts meanwhile.
 
     The critical router needs a board without ordinary copper, so bypasses are
@@ -748,7 +779,8 @@ def _plan_decouplers(board, reserved_keepouts, on_progress):
     from .hard_macros import macro_source, materialize_hard_macros
     emit(on_progress, "bypass_reservation", "started", links=len(board.decoupling_links))
     frame = materialize_hard_macros(macro_source(board))
-    frame = replace(frame, copper_keepouts=(*frame.copper_keepouts, *reserved_keepouts))
+    frame = replace(frame, tracks=(*frame.tracks, *prefix[0]), vias=(*frame.vias, *prefix[1]),
+                    copper_keepouts=(*frame.copper_keepouts, *reserved_keepouts))
     result = route_decouplers(frame)
     released = ()
     pending = frozenset(link for link, _ in result.pending)
