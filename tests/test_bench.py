@@ -118,7 +118,7 @@ def test_compare_reports_gained_and_lost_clean_boards():
 def test_committed_baseline_matches_the_published_result():
     baseline = json.loads((Path(__file__).parents[1] / ".github/routing-benchmark-baseline.json").read_text())
     assert len(baseline["boards"]) == 99
-    assert sum(item["clean_pass"] for item in baseline["boards"].values()) == 91
+    assert sum(item["clean_pass"] for item in baseline["boards"].values()) == 93
 
 
 def test_baseline_round_trips_through_the_published_record():
@@ -129,3 +129,69 @@ def test_baseline_round_trips_through_the_published_record():
     assert boards["a"] == {"status": "routed", "clean_pass": True, "unrouted": 0, "drc_errors": 0,
                            "unconnected_items": 0, "vias": 3, "wirelength_mm": 12.5}
     assert boards["b"]["clean_pass"] is False and boards["b"]["vias"] is None
+
+
+def test_unrouted_nets_get_a_primary_cause_class():
+    from pcbir.bench import unrouted_causes
+    record = {
+        "unrouted_nets": ["CE", "MISO", "PWR", "SIG", "LOST", "ODD"],
+        "unrouted_details": {
+            "CE": ["detailed search cannot reach P1.6",
+                   "search: 4 calls, 0 out of budget, 4 no path, 900 states"],
+            "MISO": ["search: 3 calls, 3 out of budget, 0 no path, 60000 states"],
+            "PWR": ["area routing blocked: package-access preflight incomplete"],
+            "SIG": ["search: 2 calls, 2 out of budget, 0 no path, 40000 states"],
+            "ODD": ["rip-up limit reached"],
+        },
+        "escape_causes": {"CE": ["two_end_crossing"], "MISO": ["two_end_crossing"]},
+        "package_pending_nets": ["LOST"],
+    }
+    assert unrouted_causes(record) == {
+        "CE": ["two_end_crossing", "no_path"], "MISO": ["two_end_crossing", "search_budget"],
+        "PWR": ["package_access"], "SIG": ["search_budget"], "LOST": ["package_access", "unlocated"],
+        "ODD": ["other"]}
+    # An escape cause outranks the pending exit it explains.
+    record["escape_causes"]["LOST"] = ["channel_overflow"]
+    assert unrouted_causes(record)["LOST"] == ["channel_overflow", "package_access", "unlocated"]
+
+
+def test_cause_table_counts_primary_causes_and_marks_kicad_only_failures(tmp_path):
+    from pcbir.bench import cause_table
+    records = {
+        "clean": {"board": "clean", "clean_pass": True, "status": "routed", "unrouted_nets": []},
+        "header": {"board": "header", "clean_pass": False, "status": "routed", "unrouted_nets": ["CE", "SCK"],
+                   "unrouted_causes": {"CE": ["two_end_crossing", "no_path"], "SCK": ["no_path"]},
+                   "escape": {"pairs": [{"components": ["P1", "U1"], "crossing_pairs": 1,
+                                         "layer_moves": ["MISO"], "analysed": True}], "clusters": []}},
+        "kicad": {"board": "kicad", "clean_pass": False, "status": "routed", "unrouted_nets": [],
+                  "unconnected_items": 2, "scored": True},
+        "unscored": {"board": "unscored", "status": "routed", "unrouted_nets": []},
+    }
+    for name, record in records.items():
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "result.json").write_text(json.dumps(record))
+    table = cause_table(tmp_path)
+    assert "| clean |" not in table and "| unscored |" not in table
+    assert "| header | 2 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | P1-U1 crossings 1, move MISO |" in table
+    assert "| kicad | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | KiCad only: no unrouted net |" in table
+    assert "| **Total (primary cause)** | 2 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | |" in table
+
+
+def test_tiers_split_the_summary_and_the_comparison(tmp_path):
+    from pcbir.bench import compare_to_baseline, main
+    for name, clean in (("0001_a", True), ("0002_b", False), ("0113_c", True)):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "result.json").write_text(json.dumps({"board": name, "clean_pass": clean,
+                                                                 "status": "routed", "seconds": 1}))
+    tiers = {"0001_a": "D3-A", "0002_b": "D3-A", "0113_c": "D3-B"}
+    assert summarize(tmp_path, {"0001_a", "0002_b"})["clean_pass_rate"] == 0.5
+    before = _baseline(**{"0001_a": {"clean_pass": True}, "0002_b": {"clean_pass": False}})
+    after = _baseline(**{"0001_a": {"clean_pass": True}, "0002_b": {"clean_pass": True},
+                         "0113_c": {"clean_pass": True}})
+    text, lost = compare_to_baseline(before, after, tiers)
+    assert not lost
+    assert "- D3-A: 1 of 2 → 2 of 2" in text
+    assert "- D3-B: 0 of 0 → 1 of 1 (1 board(s) not in the baseline)" in text
+    tiers_file = tmp_path / "tiers.json"
+    tiers_file.write_text(json.dumps(tiers))
+    assert main(["summarize", str(tmp_path), "--markdown", "--tiers", str(tiers_file)]) == 0

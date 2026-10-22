@@ -253,6 +253,7 @@ def test_retargeted_remote_replacement_is_a_lock_mismatch(tmp_path: Path) -> Non
     with pytest.raises(CopperScriptError) as captured:
         compile_file(board_path, locked=True, offline=True)
     assert captured.value.code == "PKG008"
+    assert "expected source" in str(captured.value) and "v3.0.0" in str(captured.value)
     compile_file(board_path, offline=True)
     assert "library.git@v3.0.0" in (tmp_path / "copper.lock").read_text(encoding="utf-8")
 

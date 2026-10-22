@@ -40,6 +40,7 @@ from ..physical import (
 )
 from .base import Artifact, ArtifactManifest
 from ..clusters import footprint_geometry_digest, resolved_cluster_keepouts
+from .routing_clearance import routing_clearance_rules
 from ..silkscreen import SilkscreenText, artwork_layer
 
 
@@ -116,17 +117,24 @@ class KiCadPcbBackend:
                 "and the sidecar is not manufacturing qualification."
             )
         rules = ()
-        if board.component_hole_clearances or len(board.placements) > 1:
+        if board.component_hole_clearances or len(board.placements) > 1 or routing_clearance_rules(board):
             rules = (Artifact(f"{_safe_name(board.name)}.kicad_dru", "application/x-kicad-rules",
                               _render_rules(board)),)
-        if board.component_hole_clearances:
-            warnings.append(
-                "Component-scoped hole clearances ("
-                + ", ".join(f"{rule.reference}: {_mm(rule.clearance_nm)} mm"
-                            for rule in sorted(board.component_hole_clearances,
-                                               key=lambda item: item.reference))
-                + ") are KiCad custom rules in the .kicad_dru; keep it beside the project."
-            )
+            if board.component_hole_clearances:
+                warnings.append(
+                    "Component-scoped hole clearances ("
+                    + ", ".join(f"{rule.reference}: {_mm(rule.clearance_nm)} mm"
+                                for rule in sorted(board.component_hole_clearances,
+                                                   key=lambda item: item.reference))
+                    + ") are KiCad custom rules in the .kicad_dru; keep it beside the project."
+                )
+            if routing_clearance_rules(board):
+                warnings.append("Source net clearances are KiCad custom rules in the .kicad_dru; "
+                                "keep it beside the project for native DRC and zone refill.")
+            if any(r.clearance_nm is not None and r.breakout_clearance_nm is not None
+                   for r in board.net_routing_rules):
+                warnings.append("Native net clearance exports the breakout lower bound, not its "
+                                "region; CopperScript must recheck nominal/escape clearance ownership.")
         return ArtifactManifest(
             backend=self.name,
             target_version="10.0" if _uses_internal_connections(board) or board.polygons else self.target_version,
@@ -365,6 +373,7 @@ def _render_rules(board: PhysicalBoard) -> str:
             f"  (condition \"A.{member} && B.{member} && "
             "(A.Pad_Type == 'NPTH, mechanical' || B.Pad_Type == 'NPTH, mechanical')\"))",
         ])
+    lines.extend(routing_clearance_rules(board))
     return "\n".join(lines) + "\n"
 
 

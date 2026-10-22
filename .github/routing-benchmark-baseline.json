@@ -298,13 +298,13 @@
    "wirelength_mm": 106.278
   },
   "0034_NavigationThing_NavigationThingBacklight": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 11,
-   "unrouted": 3,
-   "vias": 9,
-   "wirelength_mm": 16.191
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 4,
+   "wirelength_mm": 71.861
   },
   "0035_KiCad-Like-a-Pro-Tutorial_rf24-breakout-v1": {
    "clean_pass": true,
@@ -313,7 +313,7 @@
    "unconnected_items": 0,
    "unrouted": 0,
    "vias": 0,
-   "wirelength_mm": 192.081
+   "wirelength_mm": 191.784
   },
   "0036_nRF24breakoutBoard_nRF24-breakout": {
    "clean_pass": true,
@@ -427,19 +427,19 @@
    "clean_pass": false,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 5,
+   "unconnected_items": 2,
    "unrouted": 2,
-   "vias": 4,
-   "wirelength_mm": 63.286
+   "vias": 6,
+   "wirelength_mm": 84.295
   },
   "0049_MySRaspiGW_MySRaspiGW_PA_LNA": {
-   "clean_pass": false,
+   "clean_pass": true,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 4,
-   "unrouted": 1,
-   "vias": 4,
-   "wirelength_mm": 67.626
+   "unconnected_items": 0,
+   "unrouted": 0,
+   "vias": 5,
+   "wirelength_mm": 98.284
   },
   "0050_MySRaspiGW_MySRaspiGW_PA_LNA_Pimoroni": {
    "clean_pass": false,
@@ -769,10 +769,10 @@
    "clean_pass": false,
    "drc_errors": 0,
    "status": "routed",
-   "unconnected_items": 7,
-   "unrouted": 2,
-   "vias": 6,
-   "wirelength_mm": 60.507
+   "unconnected_items": 4,
+   "unrouted": 1,
+   "vias": 9,
+   "wirelength_mm": 70.235
   },
   "0087_solar-lanterns_proto1": {
    "clean_pass": true,
@@ -893,5 +893,5 @@
   }
  },
  "schema": "copperscript-bench-baseline/v0.1",
- "source": "routing-benchmark run 39576075376 on b05b89e (routing refactor merged with main, PR #15), stock KiCad 9.0.9"
+ "source": "routing-benchmark run 39634433599 on 34e0d41 (plan 3.6 edge pads), stock KiCad 9.0.9"
 }

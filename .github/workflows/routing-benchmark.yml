@@ -1,7 +1,8 @@
 name: Route the PCBWorld D3 benchmark boards
 
-# Routes PCBWorld's D3 evaluation boards (by default D3-A: the 99 easy test
-# boards, all from PCBench) with their placements held fixed, writes the copper
+# Routes PCBWorld's D3 evaluation boards (D3-A: the 99 easy test boards, and
+# D3-B: the 10 medium test boards, all from PCBench) with their placements held
+# fixed, writes the copper
 # back into each original KiCad board and scores it with stock kicad-cli DRC
 # under the board's own project rules. Pins live in
 # .github/routing-benchmark.json. Measurements only: never signoff,
@@ -10,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: Route only the first N boards of the tier (0 = all)
+        description: Route only the first N boards of each tier (0 = all)
         default: '0'
   push:
     branches: ['claude/**']
@@ -50,20 +51,34 @@ jobs:
           import json, sys
           pins = json.load(open("CopperScript/.github/routing-benchmark.json"))
           for key in ("pcbworld_repository", "pcbworld_ref", "pcbench_repository", "pcbench_ref",
-                      "kicad_ppa", "kicad_series", "tier", "split", "board_seconds"):
+                      "kicad_ppa", "kicad_series", "split", "board_seconds"):
               print(f"{key}={pins[key]}")
+          print("tiers=" + ",".join(pins["tiers"]))
           print("limit=" + sys.argv[1])
           print("shards=" + json.dumps(list(range(pins["shards"]))))
           print(f"shard_count={pins['shards']}")
           PY
+      - name: Restore cached KiCad packages
+        id: kicad-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: kicad9-debs-${{ hashFiles('CopperScript/.github/routing-benchmark.json') }}
       - name: Install stock KiCad 9 (board preparation and the scorer)
+        env:
+          KICAD_DEB_CACHE: /home/runner/kicad-debs
         run: |
-          sudo add-apt-repository --yes "${{ steps.plan.outputs.kicad_ppa }}"
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends kicad python3-yaml
+          bash CopperScript/scripts/ci_install_from_ppa.sh "${{ steps.plan.outputs.kicad_ppa }}" \
+            "${{ steps.plan.outputs.kicad_series }}" kicad python3-yaml
           kicad-cli version | tee "$RUNNER_TEMP/kicad-version.txt"
           case "$(kicad-cli version)" in "${{ steps.plan.outputs.kicad_series }}".*) ;; *) echo "unexpected KiCad"; exit 1;; esac
           /usr/bin/python3 -c 'import pcbnew; print("pcbnew", pcbnew.Version())'
+      - name: Save KiCad packages for later runs
+        if: steps.kicad-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: ${{ steps.kicad-cache.outputs.cache-primary-key }}
       - name: Fetch PCBWorld and the selected PCBench boards at their pinned commits
         run: |
           fetch() {  # fetch <dir> <repository> <commit>
@@ -72,13 +87,18 @@ jobs:
           }
           fetch PCBWorld "${{ steps.plan.outputs.pcbworld_repository }}" "${{ steps.plan.outputs.pcbworld_ref }}"
           git -C PCBWorld checkout --quiet FETCH_HEAD
-          python3 - PCBWorld/configs/datasets/d3.json "${{ steps.plan.outputs.tier }}" "${{ steps.plan.outputs.split }}" \
+          python3 - PCBWorld/configs/datasets/d3.json "${{ steps.plan.outputs.tiers }}" "${{ steps.plan.outputs.split }}" \
             "${{ steps.plan.outputs.limit }}" > boards.txt <<'PY'
           import json, sys
           d3 = json.load(open(sys.argv[1]))
-          names = d3[sys.argv[2]][sys.argv[3]]
-          limit = int(sys.argv[4])
-          print("\n".join(names[:limit] if limit else names))
+          labels = {"easy": "D3-A", "medium": "D3-B", "hard": "D3-C"}
+          limit = int(sys.argv[4])  # the first N boards of each tier
+          tiers = {}
+          for tier in sys.argv[2].split(","):
+              names = d3[tier][sys.argv[3]]
+              tiers.update((name, labels[tier]) for name in (names[:limit] if limit else names))
+          json.dump(tiers, open("tiers.json", "w"), indent=1, sort_keys=True)
+          print("\n".join(tiers))
           PY
           echo "$(wc -l < boards.txt) boards selected"
           fetch PCBench "${{ steps.plan.outputs.pcbench_repository }}" "${{ steps.plan.outputs.pcbench_ref }}"
@@ -121,7 +141,7 @@ jobs:
               echo "::warning title=Board not prepared::$id"; missing=$((missing + 1))
             fi
           done < boards.txt
-          cp boards.txt "$RUNNER_TEMP/kicad-version.txt" boards/
+          cp boards.txt tiers.json "$RUNNER_TEMP/kicad-version.txt" boards/
           echo "::notice title=Benchmark boards::$(ls -d boards/*/ | wc -l) prepared, $missing missing"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -200,19 +220,31 @@ jobs:
       - name: Read benchmark pins
         id: pins
         run: |
-          python3 -c 'import json; p = json.load(open(".github/routing-benchmark.json")); print("kicad_ppa=" + p["kicad_ppa"])' >> "$GITHUB_OUTPUT"
+          python3 -c 'import json; p = json.load(open(".github/routing-benchmark.json")); print("kicad_ppa=" + p["kicad_ppa"]); print("kicad_series=" + p["kicad_series"])' >> "$GITHUB_OUTPUT"
           python3 -c 'import json; print("python=" + json.load(open(".github/board-toolchain.json"))["python"])' >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ steps.pins.outputs.python }}
+      - name: Restore cached KiCad packages
+        id: kicad-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: kicad9-debs-${{ hashFiles('CopperScript/.github/routing-benchmark.json') }}
       - name: Install pinned build tools, local package and stock KiCad 9
+        env:
+          KICAD_DEB_CACHE: /home/runner/kicad-debs
         run: |
           python -m pip install setuptools==80.9.0 wheel==0.45.1
           python -m pip install --no-build-isolation --no-deps -e .
-          sudo add-apt-repository --yes "${{ steps.pins.outputs.kicad_ppa }}"
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends kicad
+          bash scripts/ci_install_from_ppa.sh "${{ steps.pins.outputs.kicad_ppa }}" "${{ steps.pins.outputs.kicad_series }}" kicad
           kicad-cli version
+      - name: Save KiCad packages for later runs
+        if: steps.kicad-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/kicad-debs
+          key: ${{ steps.kicad-cache.outputs.cache-primary-key }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bench-boards
@@ -237,7 +269,9 @@ jobs:
         run: |
           {
             echo "## CopperScript on PCBWorld D3 boards"
-            python -m pcbir.bench summarize ../results --markdown
+            python -m pcbir.bench summarize ../results --markdown --tiers ../boards/tiers.json
+            echo "### Unrouted nets by cause"
+            python -m pcbir.bench causes ../results
             echo "### Scorer check: the boards' own routing"
             python -m pcbir.bench summarize ../reference --markdown
             echo "### Boards"
@@ -269,7 +303,7 @@ jobs:
       - name: Compare with the committed baseline
         run: |
           set +e
-          python -m pcbir.bench compare .github/routing-benchmark-baseline.json ../results > ../compare.md
+          python -m pcbir.bench compare .github/routing-benchmark-baseline.json ../results --tiers ../boards/tiers.json > ../compare.md
           code=$?
           set -e
           cat ../compare.md >> "$GITHUB_STEP_SUMMARY"
