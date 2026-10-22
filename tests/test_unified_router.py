@@ -529,3 +529,22 @@ def test_buses_first_with_skew_tuning_reports_untunable_members_on_the_board() -
     assert "no tuning_amplitude_limit is declared" in result.board.metadata["bus_skew"]
     plain = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True))
     assert "bus_skew" not in plain.board.metadata
+
+
+def test_tuned_bus_copper_survives_route_smoothing() -> None:
+    from math import hypot
+    board = _bus_board(amplitude="1")
+    extra = _board({"C": ((3, 18), (17, 18))})
+    board = replace(board, footprints={**board.footprints, **extra.footprints},
+                    placements=(*board.placements, *extra.placements), nets=(*board.nets, *extra.nets))
+    global_route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    length = lambda result, net: sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
+                                     for t in result.board.tracks if t.net == net)
+    plain = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, route_smoothing=True))
+    assert length(plain, "B") - length(plain, "A") > nm_from_mm(2)
+    tuned = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_skew_tuning=True,
+                                                                    route_smoothing=True))
+    assert all(net.connected for net in tuned.nets) and "bus_skew" not in tuned.board.metadata
+    assert abs(length(tuned, "B") - length(tuned, "A")) <= nm_from_mm(2)
+    drc = run_physical_drc(tuned.board)
+    assert not [f for f in drc.findings if f.severity.value == "error"]

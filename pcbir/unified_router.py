@@ -2346,6 +2346,10 @@ def route_unified(
             bus_complete = set(bus_complete) - over_length
         bus_accepted = {name: value for name, value in bus_accepted.items() if name in bus_complete}
         if options.bus_skew_tuning and bus_accepted:
+            # Lengths are final before tuning: smooth the bus copper first, and
+            # leave it out of the final smoothing, which would undo its bumps.
+            if options.route_smoothing:
+                bus_accepted = _smoothed(board, bus_accepted)
             bus_accepted, skew_notes = _tune_bus_skew(board, bus_accepted, rules)
         emit(on_progress, "unified_buses", "finished", nets=len(bus_names), complete=len(bus_complete),
              over_length=len(over_length), iterations=used, skew_notes=skew_notes)
@@ -2448,7 +2452,9 @@ def route_unified(
         board, nets = original_board, all_nets
     spec_names = {s.name for s in router.specs} | bus_complete
     if options.route_smoothing and accepted:
-        accepted = _smoothed(board, accepted)
+        held = {name: accepted[name] for name in bus_complete if name in accepted} if options.bus_skew_tuning else {}
+        rest = {name: value for name, value in accepted.items() if name not in held}
+        accepted = {**(_smoothed(_with(board, held), rest) if rest else {}), **held}
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
     all_tracks = (*board.tracks, *new_tracks)
