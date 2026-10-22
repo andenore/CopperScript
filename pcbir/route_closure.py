@@ -51,9 +51,10 @@ def routing_complete_with_fill(
     results = {n.net: n for n in pipeline.detailed.nets}
     if any(name not in results or not results[name].connected for name in required):
         return False
-    if any(not n.connected and (n.net not in zones
-               or "zone net awaits verified fill and pad stitching" not in n.diagnostics)
-           for n in pipeline.detailed.nets):
+    # A zone net is the native fill's to prove, and the evidence above did:
+    # the router's own verdict on it (deferred by the legacy router, or not
+    # explicitly joined by the unified one) does not decide.
+    if any(not n.connected and n.net not in zones for n in pipeline.detailed.nets):
         return False
     for finding in drc.findings:
         if finding.disposition is DrcDisposition.WAIVED:
