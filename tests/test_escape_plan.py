@@ -492,3 +492,13 @@ def test_fanout_keeps_planned_surface_pins_off_dogbone_vias():
     assert not any(via.net == "N2" and via.position.x_nm < nm_from_mm(20) for via in planned.created_vias)
     assert PadReference("A", "2") not in planned.pending_pads
     assert any(via.net == "N3" and via.position.x_nm < nm_from_mm(20) for via in planned.created_vias)
+
+
+def test_a_part_without_copper_pads_has_no_pad_field():
+    hole = PhysicalFootprint("hole", (FootprintPad("", Point(0, 0), Size.mm(3, 3), kind=PadKind.NON_PLATED_THROUGH_HOLE,
+                                                   shape=PadShape.CIRCLE, drill=Size.mm(3, 3)),), Size.mm(4, 4))
+    board = two_rows({1: 2, 2: 1})
+    board = PhysicalBoard("holes", board.outline, {**board.footprints, "hole": hole},
+                          (*board.placements, Placement("H1", "hole", Point.mm(20, 25))), board.nets, rules=RULES)
+    assert pad_fields(board, "H1") == ()
+    assert escape_diagnostics(board).pairs  # the rest of the board is still analysed
