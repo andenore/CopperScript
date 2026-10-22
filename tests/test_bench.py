@@ -98,6 +98,20 @@ def test_failure_report_lists_only_unclean_boards_with_their_causes(tmp_path):
     assert "KiCad violation clearance" in report and "Track [N1]" in report
 
 
+def test_track_bends_count_turns_between_two_tracks_of_one_net():
+    from pcbir.bench import track_bends
+    top = CopperLayer.FRONT
+    p = lambda x, y: Point(nm_from_mm(str(x)), nm_from_mm(str(y)))
+    width = nm_from_mm("0.2")
+    tracks = [TrackSegment("A", p(0, 0), p(2, 0), width, top),   # straight run: no bend at (2, 0)
+              TrackSegment("A", p(2, 0), p(4, 0), width, top),
+              TrackSegment("A", p(4, 0), p(5, 1), width, top),   # 45-degree bend at (4, 0)
+              TrackSegment("A", p(5, 1), p(5, 3), width, top),   # 45-degree bend at (5, 1)
+              TrackSegment("A", p(5, 3), p(7, 3), width, top),   # 90-degree bend at (5, 3)
+              TrackSegment("B", p(7, 3), p(7, 5), width, top)]   # another net meeting there is no bend
+    assert track_bends(tracks) == {"bends": 3, "bends_90": 1}
+
+
 def test_run_needs_prepared_boards_and_a_fresh_results_directory(tmp_path):
     from pcbir.bench import PREPARED_NAME, run_boards
     boards = tmp_path / "boards"
@@ -147,7 +161,7 @@ def test_baseline_round_trips_through_the_published_record():
     # Records published before the routable/seconds columns still parse.
     assert boards["a"] == {"status": "routed", "clean_pass": True, "unrouted": 0, "drc_errors": 0,
                            "unconnected_items": 0, "vias": 3, "wirelength_mm": 12.5,
-                           "routable_nets": None, "seconds": None}
+                           "routable_nets": None, "seconds": None, "bends": None, "bends_90": None}
     assert boards["b"]["clean_pass"] is False and boards["b"]["vias"] is None
 
 

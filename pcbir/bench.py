@@ -27,7 +27,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 import json
-from math import hypot
+from math import atan2, degrees, hypot
 from pathlib import Path
 import shutil
 import subprocess
@@ -105,6 +105,7 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         tracks=len(routed.tracks), vias=len(routed.vias),
         wirelength_mm=round(sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
                                 for t in routed.tracks) / 1_000_000, 3),
+        **track_bends(routed.tracks),
         stages=_stage_summary(result),
         unrouted_details={item.net: list(item.diagnostics[:4]) + _search_note(item)
                           for item in detailed.nets if not item.connected} if detailed else {},
@@ -119,6 +120,30 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
         shutil.copyfile(project, out_dir / Path(ROUTED_NAME).with_suffix(".kicad_pro"))
     _save(out_dir, record)
     return record
+
+
+def track_bends(tracks) -> dict:
+    """Direction changes where exactly two same-net tracks meet on one layer.
+
+    ``bends`` counts every such vertex; ``bends_90`` those turning 90 degrees
+    or more (a 45-degree chamfer is not one).
+    """
+    far_ends: dict = {}
+    for track in tracks:
+        if track.start != track.end:
+            far_ends.setdefault((track.net, track.layer, track.start), []).append(track.end)
+            far_ends.setdefault((track.net, track.layer, track.end), []).append(track.start)
+    bends = sharp = 0
+    for (_, _, node), ends in far_ends.items():
+        if len(ends) != 2:
+            continue
+        ux, uy = node.x_nm - ends[0].x_nm, node.y_nm - ends[0].y_nm
+        vx, vy = ends[1].x_nm - node.x_nm, ends[1].y_nm - node.y_nm
+        angle = degrees(atan2(abs(ux * vy - uy * vx), ux * vx + uy * vy))
+        if angle > 1:
+            bends += 1
+            sharp += angle > 89
+    return {"bends": bends, "bends_90": sharp}
 
 
 def _unified_options():
@@ -512,12 +537,13 @@ def baseline_records(root: Path) -> dict:
             "drc_errors": item.get("drc_errors"), "unconnected_items": item.get("unconnected_items"),
             "vias": item.get("vias"), "wirelength_mm": item.get("wirelength_mm"),
             "routable_nets": item.get("routable_nets"), "seconds": item.get("seconds"),
+            "bends": item.get("bends"), "bends_90": item.get("bends_90"),
             "router": item.get("router")}
     return {"schema": BASELINE_SCHEMA, "boards": boards}
 
 
 RECORD_COLUMNS = ("board", "status", "clean", "unrouted", "drc_errors", "unconnected", "vias", "wirelength_mm",
-                  "routable", "seconds")
+                  "routable", "seconds", "bends", "bends_90")
 
 
 def record_text(baseline: dict) -> str:
@@ -527,7 +553,7 @@ def record_text(baseline: dict) -> str:
         rows.append("|".join(str(value) for value in (
             name, item["status"], int(item["clean_pass"]), item["unrouted"], item["drc_errors"],
             item["unconnected_items"], item["vias"], item["wirelength_mm"], item.get("routable_nets"),
-            item.get("seconds"))))
+            item.get("seconds"), item.get("bends"), item.get("bends_90"))))
     return "\n".join(rows) + "\n"
 
 
@@ -555,7 +581,8 @@ def baseline_from_record(text: str, source: str = "") -> dict:
                                 "unconnected_items": value(row["unconnected"]), "vias": value(row["vias"]),
                                 "wirelength_mm": value(row["wirelength_mm"]),
                                 "routable_nets": value(row.get("routable", "")),
-                                "seconds": value(row.get("seconds", ""))}
+                                "seconds": value(row.get("seconds", "")),
+                                "bends": value(row.get("bends", "")), "bends_90": value(row.get("bends_90", ""))}
     return {"schema": BASELINE_SCHEMA, "source": source, "boards": boards}
 
 
@@ -633,6 +660,12 @@ def versus(first: dict, second: dict, names: tuple[str, str] = ("A", "B")) -> st
         middle = len(values) // 2
         return values[middle] if len(values) % 2 else round((values[middle - 1] + values[middle]) / 2, 3)
 
+    def per_100mm(items):
+        pairs = [(item.get("bends"), item.get("wirelength_mm")) for item in items]
+        pairs = [(b, w) for b, w in pairs if b is not None and w]
+        length = sum(w for _, w in pairs)
+        return round(100 * sum(b for b, _ in pairs) / length, 2) if length else None
+
     def slowest(items):
         values = [item.get("seconds") for item in items if item.get("seconds") is not None]
         return max(values) if values else None
@@ -654,6 +687,10 @@ def versus(first: dict, second: dict, names: tuple[str, str] = ("A", "B")) -> st
         (f"Vias, {len(clean_both)} boards clean in both", total(a_clean, "vias"), total(b_clean, "vias")),
         (f"Track length mm, {len(clean_both)} boards clean in both",
          total(a_clean, "wirelength_mm"), total(b_clean, "wirelength_mm")),
+        (f"Bends, {len(clean_both)} boards clean in both", total(a_clean, "bends"), total(b_clean, "bends")),
+        (f"Bends of 90 degrees or more, {len(clean_both)} boards clean in both",
+         total(a_clean, "bends_90"), total(b_clean, "bends_90")),
+        ("Bends per 100 mm of track (all routed boards)", per_100mm(a), per_100mm(b)),
         ("Routing seconds (total)", total(a, "seconds"), total(b, "seconds")),
         ("Routing seconds (median board)", median([i.get("seconds") for i in a]),
          median([i.get("seconds") for i in b])),
@@ -667,7 +704,8 @@ def versus(first: dict, second: dict, names: tuple[str, str] = ("A", "B")) -> st
     lines += ["", f"Head to head: boards where {second_name} is better / equal / worse than {first_name}.", "",
               "| Measure | better | equal | worse |", "|---|---:|---:|---:|"]
     for key, label in (("unrouted", "Unrouted nets"), ("drc_errors", "KiCad DRC errors"),
-                       ("unconnected_items", "Unconnected items"), ("seconds", "Routing seconds")):
+                       ("unconnected_items", "Unconnected items"), ("bends", "Bends"),
+                       ("seconds", "Routing seconds")):
         pairs = [(a_all[n].get(key), b_all[n].get(key)) for n in common]
         pairs = [(x, y) for x, y in pairs if x is not None and y is not None]
         better = sum(1 for x, y in pairs if y < x)
