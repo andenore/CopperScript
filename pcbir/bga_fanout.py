@@ -69,6 +69,9 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
     via_drill = board.rules.default_via_drill_nm
     width = stub_width_nm or board.rules.minimum_track_width_nm
     tracks: list[TrackSegment] = []
+    # A cell centre serves four balls; a same-net neighbour's via there would
+    # pass the clearance check but put two holes in one place.
+    taken = {via.position for via in board.vias}
     vias: list[Via] = []
     packages, fanned, blocked, surface = [], [], [], []
     for pose in sorted(board.placements, key=lambda p: p.reference):
@@ -128,7 +131,8 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
                 local = Point(land.position.x_nm + dx * half, land.position.y_nm + dy * half)
                 site = transformed_local_point(pose, local)
                 via = Via(net, site, via_size, via_drill, layers[0], layers[-1])
-                if not index.can_via(net, site, via_size, via.from_layer, via.to_layer, drill_nm=via_drill):
+                if site in taken or not index.can_via(net, site, via_size, via.from_layer, via.to_layer,
+                                                      drill_nm=via_drill):
                     continue
                 if abs(dx) == 1:
                     stubs = ((TrackSegment(net, start, site, width, side),)
@@ -143,6 +147,7 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
                     tracks.append(stub)
                 index.add_via(via)
                 vias.append(via)
+                taken.add(site)
                 fanned.append(reference)
                 accepted = True
                 break

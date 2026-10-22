@@ -640,7 +640,19 @@ def test_bga_fanout_follows_the_array_plan():
     # planned surface track; those vias move to a free cell.
     plane_board = ball_grid(8, "0.45", plane=frozenset(range(19, 47)))
     plane_plan = array_plan(plane_board)
-    assert not loaded(plan_bga_fanouts(plane_board, array_plans={"U": plane_plan}), plane_plan)
+    plane_fanout = plan_bga_fanouts(plane_board, array_plans={"U": plane_plan})
+    # A cell centre serves four balls: two same-net neighbours never share one via site.
+    sites = [via.position for via in plane_fanout.vias]
+    assert len(sites) == len(set(sites)) == 28
+    # A via lands in a loaded cell only when each of its ball's four cells is loaded or already holds a via.
+    cell = lambda point: ((point.x_nm - origin.x_nm) // nm_from_mm("0.8"), (point.y_nm - origin.y_nm) // nm_from_mm("0.8"))
+    held = {cell(point) for point in sites}
+    for ball, via in zip(plane_fanout.fanned, plane_fanout.vias):
+        if plane_plan.tile_load.get(cell(via.position), 0):
+            index = int(ball.pad) - 1
+            column, row = index % 8, index // 8
+            for around in ((column - 1, row - 1), (column, row - 1), (column - 1, row), (column, row)):
+                assert plane_plan.tile_load.get(around, 0) or around in held
 
 
 def test_closed_tile_diagonals_stop_inner_balls_even_through_open_side_gaps():
