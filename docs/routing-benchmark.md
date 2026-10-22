@@ -87,6 +87,36 @@ The workflow runs on pushes to `claude/**` branches that touch `pcbir/` or
 the benchmark files, so router changes are measured too, and on manual
 dispatch.
 
+## Router choice
+
+`router` in `.github/routing-benchmark.json` names the ordinary router the
+benchmark measures (`legacy` or `unified`, as `route-board --router`); a
+manual dispatch may override it with the `router` input. The committed
+baseline belongs to the pinned router, so a run of the other router fails the
+lost-board check by design. The per-board record also carries routable nets
+and routing seconds. To compare two runs on every recorded measure, save
+both runs' "Benchmark baseline record" annotations (or use two local
+`baseline.json` files) and run
+`python -m pcbir.bench versus FIRST SECOND --names legacy unified`. It reports
+clean boards, fully routed boards, net completion, unrouted nets, KiCad errors,
+unconnected items, vias and length on boards clean in both, routing time
+(total, median, slowest) and failed runs, plus per-board better/equal/worse
+counts and the boards clean with only one of the two.
+
+## Local runs
+
+`python -m pcbir.bench run BOARDS --out RESULTS --router unified --workers 6
+--kicad-cli KICAD_CLI --pcbnew-python PY` routes and scores every prepared
+board in `BOARDS` (`BOARDS/<id>/processed_v9_guide_v3.kicad_pcb` with its
+`.kicad_pro`, the layout of the CI's `bench-boards` artifact: download it
+from any benchmark run). Each board routes in its own process under
+`--board-seconds` (default 1200, as CI). `RESULTS` must be new or empty; the
+run writes per-board records, `summary.md`, `baseline.json` and `record.txt`.
+`--only` (board ids or number prefixes) and `--limit` select a subset. On
+Windows, KiCad's own interpreter (`KiCad/10.0/bin/python.exe`) imports
+`pcbnew`. Local scores use the installed KiCad, so compare a local run with
+another local run, not with the KiCad 9 CI baseline.
+
 ## Baseline (2026-10-20)
 
 D3-A, 99 boards, commit 07f51f6, stock KiCad 9.0.9 on `ubuntu-24.04`:

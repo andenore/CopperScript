@@ -13,6 +13,14 @@ Usage: python -m pcbir.bench route BOARD.kicad_pcb --out DIR
        python -m pcbir.bench reference BOARD.kicad_pcb --out DIR   (score the board's own routing)
        python -m pcbir.bench score DIR --kicad-cli kicad-cli
        python -m pcbir.bench summarize RESULTS_ROOT
+       python -m pcbir.bench run BOARDS --out RESULTS --router unified --kicad-cli kicad-cli --pcbnew-python python
+       python -m pcbir.bench versus LEGACY/baseline.json UNIFIED/baseline.json --names legacy unified
+
+``run`` is the local benchmark: it routes and scores every prepared board in
+BOARDS (``BOARDS/<id>/processed_v9_guide_v3.kicad_pcb`` with its
+``.kicad_pro``, as the CI's ``bench-boards`` artifact holds them) in parallel,
+each in its own process under a time limit, and writes per-board records,
+``summary.md``, ``baseline.json`` and ``record.txt`` like the CI run.
 """
 from __future__ import annotations
 
@@ -23,12 +31,14 @@ from math import hypot
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 
 from .physical import PhysicalBoard, nm_from_mm
 
 RESULT_SCHEMA = "copperscript-bench-board/v0.1"
 ROUTED_NAME = "routed.kicad_pcb"
+PREPARED_NAME = "processed_v9_guide_v3.kicad_pcb"  # PCBWorld's prepared board, as the CI collects it
 _ROUTING_TAGS = ("segment", "arc", "via")
 
 
@@ -345,6 +355,61 @@ def score_drc_report(report: dict) -> dict:
             "unconnected_items": len(unconnected), "drc_error_types": dict(sorted(by_type.items())),
             "kicad_version": report.get("kicad_version"),
             "clean_pass": not errors and not unconnected}
+
+
+# --------------------------------------------------------------------------- local runs
+
+def run_boards(boards: Path, out_root: Path, *, router: str = "legacy", workers: int = 4,
+               board_seconds: int = 1200, kicad_cli: str | None = None, pcbnew_python: str | None = None,
+               only: tuple[str, ...] = (), limit: int = 0, python: str = sys.executable,
+               progress=print) -> dict:
+    """Route (and with ``kicad_cli`` score) every prepared board under ``boards`` in parallel.
+
+    Each board routes in its own ``python -m pcbir.bench route`` process,
+    killed after ``board_seconds`` (its record then stays "incomplete", as in
+    CI). Scoring runs in the same worker right after routing.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    candidates = sorted(path for path in boards.iterdir() if (path / PREPARED_NAME).is_file())
+    if only:
+        wanted = set(only)
+        candidates = [path for path in candidates if path.name in wanted or path.name.split("_", 1)[0] in wanted]
+    if limit:
+        candidates = candidates[:limit]
+    if not candidates:
+        raise ValueError(f"no prepared boards ({PREPARED_NAME}) under {boards}")
+    out_root.mkdir(parents=True, exist_ok=True)
+    if any(out_root.iterdir()):
+        raise ValueError(f"{out_root} is not empty; give each run its own directory")
+
+    def one(board_dir: Path) -> dict:
+        out = out_root / board_dir.name
+        out.mkdir()
+        command = [python, "-m", "pcbir.bench", "route", str(board_dir / PREPARED_NAME), "--out", str(out),
+                   "--router", router]
+        with (out / "route.log").open("w", encoding="utf-8") as log:
+            try:
+                subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=board_seconds, check=False)
+            except subprocess.TimeoutExpired:
+                log.write(f"\nkilled after {board_seconds} s\n")
+        if not (out / "result.json").is_file():
+            _save(out, {"schema": RESULT_SCHEMA, "board": board_dir.name, "status": "missing", "router": router})
+        record = json.loads((out / "result.json").read_text(encoding="utf-8"))
+        if kicad_cli:
+            record = score_result(out, kicad_cli, pcbnew_python=pcbnew_python)
+        progress(f"{board_dir.name}: {record.get('status')} clean={record.get('clean_pass')} "
+                 f"unrouted={len(record.get('unrouted_nets') or [])} seconds={record.get('seconds')}")
+        return record
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        list(pool.map(one, candidates))
+    baseline = {**baseline_records(out_root), "source": f"local {router} run of {boards}"}
+    (out_root / "baseline.json").write_text(json.dumps(baseline, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    (out_root / "record.txt").write_text(record_text(baseline), encoding="utf-8")
+    summary = summarize(out_root)
+    (out_root / "summary.md").write_text(f"## CopperScript ({router} router), local run\n\n" + summary_table(summary)
+                                         + "\n" + board_table(out_root), encoding="utf-8")
+    return summary
 
 
 # --------------------------------------------------------------------------- summary
@@ -679,6 +744,16 @@ def main(argv: list[str] | None = None) -> int:
     compare = commands.add_parser("compare", help="compare results with a baseline; exit 1 if a clean board is lost")
     compare.add_argument("baseline", type=Path)
     compare.add_argument("root", type=Path)
+    run = commands.add_parser("run", help="route and score every prepared board in a directory (local benchmark)")
+    run.add_argument("boards", type=Path, help="directory of <id>/processed_v9_guide_v3.kicad_pcb boards")
+    run.add_argument("--out", type=Path, required=True, help="new, empty results directory")
+    run.add_argument("--router", choices=("legacy", "unified"), default="legacy")
+    run.add_argument("--workers", type=int, default=4)
+    run.add_argument("--board-seconds", type=int, default=1200, help="time limit per board (CI: 1200)")
+    run.add_argument("--kicad-cli", help="score with this kicad-cli (no scoring without it)")
+    run.add_argument("--pcbnew-python", help="interpreter importing KiCad's pcbnew, to refill zones before DRC")
+    run.add_argument("--only", nargs="*", default=(), help="board ids or their number prefixes")
+    run.add_argument("--limit", type=int, default=0, help="first N boards only")
     record = commands.add_parser("record", help="print a baseline file as the published per-board record")
     record.add_argument("baseline", type=Path)
     against = commands.add_parser("versus", help="compare two baselines or published records on every measure")
@@ -706,6 +781,16 @@ def main(argv: list[str] | None = None) -> int:
                                          baseline_records(args.root))
         print(text, end="")
         return 1 if lost else 0
+    elif args.command == "run":
+        try:
+            summary = run_boards(args.boards, args.out, router=args.router, workers=args.workers,
+                                 board_seconds=args.board_seconds, kicad_cli=args.kicad_cli,
+                                 pcbnew_python=args.pcbnew_python, only=tuple(args.only), limit=args.limit)
+        except (ValueError, OSError) as exc:
+            print(f"BENCH ERROR: {exc}")
+            return 2
+        print(summary_table(summary), end="")
+        return 0
     elif args.command == "record":
         print(record_text(json.loads(args.baseline.read_text(encoding="utf-8"))), end="")
         return 0

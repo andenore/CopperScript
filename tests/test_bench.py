@@ -2,6 +2,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 
+import pytest
+
 from pcbir.bench import _top_level_spans, net_codes, score_drc_report, summarize, write_back_routing
 from pcbir.importers.kicad_mod import _parse_sexpr
 from pcbir.importers.kicad_pcb import parse_kicad_pcb
@@ -94,6 +96,22 @@ def test_failure_report_lists_only_unclean_boards_with_their_causes(tmp_path):
     assert "#### bad" in report and "#### ok" not in report
     assert "unrouted N1: detailed search cannot reach U1.2" in report
     assert "KiCad violation clearance" in report and "Track [N1]" in report
+
+
+def test_run_needs_prepared_boards_and_a_fresh_results_directory(tmp_path):
+    from pcbir.bench import PREPARED_NAME, run_boards
+    boards = tmp_path / "boards"
+    (boards / "0001_empty").mkdir(parents=True)
+    with pytest.raises(ValueError, match="no prepared boards"):
+        run_boards(boards, tmp_path / "out")
+    (boards / "0001_empty" / PREPARED_NAME).write_text("")
+    used = tmp_path / "used"
+    used.mkdir()
+    (used / "old.txt").write_text("")
+    with pytest.raises(ValueError, match="not empty"):
+        run_boards(boards, used)
+    with pytest.raises(ValueError, match="no prepared boards"):
+        run_boards(boards, tmp_path / "out", only=("0002",))
 
 
 def _baseline(**boards):
