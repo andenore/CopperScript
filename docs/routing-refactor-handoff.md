@@ -50,6 +50,14 @@ To iterate on the router alone, add
 `--extra-arg=--unified-save-inputs --extra-arg=STATE.json` once and then use
 `pcbir.unified_router.replay_unified(STATE.json, **option_overrides)`.
 
+To iterate on everything after placement, add `--placements DIR`: the first
+run saves each board's placement in `DIR/<board>/placement.state.json` and
+later runs reuse it, so a variant pays only for routing. `--jobs N` routes
+boards in parallel (mind memory: CopperProbe alone needs several GB).
+
+`python -m pcbir.bench route` also writes back KiCad 10 boards (no net
+table; copper names its net), so locally re-saved D3 boards score as in CI.
+
 ## Benchmark numbers (unified router, 2026-10-21)
 
 | Board | Completion | Open | DRC | Notes |

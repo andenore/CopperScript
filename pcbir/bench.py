@@ -353,7 +353,8 @@ def write_back_routing(text: str, routed: PhysicalBoard) -> str:
     """Replace the board's top-level tracks and vias with ``routed``'s copper.
 
     Everything else in ``text`` is kept byte for byte. Nets are written by the
-    board's own net numbers; KiCad 5 to 10 share this track and via syntax.
+    board's own net numbers, or by name in a KiCad 10 board, which has no net
+    table; KiCad 5 to 10 share the rest of the track and via syntax.
     """
     spans = _top_level_spans(text)
     kept: list[str] = []
@@ -369,19 +370,25 @@ def write_back_routing(text: str, routed: PhysicalBoard) -> str:
         raise ValueError("board text has no closing parenthesis")
     codes = net_codes(text)
     names = file_layer_names(text)
-    missing = sorted({item.net for item in (*routed.tracks, *routed.vias)} - codes.keys())
-    if missing:
-        raise ValueError(f"routed copper uses nets missing from the board net table: {missing[:5]}")
+    if codes:
+        missing = sorted({item.net for item in (*routed.tracks, *routed.vias)} - codes.keys())
+        if missing:
+            raise ValueError(f"routed copper uses nets missing from the board net table: {missing[:5]}")
+        net = {name: str(code) for name, code in codes.items()}
+    else:
+        # KiCad 10 boards have no net table: copper names its net directly.
+        net = {name: '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+               for name in {item.net for item in (*routed.tracks, *routed.vias)}}
     lines = []
     for track in routed.tracks:
         lines.append(f"  (segment (start {_mm(track.start.x_nm)} {_mm(track.start.y_nm)}) "
                      f"(end {_mm(track.end.x_nm)} {_mm(track.end.y_nm)}) (width {_mm(track.width_nm)}) "
-                     f'(layer "{names.get(track.layer.value, track.layer.value)}") (net {codes[track.net]}))')
+                     f'(layer "{names.get(track.layer.value, track.layer.value)}") (net {net[track.net]}))')
     for via in routed.vias:
         lines.append(f"  (via (at {_mm(via.position.x_nm)} {_mm(via.position.y_nm)}) (size {_mm(via.size_nm)}) "
                      f'(drill {_mm(via.drill_nm)}) (layers "{names.get(via.from_layer.value, via.from_layer.value)}" '
                      f'"{names.get(via.to_layer.value, via.to_layer.value)}") '
-                     f"(net {codes[via.net]}))")
+                     f"(net {net[via.net]}))")
     insertion = ("\n" + "\n".join(lines) + "\n") if lines else ""
     return body[:closing].rstrip() + insertion + body[closing:]
 

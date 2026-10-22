@@ -265,3 +265,16 @@ def test_tiers_split_the_summary_and_the_comparison(tmp_path):
     tiers_file = tmp_path / "tiers.json"
     tiers_file.write_text(json.dumps(tiers))
     assert main(["summarize", str(tmp_path), "--markdown", "--tiers", str(tiers_file)]) == 0
+
+
+def test_write_back_names_nets_on_a_kicad10_board_without_a_net_table():
+    text = ('(kicad_pcb (version 20260206) (generator "pcbnew")\n'
+            '  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))\n'
+            '  (segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (net "OLD"))\n)\n')
+    track = TrackSegment("SIG", Point(nm_from_mm(1), nm_from_mm(2)), Point(nm_from_mm(3), nm_from_mm(2)),
+                         nm_from_mm("0.2"), CopperLayer.FRONT)
+    via = Via("GND", Point(nm_from_mm(4), nm_from_mm(2)), nm_from_mm("0.6"), nm_from_mm("0.3"))
+    routed = replace(_routed(LEGACY), tracks=(track,), vias=(via,))
+    written = write_back_routing(text, routed)
+    assert '(net "OLD")' not in written
+    assert '(layer "F.Cu") (net "SIG"))' in written and '(net "GND"))' in written

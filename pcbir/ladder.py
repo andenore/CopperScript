@@ -12,6 +12,12 @@ The ladder file lists boards with their project directory, source file and
 missing is reported as ``skipped``, so the ladder runs wherever the optional
 consumer checkouts are absent.
 
+For fast iteration, ``--placements DIR`` keeps one placement per board: the
+first run saves ``DIR/<board>/placement.state.json`` and every later run
+reuses it (``route-board --reuse-placement``), so a variant pays only for
+routing. ``route-board`` refuses a placement whose board or placement options
+changed. ``--jobs N`` routes up to N boards at once.
+
 Each run writes ``<out>/<board>/route-report.json``, ``board.kicad_pcb`` and
 ``route.log``. The aggregate goes to ``<out>/results.json`` and
 ``<out>/results.md``. Numbers come from the report's pipeline-independent
@@ -24,6 +30,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import subprocess
 import sys
@@ -63,8 +70,18 @@ def load_ladder(path: Path) -> list[dict]:
     return result
 
 
+def placement_args(board: dict, placements: Path | None) -> tuple[str, ...]:
+    """Reuse the board's saved placement, or save it on this first run."""
+    if placements is None:
+        return ()
+    directory = placements.resolve() / board["name"]
+    saved = directory / "placement.state.json"
+    return ("--reuse-placement", str(saved)) if saved.is_file() else ("--checkpoint-dir", str(directory))
+
+
 def run_board(board: dict, out: Path, *, kicad_cli: str | None = None,
-              python: str = sys.executable, extra_args: tuple[str, ...] = ()) -> dict:
+              python: str = sys.executable, extra_args: tuple[str, ...] = (),
+              placements: Path | None = None) -> dict:
     # route-board runs in the project directory: report paths must not be relative.
     directory = out.resolve() / board["name"]
     record = {"name": board["name"], "project": str(board["project"]), "tags": board["tags"]}
@@ -74,6 +91,7 @@ def run_board(board: dict, out: Path, *, kicad_cli: str | None = None,
     directory.mkdir(parents=True, exist_ok=False)
     report = directory / "route-report.json"  # what `copper issues RUN_DIR` reads
     command = [python, "-m", "copperscript", "route-board", board["source"], *board["args"], *extra_args,
+               *placement_args(board, placements),
                "--report", str(report), "-o", str(directory / "board.kicad_pcb")]
     if kicad_cli and board["native"]:
         command += ["--verify-plane-fill", kicad_cli]
@@ -204,6 +222,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="interpreter whose CopperScript runs the boards (default: this one)")
     parser.add_argument("--extra-arg", action="append", default=[], dest="extra_args",
                         help="append one route-board argument to every board (repeatable)")
+    parser.add_argument("--placements", type=Path,
+                        help="per-board saved placements: reuse DIR/<board>/placement.state.json, "
+                             "or save it there on the first run")
+    parser.add_argument("--jobs", type=int, default=1, help="boards routed at once (default 1)")
     args = parser.parse_args(argv)
     boards = load_ladder(args.ladder)
     if args.only:
@@ -219,15 +241,23 @@ def main(argv: list[str] | None = None) -> int:
     document = {"schema": SCHEMA, "label": args.label or args.out.name,
                 "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "copperscript_commit": _commit(), "ladder": str(args.ladder), "results": []}
-    for board in boards:
+    if args.jobs < 1:
+        parser.error("--jobs must be at least 1")
+
+    def run(board: dict) -> dict:
         print(f"[bench] {board['name']} ...", flush=True)
         result = run_board(board, args.out, kicad_cli=args.kicad_cli, python=args.python,
-                           extra_args=tuple(args.extra_args))
+                           extra_args=tuple(args.extra_args), placements=args.placements)
         row = _row(result)
         print(f"[bench] {board['name']}: {result['status']} completion={row['completion']} "
               f"opens={row['opens']} drc={row['drc_errors']} time={row['elapsed_s']}s", flush=True)
-        document["results"].append(result)
-        (args.out / "results.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        return result
+
+    # Results keep the ladder's board order whatever order the jobs finish in.
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for result in pool.map(run, boards):
+            document["results"].append(result)
+            (args.out / "results.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     problems = None
     if args.baseline:
         problems = compare(json.loads(args.baseline.read_text(encoding="utf-8")), document)
