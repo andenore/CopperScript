@@ -84,7 +84,7 @@ All in `pcbir/unified_router.py` unless noted; options are on
   A board without match groups routes identical copper (D3 and the small
   ladder). CopperProbe ladder, same placement: 21 opens with both on, 24
   with both off; every ADC data line routes (10 open when off), but the
-  bus skew is 8.0 mm over its 5 mm limit (no declared amplitude) and
+  bus skew is 8.0 mm against its 5 mm limit (no declared amplitude) and
   XTALIN, SWCLK, BOOT, RESREF, ADC_RESET and three FX nets are open
   instead.
 - Length priority (`length_priority`, **off**): a max_length net that detours
