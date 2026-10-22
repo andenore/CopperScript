@@ -127,6 +127,9 @@ class UnifiedRouterOptions:
     ball_field_via_sites: bool = False       # new vias inside a ball array only at cell centres
     # With ball_field_via_sites: the outer this-many cell rings get no new vias.
     ball_field_band: int = 0
+    # Rasterize obstacles in and around full ball arrays exactly (without
+    # raster_margin_nm): their single-track channels survive (escape plan E8).
+    ball_field_exact: bool = False
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
@@ -283,12 +286,16 @@ class _Rasters:
     """Lazily built legality rasters keyed by width/clearance class."""
 
     def __init__(self, board: PhysicalBoard, grid: _Grid, obstacles: list[_Obstacle],
-                 holes: list[tuple[int, float, float, float]], margin: int) -> None:
+                 holes: list[tuple[int, float, float, float]], margin: int,
+                 exact_boxes: tuple[tuple[int, int, int, int], ...] = ()) -> None:
         self.board = board
         self.grid = grid
         self.obstacles = obstacles
         self.holes = holes          # (owner, x, y, radius)
         self.margin = margin
+        # Inside these boxes (x0, y0, x1, y1; ball fields whose grid is aligned
+        # with the balls) obstacles are rasterized exactly, without the margin.
+        self.exact_boxes = exact_boxes
         self._track: dict[tuple[int, int], tuple[list[int], list[int]]] = {}
         self._via: dict[tuple[int, int, int], tuple] = {}
         self.via_mask = None        # (ny, nx) bool: False forbids a new via there
@@ -355,7 +362,7 @@ class _Rasters:
                 owner = np.where(both & (other != _FREE) & (owner != other), _FOREIGN, owner)
             hole_clear = self.board.rules.minimum_hole_clearance_nm
             for _, x, y, radius in self.holes:
-                reach = drill / 2 + radius + hole_clear + self.margin
+                reach = drill / 2 + radius + hole_clear + self._margin_at((x,), (y,))
                 ix0, iy0, ix1, iy1 = g.window(x - reach, y - reach, x + reach, y + reach)
                 if ix0 > ix1 or iy0 > iy1:
                     continue
@@ -371,6 +378,13 @@ class _Rasters:
     def via_array(self, size: int, drill: int, clearance: int):
         self.via(size, drill, clearance)
         return self._via[(size, drill, clearance)][1]
+
+    def _margin_at(self, xs, ys) -> int:
+        """The raster margin for an obstacle: none when it lies in an exact box."""
+        for x0, y0, x1, y1 in self.exact_boxes:
+            if x0 <= min(xs) and max(xs) <= x1 and y0 <= min(ys) and max(ys) <= y1:
+                return 0
+        return self.margin
 
     def _build(self, half_width: float, clearance: int, px, py, inside, edge, *,
                for_via: bool, as_array: bool = False):
@@ -388,9 +402,9 @@ class _Rasters:
             owner_id = _FOREIGN if (for_via and item.is_pad) else item.owner
             if for_via and item.is_pad:
                 gap = max(gap, 1)
-            reach = item.radius + gap + half_width + self.margin
             xs = [p.x_nm for p in item.spine]
             ys = [p.y_nm for p in item.spine]
+            reach = item.radius + gap + half_width + self._margin_at(xs, ys)
             ix0, iy0, ix1, iy1 = g.window(min(xs) - reach, min(ys) - reach,
                                           max(xs) + reach, max(ys) + reach)
             if ix0 > ix1 or iy0 > iy1:
@@ -547,7 +561,8 @@ class _Router:
             self.net_ids.setdefault(net.name, len(self.net_ids))
         obstacles, holes = self._obstacles()
         margin = options.raster_margin_nm if options.raster_margin_nm is not None else pitch // 8
-        self.rasters = _Rasters(board, self.grid, obstacles, holes, margin)
+        self.rasters = _Rasters(board, self.grid, obstacles, holes, margin,
+                                self._ball_field_boxes() if options.ball_field_exact else ())
         if options.ball_field_via_sites:
             self.rasters.via_mask = self._ball_field_via_mask()
         from .native import astar as native_astar
@@ -605,6 +620,29 @@ class _Router:
             for iy in range(iy0, iy1 + 1):
                 for ix in range(ix0, ix1 + 1):
                     hist[g.index(layer, ix, iy)] += cost
+
+    def _ball_field_boxes(self) -> tuple[tuple[int, int, int, int], ...]:
+        """Each full ball array's land box grown by one pitch (its escape band).
+
+        choose_pitch puts the grid on every ball and channel centre line there,
+        so the raster can be exact: a minimum-width channel between dogbone
+        vias is then a row of legal nodes, not lost to the margin.
+        """
+        from .package_patterns import circular_array
+        from .placement import transformed_local_point
+        boxes = []
+        for pose in self.board.placements:
+            try:
+                array = circular_array(self.board, pose.reference)
+            except ValueError:
+                array = None
+            if array is None or self.grid.pitch > array.pitch_nm // 2:
+                continue
+            points = [transformed_local_point(pose, p.position) for p in self.board.footprints[pose.footprint].pads]
+            grow = array.pitch_nm
+            boxes.append((min(p.x_nm for p in points) - grow, min(p.y_nm for p in points) - grow,
+                          max(p.x_nm for p in points) + grow, max(p.y_nm for p in points) + grow))
+        return tuple(boxes)
 
     def _ball_field_via_mask(self):
         """Inside a full ball array, new vias only at cell centres (dogbone sites).

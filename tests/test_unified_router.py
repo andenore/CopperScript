@@ -213,6 +213,30 @@ def test_ball_field_band_keeps_the_outer_cell_rings_via_free() -> None:
     assert banded(15, 15)                            # outside the field
 
 
+def test_ball_field_exact_drops_the_raster_margin_only_inside_ball_fields() -> None:
+    import numpy as np
+    from pcbir.unified_router import _FREE, _Router
+    footprint = PhysicalFootprint("test/bga25", tuple(
+        FootprintPad(str(i), Point.mm(x, y), Size.mm("0.4", "0.4"), shape=PadShape.CIRCLE)
+        for i, (x, y) in enumerate(((x, y) for y in range(-2, 3) for x in range(-2, 3)), 1)), Size.mm(5, 5))
+    base = _board({"A": ((3, 15), (17, 15))})
+    board = replace(base, footprints={**base.footprints, footprint.name: footprint},
+                    placements=(*base.placements, Placement("U", footprint.name, Point.mm(10, 6))))
+    def free(exact):
+        router = _Router(board, UnifiedRouterOptions(pitch_nm=nm_from_mm("0.25"), ball_field_exact=exact),
+                         list(board.nets), None)
+        g = router.grid
+        owner = np.asarray(router.rasters.track(nm_from_mm("0.1"), nm_from_mm("0.1"))[0]).reshape(g.nl, g.ny, g.nx)
+        def count(x0, y0, x1, y1):
+            ix0, iy0, ix1, iy1 = g.window(nm_from_mm(x0), nm_from_mm(y0), nm_from_mm(x1), nm_from_mm(y1))
+            return int((owner[0, iy0:iy1 + 1, ix0:ix1 + 1] == _FREE).sum())
+        return count(7, 3, 13, 9), count(2, 13, 18, 17)
+    plain_field, plain_outside = free(False)
+    exact_field, exact_outside = free(True)
+    assert exact_field > plain_field             # lands in the field lose their margin
+    assert exact_outside == plain_outside        # the rest of the board keeps it
+
+
 def test_via_budget_is_never_exceeded() -> None:
     from pcbir.physical import NetRoutingRule, RouteKind
     # V may not use vias and H only one: whatever H does, it stays in budget.
