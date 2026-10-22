@@ -99,7 +99,7 @@ both runs' "Benchmark baseline record" annotations (or use two local
 `baseline.json` files) and run
 `python -m pcbir.bench versus FIRST SECOND --names legacy unified`. It reports
 clean boards, fully routed boards, net completion, unrouted nets, KiCad errors,
-unconnected items, vias and length on boards clean in both, routing time
+unconnected items, vias, length and bends on boards clean in both, bends per 100 mm, routing time
 (total, median, slowest) and failed runs, plus per-board better/equal/worse
 counts and the boards clean with only one of the two.
 
@@ -112,7 +112,7 @@ board in `BOARDS` (`BOARDS/<id>/processed_v9_guide_v3.kicad_pcb` with its
 from any benchmark run). Each board routes in its own process under
 `--board-seconds` (default 1200, as CI). `RESULTS` must be new or empty; the
 run writes per-board records, `summary.md`, `baseline.json` and `record.txt`.
-`--only` (board ids or number prefixes) and `--limit` select a subset. On
+`--only` (board ids or number prefixes) and `--limit` select a subset; `--set OPTION=VALUE` (repeatable) overrides a `UnifiedRouterOptions` field for `--router unified`, so an option is measured before it becomes a default. On
 Windows, KiCad's own interpreter (`KiCad/10.0/bin/python.exe`) imports
 `pcbnew`. Local scores use the installed KiCad, so compare a local run with
 another local run, not with the KiCad 9 CI baseline.

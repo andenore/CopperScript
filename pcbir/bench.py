@@ -45,7 +45,8 @@ _ROUTING_TAGS = ("segment", "arc", "via")
 # --------------------------------------------------------------------------- routing
 
 def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20_000,
-                     passes: int = 2, pitch_mm: str = "1", router: str = "legacy") -> dict:
+                     passes: int = 2, pitch_mm: str = "1", router: str = "legacy",
+                     unified: dict | None = None) -> dict:
     """Import, route with fixed placement, write the routed board and a result record."""
     from .detailed import DetailedRouterOptions
     from .fanout import FanoutOptions
@@ -58,6 +59,8 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
     out_dir.mkdir(parents=True, exist_ok=True)
     record: dict = {"schema": RESULT_SCHEMA, "board": out_dir.name, "source": str(board_path),
                     "status": "incomplete", "router": router}
+    if unified:
+        record["unified_options"] = dict(unified)
     _save(out_dir, record)  # a run killed by its time limit stays "incomplete"
     started = time.perf_counter()
     try:
@@ -87,7 +90,7 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
                 repair_budget_multiplier=10, defer_zone_nets=bool(board.zones), enclosure_repair_nets=12),
             fanout_options=FanoutOptions(),
             plane_stitch_options=PlaneStitchOptions(maximum_contact_radius_nm=nm_from_mm(5)) if board.zones else None,
-            **({"unified_options": _unified_options()} if router == "unified" else {}),
+            **({"unified_options": _unified_options(unified)} if router == "unified" else {}),
         )
     except Exception as exc:  # noqa: BLE001 - a routing crash is a measured outcome, not a harness error
         record.update(status="route_crashed", error=f"{type(exc).__name__}: {exc}",
@@ -146,9 +149,26 @@ def track_bends(tracks) -> dict:
     return {"bends": bends, "bends_90": sharp}
 
 
-def _unified_options():
+def _unified_options(overrides: dict | None = None):
     from .unified_router import UnifiedRouterOptions
-    return UnifiedRouterOptions()
+    return UnifiedRouterOptions(**(overrides or {}))
+
+
+def unified_overrides(items) -> dict:
+    """``OPTION=VALUE`` strings as UnifiedRouterOptions overrides (JSON values, else text)."""
+    from dataclasses import fields
+    from .unified_router import UnifiedRouterOptions
+    known = {field.name for field in fields(UnifiedRouterOptions)}
+    overrides = {}
+    for item in items:
+        name, separator, text = item.partition("=")
+        if not separator or name not in known:
+            raise ValueError(f"unknown unified option {name!r}")
+        try:
+            overrides[name] = json.loads(text)
+        except json.JSONDecodeError:
+            overrides[name] = text
+    return overrides
 
 
 def _search_note(item) -> list[str]:
@@ -384,7 +404,7 @@ def score_drc_report(report: dict) -> dict:
 
 # --------------------------------------------------------------------------- local runs
 
-def run_boards(boards: Path, out_root: Path, *, router: str = "legacy", workers: int = 4,
+def run_boards(boards: Path, out_root: Path, *, router: str = "legacy", unified_set=(), workers: int = 4,
                board_seconds: int = 1200, kicad_cli: str | None = None, pcbnew_python: str | None = None,
                only: tuple[str, ...] = (), limit: int = 0, python: str = sys.executable,
                progress=print) -> dict:
@@ -395,6 +415,7 @@ def run_boards(boards: Path, out_root: Path, *, router: str = "legacy", workers:
     CI). Scoring runs in the same worker right after routing.
     """
     from concurrent.futures import ThreadPoolExecutor
+    unified_overrides(unified_set)  # reject a mistyped option before routing anything
     candidates = sorted(path for path in boards.iterdir() if (path / PREPARED_NAME).is_file())
     if only:
         wanted = set(only)
@@ -411,7 +432,7 @@ def run_boards(boards: Path, out_root: Path, *, router: str = "legacy", workers:
         out = out_root / board_dir.name
         out.mkdir()
         command = [python, "-m", "pcbir.bench", "route", str(board_dir / PREPARED_NAME), "--out", str(out),
-                   "--router", router]
+                   "--router", router, *(arg for item in unified_set for arg in ("--set", item))]
         with (out / "route.log").open("w", encoding="utf-8") as log:
             try:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=board_seconds, check=False)
@@ -760,6 +781,8 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("--search-budget", type=int, default=20_000)
     route.add_argument("--router", choices=("legacy", "unified"), default="legacy",
                        help="ordinary detailed router, as copper route-board --router")
+    route.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="unified_set",
+                       help="UnifiedRouterOptions override for --router unified (repeatable)")
     reference = commands.add_parser("reference")
     reference.add_argument("board", type=Path)
     reference.add_argument("--out", type=Path, required=True)
@@ -786,6 +809,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("boards", type=Path, help="directory of <id>/processed_v9_guide_v3.kicad_pcb boards")
     run.add_argument("--out", type=Path, required=True, help="new, empty results directory")
     run.add_argument("--router", choices=("legacy", "unified"), default="legacy")
+    run.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="unified_set",
+                     help="UnifiedRouterOptions override for --router unified (repeatable)")
     run.add_argument("--workers", type=int, default=4)
     run.add_argument("--board-seconds", type=int, default=1200, help="time limit per board (CI: 1200)")
     run.add_argument("--kicad-cli", help="score with this kicad-cli (no scoring without it)")
@@ -804,7 +829,13 @@ def main(argv: list[str] | None = None) -> int:
     annotate.add_argument("--first", type=int, default=0, help="first chunk index (a step shows 10)")
     args = parser.parse_args(argv)
     if args.command == "route":
-        record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router)
+        try:
+            unified = unified_overrides(args.unified_set)
+        except ValueError as exc:
+            print(f"BENCH ERROR: {exc}")
+            return 2
+        record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router,
+                                  unified=unified)
     elif args.command == "reference":
         record = reference_board_file(args.board, args.out)
     elif args.command == "score":
@@ -821,7 +852,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if lost else 0
     elif args.command == "run":
         try:
-            summary = run_boards(args.boards, args.out, router=args.router, workers=args.workers,
+            summary = run_boards(args.boards, args.out, router=args.router, unified_set=tuple(args.unified_set),
+                                 workers=args.workers,
                                  board_seconds=args.board_seconds, kicad_cli=args.kicad_cli,
                                  pcbnew_python=args.pcbnew_python, only=tuple(args.only), limit=args.limit)
         except (ValueError, OSError) as exc:

@@ -102,6 +102,11 @@ class UnifiedRouterOptions:
     # 0.852); the pushed-aside nets lose more than the length rule gains.
     length_priority: bool = False
     full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
+    # Straighten this call's accepted copper afterwards with the ownership-safe
+    # pass the legacy router uses (route_smoothing.smooth_owned_tracks): grid
+    # search has no turn cost, so equal-length staircases of 45-degree jogs
+    # survive. Existing board copper is never an input. Off while measured.
+    route_smoothing: bool = False
     # Extra cost (as history) on a ball grid's own surface layer: escapes are
     # short, so through-traffic between the balls should prefer inner layers.
     ball_field_cost: float = 2.0
@@ -1882,6 +1887,17 @@ def _net_track_length(board: PhysicalBoard, name: str, new_tracks) -> int:
                for t in (*(t for t in board.tracks if t.net == name), *new_tracks))
 
 
+def _smoothed(board: PhysicalBoard, accepted):
+    """``accepted`` with its tracks straightened against the complete final board."""
+    from .detailed import _smooth_owned
+    owned = tuple(t for name in sorted(accepted) for t in accepted[name][0])
+    vias = (*board.vias, *(v for name in sorted(accepted) for v in accepted[name][1]))
+    by_net: dict[str, list[TrackSegment]] = {name: [] for name in accepted}
+    for track in _smooth_owned(board, board.tracks, owned, vias):
+        by_net[track.net].append(track)
+    return {name: (tuple(by_net[name]), accepted[name][1]) for name in accepted}
+
+
 def _merge(accepted, more):
     merged = {name: (list(tracks), list(vias)) for name, (tracks, vias) in accepted.items()}
     for name, (tracks, vias) in more.items():
@@ -2244,6 +2260,8 @@ def route_unified(
         complete = set(complete) | bus_complete
         board, nets = original_board, all_nets
     spec_names = {s.name for s in router.specs} | bus_complete
+    if options.route_smoothing and accepted:
+        accepted = _smoothed(board, accepted)
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
     all_tracks = (*board.tracks, *new_tracks)
