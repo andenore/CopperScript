@@ -428,6 +428,7 @@ class _NetSpec:
     via_budget: int | None = None            # new vias allowed (max_vias minus existing ones)
     max_length: int | None = None            # nm, the net's maximum routed length rule
     islands: int = 0                         # trailing components that are plane pieces
+    joined: dict = field(default_factory=dict)  # per component: grid nodes of its own vias
     explicit: dict = field(default_factory=dict)  # component index -> layers its plane path may not end on
 
 
@@ -905,6 +906,18 @@ class _Router:
                         layer = self.grid.layers.index(track.layer)
                         anchors.append((track.start, (layer,)))
                         anchors.append((track.end, (layer,)))
+            # The group's own vias on every layer: a group already stitched into
+            # its plane (an exposed pad's via-in-pad array) counts as joined even
+            # when its attach candidates are all surface nodes beside the pad.
+            joined = set()
+            for index, via in enumerate(board.vias):
+                if via.net == net.name and graph.roots.get(f"via:{index}") == root:
+                    ix = round((via.position.x_nm - self.grid.x0) / self.grid.pitch)
+                    iy = round((via.position.y_nm - self.grid.y0) / self.grid.pitch)
+                    if 0 <= ix < self.grid.nx and 0 <= iy < self.grid.ny:
+                        joined.update(self.grid.index(layer, ix, iy) for layer in range(self.grid.nl))
+            if joined:
+                spec.joined[len(components)] = joined
             components.append(self._attach(anchors, spec))
             if self.explicit_pads and set(members) & self.explicit_pads:
                 spec.explicit[len(components) - 1] = self._explicit_exclusion(members, spec)
@@ -1169,7 +1182,8 @@ class _Router:
                 missing += not optional
                 continue
             excluded = spec.explicit.get(position)
-            if excluded is None and any(node in targets for node, _, _ in component):
+            if excluded is None and (any(node in targets for node, _, _ in component)
+                                     or any(node in targets for node in spec.joined.get(position, ()))):
                 if position >= first_island:
                     targets.update(node for node, _, _ in component)
                 continue  # Already inside the plane's fill.
@@ -1838,7 +1852,9 @@ class _Router:
         self.rejections: dict[str, list[tuple[Point, str, tuple[str, ...], bool]]] = {}
         accepted: dict[str, tuple[list[TrackSegment], list[Via]]] = {}
         rejected: dict[str, list[Point]] = {}
-        complete: set[str] = set()
+        # A connected route with nothing to add (every pad group already in its
+        # plane) has no copper to check and is complete as it stands.
+        complete: set[str] = {name for name, route in routes.items() if route.connected and not route.paths}
         by_name = {s.name: s for s in self.specs}
         order = sorted((name for name, route in routes.items() if route.paths),
                        key=lambda name: (name in conflicts, not routes[name].connected,

@@ -376,3 +376,36 @@ def test_wide_nets_negotiate_room_for_each_others_width() -> None:
     result, drc, summary = _route(board)
     assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0
     assert all(net.connected for net in result.nets)
+
+
+def _stitched_pad_board() -> PhysicalBoard:
+    from pcbir import CopperZone, PolygonRing, PolygonWithHoles
+    from pcbir.physical import Via
+    # Pad positions are offset by +3 mm in _board. Each GND pad reaches the
+    # B.Cu plane only through its own via-in-pad, as an exposed pad's array
+    # does, and a ring of foreign copper leaves no room for a new via beside it.
+    board = _board({"GND": ((5, 5), (15, 15))})
+    w = nm_from_mm("0.2")
+    wall = []
+    for cx, cy in ((8, 8), (18, 18)):
+        corners = [(cx - 0.8, cy - 0.8), (cx + 0.8, cy - 0.8), (cx + 0.8, cy + 0.8),
+                   (cx - 0.8, cy + 0.8), (cx - 0.8, cy - 0.8)]
+        wall += [TrackSegment("W", Point.mm(*a), Point.mm(*b), w, CopperLayer.FRONT)
+                 for a, b in zip(corners, corners[1:])]
+    in_pad = tuple(Via("GND", Point.mm(x, y), nm_from_mm("0.3"), nm_from_mm("0.15"),
+                       CopperLayer.FRONT, CopperLayer.BACK) for x, y in ((8, 8), (18, 18)))
+    plane = PolygonWithHoles(PolygonRing((Point.mm(0.5, 0.5), Point.mm(25.5, 0.5),
+                                          Point.mm(25.5, 25.5), Point.mm(0.5, 25.5))))
+    return replace(board, tracks=tuple(wall), vias=in_pad,
+                   zones=(CopperZone("gnd-b", "GND", (CopperLayer.BACK,), plane),),
+                   nets=(*board.nets, PhysicalNet("W", ())))
+
+
+def test_pads_already_stitched_into_their_plane_count_as_joined() -> None:
+    board = _stitched_pad_board()
+    result, _, _ = _route(board)
+    gnd = next(net for net in result.nets if net.net == "GND")
+    assert gnd.connected and gnd.diagnostics == ()
+    # Nothing new is added for a plane net whose pads already reach it.
+    assert [v for v in result.board.vias if v.net == "GND"] == list(board.vias)
+    assert not [t for t in result.board.tracks if t.net == "GND"]
