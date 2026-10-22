@@ -913,7 +913,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument(
         "--no-route-smoothing", action="store_true",
-        help="keep accepted ordinary copper instead of straightening removable bends and detours",
+        help="keep accepted ordinary copper instead of straightening removable bends and detours "
+             "(either router)",
     )
     board_route_parser.add_argument(
         "--no-escape-terminals", action="store_true",
@@ -1092,6 +1093,7 @@ def _unified_options(args):
                                 time_budget_s=args.unified_time_budget_s,
                                 power_islands=None if args.power_islands == "off" else args.power_islands,
                                 pre_route_decouplers=not args.unified_no_decouplers,
+                                route_smoothing=not args.no_route_smoothing,
                                 save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
 
 
