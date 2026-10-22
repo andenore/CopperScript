@@ -47,8 +47,9 @@ from pcbir.detailed import (
     _search_detailed_net,
     _search_key,
 )
-from pcbir.geometry import point_in_polygon
+from pcbir.geometry import Bounds, point_in_polygon
 from pcbir.mechanical import point_in_material
+from pcbir.routing_costs import LayerBias
 from pcbir.physical import BoardCutout, MechanicalHole
 from pcbir.pin_escape import RoutingAccess
 from pcbir.placement import resolved_copper_keepouts
@@ -225,6 +226,9 @@ def test_search_key_covers_obstacles_rules_guides_anchors_and_mode() -> None:
         changed = (not value if isinstance(value, bool)
                    else 150 if item.name == "heuristic_weight_percent"
                    else 2 if item.name == "repair_budget_multiplier"
+                   else ("BLOCK1",) if item.name == "escape_net_order"
+                   else (LayerBias("BLOCK1", CopperLayer.FRONT, Bounds(0, 0, 1, 1), 1),)
+                   if item.name == "escape_layer_biases"
                    else value + 1)
         assert _search_key(**_key_inputs(board, options=replace(
             OPTIONS, **{item.name: changed}))) != key, item.name
