@@ -1,6 +1,6 @@
 # Escape planning: research and integration plan
 
-Status: accepted plan, in progress (E0, E1, E3, E4 implemented; 2026-10-22). Background research lives in the
+Status: accepted plan, in progress (E0–E5 implemented, E7 started; 2026-10-22). Background research lives in the
 Copper project notes (SOTA review Tier 2.1, D3-A fix plan); this file is the
 working copy for contributors and agents in this repository.
 
@@ -10,11 +10,13 @@ working copy for contributors and agents in this repository.
 |---|---|---|
 | E0 | #24 | Diagnostics only; D3-A routing identical (93 clean). D3-B added: 7 of 10 clean. Remaining D3 failures by cause: two-end crossings 6 of 17 unrouted nets (every failing signal net on 0048, 0050, 0051), channel overflow 1 (0024). CopperProbe: 12 of 28 open nets are the ADC bus bundle (U_ADC–U_USB, 72 crossing pairs). So E3 came before E2 |
 | E1 | #25 (re-landed in `claude/plan-escape-e1-e3`) | Model only; routing identical |
-| E2 | | |
+| E2 | `claude/plan-escape-e2-array-flow` | Opt-in (`--array-flow`). CopperProbe, unified router: 25 → 21 open nets, 522 → 496 vias. The 7 FX10 balls without a via site stay blocked (see E7) |
 | E3 | #26 (re-landed in `claude/plan-escape-e1-e3`) | Opt-in (`--escape-plan`). Off: routing identical. On (CI, bias 20): no clean board lost; 0050 3 → 2 and 0051 3 → 1 unrouted; +33 vias on boards already clean |
 | E4 | `claude/plan-escape-e4-router-integration` | Unified router and `route-board --escape-plan`; plan stays opt-in. Ladder: no completion change; vias both ways (cm4 84 → 69, led-ring 36 → 52). Global access bias not done |
-| E5 | | |
+| E5 | `claude/plan-escape-e5-bus-layers` | Layer moves opt-in (`--bus-layers`). Buses first and bus skew tuning on by default for the unified router: boards without length-match groups route identical copper (D3, small ladder); CopperProbe 24 → 21 open connections, every ADC data line routes; with a declared 1 mm amplitude the bus meets its 5 mm skew (22 open) |
 | E6 | | |
+| E7 | `claude/plan-escape-e7-bga-lattice` | In progress |
+| E8–E12 | | |
 
 Update this table when a step's PR merges: the D3 clean count (before → after),
 boards gained, full-vertical fingerprint outcome, and the ladder table if it changed.
@@ -125,6 +127,31 @@ From a code survey of `main` (2026-10-21, after PR #18):
 | E4 | **Router integration**: global access bias, detailed net order, unified reservations; then default on. | Benchmark ladder: asset-tracker, nrf52, full-vertical, cm4, led-ring, copper-probe | M |
 | E5 | **Ordered and bus escape** for match groups, length-aware. | CopperProbe ADC bus (about 11 of 30 open nets) | L |
 | E6 | **Placement feedback.** Channel overflow from the plan feeds `placement_escape` spacing. | Fewer placement repair trials | M |
+| E7 | **Package via-site lattice, reserved first.** For every ball grid, exact-checked candidate via sites per connected ball (its four diagonals at the rule-derived offset); one site per ball chosen jointly, preferring the quadrant-to-corner pattern and keeping the outer band and the central cross free of signal vias; sites reserved for their ball before ordinary escapes, bypass reservation and critical routing. Supply and ground bypass paths use their ball's site. | FX10: no ball without a site (7 today); vias aligned with the kit pattern; FX10 fast case and CopperProbe | M |
+| E8 | **Exact access near packages.** Router nodes at the package's exact via sites, land exits and channel centrelines, checked when built, instead of the bounded exact maze per trapped pin. | FX10 fast case with default options in minutes (the maze is about 85% of its time today); no exact-commit rejections at the FX10 | M–L |
+| E9 | **Hard escape corridors.** A planned exit (surface track or via site and its first channel) is closed to other nets for the first negotiation rounds, then costly; a sealed planned net rips up its blockers, not itself. Replaces E4's soft bias for package exits. | No sealed planned exits (FX10 E1 ADC_OVR) | M |
+| E10 | **Ring capacity and layer assignment.** Per layer, the capacity of each via-ring cut (gaps × tracks per gap minus blocked gaps) against the signal balls inside; balls assigned to layers by ring (outer two on the surface, then one ring per inner signal layer), checked by the E2 flow per layer with existing copper as removed capacity; overflow reported as a located issue. | Inner-layer share under the FX10 (half of F.Cu/B.Cu today); kit ring-to-layer map | M |
+| E11 | **Bypass parts and supplies around the lattice.** Decoupling parts under an array only in via-free channels or on shared supply vias (at most two balls per via); supply tracks never cross a via-site column on a layer that uses it as an escape channel. | No cap pad on a via site; FX10 supply nets routed | M |
+| E12 | **Fanout before critical routing.** Critical pairs at a package route through the reserved plan (paired boundary escape) instead of before it. | USB pair rules still met; FX10 blocked balls 0 with critical routes present | M |
+
+E7–E12 come from the FX10 comparison and the BGA research of 2026-10-22: the
+Infineon KIT_FX10_FMC_001 layout reserves one dogbone via per connected ball
+in a quadrant-to-corner lattice before anything else, keeps rings 0–1 and a
+central cross via-free (bypass parts sit there) and escapes rings 0–1 on the
+top layer, ring 3 on the first inner signal layer and rings 4–5 on the second.
+Every vendor flow found fans out before general routing (Altium Situs, Siemens
+Xpedition: power/ground first); PAO plans exact pin access points jointly
+before routing. Escape-flow models (Yan & Wong) take existing copper only as
+removed capacity, so the site choice of E7 comes first.
+
+**FX10 fast case.** `route-board --unified-save-inputs STATE` (also saves the
+ball-grid fanout, `STATE.bga.json`) on CopperProbe, then
+`copper replay-unified STATE --component U_USB [--refanout] [--set ...]`
+routes only the FX10's nets (53) against the saved board. With
+`--set local_escape_radius_nm=0` it takes about 4 minutes (17 open nets,
+the same count as with the exact maze, which takes 26 minutes); E8 makes
+the default fast. Report per variant: open nets, balls without a site,
+sealed planned exits, exact-commit rejections near the package, seconds.
 
 **Verification for every step** follows the D3 fix-plan pattern (see "How to carry out a step" below):
 - unit tests that fail with the change removed;
@@ -182,3 +209,12 @@ From a code survey of `main` (2026-10-21, after PR #18):
 - [Chen et al., "A Matching-Based Escape Routing Algorithm With Variable Design Rules and Multiple Constraints", DAC 2023 / IEEE TCAD 2025](https://scholars.lib.ntu.edu.tw/handle/123456789/732753)
 - [Li, Zhang, Xu, Liu, "FanoutNet", AAAI 2023](https://ojs.aaai.org/index.php/AAAI/article/view/26030)
 - [Freerouting release notes (v2.3 BatchFanout)](https://github.com/freerouting/freerouting/releases)
+- [Kahng, Wang, Xu, "The Tao of PAO: Anatomy of a Pin Access Oracle", DAC 2020](https://vlsicad.ucsd.edu/Publications/Conferences/377/c377.pdf)
+- [Xu et al., "PARR: Pin-Access Planning and Regular Routing", TODAES 2016](https://www.cerc.utexas.edu/utda/publications/C178.pdf)
+- [Yan, Wu, Ma, Wong, "On the escape routing of differential pairs", ICCAD 2010](https://scholars.hkbu.edu.hk/en/publications/on-the-escape-routing-of-differential-pairs/)
+- [Ho, Shih, Chang, Cheng, "Layer minimization in escape routing for staggered-pin-array PCBs", ASP-DAC 2013](https://www.aspdac.com/aspdac2013/archive/program/2D_abst.html)
+- [TI SPRABV2, "PCB design guidelines for BGA packages" (via sharing, decoupling under the array), 2019](https://ti.com/lit/pdf/SPRABV2)
+- [AMD UG1099, BGA device design rules (layer count per ring)](https://docs.amd.com/r/en-US/ug1099-bga-device-design-rules/Layer-Count-Optimization)
+- [Altium, fanout control (quadrant diagonals, away from centre)](https://www.altium.com/documentation/cstu/fanout-control?version=5)
+- [Siemens, layout automation part 3 (fanout order)](https://blogs.sw.siemens.com/electronic-systems-design/2019/10/08/layout-automation-using-advanced-pcb-design-techniques-part-3/)
+- Infineon KIT_FX10_FMC_001 PCB design data, measured in CopperProbeParts `evidence/fx10-kit-escape/`
