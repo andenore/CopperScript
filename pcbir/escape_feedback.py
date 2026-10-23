@@ -209,6 +209,7 @@ def improve_zone_escapes(
                 fanout_options=fanout_options,
                 package_access_options=package_access_options,
                 plane_stitch_options=early_options,
+                unified_options=initial.unified_options,
                 on_progress=on_progress,
                 **({"power_area_options": initial.power_area_options} if initial.power_area_options is not None else {}),
                 **({"power_native_verifier": initial.power_native_verifier} if initial.power_native_verifier is not None else {}),
@@ -527,14 +528,25 @@ def _reroute_local_dependencies(
 
     def search(source, names, kind, expansion):
         emit(on_progress, "zone_subset_search", "started", kind=kind,
-             affected_nets=sorted(names), expansion=expansion)
+             affected_nets=sorted(names), expansion=expansion,
+             router="unified" if initial.unified_options is not None else "legacy")
         # This transaction cannot release the preserved escape prefix. Flexible
         # land/chain alternatives are valid only when their owner may clean up
         # unused launch vias and witnesses afterwards. Route through retained
         # ports instead, so a dependency reroute cannot strand protected vias.
         reserved_options = replace(detailed_options, escape_terminals=False) if accesses else detailed_options
-        result = route_detailed(source, initial.placement_and_global.global_route,
-            reserved_options, fanout_accesses=accesses,
+        if initial.unified_options is None:
+            router, settings = route_detailed, reserved_options
+        else:
+            from .unified_router import route_unified
+            router = route_unified
+            # A repair must not overwrite the main run's replay input artifact.
+            settings = replace(initial.unified_options, save_inputs_path=None)
+        result = router(source, initial.placement_and_global.global_route,
+            settings, fanout_accesses=accesses,
+            **({"required_accesses": {pad: access for pad, access in (accesses or {}).items()
+                                      if isinstance(access, RoutingAccess)}}
+               if initial.unified_options is not None else {}),
             # Local transactions do not own/prune the fixed fanout prefix.
             fanout_created_vias=frozenset(), fanout_created_tracks=(), only_nets=names,
             on_progress=on_progress)

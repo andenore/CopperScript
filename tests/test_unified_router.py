@@ -584,3 +584,19 @@ def test_opposite_face_pad_gap_routes_with_ordinary_via_and_exact_length_budget(
     assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0, drc.to_json()
     assert len(result.board.vias) == 1
     assert result.board.net_routing_rules == board.net_routing_rules
+
+
+def test_pipeline_keeps_unified_settings_for_later_native_transactions():
+    from pcbir.flow import run_routing_pipeline
+    from pcbir.placement import PlacementPlannerOptions
+    from pcbir.routeflow import PlacementRoutingFeedbackOptions
+    board = _board({"A": ((3, 10), (17, 10))})
+    options = UnifiedRouterOptions(maximum_iterations=3, commit_rounds=1)
+    for stop in (None, "placement"):
+        result = run_routing_pipeline(board, unified_options=options, stop_after=stop,
+            placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
+                refinement_passes=0, fixed_references=frozenset(p.reference for p in board.placements)),
+            feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1))
+        assert result.unified_options is options
+        if stop is None:
+            assert result.detailed.board.metadata["detailed_router"] == "unified"
