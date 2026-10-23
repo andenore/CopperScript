@@ -63,3 +63,38 @@ def test_outline_keeps_holes_and_separates_diagonal_cells() -> None:
     diagonal[0, 0] = diagonal[1, 1] = True
     outline = _outline(diagonal, 0, 0, 10)
     assert len(outline.outer.vertices) == 4 and not outline.holes
+
+
+def test_a_rail_whose_rule_excludes_the_layer_gets_no_island() -> None:
+    from pcbir.physical import NetRoutingRule, RouteKind
+    board = _ground_board()
+    rule = NetRoutingRule("P1", RouteKind.GENERAL,
+                          allowed_layers=(CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.BACK))
+    board = replace(board, net_routing_rules=(rule,))
+    partition = plan_power_islands(board, CopperLayer.INTERNAL_2, ("P1", "P2"))
+    assert {zone.net for zone in partition.zones} == {"P2"}
+    assert "P1" in partition.skipped
+
+
+def test_a_rail_one_island_cannot_connect_keeps_no_island() -> None:
+    # Q's two pads sit on either side of P2's pads in a narrow host strip, so
+    # its corridor would have to cross P2: it is left to ordinary routing.
+    board = _board({"Q": ((3, 10), (17, 10)), "P2": ((10, 10), (10, 11))}, layers=4)
+    ring = PolygonRing(tuple(Point.mm(x, y) for x, y in ((1, 12), (21, 12), (21, 14.6), (1, 14.6))))
+    zone = CopperZone("gnd", "GND", (CopperLayer.INTERNAL_2,), PolygonWithHoles(ring))
+    from pcbir.physical import PhysicalNet
+    board = replace(board, zones=(zone,), nets=(*board.nets, PhysicalNet("GND", ())))
+    split = plan_power_islands(board, CopperLayer.INTERNAL_2, ("Q", "P2"))
+    assert "Q" in split.split and {zone.net for zone in split.zones} <= {"P2"}
+    loose = plan_power_islands(board, CopperLayer.INTERNAL_2, ("Q", "P2"), single_island=False)
+    assert sum(zone.net == "Q" for zone in loose.zones) > 1
+
+
+def test_island_outlines_have_no_holes() -> None:
+    import numpy as np
+    from pcbir.power_islands import _outline, _slit_holes
+    ring = np.ones((7, 7), dtype=bool)
+    ring[3, 3] = False
+    slit = _slit_holes(ring)
+    outline = _outline(slit, 0, 0, 10)
+    assert not outline.holes and slit.sum() == ring.sum() - 3   # a slit of three cells to the top edge
