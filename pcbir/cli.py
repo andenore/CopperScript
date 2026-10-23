@@ -1730,6 +1730,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                           + (" (compiler code changed since it was saved)" if placement_reuse["code_changed"] else ""))
 
                 def on_stage(name, value):
+                    if args.checkpoint_dir and name in {"critical-inputs", "critical-retry-inputs"}:
+                        from .workbench import save_state
+                        try:
+                            path = save_state(args.checkpoint_dir / (name + ".state.json"), value)
+                        except (OSError, ValueError) as exc:
+                            checkpoints[name + "_error"] = f"{type(exc).__name__}: {exc}"[:500]
+                            print(f"Critical checkpoint not saved: {exc}", flush=True)
+                        else:
+                            checkpoints[name] = str(path)
+                            print(f"Critical inputs checkpoint -> {path}", flush=True)
                     if args.checkpoint_dir and name == "placement" and initial_placement is None:
                         try:
                             path = save_placement_checkpoint(args.checkpoint_dir / "placement.state.json", value,

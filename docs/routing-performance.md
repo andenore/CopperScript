@@ -1,5 +1,38 @@
 # Routing performance and optimization assessment
 
+## Exact bypass reservations at the critical boundary (2026-10-23)
+
+The standard flow can hold its complete planned bypass contribution as actual
+copper through the existing validated critical-prefix interface. This preserves
+net identity, real track/via shapes and holes, permits legal same-net joins, and
+locks the complete accepted contribution through critical routing. The previous
+all-net rectangular keepouts can forbid such joins and approximate round
+geometry conservatively. An unsupported or ambiguous semantic ownership claim
+retains that conservative protocol with an explicit reason; no proposed piece
+is filtered out to manufacture a passing claim.
+
+Exact source fields, prefix occurrence multiplicity, original admitted return
+paths, every declared association and hard geometry are checked afresh. Changed
+temporary reservation context can therefore refuse reuse too; that adaptation
+is not silently authorized. The existing initial pair-state option now also
+bounds the standard critical path, rather than only package-access preflight.
+No maze search or retry allowance is added.
+
+Checkpoint-directory builds save first and retry critical inputs. Bypass-only
+replay restores each decoded edge to a unique equal original occurrence, then
+runs all normal admission checks. Missing/duplicate occurrences, changed
+values, context digests and stale source remain rejected. Restoration changes
+no routing value and grants no acceptance authority. Workbench views show the
+reserved proposal as diagnostic geometry.
+
+Six new real-geometry/flow tests cover a ground join rejected by the old proxy,
+foreign-net collisions, complete cross-face supply/return preservation,
+serialized replay, ambiguous/stale ownership refusal and the aggregate pair
+bound. A 64-case flow/admission/replay set passes. The nRF52 ladder206 retains
+35/35 connections, zero exact geometry errors,40vias and346.483mm, with no
+regression. Full-consumer candidate205 is still under evaluation; no improved
+full-board result or native acceptance is claimed here.
+
 ## Joint separate-support completion (2026-10-23)
 
 Pairs with exactly two shared endpoint packages and one source-bounded separate

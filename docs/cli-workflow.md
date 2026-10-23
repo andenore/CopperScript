@@ -50,6 +50,13 @@ After a routing or layout run, `issues` lists grouped, located failures and `vie
 renders one of them; see [routing and placement iteration](llm-workflow.md#routing-and-placement-iteration).
 `route-board --stop-after STAGE`, `--checkpoint-dir` and `--reuse-placement`
 shorten reruns; see [shorter reruns](llm-workflow.md#shorter-reruns).
+The standard critical path also saves `critical-inputs.state.json` and, when
+used, `critical-retry-inputs.state.json` in the checkpoint directory. These
+capture the actual temporary reservations and can be viewed or passed to
+`replay-critical`. A saved bypass-only copper prefix must pass fresh source,
+occurrence, complete-association and geometry admission; it is never accepted
+as arbitrary routed input. Value-only decoding restores original-edge identities
+only for unique exact occurrences, preserving all values and context digests.
 
 `route-board --router unified` uses unified negotiation after the established
 coupled differential/critical routing and decoupler preparation. Pair routing,

@@ -220,6 +220,7 @@ def run_routing_pipeline(
                 FanoutResult(preparation.source, {}, (), 0, 0), preparation.critical,
                 None, frozenset(), 0)
     reserved = held = None
+    held_as_copper = False
     stopped = None
     if unified_options is not None and getattr(unified_options, "direct", False):
         from .hard_macros import materialize_hard_macros
@@ -287,12 +288,28 @@ def run_routing_pipeline(
             if reserved is not None and held[3]:
                 dropped = {keepout.id for keepout in held[3]}
                 reserved = (reserved[0], reserved[1], tuple(k for k in reserved[2] if k.id not in dropped))
-        source = placement.board
-        extra = (*(reserved[2] if reserved else ()), *(held[2] if held else ()))
-        if extra:
-            source = replace(source, copper_keepouts=(*source.copper_keepouts, *extra))
+        def critical_inputs(escape_keepouts):
+            source = replace(placement.board,
+                copper_keepouts=(*placement.board.copper_keepouts, *escape_keepouts))
+            bypass_accesses, reason = (_bypass_copper_reservations(source, held[0], held[1], held[4])
+                                      if held is not None else (None, None))
+            if held is not None and bypass_accesses is None:
+                # Unsupported/ambiguous ownership keeps its original conservative
+                # reservation. Never drop it or infer semantic authority by net.
+                source = replace(source, copper_keepouts=(*source.copper_keepouts, *held[2]))
+            emit(on_progress, "bypass_reservation", "bound",
+                 mode="copper" if bypass_accesses is not None else "keepouts", reason=reason)
+            return source, bypass_accesses
+        source, bypass_accesses = critical_inputs(reserved[2] if reserved else ())
+        held_as_copper = bypass_accesses is not None
+        if on_stage is not None:
+            on_stage("critical-inputs", {"board": source, "global_route": placement.global_route,
+                                         "reserved_accesses": bypass_accesses})
+        pair_limit = (package_access_options.initial_pair_state_limit or None
+                      if package_access_options is not None else None)
         critical = route_critical_nets(source, placement.global_route,
-                                       on_progress=critical_progress(on_progress), unified_options=unified_options)
+            reserved_accesses=bypass_accesses, pair_state_limit=pair_limit,
+            on_progress=critical_progress(on_progress), unified_options=unified_options)
         if reserved is not None:
             failed = {name for item in critical.nets if not item.connected for name in item.nets}
             if failed:
@@ -303,14 +320,18 @@ def run_routing_pipeline(
                 if len(kept) < len(reserved[2]):
                     emit(on_progress, "ordinary_escapes", "released",
                          nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
-                    retry = route_critical_nets(
-                        replace(placement.board, copper_keepouts=(*placement.board.copper_keepouts, *kept,
-                                                                  *(held[2] if held else ()))),
-                        placement.global_route, on_progress=critical_progress(on_progress), unified_options=unified_options)
+                    retry_source, retry_accesses = critical_inputs(kept)
+                    if on_stage is not None:
+                        on_stage("critical-retry-inputs", {"board": retry_source,
+                            "global_route": placement.global_route, "reserved_accesses": retry_accesses})
+                    retry = route_critical_nets(retry_source, placement.global_route,
+                        reserved_accesses=retry_accesses, pair_state_limit=pair_limit,
+                        on_progress=critical_progress(on_progress), unified_options=unified_options)
                     if sum(not item.connected for item in retry.nets) < len(
                             [item for item in critical.nets if not item.connected]):
                         critical = retry
                         reserved = (reserved[0], reserved[1], kept)
+                        held_as_copper = retry_accesses is not None
     critical_feedback = None
     if critical_feedback_trials and access is None and not getattr(unified_options, "direct", False):
         critical_feedback = improve_critical_placement(
@@ -328,7 +349,7 @@ def run_routing_pipeline(
         held = None  # placement moved: the planned bypass copper no longer applies
         critical = replace(critical, board=replace(critical.board, copper_keepouts=tuple(
             k for k in critical.board.copper_keepouts if not k.id.startswith("bypass-reserve"))))
-    if held is not None:
+    if held is not None and not held_as_copper:
         # The critical router kept clear of the reserved bypass copper, so it
         # joins the board unchanged.
         board = critical.board
@@ -741,6 +762,24 @@ def _copper_keepouts(board, tracks, vias, prefix, fixed=None):
     return tuple(keepouts)
 
 
+def _bypass_copper_reservations(source, tracks, vias, witnesses=()):
+    """Fresh admission of the exact planned bypass contribution, without routing.
+
+    Keep real net/shape/hole identity rather than inflating it into all-net
+    rectangular keepouts. The ordinary public critical-prefix admission still
+    verifies every source field, occurrence, complete association and hard DRC.
+    No generated piece is filtered out to manufacture a valid ownership claim.
+    """
+    from .hard_macros import macro_source, materialize_hard_macros
+    from .bypass_reservations import verified_bypass_reservations
+    frame = materialize_hard_macros(macro_source(source))
+    reserved = FanoutResult(replace(frame, tracks=(*frame.tracks, *tracks), vias=(*frame.vias, *vias)),
+        {}, (), len(tracks), len(vias), created_tracks=tracks, created_vias=vias,
+        decoupling_tracks=tracks, decoupling_vias=vias, decoupling_witnesses=witnesses)
+    _, _, reason = verified_bypass_reservations(frame, reserved)
+    return (reserved, None) if reason is None else (None, reason)
+
+
 def _plan_decouplers(board, reserved_keepouts, on_progress):
     """Bypass copper routed before critical nets, held as keepouts meanwhile.
 
@@ -776,7 +815,7 @@ def _plan_decouplers(board, reserved_keepouts, on_progress):
     emit(on_progress, "bypass_reservation", "finished", tracks=len(tracks), vias=len(vias),
          pending=len(result.pending), released=len(released))
     return (tuple(tracks), tuple(vias), _copper_keepouts(board, tracks, vias, "bypass-reserve", fixed=frame),
-            released)
+            released, result.admitted_path_witnesses)
 
 
 def _release_reservations(board, keepouts, nets, margin_nm=nm_from_mm("2"), *, pads=()):

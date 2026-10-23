@@ -41,8 +41,11 @@ def scene_of(target) -> Scene:
     if path.is_dir():
         return load_run(path).scene()
     value = load_state(path)
-    board = value if isinstance(value, PhysicalBoard) else getattr(value, "board", None) or \
-        getattr(value, "source_board", None)
+    board = (value if isinstance(value, PhysicalBoard) else value.get("board")
+             if isinstance(value, dict) else getattr(value, "board", None) or
+             getattr(value, "source_board", None))
+    if isinstance(value, dict) and isinstance(getattr(value.get("reserved_accesses"), "board", None), PhysicalBoard):
+        board = value["reserved_accesses"].board  # Draw the proposal, never certify it.
     if not isinstance(board, PhysicalBoard):
         raise ValueError(f"{path}: state does not hold a PhysicalBoard (found {type(value).__name__})")
     return scene_from_physical(board)
