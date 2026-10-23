@@ -1,3 +1,26 @@
+## Via-budget proposals can contest mutable congestion (2026-10-24)
+
+After the existing higher-via-cost retry, a still over-budget proposal gets one
+bounded retry with mutable congestion/history costs discounted. Source geometry,
+layer restrictions, via/return masks, search-state limits and exact commit checks
+remain active. The legal proposal keeps its normal congestion claims so other
+mutable routes can negotiate. Global occupancy/history and per-net via pricing
+are unchanged after the retry. Zero-cost buffers are local and reused by a router;
+the Python and native kernels share the same policy without a native ABI change.
+
+The two-kernel synthetic fixture fails before the correction despite an available
+two-via corridor. Five after cases cover stale history, current occupancy pressure,
+normal corridor claims and a real source wall that remains impassable. The related
+router/return/macro set passes (four optional library/native fixtures skipped).
+The first related run330 failed to create sandbox temporary directories; corrected
+workspace-local temporary run332 passes without any gate changes.
+
+Actual 18-net PHY replay331 reduces four unresolved nets in326 to two, with zero
+exact geometry errors. D3V3 and TXD1 now connect. CRS_DV is blocked by PHY_ADDR;
+RXD1 is blocked by RXD0. The test retains the source, immutable prefix, existing
+return-via constraints and coarse grid. Its 159.7 s versus 186.5 s control is a
+loaded diagnostic observation, not a complete-board speed or closure claim.
+
 ## Preserve macro boundary access during source-copper reuse (2026-10-24)
 
 Union/find root labels do not distinguish private macro copper from public
