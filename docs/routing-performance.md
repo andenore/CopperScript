@@ -9,13 +9,19 @@
 | nrf52 | unified with bootstrap | 0 / 35 | 0 | 40 | 346.483 | 27.9 |
 | nrf52 | direct unified, older export contacts | 0 / 35 | 0 | 37 | 360.121 | 21.8 |
 | nrf52 | strict unified only | 0 / 35 | 0 | 35 | 359.121 | 11.7 |
+| nrf52 | standard unified with exact neck emission | 0 / 35 | 0 | 40 | 346.483 | 74.5 |
 
 Runs: `build/bench-main-baseline109`, `build/bench-unified-direct115`,
 `build/bench-unified-nrf-baseline118`, `build/bench-unified-nrf-direct119`,
-`build/bench-unified-only-nrf123`.
+`build/bench-unified-only-nrf123`, `build/bench-unified-standard131`.
 Native verification was not run; route status remains failed with deferred
 plane/evidence gates. The nRF52 timings were concurrent with each other and a
-consumer run. This is a measured subset, not full-ladder or release acceptance.
+consumer run. This is a measured subset, not full-ladder or release acceptance. The standard
+neck-emission run reproduced the standard baseline completion, DRC, via count
+and track length. The ladder flags its total wall time (27.9 to 74.5 s); loads
+were not controlled. Instrumented unified-stage times were 7.69 and 7.92 s,
+and export finished at 22.57 and 22.29 s respectively. The larger
+process-level timing difference is retained without a cause or speed claim.
 
 
 ## Isolated hotspot experiments (2026-10-12)
