@@ -1,3 +1,24 @@
+## Explicit unified search-state budget (2026-10-23)
+
+`route-board --unified-search-states N` now sets the existing maximum expanded
+states per path search. The default remains 400000. The effective value is retained
+in `work_limits` and saved replay options, and non-positive values are rejected.
+This computational bound changes no width, clearance, layer or via requirements.
+A bounded no-path result does not establish that no legal path exists.
+
+Actual prepared consumer controls use identical inputs, 16 negotiation iterations,
+three commit rounds and 90 s: TARGET_OE_N leaves four groups open at 400000 states
+but connects at 2000000 states with zero exact geometry errors. Fresh KiCad10.0.6
+refill has zero opens on that net and the retained MDI/clock prefix, zero geometry
+errors, 499 unrelated open items and 12 dangling-track warnings. This remains a
+partial diagnostic, without full-board or electrical qualification.
+
+The 37-case CLI/router set passes. The CLI test compares an intentionally exhausted
+one-state search with a 2000000-state search and checks actual connectivity,
+reported work limits and typed replay settings. Ladder304 with the larger budget
+retains 35/35 nRF52 signals, zero geometry errors, 44 vias and 350.563 mm in 57.2 s.
+Concurrent timing is not a whole-board performance claim.
+
 ## Reuse existing copper independently of graph-root labels (2026-10-23)
 
 Explicit connectivity can retain a pad identity as the root of a group already

@@ -146,8 +146,8 @@ class UnifiedRouterOptions:
     escapes_first: bool = True
 
     def __post_init__(self) -> None:
-        if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0:
-            raise ValueError("unified router pitch and iterations must be positive")
+        if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0 or self.maximum_expansions <= 0:
+            raise ValueError("unified router pitch, iterations and search states must be positive")
         if self.stall_iterations < 0:
             raise ValueError("unified router stall iterations must not be negative")
         if self.grid_window_nm is not None:
