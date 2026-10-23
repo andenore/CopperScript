@@ -221,7 +221,15 @@ def run_routing_pipeline(
                 None, frozenset(), 0)
     reserved = held = None
     stopped = None
-    if fanout_options is not None:
+    if unified_options is not None and getattr(unified_options, "direct", False):
+        from .hard_macros import materialize_hard_macros
+        source = materialize_hard_macros(placement.board)
+        critical = CriticalRoutingResult(CriticalRoutingStatus.WARNING, source, (), (), (),
+            placement.global_route.routing_fingerprint, placement.global_route.routing_fingerprint)
+        plane_stitch_options = None
+        emit(on_progress, "unified_direct", "started",
+             reason="all mutable nets negotiate together; only source-fixed copper is retained")
+    elif fanout_options is not None:
         access_options = package_access_options or PackageAccessOptions()
         if preparation is None:
             access = preflight_package_access(placement.board, placement.global_route,
@@ -304,7 +312,7 @@ def run_routing_pipeline(
                         critical = retry
                         reserved = (reserved[0], reserved[1], kept)
     critical_feedback = None
-    if critical_feedback_trials and access is None:
+    if critical_feedback_trials and access is None and not getattr(unified_options, "direct", False):
         critical_feedback = improve_critical_placement(
             placement.board, placement.global_route, critical, maximum_trials=critical_feedback_trials,
             placement_options=placement_options, global_options=global_options,
@@ -342,8 +350,9 @@ def run_routing_pipeline(
                 tracks.append(track)
         critical = replace(critical, board=replace(
             board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias)))
-    if access is None and critical.board.decoupling_links and getattr(
-            unified_options, "pre_route_decouplers", True):
+    if (access is None and critical.board.decoupling_links
+            and not getattr(unified_options, "direct", False)
+            and getattr(unified_options, "pre_route_decouplers", True)):
         from .decoupling import route_decouplers
         bypass = route_decouplers(critical.board)
         critical = replace(critical, board=bypass.board)
@@ -502,7 +511,11 @@ def run_routing_pipeline(
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="package_access_failed")
                 continue
-            trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global)
+            if getattr(unified_options, "direct", False):
+                from .hard_macros import materialize_hard_macros
+                trial_critical = replace(critical, board=materialize_hard_macros(trial_board), nets=())
+            else:
+                trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global)
             if trial_critical.status is CriticalRoutingStatus.FAILED:
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="critical_failed")
@@ -568,6 +581,8 @@ def run_routing_pipeline(
             access = blocked
             plane_stitch, duplicate_stitch = None, None
             power_status = 'power_preparation_ordinary_rejected'
+    if getattr(unified_options, "direct", False):
+        critical = _unified_profile_review(detailed, placement.global_route, drc)
     passed = (
         routing_nets is None and placement.full_route_certified
         and critical.status is not CriticalRoutingStatus.FAILED
@@ -595,6 +610,45 @@ def run_routing_pipeline(
         power_preparation_validation=preparation_validation,
         power_native_verifier=power_native_verifier,
     )
+
+
+def _unified_profile_review(detailed, global_route, drc):
+    """Report final profile copper without calling a legacy routing solver.
+
+    Independent exact paths do not certify differential coupling/returns. Keep
+    that unsupported obligation explicit and fail closed for those profiles.
+    """
+    from math import hypot
+    from .critical import CriticalNetResult
+    from .drc import DrcSeverity, explicit_copper_connectivity
+    board = detailed.board
+    graph = explicit_copper_connectivity(board)
+    nets = {net.name: net for net in board.nets}
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    results, seen = [], set()
+    for name, rule in sorted(rules.items()):
+        if rule.kind is RouteKind.GENERAL or name in seen:
+            continue
+        group = tuple(sorted({name, rule.differential_partner})) if rule.differential_partner else (name,)
+        seen.update(group)
+        tracks = tuple(t for t in board.tracks if t.net in group)
+        vias = tuple(v for v in board.vias if v.net in group)
+        lengths = tuple(sum(round(hypot(t.end.x_nm-t.start.x_nm, t.end.y_nm-t.start.y_nm))
+                            for t in tracks if t.net == net) for net in group)
+        connected = all(net in nets and graph.net_connected(nets[net]) for net in group)
+        diagnostics = [f.message for f in drc.findings
+                       if f.severity is DrcSeverity.ERROR and set(f.nets).intersection(group)]
+        if not connected:
+            diagnostics.append("unified routing left profile terminals disconnected")
+        if rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
+            diagnostics.append("unified differential coupling and return-path verification is not implemented")
+        results.append(CriticalNetResult(group, connected and not diagnostics, len(tracks), len(vias),
+            lengths, max(lengths)-min(lengths) if lengths else 0,
+            tuple(dict.fromkeys(diagnostics)), strategy="unified_final_review"))
+    status = (CriticalRoutingStatus.FAILED if any(not item.connected for item in results)
+              else CriticalRoutingStatus.SUCCESS)
+    return CriticalRoutingResult(status, board, tuple(results), (), (),
+        global_route.routing_fingerprint, detailed.routing_fingerprint)
 
 
 def _plan_ordinary_escapes(board, fanout_options, on_progress):
@@ -756,7 +810,7 @@ def _route_unified_compat(unified_options, board, global_route, _detailed_option
                           escape_options=None, **kwargs):
     from .unified_router import route_unified
     seeder = None
-    if escape_options is not None:
+    if escape_options is not None and not getattr(unified_options, "direct", False):
         from .fanout import route_fanout
 
         def seeder(partial, nets):

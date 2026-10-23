@@ -409,3 +409,18 @@ def test_pads_already_stitched_into_their_plane_count_as_joined() -> None:
     # Nothing new is added for a plane net whose pads already reach it.
     assert [v for v in result.board.vias if v.net == "GND"] == list(board.vias)
     assert not [t for t in result.board.tracks if t.net == "GND"]
+
+
+def test_adjacent_breakout_regions_do_not_emit_an_illegal_merged_neck():
+    from pcbir.physical import NetRoutingRule
+    board = _board({"N": ((3, 10), (8, 10)), "BLOCK": ()})
+    wall = TrackSegment("BLOCK", Point.mm(5, "13.65"), Point.mm(12, "13.65"),
+                        nm_from_mm("0.2"), CopperLayer.FRONT)
+    rule = NetRoutingRule("N", width_nm=nm_from_mm(1), breakout_width_nm=nm_from_mm("0.2"),
+                          breakout_length_nm=nm_from_mm(3), allowed_layers=(CopperLayer.FRONT,), max_vias=0)
+    board = replace(board, tracks=(wall,), net_routing_rules=(rule,))
+    result, drc, summary = _route(board, direct=True, route_smoothing=False, maximum_iterations=4)
+    assert result.nets[0].connected
+    assert summary["signal"]["opens"] == 0
+    assert not [f for f in drc.findings if f.code == "DRC-TRACK-WIDTH"]
+    assert wall in result.board.tracks

@@ -51,6 +51,20 @@ renders one of them; see [routing and placement iteration](llm-workflow.md#routi
 `route-board --stop-after STAGE`, `--checkpoint-dir` and `--reuse-placement`
 shorten reruns; see [shorter reruns](llm-workflow.md#shorter-reruns).
 
+`route-board --router unified --unified-direct` sends ordinary and profiled
+nets to unified negotiation from source-fixed copper. It skips the legacy
+critical, bypass, preliminary escape and late plane-contact routing stages;
+immutable macro copper and required via arrays still materialize. Legacy escape
+seeding and native bridge repair are also disabled, even after a partial result.
+Native refill/DRC still runs, and any needed repair must re-enter unified routing. Without `--unified-direct`, the current
+unified flow retains its legacy bootstrap. `--unified-time-budget-s 1800`
+bounds negotiation starting at the unified stage; placement/global planning
+and final native verification are separate. `--unified-save-inputs STATE`
+retains replay inputs. Direct mode reports final profile connectivity and
+physical DRC findings, but fails differential/CAN acceptance explicitly because
+unified coupling and return-path verification are not implemented. Independent
+pair paths and a zero-open signal summary do not establish pair qualification.
+
 ```console
 python -m copperscript issues build/BOARD/runs/STAMP
 python -m copperscript view build/BOARD/runs/STAMP --issue P1 -o build/views/P1.png

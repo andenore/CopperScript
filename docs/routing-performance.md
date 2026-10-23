@@ -1,5 +1,23 @@
 # Routing performance and optimization assessment
 
+## Direct unified pipeline subset (2026-10-23)
+
+| Ladder case | Flow | Signal opens / connections | Exact DRC errors | Vias | Length mm | Time s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| round-led-ring | retained legacy baseline | 2 / 51 | 0 | 33 | 523.802 | 178.2 |
+| round-led-ring | direct unified | 0 / 51 | 0 | 39 | 591.697 | 77.2 |
+| nrf52 | unified with bootstrap | 0 / 35 | 0 | 40 | 346.483 | 27.9 |
+| nrf52 | direct unified, older export contacts | 0 / 35 | 0 | 37 | 360.121 | 21.8 |
+| nrf52 | strict unified only | 0 / 35 | 0 | 35 | 359.121 | 11.7 |
+
+Runs: `build/bench-main-baseline109`, `build/bench-unified-direct115`,
+`build/bench-unified-nrf-baseline118`, `build/bench-unified-nrf-direct119`,
+`build/bench-unified-only-nrf123`.
+Native verification was not run; route status remains failed with deferred
+plane/evidence gates. The nRF52 timings were concurrent with each other and a
+consumer run. This is a measured subset, not full-ladder or release acceptance.
+
+
 ## Isolated hotspot experiments (2026-10-12)
 
 The fresh standard full-vertical profile in

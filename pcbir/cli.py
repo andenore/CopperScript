@@ -841,6 +841,8 @@ def _parser() -> argparse.ArgumentParser:
         help="wall-time budget for the unified router; it returns its best result when exceeded")
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
         help="unified router: save its inputs as a state file for replay_unified")
+    board_route_parser.add_argument("--unified-direct", action="store_true",
+        help="unified router: negotiate all nets from source-fixed copper without legacy critical or bypass routing")
     board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
         help="unified router: route decoupling capacitors with everything else instead of first")
     board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
@@ -1087,13 +1089,16 @@ def _apply_routing_profile(args, argv):
 
 def _unified_options(args):
     if getattr(args, "router", "legacy") != "unified":
+        if getattr(args, "unified_direct", False):
+            raise ValueError("--unified-direct requires --router unified")
         return None
     from .unified_router import UnifiedRouterOptions
     return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
                                 maximum_iterations=args.unified_iterations,
                                 time_budget_s=args.unified_time_budget_s,
                                 power_islands=None if args.power_islands == "off" else args.power_islands,
-                                pre_route_decouplers=not args.unified_no_decouplers,
+                                pre_route_decouplers=not args.unified_no_decouplers and not args.unified_direct,
+                                direct=args.unified_direct,
                                 route_smoothing=not args.no_route_smoothing,
                                 save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
 
@@ -1528,6 +1533,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     physical_board = apply_hard_macro_scene(physical_board, scene,
                         locked=args.locked, offline=args.offline)
                 editor_source_board = physical_board
+                direct_unified = args.router == "unified" and args.unified_direct
+                if direct_unified:
+                    # Native verification is read-only here. Re-entry must use
+                    # unified negotiation, never the legacy bridge controller.
+                    args.filled_copper_trials = 0
                 stitch_enabled = args.stitch_zone_pads or bool(physical_board.zones)
                 early_pads: set[PadReference] = set()
                 if args.early_plane_pad and not stitch_enabled:
@@ -1770,17 +1780,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 emit(progress, "final_contacts_native_drc", "started")
             stitch = (result.plane_stitch if result.stopped_after
                       else escape_feedback.plane_stitch if escape_feedback is not None
-                      else stitch_zone_pads(result.board, plane_options) if stitch_enabled
+                      else stitch_zone_pads(result.board, plane_options) if stitch_enabled and not direct_unified
                       else result.plane_stitch)
             plane_repair = None
-            if stitch_enabled and stitch is not None and stitch.board.zones and not result.stopped_after:
+            if (stitch_enabled and not direct_unified and stitch is not None
+                    and stitch.board.zones and not result.stopped_after):
                 # Routing after stitching can wall a pour-contact pad off; re-stitch those explicitly.
                 from .plane import repair_cut_off_plane_pads
                 before = stitch.added_track_count + stitch.added_via_count
                 stitch, still_cut_off = repair_cut_off_plane_pads(stitch, plane_options)
                 plane_repair = {"added_copper": stitch.added_track_count + stitch.added_via_count - before,
                                 "still_cut_off": [f"{p.component}.{p.pad}" for p in still_cut_off]}
-            output_board = stitch.board if stitch_enabled and not result.stopped_after else result.board
+            output_board = (stitch.board if stitch_enabled and stitch is not None
+                            and not result.stopped_after else result.board)
             duplicate_stitch = (DuplicatePadStitchResult(output_board, (), (), 0) if result.stopped_after
                                 else stitch_duplicate_pads(output_board))
             output_board = duplicate_stitch.board
@@ -1798,7 +1810,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_board = swept
             output_drc = (
                 run_physical_drc(output_board)
-                if not result.stopped_after and (stitch_enabled
+                if not result.stopped_after and ((stitch_enabled and stitch is not None)
                 or duplicate_stitch.added_track_count
                 or trimmed_overhangs)
                 else result.drc
@@ -1888,6 +1900,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
+                    "router", "unified_direct", "unified_iterations", "unified_time_budget_s",
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",

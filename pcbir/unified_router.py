@@ -137,6 +137,8 @@ class UnifiedRouterOptions:
     # Route decoupling capacitors with the dedicated decoupler router before
     # the unified router (their copper is then fixed).
     pre_route_decouplers: bool = True
+    # One negotiation from source-fixed copper; no legacy critical/bypass bootstrap.
+    direct: bool = False
     # Escape crowded ordinary pins (fanout.route_fanout) before critical routing.
     escapes_first: bool = True
 
@@ -1843,6 +1845,10 @@ class _Router:
             if run_start != prev:
                 tracks.append(TrackSegment(spec.name, g.point(run_start), g.point(prev),
                                            run_width, g.layers[g.unpack(prev)[0]]))
+        # A collinear neck can span several overlapping pad regions without
+        # belonging wholly to any one of them. Re-cut emitted mutable copper
+        # by the exact source regions before the normal exact commit check.
+        tracks = list(self.clearance.breakout.neck_down(tracks))
         return tracks, list(dict.fromkeys(vias))
 
     def commit(self, routes: Mapping[str, _NetRoute], conflicts=frozenset()):
@@ -2213,12 +2219,12 @@ def route_unified(
     nets = [net for net in board.nets
             if (len(net.pads) >= 2 or net.name in plane_nets) and (net.name not in zone_nets or net.name in plane_nets)
             and (only_nets is None or net.name in only_nets)
-            and (rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
+            and (options.direct or rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
             and not connectivity.net_connected(net)]
     already = [net for net in board.nets
                if len(net.pads) >= 2 and net.name not in zone_nets
                and (only_nets is None or net.name in only_nets)
-               and (rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
+               and (options.direct or rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
                and connectivity.net_connected(net)]
     original_board, all_nets = board, nets
     bus_accepted: dict = {}
