@@ -17,6 +17,9 @@ test = ["pytest>=8"]
 cam = ["pygerber==2.4.3"]
 qualification = ["pygerber==2.4.3", "shapely==2.1.2", "gerbonara==1.6.3; python_version >= '3.12'"]
 simulation = ["matplotlib>=3.10,<4", "plotly>=6.3,<7"]
+exact = [
+    "ortools>=9.10",
+]
 
 [project.scripts]
 copper = "pcbir.cli:main"
