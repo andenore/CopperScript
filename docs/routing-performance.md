@@ -1,5 +1,34 @@
 # Routing performance and optimization assessment
 
+## Terminal-transition rejection diagnostics (2026-10-23)
+
+Critical replay now reports finite transition-stage counters and at most 16
+rejection examples per terminal/layer/pitch, with two examples per stage and
+eight exact blocker identities per example. Local access distinguishes an
+exhausted frontier from its separate state limit. These observations do not
+change candidate order, state allowances, copper ownership or acceptance.
+
+One consumer's baseline has three short collars: one violates signal
+via-in-pad policy and two collide with opposite-face bypass lands. Its local
+fallback samples 155 sites, finds 12 legal via pairs and spends 32 local path
+calls without a complete collar. A retained capacitor-move trial generates
+six signal collars but rejects all 2472 sampled return sites, including sites
+blocked by its own disposable termination branches. This identifies serial
+support/escape/return preparation as a limitation; it is not a proof that the
+physical placement has no valid route. Both diagnostics export byte-identical
+PCBs and routing fingerprints to their corresponding pre-telemetry controls.
+
+The 41-case pair/replay set, 51-case local/IPC/telemetry set and 58-case
+transition/return set pass (overlapping sets). The nRF52 ladder case180 retains
+35/35 signal connections, zero exact geometry errors, 40 vias and 346.483 mm;
+38.3 seconds versus the prior 40.1-second control, with no ladder regression.
+Native/plane and engineering gates remain open; no speedup claim is made.
+
+The reference IPC reader also accepts an explicit empty-pad separator on a
+plated via record. A named manufacturer via is classified as a via, not a
+component with an empty pad. Units, drill dimensions and net identities remain
+explicit; unsupported records still fail closed.
+
 ## Offset collars for staggered plated rows (2026-10-23)
 
 Round plated terminals with a source breakout contract can now propose lateral

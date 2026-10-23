@@ -19,6 +19,7 @@ from .geometry import RoundedConvexShape, shapes_clear
 from .physical import BoardSide, CopperLayer, NetRoutingRule, PadKind, PhysicalBoard, Point, TrackSegment, Via, nm_from_mm
 from .routing import GlobalNetRoute
 from .routing_clearance import RoutingClearanceIndex
+from .routing_clearance import RoutingBlocker
 from .routing_layers import routing_layers
 from .surface_path import _track_inside_board
 
@@ -58,6 +59,15 @@ class PairPortInventory:
 
 
 @dataclass(frozen=True, slots=True)
+class PairTransitionExample:
+    stage: str
+    positions: tuple[Point, ...] = ()
+    blockers: tuple[RoutingBlocker, ...] = ()
+    local_expanded_states: int = 0
+    local_discovered_nodes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class PairTransitionInventory:
     component: str
     surface: CopperLayer
@@ -65,6 +75,8 @@ class PairTransitionInventory:
     pitch_nm: int
     transitions: int
     direct_contacts: int
+    stage_counts: tuple[tuple[str, int], ...] = ()
+    examples: tuple[PairTransitionExample, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
