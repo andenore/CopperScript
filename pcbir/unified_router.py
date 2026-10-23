@@ -1333,9 +1333,22 @@ class _Router:
             spec.via_factor = factor * 10
             try:
                 retry = self._route_net_once(spec, present)
+                if retry.connected and len(retry.via_xy) < len(route.via_xy):
+                    route = retry
+                if len(route.via_xy) > spec.via_budget:
+                    # A hard via budget must be able to contest a corridor
+                    # priced out by mutable routes or stale history. Retain all
+                    # source obstacles and return masks; only proposal costs
+                    # change. Normal claims and exact commit remain mandatory.
+                    self._ignore_soft_costs = True
+                    try:
+                        direct = self._route_net_once(spec, 0.0)
+                    finally:
+                        self._ignore_soft_costs = False
+                    if direct.connected and len(direct.via_xy) <= spec.via_budget:
+                        route = direct
             finally:
                 spec.via_factor = factor
-            route = retry if len(retry.via_xy) <= len(route.via_xy) else route
             if len(route.via_xy) > spec.via_budget:
                 route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0,
                                   f"needs {len(route.via_xy)} new vias, max_vias leaves {spec.via_budget}")
@@ -1481,9 +1494,20 @@ class _Router:
         route.body = {node: owner for node, owner in body.items() if node not in nodes}
         route.length = length
 
+    def _routing_history(self):
+        if not getattr(self, "_ignore_soft_costs", False):
+            return self.occupancy.history, self.occupancy.via_history
+        if not hasattr(self, "_zero_history"):
+            if self.occupancy.arrays:
+                self._zero_history = (np.zeros(self.grid.size, dtype=np.float64),
+                                      np.zeros(self.grid.plane, dtype=np.float64))
+            else:
+                self._zero_history = ([0.0] * self.grid.size, [0.0] * self.grid.plane)
+        return self._zero_history
+
     def _lead_penalty(self, lead: tuple[TrackSegment, ...], present: float) -> float:
         """Congestion price of an off-grid lead-in, so attach choices negotiate too."""
-        if not lead:
+        if not lead or getattr(self, "_ignore_soft_costs", False):
             return 0.0
         nodes = self._lead_nodes.get(lead)
         if nodes is None:
@@ -1567,7 +1591,7 @@ class _Router:
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self._via_owners(spec)
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        hist, via_hist = self.occupancy.history, self.occupancy.via_history
+        hist, via_hist = self._routing_history()
         nid = spec.nid
         nx, plane = g.nx, g.plane
         layers = spec.layers
@@ -1608,7 +1632,7 @@ class _Router:
                 return result
         g, options = self.grid, self.options
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        hist, via_hist = self.occupancy.history, self.occupancy.via_history
+        hist, via_hist = self._routing_history()
         nid = spec.nid
         neck, neck_mid, region = spec.neck, spec.neck_mid, spec.region
         use_neck = bool(neck or neck_mid)
@@ -1759,6 +1783,7 @@ class _Router:
         owner, mid_owner = self.rasters.track_arrays(spec.width, spec.clearance)
         via_owner = self._via_owners(spec, as_array=True)
         occupancy = self.occupancy
+        history, via_history = self._routing_history()
         flags, extra = self._n_flags, self._n_extra
         layers = np.asarray([layer | (0x100 if layer in spec.target_only else 0) for layer in spec.layers],
                             dtype=np.int32)
@@ -1785,7 +1810,7 @@ class _Router:
         P = lambda a: a.ctypes.data
         length = self.native(
             g.nx, g.ny, g.nl, P(owner), P(mid_owner), P(via_owner),
-            P(occupancy.history), P(occupancy.occ), P(occupancy.via_history), P(occupancy.via_occ),
+            P(history), P(occupancy.occ), P(via_history), P(occupancy.via_occ),
             P(flags), spec.nid, P(layers), len(layers), P(move_base),
             float(present), float(self.via_cost * spec.via_factor),
             *box, *tbox,
