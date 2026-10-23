@@ -48,6 +48,10 @@ python -m copperscript query BOARD.copper nets             # one line per net
 
 After a routing or layout run, `issues` lists grouped, located failures and `view`
 renders one of them; see [routing and placement iteration](llm-workflow.md#routing-and-placement-iteration).
+`issues` also reads `replay-unified`'s attempted `unrouted` nets and locates
+them on its exported PCB. Other open nets in a subset replay's whole-board
+summary are deliberately excluded from those attempted-failure issues. An empty
+replay issue list does not establish complete-board routing or native acceptance.
 `route-board --stop-after STAGE`, `--checkpoint-dir` and `--reuse-placement`
 shorten reruns; see [shorter reruns](llm-workflow.md#shorter-reruns).
 The standard critical path also saves `critical-inputs.state.json` and, when

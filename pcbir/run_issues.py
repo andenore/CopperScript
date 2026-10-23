@@ -385,6 +385,11 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
             "CRITICAL-UNROUTED", reason, nets=nets, points=_net_points(scene, nets)))
 
     detailed = [n for n in _items(_section(report, "detailed").get("nets")) if isinstance(n, dict)]
+    if not detailed and report.get("schema") == "copperscript-route-summary/v1" and report.get("state"):
+        # replay-unified records only attempted failures here. The summary's
+        # other open nets may deliberately be outside the selected replay.
+        detailed = [{"net": str(name), "connected": False, "diagnostics": _items(diagnostics)}
+                    for name, diagnostics in _section(report, "unrouted").items()]
     reasons: dict[str, list[str]] = defaultdict(list)
     for net in detailed:
         if net.get("connected") is False:

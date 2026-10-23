@@ -1,5 +1,15 @@
 # Routing performance and optimization assessment
 
+## Located unified replay failures (2026-10-23)
+
+`copper issues` now reads the existing unified subset replay summary's attempted
+failure map. Previously a replay with two exact-commit rejections displayed zero
+issues because it had no full-pipeline `detailed` section. Unattempted open nets
+remain excluded; grouping and pad-derived windows use the existing machinery.
+The 19-case iteration-tools set passes. Ladder237 retains 35/35 signals, zero
+exact geometry errors, 40 vias and 346.483 mm in 19.2 s; no regression against
+control233, with no routing or verification acceptance change.
+
 ## Check the deadline before each repair alternative (2026-10-23)
 
 The unified router now checks its existing deadline before each unseeded or
