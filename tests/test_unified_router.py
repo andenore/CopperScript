@@ -237,6 +237,57 @@ def test_ball_field_exact_drops_the_raster_margin_only_inside_ball_fields() -> N
     assert exact_outside == plain_outside        # the rest of the board keeps it
 
 
+def _array_board(parts: dict[str, tuple[float, float]], nets: dict[str, tuple[tuple[str, str], ...]]):
+    """5x5 ball arrays (1 mm pitch, 0.4 mm balls) at ``parts`` with nets between their balls."""
+    footprint = PhysicalFootprint("test/bga25", tuple(
+        FootprintPad(str(i), Point.mm(x, y), Size.mm("0.4", "0.4"), shape=PadShape.CIRCLE)
+        for i, (x, y) in enumerate(((x, y) for y in range(-2, 3) for x in range(-2, 3)), 1)), Size.mm(5, 5))
+    base = _board({"X": ((3, 18), (17, 18))})
+    return replace(base, footprints={**base.footprints, footprint.name: footprint},
+                   placements=(*base.placements, *(Placement(ref, footprint.name, Point.mm(*at))
+                                                    for ref, at in parts.items())),
+                   nets=(*base.nets, *(PhysicalNet(name, tuple(PadReference(r, n) for r, n in pads))
+                                       for name, pads in nets.items())))
+
+
+def test_exit_corridors_cost_other_nets_and_not_their_owner() -> None:
+    from pcbir.unified_router import _Router
+    # S leaves outer-ring ball 3 (column 2, row 0: top edge); T leaves second-ring ball 8 (column 2, row 1).
+    board = _array_board({"U": (10, 6)}, {"S": (("U", "3"),), "T": (("U", "8"),)})
+    far = {"S": PadReference("X_0", "1"), "T": PadReference("X_1", "1")}
+    board = replace(board, nets=tuple(replace(net, pads=(*net.pads, far[net.name]))
+                                      for net in board.nets if net.name in far))
+    router = _Router(board, UnifiedRouterOptions(pitch_nm=nm_from_mm("0.25"), exit_reservation_cost=5.0),
+                     list(board.nets), None)
+    g = router.grid
+    def node(x, y):
+        return g.index(0, int(round((nm_from_mm(x) - g.x0) / g.pitch)), int(round((nm_from_mm(y) - g.y0) / g.pitch)))
+    above = node(10, 3.5)      # straight above ball 3 (at (10, 4) in board millimetres), past the edge
+    gap = node(9.5, 4)         # between outer balls 2 and 3, in front of ball 8 (at (10, 5))
+    assert above in router._exit_corridors["S"] and gap in router._exit_corridors["T"]
+    history = router.occupancy.history
+    assert history[above] >= 5 and history[gap] >= 5
+    s_nodes, s_extra = router._escape_bias("S")
+    assert dict(zip(map(int, s_nodes), map(float, s_extra)))[above] == -5.0
+    assert gap not in set(map(int, s_nodes))      # T's exit still costs S
+
+
+def test_bus_bundles_route_the_nets_between_the_bus_parts_with_the_bus() -> None:
+    from pcbir.physical import NetMatchGroup
+    board = _array_board({"U": (8, 6), "V": (16, 6)},
+                         {"A": (("U", "15"), ("V", "11")), "B": (("U", "20"), ("V", "16")),
+                          "C": (("U", "10"), ("V", "6"))})
+    board = replace(board, match_groups=(NetMatchGroup("bus", ("A", "B"), nm_from_mm(5)),))
+    global_route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    def bus_nets(**options):
+        events = []
+        route_unified(board, global_route, UnifiedRouterOptions(maximum_iterations=5, **options),
+                      on_progress=lambda *args, **kwargs: events.append(args))
+        return next(e[2]["nets"] for e in events if e and e[0] == "unified_buses")
+    assert bus_nets() == 2                   # the group alone
+    assert bus_nets(bus_bundles=True) == 3   # with C, whose pads are all on U and V
+
+
 def test_via_budget_is_never_exceeded() -> None:
     from pcbir.physical import NetRoutingRule, RouteKind
     # V may not use vias and H only one: whatever H does, it stays in budget.
