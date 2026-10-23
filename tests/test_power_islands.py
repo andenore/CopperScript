@@ -98,3 +98,31 @@ def test_island_outlines_have_no_holes() -> None:
     slit = _slit_holes(ring)
     outline = _outline(slit, 0, 0, 10)
     assert not outline.holes and slit.sum() == ring.sum() - 3   # a slit of three cells to the top edge
+
+
+def test_ball_grid_islands_divide_the_field_among_the_rails() -> None:
+    from pcbir.geometry import point_in_polygon
+    from pcbir.power_islands import plan_ball_grid_islands
+    from test_escape_plan import ball_grid
+    # 6x6 balls at 0.8 mm (ball (0, 0) at (10, 10) mm); rails N8 (ball (1, 1)) and N29 (ball (4, 4)).
+    board = ball_grid(6, "0.45", plane=frozenset({1}))
+    partition = plan_ball_grid_islands(board, CopperLayer.BACK, ("N8", "N29"))
+    assert set(partition.rails) == {"N8", "N29"}
+    islands = {net: [z for z in partition.zones if z.net == net] for net in ("N8", "N29")}
+    # Each rail's outward cell lies in one of its islands; the rails split the field between them.
+    assert any(point_in_polygon(Point.mm("10.4", "10.4"), z.outline.outer.vertices) for z in islands["N8"])
+    assert any(point_in_polygon(Point.mm("13.6", "13.6"), z.outline.outer.vertices) for z in islands["N29"])
+    assert not any(point_in_polygon(Point.mm("13.6", "13.6"), z.outline.outer.vertices) for z in islands["N8"])
+    assert any(point_in_polygon(Point.mm("11.6", "10.4"), z.outline.outer.vertices) for z in islands["N8"])
+    assert all(not z.outline.holes and z.priority > board.zones[0].priority for z in partition.zones)
+
+
+def test_ball_grid_islands_keep_to_allowed_layers() -> None:
+    from pcbir.physical import NetRoutingRule, RouteKind
+    from pcbir.power_islands import plan_ball_grid_islands
+    from test_escape_plan import ball_grid
+    board = ball_grid(6, "0.45", plane=frozenset({1}))
+    board = replace(board, net_routing_rules=(NetRoutingRule("N8", RouteKind.GENERAL,
+                                                             allowed_layers=(CopperLayer.FRONT,)),))
+    partition = plan_ball_grid_islands(board, CopperLayer.BACK, ("N8", "N29"))
+    assert {z.net for z in partition.zones} == {"N29"} and "N8" in partition.skipped
