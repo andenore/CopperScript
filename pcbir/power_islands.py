@@ -65,24 +65,35 @@ def ball_grid_rails(board: PhysicalBoard) -> tuple[str, ...]:
 
 
 def plan_ball_grid_islands(board: PhysicalBoard, layer: CopperLayer, rails: tuple[str, ...] | None = None, *,
-                           gap_nm: int = nm_from_mm("0.3"), pitch_nm: int = nm_from_mm("0.025")) -> PowerPartition:
-    """Split-plane islands under ball grids from the via-site matrix (reference-style PWR layer).
+                           gap_nm: int = nm_from_mm("0.3"), pitch_nm: int = nm_from_mm("0.05"),
+                           extend_nm: int = nm_from_mm("12"), corridor_nm: int = nm_from_mm("0.8"),
+                           pad_reach_nm: int = nm_from_mm("0.6"), core_nm: int = nm_from_mm("0.5")) -> PowerPartition:
+    """Split-plane islands under ball grids from the via-site matrix, extended to each rail's other pads.
 
-    Each cell of a ball grid's via lattice (the square around a cell centre,
-    one pitch wide; the ring just outside the array included) is seeded by
-    the rail whose via sits on that centre, or, for a rail ball without a via
-    yet, by its outward cell. Every other cell goes to the nearest seed, so
-    the whole field is divided among the rails and other nets' vias are holes
-    in the fill (the FX10 kit's PWR1 layer). Same-rail cells that touch, also
-    only at a corner (an empty ball position on an inner layer), form one
-    island; a rail may get several, which the router joins as plane pieces.
-    Islands keep ``gap_nm`` from each other and from the host plane, which
-    they are carved out of by priority. Rails whose routing rule excludes
-    ``layer`` get none.
+    Under the array: each cell of a ball grid's via lattice (the square
+    around a cell centre, one pitch wide; the ring just outside the array
+    included) is seeded by the rail whose via sits on that centre, or, for a
+    rail ball without a via yet, by its outward cell. Every other cell goes
+    to the nearest seed, so the field is divided among the rails and other
+    nets' vias are holes in the fill (the FX10 kit's PWR1 layer).
+
+    Outside it: every other pad of a rail within ``extend_nm`` (its ferrite
+    bead, bulk and decoupling capacitors) is joined by a ``corridor_nm`` wide
+    corridor, routed on the raster from the pad to the nearest copper of the
+    rail through the host plane's area, keeping ``core_nm`` from other rails'
+    pads and the gap from their copper; nearest pads first, so later ones can
+    join earlier corridors. The kit's islands likewise reach those parts.
+
+    Touching same-rail copper forms one island; a rail may get several, which
+    the router joins as plane pieces. Islands keep ``gap_nm`` from each other
+    and from the host plane, which they are carved out of by priority. Rails
+    whose routing rule excludes ``layer`` get none.
     """
+    from collections import deque
     from .package_patterns import ball_grid
     from .placement import transformed_local_point
     from .plane_estimate import _label
+    from .unified_router import _polygon_inside, _segment_distance
 
     rails = tuple(rails) if rails is not None else ball_grid_rails(board)
     rules = {rule.net: rule for rule in board.net_routing_rules}
@@ -94,31 +105,60 @@ def plan_ball_grid_islands(board: PhysicalBoard, layer: CopperLayer, rails: tupl
         return PowerPartition(layer, (), (), excluded)
     rail_index = {rail: index for index, rail in enumerate(rails)}
     net_of = {(pad.component, pad.pad): net.name for net in board.nets for pad in net.pads}
-    priority = max(zone.priority for zone in host) + 1
-    zones, used = [], set()
+    poses = {pose.reference: pose for pose in board.placements}
+
+    # Board raster: the cells a rail may fill (the host plane's area).
+    vertices = board.outline.vertices
+    x0 = min(p.x_nm for p in vertices); y0 = min(p.y_nm for p in vertices)
+    x1 = max(p.x_nm for p in vertices); y1 = max(p.y_nm for p in vertices)
+    rx, ry = int((x1 - x0) // pitch_nm) + 1, int((y1 - y0) // pitch_nm) + 1
+    px, py = np.meshgrid(x0 + pitch_nm * (np.arange(rx) + 0.5), y0 + pitch_nm * (np.arange(ry) + 0.5))
+    allowed = np.zeros(px.shape, dtype=bool)
+    for zone in host:
+        inside = _polygon_inside(zone.outline.outer.vertices, px, py)
+        for hole in zone.outline.holes:
+            inside &= ~_polygon_inside(hole.vertices, px, py)
+        allowed |= inside
+    edge = np.full(px.shape, np.inf)
+    for i in range(len(vertices)):
+        a, b = vertices[i], vertices[(i + 1) % len(vertices)]
+        edge = np.minimum(edge, _segment_distance(px, py, float(a.x_nm), float(a.y_nm), float(b.x_nm), float(b.y_nm)))
+    allowed &= edge > board.rules.minimum_clearance_nm + pitch_nm
+    for keepout in board.copper_keepouts:
+        if keepout.block_zones and layer in keepout.layers:
+            allowed &= ~_polygon_inside(keepout.outline.outer.vertices, px, py)
+    owner = np.full(px.shape, -1, dtype=np.int32)
+
+    def window(cx, cy, half):
+        return (max(0, int((cy - half - y0) // pitch_nm)), min(ry - 1, int((cy + half - y0) // pitch_nm)),
+                max(0, int((cx - half - x0) // pitch_nm)), min(rx - 1, int((cx + half - x0) // pitch_nm)))
+
+    def paint(cx, cy, half, value):
+        j0, j1, i0, i1 = window(cx, cy, half)
+        owner[j0:j1 + 1, i0:i1 + 1] = value
+
+    # Under each ball grid: the via-site matrix.
     for pose in sorted(board.placements, key=lambda p: p.reference):
         grid = ball_grid(board, pose.reference)
         if grid is None:
             continue
         nx, ny, half = len(grid.xs_nm), len(grid.ys_nm), grid.pitch_nm // 2
-        # Cells (cx, cy) for cx in -1..nx-1: centre half a pitch past ball cx.
+
         def centre(cx, cy):
             return transformed_local_point(pose, Point(grid.xs_nm[0] + cx * grid.pitch_nm + half,
                                                        grid.ys_nm[0] + cy * grid.pitch_nm + half))
         cells: dict[tuple[int, int], int] = {}
         sites = {(cx, cy): centre(cx, cy) for cx in range(-1, nx) for cy in range(-1, ny)}
-        by_position = {(point.x_nm, point.y_nm): key for key, point in sites.items()}
         tolerance = grid.tolerance_nm + 1
         for via in board.vias:
             if via.net not in rail_index:
                 continue
-            for (x, y), key in by_position.items():
-                if abs(via.position.x_nm - x) <= tolerance and abs(via.position.y_nm - y) <= tolerance:
+            for key, point in sites.items():
+                if abs(via.position.x_nm - point.x_nm) <= tolerance and abs(via.position.y_nm - point.y_nm) <= tolerance:
                     cells.setdefault(key, rail_index[via.net])
-        lands = {land.number: land for land in board.footprints[pose.footprint].pads if land.number in grid.balls}
-        have = set(cells.values())
-        for number, land in sorted(lands.items()):
-            net = net_of.get((pose.reference, number))
+        for land in sorted((p for p in board.footprints[pose.footprint].pads if p.number in grid.balls),
+                           key=lambda p: p.number):
+            net = net_of.get((pose.reference, land.number))
             if net not in rail_index:
                 continue
             ix, iy = grid.index(land.position)
@@ -126,60 +166,130 @@ def plan_ball_grid_islands(board: PhysicalBoard, layer: CopperLayer, rails: tupl
                 continue  # its via already marks a cell of the rail
             sx = -1 if 2 * ix < nx - 1 else 1
             sy = -1 if 2 * iy < ny - 1 else 1
-            key = (ix - (sx < 0), iy - (sy < 0))
-            cells.setdefault(key, rail_index[net])
+            cells.setdefault((ix - (sx < 0), iy - (sy < 0)), rail_index[net])
         if not cells:
             continue
-        # A split power layer gives the whole field to the rails: every cell
-        # goes to the nearest rail cell (other nets' vias become holes in the
-        # fill), as the FX10 kit's PWR1 islands span the array.
         seeds = sorted(cells.items())
         for key in sites:
-            if key in cells:
-                continue
-            best = min(seeds, key=lambda item: ((item[0][0] - key[0]) ** 2 + (item[0][1] - key[1]) ** 2,
-                                                 item[1], item[0]))
-            cells[key] = best[1]
-        # Raster over the array (plus one ring of cells) in board coordinates.
-        corners = list(sites.values())
-        x0 = min(p.x_nm for p in corners) - grid.pitch_nm; y0 = min(p.y_nm for p in corners) - grid.pitch_nm
-        x1 = max(p.x_nm for p in corners) + grid.pitch_nm; y1 = max(p.y_nm for p in corners) + grid.pitch_nm
-        rx, ry = int((x1 - x0) // pitch_nm) + 1, int((y1 - y0) // pitch_nm) + 1
-        owner = np.full((ry, rx), -1, dtype=np.int32)
-        cell_half = grid.pitch_nm // 2
-        def paint(cx_nm, cy_nm, half_nm, value):
-            i0 = max(0, int((cx_nm - half_nm - x0) // pitch_nm)); i1 = min(rx - 1, int((cx_nm + half_nm - x0) // pitch_nm))
-            j0 = max(0, int((cy_nm - half_nm - y0) // pitch_nm)); j1 = min(ry - 1, int((cy_nm + half_nm - y0) // pitch_nm))
-            owner[j0:j1 + 1, i0:i1 + 1] = value
+            if key not in cells:
+                cells[key] = min(seeds, key=lambda item: ((item[0][0] - key[0]) ** 2 + (item[0][1] - key[1]) ** 2,
+                                                          item[1], item[0]))[1]
         for key, value in cells.items():
-            point = sites[key]
-            paint(point.x_nm, point.y_nm, cell_half, value)
-        # Diagonal neighbours of one rail meet at a corner: bridge it.
+            paint(sites[key].x_nm, sites[key].y_nm, half, value)
         for (cx, cy), value in cells.items():
             for dx, dy in ((1, 1), (1, -1)):
                 if cells.get((cx + dx, cy + dy)) == value:
                     a, b = sites[(cx, cy)], sites[(cx + dx, cy + dy)]
-                    paint((a.x_nm + b.x_nm) // 2, (a.y_nm + b.y_nm) // 2, cell_half // 2, value)
-        k = max(1, int(np.ceil(gap_nm / 2 / pitch_nm)))
-        kept = owner.copy()
-        for dy in range(-k, k + 1):
-            for dx in range(-k, k + 1):
-                if dx * dx + dy * dy > k * k:
-                    continue
-                shifted = np.full(owner.shape, -2, dtype=np.int32)
-                source = owner[max(0, -dy):ry - max(0, dy), max(0, -dx):rx - max(0, dx)]
-                shifted[max(0, dy):ry - max(0, -dy), max(0, dx):rx - max(0, -dx)] = source
-                kept[shifted != owner] = -1
-        for index, rail in enumerate(rails):
-            labels, _ = _label(kept == index)
-            for count, label in enumerate(sorted(set(np.unique(labels[labels > 0]).tolist()))):
-                outline = _outline(_slit_holes(labels == label), x0, y0, pitch_nm)
-                if outline is None or len(outline.outer.vertices) < 3:
-                    continue
-                used.add(rail)
-                zones.append(CopperZone(
-                    f"bga-power-{pose.reference}-{rail}-{layer.value}-{count}", rail, (layer,), outline,
-                    priority=priority, pad_connection=ZoneConnection.SOLID, island_policy=IslandPolicy.REMOVE_ALL))
+                    paint((a.x_nm + b.x_nm) // 2, (a.y_nm + b.y_nm) // 2, half // 2, value)
+    owner[~allowed] = -1
+
+    # Outside the arrays: corridors from each rail's other pads to its copper.
+    pads: dict[int, list[Point]] = {index: [] for index in rail_index.values()}
+    for net in board.nets:
+        if net.name not in rail_index:
+            continue
+        for pad in net.pads:
+            pose = poses[pad.component]
+            land = next((item for item in board.footprints[pose.footprint].pads if item.number == pad.pad), None)
+            if land is not None:
+                pads[rail_index[net.name]].append(transformed_local_point(pose, land.position))
+
+    def cell(point):
+        return (min(ry - 1, max(0, int((point.y_nm - y0) // pitch_nm))),
+                min(rx - 1, max(0, int((point.x_nm - x0) // pitch_nm))))
+
+    def disc(point, radius):
+        j0, j1, i0, i1 = window(point.x_nm, point.y_nm, radius)
+        inside = np.hypot(px[j0:j1 + 1, i0:i1 + 1] - point.x_nm, py[j0:j1 + 1, i0:i1 + 1] - point.y_nm) <= radius
+        return (slice(j0, j1 + 1), slice(i0, i1 + 1)), inside
+
+    cores = np.full(px.shape, -1, dtype=np.int32)
+    for index, points in pads.items():
+        for point in points:
+            where, inside = disc(point, core_nm)
+            region = cores[where]
+            region[inside & (region != -1) & (region != index)] = -2
+            region[inside & (region == -1)] = index
+    kg = max(1, int(np.ceil(gap_nm / pitch_nm)))
+    kw = max(1, int(corridor_nm // 2 // pitch_nm))
+    band = [(dy, dx) for dy in range(-kw, kw + 1) for dx in range(-kw, kw + 1) if dx * dx + dy * dy <= kw * kw]
+    reach = int(extend_nm // pitch_nm)
+    for index in sorted(pads):
+        mine = owner == index
+        if not mine.any():
+            continue
+        others = (owner >= 0) & ~mine
+        grown = others.copy()  # other rails' copper plus the gap
+        for dy in range(-kg, kg + 1):
+            for dx in range(-kg, kg + 1):
+                if dx * dx + dy * dy <= kg * kg:
+                    grown |= np.roll(np.roll(others, dy, axis=0), dx, axis=1)
+        blocked = ~allowed | grown | ((cores != -1) & (cores != index))
+        js, columns = np.nonzero(mine)
+
+        def distance(point):
+            j, i = cell(point)
+            return int(np.min(np.abs(js - j) + np.abs(columns - i)))
+        for point in sorted(pads[index], key=lambda p: (distance(p), p.x_nm, p.y_nm)):
+            start = cell(point)
+            if owner[start] == index or distance(point) > reach:
+                continue
+            j0, j1 = max(0, start[0] - reach), min(ry - 1, start[0] + reach)
+            i0, i1 = max(0, start[1] - reach), min(rx - 1, start[1] + reach)
+            previous = {start: None}
+            queue = deque([start])
+            found = None
+            while queue:
+                j, i = queue.popleft()
+                if owner[j, i] == index:
+                    found = (j, i)
+                    break
+                for dj, di in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+                    nj, ni = j + dj, i + di
+                    if j0 <= nj <= j1 and i0 <= ni <= i1 and (nj, ni) not in previous and (
+                            owner[nj, ni] == index or not blocked[nj, ni]):
+                        previous[(nj, ni)] = (j, i)
+                        queue.append((nj, ni))
+            if found is None:
+                continue  # walled in by other rails: the router joins this pad with a track
+            step = found
+            while step is not None:
+                j, i = step
+                for dy, dx in band:
+                    nj, ni = j + dy, i + dx
+                    if 0 <= nj < ry and 0 <= ni < rx and not blocked[nj, ni] and owner[nj, ni] == -1:
+                        owner[nj, ni] = index
+                step = previous[step]
+            where, inside = disc(point, pad_reach_nm)
+            region = owner[where]
+            region[inside & (region == -1) & ~blocked[where]] = index
+
+    # Gaps between different owners (and the host plane), then islands.
+    k = max(1, int(np.ceil(gap_nm / 2 / pitch_nm)))
+    kept = owner.copy()
+    for dy in range(-k, k + 1):
+        for dx in range(-k, k + 1):
+            if dx * dx + dy * dy > k * k:
+                continue
+            shifted = np.full(owner.shape, -2, dtype=np.int32)
+            source = owner[max(0, -dy):ry - max(0, dy), max(0, -dx):rx - max(0, dx)]
+            shifted[max(0, dy):ry - max(0, -dy), max(0, dx):rx - max(0, -dx)] = source
+            kept[shifted != owner] = -1
+    priority = max(zone.priority for zone in host) + 1
+    zones, used = [], set()
+    for index, rail in enumerate(rails):
+        mask = kept == index
+        if not mask.any():
+            continue
+        labels, _ = _label(mask)
+        for count, label in enumerate(sorted(set(np.unique(labels[labels > 0]).tolist()))):
+            outline = _outline(_slit_holes(labels == label), x0, y0, pitch_nm)
+            if outline is None or len(outline.outer.vertices) < 3:
+                continue
+            used.add(rail)
+            zones.append(CopperZone(f"bga-power-{rail}-{layer.value}-{count}", rail, (layer,), outline,
+                                    priority=priority, pad_connection=ZoneConnection.SOLID,
+                                    island_policy=IslandPolicy.REMOVE_ALL))
     return PowerPartition(layer, tuple(zones), tuple(r for r in rails if r in used),
                           tuple(r for r in rails if r not in used) + excluded)
 
