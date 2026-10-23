@@ -1,0 +1,43 @@
+"""Off-grid access copper must participate in negotiated via clearance."""
+import pytest
+from pcbir import CopperLayer, Point, TrackSegment, nm_from_mm
+from pcbir.unified_router import _Router, _NetRoute, UnifiedRouterOptions
+from test_unified_router import _board
+
+
+@pytest.mark.parametrize("native", (False, True))
+@pytest.mark.parametrize("sign", (-1,1))
+@pytest.mark.parametrize("close", (False,True))
+def test_short_off_grid_lead_reports_a_real_via_clearance_conflict(monkeypatch, native, sign, close):
+    if not native:
+        import pcbir.native
+        monkeypatch.setattr(pcbir.native, "astar", lambda: None)
+    board = _board({"A": ((2,2),(3,2)), "B": ((18,18),(19,18))})
+    router = _Router(board, UnifiedRouterOptions(), list(board.nets), None)
+    grid = router.grid
+    def node(layer, x, y):
+        return grid.index(grid.layers.index(layer),
+            round((nm_from_mm(x)-grid.x0)/grid.pitch),
+            round((nm_from_mm(y)-grid.y0)/grid.pitch))
+    front, back = CopperLayer.FRONT, CopperLayer.BACK
+    a = _NetRoute([[node(front,13,13),node(back,13,13)]], [()],
+                  set(),set(),set(),set(),True,0.0)
+    offset = .375 if close else .875
+    start, end = Point.mm(13+sign*offset,13.125), Point.mm(13+sign*(offset+.125),13.25)
+    lead = TrackSegment("B", start, end,
+                        nm_from_mm("0.2"), front)
+    b = _NetRoute([[node(front,13+sign*(offset+.125),13.25)]], [(lead,)],
+                  set(),set(),set(),set(),True,0.0)
+    for route,spec in ((a,router.specs[0]),(b,router.specs[1])):
+        router._finish_route(route,spec)
+        router.occupancy.add(route,1)
+    # The exact geometry oracle already rejects this via/lead pair. Negotiation
+    # must also see it, before fixing one route and rejecting the other.
+    routes={"A":a,"B":b}
+    _,rejected,_=router.commit(routes)
+    assert bool(rejected)==close
+    conflicts=router._conflicts(routes)
+    assert conflicts==({"A","B"} if close else set())
+    router._penalise(routes, conflicts)
+    xy = node(front,13,13) % grid.plane
+    assert (router.occupancy.via_history[xy] > 0)==close
