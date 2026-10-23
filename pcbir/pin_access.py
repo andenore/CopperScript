@@ -8,21 +8,35 @@ by later routing stages.
 from __future__ import annotations
 
 from heapq import heappop, heappush
+from dataclasses import dataclass
 
 from .geometry import point_in_polygon
 from .physical import CopperLayer, PhysicalBoard, Point, TrackSegment
 from .routing_clearance import RoutingClearanceIndex
 
 
+@dataclass(slots=True)
+class LocalAccessStats:
+    """Optional search observations; never acceptance or a search allowance."""
+    expanded_states: int = 0
+    discovered_nodes: int = 0
+    outcome: str = "not_started"
+
+
 def local_access_path(
     board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
     start: Point, end: Point, layer: CopperLayer, width_nm: int,
     *, step_nm: int, detour_nm: int, maximum_states: int = 1200,
+    stats: LocalAccessStats | None = None,
 ) -> tuple[TrackSegment, ...] | None:
     """Find an exact-clearance, eight-direction path in a bounded local window."""
     if start == end:
+        if stats is not None:
+            stats.outcome = "same_point"
         return ()
     if _legal_segment(board, clearance, net, start, end, layer, width_nm):
+        if stats is not None:
+            stats.outcome = "direct"
         return clearance.route_pieces(net, start, end, width_nm, layer)
     if min(step_nm, detour_nm, maximum_states) <= 0:
         raise ValueError("local access search bounds must be positive")
@@ -70,6 +84,11 @@ def local_access_path(
             remaining = _distance(point, end)
             heappush(queue, (candidate_cost + remaining, remaining,
                              candidate_cost, serial, neighbor))
+    if stats is not None:
+        stats.expanded_states = expanded
+        stats.discovered_nodes = len(previous)
+        stats.outcome = ("connected" if target in previous else
+                         "state_limit" if queue else "frontier_exhausted")
     if target not in previous:
         return None
     points = [end]

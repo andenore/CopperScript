@@ -61,3 +61,18 @@ def test_tiny_budget_cannot_claim_unsearched_off_grid_join():
     board,pad,net,start,end,layer=scene(obstacle=True)
     assert local_access_path(board,RoutingClearanceIndex(board),net,start,end,layer,150000,
         step_nm=100000,detour_nm=1500000,maximum_states=1) is None
+
+
+def test_local_diagnostics_distinguish_exhaustion_without_changing_copper():
+    from pcbir.pin_access import LocalAccessStats
+    board,pad,net,start,end,layer=scene(obstacle=True)
+    for limit in (1,4000):
+        stats=LocalAccessStats()
+        def run(observed=None):
+            return local_access_path(board,RoutingClearanceIndex(board),net,start,end,layer,150000,
+                step_nm=100000,detour_nm=1500000,maximum_states=limit,stats=observed)
+        assert run(stats)==run()
+        assert stats.expanded_states<=limit
+        assert stats.discovered_nodes>=stats.expanded_states
+        assert stats.outcome==('state_limit' if limit==1 else 'connected')
+    assert board.tracks==()

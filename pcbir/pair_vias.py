@@ -7,12 +7,12 @@ are searched together. This is not arbitrary 3-D maze routing or SI signoff.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from itertools import product
 from math import hypot, sqrt
 from typing import Callable, Iterator
 
-from .pair_search import (PairSearchCandidate, PairSearchStats, PairTransitionInventory, _Port, _HEADS,
+from .pair_search import (PairSearchCandidate, PairSearchStats, PairTransitionInventory, PairTransitionExample, _Port, _HEADS,
                           _legal, _ports, _search, _remaining_states, _can_depart,
                           _PairAccessIndex, _normal, _shift, _tracks)
 from .drc import placed_pad_shape
@@ -36,6 +36,30 @@ class _Transition:
     # Caller's site preference (lower first); 0 unless a site rank is given.
     rank: int = 0
     outer: bool = False
+
+
+@dataclass(slots=True)
+class _TransitionTrace:
+    """Finite diagnostic samples, with no influence on candidate admission."""
+    counts: Counter = field(default_factory=Counter)
+    examples: list = field(default_factory=list)
+
+    def record(self, stage, *, positions=(), index=None, vias=(), tracks=(), local=None):
+        self.counts[stage] += 1
+        if (len(self.examples) >= 16 or
+                sum(item.stage == stage for item in self.examples) >= 2):
+            return
+        blockers = {}
+        if index is not None:
+            for item in vias:
+                for blocker in index.via_blocker_records(item):
+                    blockers.setdefault((blocker.identity, blocker.occurrence), blocker)
+            for item in tracks:
+                for blocker in index.track_blocker_records(item):
+                    blockers.setdefault((blocker.identity, blocker.occurrence), blocker)
+        self.examples.append(PairTransitionExample(stage, tuple(positions),
+            tuple(blockers.values())[:8], local.expanded_states if local else 0,
+            local.discovered_nodes if local else 0))
 
 
 def transition_spacing(board: PhysicalBoard, first: NetRoutingRule,
@@ -208,7 +232,7 @@ def _return_positions(board: PhysicalBoard, port: _Port, pair: tuple[Via, Via],
 def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
                 port: _Port, pair: tuple[Via, Via], first: NetRoutingRule,
                 second: NetRoutingRule, surface: CopperLayer,
-                layer: CopperLayer) -> tuple[Via, ...] | None:
+                layer: CopperLayer, *, trace=None) -> tuple[Via, ...] | None:
     if not (first.require_return_vias or second.require_return_vias):
         return ()
     span = physical_via_span(board,surface,layer)
@@ -218,6 +242,8 @@ def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
             or any(surface not in routing_layers(board,r.net,r)
                    or layer not in routing_layers(board,r.net,r)
                    for r in (first,second))):
+        if trace is not None:
+            trace.record('return_invalid_signal_contract')
         return None
     # The caller may reserve additional collars/vias, but not use an index
     # bound to old source, rules, placements or missing occurrence geometry.
@@ -226,6 +252,8 @@ def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
             or not Counter(index.board.tracks) >= Counter(board.tracks)
             or not Counter(index.board.vias) >= Counter(board.vias)
             or not index.candidate_vias_clear(pair)):
+        if trace is not None:
+            trace.record('return_invalid_index_or_signal_geometry')
         return None
     if shared_reference_plane(board, first, second, (surface, layer),
                               tuple(via.position for via in pair)) is not None:
@@ -238,14 +266,18 @@ def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
         return None
     limit = min(rule.maximum_return_via_distance_nm for rule in requested)
     for position in _return_positions(board,port,pair,first,second,net,limit):
+        if trace is not None:
+            trace.counts['return_sites_sampled'] += 1
         via = replace(pair[0], net=net, position=position)
         if (via_inside_board(board, position, via.size_nm)
                 and index.candidate_vias_clear((*pair,via))):
             return (via,)
+        if trace is not None:
+            trace.record('return_site_blocked', positions=(position,), index=index, vias=(via,))
     return None
 
 
-def _local_via_ports(board, first, second, a, b, component, surface, layer):
+def _local_via_ports(board, first, second, a, b, component, surface, layer, *, trace=None):
     """Finite recessed-land fallback: choose legal vias before searching collars.
 
     Surface-only portals can sit above opposite-face bypass pads or ground
@@ -254,7 +286,7 @@ def _local_via_ports(board, first, second, a, b, component, surface, layer):
     path calls at most. Every path keeps both lanes, holes and old copper as
     obstacles; the normal transition and owner gates still run afterwards.
     """
-    from .pin_access import local_access_path
+    from .pin_access import local_access_path, LocalAccessStats
     span = physical_via_span(board, surface, layer)
     if span is None:
         return ()
@@ -284,15 +316,28 @@ def _local_via_ports(board, first, second, a, b, component, surface, layer):
         pair = tuple(Via(rule.net, point, board.rules.default_via_size_nm,
                          board.rules.default_via_drill_nm, *span)
                      for rule, point in zip((first, second), targets))
-        if (not _signal_drills_outside_smd(board, pair)
-                or not _reserve_vias(board, RoutingClearanceIndex(board), pair)):
+        if trace is not None:
+            trace.counts['local_sites_sampled'] += 1
+        if not _signal_drills_outside_smd(board, pair):
+            if trace is not None:
+                trace.record('local_signal_drill_in_smd', positions=targets)
+            continue
+        if not _reserve_vias(board, RoutingClearanceIndex(board), pair):
+            if trace is not None:
+                trace.record('local_via_clearance', positions=targets,
+                    index=RoutingClearanceIndex(board), vias=pair)
             continue
         sites += 1
+        if trace is not None:
+            trace.counts['local_legal_via_sites'] += 1
         approaches = tuple(Point(p.x_nm-dx*125000, p.y_nm-dy*125000) for p in targets)
         tails = tuple(_tracks(rule.net, (approach, target), width, surface,
                               RoutingClearanceIndex(board).breakout)
                       for rule, approach, target in zip((first, second), approaches, targets))
         if not _legal(board, RoutingClearanceIndex(board), *tails, clearance):
+            if trace is not None:
+                trace.record('local_tail_clearance', positions=targets,
+                    index=RoutingClearanceIndex(board), tracks=(*tails[0], *tails[1]))
             continue
         for order in ((0, 1), (1, 0)):
             held = replace(board, tracks=(*board.tracks, *tails[0], *tails[1]),
@@ -303,9 +348,14 @@ def _local_via_ports(board, first, second, a, b, component, surface, layer):
                 if calls >= 32:
                     break
                 calls += 1
+                local = LocalAccessStats() if trace is not None else None
                 path = local_access_path(held, index, (first.net, second.net)[member],
                     (a, b)[member], approaches[member], surface, width,
-                    step_nm=25000, detour_nm=500000, maximum_states=2400)
+                    step_nm=25000, detour_nm=500000, maximum_states=2400, stats=local)
+                if trace is not None:
+                    trace.record('local_path_' + local.outcome,
+                        positions=((a, b)[member], approaches[member]), local=local)
+                    trace.counts[f'local_{local.outcome}_member{member}_heading{heading}_sign{sign}'] += 1
                 if path is None:
                     break
                 paths[member] = (*path, *tails[member])
@@ -314,7 +364,13 @@ def _local_via_ports(board, first, second, a, b, component, surface, layer):
             if (all(p is not None for p in paths)
                     and _legal(board, RoutingClearanceIndex(held), *paths, clearance)):
                 results.append(_Port(center, heading, sign, *paths, 8))
+                if trace is not None:
+                    trace.counts['local_collars'] += 1
                 break
+    if trace is not None:
+        trace.counts['local_path_calls'] += calls
+        trace.counts['local_site_limit_reached'] += int(sites >= 16)
+        trace.counts['local_call_limit_reached'] += int(calls >= 32)
     return tuple(results)
 
 
@@ -322,7 +378,7 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                  first_position: Point, second_position: Point, component: str,
                  surface: CopperLayer, layer: CopperLayer,
                  site_rank: Callable[[tuple[Via, ...]], int | None] | None = None,
-                 *, include_outer: bool = False,
+                 *, include_outer: bool = False, trace=None,
                  ) -> tuple[_Transition, ...]:
     if surface is layer:
         # An opposite-face pair may use this terminal's own signal layer as
@@ -373,19 +429,28 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
             if results:
                 break
             wide = _local_via_ports(board, first, second, first_position,
-                                    second_position, component, surface, layer)
+                                    second_position, component, surface, layer, trace=trace)
+        if trace is not None:
+            trace.counts[('short', 'outer', 'local')[family] + '_surface_collars'] += len(wide)
         for collar in wide:
             pair = tuple(Via(net, tracks[-1].end, board.rules.default_via_size_nm,
                              board.rules.default_via_drill_nm, *span)
                          for net, tracks in ((first.net, collar.first), (second.net, collar.second)))
             if not _signal_drills_outside_smd(board,pair):
+                if trace is not None:
+                    trace.record('signal_drill_in_smd', positions=tuple(v.position for v in pair))
                 continue
             escaped = replace(board, tracks=(*board.tracks, *collar.first, *collar.second))
             reserved = RoutingClearanceIndex(escaped)
             if not _reserve_vias(board, reserved, pair):
+                if trace is not None:
+                    trace.record('signal_via_clearance', positions=tuple(v.position for v in pair),
+                        index=RoutingClearanceIndex(escaped), vias=pair)
                 continue
-            returns = _return_via(board, reserved, collar, pair, first, second, surface, layer)
+            returns = _return_via(board, reserved, collar, pair, first, second, surface, layer, trace=trace)
             if returns is None:
+                if trace is not None:
+                    trace.record('return_unavailable', positions=tuple(v.position for v in pair))
                 continue
             # A caller's site rank may drop a transition (``None``) or order it
             # ahead of others; it never admits a site the checks above refused.
@@ -393,9 +458,14 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
             if rank is None:
                 continue
             escaped = replace(escaped, vias=(*board.vias, *pair, *returns))
-            for inner in _ports(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
+            inner_ports = _ports(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
                                 pair[0].position, pair[1].position, component,
-                                width, offset, clearance, layer):
+                                width, offset, clearance, layer)
+            if trace is not None:
+                trace.counts['middle_layer_collars'] += len(inner_ports)
+                if not inner_ports:
+                    trace.record('middle_layer_blocked', positions=tuple(v.position for v in pair))
+            for inner in inner_ports:
                 results.append(_Transition(replace(inner,
                     first=(*collar.first, *inner.first), second=(*collar.second, *inner.second),
                     preference=collar.preference+inner.preference), pair, returns, rank, bool(family)))
@@ -516,14 +586,16 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             break
         surfaces = tuple(layer if layer in domain else min(domain, key=board.stackup.copper_layers.index)
                          for domain in domains)
+        traces = tuple(_TransitionTrace() for _ in accesses)
         groups = tuple(_transitions(board, first, second, a.pad_position,
             partners[a.pad].pad_position, a.pad.component, surface, layer, site_rank,
-            include_outer=True)
-            for a, surface in zip(accesses, surfaces))
-        for access, surface, group in zip(accesses, surfaces, groups):
+            include_outer=True, trace=trace)
+            for a, surface, trace in zip(accesses, surfaces, traces))
+        for access, surface, group, trace in zip(accesses, surfaces, groups, traces):
             if len(stats.transition_inventory) < 24:
                 stats.transition_inventory.append(PairTransitionInventory(access.pad.component,
-                    surface, layer, pitch_nm, len(group), sum(not item.vias for item in group)))
+                    surface, layer, pitch_nm, len(group), sum(not item.vias for item in group),
+                    tuple(sorted(trace.counts.items())), tuple(trace.examples)))
         total_pairs, combinations = _transition_pairs(groups)
         stats.port_pairs += total_pairs
         searches_at_entry = stats.searches
