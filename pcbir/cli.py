@@ -203,6 +203,7 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
         result = replay_unified(args.state, only_nets=frozenset(args.only) if args.only else None,
                                 only_components=frozenset(args.component) if args.component else None,
                                 bga_fanout=fanout, power_islands=args.power_islands,
+                                exact_escape=args.exact_escape,
                                 on_progress=console_progress() if args.progress else None,
                                 **overrides)
     except (StateError, OSError, ValueError) as exc:
@@ -577,6 +578,8 @@ def _parser() -> argparse.ArgumentParser:
         help="fan-out option for --refanout: surface_rings, stub_width_nm, or array_flow (plan escapes by flow)")
     replay_parser.add_argument("-o", "--output", type=Path, help="write the routed board as .kicad_pcb (for copper view)")
     replay_parser.add_argument("--progress", action="store_true", help="print PROGRESS lines while routing")
+    replay_parser.add_argument("--exact-escape", default=None, metavar="REF",
+        help="first add this ball grid's exact escapes as fixed copper (optional extra 'exact')")
     replay_parser.add_argument("--power-islands", default=None, metavar="auto|LAYER",
         help="carve supply islands on this plane layer first, as route-board --power-islands does")
     from .design_query import QUERY_KINDS

@@ -229,7 +229,7 @@ def board_certificate(board, component: str, *, via_layers: Sequence | None = No
         raise ValueError(f"{component} is not a ball grid")
     pose = next(p for p in board.placements if p.reference == component)
     side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
-    planes = set(deferred_zone_nets(board))
+    planes = set(deferred_zone_nets(board)) | {zone.net for zone in board.zones}
     supplies = set(decoupled_rails(board))
     net_of = {(pad.component, pad.pad): net.name for net in board.nets for pad in net.pads}
     nx, ny, half = len(grid.xs_nm), len(grid.ys_nm), grid.pitch_nm // 2

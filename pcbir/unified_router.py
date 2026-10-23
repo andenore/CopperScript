@@ -2661,7 +2661,7 @@ def route_unified(
 def replay_unified(path, on_progress: ProgressCallback | None = None, *,
                    only_nets: frozenset[str] | None = None, only_components: frozenset[str] | None = None,
                    bga_fanout: dict | None = None, power_islands: str | None = None,
-                   **overrides) -> DetailedRoutingResult:
+                   exact_escape: str | None = None, **overrides) -> DetailedRoutingResult:
     """Route the inputs saved by ``save_inputs_path`` again, with option overrides.
 
     ``only_nets`` narrows the saved net selection (to study a net alone);
@@ -2673,7 +2673,10 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
     (``array_flow`` in the dict overrides that).
     Stages between fanout and routing (plane stitch, power areas) keep their
     saved result. ``power_islands`` ("auto" or a layer name) carves supply
-    islands as the pipeline does before fanout, when the saved run did not. Without the pipeline's escape seeder (repair rounds run
+    islands as the pipeline does before fanout, when the saved run did not.
+    ``exact_escape`` (a ball-grid reference) first adds that package's exact
+    escapes as fixed copper (exact_escape.exact_escape_copper, needs the
+    optional ``exact`` extra). Without the pipeline's escape seeder (repair rounds run
     unseeded).
     """
     from .state_codec import load_state
@@ -2712,6 +2715,11 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
         bga = plan_bga_fanouts(board, array_plans=plans, **options_of)
         emit(on_progress, "bga_fanout", "finished", **bga.report())
         saved["board"] = bga.board
+    if exact_escape is not None:
+        from .exact_escape import exact_escape_copper
+        escapes = exact_escape_copper(saved["board"], exact_escape)
+        emit(on_progress, "exact_escape", "finished", **{k: v for k, v in escapes.report().items() if k != "reasons"})
+        saved["board"] = escapes.board
     return route_unified(saved["board"], saved["global_route"], options,
                          fanout_accesses=saved["fanout_accesses"],
                          fanout_created_vias=saved["fanout_created_vias"],
