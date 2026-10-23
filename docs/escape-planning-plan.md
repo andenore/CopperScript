@@ -16,7 +16,11 @@ working copy for contributors and agents in this repository.
 | E5 | `claude/plan-escape-e5-bus-layers` | Layer moves opt-in (`--bus-layers`). Buses first and bus skew tuning on by default for the unified router: boards without length-match groups route identical copper (D3, small ladder); CopperProbe 24 → 21 open connections, every ADC data line routes; with a declared 1 mm amplitude the bus meets its 5 mm skew (22 open) |
 | E6 | | |
 | E7 | `claude/plan-escape-e7-bga-lattice` | In progress. `--via-lattice` (opt-in): FX10 58 balls sited, none blocked (7 before); the GND/supply balls N4–N10, M4–M10 beside the USB macro get no site. FX10 fast case, median open nets over five perturbed runs: base 17, lattice 20, exact raster 17, lattice + exact raster 15 — single runs vary by ±4 nets, so every comparison uses the five-run ensemble. Always open with the lattice: ACQ_EN, FX_RESET, the FX_V33/FX_VDDD/GND supplies (E11), ADC_OE, ADC_OVR and the CC nets (sealed exits, E9) |
-| E8–E12 | | |
+| E8 | `claude/plan-escape-e7-bga-lattice` | Partial. `ball_field_exact` (exact raster around ball grids, opt-in) and tolerant ball-grid detection (`package_patterns.ball_grid`: 2 µm rounding, depopulated grids, extra pads; D3 copper identical). Exact raster everywhere (`raster_margin_nm=0`) is not safe: D3 loses 0024, 0035, 0376; full-vertical and led-ring lose a net. Access points per ball (TritonRoute PAO) not done |
+| E9 | `claude/plan-escape-e7-bga-lattice` | Tried, no gain. Exit corridors (`exit_reservation_cost` 5, 20), bus bundles, rejection marker cost and retrying failed nets every iteration all stay within ±1.5 nets of the FX10 five-run mean (16.0–16.4); retrying gives 15.2 with the lattice but 17.8 without |
+| E10 | | |
+| E11 | `claude/plan-escape-e7-bga-lattice` | In progress. `power_islands_ball_grid_only`: islands on In4 for the eight FX10 rails only. Islands for every decoupled rail in the replay (after bypass copper exists) were worse (median 20) |
+| E12 | | |
 
 Update this table when a step's PR merges: the D3 clean count (before → after),
 boards gained, full-vertical fingerprint outcome, and the ladder table if it changed.
@@ -143,6 +147,8 @@ Every vendor flow found fans out before general routing (Altium Situs, Siemens
 Xpedition: power/ground first); PAO plans exact pin access points jointly
 before routing. Escape-flow models (Yan & Wong) take existing copper only as
 removed capacity, so the site choice of E7 comes first.
+
+**Open BGA benchmark (2026-10-23).** ULX3S (caBGA-381, 0.8 mm, 4 layers), Antmicro sdi-mipi-bridge (0.65 and 1.0 mm grids) and lpddr4-testbed (0.8 x 0.65 mm), prepared from their official repositories with routing stripped; the originals are the reference layouts. Every reference reserves one dogbone per connected ball in the outer rings, escapes rings 0–1 on the top layer and puts decoupling parts on the bottom inside the array. ULX3S routes 122 of 287 nets with the unified router; its failures are board-wide (power nets that cannot reach their planes, no terminal access), not only the BGA. lpddr4 and sdi-mipi-bridge exceed 35 minutes. OrangeCrab does not import (thermal_bridge_angle 90 pads).
 
 **FX10 fast case.** `route-board --unified-save-inputs STATE` (also saves the
 ball-grid fanout, `STATE.bga.json`) on CopperProbe, then
