@@ -131,6 +131,13 @@ class UnifiedRouterOptions:
     # raster_margin_nm): their single-track channels survive (escape plan E8).
     ball_field_exact: bool = False
     ball_field_exact_reach_nm: int | None = None  # how far around the array (None: one pitch)
+    # Extra cost (as history) for other nets on the surface exit of each
+    # outer-two-ring ball of a ball grid (escape plan E9); 0 disables.
+    exit_reservation_cost: float = 0.0
+    # With buses_first: also route, in the bus phase, every net whose pads
+    # all lie on the parts a bus joins (its bundle), so a bus cannot seal
+    # their exits (CopperProbe ADC_OVR beside the ADC data bus).
+    bus_bundles: bool = False
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
@@ -592,6 +599,7 @@ class _Router:
         self.default_width = default_width
         self._seed_ball_field_cost()
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
+        self._exit_corridors = self._seed_exit_corridors()
         self.routes: dict[str, _NetRoute] = {}
         self._lead_nodes: dict[tuple, list[int]] = {}
         self.present = options.present_factor
@@ -621,6 +629,73 @@ class _Router:
             for iy in range(iy0, iy1 + 1):
                 for ix in range(ix0, ix1 + 1):
                     hist[g.index(layer, ix, iy)] += cost
+
+    def _seed_exit_corridors(self) -> dict[str, set[int]]:
+        """Surface exits of ball-grid edge balls, reserved for their own nets (escape plan E9).
+
+        A signal ball in the outer two rings leaves on its surface layer:
+        an outer-ring ball straight out past the array edge, a second-ring
+        ball through the gap between the two outer balls in front of it and
+        then out. Those grid nodes cost ``exit_reservation_cost`` (as history)
+        for every other net; the owner's search removes it again
+        (``_escape_bias``). Without it a ball's only exit is taken by nets
+        routed earlier, and the ball is sealed (CopperProbe FX10 E1, J13).
+        """
+        cost = self.options.exit_reservation_cost
+        if not cost:
+            return {}
+        from .package_patterns import circular_array
+        from .placement import transformed_local_point
+        g = self.grid
+        routed = {spec.name for spec in self.specs}
+        net_of = {pad: net.name for net in self.board.nets for pad in net.pads}
+        corridors: dict[str, set[int]] = {}
+        for pose in self.board.placements:
+            try:
+                array = circular_array(self.board, pose.reference)
+            except ValueError:
+                array = None
+            if array is None:
+                continue
+            side = CopperLayer.FRONT if pose.side.value == "front" else CopperLayer.BACK
+            if side not in g.layers:
+                continue
+            layer = g.layers.index(side)
+            nx, ny, pitch = len(array.xs_nm), len(array.ys_nm), array.pitch_nm
+            for land in self.board.footprints[pose.footprint].pads:
+                net = net_of.get(PadReference(pose.reference, land.number))
+                if net not in routed:
+                    continue
+                ix, iy = array.xs_nm.index(land.position.x_nm), array.ys_nm.index(land.position.y_nm)
+                edges = ((ix, (-1, 0)), (nx - 1 - ix, (1, 0)), (iy, (0, -1)), (ny - 1 - iy, (0, 1)))
+                ring, (ox, oy) = min(edges, key=lambda item: item[0])
+                if ring > 1:
+                    continue
+                x, y = land.position.x_nm, land.position.y_nm
+                points = [(x, y)]
+                if ring == 1:
+                    # Into the gap on the side away from the array centre.
+                    along = (ix if oy else iy) - ((nx if oy else ny) - 1) / 2
+                    lateral = 1 if along >= 0 else -1
+                    x, y = x + ox * pitch + oy * lateral * pitch // 2, y + oy * pitch + ox * lateral * pitch // 2
+                    points.append((x, y))
+                points.append((x + ox * pitch * 3 // 2, y + oy * pitch * 3 // 2))
+                nodes = corridors.setdefault(net, set())
+                for (ax, ay), (bx, by) in zip(points, points[1:]):
+                    a = transformed_local_point(pose, Point(int(ax), int(ay)))
+                    b = transformed_local_point(pose, Point(int(bx), int(by)))
+                    steps = max(1, int(2 * hypot(b.x_nm - a.x_nm, b.y_nm - a.y_nm) // g.pitch))
+                    for k in range(steps + 1):
+                        px = a.x_nm + (b.x_nm - a.x_nm) * k / steps
+                        py = a.y_nm + (b.y_nm - a.y_nm) * k / steps
+                        node_x, node_y = round((px - g.x0) / g.pitch), round((py - g.y0) / g.pitch)
+                        if 0 <= node_x < g.nx and 0 <= node_y < g.ny:
+                            nodes.add(g.index(layer, node_x, node_y))
+        history = self.occupancy.history
+        for nodes in corridors.values():
+            for node in nodes:
+                history[node] += cost
+        return corridors
 
     def _ball_field_boxes(self) -> tuple[tuple[int, int, int, int], ...]:
         """Each full ball array's land box grown by ``ball_field_exact_reach_nm`` (one pitch by default).
@@ -1522,6 +1597,8 @@ class _Router:
             return cache[net]
         g = self.grid
         extra: dict[int, float] = {}
+        for node in self._exit_corridors.get(net, ()):
+            extra[node] = extra.get(node, 0.0) - self.options.exit_reservation_cost
         for bias in self.options.escape_layer_biases:
             if bias.net != net or bias.layer not in g.layers or not bias.rate:
                 continue
@@ -2379,6 +2456,12 @@ def route_unified(
     bus_complete: set[str] = set()
     skew_notes: list[str] = []
     bus_names = {name for group in board.match_groups for name in group.nets} & {net.name for net in nets}
+    if options.buses_first and options.bus_bundles and bus_names:
+        pads_of = {net.name: net.pads for net in board.nets}
+        for group in board.match_groups:
+            parts = {pad.component for name in group.nets for pad in pads_of.get(name, ())}
+            bus_names |= {net.name for net in nets if len(net.pads) >= 2
+                          and all(pad.component in parts for pad in net.pads)}
     if options.buses_first and bus_names and len(bus_names) < len(nets):
         # A bus needs a shared corridor; negotiated together with every other
         # net it loses it piecemeal. Its members route first, among themselves.
