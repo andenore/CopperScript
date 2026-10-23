@@ -1,3 +1,33 @@
+## Revalidate collateral escape-reservation release (2026-10-24)
+
+Bypass preparation may release provisional package-exit keepouts in a proximity
+box to retry a pending capacitor. That box can include a complete signal exit
+which does not conflict with the selected bypass copper. Removing its reservation
+lets a later clock or pair route occupy the exit. The flow now checks every
+original track and via of an affected net against the actual immutable/bypass
+prefix, including its return-via rule. It restores only complete legal groups
+whose proxy masks also clear that prefix. No copper or source pose is modified.
+
+The new temporary mask context requires newly verified bypass paths and strict
+source/prefix admission. Original ledgers are not rewritten to waive a context
+change. Any failed witness or admission check rolls back the whole restoration.
+A functional fixture shows a clock occupying the unprotected exit, then keeping
+it clear after restoration. Tests also reject a legal via with a blocked stem
+and exercise new-ledger validation and rollback. The 77-case related set passes.
+
+On actual combined preparation, 37 collateral keepouts across 18 nets can be
+restored, including RXD0 and CRS_DV. RXD1's original proposal conflicts with the
+bypass prefix and stays withdrawn. Fresh exact bypass admission passes without
+changing its 344 tracks or 108 vias, source poses, arrays or declared rules.
+Critical replay316 is pending; this is not a full-board pass.
+
+Ladder315 retains the prior copper/completion: nRF52 35/35, zero geometry errors,
+44 vias and 350.563 mm in 31.1 s; round LED remains 50/51 with DEC3 open,
+41 vias and 552.542 mm in 88.4 s; the separate LED consumer passes fresh native
+with zero opens or violations, 35 vias and 545.611 mm in 73.5 s. Concurrent
+runtimes do not establish a performance improvement or an unchanged-consumer
+runtime guarantee.
+
 ## Explicit unified search-state budget (2026-10-23)
 
 `route-board --unified-search-states N` now sets the existing maximum expanded
