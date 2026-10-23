@@ -114,6 +114,9 @@ class UnifiedRouterOptions:
     # 0.852); the pushed-aside nets lose more than the length rule gains.
     length_priority: bool = False
     full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
+    # Retry nets without a path every N iterations, as congestion moves (VPR
+    # never drops an unrouted connection); 0 keeps the old rule: iterations 3 and 6.
+    retry_failed_every: int = 0
     # Straighten this call's accepted copper afterwards with the ownership-safe
     # pass the legacy router uses (route_smoothing.smooth_owned_tracks): grid
     # search has no turn cost, so equal-length staircases of 45-degree jogs
@@ -1966,9 +1969,11 @@ class _Router:
             self.present = present
             # Reroute conflicted nets; retry failed nets now and then, since
             # congestion elsewhere may have moved.
-            pending = [s.name for s in specs if s.name in conflicts or (s.name in failed and iteration in (3, 6))]
+            every = options.retry_failed_every
+            retry = iteration % every == 0 if every else iteration in (3, 6)
+            pending = [s.name for s in specs if s.name in conflicts or (s.name in failed and retry)]
             if options.full_reroute_every and iteration % options.full_reroute_every == 0:
-                pending = [s.name for s in specs if s.name not in failed or iteration in (3, 6)]
+                pending = [s.name for s in specs if s.name not in failed or retry]
             if not pending:
                 break
         _, snapshot, conflicts = best_snapshot
