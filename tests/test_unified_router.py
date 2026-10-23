@@ -107,6 +107,41 @@ def test_unroutable_net_is_reported_not_raised() -> None:
     assert not result.nets[0].connected or summary["signal"]["opens"] == 0
 
 
+def test_expired_repair_budget_does_not_start_another_escape_seed(monkeypatch):
+    import pcbir.unified_router as unified
+    fixed = TrackSegment("B", Point.mm(6, 5), Point.mm(20, 5),
+                         nm_from_mm("0.2"), CopperLayer.FRONT)
+    board = _board({"A": ((3, 10), (17, 10)), "B": ((3, 2), (17, 2))}, tracks=(fixed,))
+    guides = route_global(replace(board, tracks=()), GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    clock = [0.0]
+    events, seeds = [], []
+    monkeypatch.setattr(unified, "perf_counter", lambda: clock[0])
+
+    def observe(phase, event, details):
+        events.append((phase, event, details))
+        iterations = sum(p == "unified_iteration" and e == "finished" for p, e, _ in events)
+        # The initial negotiation and the first unseeded repair run normally.
+        # The clock expires as that repair ends, before a seeded alternative.
+        if iterations == 2:
+            clock[0] = 11.0
+
+    def seed(partial, names):
+        seeds.append(names)
+        return partial
+
+    result = unified.route_unified(board, guides,
+        UnifiedRouterOptions(maximum_iterations=1, maximum_expansions=1,
+                             commit_rounds=2, time_budget_s=10),
+        on_progress=observe, escape_seeder=seed)
+    assert sum(p == "unified_iteration" and e == "finished" for p, e, _ in events) == 2
+    assert not seeds
+    assert fixed in result.board.tracks and result.board.placements == board.placements
+    assert next(net for net in result.nets if net.net == "B").connected
+    assert not next(net for net in result.nets if net.net == "A").connected
+    assert any(p == "unified_repair" and e == "skipped" and d["reason"] == "time_budget"
+               for p, e, d in events)
+
+
 def test_pad_groups_sharing_an_attach_node_both_keep_their_lead_ins() -> None:
     # A fine-pitch connector row on one net (like a board-to-board supply
     # row): neighbouring pads attach to the same grid node, and each needs

@@ -2317,6 +2317,10 @@ def route_unified(
         baseline = _open_count(board, nets, accepted, plane_nets)
         best_attempt = None
         for seed in ((False, True) if escape_seeder is not None else (False,)):
+            if deadline is not None and perf_counter() >= deadline:
+                emit(on_progress, "unified_repair", "skipped", round=round_index + 1,
+                     seeded=seed, reason="time_budget")
+                break
             attempt = repair_attempt(seed)
             if attempt is None:
                 continue
