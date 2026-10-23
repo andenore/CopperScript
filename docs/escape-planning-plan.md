@@ -15,7 +15,7 @@ working copy for contributors and agents in this repository.
 | E4 | `claude/plan-escape-e4-router-integration` | Unified router and `route-board --escape-plan`; plan stays opt-in. Ladder: no completion change; vias both ways (cm4 84 → 69, led-ring 36 → 52). Global access bias not done |
 | E5 | `claude/plan-escape-e5-bus-layers` | Layer moves opt-in (`--bus-layers`). Buses first and bus skew tuning on by default for the unified router: boards without length-match groups route identical copper (D3, small ladder); CopperProbe 24 → 21 open connections, every ADC data line routes; with a declared 1 mm amplitude the bus meets its 5 mm skew (22 open) |
 | E6 | | |
-| E7 | `claude/plan-escape-e7-bga-lattice` | In progress |
+| E7 | `claude/plan-escape-e7-bga-lattice` | In progress. `--via-lattice` (opt-in): FX10 58 balls sited, none blocked (7 before); the GND/supply balls N4–N10, M4–M10 beside the USB macro get no site. FX10 fast case, median open nets over five perturbed runs: base 17, lattice 20, exact raster 17, lattice + exact raster 15 — single runs vary by ±4 nets, so every comparison uses the five-run ensemble. Always open with the lattice: ACQ_EN, FX_RESET, the FX_V33/FX_VDDD/GND supplies (E11), ADC_OE, ADC_OVR and the CC nets (sealed exits, E9) |
 | E8–E12 | | |
 
 Update this table when a step's PR merges: the D3 clean count (before → after),
@@ -150,7 +150,12 @@ ball-grid fanout, `STATE.bga.json`) on CopperProbe, then
 routes only the FX10's nets (53) against the saved board. With
 `--set local_escape_radius_nm=0` it takes about 4 minutes (17 open nets,
 the same count as with the exact maze, which takes 26 minutes); E8 makes
-the default fast. Report per variant: open nets, balls without a site,
+the default fast. One run is not a measurement: a 0.05 change of
+`present_factor` or `history_increment` moves the open count between 12
+and 20, so each variant runs five times (`present_factor` 0.55, 0.6,
+0.65; `history_increment` 0.75, 0.85) and is compared by median and
+spread, and nets that fail in every run are the structural targets.
+Report per variant: open nets, balls without a site,
 sealed planned exits, exact-commit rejections near the package, seconds.
 
 **Verification for every step** follows the D3 fix-plan pattern (see "How to carry out a step" below):
