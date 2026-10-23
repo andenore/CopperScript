@@ -889,3 +889,23 @@ On one 414-track/69-via consumer control, eight repeated index builds and region
 queries took 1.65 s before and 0.15 s after. The membership result digest and
 complete physical DRC report were identical. This isolates repeated source
 membership work, not complete-route performance or any engineering acceptance.
+
+
+### Exact decoupling path-point lookup
+
+The path graph narrows point candidates by inclusive X/Y bounds, selecting the
+smaller sorted interval. The original integer collinearity test, distance order,
+track/via occurrences and BFS state bound remain authoritative. The index is
+local to one graph construction; it caches no witness or clearance decision.
+
+`bench/decoupling_paths.py` loads saved inputs through `pcbir.workbench` and calls
+the public verifier. Before259/after261 on eight opposite-surface associations
+retain identical input and path hashes: 0.4969 s versus 0.2367 s. This is a
+prepared-prefix measurement, not a whole-board runtime claim. A 55-case related
+set passes, including randomized inclusive/reversed/diagonal lookup parity and
+an 80-versus-6400 exact-candidate count. The initial test used an illegal zero-
+length track and was corrected; track validation was not relaxed.
+
+The nRF52 ladder263 retains 35/35 signals, zero exact geometry errors, 44 vias and
+350.563 mm in 20.7 s. Its loaded baseline257 took70.9s with identical copper;
+this comparison does not establish a whole-board speedup.
