@@ -67,6 +67,14 @@ selects the clock fallback for comparison. Failed groups have located `C` issues
 pair reports include a bounded port inventory with headings and departure probes.
 The transition inventory distinguishes native plated-layer contacts from generated
 signal-via launches and exposes which terminal has no legal transition candidates.
+`pair_attempts` reports at most 16 tried endpoint orientations, state counts and
+closest approaches; it contains no resumable frontier or accepted copper.
+For a pair with two shared endpoint packages and one separate nearby support
+contact per member, local support ties remain pending while each surface or
+signal/return-via escape is formed. `pending_contacts` clears only after complete
+pair acceptance. The original breakout-distance, contact, via and geometry rules
+remain active. Ambiguous or unsupported contact trees retain the established
+preparation; no support is dropped to fit a two-terminal guide.
 This diagnostic does not rerun placement, bypass preparation or native checks,
 and never establishes full-board or current-source acceptance.
 

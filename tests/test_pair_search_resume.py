@@ -2,7 +2,7 @@ from dataclasses import replace
 
 from pcbir import (BoardOutline, CopperKeepout, CopperLayer, PhysicalBoard,
     PhysicalNet, Point, PolygonRing, PolygonWithHoles, TrackSegment)
-from pcbir.pair_search import PairSearchStats, _Port, _search
+from pcbir.pair_search import PairSearchStats, _Port, _search, pair_search_attempts
 from pcbir.pair_search_resume import register_pair_search, resume_pair_candidates
 from pcbir.routing_clearance import RoutingClearanceIndex
 
@@ -36,6 +36,10 @@ def test_exact_frontier_resumes_without_repeating_states_or_search_slots():
     assert stats.resumed_portals==1 and stats.resumed_states==stats.expanded_states-1
     assert board.tracks==board.vias==()
     assert list(resume_pair_candidates(stats,board=board,maximum_total_states=1000))==[]
+    attempts=pair_search_attempts(stats)
+    assert len(attempts)==1 and attempts[0].expanded_states==stats.expanded_states
+    assert attempts[0].start==Point.mm(5,12) and attempts[0].end==Point.mm(35,12)
+    assert attempts[0].legal_advances>0 and attempts[0].minimum_goal_distance_nm<=4000000
 
 
 def test_blocked_source_portal_does_not_consume_leftovers():
