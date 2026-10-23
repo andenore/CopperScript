@@ -129,7 +129,11 @@ class UnifiedRouterOptions:
     # Extra cost (as history) on a ball grid's own surface layer: escapes are
     # short, so through-traffic between the balls should prefer inner layers.
     ball_field_cost: float = 2.0
-    reuse_plane_vias: bool = False           # plane pads may join an existing via of their net
+    # Plane pads may join an existing via of their net that lands in the
+    # plane. On by default: the FX10 fast case goes from 16.0 to 12.0 open nets
+    # (five-run mean, with plane_fill_width); D3 copper is identical and the
+    # small ladder keeps completion with fewer vias (nrf52 56 -> 40).
+    reuse_plane_vias: bool = True
     ball_field_via_sites: bool = False       # new vias inside a ball array only at cell centres
     # With ball_field_via_sites: the outer this-many cell rings get no new vias.
     ball_field_band: int = 0
@@ -154,8 +158,9 @@ class UnifiedRouterOptions:
     # touching cells form an island (escape plan E11, plan_ball_grid_islands).
     power_islands_ball_grid_only: bool = False
     # Plane regions of zone nets at the board minimum width and clearance
-    # (zone fill semantics) instead of the net's own track width.
-    plane_fill_width: bool = False
+    # (zone fill semantics) instead of the net's own track width; existing
+    # vias count as plane taps when the fill touches them (see reuse_plane_vias).
+    plane_fill_width: bool = True
     # Nets without a profile width may narrow to the board minimum this close
     # to their pads (0 disables).
     implicit_neck_nm: int = nm_from_mm("2.5")
