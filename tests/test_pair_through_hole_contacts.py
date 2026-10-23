@@ -36,7 +36,11 @@ def test_front_pth_and_back_smd_connect_without_a_via(reverse):
 
 def test_inner_middle_needs_only_smd_transition_and_its_return():
     b=hybrid(inner=True);routes={r.net:r for r in route_global(b).routes}
-    c=next(paired_via_candidates(b,*b.net_routing_rules,routes['A'],routes['B'],layers=(CopperLayer.INTERNAL_2,)))
+    stats=PairSearchStats()
+    c=next(paired_via_candidates(b,*b.net_routing_rules,routes['A'],routes['B'],layers=(CopperLayer.INTERNAL_2,),stats=stats))
+    assert len(stats.transition_inventory)==2
+    assert any(item.direct_contacts for item in stats.transition_inventory)
+    assert all(item.transitions for item in stats.transition_inventory)
     assert len(c.via_pairs)==1 and len(c.return_vias)==1
     result,tracks,vias=_route_pair(b,*b.net_routing_rules,routes,
         exact_tracks=(c.first,c.second),exact_via_pairs=c.via_pairs,exact_return_vias=c.return_vias)

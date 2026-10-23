@@ -12,7 +12,7 @@ from itertools import product
 from math import hypot, sqrt
 from typing import Callable, Iterator
 
-from .pair_search import (PairSearchCandidate, PairSearchStats, _Port, _HEADS,
+from .pair_search import (PairSearchCandidate, PairSearchStats, PairTransitionInventory, _Port, _HEADS,
                           _legal, _ports, _search, _remaining_states, _can_depart,
                           _PairAccessIndex, _normal, _shift, _tracks)
 from .drc import placed_pad_shape
@@ -520,6 +520,10 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             partners[a.pad].pad_position, a.pad.component, surface, layer, site_rank,
             include_outer=True)
             for a, surface in zip(accesses, surfaces))
+        for access, surface, group in zip(accesses, surfaces, groups):
+            if len(stats.transition_inventory) < 24:
+                stats.transition_inventory.append(PairTransitionInventory(access.pad.component,
+                    surface, layer, pitch_nm, len(group), sum(not item.vias for item in group)))
         total_pairs, combinations = _transition_pairs(groups)
         stats.port_pairs += total_pairs
         searches_at_entry = stats.searches

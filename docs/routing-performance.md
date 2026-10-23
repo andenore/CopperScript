@@ -1,5 +1,38 @@
 # Routing performance and optimization assessment
 
+## Offset collars for staggered plated rows (2026-10-23)
+
+Round plated terminals with a source breakout contract can now propose lateral
+collars derived from neighboring land edges. At most two proposals per cardinal
+heading are retained, with one opportunity on each lateral side. Lead-ins and
+oriented tails use the existing exact source-width and whole-board clearance
+checks; main search/state limits and complete-pair acceptance are unchanged.
+The change is generic, rotation/mirror independent and has no board selectors.
+
+On one consumer's unchanged revised placement, baseline161 failed both MDI
+pairs after ten states each. Candidate160 connected RX within the same 6000-state
+bound (3070 states, one complete candidate); TX still failed. Reported RX total
+copper skew is zero, but includes termination branches and is not endpoint-delay
+qualification. Independent KiCad refill of the RX diagnostic has zero geometry
+errors and no RX opens; unrelated board opens remain. Transition diagnostics
+then locate TX's missing generated launches at its surface-mounted terminal,
+while its plated terminal offers twelve direct opposite-face contacts.
+
+The 122-case routing set passed before the final lateral-slot diversification.
+After that change, 58 targeted cases passed; 38 cases including new directional
+and transition-inventory assertions also passed (sets overlap). The early nRF52
+run157 retains all 35 signal connections, zero exact geometry errors, 40 vias,
+346.483 mm and byte-identical PCB SHA256
+`9f05741a655c1d478e1d53beeec7d1aaef80c5e75ea8e14ef6a539680b6014d3`.
+Its concurrent runtime 16.1 to 67.5 seconds triggers the ladder timing warning;
+this is retained without a speed claim. A first control launch167 accidentally
+used the original editable install and failed CLI parsing; it is not a routing
+comparison. Explicit-PYTHONPATH control168 and candidate169 repeat the same case.
+Both retain byte-identical copper and all signal connections, with 75.4 and
+40.1 seconds respectively and no ladder regression. External workloads differed;
+this is not a whole-board speedup claim.
+Native plane and engineering gates remain incomplete in this example subset.
+
 ## Direct unified pipeline subset (2026-10-23)
 
 | Ladder case | Flow | Signal opens / connections | Exact DRC errors | Vias | Length mm | Time s |
