@@ -24,6 +24,29 @@ and export finished at 22.57 and 22.29 s respectively. The larger
 process-level timing difference is retained without a cause or speed claim.
 
 
+## Fine-grid keepout windows (2026-10-23)
+
+A read-only stack sample of the consumer's standard unified pipeline caught its
+critical-clock prepass in `detailed._blocked_nodes`: every fine-grid point
+scanned all keepouts on every layer. The new broad phase visits each keepout's
+inclusive axis window and retains the exact polygon and board-material
+predicates. Source keepouts, layer membership, node coordinates and the result
+set are unchanged; no geometry or routing budget is relaxed.
+
+The existing hotspot runner now accepts `--only grid`. On its synthetic
+six-layer fixture (120 small reservations, irregular axis coordinates), five
+alternating samples gave median 4.280 s before and 0.311 s after (13.78x).
+Every blocked-node output matched exactly. This measures grid construction,
+not a full-board speedup or qualification. Working results:
+`build/grid-hotspot132.json`.
+
+The 64-test detailed/reuse/grid set passed 63 tests and initially rejected a
+new invalid test fixture that named a layer outside its board stackup. The
+corrected fixture and both existing grid-equivalence checks then passed.
+All 32 critical/pipeline tests also passed. Full-board routing and native
+verification remain separate pending checks.
+
+
 ## Isolated hotspot experiments (2026-10-12)
 
 The fresh standard full-vertical profile in
