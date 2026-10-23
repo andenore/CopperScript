@@ -1,5 +1,31 @@
 # Routing performance and optimization assessment
 
+## Coupled groups before equal-priority singles (2026-10-23)
+
+Critical job ordering preserves explicit source priority and places coupled
+groups before singles at an equal priority. The old alphabetical kind ordering
+put clocks first; a legal single trace could wall off the same package's paired
+exit. Coupled lanes require one contiguous joint channel and cannot use the
+independent single fallback. The new tie-break is forward ordering, with no
+additional portal, search, state, retry or rip-up allowance.
+
+A real crossing fixture connects both a surface-only pair and an equal-priority
+clock, using the clock's permitted layer transition. Giving the clock a higher
+explicit priority preserves that choice and the blocked pair remains failed.
+Both cases preserve all inputs and complete geometry checks. The 62-case
+routing/flow set passes. The nRF52 ladder214 retains35/35connections, zero exact
+geometry errors,40vias and346.483mm, with no regression.
+
+In full consumer controls198/205, the clock's13-segment surface path runs
+between paired package lands and termination supports; both pairs fail before
+main search. Replay212 of the actual prepared input, including all344bypass
+tracks,108vias and ordinary reservations, connects both pairs and all five
+clocks with the new order. TX uses470states and RX3070, each under6000. The
+two clock branches tune to23.106233mm each with two legal bumps. Fresh
+KiCad10.0.6 refill has zero geometry errors and no selected-net opens;499
+unrelated whole-board open items and12dangling-track warnings remain. This
+is a prepared-critical subset, not a full ordinary-routing or SI result.
+
 ## Exact bypass reservations at the critical boundary (2026-10-23)
 
 The standard flow can hold its complete planned bypass contribution as actual
@@ -30,8 +56,12 @@ foreign-net collisions, complete cross-face supply/return preservation,
 serialized replay, ambiguous/stale ownership refusal and the aggregate pair
 bound. A 64-case flow/admission/replay set passes. The nRF52 ladder206 retains
 35/35 connections, zero exact geometry errors,40vias and346.483mm, with no
-regression. Full-consumer candidate205 is still under evaluation; no improved
-full-board result or native acceptance is claimed here.
+regression. Full-consumer205 admits all344planned tracks and108vias as copper;
+clock-first ordering still obstructs its paired exits. Removing ordinary
+reservations changes an original witness context and correctly retains the
+conservative fallback rather than rebinding it without authority. Prepared
+replay212, using the changed coupled-first order, needs no such release and
+passes selected-native verification. No improved full-board result is claimed.
 
 ## Joint separate-support completion (2026-10-23)
 

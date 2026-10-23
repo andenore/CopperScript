@@ -64,6 +64,10 @@ skew tuning and return-path checks remain available in this standard pipeline.
 Clock fallback uses the selected unified engine with the original clock profile;
 each clock is bounded to 60 seconds, 16 iterations and two commit rounds (or the
 smaller caller bounds). Complete-group matching and exact acceptance still apply.
+At equal explicit priority, coupled differential/CAN groups route before
+single-ended critical groups. This reserves their joint exit before a flexible
+single trace can obstruct it. An explicitly higher priority still takes
+precedence; no extra search or rip-up allowance is created.
 
 `replay-critical STATE --only NET --report RUN/route-report.json -o RUN/board.kicad_pcb`
 isolates critical routing from a placement checkpoint or source-only saved input.

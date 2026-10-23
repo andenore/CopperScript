@@ -786,7 +786,7 @@ def _nested_outcomes(
 
 
 def _critical_jobs(board: PhysicalBoard) -> list[tuple[NetRoutingRule, tuple[str, ...]]]:
-    """Critical groups in the default order: priority, kind, then net name.
+    """Critical groups: explicit priority, coupled groups, kind and net name.
 
     A pair is one group, placed at its first member's position. Each net
     belongs to the first group that names it.
@@ -795,7 +795,12 @@ def _critical_jobs(board: PhysicalBoard) -> list[tuple[NetRoutingRule, tuple[str
     seen: set[str] = set()
     for rule in sorted(
         (item for item in board.net_routing_rules if item.kind is not RouteKind.GENERAL),
-        key=lambda item: (-item.priority, item.kind.value, item.net),
+        # Coupled lanes need one contiguous joint exit and cannot use the
+        # independent single-ended fallback. At equal explicit priority reserve
+        # that narrower freedom before a flexible single-ended path can wall
+        # its own package's paired pins in. No extra trial or rip-up is added.
+        key=lambda item: (-item.priority,
+            item.kind not in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}, item.kind.value, item.net),
     ):
         if rule.net in seen:
             continue
