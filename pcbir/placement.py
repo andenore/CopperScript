@@ -603,7 +603,7 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
             errors.append(f"{ref}: own non-plated drill violates pad clearance")
         for other_ref, other in sorted(placements.items()):
             if other_ref < ref and not footprint_holes_clear(board, pose, {other_ref: other}):
-                errors.append(f"{ref} / {other_ref}: footprint drill violates courtyard or copper clearance")
+                errors.append(f"{ref} / {other_ref}: footprint drill or required via array violates courtyard/copper clearance")
         rule = _rules(board).get(ref)
         if ref in options.fixed_references and pose != original[ref]:
             errors.append(f"{ref}: temporary session lock fixes the complete pose")
