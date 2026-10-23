@@ -105,6 +105,11 @@ increase the configured trial or search budgets.
    accepted contacts/bridges, reroute displaced nets and check hard physical DRC.
    Dependency routes with retained package exits must use those ports: flexible
    pad alternatives cannot abandon a preserved launch via's other-layer witness.
+   The pipeline retains its selected router options: unified builds use unified
+   dependency negotiation rather than silently calling the legacy backend. Fresh
+   required-port witnesses constrain every unified negotiation and pour-recheck
+   retry; stale ports fail. A dependency transaction cannot overwrite the main
+   run's saved replay inputs. Search events identify the actual backend.
    Main routing may have replaced a collar witness with ordinary area copper.
    If its owned launch via remains, the original witness can be regenerated
    only after actual land-path and exact clearance verification against the

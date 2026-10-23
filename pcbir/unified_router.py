@@ -548,7 +548,8 @@ def _segment_offsets(dx: int, dy: int, radius_in_pitches: float) -> tuple[tuple[
 
 class _Router:
     def __init__(self, board: PhysicalBoard, options: UnifiedRouterOptions,
-                 nets: list, on_progress, *, explicit_pads: frozenset[PadReference] = frozenset()) -> None:
+                 nets: list, on_progress, *, explicit_pads: frozenset[PadReference] = frozenset(),
+                 required_accesses=None) -> None:
         self.board = board
         # Plane pads that must reach the plane with copper of their own, not
         # by lying in a pour piece (pour re-check, see route_unified).
@@ -608,6 +609,22 @@ class _Router:
         default_width = board.rules.default_track_width_nm
         self.default_width = default_width
         self._seed_ball_field_cost()
+        # A local transaction may own the area copper but not the launch vias
+        # or collar witnesses. Such pads attach only at fresh verified ports.
+        from .pin_escape import RoutingAccess, verified_routing_access
+        self.required_accesses = {}
+        net_by_pad = {pad: net.name for net in board.nets for pad in net.pads}
+        selected = {net.name for net in nets}
+        for pad, access in (required_accesses or {}).items():
+            name = net_by_pad.get(pad)
+            if name is None:
+                raise ValueError(f"required routing access has no net: {pad}")
+            if name not in selected:
+                continue
+            if (not isinstance(access, RoutingAccess)
+                    or verified_routing_access(board, pad, name, access, self.clearance) is None):
+                raise ValueError(f"required routing access is stale or invalid: {pad}")
+            self.required_accesses[pad] = access
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
         self.routes: dict[str, _NetRoute] = {}
         self._lead_nodes: dict[tuple, list[int]] = {}
@@ -954,6 +971,12 @@ class _Router:
                         layer = self.grid.layers.index(track.layer)
                         anchors.append((track.start, (layer,)))
                         anchors.append((track.end, (layer,)))
+            required = [self.required_accesses[pad] for pad in members if pad in self.required_accesses]
+            if required:
+                # Land and existing-copper alternatives would bypass the retained
+                # witness and leave its far end dangling after the dependency rip-up.
+                anchors = [(access.position, (self.grid.layers.index(access.layer),))
+                           for access in required]
             # The group's own vias on every layer: a group already stitched into
             # its plane (an exposed pad's via-in-pad array) counts as joined even
             # when its attach candidates are all surface nodes beside the pad.
@@ -2039,7 +2062,8 @@ def _merge(accepted, more):
     return merged
 
 
-def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadline, on_progress):
+def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadline, on_progress,
+                   required_accesses=None):
     """Reconnect plane pads that committed signal copper walled off from their pour.
 
     Plane pieces are labelled once, from fixed copper, so signal copper
@@ -2072,7 +2096,8 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
 
     current = (accepted, before)
     # Step 1: plane nets only, everything else fixed.
-    step = _Router(_with(board, accepted), options, plane_list, on_progress)
+    step = _Router(_with(board, accepted), options, plane_list, on_progress,
+                   required_accesses=required_accesses)
     routes, conflicts, used = step.negotiate(deadline)
     report["iterations"] += used
     more, _, _ = step.commit(routes, conflicts)
@@ -2091,7 +2116,7 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
         ripped = {name: value for name, value in current[0].items() if name not in crowd}
         partial = _with(board, ripped)
         first = _Router(partial, options, [net for net in nets if net.name in still], on_progress,
-                        explicit_pads=pads)
+                        explicit_pads=pads, required_accesses=required_accesses)
         routes, conflicts, used = first.negotiate(deadline)
         report["iterations"] += used
         plane_more, plane_rejected, _ = first.commit(routes, conflicts)
@@ -2101,7 +2126,8 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
                    "rejected": _rejection_text(first, name) if name in plane_rejected else ""}
             for name in still}
         candidate = _merge(ripped, plane_more)
-        second = _Router(_with(board, candidate), options, [net for net in nets if net.name in crowd], on_progress)
+        second = _Router(_with(board, candidate), options, [net for net in nets if net.name in crowd], on_progress,
+                         required_accesses=required_accesses)
         routes, conflicts, used = second.negotiate(deadline)
         report["iterations"] += used
         signal_more, _, signal_complete = second.commit(routes, conflicts)
@@ -2231,11 +2257,16 @@ def route_unified(
     only_nets: frozenset[str] | None = None,
     on_progress: ProgressCallback | None = None,
     escape_seeder=None,
+    required_accesses=None,
 ) -> DetailedRoutingResult:
     """Route all ordinary nets with one negotiated-congestion loop.
 
     ``escape_seeder(board, net_names)`` may return a board with checked pad
     escapes for nets that failed; repair rounds use it before rerouting.
+
+    ``required_accesses`` are immutable, verified package ports for local
+    transactions. Pad and fixed-copper alternatives cannot bypass these ports.
+    Stale witnesses fail instead of being silently treated as ordinary pads.
 
     Signature-compatible with :func:`pcbir.detailed.route_detailed`.
     Existing copper is fixed; zone nets are deferred to fill.
@@ -2251,6 +2282,7 @@ def route_unified(
             "options": replace(options, save_inputs_path=None),
             "fanout_accesses": fanout_accesses, "fanout_created_vias": fanout_created_vias,
             "fanout_created_tracks": fanout_created_tracks, "only_nets": only_nets,
+            "required_accesses": required_accesses,
         }, note="route_unified inputs")
     started = perf_counter()
     deadline = started + options.time_budget_s if options.time_budget_s else None
@@ -2280,7 +2312,8 @@ def route_unified(
         # A bus needs a shared corridor; negotiated together with every other
         # net it loses it piecemeal. Its members route first, among themselves.
         bus_options = replace(options, length_priority=True) if options.bus_length_budget else options
-        bus_router = _Router(board, bus_options, [net for net in nets if net.name in bus_names], on_progress)
+        bus_router = _Router(board, bus_options, [net for net in nets if net.name in bus_names], on_progress,
+                             required_accesses=required_accesses)
         bus_routes, bus_conflicts, used = bus_router.negotiate(deadline)
         bus_accepted, _, bus_complete = bus_router.commit(bus_routes, bus_conflicts)
         over_length = set()
@@ -2299,7 +2332,7 @@ def route_unified(
             board = _with(board, bus_accepted)
             nets = [net for net in nets if net.name not in bus_complete]
     emit(on_progress, "unified_setup", "started", nets=len(nets))
-    router = _Router(board, options, nets, on_progress)
+    router = _Router(board, options, nets, on_progress, required_accesses=required_accesses)
     emit(on_progress, "unified_setup", "finished", nets=len(router.specs),
          grid=[router.grid.nx, router.grid.ny, router.grid.nl], seconds=round(perf_counter() - started, 2))
     routes, conflicts, iterations = router.negotiate(deadline)
@@ -2343,7 +2376,7 @@ def route_unified(
             partial = seeded
         fixed = explicit_copper_connectivity(partial)
         remaining = [net for net in remaining if not fixed.net_connected(net) or net.name in plane_nets]
-        repair = _Router(partial, options, remaining, on_progress)
+        repair = _Router(partial, options, remaining, on_progress, required_accesses=required_accesses)
         repair.history_seed(router)
         more_routes, more_conflicts, used = repair.negotiate(deadline)
         more, more_rejected, more_complete = repair.commit(more_routes, more_conflicts)
@@ -2388,7 +2421,8 @@ def route_unified(
             break
     if options.pour_recheck and plane_nets and (deadline is None or perf_counter() <= deadline):
         accepted, complete, recheck = _recheck_pours(
-            board, nets, plane_nets, accepted, set(complete), options, deadline, on_progress)
+            board, nets, plane_nets, accepted, set(complete), options, deadline, on_progress,
+            required_accesses=required_accesses)
         iterations += recheck.pop("iterations", 0)
         emit(on_progress, "unified_pour_recheck", "finished", **recheck)
     if bus_accepted:
@@ -2458,4 +2492,5 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
                          fanout_accesses=saved["fanout_accesses"],
                          fanout_created_vias=saved["fanout_created_vias"],
                          fanout_created_tracks=saved["fanout_created_tracks"],
-                         only_nets=saved["only_nets"], on_progress=on_progress)
+                         only_nets=saved["only_nets"], on_progress=on_progress,
+                         required_accesses=saved.get("required_accesses"))

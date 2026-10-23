@@ -54,6 +54,8 @@ class RoutingPipelineResult:
     power_preparation_validation: object | None = None
     power_native_verifier: object | None = field(default=None, repr=False, compare=False)
     stopped_after: str | None = None
+    # Retain the selected backend for later transactional dependency repairs.
+    unified_options: object | None = None
 
     @property
     def board(self) -> PhysicalBoard:
@@ -182,7 +184,7 @@ def run_routing_pipeline(
         emit(on_progress, "ordinary_area", "stopped", reason="stop_after_placement")
         critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
         return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
-                                     stopped_after="placement")
+                                     stopped_after="placement", unified_options=unified_options)
     access = None
     preparation, preparation_validation = None, None
     if power_area_options is not None and power_area_options.plane_return_nets:
@@ -269,7 +271,7 @@ def run_routing_pipeline(
                 power_area_status=(preparation.status if preparation and not preparation.accepted else
                                    "package_access_incomplete") if power_area_options is not None else "disabled",
                 power_area_options=power_area_options, power_preparation=preparation,
-                power_native_verifier=power_native_verifier, stopped_after=stopped)
+                power_native_verifier=power_native_verifier, stopped_after=stopped, unified_options=unified_options)
         if not access.ready:
             emit(on_progress, "package_access", "incomplete", pending_pads=len(access.pending_pads))
         critical = access.critical
@@ -482,7 +484,7 @@ def run_routing_pipeline(
                 fanout=blocked.fanout, package_access=blocked, power_area_plan=power_plan,
                 power_area_status='power_preparation_boundary_rejected', power_area_options=power_area_options,
                 power_preparation=preparation, power_preparation_validation=preparation_validation,
-                power_native_verifier=power_native_verifier)
+                power_native_verifier=power_native_verifier, unified_options=unified_options)
     elif power_area_options is not None:
         pre_detailed, power_plan, power_status = plan_distribution(pre_detailed, fanout)
         deferred_zones = (frozenset(deferred_zone_nets(pre_detailed))
@@ -630,6 +632,7 @@ def run_routing_pipeline(
         power_preparation=preparation,
         power_preparation_validation=preparation_validation,
         power_native_verifier=power_native_verifier,
+        unified_options=unified_options,
     )
 
 
