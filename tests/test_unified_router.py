@@ -539,3 +539,48 @@ def test_adjacent_breakout_regions_do_not_emit_an_illegal_merged_neck():
     assert summary["signal"]["opens"] == 0
     assert not [f for f in drc.findings if f.code == "DRC-TRACK-WIDTH"]
     assert wall in result.board.tracks
+
+
+def _opposite_pad_via_board(hole_clearance):
+    from pcbir.physical import BoardSide, NetRoutingRule
+    cap = PhysicalFootprint("cap", (FootprintPad("1", Point(0, 0), Size.mm("0.95", "0.9")),), Size.mm("1.6", "1"))
+    pin = PhysicalFootprint("pin", (FootprintPad("1", Point(0, 0), Size.mm("0.3", "1.55")),), Size.mm("1", "2"))
+    return PhysicalBoard("OwnPadVia", BoardOutline.rectangle(26, 26), {cap.name: cap, pin.name: pin},
+        (Placement("C", cap.name, Point.mm(13, 10), side=BoardSide.BACK),
+         Placement("U", pin.name, Point.mm(13, "11.95"))),
+        (PhysicalNet("N", (PadReference("C", "1"), PadReference("U", "1"))), PhysicalNet("X", ())),
+        rules=DesignRules(minimum_clearance_nm=nm_from_mm("0.2"),
+            default_track_width_nm=nm_from_mm("0.2"), default_via_size_nm=nm_from_mm("0.45"),
+            default_via_drill_nm=nm_from_mm("0.2"), minimum_hole_clearance_nm=nm_from_mm(hole_clearance)),
+        net_routing_rules=(NetRoutingRule("N", width_nm=nm_from_mm("0.2"),
+            clearance_nm=nm_from_mm("0.2"), max_vias=1, max_length_nm=nm_from_mm("2.2")),))
+
+
+def test_via_raster_distinguishes_own_pad_halo_from_forbidden_annulus():
+    from pcbir.unified_router import _Router, _FOREIGN
+    from pcbir.routing_clearance import RoutingClearanceIndex
+    for hole_clearance in ("0.2", "0.5"):
+        board = _opposite_pad_via_board(hole_clearance)
+        router = _Router(board, UnifiedRouterOptions(pitch_nm=nm_from_mm("0.25")), [board.nets[0]], None)
+        g = router.grid
+        position = Point.mm(13, "10.75")
+        index = RoutingClearanceIndex(board)
+        assert index.can_via("N", position, nm_from_mm("0.45"), CopperLayer.FRONT, CopperLayer.BACK,
+                             drill_nm=nm_from_mm("0.2"))
+        assert not index.can_via("X", position, nm_from_mm("0.45"), CopperLayer.FRONT, CopperLayer.BACK,
+                                 drill_nm=nm_from_mm("0.2"))
+        owners = router.rasters.via_array(nm_from_mm("0.45"), nm_from_mm("0.2"), nm_from_mm("0.2"))
+        xy = lambda x, y: round((nm_from_mm(y)-g.y0)/g.pitch)*g.nx + round((nm_from_mm(x)-g.x0)/g.pitch)
+        assert owners[xy(13, "10.75")] == router.net_ids["N"]
+        assert owners[xy(13, "10.5")] == _FOREIGN
+        assert not index.can_via("N", Point.mm(13, "10.5"), nm_from_mm("0.45"), CopperLayer.FRONT,
+                                 CopperLayer.BACK, drill_nm=nm_from_mm("0.2"))
+
+
+def test_opposite_face_pad_gap_routes_with_ordinary_via_and_exact_length_budget():
+    board = _opposite_pad_via_board("0.2")
+    result, drc, summary = _route(board, maximum_iterations=8, commit_rounds=2)
+    assert next(net for net in result.nets if net.net == "N").connected
+    assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0, drc.to_json()
+    assert len(result.board.vias) == 1
+    assert result.board.net_routing_rules == board.net_routing_rules

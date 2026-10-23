@@ -1,5 +1,37 @@
 # Routing performance and optimization assessment
 
+## Net-aware via halos outside pad annuli (2026-10-23)
+
+The via raster now distinguishes a pad's foreign-net clearance halo from the
+annulus exclusion that applies to every net. Exact `can_via` already makes this
+distinction. Previously the raster marked the entire expanded pad halo foreign,
+discarding legal same-net transitions between opposite-face lands. Foreign
+copper and drill clearances retain their original envelopes. The inner pad
+exclusion uses the actual annulus radius, including when the effective foreign
+drill envelope is larger. No annulus may touch pad copper; exact commits remain
+mandatory and no routing rule is reduced.
+
+Both regression tests fail before the correction. One compares raster ownership
+with exact via legality at an ordinary opposite-face gap, including foreign-net
+queries, forbidden annulus contact and two hole-clearance values. The other
+keeps a 2.2 mm route budget: the former detour is 2.571320 mm; the correction
+connects the lands within the original budget with one ordinary via and zero
+exact DRC errors. The 39-case router/CLI/coupled/bypass set passes.
+
+Actual prepared consumer replay246 connects all eight ADC input networks on
+the original coarse grid (control235 connects six). No source geometry, width,
+clearance, layer, via-count or length rule changes. Fresh KiCad10.0.6 refill
+has no selected-network opens and zero geometry errors;499other unconnected
+items and12dangling-track warnings remain because ordinary routing is excluded.
+This is not complete-board, noise, assembly or CAM acceptance.
+
+Ladder250 retains35/35signals and zero geometry errors, using44vias and
+350.563mm rather than40vias/346.483mm. Its72.9s flags the old22.9s timing
+baseline. Unchanged compiler control251 also flags its old baseline at74.3s
+under concurrent jobs; the timing comparison is inconclusive. The extra vias
+and length are retained tradeoffs, not a claim of general routing-quality or
+runtime improvement.
+
 ## Bounded fine-grid diagnostics (2026-10-23)
 
 The optional `grid_window_nm` restricts a unified replay's raster/search nodes
