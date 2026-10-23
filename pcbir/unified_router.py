@@ -872,9 +872,17 @@ class _Router:
                 continue
             span = layers_all[layers_all.index(via.from_layer):layers_all.index(via.to_layer) + 1]
             # The plane must surround the via (fill reaches it from all
-            # sides), not just touch it at one raster node.
+            # sides), not just touch it at one raster node. Between a ball
+            # grid's vias nothing is that free, so there (plane_fill_width)
+            # fill touching the via's own pad at two nodes or more counts,
+            # as zone fill connects any via it reaches.
             reach = max(1, int(round((via.size_nm / 2 + spec.clearance) / g.pitch)) + 1)
+            touch = max(1, int(np.ceil(via.size_nm / 2 / g.pitch)))
             def surrounded(index):
+                if self.options.plane_fill_width:
+                    return sum(1 for dx in range(-touch, touch + 1) for dy in range(-touch, touch + 1)
+                               if 0 <= ix + dx < g.nx and 0 <= iy + dy < g.ny
+                               and g.index(index, ix + dx, iy + dy) in planes) >= 2
                 return all(0 <= ix + dx < g.nx and 0 <= iy + dy < g.ny
                            and g.index(index, ix + dx, iy + dy) in planes
                            for dx, dy in ((reach, 0), (-reach, 0), (0, reach), (0, -reach)))
