@@ -65,6 +65,8 @@ rules remain active; arbitrary routed input copper is rejected. `--pair-states`
 bounds aggregate pair search (default 6000), and `--clock-router legacy|unified`
 selects the clock fallback for comparison. Failed groups have located `C` issues;
 pair reports include a bounded port inventory with headings and departure probes.
+The transition inventory distinguishes native plated-layer contacts from generated
+signal-via launches and exposes which terminal has no legal transition candidates.
 This diagnostic does not rerun placement, bypass preparation or native checks,
 and never establishes full-board or current-source acceptance.
 

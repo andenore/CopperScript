@@ -48,7 +48,7 @@ from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
 from .surface_path import via_inside_board
 from .drc import DrcSeverity, run_physical_drc
-from .pair_search import PairSearchCandidate, PairSearchStats, PairPortInventory, _legal, nested_exit_candidates, paired_candidates
+from .pair_search import PairSearchCandidate, PairSearchStats, PairPortInventory, PairTransitionInventory, _legal, nested_exit_candidates, paired_candidates
 from .pair_vias import paired_via_candidates, transition_spacing
 from .pair_refine import PairRefinementStats, paired_shortcuts
 from .local_critical import local_surface_candidates
@@ -106,6 +106,7 @@ class CriticalNetResult:
     pair_resumed_states: int = 0
     pair_resumed_portals: int = 0
     pair_ports: tuple[PairPortInventory, ...] = field(default=(), compare=False)
+    pair_transitions: tuple[PairTransitionInventory, ...] = field(default=(), compare=False)
 
 
 def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
@@ -137,6 +138,7 @@ def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
         "pair_resumed_states": item.pair_resumed_states,
         "pair_resumed_portals": item.pair_resumed_portals,
         "pair_ports": [asdict(port) for port in item.pair_ports],
+        "pair_transitions": [asdict(item) for item in item.pair_transitions],
         "local_candidate_attempts": item.local_candidate_attempts,
         "guide_length_nm": item.guide_length_nm,
         "pair_refinement_attempts": item.pair_refinement_attempts,
@@ -1533,6 +1535,7 @@ def _route_pair_group(
                          pair_resumed_states=stats.resumed_states,
                          pair_resumed_portals=stats.resumed_portals,
                          pair_ports=tuple(stats.port_inventory),
+                         pair_transitions=tuple(stats.transition_inventory),
                          pair_search_order=order,
                          pair_state_limit=pair_state_limit,
                          pair_budget_exhausted=(pair_state_limit is not None
