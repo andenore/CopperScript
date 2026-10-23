@@ -1,3 +1,10 @@
+## Isolated via-budget revalidation 423
+
+This branch reapplies only the via-budget proposal experiment to commit 4ed3d66.
+It is separate from main; the other three congestion experiments remain excluded.
+The historical results below do not validate this new combination. Current board
+and benchmark results are pending, and no push or merge is implied.
+
 ## Reproducible router review fixes (2026-10-24)
 
 Unified plane contacts now materialize a required pad-to-grid lead before
@@ -71,6 +78,28 @@ Actual PHY search350 previously failed during array materialization; corrected
 search353 finds a legal back-side INTSEL location while all other trial poses
 remain fixed. Source regeneration and complete routing/native validation remain
 required before adopting the two-component reference adaptation.
+## Via-budget proposals can contest mutable congestion (2026-10-24)
+
+After the existing higher-via-cost retry, a still over-budget proposal gets one
+bounded retry with mutable congestion/history costs discounted. Source geometry,
+layer restrictions, via/return masks, search-state limits and exact commit checks
+remain active. The legal proposal keeps its normal congestion claims so other
+mutable routes can negotiate. Global occupancy/history and per-net via pricing
+are unchanged after the retry. Zero-cost buffers are local and reused by a router;
+the Python and native kernels share the same policy without a native ABI change.
+
+The two-kernel synthetic fixture fails before the correction despite an available
+two-via corridor. Five after cases cover stale history, current occupancy pressure,
+normal corridor claims and a real source wall that remains impassable. The related
+router/return/macro set passes (four optional library/native fixtures skipped).
+The first related run330 failed to create sandbox temporary directories; corrected
+workspace-local temporary run332 passes without any gate changes.
+
+Actual 18-net PHY replay331 reduces four unresolved nets in326 to two, with zero
+exact geometry errors. D3V3 and TXD1 now connect. CRS_DV is blocked by PHY_ADDR;
+RXD1 is blocked by RXD0. The test retains the source, immutable prefix, existing
+return-via constraints and coarse grid. Its 159.7 s versus 186.5 s control is a
+loaded diagnostic observation, not a complete-board speed or closure claim.
 
 ## Preserve macro boundary access during source-copper reuse (2026-10-24)
 
