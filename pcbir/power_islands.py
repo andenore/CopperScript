@@ -52,17 +52,15 @@ def ball_grid_rails(board: PhysicalBoard) -> tuple[str, ...]:
     columns the signals escape through; an island under the array gives each
     supply ball a via straight into its rail (the FX10 kit's split PWR1 layer).
     """
-    from .package_patterns import circular_array
-    arrays = set()
+    from .package_patterns import ball_grid
+    balls = set()
     for pose in board.placements:
-        try:
-            if circular_array(board, pose.reference) is not None:
-                arrays.add(pose.reference)
-        except ValueError:
-            continue
+        grid = ball_grid(board, pose.reference)
+        if grid is not None:
+            balls |= {(pose.reference, number) for number in grid.balls}
     pads = {net.name: net.pads for net in board.nets}
     return tuple(rail for rail in decoupled_rails(board)
-                 if any(pad.component in arrays for pad in pads.get(rail, ())))
+                 if any((pad.component, pad.pad) in balls for pad in pads.get(rail, ())))
 
 
 def auto_power_layer(board: PhysicalBoard) -> CopperLayer | None:

@@ -82,7 +82,7 @@ def plan_via_lattices(board: PhysicalBoard, *, surface: frozenset[PadReference] 
     """
     from .escape_plan import _MinCostFlow
     from .hard_macros import macro_owned_pads
-    from .package_patterns import circular_array
+    from .package_patterns import ball_grid
     from .placement import transformed_local_point
     from .routing_clearance import RoutingClearanceIndex
     from .routing_layers import routing_layers
@@ -101,7 +101,7 @@ def plan_via_lattices(board: PhysicalBoard, *, surface: frozenset[PadReference] 
     lattices, tracks, vias = [], [], []
     for pose in sorted(board.placements, key=lambda p: p.reference):
         try:
-            array = circular_array(board, pose.reference)
+            array = ball_grid(board, pose.reference)
         except ValueError:
             array = None
         if array is None:
@@ -109,7 +109,8 @@ def plan_via_lattices(board: PhysicalBoard, *, surface: frozenset[PadReference] 
         side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
         nx, ny, half = len(array.xs_nm), len(array.ys_nm), array.pitch_nm // 2
         balls = []  # (reference, net, ix, iy, land position, needs-band-free)
-        for land in sorted(board.footprints[pose.footprint].pads, key=lambda p: p.number):
+        for land in sorted((p for p in board.footprints[pose.footprint].pads if p.number in array.balls),
+                           key=lambda p: p.number):
             reference = PadReference(pose.reference, land.number)
             net = net_of.get(reference)
             if net is None or reference in owned:
@@ -120,7 +121,7 @@ def plan_via_lattices(board: PhysicalBoard, *, surface: frozenset[PadReference] 
                 continue  # critical routers own their escapes
             if not supply and not any(layer != side for layer in routing_layers(board, net, rule)):
                 continue
-            ix, iy = array.xs_nm.index(land.position.x_nm), array.ys_nm.index(land.position.y_nm)
+            ix, iy = array.index(land.position)
             ring = min(ix, iy, nx - 1 - ix, ny - 1 - iy)
             if not supply and (reference in surface if surface is not None else ring < surface_rings):
                 continue

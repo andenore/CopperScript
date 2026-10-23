@@ -619,18 +619,9 @@ class _Router:
         cost = self.options.ball_field_cost
         if not cost:
             return
-        from .package_patterns import circular_array
-        from .placement import transformed_local_point
         g = self.grid
         hist = self.occupancy.history
-        for pose in self.board.placements:
-            try:
-                array = circular_array(self.board, pose.reference)
-            except ValueError:
-                array = None
-            if array is None:
-                continue
-            corners = [transformed_local_point(pose, p.position) for p in self.board.footprints[pose.footprint].pads]
+        for pose, array, corners in _ball_grids(self.board):
             ix0, iy0, ix1, iy1 = g.window(min(p.x_nm for p in corners), min(p.y_nm for p in corners),
                                           max(p.x_nm for p in corners), max(p.y_nm for p in corners))
             layer = g.layers.index(CopperLayer.FRONT if pose.side.value == "front" else CopperLayer.BACK)
@@ -652,19 +643,12 @@ class _Router:
         cost = self.options.exit_reservation_cost
         if not cost:
             return {}
-        from .package_patterns import circular_array
         from .placement import transformed_local_point
         g = self.grid
         routed = {spec.name for spec in self.specs}
         net_of = {pad: net.name for net in self.board.nets for pad in net.pads}
         corridors: dict[str, set[int]] = {}
-        for pose in self.board.placements:
-            try:
-                array = circular_array(self.board, pose.reference)
-            except ValueError:
-                array = None
-            if array is None:
-                continue
+        for pose, array, _ in _ball_grids(self.board):
             side = CopperLayer.FRONT if pose.side.value == "front" else CopperLayer.BACK
             if side not in g.layers:
                 continue
@@ -672,9 +656,9 @@ class _Router:
             nx, ny, pitch = len(array.xs_nm), len(array.ys_nm), array.pitch_nm
             for land in self.board.footprints[pose.footprint].pads:
                 net = net_of.get(PadReference(pose.reference, land.number))
-                if net not in routed:
+                if net not in routed or land.number not in array.balls:
                     continue
-                ix, iy = array.xs_nm.index(land.position.x_nm), array.ys_nm.index(land.position.y_nm)
+                ix, iy = array.index(land.position)
                 edges = ((ix, (-1, 0)), (nx - 1 - ix, (1, 0)), (iy, (0, -1)), (ny - 1 - iy, (0, 1)))
                 ring, (ox, oy) = min(edges, key=lambda item: item[0])
                 if ring > 1:
@@ -712,17 +696,10 @@ class _Router:
         so the raster can be exact: a minimum-width channel between dogbone
         vias is then a row of legal nodes, not lost to the margin.
         """
-        from .package_patterns import circular_array
-        from .placement import transformed_local_point
         boxes = []
-        for pose in self.board.placements:
-            try:
-                array = circular_array(self.board, pose.reference)
-            except ValueError:
-                array = None
-            if array is None or self.grid.pitch > array.pitch_nm // 2:
+        for pose, array, points in _ball_grids(self.board):
+            if not _aligned(array, points, self.grid.pitch):
                 continue
-            points = [transformed_local_point(pose, p.position) for p in self.board.footprints[pose.footprint].pads]
             grow = self.options.ball_field_exact_reach_nm or array.pitch_nm
             boxes.append((min(p.x_nm for p in points) - grow, min(p.y_nm for p in points) - grow,
                           max(p.x_nm for p in points) + grow, max(p.y_nm for p in points) + grow))
@@ -736,21 +713,11 @@ class _Router:
         the field closes channels for everyone (the FX10 kit, for example,
         fans out every inner ball to its cell centre).
         """
-        from .package_patterns import circular_array
-        from .placement import transformed_local_point
         g = self.grid
         mask = None
-        for pose in self.board.placements:
-            try:
-                array = circular_array(self.board, pose.reference)
-            except ValueError:
-                array = None
-            if array is None:
-                continue
+        for pose, array, points in _ball_grids(self.board):
             if mask is None:
                 mask = np.ones((g.ny, g.nx), dtype=bool)
-            pads = self.board.footprints[pose.footprint].pads
-            points = [transformed_local_point(pose, p.position) for p in pads]
             x0 = min(p.x_nm for p in points); x1 = max(p.x_nm for p in points)
             y0 = min(p.y_nm for p in points); y1 = max(p.y_nm for p in points)
             ix0, iy0, ix1, iy1 = g.window(x0, y0, x1, y1)
@@ -2356,26 +2323,40 @@ def _rejection_text(router, name: str) -> str:
 def choose_pitch(board: PhysicalBoard, default_nm: int = nm_from_mm("0.25")) -> int:
     """0.25 mm, or the coarsest finer pitch that puts nodes on every ball and
     on the channel centre lines of each full-grid ball array (BGA)."""
-    from .package_patterns import circular_array
-    from .placement import transformed_local_point
     pitch = default_nm
-    for pose in board.placements:
-        try:
-            array = circular_array(board, pose.reference)
-        except ValueError:
-            array = None
-        if array is None:
-            continue
-        land = board.footprints[pose.footprint].pads[0]
-        corner = transformed_local_point(pose, land.position)
-        for candidate in (pitch, pitch // 2, pitch // 4, nm_from_mm("0.05")):
-            if candidate <= 0:
-                continue
-            if (array.pitch_nm // 2) % candidate == 0 and corner.x_nm % candidate == 0 \
-                    and corner.y_nm % candidate == 0:
+    for _, array, points in _ball_grids(board):
+        for candidate in (pitch, pitch // 2, nm_from_mm("0.1"), pitch // 4, nm_from_mm("0.05")):
+            if 0 < candidate <= pitch and _aligned(array, points, candidate):
                 pitch = candidate
                 break
     return pitch
+
+
+def _ball_grids(board: PhysicalBoard):
+    """(pose, ball grid, board positions of its balls) for each ball grid on ``board``."""
+    from .package_patterns import ball_grid
+    from .placement import transformed_local_point
+    result = []
+    for pose in board.placements:
+        try:
+            grid = ball_grid(board, pose.reference)
+        except ValueError:
+            grid = None
+        if grid is None:
+            continue
+        points = [transformed_local_point(pose, p.position)
+                  for p in board.footprints[pose.footprint].pads if p.number in grid.balls]
+        result.append((pose, grid, points))
+    return result
+
+
+def _aligned(grid, points, pitch: int) -> bool:
+    """Whether a routing grid of ``pitch`` has nodes on every ball and channel centre line
+    (within the ball grid's coordinate tolerance)."""
+    def near(value):
+        rest = value % pitch
+        return min(rest, pitch - rest) <= grid.tolerance_nm
+    return near(grid.pitch_nm // 2) and all(near(point.x_nm) and near(point.y_nm) for point in points)
 
 
 def _diagonal_mid(g: _Grid, a: int, b: int) -> int:

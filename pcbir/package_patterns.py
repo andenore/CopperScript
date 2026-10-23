@@ -179,6 +179,93 @@ def circular_array(board, component):
     return CircularArray(component, xs, ys, next(iter(pitches)), next(iter(sizes)))
 
 
+@dataclass(frozen=True, slots=True)
+class BallGrid:
+    """A square-pitch ball grid in footprint-local coordinates, possibly depopulated.
+
+    ``xs_nm``/``ys_nm`` are the ideal column and row coordinates (every
+    lattice position, populated or not); ``balls`` are the pad numbers on
+    the grid. Other pads of the footprint (mounting or aperture pads) are not
+    part of it.
+    """
+    component: str
+    xs_nm: tuple[int, ...]
+    ys_nm: tuple[int, ...]
+    pitch_nm: int
+    land_diameter_nm: int
+    balls: frozenset[str]
+    tolerance_nm: int = 2_000
+
+    def index(self, position: Point) -> tuple[int, int] | None:
+        """(column, row) of a lattice position within tolerance, else None."""
+        ix = round((position.x_nm - self.xs_nm[0]) / self.pitch_nm)
+        iy = round((position.y_nm - self.ys_nm[0]) / self.pitch_nm)
+        if (0 <= ix < len(self.xs_nm) and 0 <= iy < len(self.ys_nm)
+                and abs(position.x_nm - self.xs_nm[ix]) <= self.tolerance_nm
+                and abs(position.y_nm - self.ys_nm[iy]) <= self.tolerance_nm):
+            return ix, iy
+        return None
+
+
+def ball_grid(board, component, *, tolerance_nm: int = 2_000, minimum_density: float = 0.5):
+    """Detect a ball grid like ``circular_array``, tolerant of real footprints.
+
+    Footprint coordinates carry rounding (a 1.0 mm pitch read as 0.999 and
+    1.001 mm), grids leave positions empty (ULX3S's caBGA-381 fills 381 of
+    20x20) and footprints add non-ball pads. The balls are the round SMD
+    lands of the most common size; their coordinates must sit on one square
+    lattice within ``tolerance_nm``, filling at least ``minimum_density`` of
+    it. Rectangular pitches are not supported (None).
+    """
+    from collections import Counter
+    pose = next((p for p in board.placements if p.reference == component), None)
+    if pose is None:
+        raise ValueError('unknown package component')
+    round_lands = [p for p in board.footprints[pose.footprint].pads
+                   if p.kind is PadKind.SMD and p.shape is PadShape.CIRCLE and p.size.width_nm == p.size.height_nm]
+    if len(round_lands) < 9:
+        return None
+    size = Counter(p.size.width_nm for p in round_lands).most_common(1)[0][0]
+    balls = [p for p in round_lands if p.size.width_nm == size]
+    if len({p.number for p in balls}) != len(balls):
+        return None
+
+    def axis(values):
+        """Column centres, then the pitch they share (None when irregular)."""
+        centres, group = [], []
+        for value in sorted(values):
+            if group and value - group[-1] > tolerance_nm:
+                centres.append(round(sum(group) / len(group)))
+                group = []
+            group.append(value)
+        centres.append(round(sum(group) / len(group)))
+        if len(centres) < 3:
+            return None, None
+        step = min(b - a for a, b in zip(centres, centres[1:]))
+        # The mean spacing, so rounding in single gaps does not accumulate.
+        pitch = round((centres[-1] - centres[0]) / round((centres[-1] - centres[0]) / step))
+        if any(abs((b - a) - round((b - a) / pitch) * pitch) > 2 * tolerance_nm
+               for a, b in zip(centres, centres[1:])):
+            return None, None
+        return centres, pitch
+
+    xs, pitch_x = axis([p.position.x_nm for p in balls])
+    ys, pitch_y = axis([p.position.y_nm for p in balls])
+    if xs is None or ys is None or abs(pitch_x - pitch_y) > 2 * tolerance_nm:
+        return None
+    pitch = round((pitch_x + pitch_y) / 2)
+    nx = round((xs[-1] - xs[0]) / pitch) + 1
+    ny = round((ys[-1] - ys[0]) / pitch) + 1
+    if len(balls) < minimum_density * nx * ny:
+        return None
+    grid = BallGrid(component, tuple(xs[0] + k * pitch for k in range(nx)),
+                    tuple(ys[0] + k * pitch for k in range(ny)), pitch, size,
+                    frozenset(p.number for p in balls), tolerance_nm)
+    if any(grid.index(p.position) is None for p in balls):
+        return None
+    return grid
+
+
 def _direction(array, pad, family):
     x, y = array.xs_nm.index(pad.position.x_nm), array.ys_nm.index(pad.position.y_nm)
     sx = -1 if 2*x < len(array.xs_nm)-1 else 1

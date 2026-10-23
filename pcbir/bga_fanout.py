@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .package_patterns import circular_array
+from .package_patterns import ball_grid
 from .physical import (BoardSide, CopperLayer, PadReference, PhysicalBoard, Point, RouteKind,
                        TrackSegment, Via)
 from .pin_escape import checked_access_path
@@ -76,7 +76,7 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
     packages, fanned, blocked, surface = [], [], [], []
     for pose in sorted(board.placements, key=lambda p: p.reference):
         try:
-            array = circular_array(board, pose.reference)
+            array = ball_grid(board, pose.reference)
         except ValueError:
             array = None
         if array is None:
@@ -90,9 +90,10 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
         half = array.pitch_nm // 2
         # Inner balls first: they have the fewest alternatives.
         def depth(pad):
-            ix, iy = array.xs_nm.index(pad.position.x_nm), array.ys_nm.index(pad.position.y_nm)
+            ix, iy = array.index(pad.position)
             return min(ix, iy, nx - 1 - ix, ny - 1 - iy)
-        for land in sorted(footprint.pads, key=lambda p: (-depth(p), p.number)):
+        lands = [land for land in footprint.pads if land.number in array.balls]
+        for land in sorted(lands, key=lambda p: (-depth(p), p.number)):
             reference = PadReference(pose.reference, land.number)
             net = net_of.get(reference)
             if net is None or reference in owned:
@@ -111,8 +112,7 @@ def plan_bga_fanouts(board: PhysicalBoard, *, surface_rings: int = 2,
             if any(connectivity.roots[node] in copper_roots
                    for node in connectivity.pad_nodes.get(reference, ())):
                 continue  # Already has a launch (critical route, macro, earlier fanout).
-            ix = array.xs_nm.index(land.position.x_nm)
-            iy = array.ys_nm.index(land.position.y_nm)
+            ix, iy = array.index(land.position)
             sx = -1 if 2 * ix < nx - 1 else 1
             sy = -1 if 2 * iy < ny - 1 else 1
             # The four adjacent cell centres (outward first), then the next
