@@ -3120,6 +3120,11 @@ def replay_critical(path, *, only_nets: frozenset[str] | None = None,
     global_route = saved.get("global_route") if isinstance(saved, dict) else getattr(saved, "global_route", None)
     if not isinstance(board, PhysicalBoard) or not isinstance(global_route, GlobalRoutingResult):
         raise ValueError("critical replay requires a board and global route from saved pipeline inputs")
+    reserved = saved.get("reserved_accesses") if isinstance(saved, dict) else None
+    if reserved is not None:
+        from .bypass_reservations import restore_bypass_reservation_edges
+        reserved = restore_bypass_reservation_edges(reserved)
     return route_critical_nets(board, global_route, only_nets=only_nets,
+                              reserved_accesses=reserved,
                               pair_state_limit=pair_state_limit, unified_options=unified_options,
                               on_progress=on_progress)
