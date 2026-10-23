@@ -68,7 +68,7 @@ from .quantities import Length, Quantity
 from .design import Design
 from .mechanical_profiles import mechanical_provenance
 from .power_planning import lower_power_domains, lower_power_feeds
-from .zone_geometry import lower_zone_outline
+from .zone_geometry import lower_zone_outline, polygon_boundary
 
 
 @dataclass(frozen=True, slots=True)
@@ -776,16 +776,18 @@ def _lower_physical_constraints(
             if gap is not None and (not lowered_targets or any(target.pad is not None for target in lowered_targets)):
                 raise ValueError("placement_region courtyard_gap requires component targets, not pins")
             name = str(parameters.get("name", f"region:{index}"))
-            region = PlacementRegion(
-                name,
-                BoardOutline.rectangle(
+            if "polygon_mm" in parameters:
+                if any(k in parameters for k in ("x", "y", "width", "height")):
+                    raise ValueError("placement_region boundary parameters are mutually exclusive")
+                region_outline = polygon_boundary(parameters["polygon_mm"], context="placement_region")
+            else:
+                region_outline = BoardOutline.rectangle(
                     _constraint_length(parameters, "width") / 1_000_000,
                     _constraint_length(parameters, "height") / 1_000_000,
-                    origin=Point(
-                        _constraint_length(parameters, "x"),
-                        _constraint_length(parameters, "y"),
-                    ),
-                ),
+                    origin=Point(_constraint_length(parameters, "x"), _constraint_length(parameters, "y")))
+            region = PlacementRegion(
+                name,
+                region_outline,
                 _constraint_side(parameters.get("side")),
             )
             regions.append(region)
