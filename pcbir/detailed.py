@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -2608,34 +2608,33 @@ def _blocked_nodes(
 ) -> frozenset[DetailedNode]:
     # Courtyards are assembly geometry, not copper obstacles. The clearance
     # index checks the actual placed pads and existing copper instead.
-    copper_keepouts = tuple(
-        (item.layers, item.outline.outer.vertices)
-        for item in resolved_copper_keepouts(board)
-        if item.block_tracks
-    )
-    # Material is layer-independent: test each point once, not once per layer.
-    # A keepout polygon is tested only inside its inclusive bounding box.
-    layer_keepouts = tuple(
-        tuple((polygon, _bounds(polygon)) for layers, polygon in copper_keepouts
-              if layer in layers)
-        for layer in board.stackup.copper_layers
-    )
-    layer_indexes = range(len(layer_keepouts))
+    layers = tuple(board.stackup.copper_layers)
     blocked: set[DetailedNode] = set()
+    # Material is layer-independent. Keep its exact predicate, including
+    # boundary, cutout and mechanical-hole behavior, on every axis point.
     for x_index, x in enumerate(xs):
         for y_index, y in enumerate(ys):
-            point = Point(x, y)
-            if not point_in_material(board, point):
+            if not point_in_material(board, Point(x, y)):
                 blocked.update(DetailedNode(layer_index, x_index, y_index)
-                               for layer_index in layer_indexes)
-                continue
-            for layer_index, keepouts in enumerate(layer_keepouts):
-                if any(
-                    box[0] <= x <= box[2] and box[1] <= y <= box[3]
-                    and point_in_polygon(point, polygon)
-                    for polygon, box in keepouts
-                ):
-                    blocked.add(DetailedNode(layer_index, x_index, y_index))
+                               for layer_index in range(len(layers)))
+    # Visit each polygon's inclusive axis window instead of scanning every
+    # keepout for every board node. This is only a broad-phase change: the
+    # same exact polygon predicate decides membership, including boundaries.
+    for item in resolved_copper_keepouts(board):
+        if not item.block_tracks:
+            continue
+        polygon = item.outline.outer.vertices
+        min_x, min_y, max_x, max_y = _bounds(polygon)
+        x0, x1 = bisect_left(xs, min_x), bisect_right(xs, max_x)
+        y0, y1 = bisect_left(ys, min_y), bisect_right(ys, max_y)
+        layer_indexes = tuple(i for i, layer in enumerate(layers) if layer in item.layers)
+        if not layer_indexes:
+            continue
+        for x_index in range(x0, x1):
+            for y_index in range(y0, y1):
+                if point_in_polygon(Point(xs[x_index], ys[y_index]), polygon):
+                    blocked.update(DetailedNode(layer_index, x_index, y_index)
+                                   for layer_index in layer_indexes)
     return frozenset(blocked)
 
 

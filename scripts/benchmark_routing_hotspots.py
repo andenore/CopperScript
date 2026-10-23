@@ -30,7 +30,7 @@ import pcbir.placement as placement
 import pcbir.surface_path as surface
 from pcbir.backends import kicad_pcb as backend
 from pcbir import (BoardOutline, BoardSide, CopperLayer, CopperZone, DetailedRouterOptions,
-                   FootprintPad, PadReference, PadShape, PadViaInPadRule,
+                   CopperKeepout, FootprintPad, PadReference, PadShape, PadViaInPadRule,
                    PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing,
                    PolygonWithHoles, Size, Stackup, TrackSegment, Via)
 from pcbir.clusters import footprint_geometry_digest
@@ -318,11 +318,33 @@ def maze_cases(old_namespace, baseline_path):
     return results
 
 
+
+def grid_cases(old_grid):
+    # Many small reservations on a fine grid, as produced by generic escape
+    # and bypass preparation. Dimensions and names are synthetic.
+    layers = (CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
+              CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4, CopperLayer.BACK)
+    keepouts = []
+    for i in range(120):
+        x, y = 2 + (i % 20) * 3, 2 + (i // 20) * 7
+        polygon = PolygonWithHoles(PolygonRing((Point.mm(x, y), Point.mm(x + 1, y),
+            Point.mm(x + 1.5, y + 1), Point.mm(x + 0.5, y + 1))))
+        span = layers if i % 3 == 0 else (layers[i % len(layers)],)
+        keepouts.append(CopperKeepout(f"reservation-{i}", span, polygon))
+    board = PhysicalBoard("grid-window-fixture", BoardOutline.rectangle(80, 60), {}, (), (),
+                          stackup=Stackup(layers), copper_keepouts=tuple(keepouts))
+    xs = tuple(sorted({*range(0, 80000001, 250000), 5012345}))
+    ys = tuple(sorted({*range(0, 60000001, 250000), 7890123}))
+    return [compare("blocked-node-windows", {
+        "baseline": lambda: tuple(sorted(old_grid(board, xs, ys))),
+        "bounded-windows": lambda: tuple(sorted(detailed._blocked_nodes(board, xs, ys))),
+    })]
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-dir", required=True, type=Path)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--only", choices=("macro", "construction", "placement", "maze"))
+    parser.add_argument("--only", choices=("macro", "construction", "placement", "maze", "grid"))
     args = parser.parse_args()
     root = args.baseline_dir / "pcbir"
     old_macro = old_functions(macros, root / "hard_macros.py", ("_validate_macro_via_permissions",))
@@ -330,7 +352,7 @@ def main():
     old_backend = old_functions(backend, root / "backends/kicad_pcb.py",
                                ("_render_library_footprint", "_footprint_lines", "_copper_keepout_lines"))
     old_placement = old_functions(placement, root / "placement.py", ("_lands_meet_macro_copper", "_legal", "_placement_polygon"))
-    old_maze = old_functions(detailed, root / "detailed.py", ("_search_once",))
+    old_maze = old_functions(detailed, root / "detailed.py", ("_search_once", "_blocked_nodes"))
     output = {"schema": "copperscript-hotspot-benchmark/v1", "instrumented": False,
               "python": platform.python_version(), "platform": platform.platform(),
               "baseline_hashes": {str(p.relative_to(root)): sha256(p.read_bytes()).hexdigest()
@@ -344,7 +366,8 @@ def main():
             ("construction", lambda: construction_cases(board, old_surface["surface_path"],
                     old_backend["_render_library_footprint"], old_macro["_validate_macro_via_permissions"]),
             ), ("placement", lambda: placement_cases(board, old_placement, root / "placement.py")),
-            ("maze", lambda: maze_cases(old_maze, root / "detailed.py"))):
+            ("maze", lambda: maze_cases(old_maze, root / "detailed.py")),
+            ("grid", lambda: grid_cases(old_maze["_blocked_nodes"]))):
             if args.only and args.only != name:
                 continue
             output["cases"].extend(suite())
