@@ -122,6 +122,9 @@ class UnifiedRouterOptions:
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
+    # Optional diagnostic raster/search window, not a replacement outline or
+    # copper keepout. All source geometry and final exact checks remain whole.
+    grid_window_nm: tuple[int, int, int, int] | None = None
     # Supply islands carved from a spare plane layer before routing
     # (power_islands.py): "auto", a copper layer name, or None.
     power_islands: str | None = None
@@ -147,6 +150,13 @@ class UnifiedRouterOptions:
             raise ValueError("unified router pitch and iterations must be positive")
         if self.stall_iterations < 0:
             raise ValueError("unified router stall iterations must not be negative")
+        if self.grid_window_nm is not None:
+            bounds = self.grid_window_nm
+            if (not isinstance(bounds, (tuple, list)) or len(bounds) != 4
+                    or any(type(value) is not int for value in bounds)
+                    or bounds[0] >= bounds[2] or bounds[1] >= bounds[3]):
+                raise ValueError("grid_window_nm requires four ordered integer nanometre coordinates")
+            object.__setattr__(self, "grid_window_nm", tuple(bounds))
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +223,7 @@ def _polygon_inside(vertices: tuple[Point, ...], px, py):
 
 
 class _Grid:
-    def __init__(self, board: PhysicalBoard, pitch: int) -> None:
+    def __init__(self, board: PhysicalBoard, pitch: int, window=None) -> None:
         vertices = board.outline.vertices
         min_x = min(p.x_nm for p in vertices)
         min_y = min(p.y_nm for p in vertices)
@@ -224,6 +234,19 @@ class _Grid:
         self.y0 = floor(min_y / pitch) * pitch
         self.nx = int((max_x - self.x0) // pitch) + 2
         self.ny = int((max_y - self.y0) // pitch) + 2
+        if window is not None:
+            # Retain the full-board lattice phase. A window only discards
+            # search nodes; it never translates or clips any source object.
+            x0, y0, x1, y1 = window
+            ix0 = -((self.x0 - max(min_x, x0)) // pitch)
+            iy0 = -((self.y0 - max(min_y, y0)) // pitch)
+            ix1 = (min(max_x, x1) - self.x0) // pitch
+            iy1 = (min(max_y, y1) - self.y0) // pitch
+            self.x0 += ix0 * pitch
+            self.y0 += iy0 * pitch
+            self.nx, self.ny = ix1 - ix0 + 1, iy1 - iy0 + 1
+            if self.nx < 2 or self.ny < 2:
+                raise ValueError("grid_window_nm must contain at least two board grid nodes per axis")
         self.layers = tuple(board.stackup.copper_layers)
         self.nl = len(self.layers)
         self.plane = self.nx * self.ny
@@ -525,7 +548,20 @@ class _Router:
         pitch = options.pitch_nm or choose_pitch(board)
         self.pitch = pitch
         self.via_cost = options.via_cost_mm * 1_000_000 / pitch
-        self.grid = _Grid(board, pitch)
+        self.grid = _Grid(board, pitch, options.grid_window_nm)
+        if options.grid_window_nm is not None:
+            from .placement import transformed_local_point
+            x0, y0, x1, y1 = options.grid_window_nm
+            poses = {pose.reference: pose for pose in board.placements}
+            for net in nets:
+                for ref in net.pads:
+                    pose = poses[ref.component]
+                    for land in board.footprints[pose.footprint].pads:
+                        if land.number != ref.pad or land.kind in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}:
+                            continue
+                        point = transformed_local_point(pose, land.position)
+                        if not (x0 <= point.x_nm <= x1 and y0 <= point.y_nm <= y1):
+                            raise ValueError(f"terminal {ref.component}.{ref.pad} is outside grid_window_nm")
         self.rules: dict[str, NetRoutingRule] = {r.net: r for r in board.net_routing_rules}
         self.zone_nets = {zone.net for zone in board.zones}
         self.clearance = RoutingClearanceIndex(board)

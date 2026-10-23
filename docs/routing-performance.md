@@ -1,5 +1,27 @@
 # Routing performance and optimization assessment
 
+## Bounded fine-grid diagnostics (2026-10-23)
+
+The optional `grid_window_nm` restricts a unified replay's raster/search nodes
+while retaining the original lattice phase and complete physical board.
+Attempted terminals outside the requested rectangle are refused; original
+pads, keepouts, source copper, holes, outline and exact commit checks remain.
+Geometry entering the window from outside is still an obstacle. Default runs
+keep their previous grid and behavior.
+
+A real two-lane fixture has a 1.05 mm corridor for two 0.2 mm traces with
+0.2 mm clearances. The 0.25 mm grid cannot fit both; a bounded 0.025 mm grid
+connects both with zero exact DRC errors and unchanged rules. Tests also cover
+whole-source preservation, entering obstacles and invalid/excluded terminals.
+The 35-case router/CLI/bypass set passes. nRF52 ladder244 retains35/35signals,
+zero geometry errors,40vias and346.483mm in22.9s, with no regression.
+
+In the actual prepared eight-channel consumer diagnostic, coarse control235
+connects six channels; finer windows242/245 connect seven. This diagnostic
+isolates a precision limitation but does not close the bank or establish native,
+noise or complete-board acceptance. It also exposed overly conservative via
+pad halos for a separate correction.
+
 ## Located unified replay failures (2026-10-23)
 
 `copper issues` now reads the existing unified subset replay summary's attempted

@@ -142,6 +142,86 @@ def test_expired_repair_budget_does_not_start_another_escape_seed(monkeypatch):
                for p, e, d in events)
 
 
+def test_local_grid_window_preserves_whole_source_and_exact_copper():
+    fixed = TrackSegment("B", Point.mm(6, 5), Point.mm(20, 5), nm_from_mm("0.2"), CopperLayer.FRONT)
+    board = _board({"A": ((3, 10), (17, 10)), "B": ((3, 2), (17, 2))}, tracks=(fixed,))
+    guides = route_global(replace(board, tracks=()), GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    events = []
+    result = route_unified(board, guides,
+        UnifiedRouterOptions(pitch_nm=nm_from_mm("0.1"),
+                             grid_window_nm=[nm_from_mm(v) for v in (5, 11, 21, 15)]),
+        only_nets=frozenset({"A"}), on_progress=lambda *args: events.append(args))
+    assert result.nets[0].connected
+    assert result.board.outline == board.outline and result.board.placements == board.placements
+    assert result.board.tracks[:1] == (fixed,) and result.board.nets == board.nets
+    assert not [f for f in run_physical_drc(result.board).findings if f.severity.value == "error"]
+    setup = next(d for p, e, d in events if p == "unified_setup" and e == "finished")
+    assert setup["grid"] == [161, 41, 2]
+
+
+def test_geometry_entering_a_grid_window_still_blocks_it():
+    walls = tuple(TrackSegment("W", Point.mm(13, 10), Point.mm(13, 16),
+                               nm_from_mm("0.3"), layer)
+                  for layer in (CopperLayer.FRONT, CopperLayer.BACK))
+    board = _board({"A": ((3, 10), (17, 10)), "W": ()}, tracks=walls)
+    guides = route_global(replace(board, tracks=()), GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_unified(board, guides,
+        UnifiedRouterOptions(maximum_iterations=2, commit_rounds=1,
+                             grid_window_nm=tuple(nm_from_mm(v) for v in (5, 11, 21, 15))),
+        only_nets=frozenset({"A"}))
+    assert not result.nets[0].connected
+    assert result.board.tracks[:2] == walls and result.board.outline == board.outline
+
+
+def test_grid_window_refuses_invalid_bounds_and_excluded_targets():
+    import pytest
+    for bounds in ((0, 0, 1), (1, 0, 0, 1), (0, 0, True, 1), (0, 0, 1.0, 1)):
+        with pytest.raises(ValueError, match="grid_window_nm"):
+            UnifiedRouterOptions(grid_window_nm=bounds)
+    board = _board({"A": ((3, 10), (17, 10))})
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    for bounds in ((10, 11, 18, 15), (30, 30, 40, 40)):
+        with pytest.raises(ValueError, match="grid_window_nm"):
+            route_unified(board, guides, UnifiedRouterOptions(
+                grid_window_nm=tuple(nm_from_mm(v) for v in bounds)))
+
+
+def test_fine_window_fits_two_declared_widths_without_relaxing_clearance():
+    from pcbir.physical import CopperKeepout, PolygonWithHoles, PolygonRing, NetRoutingRule
+    pad = PhysicalFootprint("tiny", (FootprintPad("1", Point(0, 0), Size.mm("0.15", "0.15")),), Size.mm("0.3", "0.3"))
+    poses, nets = [], []
+    for name, x in (("A", "10.3"), ("B", "10.75")):
+        refs = []
+        for i, y in enumerate(("3.5", "20.5") if name == "A" else ("4.5", "21.5")):
+            ref = name + str(i)
+            poses.append(Placement(ref, pad.name, Point.mm(x, y)))
+            refs.append(PadReference(ref, "1"))
+        nets.append(PhysicalNet(name, tuple(refs)))
+    walls = tuple(CopperKeepout(name, (CopperLayer.FRONT, CopperLayer.BACK),
+        PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in points))))
+        for name, points in (("left", ((.5,6),(10,6),(10,18),(.5,18))),
+                             ("right", ((11.05,6),(25.5,6),(25.5,18),(11.05,18)))))
+    board = PhysicalBoard("FineChannels", BoardOutline.rectangle(26, 26), {pad.name: pad},
+        tuple(poses), tuple(nets), copper_keepouts=walls,
+        net_routing_rules=tuple(NetRoutingRule(n.name, width_nm=nm_from_mm("0.2"),
+            clearance_nm=nm_from_mm("0.2"), allowed_layers=(CopperLayer.FRONT,), max_vias=0) for n in nets))
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    results = []
+    for pitch in ("0.25", "0.025"):
+        result = route_unified(board, guides, UnifiedRouterOptions(pitch_nm=nm_from_mm(pitch),
+            maximum_iterations=16, commit_rounds=2,
+            grid_window_nm=tuple(nm_from_mm(v) for v in (9, 2, 12, 22))))
+        assert result.board.copper_keepouts == board.copper_keepouts
+        assert result.board.net_routing_rules == board.net_routing_rules
+        drc = run_physical_drc(result.board)
+        assert not [f for f in drc.findings if f.severity.value == "error"
+                    and f.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}]
+        results.append(result)
+    assert not all(net.connected for net in results[0].nets)
+    assert all(net.connected for net in results[1].nets)
+    assert not [f for f in run_physical_drc(results[1].board).findings if f.severity.value == "error"]
+
+
 def test_pad_groups_sharing_an_attach_node_both_keep_their_lead_ins() -> None:
     # A fine-pitch connector row on one net (like a board-to-board supply
     # row): neighbouring pads attach to the same grid node, and each needs
