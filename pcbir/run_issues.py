@@ -175,6 +175,29 @@ def _pad_points(scene: Scene | None, ref_pad: str) -> list[tuple[float, float]]:
     return [item.center for item in scene.pad(ref, pad)]
 
 
+def _physical_object_points(scene: Scene | None, objects, nets, layers):
+    """Locate exact DRC object ids in the exported, unfilled board scene."""
+    if scene is None:
+        return []
+    points = []
+    for identity in objects:
+        match = re.fullmatch(r"(track|via):(\d+)", identity)
+        if match is None:
+            points.extend(_pad_points(scene, identity))
+            continue
+        kind, index = match.group(1), int(match.group(2))
+        collection = scene.tracks if kind == "track" else scene.vias
+        if index >= len(collection):
+            continue
+        item = collection[index]
+        item_layers = (item.layer,) if kind == "track" else item.layers
+        # A mismatching report/board must not produce a plausible false marker.
+        if nets and item.net not in nets or layers and not set(layers).intersection(item_layers):
+            continue
+        points.extend((item.start, item.end) if kind == "track" else (item.center,))
+    return points
+
+
 def _net_points(scene: Scene | None, nets) -> list[tuple[float, float]]:
     if scene is None:
         return []
@@ -343,10 +366,12 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
     other = [f for f in drc if f.get("severity") == "error" and f.get("code") not in {"DRC-OPEN-NET",
                                                                                          "DRC-ROUTE-INCOMPLETE"}]
     for index, finding in enumerate(other, 1):
-        objects = [o.split(":", 1)[1] for o in finding.get("objects", []) if o.startswith("pad:")]
+        objects = [o.split(":", 1)[1] if o.startswith("pad:") else o
+                   for o in finding.get("objects", []) if isinstance(o, str)]
+        nets, layers = list(finding.get("nets") or []), list(finding.get("layers") or [])
         issues.append(RunIssue(f"D{index}", "physical", finding.get("code", "DRC"), finding.get("message", ""),
-                               nets=list(finding.get("nets") or []), layers=list(finding.get("layers") or []),
-                               objects=objects, points=[p for o in objects for p in _pad_points(scene, o)]))
+                               nets=nets, layers=layers, objects=objects,
+                               points=_physical_object_points(scene, objects, nets, layers)))
 
     detailed = [n for n in _items(_section(report, "detailed").get("nets")) if isinstance(n, dict)]
     reasons: dict[str, list[str]] = defaultdict(list)
