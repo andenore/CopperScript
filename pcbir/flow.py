@@ -288,8 +288,8 @@ def run_routing_pipeline(
             # a critical route cannot take a capacitor's short surface feed.
             held = _plan_decouplers(placement.board, reserved[2] if reserved else (), on_progress)
             if reserved is not None and held[3]:
-                dropped = {keepout.id for keepout in held[3]}
-                reserved = (reserved[0], reserved[1], tuple(k for k in reserved[2] if k.id not in dropped))
+                reserved, held, restored = _revalidate_released_escapes(placement.board, reserved, held)
+                emit(on_progress, "ordinary_escapes", "revalidated", **restored)
         def critical_inputs(escape_keepouts):
             source = replace(placement.board,
                 copper_keepouts=(*placement.board.copper_keepouts, *escape_keepouts))
@@ -819,6 +819,66 @@ def _plan_decouplers(board, reserved_keepouts, on_progress):
          pending=len(result.pending), released=len(released))
     return (tuple(tracks), tuple(vias), _copper_keepouts(board, tracks, vias, "bypass-reserve", fixed=frame),
             released, result.admitted_path_witnesses)
+
+
+
+def _revalidate_released_escapes(board, reserved, held):
+    """Restore collateral reservations only as complete, freshly legal net groups.
+
+    Bypass planning releases proximity boxes, not proven conflicting exits. A
+    surviving complete launch must still constrain subsequent critical routing.
+    No copper is changed. A new temporary keepout context gets a fresh bypass
+    ledger and ordinary strict prefix admission; any failed check rolls back
+    the entire restoration, without editing the original witnesses.
+    """
+    from .hard_macros import macro_source, materialize_hard_macros
+    from .routing_clearance import RoutingClearanceIndex
+    from .return_paths import existing_returns_permit
+    from .decoupling_paths import verify_crosslayer_decoupling
+    frame = materialize_hard_macros(macro_source(board))
+    fixed = replace(frame, tracks=(*frame.tracks, *held[0]), vias=(*frame.vias, *held[1]))
+    index = RoutingClearanceIndex(fixed)
+    tracks, vias, keepouts = reserved
+    released = {k.id for k in held[3]}
+    baseline = (tracks, vias, tuple(k for k in keepouts if k.id not in released))
+    owners = {**{f"escape-reserve-track-{i}": t.net for i,t in enumerate(tracks)},
+              **{f"escape-reserve-via-{i}": v.net for i,v in enumerate(vias)}}
+    affected = {owners[k.id] for k in keepouts if k.id in released and k.id in owners}
+    # Preserve the complete original group, not a legal via with a blocked stem.
+    rules = {r.net:r for r in board.net_routing_rules}
+    legal = {net for net in affected
+             if all(index.can_track(t.net,t.start,t.end,t.width_nm,t.layer)
+                    for t in tracks if t.net == net)
+             and all(index.can_via(v.net,v.position,v.size_nm,v.from_layer,v.to_layer,drill_nm=v.drill_nm)
+                     and existing_returns_permit(fixed,rules.get(v.net),v)
+                     for v in vias if v.net == net)}
+    # Proxy keepouts must themselves avoid the real immutable/bypass prefix.
+    safe_ids = {k.id for k in _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=fixed)}
+    legal = {net for net in legal if all(k.id in safe_ids for k in keepouts
+                                        if k.id in released and owners.get(k.id) == net)}
+    kept = tuple(k for k in keepouts if k.id not in released or owners.get(k.id) in legal)
+    count = len(kept) - len(baseline[2])
+    report = {"restored_keepouts":0, "restored_nets":[],
+              "unrestored_nets":sorted(affected), "outcome":"no_complete_legal_group"}
+    if not count:
+        return baseline, held, report
+    context = replace(fixed,copper_keepouts=(*board.copper_keepouts,*kept))
+    fresh = RoutingClearanceIndex(context)
+    witnesses=[]
+    for witness in held[4]:
+        checked = verify_crosslayer_decoupling(context,witness.link,
+                    return_target=witness.return_target,index=fresh)
+        if checked.witness is None:
+            return baseline, held, {**report,"outcome":"bypass_revalidation_failed","reason":checked.reason}
+        witnesses.append(checked.witness)
+    source = replace(board,copper_keepouts=context.copper_keepouts)
+    _, reason = _bypass_copper_reservations(source,held[0],held[1],tuple(witnesses))
+    if reason is not None:
+        return baseline, held, {**report,"outcome":"prefix_admission_failed","reason":reason}
+    remaining = tuple(k for k in held[3] if k.id not in {x.id for x in kept})
+    updated = (*held[:3],remaining,tuple(witnesses))
+    return (tracks,vias,kept), updated, {**report,"restored_keepouts":count,
+        "restored_nets":sorted(legal),"unrestored_nets":sorted(affected-legal),"outcome":"restored"}
 
 
 def _release_reservations(board, keepouts, nets, margin_nm=nm_from_mm("2"), *, pads=()):
