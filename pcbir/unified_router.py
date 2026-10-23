@@ -355,7 +355,8 @@ class _Rasters:
             # Copper spacing, or the drill's hole clearance to copper if larger.
             half = max(size / 2, drill / 2 + self.board.rules.minimum_hole_clearance_nm - clearance)
             stacked = self._build(half, clearance, self.px, self.py, self.inside_nodes,
-                                  self.edge_nodes, for_via=True, as_array=True)
+                                  self.edge_nodes, for_via=True, as_array=True,
+                                  via_annulus_half_width=size / 2)
             owner = stacked[0].copy()
             for layer in range(1, g.nl):
                 other = stacked[layer]
@@ -382,7 +383,7 @@ class _Rasters:
         return self._via[(size, drill, clearance)][1]
 
     def _build(self, half_width: float, clearance: int, px, py, inside, edge, *,
-               for_via: bool, as_array: bool = False):
+               for_via: bool, as_array: bool = False, via_annulus_half_width=None):
         g = self.grid
         edge_clear = self.board.rules.minimum_clearance_nm
         legal_material = inside & (edge >= half_width + edge_clear + self.margin)
@@ -393,8 +394,7 @@ class _Rasters:
             if for_via and not item.blocks_vias or not for_via and not item.blocks_tracks:
                 continue
             gap = max(clearance, item.clearance)
-            # Vias may never touch any pad, including their own net's.
-            owner_id = _FOREIGN if (for_via and item.is_pad) else item.owner
+            owner_id = item.owner
             if for_via and item.is_pad:
                 gap = max(gap, 1)
             reach = item.radius + gap + half_width + self.margin
@@ -411,6 +411,14 @@ class _Rasters:
             hit = distance < reach
             if not hit.any():
                 continue
+            pad_contact = None
+            if for_via and item.is_pad:
+                # Exact can_via excludes the full annulus from every pad,
+                # but ordinary copper/drill clearance applies only to foreign
+                # nets. Keep the electrical halo net-aware and its inner
+                # annulus exclusion foreign to everyone, on every layer.
+                annulus = half_width if via_annulus_half_width is None else via_annulus_half_width
+                pad_contact = distance < item.radius + annulus + 1 + self.margin
             for layer in item.layers:
                 window = owner[layer, iy0:iy1 + 1, ix0:ix1 + 1]
                 if owner_id == _FOREIGN:
@@ -420,6 +428,8 @@ class _Rasters:
                 clash = hit & (window != _FREE) & (window != owner_id)
                 window[free] = owner_id
                 window[clash] = _FOREIGN
+                if pad_contact is not None:
+                    window[pad_contact] = _FOREIGN
         if as_array:
             return owner
         return owner.ravel().tolist()
