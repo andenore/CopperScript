@@ -32,10 +32,11 @@ class PowerPartition:
     zones: tuple[CopperZone, ...]
     rails: tuple[str, ...]
     skipped: tuple[str, ...]
+    split: tuple[str, ...] = ()     # rails left without islands: one island could not connect them
 
     def report(self) -> dict:
         return {"layer": self.layer.value, "rails": list(self.rails), "islands": len(self.zones),
-                "skipped": list(self.skipped)}
+                "skipped": list(self.skipped), "split": list(self.split)}
 
 
 def decoupled_rails(board: PhysicalBoard) -> tuple[str, ...]:
@@ -80,13 +81,54 @@ def auto_power_layer(board: PhysicalBoard) -> CopperLayer | None:
 
 
 def plan_power_islands(board: PhysicalBoard, layer: CopperLayer, rails: tuple[str, ...] | None = None, *,
+                       single_island: bool = True, **options) -> PowerPartition:
+    """Split-plane islands for ``rails`` on ``layer`` (see ``_partition``).
+
+    With ``single_island`` a rail that would get more than one island keeps
+    none and is planned again without it: as a plane net its pads could then
+    only tap pieces that do not connect them, while as an ordinary net the
+    router still joins them with tracks. Interleaved rails under a ball grid
+    cannot all be connected on one layer; the kit layout uses several layers.
+    """
+    rails = tuple(rails) if rails is not None else decoupled_rails(board)
+    split: list[str] = []
+    while True:
+        partition = _partition(board, layer, tuple(r for r in rails if r not in split), **options)
+        counts: dict[str, int] = {}
+        for zone in partition.zones:
+            counts[zone.net] = counts.get(zone.net, 0) + 1
+        more = [rail for rail, count in counts.items() if count > 1]
+        if not single_island or not more:
+            break
+        split += sorted(more)
+    return PowerPartition(partition.layer, partition.zones, partition.rails,
+                          partition.skipped + tuple(split), tuple(split))
+
+
+def _partition(board: PhysicalBoard, layer: CopperLayer, rails: tuple[str, ...] | None = None, *,
                        reach_nm: int = nm_from_mm("1.6"), gap_nm: int = nm_from_mm("0.3"),
                        corridor_nm: int = nm_from_mm("1.6"), link_nm: int = nm_from_mm("12"),
-                       pitch_nm: int = nm_from_mm("0.1")) -> PowerPartition:
+                       pitch_nm: int = nm_from_mm("0.1"), connected: bool = True,
+                       link_width_nm: int = nm_from_mm("0.8"), core_nm: int = nm_from_mm("0.5")) -> PowerPartition:
+    """Islands for ``rails`` on ``layer``; ``connected`` joins each rail's pads first.
+
+    With ``connected`` every spanning-tree edge of a rail's pads and vias
+    (up to ``link_nm``) is routed on the raster as a ``link_width_nm`` wide
+    corridor that keeps ``core_nm`` away from other rails' pads and earlier
+    rails' corridors, and claimed before the nearest-pad split. Without it a
+    rail whose pads are interleaved with other rails' (a ball grid's supply
+    balls) falls apart into pieces that do not connect its pads; reference
+    split planes (the FX10 kit's PWR1) give each rail one connected island.
+    A rail whose routing rule excludes ``layer`` gets no island.
+    """
     from .placement import transformed_local_point
     from .unified_router import _polygon_inside, _segment_distance
 
     rails = tuple(rails) if rails is not None else decoupled_rails(board)
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    excluded = tuple(rail for rail in rails if rules.get(rail) is not None and rules[rail].allowed_layers
+                     and layer not in rules[rail].allowed_layers)
+    rails = tuple(rail for rail in rails if rail not in excluded)
     host = [zone for zone in board.zones if layer in zone.layers]
     if not rails or not host:
         return PowerPartition(layer, (), (), tuple(rails))
@@ -152,6 +194,9 @@ def plan_power_islands(board: PhysicalBoard, layer: CopperLayer, rails: tuple[st
             take = (d < reach_nm) & (d < win_best)
             win_best[take] = d[take]
             owner[j0:j1 + 1, i0:i1 + 1][take] = index
+    if connected:
+        claimed = _link_corridors(seeds, used, rails, allowed, x0, y0, pitch_nm, link_nm, link_width_nm, core_nm)
+        owner = np.where(claimed >= 0, claimed, owner)
     owner[~allowed] = -1
     # Keep a gap: a cell survives only if every neighbour within gap/2 has the same owner.
     k = max(1, int(np.ceil(gap_nm / 2 / pitch_nm)))
@@ -183,14 +228,86 @@ def plan_power_islands(board: PhysicalBoard, layer: CopperLayer, rails: tuple[st
             if 0 <= i < nx and 0 <= j < ny and labels[j, i] > 0:
                 seed_cells.add(int(labels[j, i]))
         for count, label in enumerate(sorted(seed_cells)):
-            outline = _outline(labels == label, x0, y0, pitch_nm)
+            # Zone outlines without holes (the KiCad backend writes none): a
+            # slit from each hole to the outside keeps the island one piece.
+            outline = _outline(_slit_holes(labels == label), x0, y0, pitch_nm)
             if outline is None or len(outline.outer.vertices) < 3:
                 continue
             zones.append(CopperZone(
                 f"auto-power-{rail}-{layer.value}-{count}", rail, (layer,),
                 outline, priority=priority,
                 pad_connection=ZoneConnection.SOLID, island_policy=IslandPolicy.REMOVE_ALL))
-    return PowerPartition(layer, tuple(zones), tuple(used), tuple(skipped))
+    return PowerPartition(layer, tuple(zones), tuple(used), tuple(skipped) + excluded)
+
+
+def _link_corridors(seeds, used, rails, allowed, x0, y0, pitch, link, width, core) -> np.ndarray:
+    """Raster owner (rail index or -1) of the corridors joining each rail's seeds."""
+    from collections import deque
+    ny, nx = allowed.shape
+    cell = lambda point: (min(ny - 1, max(0, int((point.y_nm - y0) // pitch))),
+                          min(nx - 1, max(0, int((point.x_nm - x0) // pitch))))
+    cores = np.full(allowed.shape, -1, dtype=np.int32)
+    kc = max(1, int(core // pitch))
+    disc = [(dy, dx) for dy in range(-kc, kc + 1) for dx in range(-kc, kc + 1) if dx * dx + dy * dy <= kc * kc]
+    for index, rail in enumerate(rails):
+        if rail not in used:
+            continue
+        for point in seeds[rail]:
+            j, i = cell(point)
+            for dy, dx in disc:
+                if 0 <= j + dy < ny and 0 <= i + dx < nx:
+                    cores[j + dy, i + dx] = index if cores[j + dy, i + dx] in (-1, index) else -2
+    claimed = np.full(allowed.shape, -1, dtype=np.int32)
+    kw = max(1, int(width // 2 // pitch))
+    band = [(dy, dx) for dy in range(-kw, kw + 1) for dx in range(-kw, kw + 1) if dx * dx + dy * dy <= kw * kw]
+    margin = int(nm_from_mm("3") // pitch)
+    for index, rail in enumerate(rails):
+        if rail not in used:
+            continue
+        for a, b in _spanning_edges(seeds[rail], link):
+            (ja, ia), (jb, ib) = cell(a), cell(b)
+            j0, j1 = max(0, min(ja, jb) - margin), min(ny - 1, max(ja, jb) + margin)
+            i0, i1 = max(0, min(ia, ib) - margin), min(nx - 1, max(ia, ib) + margin)
+            def free(j, i):
+                return (allowed[j, i] and cores[j, i] in (-1, index) and claimed[j, i] in (-1, index))
+            previous = {(ja, ia): None}
+            queue = deque([(ja, ia)])
+            while queue and (jb, ib) not in previous:
+                j, i = queue.popleft()
+                for dy, dx in ((0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+                    nj, ni = j + dy, i + dx
+                    if j0 <= nj <= j1 and i0 <= ni <= i1 and (nj, ni) not in previous and (
+                            free(nj, ni) or (nj, ni) == (jb, ib)):
+                        previous[(nj, ni)] = (j, i)
+                        queue.append((nj, ni))
+            if (jb, ib) not in previous:
+                continue  # no corridor around the other rails here; the pads stay apart
+            step = (jb, ib)
+            while step is not None:
+                j, i = step
+                for dy, dx in band:
+                    if 0 <= j + dy < ny and 0 <= i + dx < nx and free(j + dy, i + dx):
+                        claimed[j + dy, i + dx] = index
+                step = previous[step]
+    return claimed
+
+
+def _slit_holes(mask: np.ndarray) -> np.ndarray:
+    """``mask`` with a one-cell slit from each enclosed hole up to the outside."""
+    from .plane_estimate import _label
+    mask = mask.copy()
+    while True:
+        labels, _ = _label(~mask)
+        border = set(np.unique(np.concatenate((labels[0], labels[-1], labels[:, 0], labels[:, -1]))).tolist())
+        holes = sorted(set(np.unique(labels[labels > 0]).tolist()) - border)
+        if not holes:
+            return mask
+        ys, xs = np.nonzero(labels == holes[0])
+        j, i = int(ys.min()), int(xs[ys.argmin()])
+        j -= 1
+        while j >= 0 and mask[j, i]:
+            mask[j, i] = False
+            j -= 1
 
 
 def _spanning_edges(points: list[Point], limit: int) -> list[tuple[Point, Point]]:
