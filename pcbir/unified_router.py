@@ -1474,7 +1474,10 @@ class _Router:
             for track in leads:
                 layer = layer_of[track.layer]
                 radius_nm = track.width_nm / 2 + spec.clearance + max(self.default_width, track.width_nm) / 2
-                near = g.pitch / 2
+                # A short off-grid lead may lie at a grid-cell corner: half
+                # a pitch misses all nearby nodes. Include the nearest cell
+                # centres so via-to-lead conflicts participate in negotiation.
+                near = hypot(g.pitch, g.pitch) / 2 + 1
                 for node, distance in self._segment_nodes(track.start, track.end, layer, radius_nm):
                     claims.add(node)
                     if distance <= near:
@@ -1523,7 +1526,7 @@ class _Router:
             nodes = []
             for track in lead:
                 nodes.extend(node for node, distance in self._segment_nodes(
-                    track.start, track.end, layer_of[track.layer], g.pitch / 2 + 1) )
+                    track.start, track.end, layer_of[track.layer], hypot(g.pitch, g.pitch) / 2 + 1) )
             self._lead_nodes[lead] = nodes
         if not nodes:
             return 0.0
@@ -1869,16 +1872,26 @@ class _Router:
     def _conflicts(self, routes: Mapping[str, _NetRoute]) -> set[str]:
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
         bad = set()
+        contested, via_contested = set(), set()
         for name, route in routes.items():
             if not route.connected:
                 continue
-            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.nodes):
+            blocked = {node for node in route.nodes
+                       if occ[node] - (1 if node in route.claims else 0) > 0}
+            blocked.update(node for node in route.body
+                           if occ[node] - (1 if node in route.claims else 0) > 0)
+            via_blocked = {xy for xy in route.via_xy
+                           if via_occ[xy] - (1 if xy in route.via_claims else 0) > 0}
+            if blocked or via_blocked:
                 bad.add(name)
-                continue
-            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.body):
-                bad.add(name)
-                continue
-            if any(via_occ[xy] - (1 if xy in route.via_claims else 0) > 0 for xy in route.via_xy):
+                contested.update(blocked)
+                via_contested.update(via_blocked)
+        # An off-grid lead may see a via's clearance claim while the via's
+        # centre sees no lead claim. Both mutable owners must negotiate.
+        self._contested_xy = {node % self.grid.plane for node in contested}
+        for name, route in routes.items():
+            if route.connected and (not route.claims.isdisjoint(contested)
+                                    or not route.via_claims.isdisjoint(via_contested)):
                 bad.add(name)
         return bad
 
@@ -1891,8 +1904,17 @@ class _Router:
             for node in route.nodes:
                 if occ[node] - (1 if node in route.claims else 0) > 0:
                     hist[node] += inc
+            spec = next(spec for spec in self.specs if spec.name == name)
+            reach = max(spec.via_size / 2 + spec.clearance,
+                        spec.via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
+            radius = (reach + self.default_width / 2) / self.grid.pitch
             for xy in route.via_xy:
-                if via_occ[xy] - (1 if xy in route.via_claims else 0) > 0:
+                y, x = divmod(xy, self.grid.nx)
+                lead_conflict = any(
+                    (y + oy) * self.grid.nx + x + ox in self._contested_xy
+                    for ox, oy in _disc_offsets_cached(radius)
+                    if 0 <= x + ox < self.grid.nx and 0 <= y + oy < self.grid.ny)
+                if lead_conflict or via_occ[xy] - (1 if xy in route.via_claims else 0) > 0:
                     via_hist[xy] += inc
             for node, owner in route.body.items():
                 if occ[node] - (1 if node in route.claims else 0) > 0:

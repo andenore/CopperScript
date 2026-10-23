@@ -1,9 +1,10 @@
-## Isolated via-budget revalidation 423
+## Isolated exact-congestion revalidation 429
 
-This branch reapplies only the via-budget proposal experiment to commit 4ed3d66.
-It is separate from main; the other three congestion experiments remain excluded.
-The historical results below do not validate this new combination. Current board
-and benchmark results are pending, and no push or merge is implied.
+This branch reapplies the four preserved congestion experiments to commit4ed3d66.
+It is separate from main. Historical results below do not validate this new
+combination. The via-budget-only trial423 regressed the matched consumer control;
+the full combination now requires fresh tests and matched board validation.
+No push, merge or board adoption is implied.
 
 ## Reproducible router review fixes (2026-10-24)
 
@@ -78,6 +79,22 @@ Actual PHY search350 previously failed during array materialization; corrected
 search353 finds a legal back-side INTSEL location while all other trial poses
 remain fixed. Source regeneration and complete routing/native validation remain
 required before adopting the two-component reference adaptation.
+## Negotiate off-grid lead and via conflicts (2026-10-24)
+
+Half-pitch sampling can miss every representative grid node of a short off-grid
+lead near a cell corner. Lead centre sampling and lead congestion pricing now
+cover the half-diagonal distance. Conflict accounting identifies both mutable
+owners of a contested resource; via history also prices a via whose clearance
+region conflicts with the lead. Source raster masks and exact commit remain
+unchanged. This is conservative negotiation accounting, not clearance relaxation.
+
+Both kernels miss the exact via/lead collision in control339. Intermediate340
+exposes only one owner. The complete correction passes both kernels, positive and
+negative offsets, a nearby real collision and separated legal copper (eight
+cases344). Related router, return, ownership and via-budget checks342 pass with
+four optional skips. Actual18-net PHY replay343 and ladder comparison are pending;
+no complete-board or speed result is claimed.
+
 ## Via-budget proposals can contest mutable congestion (2026-10-24)
 
 After the existing higher-via-cost retry, a still over-budget proposal gets one
@@ -115,7 +132,10 @@ then connects through the declared free-track port with exact ownership intact.
 An independent KiCad10.0.6 refill reports zero opens or dangling tracks. Related
 macro, source-access and router tests pass. Ladder323 exposed this issue as one
 MODEM_EN dangling stub on the asset tracker despite 120/120 signal connectivity;
-the full native consumer replay is pending and must not be claimed as passing.
+the full native consumer328 now passes with120/120 signals, zero native opens/
+violations,265 vias and1993.925mm in1170.8s. Its ordinary prefix and immutable
+port remain intact. This is consumer routing compatibility, not electrical or
+manufacturing qualification.
 
 ## Preserve signal reservations through plane preparation (2026-10-24)
 
