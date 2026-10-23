@@ -2637,7 +2637,8 @@ def route_unified(
 
 def replay_unified(path, on_progress: ProgressCallback | None = None, *,
                    only_nets: frozenset[str] | None = None, only_components: frozenset[str] | None = None,
-                   bga_fanout: dict | None = None, **overrides) -> DetailedRoutingResult:
+                   bga_fanout: dict | None = None, power_islands: str | None = None,
+                   **overrides) -> DetailedRoutingResult:
     """Route the inputs saved by ``save_inputs_path`` again, with option overrides.
 
     ``only_nets`` narrows the saved net selection (to study a net alone);
@@ -2648,7 +2649,8 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
     and fans out again first, re-planning array escapes when the run did
     (``array_flow`` in the dict overrides that).
     Stages between fanout and routing (plane stitch, power areas) keep their
-    saved result. Without the pipeline's escape seeder (repair rounds run
+    saved result. ``power_islands`` ("auto" or a layer name) carves supply
+    islands as the pipeline does before fanout, when the saved run did not. Without the pipeline's escape seeder (repair rounds run
     unseeded).
     """
     from .state_codec import load_state
@@ -2660,6 +2662,14 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
         only_nets = touching if only_nets is None else only_nets | touching
     if only_nets is not None:
         saved["only_nets"] = only_nets if saved["only_nets"] is None else saved["only_nets"] & only_nets
+    if power_islands is not None:
+        from .power_islands import auto_power_layer, plan_power_islands
+        board = saved["board"]
+        layer = auto_power_layer(board) if power_islands == "auto" else CopperLayer(power_islands)
+        if layer is not None:
+            partition = plan_power_islands(board, layer)
+            saved["board"] = replace(board, zones=(*board.zones, *partition.zones))
+            emit(on_progress, "power_islands", "finished", **partition.report())
     if bga_fanout is not None:
         from .bga_fanout import plan_bga_fanouts
         from .escape_plan import plan_array_escapes
