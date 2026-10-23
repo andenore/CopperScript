@@ -51,6 +51,10 @@ renders one of them; see [routing and placement iteration](llm-workflow.md#routi
 `route-board --stop-after STAGE`, `--checkpoint-dir` and `--reuse-placement`
 shorten reruns; see [shorter reruns](llm-workflow.md#shorter-reruns).
 
+`route-board --router unified` uses unified negotiation after the established
+coupled differential/critical routing and decoupler preparation. Pair routing,
+skew tuning and return-path checks remain available in this standard pipeline.
+
 `route-board --router unified --unified-direct` sends ordinary and profiled
 nets to unified negotiation from source-fixed copper. It skips the legacy
 critical, bypass, preliminary escape and late plane-contact routing stages;

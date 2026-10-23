@@ -263,3 +263,30 @@ def test_direct_unified_does_not_seed_failed_nets_with_legacy_fanout(monkeypatch
     assert result.board.metadata["detailed_router"] == "unified"
     assert result.status is PhysicalFlowStatus.FAIL
     assert not result.detailed.nets[0].connected
+
+
+def test_standard_unified_pipeline_keeps_coupled_pair_and_routes_other_nets():
+    from test_critical_routing import _pair_board
+    from pcbir.route_summary import connection_summary
+    from pcbir.unified_router import UnifiedRouterOptions
+    source = _pair_board()
+    one = PhysicalFootprint("one", (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),), Size.mm(1, 1))
+    board = replace(source, footprints={**source.footprints, "one": one},
+        placements=(*source.placements, Placement("S1", "one", Point.mm(10, 4)),
+                    Placement("S2", "one", Point.mm(30, 20))),
+        nets=(*source.nets, PhysicalNet("SIGNAL", (PadReference("S1", "1"), PadReference("S2", "1")))))
+    result = run_routing_pipeline(board,
+        placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0, refinement_passes=0,
+            fixed_references=tuple(p.reference for p in board.placements)),
+        global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
+        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
+        unified_options=UnifiedRouterOptions(maximum_iterations=20, time_budget_s=20))
+    pair = next(item for item in result.critical.nets if len(item.nets) == 2)
+    assert pair.connected and pair.coupled_length_nm > 0
+    assert pair.strategy != "unified_final_review"
+    assert result.board.metadata["detailed_router"] == "unified"
+    assert next(n for n in result.detailed.nets if n.net == "SIGNAL").connected
+    assert set(result.critical.locked_tracks) <= set(result.board.tracks)
+    summary = connection_summary(result.board, result.drc)
+    assert summary["signal"]["opens"] == 0
+    assert summary["drc"]["errors"] == 0
