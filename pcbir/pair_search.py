@@ -39,6 +39,25 @@ class _Port:
 
 
 @dataclass(frozen=True, slots=True)
+class PairPortExample:
+    center: Point
+    heading: int
+    sign: int
+    can_depart: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PairPortInventory:
+    """Bounded proposal telemetry, not an accepted exit or search frontier."""
+    component: str
+    layer: CopperLayer
+    pitch_nm: int
+    port_count: int
+    departable_count: int
+    examples: tuple[PairPortExample, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class PairSearchCandidate:
     first: tuple[TrackSegment, ...]
     second: tuple[TrackSegment, ...]
@@ -80,6 +99,7 @@ class PairSearchStats:
     candidates: int = 0
     resumed_states: int = 0
     resumed_portals: int = 0
+    port_inventory: list[PairPortInventory] = field(default_factory=list, repr=False, compare=False)
     # Private exact frontiers; never report, fingerprint or accepted copper.
     _continuations: list = field(default_factory=list, repr=False, compare=False)
 
@@ -475,6 +495,17 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                      width, offset, clearance, layer) for access in accesses]
     onward = _departure_preferences(board, groups, first_rule.net, second_rule.net,
                                     width, offset, clearance, layer, pitch_nm)
+    for access, ports in zip(accesses, groups):
+        if len(stats.port_inventory) >= 24:
+            break
+        examples, per_heading = [], {}
+        for port in ports:
+            if per_heading.get(port.heading, 0) >= 2:
+                continue
+            per_heading[port.heading] = per_heading.get(port.heading, 0) + 1
+            examples.append(PairPortExample(port.center, port.heading, port.sign, onward[id(port)] == 0))
+        stats.port_inventory.append(PairPortInventory(access.pad.component, layer, pitch_nm, len(ports),
+            sum(onward[id(port)] == 0 for port in ports), tuple(examples)))
     combinations = sorted([(a, b) for a, b in product(*groups) if a.sign == -b.sign],
                           key=lambda pair: (onward[id(pair[0])] + onward[id(pair[1])],
                                             pair[0].preference + pair[1].preference,

@@ -2,7 +2,7 @@
 
 Coarse access is a routing heuristic, not a certificate. These physical terminal
 records have no global grid node and never make a failed global guide connected.
-Short same-package branches are returned as disposable candidate copper; only
+Short same-package or source-bounded support branches are disposable candidate copper; only
 the complete pair's ordinary atomic geometry/connectivity gates may adopt them.
 """
 from dataclasses import dataclass, field, fields, replace
@@ -231,6 +231,7 @@ def _surface_pair_terminals(board, first, second, routes):
     owned = macro_owned_pads(board)
     guides=[source_terminal_guide(board,r.net,routes.get(r.net)) for r in (first,second)]
     if any(g is None for g in guides): return None,(),()
+    common = set(a.pad.component for a in guides[0].accesses) & set(a.pad.component for a in guides[1].accesses)
     all_branches=[]
     normalized=[]
     from .pair_search import _PairAccessIndex
@@ -238,6 +239,25 @@ def _surface_pair_terminals(board, first, second, routes):
     for rule,guide in zip((first,second),guides):
         groups={}
         for a in guide.accesses: groups.setdefault(a.pad.component,[]).append(a)
+        fixed_anchors = {}
+        if len(groups) > 2:
+            # A separate nearby termination/support is another real contact,
+            # not a third main endpoint. Both lanes must still share exactly
+            # two endpoint components. Attach only to one unambiguous source
+            # breakout region, retaining that component's actual main contact.
+            if len(common) != 2 or rule.breakout_length_nm is None:
+                return None,(),()
+            fixed_anchors = {c: _main_contact(board, rule, groups[c]) for c in sorted(common)}
+            extra = [a for c, items in sorted(groups.items()) if c not in common for a in items]
+            groups = {c: list(groups[c]) for c in sorted(common)}
+            for contact in extra:
+                choices = [c for c, anchor in fixed_anchors.items()
+                    if anchor.layer is contact.layer
+                    and (anchor.pad_position.x_nm-contact.pad_position.x_nm)**2
+                        + (anchor.pad_position.y_nm-contact.pad_position.y_nm)**2 <= rule.breakout_length_nm**2]
+                if len(choices) != 1:
+                    return None,(),()
+                groups[choices[0]].append(contact)
         if len(groups)!=2 or sum(len(v)-1 for v in groups.values())>8:
             return None,(),()  # fixed bound on disposable local branches
         anchors=[]
@@ -245,7 +265,7 @@ def _surface_pair_terminals(board, first, second, routes):
         for component,terminals in sorted(groups.items()):
             if len(terminals)>1 and any(a.pad in owned for a in terminals):
                 return None,(),()  # Never tie private contacts or replace a prescribed port.
-            anchor=_main_contact(board, rule, terminals)
+            anchor=fixed_anchors.get(component) or _main_contact(board, rule, terminals)
             anchors.append(anchor)
             for other in sorted(terminals,key=lambda a:str(a.pad)):
                 if other is anchor: continue

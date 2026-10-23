@@ -210,6 +210,46 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def _run_replay_critical(args: argparse.Namespace) -> int:
+    from hashlib import sha256
+    from time import perf_counter
+    from .critical import replay_critical
+    from .drc import run_physical_drc
+    from .route_summary import connection_summary
+    from .state_codec import StateError
+    started = perf_counter()
+    try:
+        from .unified_router import UnifiedRouterOptions
+        clock_options = UnifiedRouterOptions() if args.clock_router == "unified" else None
+        input_digest = sha256(args.state.read_bytes()).hexdigest()
+        result = replay_critical(args.state, only_nets=frozenset(args.only) if args.only else None,
+                                 pair_state_limit=args.pair_states, unified_options=clock_options)
+        if sha256(args.state.read_bytes()).hexdigest() != input_digest:
+            raise ValueError("replay input changed during the diagnostic")
+    except (StateError, OSError, ValueError) as exc:
+        print(f"REPLAY ERROR: {exc}")
+        return 2
+    drc = run_physical_drc(result.board)
+    document = {"schema": "copperscript-critical-replay/v1", "status": result.status.value,
+        "scope": "bounded saved-input diagnostic; no current-source, full-board or native acceptance",
+        "fabrication_ready": False, "qualified_release": False, "native_verification": "not_run", "state": str(args.state),
+        "state_sha256": input_digest, "only_nets": args.only, "clock_router": args.clock_router,
+        "pair_state_limit": args.pair_states, "seconds": round(perf_counter() - started, 1),
+        "critical": json.loads(result.to_json()), "drc": json.loads(drc.to_json()),
+        "summary": connection_summary(result.board, drc)}
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    if args.output:
+        write_kicad_project(KiCadPcbBackend().generate(result.board), args.output)
+    print(json.dumps({key: document[key] for key in ("scope", "seconds", "pair_state_limit")}, sort_keys=True))
+    for item in result.nets:
+        print(json.dumps({"nets": item.nets, "connected": item.connected, "strategy": item.strategy,
+            "diagnostics": item.diagnostics, "local_preparation":
+                asdict(item.local_preparation) if item.local_preparation else None}, sort_keys=True))
+    return 0
+
 def _run_view(args: argparse.Namespace) -> int:
     from .run_issues import find_issue, load_run, run_issues
     from .scene import scene_from_kicad_pcb
@@ -554,6 +594,17 @@ def _parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("--only", action="append", default=[], metavar="NET",
         help="route only this net (repeatable); the other nets keep their saved copper, if any")
     replay_parser.add_argument("-o", "--output", type=Path, help="write the routed board as .kicad_pcb (for copper view)")
+    critical_replay = subparsers.add_parser("replay-critical",
+        help="bounded critical-group diagnostic from a placement checkpoint or source-only inputs")
+    critical_replay.add_argument("state", type=Path)
+    critical_replay.add_argument("--only", action="append", default=[], metavar="NET",
+        help="attempt complete critical groups containing this net; all source rules/copper remain")
+    critical_replay.add_argument("--pair-states", type=_nonnegative_int, default=6000,
+        help="aggregate state bound per coupled pair (default: 6000)")
+    critical_replay.add_argument("--clock-router", choices=("legacy", "unified"), default="unified",
+        help="clock fallback backend; differential groups retain their coupled engine")
+    critical_replay.add_argument("--report", type=Path)
+    critical_replay.add_argument("-o", "--output", type=Path, help="diagnostic KiCad board for copper view")
     from .design_query import QUERY_KINDS
     query_parser = subparsers.add_parser(
         "query", help="answer compact questions about the compiled design (pins, nets, components, open pins)")
@@ -1145,6 +1196,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_view(args)
     if args.command == "replay-unified":
         return _run_replay_unified(args)
+    if args.command == "replay-critical":
+        return _run_replay_critical(args)
     if args.command == "state":
         from .state_codec import StateError, describe_state
         try:

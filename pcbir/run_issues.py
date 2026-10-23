@@ -373,6 +373,17 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
                                nets=nets, layers=layers, objects=objects,
                                points=_physical_object_points(scene, objects, nets, layers)))
 
+    for result in _items(_section(report, "critical").get("nets")):
+        if not isinstance(result, dict) or result.get("connected") is not False:
+            continue
+        nets = [str(n) for n in result.get("nets") or ()]
+        reason = "; ".join(str(d) for d in result.get("diagnostics") or ()) or "not connected"
+        preparation = result.get("local_preparation") or {}
+        if preparation.get("status") in {"blocked", "unsupported"}:
+            reason += "; terminal preparation " + str(preparation.get("status")) + ": " + str(preparation.get("reason", ""))
+        issues.append(RunIssue(f"C{1+sum(i.stage == 'critical' for i in issues)}", "critical",
+            "CRITICAL-UNROUTED", reason, nets=nets, points=_net_points(scene, nets)))
+
     detailed = [n for n in _items(_section(report, "detailed").get("nets")) if isinstance(n, dict)]
     reasons: dict[str, list[str]] = defaultdict(list)
     for net in detailed:
