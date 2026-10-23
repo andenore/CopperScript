@@ -153,6 +153,9 @@ class UnifiedRouterOptions:
     # Islands only under ball grids, from the via-site matrix: each rail's
     # touching cells form an island (escape plan E11, plan_ball_grid_islands).
     power_islands_ball_grid_only: bool = False
+    # Plane regions of zone nets at the board minimum width and clearance
+    # (zone fill semantics) instead of the net's own track width.
+    plane_fill_width: bool = False
     # Nets without a profile width may narrow to the board minimum this close
     # to their pads (0 disables).
     implicit_neck_nm: int = nm_from_mm("2.5")
@@ -894,7 +897,14 @@ class _Router:
         """
         from .plane_estimate import _label
         g = self.grid
-        owner, _ = self.rasters.track(spec.width, spec.clearance)
+        if self.options.plane_fill_width:
+            # Zone fill is bound by the board minimum width and clearance,
+            # not by the net's track width: a 0.4 mm rail still fills the
+            # 0.1 mm necks between a ball grid's vias.
+            owner, _ = self.rasters.track(self.board.rules.minimum_track_width_nm,
+                                          self.board.rules.minimum_clearance_nm)
+        else:
+            owner, _ = self.rasters.track(spec.width, spec.clearance)
         owner_arr = np.asarray(owner, dtype=np.int32).reshape(g.nl, g.ny, g.nx)
         free = (owner_arr == _FREE) | (owner_arr == spec.nid)
         per_layer: dict[int, np.ndarray] = {}
