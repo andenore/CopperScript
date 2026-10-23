@@ -19,7 +19,7 @@ working copy for contributors and agents in this repository.
 | E8 | `claude/plan-escape-e7-bga-lattice` | Partial. `ball_field_exact` (exact raster around ball grids, opt-in) and tolerant ball-grid detection (`package_patterns.ball_grid`: 2 µm rounding, depopulated grids, extra pads; D3 copper identical). Exact raster everywhere (`raster_margin_nm=0`) is not safe: D3 loses 0024, 0035, 0376; full-vertical and led-ring lose a net. Access points per ball (TritonRoute PAO) not done |
 | E9 | `claude/plan-escape-e7-bga-lattice` | Tried, no gain. Exit corridors (`exit_reservation_cost` 5, 20), bus bundles, rejection marker cost and retrying failed nets every iteration all stay within ±1.5 nets of the FX10 five-run mean (16.0–16.4); retrying gives 15.2 with the lattice but 17.8 without |
 | E10 | | |
-| E11 | `claude/plan-escape-e7-bga-lattice` | In progress. `power_islands_ball_grid_only`: islands on In4 for the eight FX10 rails only. Islands for every decoupled rail in the replay (after bypass copper exists) were worse (median 20) |
+| E11 | `claude/plan-escape-e7-bga-lattice` | Not usable yet. `power_islands_ball_grid_only` (In4 islands for the eight FX10 rails) makes things worse: FX10 fast case 20–25 open (baseline mean about 16) and 4x slower; full CopperProbe 20 open signal nets against 14, 9008 s. Three defects: supply pad groups cannot reach their islands; an island for FX_P1 on a layer its rule excludes (DRC-LAYER); island zones with holes do not export to KiCad |
 | E12 | | |
 
 Update this table when a step's PR merges: the D3 clean count (before → after),
