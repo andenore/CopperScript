@@ -89,6 +89,7 @@ def improve_critical_placement(
     maximum_trials: int = 0, movement_nm: int = nm_from_mm("0.5"),
     placement_options: PlacementPlannerOptions | None = None,
     global_options: GlobalRouterOptions | None = None,
+    unified_options=None,
     on_trial_started: Callable[[int, str, PhysicalBoard], None] | None = None,
     on_trial: Callable[[CriticalPlacementTrial], None] | None = None,
     on_progress: Callable[[str, tuple[str, ...], CriticalNetResult | None], None] | None = None,
@@ -134,7 +135,7 @@ def improve_critical_placement(
             remaining = failed
             outcome = "global_failed"
             if proposed_global.status is GlobalRoutingStatus.SUCCESS:
-                proposed_critical = route_critical_nets(trial, proposed_global, on_progress=on_progress)
+                proposed_critical = route_critical_nets(trial, proposed_global, on_progress=on_progress, unified_options=unified_options)
                 remaining, hard = _failures(trial, proposed_critical)
                 if hard:
                     outcome = "hard_drc"

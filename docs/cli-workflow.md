@@ -54,6 +54,19 @@ shorten reruns; see [shorter reruns](llm-workflow.md#shorter-reruns).
 `route-board --router unified` uses unified negotiation after the established
 coupled differential/critical routing and decoupler preparation. Pair routing,
 skew tuning and return-path checks remain available in this standard pipeline.
+Clock fallback uses the selected unified engine with the original clock profile;
+each clock is bounded to 60 seconds, 16 iterations and two commit rounds (or the
+smaller caller bounds). Complete-group matching and exact acceptance still apply.
+
+`replay-critical STATE --only NET --report RUN/route-report.json -o RUN/board.kicad_pcb`
+isolates critical routing from a placement checkpoint or source-only saved input.
+Selecting one differential member selects its whole existing group. All source
+rules remain active; arbitrary routed input copper is rejected. `--pair-states`
+bounds aggregate pair search (default 6000), and `--clock-router legacy|unified`
+selects the clock fallback for comparison. Failed groups have located `C` issues;
+pair reports include a bounded port inventory with headings and departure probes.
+This diagnostic does not rerun placement, bypass preparation or native checks,
+and never establishes full-board or current-source acceptance.
 
 `route-board --router unified --unified-direct` sends ordinary and profiled
 nets to unified negotiation from source-fixed copper. It skips the legacy

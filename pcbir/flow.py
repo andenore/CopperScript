@@ -292,7 +292,7 @@ def run_routing_pipeline(
         if extra:
             source = replace(source, copper_keepouts=(*source.copper_keepouts, *extra))
         critical = route_critical_nets(source, placement.global_route,
-                                       on_progress=critical_progress(on_progress))
+                                       on_progress=critical_progress(on_progress), unified_options=unified_options)
         if reserved is not None:
             failed = {name for item in critical.nets if not item.connected for name in item.nets}
             if failed:
@@ -306,7 +306,7 @@ def run_routing_pipeline(
                     retry = route_critical_nets(
                         replace(placement.board, copper_keepouts=(*placement.board.copper_keepouts, *kept,
                                                                   *(held[2] if held else ()))),
-                        placement.global_route, on_progress=critical_progress(on_progress))
+                        placement.global_route, on_progress=critical_progress(on_progress), unified_options=unified_options)
                     if sum(not item.connected for item in retry.nets) < len(
                             [item for item in critical.nets if not item.connected]):
                         critical = retry
@@ -315,7 +315,7 @@ def run_routing_pipeline(
     if critical_feedback_trials and access is None and not getattr(unified_options, "direct", False):
         critical_feedback = improve_critical_placement(
             placement.board, placement.global_route, critical, maximum_trials=critical_feedback_trials,
-            placement_options=placement_options, global_options=global_options,
+            placement_options=placement_options, global_options=global_options, unified_options=unified_options,
         )
         critical = critical_feedback.critical
         if critical_feedback.accepted_moves:
@@ -515,7 +515,7 @@ def run_routing_pipeline(
                 from .hard_macros import materialize_hard_macros
                 trial_critical = replace(critical, board=materialize_hard_macros(trial_board), nets=())
             else:
-                trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global)
+                trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global, unified_options=unified_options)
             if trial_critical.status is CriticalRoutingStatus.FAILED:
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="critical_failed")
