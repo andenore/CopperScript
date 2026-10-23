@@ -288,6 +288,35 @@ def test_bus_bundles_route_the_nets_between_the_bus_parts_with_the_bus() -> None
     assert bus_nets(bus_bundles=True) == 3   # with C, whose pads are all on U and V
 
 
+def test_plane_fill_width_sees_a_wide_rail_plane_and_taps_a_crowded_via() -> None:
+    from pcbir.physical import CopperZone, NetRoutingRule, PhysicalNet, PolygonRing, PolygonWithHoles, RouteKind, Via
+    from pcbir.unified_router import _Router
+    # P: a 0.6 mm rail with a via into its small In1 zone, ringed by foreign vias 0.75 mm away.
+    board = _board({"P": ((5, 5), (15, 15)), "X": ((2, 20), (20, 20))}, layers=4)
+    ring = PolygonRing(tuple(Point.mm(x, y) for x, y in ((7, 7), (10, 7), (10, 10), (7, 10))))
+    zone = CopperZone("p", "P", (CopperLayer("In1.Cu"),), PolygonWithHoles(ring))
+    centre = Point.mm("8.5", "8.5")
+    layers = board.stackup.copper_layers
+    vias = (Via("P", centre, nm_from_mm("0.45"), nm_from_mm("0.2"), layers[0], layers[-1]),
+            *(Via("X", Point(centre.x_nm + dx, centre.y_nm + dy), nm_from_mm("0.45"), nm_from_mm("0.2"),
+                  layers[0], layers[-1])
+              for dx, dy in ((750_000, 0), (-750_000, 0), (0, 750_000), (0, -750_000))))
+    board = replace(board, zones=(zone,), vias=vias,
+                    net_routing_rules=(NetRoutingRule("P", RouteKind.GENERAL, width_nm=nm_from_mm("0.6")),),
+                    rules=replace(board.rules, minimum_track_width_nm=nm_from_mm("0.1"),
+                                  minimum_clearance_nm=nm_from_mm("0.1")))
+    def plane_and_taps(fill):
+        router = _Router(board, UnifiedRouterOptions(pitch_nm=nm_from_mm("0.125"), plane_fill_width=fill,
+                                                     reuse_plane_vias=True), [n for n in board.nets if n.name == "P"], None)
+        (spec,) = router.specs
+        planes, _, _ = router._zone_regions("P", spec)
+        return len(planes), len(router._plane_via_taps("P", spec, planes))
+    narrow_plane, narrow_taps = plane_and_taps(False)
+    fill_plane, fill_taps = plane_and_taps(True)
+    assert fill_plane > narrow_plane      # the zone fill is not limited by the rail's 0.6 mm track width
+    assert narrow_taps == 0 and fill_taps > 0   # the crowded via counts as joined to its plane
+
+
 def test_via_budget_is_never_exceeded() -> None:
     from pcbir.physical import NetRoutingRule, RouteKind
     # V may not use vias and H only one: whatever H does, it stays in budget.
