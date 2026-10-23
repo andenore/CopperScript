@@ -86,17 +86,25 @@ def _land(board: PhysicalBoard, reference: PadReference) -> tuple[Placement, Foo
     return placement, pad
 
 
-def _sites(board: PhysicalBoard, rule: PadViaInPadRule) -> tuple[tuple[int, int, Point], ...]:
+def _sites(board: PhysicalBoard, rule: PadViaInPadRule,
+           placement: Placement | None = None) -> tuple[tuple[int, int, Point], ...]:
     """Board positions, rotated with the land exactly as DRC shapes it."""
-    placement, pad = _land(board, rule.pad)
+    source_pose, pad = _land(board, rule.pad)
+    placement = placement or source_pose
+    if placement.reference != source_pose.reference or placement.footprint != source_pose.footprint:
+        raise ValueError("array geometry requires its declared owner and footprint")
     centre = transformed_local_point(placement, pad.position)
     angle = -float(placement.rotation_degrees + pad.rotation_degrees)
     return tuple((row, column, _rotate_offset(centre, dx, dy, angle))
                  for row, column, dx, dy in _offsets(pad, rule))
 
 
-def via_in_pad_array_vias(board: PhysicalBoard) -> tuple[Via, ...]:
-    """The vias every required array consists of; pure geometry, unchecked."""
+def via_in_pad_array_vias(board: PhysicalBoard, *, placements=None) -> tuple[Via, ...]:
+    """Required array geometry, unchecked; optional accepted owner poses only.
+
+    A supplied mapping may be partial: unaccepted owners create no obstacles.
+    No candidate placement, source witness or materialization is admitted here.
+    """
     rules = array_rules(board)
     if not rules:
         return ()
@@ -105,7 +113,8 @@ def via_in_pad_array_vias(board: PhysicalBoard) -> tuple[Via, ...]:
     return tuple(
         Via(net_by_pad[rule.pad], site, ARRAY_VIA_SIZE_NM, ARRAY_VIA_DRILL_NM,
             outer[0], outer[1], finish="filled-capped")
-        for rule in rules for _, _, site in _sites(board, rule)
+        for rule in rules if placements is None or rule.pad.component in placements
+        for _, _, site in _sites(board, rule, None if placements is None else placements[rule.pad.component])
     )
 
 

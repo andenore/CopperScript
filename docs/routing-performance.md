@@ -1,3 +1,27 @@
+## Reserve required pad-via arrays during placement (2026-10-24)
+
+Incremental placement now reserves every declared filled/capped array's annulus
+and drill against accepted peer pads, footprint holes and other required arrays.
+The checks are symmetric and use the actual candidate/held owner poses; unaccepted
+source seeds and optional single-via permissions create no array obstacles.
+Filled/capped array sites do not introduce a body-only courtyard exclusion.
+Source nets, array sizes, spacing, multiplicity and final exact materialization
+remain authoritative. Cached objects are geometry only, never acceptance.
+
+The public array geometry helper accepts an optional partial map of accepted
+owner poses. Default callers retain identical complete source geometry. The
+placement checker uses ordinary copper/drill clearance floors and still requires
+fresh full array materialization; this is not routing, assembly or CAM admission.
+
+Control351 misses a 1 nm drill-clearance violation in both placement orders and
+uses an unaccepted source owner pose. After352 passes the boundary/materialization
+checks. Related354 passes with one optional native skip; expanded355 also proves
+the generic planner moves a support off the array and preserves all nine sites.
+Actual PHY search350 previously failed during array materialization; corrected
+search353 finds a legal back-side INTSEL location while all other trial poses
+remain fixed. Source regeneration and complete routing/native validation remain
+required before adopting the two-component reference adaptation.
+
 ## Negotiate off-grid lead and via conflicts (2026-10-24)
 
 Half-pitch sampling can miss every representative grid node of a short off-grid
