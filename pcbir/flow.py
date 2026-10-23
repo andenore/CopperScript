@@ -394,15 +394,6 @@ def run_routing_pipeline(
                 if len(retry.pending) < len(pending):
                     critical = replace(critical, board=replace(retry.board,
                                                                copper_keepouts=board.copper_keepouts))
-    if reserved is not None:
-        # The reservations also held while decouplers routed. The escapes
-        # themselves are not kept: the unified router finds its own exact
-        # access, and a fixed escape of one pin can block a neighbour that the
-        # escape generator left pending.
-        temporary = {keepout.id for keepout in reserved[2]}
-        board = critical.board
-        critical = replace(critical, board=replace(
-            board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary)))
     if unified_options is not None and getattr(unified_options, "power_islands", None):
         from .physical import CopperLayer
         from .power_islands import auto_power_layer, plan_power_islands
@@ -489,6 +480,20 @@ def run_routing_pipeline(
         pre_detailed, power_plan, power_status = plan_distribution(pre_detailed, fanout)
         deferred_zones = (frozenset(deferred_zone_nets(pre_detailed))
                           if detailed_options.defer_zone_nets else frozenset())
+    if reserved is not None:
+        # Keep promised exits through every preparation step, including plane
+        # contacts. Remove only these temporary masks when the shared ordinary
+        # router takes ownership; a later GND via must not occupy the launch.
+        temporary = {keepout.id for keepout in reserved[2]}
+        def release_masks(current):
+            return replace(current,copper_keepouts=tuple(
+                k for k in current.copper_keepouts if k.id not in temporary))
+        critical = replace(critical,board=release_masks(critical.board))
+        if plane_stitch is not None:
+            plane_stitch = replace(plane_stitch,board=release_masks(plane_stitch.board))
+        if fanout is not None:
+            fanout = replace(fanout,board=release_masks(fanout.board))
+        pre_detailed = release_masks(pre_detailed)
     emit(on_progress, "ordinary_area", "started")
     detailed = route_ordinary(
         pre_detailed, placement.global_route,

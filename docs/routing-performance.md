@@ -1,3 +1,38 @@
+## Preserve signal reservations through plane preparation (2026-10-24)
+
+Early package-exit masks now survive critical routing, bypass work, BGA planning
+and plane stitching. They are removed only when ordinary negotiation takes
+ownership. Removing them before plane stitching allowed a later GND/supply via
+to occupy a promised signal site. Final physical boards do not retain these
+temporary masks; original declared keepouts remain authoritative.
+
+A functional four-layer fixture demonstrates that an otherwise legal competing
+GND-via site stays blocked during preparation and is released for negotiation.
+The corrected fixture fails on frozen b7c1046 (control321), passes after the
+change (319), and the 50-case related set passes (322). Earlier controls317/318
+used a one-pad package, which has no neighbouring-land escape demand; those
+failures were invalid evidence and are retained. Control320 accidentally imported
+the active compiler through pytest configuration and is also not a valid control.
+The matched control explicitly pins pytest's configuration and compiler path.
+
+Ladder323 improves round LED from 50/51 to 51/51 signals with zero geometry errors,
+40 vias and 582.844 mm (formerly 41 vias and 552.542 mm). It retains nRF52 35/35,
+44 vias and 350.563 mm. The separate LED consumer passes fresh native with zero
+opens/violations, 33 vias and 545.708 mm (formerly 35 vias and 545.611 mm).
+The 30.302 mm extra round-LED copper and 0.097 mm extra consumer copper remain
+tradeoffs; loaded timing is not an isolated speed comparison. Asset tracker is
+still running, so its compatibility result is not yet claimed.
+
+Actual restored critical replay316 connects both MDI pairs and all five clocks.
+Support/plane screen319 retains the masks until negotiation and all physical
+prefix copper. Subsequent coarse RMII replay324 connects all six nets. Fresh
+KiCad10.0.6 refill has zero selected MDI/clock/RMII or GND opens and zero geometry
+errors; 456 other opens and 12 dangling-track warnings remain on the partial
+export. The largest existing ground-return distance is 2.134574 mm within the
+source 2.2 mm bound, with no ground-via changes during RMII routing. The screen
+excludes pending-support release retry and full ordinary routing: fresh complete
+pipeline validation is still required.
+
 ## Revalidate collateral escape-reservation release (2026-10-24)
 
 Bypass preparation may release provisional package-exit keepouts in a proximity
