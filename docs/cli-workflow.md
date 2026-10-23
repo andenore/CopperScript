@@ -453,3 +453,10 @@ python -m pip install -e ".[test]"
 copper check examples/valid_board/board.copper
 python -m pytest
 ```
+
+For a search that exhausts the unified router's per-path work bound, use
+`--unified-search-states N` to choose a larger bounded search. The default is
+400000 expanded states per path. `--unified-time-budget-s` remains a separate
+wall-time limit. Both are computational settings; source and fabrication rules
+are unchanged. The effective state limit appears in `work_limits` and replay
+inputs. A failed bounded search is not proof that the connection is impossible.

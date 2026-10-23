@@ -894,6 +894,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--unified-iterations", type=int, default=150,
         help="maximum negotiation iterations of the unified router; it also stops after 60 "
              "iterations without improvement (default: 150)")
+    board_route_parser.add_argument("--unified-search-states", type=int, default=400_000,
+        help="maximum expanded states per unified path search (default: 400000); "
+             "a bounded search failure is not proof that no legal route exists")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
         help="wall-time budget for the unified router; it returns its best result when exceeded")
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
@@ -1152,6 +1155,7 @@ def _unified_options(args):
     from .unified_router import UnifiedRouterOptions
     return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
                                 maximum_iterations=args.unified_iterations,
+                                maximum_expansions=args.unified_search_states,
                                 time_budget_s=args.unified_time_budget_s,
                                 power_islands=None if args.power_islands == "off" else args.power_islands,
                                 pre_route_decouplers=not args.unified_no_decouplers and not args.unified_direct,
@@ -1969,7 +1973,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
-                    "router", "unified_direct", "unified_iterations", "unified_time_budget_s",
+                    "router", "unified_direct", "unified_iterations", "unified_time_budget_s", "unified_search_states",
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
