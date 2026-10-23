@@ -446,8 +446,14 @@ def test_replay_cli_routes_saved_inputs_with_overrides(tmp_path, capsys) -> None
     state = tmp_path / "inputs.json"
     global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
     route_unified(board, global_route, UnifiedRouterOptions(save_inputs_path=str(state)))
+    result_state = tmp_path / "routed.state.json"
     assert main(["replay-unified", str(state), "--set", "maximum_iterations=3",
-                 "--report", str(tmp_path / "replay.json")]) == 0
+                 "--report", str(tmp_path / "replay.json"), "--save-result", str(result_state)]) == 0
+    from pcbir.workbench import load_state
+    assert load_state(result_state).board.placements == board.placements
+    previous_bytes = result_state.read_bytes()
+    assert main(["replay-unified", str(state), "--save-result", str(result_state)]) == 2
+    assert result_state.read_bytes() == previous_bytes
     document = json.loads((tmp_path / "replay.json").read_text(encoding="utf-8"))
     assert document["overrides"] == {"maximum_iterations": 3}
     assert document["signal"]["opens"] == 0 and document["unrouted"] == {}

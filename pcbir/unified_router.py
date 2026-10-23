@@ -1513,11 +1513,46 @@ class _Router:
         scale = min(self.options.window_growth_limit, 1 + age // 3)
         return int(self.options.window_margin_nm * scale // self.grid.pitch)
 
+    def _via_owners(self, spec: _NetSpec, *, as_array=False):
+        """Via proposals for a single-ended net must have existing returns.
+
+        The raster narrows proposals only. Exact integer distance/span checks
+        repeat at commit, and independent physical DRC checks all source vias.
+        """
+        rule = self.rules.get(spec.name)
+        if rule is None or not rule.require_return_vias or rule.differential_partner is not None:
+            return (self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance) if as_array
+                    else self.rasters.via(spec.via_size, spec.via_drill, spec.clearance))
+        cached = spec.arrays.get("return_via_owner")
+        if cached is not None:
+            return cached
+        from .return_paths import return_span_covers
+        g = self.grid
+        mask = np.zeros((g.ny, g.nx), dtype=bool)
+        limit = rule.maximum_return_via_distance_nm
+        for via in self.board.vias:
+            if (via.net != rule.return_via_net or via.net == spec.name
+                    or not return_span_covers(self.board, via, g.layers[0], g.layers[-1])):
+                continue
+            x, y = via.position.x_nm, via.position.y_nm
+            x0, y0, x1, y1 = g.window(x-limit, y-limit, x+limit, y+limit)
+            if x0 > x1 or y0 > y1:
+                continue
+            # As with the obstacle raster, numerical membership is a proposal.
+            # Exact integer squared distance is authoritative at commit/DRC.
+            distance = np.hypot(self.rasters.px[y0:y1+1, x0:x1+1]-x,
+                                self.rasters.py[y0:y1+1, x0:x1+1]-y)
+            mask[y0:y1+1, x0:x1+1] |= distance <= limit
+        owners = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance).copy()
+        owners.reshape((g.ny, g.nx))[~mask] = _FOREIGN
+        spec.arrays["return_via_owner"] = owners
+        return owners
+
     def _search(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
                 target_extra=None):
         g, options = self.grid, self.options
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
-        via_owner = self.rasters.via(spec.via_size, spec.via_drill, spec.clearance)
+        via_owner = self._via_owners(spec)
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
         hist, via_hist = self.occupancy.history, self.occupancy.via_history
         nid = spec.nid
@@ -1709,7 +1744,7 @@ class _Router:
         import ctypes
         g = self.grid
         owner, mid_owner = self.rasters.track_arrays(spec.width, spec.clearance)
-        via_owner = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance)
+        via_owner = self._via_owners(spec, as_array=True)
         occupancy = self.occupancy
         flags, extra = self._n_flags, self._n_extra
         layers = np.asarray([layer | (0x100 if layer in spec.target_only else 0) for layer in spec.layers],
@@ -1956,6 +1991,13 @@ class _Router:
                 for via in vias:
                     if via in net_vias:
                         continue
+                    rule = self.rules.get(name)
+                    if rule and rule.require_return_vias and rule.differential_partner is None:
+                        from .return_paths import covering_return_vias
+                        if not covering_return_vias(self.board, rule, via):
+                            bad.append(via.position)
+                            self.rejections.setdefault(name, []).append(
+                                (via.position, "via", (), True, "required_return_via"))
                     if not index.can_via(name, via.position, via.size_nm, via.from_layer, via.to_layer,
                                          drill_nm=via.drill_nm):
                         bad.append(via.position)

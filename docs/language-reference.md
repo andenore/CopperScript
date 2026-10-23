@@ -885,6 +885,16 @@ return_via_policy = "reference_change";
 shared_reference_layer = "In1.Cu";
 ```
 
+For single-ended profiles, the unified router can reuse existing return vias.
+`require_return_vias`, `return_via_net` and `maximum_return_via_distance` constrain
+both early launch proposals and negotiated transition sites. Exact commit and
+independent `DRC-RETURN-VIA` checking require an existing return barrel spanning
+the entire physical signal via within the stated center distance. No ground
+vias are generated, moved or removed. Missing returns remain unresolved. This
+single-ended path conservatively requires actual return vias even when a
+shared-reference waiver might otherwise be requested; it does not infer one.
+Native filled-reference continuity and electrical SI remain separate checks.
+
 Both paired rules must agree. Only actual signal layers adjacent to that same
 unambiguous dedicated return plane can omit a stitching via; unknown or
 different references still require one. The owning router checks the entire

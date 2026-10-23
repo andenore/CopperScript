@@ -298,6 +298,10 @@ def run_physical_drc(
         True,
         "group skew is checked once every member net is connected" if board.match_groups else "",
     ))
+    returns_required = _check_single_ended_return_vias(board, findings)
+    coverage.append(DrcCoverage("single_ended_return_vias",
+        DrcCoverageStatus.EXECUTED if returns_required else DrcCoverageStatus.NOT_APPLICABLE,
+        True, "exact existing-barrel span and center distance; no filled-reference or SI proof"))
     _check_vias(board, findings)
     coverage.append(DrcCoverage("via_geometry_and_budgets", DrcCoverageStatus.EXECUTED, True))
     _check_board_edge(board, findings)
@@ -752,6 +756,21 @@ def _check_differential_rules(board: PhysicalBoard, findings: list[DrcFinding]) 
             findings.append(_finding("DRC-DIFF-VIAS", DrcSeverity.ERROR,
                                      "differential pair members have unequal via transitions",
                                      nets=tuple(sorted(pair))))
+
+
+def _check_single_ended_return_vias(board: PhysicalBoard, findings: list[DrcFinding]) -> bool:
+    from .return_paths import covering_return_vias
+    rules = {rule.net: rule for rule in board.net_routing_rules
+             if rule.require_return_vias and rule.differential_partner is None}
+    for index, via in enumerate(board.vias):
+        rule = rules.get(via.net)
+        if rule is not None and not covering_return_vias(board, rule, via):
+            findings.append(_finding("DRC-RETURN-VIA", DrcSeverity.ERROR,
+                f"signal via {index} lacks an existing {rule.return_via_net} return barrel "
+                f"covering its span within {rule.maximum_return_via_distance_nm} nm",
+                objects=(f"via:{index}",), nets=(via.net,),
+                required_nm=rule.maximum_return_via_distance_nm))
+    return bool(rules)
 
 
 def _check_length_match(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
