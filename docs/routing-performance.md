@@ -909,3 +909,27 @@ length track and was corrected; track validation was not relaxed.
 The nRF52 ladder263 retains 35/35 signals, zero exact geometry errors, 44 vias and
 350.563 mm in 20.7 s. Its loaded baseline257 took70.9s with identical copper;
 this comparison does not establish a whole-board speedup.
+
+
+### Single-ended existing-return reuse
+
+The source's existing return-via fields now constrain ordinary launch candidates,
+maze proposals and final reservations, plus the unified Python/native via mask
+and exact commit. The shared checker uses integer squared distance and actual
+barrel spans. Independent DRC reports `DRC-RETURN-VIA` and coverage; it does not
+prove native filled-ground continuity or SI. No return copper is invented and
+all immutable copper is preserved. This is existing-via reuse, not a return-via
+generator or a shared-reference waiver.
+
+The regression fixture previously crossed without any permitted return in both
+kernels; the new mask finds a source-covered transition or leaves it unresolved.
+Exact-commit fault injection, distance boundaries, span mismatches, early launch
+paths and a real two-face native refill fixture are covered. The related68-case
+set passes. `replay-unified --save-result FILE` retains a typed result for further
+workbench inspection and refuses to overwrite an existing result; it carries no
+source/native admission authority.
+
+Ladder281 retains35/35 signals, zero geometry errors,44 vias and350.563mm, with a
+55.9s timing warning against an old20.7s baseline. Unchanged control283 takes35.9s;
+final candidate285 takes30.7s with identical copper and no new warning. Concurrent
+board verification makes these timings unsuitable as a whole-board speed claim.

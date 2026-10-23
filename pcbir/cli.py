@@ -174,7 +174,7 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
     from time import perf_counter
     from .drc import run_physical_drc
     from .route_summary import connection_summary
-    from .state_codec import StateError
+    from .state_codec import StateError, save_state
     from .unified_router import UnifiedRouterOptions, replay_unified
     known = {field.name for field in fields(UnifiedRouterOptions)}
     overrides = {}
@@ -189,7 +189,12 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
             overrides[name] = text
     started = perf_counter()
     try:
+        result_path = getattr(args, "save_result", None)
+        if result_path is not None and result_path.exists():
+            raise ValueError(f"preserve the existing result state: {result_path}")
         result = replay_unified(args.state, only_nets=frozenset(args.only) if args.only else None, **overrides)
+        if result_path is not None:
+            save_state(result_path, result, note="Scoped unified replay result; not source/native admission or board qualification")
     except (StateError, OSError, ValueError) as exc:
         print(f"REPLAY ERROR: {exc}")
         return 2
@@ -591,6 +596,7 @@ def _parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="overrides",
         help="UnifiedRouterOptions field; the value is JSON (true, 40, 0.6, null) or a plain string")
     replay_parser.add_argument("--report", type=Path, help="also write the summary JSON here")
+    replay_parser.add_argument("--save-result", type=Path, help="save typed routed result to a fresh diagnostic state file")
     replay_parser.add_argument("--only", action="append", default=[], metavar="NET",
         help="route only this net (repeatable); the other nets keep their saved copper, if any")
     replay_parser.add_argument("-o", "--output", type=Path, help="write the routed board as .kicad_pcb (for copper view)")
