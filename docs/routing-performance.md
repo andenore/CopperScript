@@ -43,8 +43,17 @@ not a full-board speedup or qualification. Working results:
 The 64-test detailed/reuse/grid set passed 63 tests and initially rejected a
 new invalid test fixture that named a layer outside its board stackup. The
 corrected fixture and both existing grid-equivalence checks then passed.
-All 32 critical/pipeline tests also passed. Full-board routing and native
-verification remain separate pending checks.
+All 32 critical/pipeline tests also passed. A warm same-checkout nRF52 ladder comparison used the exact original
+`detailed.py` for the baseline and restored the committed candidate for the
+second run. Both completed 35/35 signal connections with zero exact DRC errors,
+40 vias and 346.483 mm; the emitted KiCad PCB bytes were identical
+(SHA-256 `9f05741a655c1d478e1d53beeec7d1aaef80c5e75ea8e14ef6a539680b6014d3`).
+Total times were 45.4 and 44.1 s and the ladder reports no regression.
+The earlier cold-copy/concurrent attempt (108.6 s) and its warning remain in
+`build/bench-grid133`; the warm baseline/candidate are
+`build/bench-grid-baseline135` and `build/bench-grid-candidate136`.
+Native verification was not run on these ladder cases. Full-board routing and
+native verification remain separate pending checks.
 
 
 ## Isolated hotspot experiments (2026-10-12)
