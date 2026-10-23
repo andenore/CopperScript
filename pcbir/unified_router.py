@@ -117,6 +117,9 @@ class UnifiedRouterOptions:
     # Retry nets without a path every N iterations, as congestion moves (VPR
     # never drops an unrouted connection); 0 keeps the old rule: iterations 3 and 6.
     retry_failed_every: int = 0
+    # Repair rounds add this much history around each point where the exact
+    # commit check rejected a path (0 disables).
+    rejection_marker_cost: float = 0.0
     # Straighten this call's accepted copper afterwards with the ownership-safe
     # pass the legacy router uses (route_smoothing.smooth_owned_tracks): grid
     # search has no turn cost, so equal-length staircases of 45-degree jogs
@@ -2542,6 +2545,14 @@ def route_unified(
         remaining = [net for net in remaining if not fixed.net_connected(net) or net.name in plane_nets]
         repair = _Router(partial, options, remaining, on_progress)
         repair.history_seed(router)
+        if options.rejection_marker_cost:
+            # Where the exact check rejected a path, the raster was too
+            # optimistic: make those spots costly for the repair search
+            # (TritonRoute's DRC-marker cost), so it looks elsewhere first.
+            for name in sorted(remaining_names):
+                points = [where for where, *_ in router.rejections.get(name, ())]
+                if points:
+                    repair.penalise_points(name, points, options.rejection_marker_cost)
         more_routes, more_conflicts, used = repair.negotiate(deadline)
         more, more_rejected, more_complete = repair.commit(more_routes, more_conflicts)
         for name, (tracks, vias) in more.items():
