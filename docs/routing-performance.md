@@ -1,5 +1,38 @@
 # Routing performance and optimization assessment
 
+## Native filled-polygon parity index (2026-10-23)
+
+The native slit-bridge decoder indexes nonhorizontal edges by their exact
+half-open Y intervals before evaluating polygonized faces. It retains original
+oriented edges and the original even/odd crossing arithmetic. No geometry is
+healed, rounded, buffered, or cached; representation rejection and linework
+checks remain unchanged. The median lower endpoint gives the interval tree a
+finite, balanced construction even when coordinates repeat.
+
+`bench/native_fill.py` measures the public decoder, using `pcbir.workbench`
+to load native PCB fills. On the identical 15,005-vertex synthetic walk,
+controls223 took 7.57 s before and 1.65 s after. On the saved consumer native
+37,210-vertex GND/In1.Cu region, controls224/223 took 6.83 s and 3.72 s.
+Input hashes, area and normalized WKB hashes match exactly in each comparison.
+These are isolated decode timings under concurrent workloads, not a claim
+about complete routing or native feedback duration. A one-second sample of
+the earlier full consumer verification was inside the former all-edge scan;
+repeated complete verification still needs its own measurement.
+
+The 76-case parity, qualification and filled-feedback test set passes. Boundary
+tests compare active edge multisets and parity at vertices and neighboring
+floating-point values in millimetre and nanometre scales; a 400-hole walk
+retains its exact area and every void. Native connectivity, electrical/RF/PDN,
+assembly and CAM qualification remain separate.
+
+The matching unified nRF52 ladder227 retains all 35 signal connections, zero
+exact geometry errors, 40 vias and 346.483 mm. Its 93.7 s versus control214's
+19.7 s triggers the timing warning under concurrent full-board jobs; no whole
+route speedup or clean timing gate is claimed. The unchanged active compiler
+control228 also takes 71.6 s and flags the same earlier baseline; this timing
+comparison remains inconclusive. Run225 omitted the unified
+override and is an extra legacy control, not a comparable unified result.
+
 ## Coupled groups before equal-priority singles (2026-10-23)
 
 Critical job ordering preserves explicit source priority and places coupled
