@@ -90,7 +90,10 @@ def test_separate_nearby_support_contacts_keep_two_real_main_endpoints():
     guides = replace(guides, routes=tuple(replace(g, connected=False, segments=(), vias=()) for g in guides.routes))
     result = route_critical_nets(board, guides, pair_state_limit=6000)
     assert result.nets[0].connected, result.nets
-    assert result.nets[0].local_preparation.status == "surface_contacts"
+    assert result.nets[0].local_preparation.status == "joint_support_contacts"
+    assert not result.nets[0].local_preparation.pending_contacts
+    assert 0 < result.nets[0].local_preparation.support_trials <= 16
+    assert result.nets[0].local_preparation.support_expanded_states <= 1200
     assert all(not g.connected for g in guides.routes)
     graph = explicit_copper_connectivity(result.board)
     assert all(graph.net_connected(n) for n in board.nets)

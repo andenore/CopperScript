@@ -127,6 +127,31 @@ class PairSearchStats:
     _continuations: list = field(default_factory=list, repr=False, compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class PairSearchAttempt:
+    """Compact endpoint/search progress; no frontier or copper ownership."""
+    layer: CopperLayer
+    pitch_nm: int
+    start: Point
+    start_heading: int
+    start_sign: int
+    end: Point
+    end_heading: int
+    end_sign: int
+    expanded_states: int
+    legal_advances: int
+    minimum_goal_distance_nm: int | None
+
+
+def pair_search_attempts(stats: PairSearchStats) -> tuple[PairSearchAttempt, ...]:
+    return tuple(PairSearchAttempt(c.layer, c.pitch,
+        c.start.center, c.start.heading, c.start.sign,
+        c.end.center, c.end.heading, c.end.sign,
+        c.expanded_states, c.legal_advances,
+        None if c.minimum_goal_distance_nm == float("inf") else round(c.minimum_goal_distance_nm))
+        for c in stats._continuations[:16])
+
+
 def _normal(heading: int, offset: int) -> Point:
     dx, dy = _HEADS[heading]
     amount = ceil(offset / sqrt(2)) if dx and dy else offset
@@ -581,7 +606,8 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                       maximum_searches: int = 8, maximum_states: int = 30_000,
                       pitch_nm: int = nm_from_mm(1),
                       stats: PairSearchStats | None = None,
-                      maximum_total_states: int | None = None) -> Iterator[PairSearchCandidate]:
+                      maximum_total_states: int | None = None,
+                      terminal_completion=None) -> Iterator[PairSearchCandidate]:
     """Yield deterministic joint candidates; never reserve or modify input copper."""
     if min(maximum_searches, maximum_states, pitch_nm) <= 0:
         raise ValueError("joint pair search bounds must be positive")
@@ -599,6 +625,11 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
     groups = [_ports(board, index, first_rule.net, second_rule.net, access.pad_position,
                      partners[access.pad].pad_position, access.pad.component,
                      width, offset, clearance, layer) for access in accesses]
+    if terminal_completion is not None:
+        groups = [tuple(completed for port in ports
+            if (completed := _complete_support_port(board, access.pad.component,
+                port, terminal_completion)) is not None)
+            for access, ports in zip(accesses, groups)]
     onward = _departure_preferences(board, groups, first_rule.net, second_rule.net,
                                     width, offset, clearance, layer, pitch_nm)
     for access, ports in zip(accesses, groups):
@@ -650,6 +681,15 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                 (*start.second, *b, *tuple(
                 TrackSegment(t.net, t.end, t.start, t.width_nm, t.layer) for t in reversed(end.second))),
                 expanded, search_index, spine, start, end)
+
+
+def _complete_support_port(board, component, port, completion):
+    """Keep the existing collar; append only disposable, checked support ties."""
+    held = replace(board, tracks=(*board.tracks, *port.first, *port.second))
+    branches = completion(component, held, port.first, port.second, "surface")
+    if branches is None:
+        return None
+    return replace(port, first=(*branches[0], *port.first), second=(*branches[1], *port.second))
 
 
 def nested_turn_chamfer(width: int, gap: int) -> int:

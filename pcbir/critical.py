@@ -48,7 +48,7 @@ from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
 from .surface_path import via_inside_board
 from .drc import DrcSeverity, run_physical_drc
-from .pair_search import PairSearchCandidate, PairSearchStats, PairPortInventory, PairTransitionInventory, _legal, nested_exit_candidates, paired_candidates
+from .pair_search import PairSearchCandidate, PairSearchStats, PairPortInventory, PairTransitionInventory, PairSearchAttempt, pair_search_attempts, _legal, nested_exit_candidates, paired_candidates
 from .pair_vias import paired_via_candidates, transition_spacing
 from .pair_refine import PairRefinementStats, paired_shortcuts
 from .local_critical import local_surface_candidates
@@ -107,6 +107,7 @@ class CriticalNetResult:
     pair_resumed_portals: int = 0
     pair_ports: tuple[PairPortInventory, ...] = field(default=(), compare=False)
     pair_transitions: tuple[PairTransitionInventory, ...] = field(default=(), compare=False)
+    pair_attempts: tuple[PairSearchAttempt, ...] = field(default=(), compare=False)
 
 
 def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
@@ -139,6 +140,7 @@ def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
         "pair_resumed_portals": item.pair_resumed_portals,
         "pair_ports": [asdict(port) for port in item.pair_ports],
         "pair_transitions": [asdict(item) for item in item.pair_transitions],
+        "pair_attempts": [asdict(item) for item in item.pair_attempts],
         "local_candidate_attempts": item.local_candidate_attempts,
         "guide_length_nm": item.guide_length_nm,
         "pair_refinement_attempts": item.pair_refinement_attempts,
@@ -1353,11 +1355,21 @@ def _route_pair_group(
 
     partner_name = partner_rule.net
     first, second = sorted((rule, partner_rule), key=lambda item: item.net)
-    from .pair_terminals import PairTerminalPreparationStats, prepare_pair_terminals, terminal_partners
+    from .pair_terminals import (PairTerminalPreparationStats, prepare_pair_terminals, terminal_partners,
+                                plan_pair_supports, PairSupportCompletion)
     preparation = PairTerminalPreparationStats()
-    routes, first_branches, second_branches, branch_via_pairs, branch_return_vias = prepare_pair_terminals(
-        replace(board, tracks=tuple(tracks), vias=tuple(vias)), first, second, routes, report=preparation)
-    evidence = preparation.snapshot() if preparation.status != "source_terminals" else None
+    held = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+    support_plan = plan_pair_supports(held, first, second, routes)
+    completion = None
+    if support_plan is not None:
+        routes = {**routes, **{g.net:g for g in support_plan.guides}}
+        first_branches = second_branches = branch_via_pairs = branch_return_vias = ()
+        preparation.status = "pending_support_contacts"
+        preparation.pending_contacts = tuple(contact.pad for _,contact in support_plan.contacts)
+        completion = PairSupportCompletion(support_plan, first, second, preparation, source=held)
+    else:
+        routes, first_branches, second_branches, branch_via_pairs, branch_return_vias = prepare_pair_terminals(
+            held, first, second, routes, report=preparation)
     def reported(outcome):
         result, additions, transitions = outcome
         if not result.connected and preparation.status in {"blocked", "unsupported"}:
@@ -1368,6 +1380,10 @@ def _route_pair_group(
                 if message == "coupled pair routing v0.1 requires two terminals per member" else message
                 for message in result.diagnostics)
             result = replace(result, diagnostics=diagnostics)
+        if completion is not None and result.connected:
+            preparation.status = "joint_support_contacts"
+            preparation.pending_contacts = ()
+        evidence = preparation.snapshot() if preparation.status != "source_terminals" else None
         return replace(result, local_preparation=evidence), additions, transitions
     found: set[str] = set()
     if nested is not None:
@@ -1483,7 +1499,7 @@ def _route_pair_group(
             if attempt.connected:
                 if crossing is not None:
                     attempt = replace(attempt, strategy="planned_crossing")
-                elif not candidate.via_pairs and not (first_branches or second_branches):
+                elif not candidate.via_pairs and not (first_branches or second_branches) and completion is None:
                     attempt, proposed_tracks, proposed_vias = _improve_pair_spine(
                         board, search_board, first, second, routes, candidate,
                         attempt, proposed_tracks, proposed_vias, tracks, vias)
@@ -1504,7 +1520,8 @@ def _route_pair_group(
                               "maximum_searches": 2}
                 for candidate in searcher(
                     search_board, first, second, routes[first.net], routes[second.net],
-                    stats=stats, pitch_nm=pitch_nm, **limits,
+                    stats=stats, pitch_nm=pitch_nm,
+                    **({"terminal_completion": completion} if completion is not None else {}), **limits,
                 ):
                     attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
                     if attempt.connected:
@@ -1536,6 +1553,7 @@ def _route_pair_group(
                          pair_resumed_portals=stats.resumed_portals,
                          pair_ports=tuple(stats.port_inventory),
                          pair_transitions=tuple(stats.transition_inventory),
+                         pair_attempts=pair_search_attempts(stats),
                          pair_search_order=order,
                          pair_state_limit=pair_state_limit,
                          pair_budget_exhausted=(pair_state_limit is not None

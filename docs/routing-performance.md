@@ -1,5 +1,49 @@
 # Routing performance and optimization assessment
 
+## Joint separate-support completion (2026-10-23)
+
+Pairs with exactly two shared endpoint packages and one source-bounded separate
+support contact per member keep those support contacts as obligations while
+forming each escape. A proposed signal collar and its required ground return
+are reserved before both local ties are completed against fresh exact geometry.
+Changing the return site can therefore change the temporary support topology.
+Only the ordinary complete-pair gates may adopt the resulting group; failure
+rolls back all generated copper and retains every pending source contact.
+Macro-owned, ambiguous, remote and unsupported contact trees keep their existing
+preparation. Fixed copper and required via-array multiplicity remain immutable.
+
+Eight distinct surface and eight transition proposals share the former
+600-state local allowance per member: 300 states per family/member across all
+local calls, at most 1200 total. Each support samples at most eight attachment
+points on actual connected collar copper within its original breakout region.
+An exact repeated local proposal can reuse geometric work across pitches only
+with identical non-copper source fields, tracks/vias including occurrence
+multiplicity, and exact caller prefixes. This transaction-local cache holds at
+most 16 outcomes; it never certifies whole-pair acceptance or reuses a clearance
+index. Every final candidate receives fresh complete validation.
+
+Transition-pair ranking also checks each endpoint's one-pitch straight
+continuation against its own complete local proposal. A clear continuation is
+a preference inside the existing 128 combinations and search/state allowances,
+not an admission gate: a shorter goal tail may reach another legal collar.
+Compact attempted-endpoint telemetry reports at most 16 orientations, expanded
+states, legal advances and closest approaches, excluding private frontiers and
+routing identity.
+
+On one unchanged 389-component consumer, serial preparation produced no PHY
+transitions and failed TX. Joint completion produces 23 transitions, but its
+first channel ranking still fails at 6000 and 60000 states. Endpoint approach
+ranking then connects all six TX contacts in 4032 of 6000 states, with one signal
+transition pair and its required ground return. Independent KiCad 10.0.6 refill
+has zero geometry errors and no TX opens; unrelated board opens remain. RX also
+retains all six contacts. Copper-total skew is about 0.5 mm and is not an
+endpoint-delay or SI qualification. No capacitor or source-rule change is needed.
+
+The nRF52 ladder controls188/194 retain 35/35 signal connections, zero exact
+geometry errors, 40 vias and 346.483 mm, with no regression. Concurrent runtimes
+19.3/18.9 seconds are observations, not a speedup claim. Full-board, native plane
+and engineering qualification remain separate from these selected-net results.
+
 ## Terminal-transition rejection diagnostics (2026-10-23)
 
 Critical replay now reports finite transition-stage counters and at most 16
