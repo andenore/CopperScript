@@ -52,6 +52,13 @@ renders one of them; see [routing and placement iteration](llm-workflow.md#routi
 them on its exported PCB. Other open nets in a subset replay's whole-board
 summary are deliberately excluded from those attempted-failure issues. An empty
 replay issue list does not establish complete-board routing or native acceptance.
+For a bounded fine-grid diagnostic, `replay-unified --set pitch_nm=25000
+--set 'grid_window_nm=[1000000,1000000,21000000,21000000]'` limits the raster
+and search to an explicit rectangle in nanometres. Include every attempted
+terminal. The full-board lattice phase, source outline, obstacles, fixed copper,
+macro/array intent and fresh exact commit checks remain in force. The window
+is a search bound, not a new board outline or permission to discard outside
+copper, and a successful subset is not complete-board or native acceptance.
 `route-board --stop-after STAGE`, `--checkpoint-dir` and `--reuse-placement`
 shorten reruns; see [shorter reruns](llm-workflow.md#shorter-reruns).
 The standard critical path also saves `critical-inputs.state.json` and, when
