@@ -1,5 +1,22 @@
 # Routing performance and optimization assessment
 
+## Check the deadline before each repair alternative (2026-10-23)
+
+The unified router now checks its existing deadline before each unseeded or
+seeded repair attempt. Previously the outer round alone checked time: an
+unseeded attempt could use the remaining budget and still launch a full escape
+seeder afterward. It retains the best completed attempt before reporting the
+skipped alternative. This does not interrupt a running search, geometry check
+or seeder, and is not a hard wall-time guarantee.
+
+A real-search regression expires a controlled clock as the unseeded repair
+ends. Before the fix a third negotiation/seed starts; afterward exactly two
+negotiations run, the seeder is never called, the connected fixed net stays
+connected and the unresolved net remains explicit. The 32-case unified,
+coupled-order and bypass-flow set passes. Ladder233 retains all 35 signals,
+zero exact geometry errors, 40 vias and 346.483 mm; 45.9 s versus unchanged
+control228's 71.6 s flags no regression, without a speedup claim.
+
 ## Native filled-polygon parity index (2026-10-23)
 
 The native slit-bridge decoder indexes nonhorizontal edges by their exact
