@@ -45,6 +45,26 @@ def decoupled_rails(board: PhysicalBoard) -> tuple[str, ...]:
     return tuple(sorted({link.net for link in board.decoupling_links} - zoned - returns))
 
 
+def ball_grid_rails(board: PhysicalBoard) -> tuple[str, ...]:
+    """Decoupled rails with a pad on a full ball grid: their balls need plane access.
+
+    Under a dense ball grid a rail routed as tracks crosses the dogbone via
+    columns the signals escape through; an island under the array gives each
+    supply ball a via straight into its rail (the FX10 kit's split PWR1 layer).
+    """
+    from .package_patterns import circular_array
+    arrays = set()
+    for pose in board.placements:
+        try:
+            if circular_array(board, pose.reference) is not None:
+                arrays.add(pose.reference)
+        except ValueError:
+            continue
+    pads = {net.name: net.pads for net in board.nets}
+    return tuple(rail for rail in decoupled_rails(board)
+                 if any(pad.component in arrays for pad in pads.get(rail, ())))
+
+
 def auto_power_layer(board: PhysicalBoard) -> CopperLayer | None:
     """A plane layer that can host supply islands without losing a reference.
 

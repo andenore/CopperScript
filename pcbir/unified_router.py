@@ -150,6 +150,8 @@ class UnifiedRouterOptions:
     # Supply islands carved from a spare plane layer before routing
     # (power_islands.py): "auto", a copper layer name, or None.
     power_islands: str | None = None
+    # Only rails with a pad on a full ball grid get islands (escape plan E11).
+    power_islands_ball_grid_only: bool = False
     # Nets without a profile width may narrow to the board minimum this close
     # to their pads (0 disables).
     implicit_neck_nm: int = nm_from_mm("2.5")
@@ -2683,7 +2685,11 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
         board = saved["board"]
         layer = auto_power_layer(board) if power_islands == "auto" else CopperLayer(power_islands)
         if layer is not None:
-            partition = plan_power_islands(board, layer)
+            rails = None
+            if options.power_islands_ball_grid_only:
+                from .power_islands import ball_grid_rails
+                rails = ball_grid_rails(board)
+            partition = plan_power_islands(board, layer, rails)
             saved["board"] = replace(board, zones=(*board.zones, *partition.zones))
             emit(on_progress, "power_islands", "finished", **partition.report())
     if bga_fanout is not None:

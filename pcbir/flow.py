@@ -446,7 +446,11 @@ def run_routing_pipeline(
         layer = auto_power_layer(critical.board) if choice == "auto" else CopperLayer(choice)
         if layer is not None:
             emit(on_progress, "power_islands", "started", layer=layer.value)
-            partition = plan_power_islands(critical.board, layer)
+            rails = None
+            if getattr(unified_options, "power_islands_ball_grid_only", False):
+                from .power_islands import ball_grid_rails
+                rails = ball_grid_rails(critical.board)
+            partition = plan_power_islands(critical.board, layer, rails)
             critical = replace(critical, board=replace(
                 critical.board, zones=(*critical.board.zones, *partition.zones)))
             emit(on_progress, "power_islands", "finished", **partition.report())
