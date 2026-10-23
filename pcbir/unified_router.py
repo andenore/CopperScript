@@ -961,32 +961,33 @@ class _Router:
                     separate.append([anchor for anchor in pad_anchors if anchor[0] in piece])
                     pad_anchors = [anchor for anchor in pad_anchors if anchor[0] not in piece]
                 anchors.extend(pad_anchors)
-            if not root.startswith("pad:"):
-                # Existing copper of this group (fanout, plane taps, partial routes).
-                for index, via in enumerate(board.vias):
-                    if via.net == net.name and graph.roots.get(f"via:{index}") == root:
-                        anchors.append((via.position, tuple(range(self.grid.nl))))
-                for index, track in enumerate(board.tracks):
-                    if track.net == net.name and graph.roots.get(f"track:{index}") == root:
-                        layer = self.grid.layers.index(track.layer)
-                        anchors.append((track.start, (layer,)))
-                        anchors.append((track.end, (layer,)))
+            # Connectivity roots are opaque identities: union/find may retain
+            # a pad label even after source tracks and vias join it. Reuse that
+            # group's real copper regardless of the root's spelling.
+            joined = set()
+            for index, via in enumerate(board.vias):
+                if via.net != net.name or graph.roots.get(f"via:{index}") != root:
+                    continue
+                first, last = sorted((self.grid.layers.index(via.from_layer),
+                                      self.grid.layers.index(via.to_layer)))
+                layers = tuple(range(first, last + 1))
+                anchors.append((via.position, layers))
+                ix = round((via.position.x_nm - self.grid.x0) / self.grid.pitch)
+                iy = round((via.position.y_nm - self.grid.y0) / self.grid.pitch)
+                if 0 <= ix < self.grid.nx and 0 <= iy < self.grid.ny:
+                    joined.update(self.grid.index(layer, ix, iy) for layer in layers)
+            for index, track in enumerate(board.tracks):
+                if track.net == net.name and graph.roots.get(f"track:{index}") == root:
+                    layer = self.grid.layers.index(track.layer)
+                    anchors.append((track.start, (layer,)))
+                    anchors.append((track.end, (layer,)))
             required = [self.required_accesses[pad] for pad in members if pad in self.required_accesses]
             if required:
                 # Land and existing-copper alternatives would bypass the retained
                 # witness and leave its far end dangling after the dependency rip-up.
                 anchors = [(access.position, (self.grid.layers.index(access.layer),))
                            for access in required]
-            # The group's own vias on every layer: a group already stitched into
-            # its plane (an exposed pad's via-in-pad array) counts as joined even
-            # when its attach candidates are all surface nodes beside the pad.
-            joined = set()
-            for index, via in enumerate(board.vias):
-                if via.net == net.name and graph.roots.get(f"via:{index}") == root:
-                    ix = round((via.position.x_nm - self.grid.x0) / self.grid.pitch)
-                    iy = round((via.position.y_nm - self.grid.y0) / self.grid.pitch)
-                    if 0 <= ix < self.grid.nx and 0 <= iy < self.grid.ny:
-                        joined.update(self.grid.index(layer, ix, iy) for layer in range(self.grid.nl))
+            # Existing via taps count only on the actual source barrel span.
             if joined:
                 spec.joined[len(components)] = joined
             components.append(self._attach(anchors, spec))

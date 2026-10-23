@@ -1,3 +1,28 @@
+## Reuse existing copper independently of graph-root labels (2026-10-23)
+
+Explicit connectivity can retain a pad identity as the root of a group already
+joined to tracks and vias. The unified router previously omitted those copper
+anchors whenever the root began with `pad:`. It now follows actual group
+membership, retains all original copper, and exposes each via only on its real
+barrel span. Required verified package accesses still replace these alternative
+anchors, so this does not authorize bypassing a protected exit.
+
+A front-layer barrier fixture has two existing pad-to-via exits and no remaining
+via budget. It fails before the correction and connects on the back layer after
+it, with zero exact geometry errors and unchanged source tracks/vias. Both search
+kernels pass; a blind-via variant cannot invent a back-layer anchor. The 42-case
+router/return set and 55-case native dependency/bypass ownership set pass.
+
+Ladder298 retains the prior copper and completion: nRF52 35/35, zero geometry
+errors, 44 vias and 350.563 mm; round LED 50/51 with DEC3 still open, zero geometry
+errors, 41 vias and 552.542 mm. The separate LED consumer passes native with zero
+opens and violations, 35 vias and 545.611 mm. nRF52 took 79.9 s under concurrent
+jobs and the unchanged control300 took 77.7 s with identical copper. Loaded
+timing is inconclusive; no runtime improvement is claimed.
+Actual control-net replay299 remains partial: ADC_SDO connects but TARGET_OE_N
+still cannot reach four groups. This generic correction is not presented as
+closure of that board fault.
+
 # Routing performance and optimization assessment
 
 ## Net-aware via halos outside pad annuli (2026-10-23)
