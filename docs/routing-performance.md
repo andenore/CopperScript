@@ -1,3 +1,19 @@
+## Preserve macro boundary access during source-copper reuse (2026-10-24)
+
+Union/find root labels do not distinguish private macro copper from public
+access. Existing-copper anchors now yield to the group's declared macro ports;
+plane-joined witnesses are also limited to the actual public port nodes. This
+preserves ordinary pad-rooted exit reuse and real via barrel spans while stopping
+an internal via from bypassing an immutable boundary stub. Required package-exit
+witnesses remain authoritative. No macro copper is deleted or rewritten.
+
+The regression fixture fails on both Python and native kernels before the fix,
+then connects through the declared free-track port with exact ownership intact.
+An independent KiCad10.0.6 refill reports zero opens or dangling tracks. Related
+macro, source-access and router tests pass. Ladder323 exposed this issue as one
+MODEM_EN dangling stub on the asset tracker despite 120/120 signal connectivity;
+the full native consumer replay is pending and must not be claimed as passing.
+
 ## Preserve signal reservations through plane preparation (2026-10-24)
 
 Early package-exit masks now survive critical routing, bypass work, BGA planning
@@ -20,8 +36,9 @@ Ladder323 improves round LED from 50/51 to 51/51 signals with zero geometry erro
 44 vias and 350.563 mm. The separate LED consumer passes fresh native with zero
 opens/violations, 33 vias and 545.708 mm (formerly 35 vias and 545.611 mm).
 The 30.302 mm extra round-LED copper and 0.097 mm extra consumer copper remain
-tradeoffs; loaded timing is not an isolated speed comparison. Asset tracker is
-still running, so its compatibility result is not yet claimed.
+tradeoffs; loaded timing is not an isolated speed comparison. Asset tracker
+finishes with 120/120 signals and zero native opens, but one immutable MODEM_EN
+port stub is dangling. This is a compatibility regression, not a native pass.
 
 Actual restored critical replay316 connects both MDI pairs and all five clocks.
 Support/plane screen319 retains the masks until negotiation and all physical

@@ -981,6 +981,18 @@ class _Router:
                     layer = self.grid.layers.index(track.layer)
                     anchors.append((track.start, (layer,)))
                     anchors.append((track.end, (layer,)))
+            boundary = [ports[pad] for pad in members if pad in ports]
+            if boundary:
+                # Source-copper reuse must not expose a macro's private vias or
+                # bypass its declared boundary stub. Only the proved ports are
+                # public anchors, even when union/find roots carry pad labels.
+                anchors = [(port.position, tuple(self.grid.layers.index(layer)
+                            for layer in macro_port_layers(board, port))) for port in boundary]
+                public_nodes = {self.grid.index(layer,
+                    round((position.x_nm - self.grid.x0) / self.grid.pitch),
+                    round((position.y_nm - self.grid.y0) / self.grid.pitch))
+                    for position, layers in anchors for layer in layers}
+                joined.intersection_update(public_nodes)
             required = [self.required_accesses[pad] for pad in members if pad in self.required_accesses]
             if required:
                 # Land and existing-copper alternatives would bypass the retained
