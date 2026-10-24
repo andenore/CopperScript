@@ -224,6 +224,15 @@ class UnifiedRouterOptions:
     guide_cost: float = 0.0
     guide_margin_nm: int = nm_from_mm("1")
 
+    # -- Congestion export (congestion-driven placement feedback) -----------
+    # After the final commit, bin the main negotiation's contention (claim
+    # overflow plus history) and the free track capacity into square tiles
+    # of this size on a lattice anchored at the grid origin, and attach the
+    # map as DetailedRoutingResult.congestion (see _congestion_map). Telemetry
+    # only: it never changes copper. The tile must be at least one pitch.
+    congestion_tile_nm: int = nm_from_mm("1")
+    export_congestion: bool = True
+
     def __post_init__(self) -> None:
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0 or self.maximum_expansions <= 0:
             raise ValueError("unified router pitch, iterations and search states must be positive")
@@ -255,6 +264,9 @@ class UnifiedRouterOptions:
                     or bounds[0] >= bounds[2] or bounds[1] >= bounds[3]):
                 raise ValueError("grid_window_nm requires four ordered integer nanometre coordinates")
             object.__setattr__(self, "grid_window_nm", tuple(bounds))
+        if type(self.congestion_tile_nm) is not int or self.congestion_tile_nm <= 0 or (
+                self.pitch_nm is not None and self.congestion_tile_nm < self.pitch_nm):
+            raise ValueError("congestion_tile_nm must be a positive integer of at least one pitch")
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +578,9 @@ class _NetSpec:
     islands: int = 0                         # trailing components that are plane pieces
     joined: dict = field(default_factory=dict)  # per component: grid nodes of its own vias
     explicit: dict = field(default_factory=dict)  # component index -> layers its plane path may not end on
+    # Per pad-group component (not plane pieces): the anchor positions its
+    # attach candidates were sought from (failed-point export).
+    anchors: list = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -737,6 +752,9 @@ class _Router:
         self.heading = [headings.get(layer) for layer in g.layers]
         default_width = board.rules.default_track_width_nm
         self.default_width = default_width
+        # (layer, iy0, iy1, ix0, ix1, cost) windows of seeded ball-field
+        # history: a routing preference, not contention (_congestion_map).
+        self._seeded_history: list[tuple[int, int, int, int, int, float]] = []
         self._seed_ball_field_cost()
         # A local transaction may own the area copper but not the launch vias
         # or collar witnesses. Such pads attach only at fresh verified ports.
@@ -781,6 +799,7 @@ class _Router:
             ix0, iy0, ix1, iy1 = g.window(min(p.x_nm for p in corners), min(p.y_nm for p in corners),
                                           max(p.x_nm for p in corners), max(p.y_nm for p in corners))
             layer = g.layers.index(CopperLayer.FRONT if pose.side.value == "front" else CopperLayer.BACK)
+            self._seeded_history.append((layer, iy0, iy1, ix0, ix1, cost))
             for iy in range(iy0, iy1 + 1):
                 for ix in range(ix0, ix1 + 1):
                     hist[g.index(layer, ix, iy)] += cost
@@ -1132,9 +1151,12 @@ class _Router:
             if joined:
                 spec.joined[len(components)] = joined
             components.append(self._attach(anchors, spec))
+            spec.anchors.append(tuple(anchor[0] for anchor in anchors))
             if self.explicit_pads and set(members) & self.explicit_pads:
                 spec.explicit[len(components) - 1] = self._explicit_exclusion(members, spec)
-        components.extend(self._attach(anchors, spec) for anchors in separate)
+        for anchors in separate:
+            components.append(self._attach(anchors, spec))
+            spec.anchors.append(tuple(anchor[0] for anchor in anchors))
         return components
 
     def _separate_land_pieces(self, pad: PadReference) -> tuple[frozenset[Point], ...]:
@@ -2806,6 +2828,86 @@ def _disc_offsets_cached(radius: float):
 
 
 # ---------------------------------------------------------------------------
+# Congestion export (congestion-driven placement feedback, stage A1)
+
+def _failed_points(router: _Router, failed: Iterable[str]) -> tuple[tuple[str, Point], ...]:
+    """(net, point) where each failed net was blocked or could not be reached.
+
+    Points are the exact commit check's rejection sites, plus the anchor
+    positions of pad groups the net's route never reached: groups without
+    any attach candidate, and (for a route that did not connect) groups its
+    paths do not touch. Plane nets count only groups outside their plane.
+    """
+    specs = {spec.name: spec for spec in router.specs}
+    rejections = getattr(router, "rejections", {})
+    result: list[tuple[str, Point]] = []
+    for name in sorted(failed):
+        points = [record[0] for record in rejections.get(name, ())]
+        spec, route = specs.get(name), router.routes.get(name)
+        if spec is not None:
+            disconnected = route is None or not route.connected
+            touched = route.nodes if route is not None else set()
+            for component, anchors in zip(spec.components, spec.anchors):
+                if component and not disconnected:
+                    continue
+                if component and (any(node in touched for node, _, _ in component)
+                                  or any(node in spec.plane for node, _, _ in component)):
+                    continue
+                points.extend(anchors)
+        result.extend((name, point) for point in dict.fromkeys(points))
+    return tuple(result)
+
+
+def _congestion_map(router: _Router, failed: Iterable[str], tile_nm: int):
+    """Per-tile contention of ``router``'s final negotiated state.
+
+    Demand per tile, summed over every node of every layer in it:
+    ``max(0, occ - 1)`` (claims beyond the first; via sites count as one more
+    layer) plus ``history / history_increment``, so one unit is about one
+    conflicting net on one node for one iteration. Seeded ball-field history
+    is a routing preference, not contention, and is left out.
+
+    Capacity per tile: the free nodes (``_FREE``) of the default track
+    raster (board default width, minimum clearance) on every signal layer,
+    divided by the pitches one track lane occupies,
+    ``(default width + clearance) / pitch``: default-width tracks that fit
+    across the tile, times the tile edge in pitches. Outside board material
+    every node is foreign, so capacity is 0 there.
+    """
+    g = router.grid
+    occupancy = router.occupancy
+    nl, ny, nx = g.nl, g.ny, g.nx
+    occ = np.asarray(occupancy.occ, dtype=np.int64).reshape(nl, ny, nx)
+    node_demand = np.maximum(occ - 1, 0).sum(axis=0).astype(np.float64)
+    node_demand += np.maximum(np.asarray(occupancy.via_occ, dtype=np.int64).reshape(ny, nx) - 1, 0)
+    increment = router.options.history_increment
+    if increment > 0:
+        history = np.asarray(occupancy.history, dtype=np.float64).reshape(nl, ny, nx).sum(axis=0)
+        for _, iy0, iy1, ix0, ix1, cost in router._seeded_history:
+            history[iy0:iy1 + 1, ix0:ix1 + 1] -= cost
+        history += np.asarray(occupancy.via_history, dtype=np.float64).reshape(ny, nx)
+        node_demand += np.maximum(history, 0.0) / increment
+    tx = (np.arange(nx, dtype=np.int64) * g.pitch) // tile_nm
+    ty = (np.arange(ny, dtype=np.int64) * g.pitch) // tile_nm
+    tiles_x, tiles_y = int(tx[-1]) + 1, int(ty[-1]) + 1
+    tile_ids = (ty[:, None] * tiles_x + tx[None, :]).ravel()
+    count = tiles_x * tiles_y
+    demand = np.bincount(tile_ids, weights=node_demand.ravel(), minlength=count).reshape(tiles_y, tiles_x)
+    width, clearance = router.default_width, router.board.rules.minimum_clearance_nm
+    owner = router.rasters.track_arrays(width, clearance)[0].reshape(nl, ny, nx)
+    signal = set(routing_layers(router.board, "", None))
+    layers = [i for i, layer in enumerate(g.layers) if layer in signal]
+    free = (owner[layers] == _FREE).sum(axis=0) if layers else np.zeros((ny, nx))
+    lane = (width + clearance) / g.pitch
+    capacity = np.bincount(tile_ids, weights=free.ravel() / lane, minlength=count).reshape(tiles_y, tiles_x)
+    from .congestion_feedback import CongestionMap
+    return CongestionMap(
+        tile_nm=tile_nm, x0_nm=int(g.x0), y0_nm=int(g.y0), nx=tiles_x, ny=tiles_y,
+        demand=demand, capacity=capacity, source="unified_router",
+        failed_points=_failed_points(router, failed))
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 
 
@@ -2918,6 +3020,8 @@ def route_unified(
                      guides=global_route, clearance=shared.index if shared is not None else None)
     if options.share_commit_index and shared is None:
         shared = _SharedIndex(router.clearance)
+    if options.export_congestion and options.congestion_tile_nm < router.pitch:
+        raise ValueError("congestion_tile_nm must be at least the router pitch")
     emit(on_progress, "unified_setup", "finished", nets=len(router.specs),
          grid=[router.grid.nx, router.grid.ny, router.grid.nl], seconds=round(perf_counter() - started, 2))
     routes, conflicts, iterations = router.negotiate(deadline)
@@ -3067,6 +3171,15 @@ def route_unified(
     routed_names = (set(complete) | {net.name for net in already}) - budget_errors.keys()
     unrouted = [net.name for net in (*nets, *already) if net.name not in routed_names]
     success = not unrouted
+    congestion = None
+    if options.export_congestion:
+        export_started = perf_counter()
+        congestion = _congestion_map(router, unrouted, options.congestion_tile_nm)
+        utilisation = congestion.utilisation()
+        emit(on_progress, "unified_congestion", "finished", tiles=int(congestion.nx * congestion.ny),
+             hot_tiles=int(np.count_nonzero((utilisation > 1) & (np.asarray(congestion.demand) > 0))),
+             failed_points=len(congestion.failed_points),
+             seconds=round(perf_counter() - export_started, 3))
     metadata.update({"detailed_routing": "complete" if success else "partial",
                      "detailed_router": "unified",
                      "global_routing_fingerprint": global_route.routing_fingerprint,
@@ -3101,7 +3214,8 @@ def route_unified(
     # Every result is connected when nothing is unrouted.
     status = DetailedRoutingStatus.SUCCESS if success else DetailedRoutingStatus.PARTIAL
     return DetailedRoutingResult(status, routed, tuple(results), metrics, len(board.tracks),
-                                 len(board.vias), global_route.routing_fingerprint, fingerprint)
+                                 len(board.vias), global_route.routing_fingerprint, fingerprint,
+                                 congestion=congestion)
 
 
 def replay_unified(path, on_progress: ProgressCallback | None = None, *,

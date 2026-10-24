@@ -71,19 +71,73 @@ def test_unified_flag_notes_name_skipped_stage_flags_and_respect_scope(tmp_path)
 
     assert notes("--router", "legacy", "--passes", "7") is None  # legacy router: every flag applies
     # The unified router is the default.
-    assert notes("--passes", "7") == {"ignored_flags": ["--passes"], "skipped_stage_flags": []}
-    assert notes("--router", "unified") == {"ignored_flags": [], "skipped_stage_flags": []}
+    assert notes("--passes", "7") == {"ignored_flags": ["--passes"], "skipped_stage_flags": [],
+                                     "mapped_flags": []}
+    assert notes("--router", "unified") == {"ignored_flags": [], "skipped_stage_flags": [], "mapped_flags": []}
     assert notes("--router", "unified", "--fanout", "--no-route-smoothing",
-                 "--layer-preference-cost", "2") == {"ignored_flags": [], "skipped_stage_flags": []}
+                 "--layer-preference-cost", "2") == {"ignored_flags": [], "skipped_stage_flags": [],
+                                                       "mapped_flags": []}
     # Disabling a skipped stage is consistent with skipping it; enabling it is not.
     assert notes("--router", "unified", "--package-access-trials", "0", "--zone-escape-trials", "2",
                  "--zone-local-ripup-trials", "0", "--plan-power-areas", "--soft-ripup") == {
         "ignored_flags": ["--soft-ripup"],
-        "skipped_stage_flags": ["--plan-power-areas", "--zone-escape-trials"]}
+        "skipped_stage_flags": ["--plan-power-areas", "--zone-escape-trials"], "mapped_flags": []}
     # --pitch-mm still sets global local-demand lanes when that cost is enabled.
     assert notes("--router", "unified", "--pitch-mm", "0.5")["ignored_flags"] == ["--pitch-mm"]
     assert notes("--router", "unified", "--pitch-mm", "0.5", "--local-demand-cost", "3")["ignored_flags"] == []
     # Profile budgets that differ from the defaults are reported as well (quick keeps --passes 1).
     assert notes("--router", "unified", "--routing-profile", "quick") == {
         "ignored_flags": ["--search-budget"],
-        "skipped_stage_flags": ["--package-access-trials", "--package-placement-probes"]}
+        "skipped_stage_flags": ["--package-access-trials", "--package-placement-probes"], "mapped_flags": []}
+    # The legacy placement controllers' budgets map onto the congestion feedback loop.
+    assert notes("--router", "unified", "--critical-feedback-trials", "2", "--detailed-feedback-trials", "0") == {
+        "ignored_flags": [], "skipped_stage_flags": [], "mapped_flags": ["--critical-feedback-trials"]}
+    args = cli._parser().parse_args(["route-board", "board.copper", "--critical-feedback-trials", "2",
+                                     "--detailed-feedback-trials", "3", "--congestion-feedback-trials", "4"])
+    assert cli._congestion_feedback_budget(args) == 5
+    args.router = "legacy"
+    assert cli._congestion_feedback_budget(args) == 0
+
+
+BYPASS_SOURCE = '''board MappedFlags {
+    silkscreen { branding { enabled = false; } }
+    use library "tiny";
+    component U: REGULATOR_3V3 { footprint = "SOT-23-3"; }
+    component C: CAPACITOR { footprint = "0402"; role = decoupling; decouples = "U.IN"; }
+    component R: RESISTOR { footprint = "0402"; }
+    net P { U.IN; C.1; R.1; } net G { U.GND; C.2; } net O { U.OUT; R.2; }
+    supply GROUND { net = G; voltage = 0V; external = true; }
+    supply VIN { net = P; voltage = 5V; external = true; }
+    mechanical { outline rectangle { width=20mm; height=12mm; } }
+}'''
+
+
+def test_unified_critical_feedback_trials_map_onto_the_congestion_loop(tmp_path, capsys):
+    # Before the congestion loop, the unified path handed its bypass-reserved
+    # critical board to the legacy critical controller, whose baseline check
+    # stopped the run ("stale or inconsistent" / "cannot rebuild package access").
+    source = tmp_path / "bypass.copper"
+    source.write_text(BYPASS_SOURCE, encoding="utf-8")
+    report = tmp_path / "mapped.json"
+    code = cli.main(["route-board", str(source), "--allow-proxy-footprints", "--router", "unified",
+        "--unified-time-budget-s", "5", "--candidates", "1", "--feedback-iterations", "1",
+        "--router-iterations", "1", "--progress", "--critical-feedback-trials", "2", "--report", str(report)])
+    assert code == 0
+    data = json.loads(report.read_text())
+    assert data["work_limits"]["unified_mapped_flags"] == ["--critical-feedback-trials"]
+    assert data["work_limits"]["unified_ignored_flags"] == []
+    assert data["work_limits"]["congestion_feedback_trials"] == 4  # max(default 4, mapped 2)
+    assert "critical_placement_feedback" not in data
+    feedback = data["placement_feedback"]
+    assert feedback["stop_reason"] == "no_failed_nets" and feedback["trials"] == []
+    events = _router_events(capsys.readouterr().out)
+    assert [(e["event"], e["details"]["mapped_flags"]) for e in events] == [
+        ("mapped", ["--critical-feedback-trials"])]
+
+    # The legacy router keeps its own controllers and has no congestion loop.
+    source, footprints = _board(tmp_path)
+    code, data = _route(tmp_path, source, footprints, "legacy-mapped", "--critical-feedback-trials", "2",
+                        router=("--router", "legacy"))
+    assert code == 0
+    assert data["work_limits"]["congestion_feedback_trials"] == 0
+    assert "placement_feedback" not in data and "unified_mapped_flags" not in data["work_limits"]

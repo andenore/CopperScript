@@ -120,6 +120,15 @@ All in `pcbir/unified_router.py` unless noted; options are on
    consider dropping it from `bench/ladder.json`.
 7. **Freerouting comparison (D2)** and a Windows run of the native DLL are
    still not done.
+8. **Congestion-driven placement feedback (2026-10-24).** The unified path
+   now runs `congestion_feedback.run_placement_feedback`
+   (`--congestion-feedback-trials N`; the two legacy feedback flags map onto
+   it). First real target: CopperProbe (needs the owner's machine), e.g.
+   `--congestion-feedback-trials 8` against its 0.869 baseline. After one
+   release on the new loop, delete `critical_feedback.py` and
+   `routeflow.detailed_failure_trials` with their tests, and the legacy-only
+   feedback branches in `flow.run_routing_pipeline`. The loop proposes nothing
+   on a source that already carries tracks or vias (user-locked copper).
 
 ## Merging to main
 
