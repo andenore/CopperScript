@@ -1,3 +1,30 @@
+## Reproducible router review fixes (2026-10-24)
+
+Unified plane contacts now materialize a required pad-to-grid lead before
+claiming connectivity. Zero-via limits are enforced, and final whole-net length
+and via checks include retained source copper after smoothing and bus routing.
+Over-budget additions are rejected while source copper remains intact. Legacy
+routing also counts retained vias against the whole-net limit. Quantity equality
+and hashing now use normalized values independently of the display unit.
+
+Unified negotiation checks its deadline before starting nets and searches and
+periodically during Python search; cancellation preserves the previous incumbent.
+The deadline remains soft: setup, final exact validation and an in-flight bounded
+native search may finish. Unstarted nets report an explicit budget exhaustion.
+
+The six original reproductions pass. Permanent regressions cover both search
+backends, fixed-copper preservation, zero and positive budgets, already-connected
+over-budget input, and expired negotiation. The plane-lead fixture also passes
+KiCad refill. The broader routing/physical/compiler/ERC set passes 126 tests with
+one optional skip.
+
+Matched standard ladder runs against clean `ce42775` retain 51/51 connections on
+round-led-ring and 35/35 on nRF52, with zero estimated plane opens and zero exact
+geometry errors. Via counts and lengths are unchanged: 40 / 582.844 mm and
+44 / 350.563 mm respectively. Concurrent runtime measurements are not a speed
+comparison. These ladder runs do not include whole-board native verification;
+the focused native refill is not a complete consumer or hardware qualification.
+
 ## Main integration without congestion experiments (2026-10-24)
 
 This main selection merges the routing work through `053f4bb` and independently

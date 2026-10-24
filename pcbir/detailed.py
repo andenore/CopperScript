@@ -2022,8 +2022,12 @@ def _route_net(
     diagnostics: list[str] = []
     if rule and rule.max_length_nm is not None and length > rule.max_length_nm:
         diagnostics.append(f"route length {length} nm exceeds {rule.max_length_nm} nm")
-    if rule and rule.max_vias is not None and len(vias) > rule.max_vias:
-        diagnostics.append(f"via count {len(vias)} exceeds {rule.max_vias}")
+    if rule and rule.max_vias is not None:
+        # Source launches and required arrays remain in the emitted board.
+        # Only genuinely reused vias were excluded from the new list above.
+        total_vias = sum(via.net == name for via in board.vias) + len(vias)
+        if total_vias > rule.max_vias:
+            diagnostics.append(f"via count {total_vias} exceeds {rule.max_vias}")
     return _NetAttempt(
         DetailedNetResult(
             name,

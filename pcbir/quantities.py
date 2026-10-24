@@ -6,7 +6,7 @@ diagnostics pleasant; equality and ordering use the normalized value.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import ClassVar, Self
 
@@ -36,7 +36,7 @@ class Quantity:
     """
 
     base_value: Decimal
-    display_unit: str
+    display_unit: str = field(compare=False)
 
     UNITS: ClassVar[dict[str, Decimal]] = {}
 
