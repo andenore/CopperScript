@@ -137,3 +137,80 @@ def test_port_inventory_is_bounded_and_outside_routing_identity():
     reported = replace(original, pair_ports=(diagnostic,))
     assert reported == original
     assert _fingerprint("guide", [], [], [reported]) == _fingerprint("guide", [], [], [original])
+
+
+def _single_critical_board(length_limit=40000000):
+    board = _pair_board()
+    return replace(board, net_routing_rules=tuple(
+        NetRoutingRule(name, kind=RouteKind.CRITICAL, priority=80, width_nm=250000,
+            allowed_layers=(CopperLayer.FRONT,), max_vias=0,
+            max_length_nm=length_limit if name == "USB_DM" else 40000000)
+        for name in ("USB_DM", "USB_DP")))
+
+
+@pytest.mark.parametrize("length_limit", (1000000, 40000000))
+def test_critical_cohort_uses_shared_engine_and_preserves_profile(monkeypatch, length_limit):
+    import pcbir.unified_router as unified
+    from test_local_critical import hard_findings
+    board = _single_critical_board(length_limit)
+    calls = []
+    original = unified.route_unified
+    def record(search_board, guide, options, **kwargs):
+        calls.append(kwargs["only_nets"])
+        assert search_board.net_routing_rules == board.net_routing_rules
+        return original(search_board, guide, options, **kwargs)
+    monkeypatch.setattr(unified, "route_unified", record)
+    result = route_critical_nets(board, route_global(board),
+        unified_options=unified.UnifiedRouterOptions(time_budget_s=10))
+    assert calls == [frozenset({"USB_DM", "USB_DP"})]
+    outcomes = {item.nets[0]: item for item in result.nets}
+    assert outcomes["USB_DP"].connected
+    assert outcomes["USB_DM"].connected is (length_limit == 40000000)
+    assert all(item.strategy == "unified_critical_cohort" for item in result.nets)
+    assert not result.board.vias
+    assert all(t.layer is CopperLayer.FRONT for t in result.board.tracks)
+    if length_limit == 1000000:
+        assert all(t.net != "USB_DM" for t in result.board.tracks)
+    else:
+        assert not hard_findings(result.board)
+    assert board.tracks == ()
+
+
+@pytest.mark.parametrize("damage", ("prefix", "owner"))
+def test_critical_cohort_rejects_changed_prefix_or_foreign_owner(monkeypatch, damage):
+    import pcbir.unified_router as unified
+    from pcbir.critical import _route_critical_cohort
+    board = _single_critical_board()
+    prefix = TrackSegment("USB_DP", Point.mm(5, "11.5"), Point.mm(6, "11.5"),
+        250000, CopperLayer.FRONT)
+    board = replace(board, nets=(*board.nets, PhysicalNet("foreign", ())))
+    original = unified.route_unified
+    def corrupt(search_board, guide, options, **kwargs):
+        result = original(search_board, guide, options, **kwargs)
+        tracks = result.board.tracks
+        if damage == "prefix":
+            tracks = tracks[1:]
+        else:
+            tracks = (*tracks, replace(prefix, net="foreign"))
+        return replace(result, board=replace(result.board, tracks=tracks))
+    monkeypatch.setattr(unified, "route_unified", corrupt)
+    results = _route_critical_cohort(board, board.net_routing_rules, route_global(board),
+        [prefix], [], unified.UnifiedRouterOptions(time_budget_s=10))
+    assert all(not result.connected and not tracks and not vias
+               for result, tracks, vias in results.values())
+    assert all("changed input copper" in result.diagnostics[-1]
+               for result, _, _ in results.values())
+
+
+def test_different_priority_critical_jobs_do_not_form_a_cohort(monkeypatch):
+    import pcbir.critical as critical
+    from pcbir.unified_router import UnifiedRouterOptions
+    board = _single_critical_board()
+    board = replace(board, net_routing_rules=(board.net_routing_rules[0],
+        replace(board.net_routing_rules[1], priority=70)))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("different priority jobs formed a cohort")
+    monkeypatch.setattr(critical, "_route_critical_cohort", forbidden)
+    result = route_critical_nets(board, route_global(board),
+        unified_options=UnifiedRouterOptions(time_budget_s=10))
+    assert all(item.connected for item in result.nets)

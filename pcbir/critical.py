@@ -505,7 +505,8 @@ def route_critical_nets(
     as_routed: dict[tuple[str, ...], tuple[tuple[TrackSegment, ...], CriticalNetResult]] = {}
     # Why each tuning group (plan R14) last failed to tune while routing.
     group_failures: dict[str, str] = {}
-    for rule, group in jobs:
+    cohort_candidates = {}
+    for job_index, (rule, group) in enumerate(jobs):
         if on_progress:
             on_progress("started", group, None)
         if owner_graph is not None and any(t.net == rule.net for t in board.tracks):
@@ -608,11 +609,30 @@ def route_critical_nets(
             coupled_pairs.add(frozenset((rule.net, partner_name)))
             net_tracks, net_vias = pair_tracks, pair_vias
         else:
+            # Equal-priority single-ended jobs share one negotiation rather than
+            # freezing the first path before its peers can contest that space.
+            # Cohorts are contiguous in the existing job order. Do not move
+            # coupled jobs, clocks, or independently retained verified copper.
+            if (unified_options is not None and rule.kind is RouteKind.CRITICAL
+                    and rule.net not in cohort_candidates and rule.net not in retained_by_net):
+                cohort = []
+                for peer, peer_group in jobs[job_index:]:
+                    if (peer.kind is not RouteKind.CRITICAL or peer.priority != rule.priority
+                            or len(peer_group) != 1 or peer.net in retained_by_net):
+                        break
+                    cohort.append(peer)
+                if len(cohort) > 1:
+                    cohort_candidates.update(_route_critical_cohort(
+                        board, cohort, global_route, tracks, vias, unified_options))
+            proposed = cohort_candidates.pop(rule.net, None)
             reused = retained_by_net.get(rule.net)
             accepted_reuse = None
-            if reused is not None:
+            if proposed is None and reused is not None:
                 accepted_reuse = validate_single_critical_reuse(board, reused, tracks, vias)
-            if accepted_reuse is not None and accepted_reuse[0].connected:
+            if proposed is not None:
+                result, net_tracks, net_vias = _validate_candidate(
+                    board, *proposed, tracks, vias)
+            elif accepted_reuse is not None and accepted_reuse[0].connected:
                 result, net_tracks, net_vias = accepted_reuse
             else:
                 result, net_tracks, net_vias = _route_single(
@@ -1925,6 +1945,46 @@ def _guide_via(
         net, position, board.rules.default_via_size_nm,
         board.rules.default_via_drill_nm, *span,
     )
+
+
+def _route_critical_cohort(board, rules, global_route, committed_tracks, committed_vias,
+                           unified_options):
+    """Plan a bounded cohort with unchanged profiles and an immutable input prefix.
+
+    The normal per-job gate freshly checks each proposed owner before adoption.
+    Failed owners keep no new copper; their successful peers remain reviewable.
+    """
+    from .unified_router import route_unified
+
+    names = frozenset(rule.net for rule in rules)
+    options = replace(unified_options, direct=True, save_inputs_path=None,
+        maximum_iterations=min(16, unified_options.maximum_iterations),
+        time_budget_s=min(60.0 * len(rules), unified_options.time_budget_s or 60.0 * len(rules)),
+        commit_rounds=min(2, unified_options.commit_rounds),
+        pre_route_decouplers=False, escapes_first=False)
+    search_board = replace(board, tracks=tuple(committed_tracks), vias=tuple(committed_vias))
+    detailed = route_unified(search_board, global_route, options, only_nets=names)
+    prefix_ok = (detailed.board.tracks[:len(committed_tracks)] == tuple(committed_tracks)
+                 and detailed.board.vias[:len(committed_vias)] == tuple(committed_vias))
+    additions = detailed.board.tracks[len(committed_tracks):]
+    new_vias = detailed.board.vias[len(committed_vias):]
+    owners_ok = all(item.net in names for item in (*additions, *new_vias))
+    integrity = (() if prefix_ok and owners_ok else
+                 ("unified critical cohort changed input copper or added an unselected owner",))
+    routed = {net.net: net for net in detailed.nets}
+    candidates = {}
+    for rule in rules:
+        net = routed.get(rule.net)
+        tracks = tuple(item for item in additions if item.net == rule.net) if not integrity else ()
+        vias = tuple(item for item in new_vias if item.net == rule.net) if not integrity else ()
+        diagnostics = ((*net.diagnostics, *_budget_diagnostics(rule, tracks, vias))
+                       if net is not None else ("no unified critical cohort attempt",))
+        result = CriticalNetResult((rule.net,), net is not None and net.connected and not integrity,
+            len(tracks), len(vias), (_track_length(tracks),), 0,
+            (*diagnostics, *integrity), _external_assumptions(rule),
+            evidence_digests=_external_evidence(rule), strategy="unified_critical_cohort")
+        candidates[rule.net] = result, tracks, vias
+    return candidates
 
 
 def _route_single_exact(
