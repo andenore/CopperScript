@@ -195,6 +195,25 @@ class UnifiedRouterOptions:
     via_budget_factor: float = 4.0
     via_overrun_factor: float = 10.0
 
+    # -- Search cost terms (plan section 3, "Costs") -------------------------
+    # Turn cost per 45 degrees of heading change, in pitch steps (as via_cost
+    # is after its mm conversion); a 90-degree turn pays twice this. The
+    # search state stays one node: the incoming heading is that of the
+    # node's best parent (parent[node]), not a separate per-heading state.
+    # This is not exact (a node keeps only its cheapest arrival, so a
+    # slightly dearer arrival with a better heading is dropped), but it keeps
+    # memory, the expansion budget and the native kernel's buffers as they
+    # are. Arrival by via and source nodes have no heading (no turn charged).
+    # 0 leaves the search byte-identical to having no turn term.
+    bend_cost: float = 0.0
+    # Soft cost per pitch step whose target node lies outside the net's
+    # connected global-route corridor (guide segments on their layer within
+    # guide_half_width_nm + guide_margin_nm; pin accesses within the margin
+    # square). Nets without a connected guide pay nothing. Never a restriction
+    # and never part of the legality rasters. 0 disables (byte-identical).
+    guide_cost: float = 0.0
+    guide_margin_nm: int = nm_from_mm("1")
+
     def __post_init__(self) -> None:
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0 or self.maximum_expansions <= 0:
             raise ValueError("unified router pitch, iterations and search states must be positive")
@@ -217,6 +236,8 @@ class UnifiedRouterOptions:
             raise ValueError("plane_piece_fraction must be in (0, 1]")
         if self.via_budget_factor <= 0 or self.via_overrun_factor < 1:
             raise ValueError("via_budget_factor must be positive and via_overrun_factor at least 1")
+        if not (self.bend_cost >= 0 and self.guide_cost >= 0) or self.guide_margin_nm < 0:
+            raise ValueError("bend_cost, guide_cost and guide_margin_nm must not be negative")
         if self.grid_window_nm is not None:
             bounds = self.grid_window_nm
             if (not isinstance(bounds, (tuple, list)) or len(bounds) != 4
@@ -616,7 +637,7 @@ def _segment_offsets(dx: int, dy: int, radius_in_pitches: float) -> tuple[tuple[
 class _Router:
     def __init__(self, board: PhysicalBoard, options: UnifiedRouterOptions,
                  nets: list, on_progress, *, explicit_pads: frozenset[PadReference] = frozenset(),
-                 required_accesses=None) -> None:
+                 required_accesses=None, guides: GlobalRoutingResult | None = None) -> None:
         self.board = board
         # Plane pads that must reach the plane with copper of their own, not
         # by lying in a pour piece (pour re-check, see route_unified).
@@ -630,6 +651,15 @@ class _Router:
         self._open_cache: dict[tuple[int, int], np.ndarray] = {}
         self._move_cache: np.ndarray | None = None
         self._local_spent = 0
+        # Search cost terms (bend_cost, guide_cost): the turn table and, per
+        # net, the global-route corridor nodes (None: no connected guide).
+        self._turn_cache: np.ndarray | None = None
+        self._guide_cache: dict[str, tuple | None] = {}
+        self.guides: dict[str, tuple] = {}
+        if guides is not None and options.guide_cost:
+            for route in guides.routes:
+                if route.connected and (route.segments or route.accesses):
+                    self.guides[route.net] = (*self.guides.get(route.net, ()), route)
         pitch = options.pitch_nm or choose_pitch(board)
         self.pitch = pitch
         self.via_cost = options.via_cost_mm * 1_000_000 / pitch
@@ -676,6 +706,10 @@ class _Router:
             self._n_touched = np.zeros(self._n_touched_cap, dtype=np.int32)
             self._n_path_cap = 1_000_000
             self._n_path = np.zeros(self._n_path_cap, dtype=np.int32)
+            # Per-node guide penalty for the kernel: guide_cost outside the
+            # searched net's corridor, 0 inside (set and restored per search;
+            # allocated on the first guided search).
+            self._n_guide: np.ndarray | None = None
         ranks, headings = signal_layer_preferences(board)
         g = self.grid
         self.layer_cost = [options.outer_layer_cost if i in (0, g.nl - 1) else 0.0 for i in range(g.nl)]
@@ -1666,6 +1700,12 @@ class _Router:
         bx1 = min(nx - 1, max(tx1, max(x for x, _ in src_xy)) + margin)
         by0 = max(0, min(ty0, min(y for _, y in src_xy)) - margin)
         by1 = min(g.ny - 1, max(ty1, max(y for _, y in src_xy)) + margin)
+        corridor = self._guide_corridor(spec) if self.guides else None
+        if corridor is not None:
+            # A guided net's window covers its corridor, so the soft guide
+            # cost can be followed where the guide detours.
+            cx0, cy0, cx1, cy1 = corridor[2]
+            bx0, by0, bx1, by1 = min(bx0, cx0), min(by0, cy0), max(bx1, cx1), max(by1, cy1)
         for attempt in range(3):
             result = self._astar(spec, sources, targets, present, (bx0, by0, bx1, by1),
                                  (tx0, ty0, tx1, ty1), owner, mid_owner, via_owner, target_extra)
@@ -1731,14 +1771,24 @@ class _Router:
             head = heading[layer]
             lc = layer_cost[layer]
             table = []
-            for dx, dy, step in _MOVES:
+            for m, (dx, dy, step) in enumerate(_MOVES):
                 base = step * (1.0 + lc)
                 if head is not None and (head == "h" and dy and not dx or head == "n" and dx and not dy):
                     base += wrong * step
                 cell_dy = 0 if dy > 0 else -1
                 cell_dx = 0 if dx > 0 else -1
-                table.append((dx, dy, dy * nx + dx, base, bool(dx and dy), cell_dy * nx + cell_dx))
+                table.append((dx, dy, dy * nx + dx, base, bool(dx and dy), cell_dy * nx + cell_dx, m, step))
             move_tables.append(table)
+        # Soft cost terms (see UnifiedRouterOptions.bend_cost/guide_cost);
+        # the kernel adds them in the same order.
+        turns = arrival = None
+        if options.bend_cost:
+            table = self._turn_table().tolist()
+            turns = [table[8 * m:8 * m + 8] for m in range(8)]
+            arrival = {dy * nx + dx: m for m, (dx, dy, _) in enumerate(_MOVES)}
+        corridor = self._guide_corridor(spec) if self.guides else None
+        inside = corridor[0] if corridor is not None else None
+        guide_cost = options.guide_cost
         while heap:
             if expansions % 1024 == 0 and self._expired():
                 break
@@ -1764,7 +1814,14 @@ class _Router:
             # outside the region: that step would be drawn at full width.
             here_neck_only = here_in_region and node in neck
             only_targets = layer in target_only
-            for dx, dy, dn, base, diagonal, dcell in move_tables[layer]:
+            # Turn cost from the heading of this node's best parent (none
+            # after a via or at a source).
+            turn = None
+            if turns is not None:
+                p = parent[node]
+                if p != -1 and p // plane == layer:
+                    turn = turns[arrival[node - p]]
+            for dx, dy, dn, base, diagonal, dcell, m, step in move_tables[layer]:
                 x2 = x + dx
                 y2 = y + dy
                 if x2 < bx0 or x2 > bx1 or y2 < by0 or y2 > by1:
@@ -1783,6 +1840,10 @@ class _Router:
                     if o != -1 and o != nid and not (here_in_region and n2 in region and cell in neck_mid):
                         continue
                 c = cost + base * (1.0 + hist[n2]) * (1.0 + present * occ[n2])
+                if turn is not None:
+                    c += turn[m]
+                if inside is not None and n2 not in inside:
+                    c += step * guide_cost
                 if c < best[n2]:
                     if best[n2] >= INF:
                         touched.append(n2)
@@ -1870,6 +1931,14 @@ class _Router:
             keys = np.fromiter(target_extra.keys(), dtype=np.int64, count=len(target_extra))
             extra[keys] = np.fromiter(target_extra.values(), dtype=np.float64, count=len(target_extra))
             extra_pointer = extra.ctypes.data
+        turn_pointer = self._turn_table().ctypes.data if self.options.bend_cost else None
+        corridor = self._guide_corridor(spec) if self.guides else None
+        guide_pointer = None
+        if corridor is not None:
+            if self._n_guide is None:
+                self._n_guide = np.full(g.size, float(self.options.guide_cost), dtype=np.float64)
+            self._n_guide[corridor[1]] = 0.0
+            guide_pointer = self._n_guide.ctypes.data
         touched_count = ctypes.c_int(0)
         P = lambda a: a.ctypes.data
         length = self.native(
@@ -1879,7 +1948,7 @@ class _Router:
             float(present), float(self.via_cost * spec.via_factor),
             *box, *tbox,
             P(source_nodes), P(source_costs), len(source_nodes),
-            extra_pointer, self.options.maximum_expansions,
+            extra_pointer, turn_pointer, guide_pointer, self.options.maximum_expansions,
             P(self._n_best), P(self._n_parent), P(self._n_heap), self._n_heap_cap,
             P(self._n_touched), self._n_touched_cap, ctypes.byref(touched_count),
             P(self._n_path), self._n_path_cap)
@@ -1890,6 +1959,8 @@ class _Router:
                 flags[nodes] = 0
         if target_extra:
             extra[keys] = 0.0
+        if corridor is not None:
+            self._n_guide[corridor[1]] = float(self.options.guide_cost)
         if length < 0:
             return NotImplemented
         if length == 0:
@@ -1912,6 +1983,75 @@ class _Router:
                     table.append(base)
             cache = self._move_cache = np.asarray(table, dtype=np.float64)
         return cache
+
+    def _turn_table(self) -> np.ndarray:
+        """bend_cost times the 45-degree turns from move a to move b, at [8 * a + b]."""
+        cache = self._turn_cache
+        if cache is None:
+            headings = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
+            index = [headings.index((dx, dy)) for dx, dy, _ in _MOVES]
+            bend = self.options.bend_cost
+            cache = self._turn_cache = np.asarray(
+                [bend * min(abs(a - b), 8 - abs(a - b)) for a in index for b in index], dtype=np.float64)
+        return cache
+
+    def _guide_corridor(self, spec: _NetSpec):
+        """The net's global-route corridor as grid nodes (set, int64 array, xy box), or None.
+
+        Matches the legacy corridor (detailed._inside_guide): guide segments
+        on their own layer within guide_half_width_nm + guide_margin_nm, and
+        pin accesses within the margin square on their layer.
+        """
+        if spec.name in self._guide_cache:
+            return self._guide_cache[spec.name]
+        routes = self.guides.get(spec.name)
+        result = None
+        if routes:
+            g = self.grid
+            margin = self.options.guide_margin_nm
+            index = {layer: i for i, layer in enumerate(g.layers)}
+            parts = []
+
+            def add(layer, ix0, iy0, inside):
+                iy, ix = np.nonzero(inside)
+                parts.append(layer * g.plane + (iy + iy0) * g.nx + (ix + ix0))
+
+            for route in routes:
+                for segment in route.segments:
+                    layer = index.get(segment.layer)
+                    if layer is None:
+                        continue
+                    r = segment.guide_half_width_nm + margin
+                    a, b = segment.start, segment.end
+                    ix0, iy0, ix1, iy1 = g.window(min(a.x_nm, b.x_nm) - r, min(a.y_nm, b.y_nm) - r,
+                                                  max(a.x_nm, b.x_nm) + r, max(a.y_nm, b.y_nm) + r)
+                    if ix0 > ix1 or iy0 > iy1:
+                        continue
+                    px = g.xs[ix0:ix1 + 1][None, :]
+                    py = g.ys[iy0:iy1 + 1][:, None]
+                    add(layer, ix0, iy0, _segment_distance(
+                        px, py, float(a.x_nm), float(a.y_nm), float(b.x_nm), float(b.y_nm)) <= r)
+                for access in route.accesses:
+                    layer = index.get(access.layer)
+                    if layer is None:
+                        continue
+                    c = access.access_position
+                    ix0, iy0, ix1, iy1 = g.window(c.x_nm - margin, c.y_nm - margin,
+                                                  c.x_nm + margin, c.y_nm + margin)
+                    if ix0 > ix1 or iy0 > iy1:
+                        continue
+                    px = g.xs[ix0:ix1 + 1][None, :]
+                    py = g.ys[iy0:iy1 + 1][:, None]
+                    add(layer, ix0, iy0,
+                        (np.abs(px - c.x_nm) <= margin) & (np.abs(py - c.y_nm) <= margin))
+            nodes = np.unique(np.concatenate(parts)).astype(np.int64) if parts else np.zeros(0, np.int64)
+            if nodes.size:
+                rest = nodes % g.plane
+                xs, ys = rest % g.nx, rest // g.nx
+                box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+                result = (frozenset(nodes.tolist()), nodes, box)
+        self._guide_cache[spec.name] = result
+        return result
 
     # -- negotiation ------------------------------------------------------
 
@@ -2504,7 +2644,7 @@ def route_unified(
         # net it loses it piecemeal. Its members route first, among themselves.
         bus_options = replace(options, length_priority=True) if options.bus_length_budget else options
         bus_router = _Router(board, bus_options, [net for net in nets if net.name in bus_names], on_progress,
-                             required_accesses=required_accesses)
+                             required_accesses=required_accesses, guides=global_route)
         bus_routes, bus_conflicts, used = bus_router.negotiate(deadline)
         bus_accepted, _, bus_complete = bus_router.commit(bus_routes, bus_conflicts)
         over_length = set()
@@ -2523,7 +2663,8 @@ def route_unified(
             board = _with(board, bus_accepted)
             nets = [net for net in nets if net.name not in bus_complete]
     emit(on_progress, "unified_setup", "started", nets=len(nets))
-    router = _Router(board, options, nets, on_progress, required_accesses=required_accesses)
+    router = _Router(board, options, nets, on_progress, required_accesses=required_accesses,
+                     guides=global_route)
     emit(on_progress, "unified_setup", "finished", nets=len(router.specs),
          grid=[router.grid.nx, router.grid.ny, router.grid.nl], seconds=round(perf_counter() - started, 2))
     routes, conflicts, iterations = router.negotiate(deadline)
