@@ -164,7 +164,7 @@ the default path imports it (phase P7).
 | `plane_verify.py` (`verify_filled_planes`, `native_object_map`), `filled_connectivity.py`, `decoupling_fill.py` | The single native refill/DRC, islands, and capacitor supply/return checks |
 | `power_network.py`, `power_extract.py`, `power_integrity.py`, `power_planning.py`, `power.py` | DC/IR screening and lowering. Advisory reports only |
 | `routing_benchmark.py` (`summarize_run`, `compare_runs`), `routing_acceptance.py`, `routing_metrics.py`, `access_diagnostics.py` | Benchmark ladder (P1) |
-| `placement*.py`, `clusters.py`, `incremental_placement.py`, `routeflow.py` (`optimize_placement_for_routing`, `detailed_failure_trials`) | Placement, plus the optional outer loop driven by opens |
+| `placement*.py`, `clusters.py`, `incremental_placement.py`, `routeflow.py` (`optimize_placement_for_routing`, `detailed_failure_trials`) | Placement, plus the optional outer loop driven by opens. `detailed_failure_trials` serves the legacy path only once `congestion_feedback.py` drives the unified path |
 | `critical_review.py`, `pair_geometry.py`, `route_path_geometry.py`, `return_paths.py` | Read-only reports |
 
 ### New (added by the refactor)
@@ -176,6 +176,7 @@ the default path imports it (phase P7).
 | `bga_fanout.py` | Deterministic quadrant dogbones for full-grid ball arrays (P4) |
 | `power_islands.py` | Automatic split-plane islands for decoupled rails on a spare plane layer (P3, opt-in `--power-islands`) |
 | `route_summary.py`, `plane_estimate.py`, `bench.py`, `bench/ladder.json` | Pipeline-independent completion summary, raster plane estimate, benchmark ladder (P1) |
+| `congestion_feedback.py` | Routability-driven placement feedback: per-tile congestion map from the unified router's contention (history, overflow, rejection points) combined with a RUDY-style demand estimate; parts on failed nets and hot tiles move down the demand gradient, candidates are screened by the estimate plus `route_global`, and only the best rerun the pipeline tail. Replaces `critical_feedback.py` and `routeflow.detailed_failure_trials` on the unified path (2026-10-24) |
 
 ### Lift (useful parts inside large modules)
 
