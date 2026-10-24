@@ -378,13 +378,14 @@ def test_cli_writes_global_routing_guides(tmp_path: Path) -> None:
 
 def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_path: Path) -> None:
     # The report may live in a fresh directory independently of the PCB.
-    # Exercise the default package-access flow without a --fanout opt-in.
+    # Exercise the default package-access flow without a --fanout opt-in
+    # (package access is a stage of the legacy router).
     report = tmp_path / "new-review" / "reports" / "route-report.json"
     pcb = tmp_path / "route-draft.kicad_pcb"
     result = subprocess.run(
         [
             sys.executable, "-m", "copperscript", "route-board",
-            "examples/valid_board/board.copper", "--allow-proxy-footprints",
+            "examples/valid_board/board.copper", "--allow-proxy-footprints", "--router", "legacy",
             "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
             "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
             "--plane-stitch-radius-mm", "5",

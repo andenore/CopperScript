@@ -37,9 +37,9 @@ git fetch origin && git checkout refactor/routing
 export COPPER_BOARDS=..            # the dev folder
 export KICAD_FOOTPRINTS=<path to a kicad-footprints checkout>
 copper bench bench/ladder.json --only asset-tracker,nrf52,full-vertical,cm4,led-ring,round-led-ring \
-    --extra-arg=--router --extra-arg=unified --label ladder --out build/bench/ladder
+    --label ladder --out build/bench/ladder     # unified is the default router
 copper bench bench/ladder.json --only copper-probe \
-    --extra-arg=--router --extra-arg=unified --label probe --out build/bench/probe
+    --label probe --out build/bench/probe       # add --extra-arg=--router --extra-arg=legacy to compare
 copper issues build/bench/probe/copper-probe        # grouped failures, located
 copper view build/bench/probe/copper-probe --issue R1
 ```
@@ -130,14 +130,12 @@ The aim is one PR, `refactor/routing` → `main`, merged once the checks hold.
    149 failures, all already failing on the branch before this work (power-transition repair, autonomous plane
    access, CAM corpus, CI bundle). Check which of them also fail on `main`;
    any that fail only on the branch must be fixed or explained before merging.
-3. Default router: `copper route-board` still defaults to `--router legacy`.
-   Decide whether the merge switches the default to `unified` (all ladder
-   numbers above are with `unified`). If it does, the legacy-only paths that
-   the unified flow skips (late zone-escape repair, power-preparation
-   allocator) need a decision: keep behind `--router legacy` or retire (plan
-   decision D4 allows deleting retired code). What changes for a run that
-   does not pass `--router` when the default flips:
-   - Stops working: scoped routing (`run_routing_pipeline(routing_nets=...)`)
+3. Default router: decided. As of 2026-10-24 `copper route-board`,
+   `pcbir.bench route|run` and the D3 CI benchmark pin
+   (`.github/routing-benchmark.json`) default to `--router unified`;
+   `--router legacy` keeps the pre-refactor pipeline. What changed for a run
+   that does not pass `--router`:
+   - No longer runs: scoped routing (`run_routing_pipeline(routing_nets=...)`)
      raises, because the unified path nulls `power_area_options`; the late
      zone-escape repair (`improve_zone_escapes`) is skipped; power preparation
      and area planning are skipped ("unified router uses declared planes");
@@ -145,19 +143,29 @@ The aim is one PR, `refactor/routing` → `main`, merged once the checks hold.
      escapes), so `--stop-after package-preflight|package-access` is refused.
    - Ignored flags: the legacy ordinary-router flags listed in
      `cli-workflow.md` (`--passes`, `--search-budget`, `--soft-ripup`, ...)
-     stop having an effect; `route-board` reports them in
-     `work_limits.unified_ignored_flags` and `unified_skipped_stage_flags`.
-     `bench/ladder.json` still passes them; the D3 CI benchmark pins
-     `"router": "legacy"` in `.github/routing-benchmark.json` (item 4).
+     have no effect; `route-board` reports them in one `router_options` /
+     `ignored` progress event and in `work_limits.unified_ignored_flags` and
+     `unified_skipped_stage_flags`. `bench/ladder.json` and the consumer
+     `make/board.mk` `ROUTE_ARGS` still pass them (`ROUTE_ARGS`: `--passes`,
+     `--search-budget`, `--soft-ripup`, `--constrained-pins-first`,
+     `--progressive-guides`, `--repair-budget-multiplier`), so ladder and
+     CopperAssetTracker/CopperLedRing Make runs now emit that note; they run
+     unchanged otherwise.
    - Still runs: the CLI post-stitch (`stitch_zone_pads`,
      `repair_cut_off_plane_pads`) on top of the unified plane routes (not with
      `--unified-direct`), filled-copper feedback trials and detailed placement
      feedback trials.
+   - Still needs the owner: re-record `.github/routing-benchmark-baseline.json`
+     from the next workflow run's "Benchmark baseline record" (the committed
+     one was recorded with `legacy`, so that run may fail the lost-board
+     check); and decide whether the legacy-only stages (package access, power
+     preparation, late zone-escape repair, scoped routing) stay behind
+     `--router legacy` or are retired (plan decision D4).
 4. Run `main`'s CI on the branch: `routing-benchmark.yml` (PCBWorld D3 boards
    scored by KiCad, baseline 81 / 99 clean in
    `.github/routing-benchmark-baseline.json`) and `board-routing.yml`. The
-   D3 benchmark routes with the detailed router through `pcbir.bench`; if the
-   default router changes, compare both.
+   D3 benchmark routes through `pcbir.bench` with the pinned router (now
+   `unified`); dispatch it with `router: legacy` to compare both.
 5. Run the ladder (above) on the PR head and record the table in
    `routing-refactor-plan.md` section 5a.
 6. Squash or keep history: the branch contains a large early snapshot commit

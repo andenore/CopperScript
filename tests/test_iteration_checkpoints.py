@@ -63,14 +63,17 @@ def test_reuse_with_other_options_is_refused_with_an_error_record(stopped):
 
 
 def test_package_stops_require_fanout(tmp_path):
-    _, result = _route(tmp_path, "r4", "--stop-after", "package-access", "--no-fanout")
+    _, result = _route(tmp_path, "r4", "--router", "legacy", "--stop-after", "package-access", "--no-fanout")
     assert result.returncode == 2 and "fanout" in result.stdout + result.stderr
+    # The default unified router has no package-access stage to stop after.
+    _, result = _route(tmp_path, "r4u", "--stop-after", "package-access")
+    assert result.returncode == 2 and "--router legacy" in result.stdout + result.stderr
 
 
 def test_stop_after_package_access_reports_the_stop_not_a_block(stopped):
     tmp_path, _, _ = stopped
     out, result = _route(tmp_path, "r5", "--reuse-placement", str(tmp_path / "ck" / "placement.state.json"),
-                         "--stop-after", "package-access")
+                         "--router", "legacy", "--stop-after", "package-access")
     assert result.returncode == 1 and "STOPPED after package-access" in result.stdout
     report = json.loads((out / "route-report.json").read_text())
     assert report["stopped_after"] == "package-access"

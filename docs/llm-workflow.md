@@ -63,13 +63,14 @@ fixed while you change later stages:
 
 ```console
 copper route-board BOARD --progress --stop-after placement --checkpoint-dir CK -o RUN/board.kicad_pcb --report RUN/route-report.json
-copper route-board BOARD --progress --reuse-placement CK/placement.state.json --stop-after package-preflight ...
+copper route-board BOARD --progress --reuse-placement CK/placement.state.json --router legacy --stop-after package-preflight ...
 copper route-board BOARD --progress --reuse-placement CK/placement.state.json ...
 ```
 
 `--stop-after` accepts `placement`, `package-preflight` and `package-access`
 (runs the package-access improvement trials, then stops). The package stops
-need fanout, which is on unless `--no-fanout`. A stopped run writes its report and
+need `--router legacy` (the default unified router has no package-access stage)
+and fanout, which is on unless `--no-fanout`. A stopped run writes its report and
 draft board, is marked `stopped_after`, skips zone-escape, filled-copper and
 final native verification, and never passes; its open nets read "run stopped
 after ...". `copper issues` shows the stop in its header.

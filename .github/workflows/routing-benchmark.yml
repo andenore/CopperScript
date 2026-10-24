@@ -54,7 +54,7 @@ jobs:
           python3 - "${{ github.event.inputs.limit || '0' }}" "${{ github.event.inputs.router || '' }}" <<'PY' >> "$GITHUB_OUTPUT"
           import json, sys
           pins = json.load(open("CopperScript/.github/routing-benchmark.json"))
-          router = sys.argv[2] or pins.get("router", "legacy")
+          router = sys.argv[2] or pins.get("router", "unified")
           assert router in ("legacy", "unified"), router
           print("router=" + router)
           for key in ("pcbworld_repository", "pcbworld_ref", "pcbench_repository", "pcbench_ref",
