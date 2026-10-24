@@ -350,6 +350,7 @@ def test_ball_field_exact_drops_the_raster_margin_only_inside_ball_fields() -> N
     exact_field, exact_outside = free(True)
     assert exact_field > plain_field             # lands in the field lose their margin
     assert exact_outside == plain_outside        # the rest of the board keeps it
+    assert UnifiedRouterOptions().ball_field_exact   # on by default
 
 
 def _array_board(parts: dict[str, tuple[float, float]], nets: dict[str, tuple[tuple[str, str], ...]]):

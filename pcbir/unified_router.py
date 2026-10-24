@@ -139,7 +139,9 @@ class UnifiedRouterOptions:
     ball_field_band: int = 0
     # Rasterize obstacles in and around full ball arrays exactly (without
     # raster_margin_nm): their single-track channels survive (escape plan E8).
-    ball_field_exact: bool = False
+    # On by default: FX10 fast case 12.6 -> 10.2 open nets (five-run mean),
+    # identical copper on D3 and the small ladder (no full ball arrays).
+    ball_field_exact: bool = True
     ball_field_exact_reach_nm: int | None = None  # how far around the array (None: one pitch)
     # Extra cost (as history) for other nets on the surface exit of each
     # outer-two-ring ball of a ball grid (escape plan E9); 0 disables.
