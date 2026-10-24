@@ -227,6 +227,21 @@ def test_preserves_embedded_keepout_zone() -> None:
     )
 
 
+def test_preserves_multilayer_isolation_keepout() -> None:
+    source = '''(footprint "isolated-module" (layer "F.Cu")
+      (zone (net 0) (net_name "") (layers "F.Cu" "In1.Cu" "In2.Cu" "B.Cu")
+        (keepout (tracks not_allowed) (vias not_allowed)
+          (pads not_allowed) (copperpour not_allowed) (footprints allowed))
+        (polygon (pts (xy 0 0) (xy 3 0) (xy 3 20) (xy 0 20)))))'''
+    keepout = parse_kicad_mod(source).footprint.keepouts[0]
+    assert keepout.layers == (
+        CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+        CopperLayer.INTERNAL_2, CopperLayer.BACK,
+    )
+    assert keepout.block_tracks and keepout.block_vias
+    assert keepout.block_pads and keepout.block_zones
+
+
 def test_preserves_footprint_placement_keepout() -> None:
     source = """(footprint "Socket" (layer "F.Cu")
       (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask"))
@@ -409,7 +424,8 @@ def test_installed_tag_connect_target_imports_and_exports(tmp_path: Path) -> Non
     )
     assert not any(item.code == "DRC-PLACEMENT" for item in run_physical_drc(board).findings)
     pcb = tmp_path / "TagConnectTarget.kicad_pcb"
-    pcb.write_text(KiCadPcbBackend().generate(board).artifacts[0].content, encoding="utf-8")
+    from pcbir.backends.kicad_project import write_kicad_project
+    write_kicad_project(KiCadPcbBackend().generate(board),pcb)
     assert '(attr smd exclude_from_bom exclude_from_pos_files)' in pcb.read_text(encoding="utf-8")
     result = subprocess.run(
         [cli, "pcb", "export", "svg", "--mode-multi", "--layers", "F.Cu", "--output", str(tmp_path), str(pcb)],
@@ -424,6 +440,8 @@ def test_installed_tag_connect_target_imports_and_exports(tmp_path: Path) -> Non
     assert drc.returncode == 0, drc.stdout + drc.stderr
     report = json.loads(drc_path.read_text(encoding="utf-8"))
     assert "footprint in keepout" not in str(report).lower()
+    assert not report["unconnected_items"]
+    assert not [v for v in report["violations"] if v["severity"] == "error"]
 
 
 def test_strict_mode_promotes_loss_warning_to_error() -> None:

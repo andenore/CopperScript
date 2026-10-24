@@ -174,7 +174,7 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
     from time import perf_counter
     from .drc import run_physical_drc
     from .route_summary import connection_summary
-    from .state_codec import StateError
+    from .state_codec import StateError, save_state
     from .unified_router import UnifiedRouterOptions, replay_unified
     known = {field.name for field in fields(UnifiedRouterOptions)}
     overrides = {}
@@ -189,7 +189,12 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
             overrides[name] = text
     started = perf_counter()
     try:
+        result_path = getattr(args, "save_result", None)
+        if result_path is not None and result_path.exists():
+            raise ValueError(f"preserve the existing result state: {result_path}")
         result = replay_unified(args.state, only_nets=frozenset(args.only) if args.only else None, **overrides)
+        if result_path is not None:
+            save_state(result_path, result, note="Scoped unified replay result; not source/native admission or board qualification")
     except (StateError, OSError, ValueError) as exc:
         print(f"REPLAY ERROR: {exc}")
         return 2
@@ -209,6 +214,46 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
     print(text)
     return 0
 
+
+
+def _run_replay_critical(args: argparse.Namespace) -> int:
+    from hashlib import sha256
+    from time import perf_counter
+    from .critical import replay_critical
+    from .drc import run_physical_drc
+    from .route_summary import connection_summary
+    from .state_codec import StateError
+    started = perf_counter()
+    try:
+        from .unified_router import UnifiedRouterOptions
+        clock_options = UnifiedRouterOptions() if args.clock_router == "unified" else None
+        input_digest = sha256(args.state.read_bytes()).hexdigest()
+        result = replay_critical(args.state, only_nets=frozenset(args.only) if args.only else None,
+                                 pair_state_limit=args.pair_states, unified_options=clock_options)
+        if sha256(args.state.read_bytes()).hexdigest() != input_digest:
+            raise ValueError("replay input changed during the diagnostic")
+    except (StateError, OSError, ValueError) as exc:
+        print(f"REPLAY ERROR: {exc}")
+        return 2
+    drc = run_physical_drc(result.board)
+    document = {"schema": "copperscript-critical-replay/v1", "status": result.status.value,
+        "scope": "bounded saved-input diagnostic; no current-source, full-board or native acceptance",
+        "fabrication_ready": False, "qualified_release": False, "native_verification": "not_run", "state": str(args.state),
+        "state_sha256": input_digest, "only_nets": args.only, "clock_router": args.clock_router,
+        "pair_state_limit": args.pair_states, "seconds": round(perf_counter() - started, 1),
+        "critical": json.loads(result.to_json()), "drc": json.loads(drc.to_json()),
+        "summary": connection_summary(result.board, drc)}
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    if args.output:
+        write_kicad_project(KiCadPcbBackend().generate(result.board), args.output)
+    print(json.dumps({key: document[key] for key in ("scope", "seconds", "pair_state_limit")}, sort_keys=True))
+    for item in result.nets:
+        print(json.dumps({"nets": item.nets, "connected": item.connected, "strategy": item.strategy,
+            "diagnostics": item.diagnostics, "local_preparation":
+                asdict(item.local_preparation) if item.local_preparation else None}, sort_keys=True))
+    return 0
 
 def _run_view(args: argparse.Namespace) -> int:
     from .run_issues import find_issue, load_run, run_issues
@@ -551,9 +596,21 @@ def _parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="overrides",
         help="UnifiedRouterOptions field; the value is JSON (true, 40, 0.6, null) or a plain string")
     replay_parser.add_argument("--report", type=Path, help="also write the summary JSON here")
+    replay_parser.add_argument("--save-result", type=Path, help="save typed routed result to a fresh diagnostic state file")
     replay_parser.add_argument("--only", action="append", default=[], metavar="NET",
         help="route only this net (repeatable); the other nets keep their saved copper, if any")
     replay_parser.add_argument("-o", "--output", type=Path, help="write the routed board as .kicad_pcb (for copper view)")
+    critical_replay = subparsers.add_parser("replay-critical",
+        help="bounded critical-group diagnostic from a placement checkpoint or source-only inputs")
+    critical_replay.add_argument("state", type=Path)
+    critical_replay.add_argument("--only", action="append", default=[], metavar="NET",
+        help="attempt complete critical groups containing this net; all source rules/copper remain")
+    critical_replay.add_argument("--pair-states", type=_nonnegative_int, default=6000,
+        help="aggregate state bound per coupled pair (default: 6000)")
+    critical_replay.add_argument("--clock-router", choices=("legacy", "unified"), default="unified",
+        help="clock fallback backend; differential groups retain their coupled engine")
+    critical_replay.add_argument("--report", type=Path)
+    critical_replay.add_argument("-o", "--output", type=Path, help="diagnostic KiCad board for copper view")
     from .design_query import QUERY_KINDS
     query_parser = subparsers.add_parser(
         "query", help="answer compact questions about the compiled design (pins, nets, components, open pins)")
@@ -837,10 +894,15 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--unified-iterations", type=int, default=150,
         help="maximum negotiation iterations of the unified router; it also stops after 60 "
              "iterations without improvement (default: 150)")
+    board_route_parser.add_argument("--unified-search-states", type=int, default=400_000,
+        help="maximum expanded states per unified path search (default: 400000); "
+             "a bounded search failure is not proof that no legal route exists")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
         help="wall-time budget for the unified router; it returns its best result when exceeded")
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
         help="unified router: save its inputs as a state file for replay_unified")
+    board_route_parser.add_argument("--unified-direct", action="store_true",
+        help="unified router: negotiate all nets from source-fixed copper without legacy critical or bypass routing")
     board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
         help="unified router: route decoupling capacitors with everything else instead of first")
     board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
@@ -1087,13 +1149,17 @@ def _apply_routing_profile(args, argv):
 
 def _unified_options(args):
     if getattr(args, "router", "legacy") != "unified":
+        if getattr(args, "unified_direct", False):
+            raise ValueError("--unified-direct requires --router unified")
         return None
     from .unified_router import UnifiedRouterOptions
     return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
                                 maximum_iterations=args.unified_iterations,
+                                maximum_expansions=args.unified_search_states,
                                 time_budget_s=args.unified_time_budget_s,
                                 power_islands=None if args.power_islands == "off" else args.power_islands,
-                                pre_route_decouplers=not args.unified_no_decouplers,
+                                pre_route_decouplers=not args.unified_no_decouplers and not args.unified_direct,
+                                direct=args.unified_direct,
                                 route_smoothing=not args.no_route_smoothing,
                                 save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
 
@@ -1140,6 +1206,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_view(args)
     if args.command == "replay-unified":
         return _run_replay_unified(args)
+    if args.command == "replay-critical":
+        return _run_replay_critical(args)
     if args.command == "state":
         from .state_codec import StateError, describe_state
         try:
@@ -1528,6 +1596,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     physical_board = apply_hard_macro_scene(physical_board, scene,
                         locked=args.locked, offline=args.offline)
                 editor_source_board = physical_board
+                direct_unified = args.router == "unified" and args.unified_direct
+                if direct_unified:
+                    # Native verification is read-only here. Re-entry must use
+                    # unified negotiation, never the legacy bridge controller.
+                    args.filled_copper_trials = 0
                 stitch_enabled = args.stitch_zone_pads or bool(physical_board.zones)
                 early_pads: set[PadReference] = set()
                 if args.early_plane_pad and not stitch_enabled:
@@ -1667,6 +1740,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                           + (" (compiler code changed since it was saved)" if placement_reuse["code_changed"] else ""))
 
                 def on_stage(name, value):
+                    if args.checkpoint_dir and name in {"critical-inputs", "critical-retry-inputs"}:
+                        from .workbench import save_state
+                        try:
+                            path = save_state(args.checkpoint_dir / (name + ".state.json"), value)
+                        except (OSError, ValueError) as exc:
+                            checkpoints[name + "_error"] = f"{type(exc).__name__}: {exc}"[:500]
+                            print(f"Critical checkpoint not saved: {exc}", flush=True)
+                        else:
+                            checkpoints[name] = str(path)
+                            print(f"Critical inputs checkpoint -> {path}", flush=True)
                     if args.checkpoint_dir and name == "placement" and initial_placement is None:
                         try:
                             path = save_placement_checkpoint(args.checkpoint_dir / "placement.state.json", value,
@@ -1770,17 +1853,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 emit(progress, "final_contacts_native_drc", "started")
             stitch = (result.plane_stitch if result.stopped_after
                       else escape_feedback.plane_stitch if escape_feedback is not None
-                      else stitch_zone_pads(result.board, plane_options) if stitch_enabled
+                      else stitch_zone_pads(result.board, plane_options) if stitch_enabled and not direct_unified
                       else result.plane_stitch)
             plane_repair = None
-            if stitch_enabled and stitch is not None and stitch.board.zones and not result.stopped_after:
+            if (stitch_enabled and not direct_unified and stitch is not None
+                    and stitch.board.zones and not result.stopped_after):
                 # Routing after stitching can wall a pour-contact pad off; re-stitch those explicitly.
                 from .plane import repair_cut_off_plane_pads
                 before = stitch.added_track_count + stitch.added_via_count
                 stitch, still_cut_off = repair_cut_off_plane_pads(stitch, plane_options)
                 plane_repair = {"added_copper": stitch.added_track_count + stitch.added_via_count - before,
                                 "still_cut_off": [f"{p.component}.{p.pad}" for p in still_cut_off]}
-            output_board = stitch.board if stitch_enabled and not result.stopped_after else result.board
+            output_board = (stitch.board if stitch_enabled and stitch is not None
+                            and not result.stopped_after else result.board)
             duplicate_stitch = (DuplicatePadStitchResult(output_board, (), (), 0) if result.stopped_after
                                 else stitch_duplicate_pads(output_board))
             output_board = duplicate_stitch.board
@@ -1798,7 +1883,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_board = swept
             output_drc = (
                 run_physical_drc(output_board)
-                if not result.stopped_after and (stitch_enabled
+                if not result.stopped_after and ((stitch_enabled and stitch is not None)
                 or duplicate_stitch.added_track_count
                 or trimmed_overhangs)
                 else result.drc
@@ -1888,6 +1973,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
+                    "router", "unified_direct", "unified_iterations", "unified_time_budget_s", "unified_search_states",
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",

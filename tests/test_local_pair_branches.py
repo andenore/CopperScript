@@ -68,3 +68,55 @@ def test_complete_pair_accepts_matched_branch_and_preserves_all_source_contacts(
     assert all(graph.net_connected(n) for n in board.nets)
     assert not [f for f in run_physical_drc(result.board,policy=PhysicalDrcPolicy(require_completed_detailed_route=False)).findings if f.severity.value=='error']
     assert board.tracks==board.vias==()
+
+
+def support_fixture():
+    from test_critical_routing import _pair_board
+    board = _pair_board()
+    one = PhysicalFootprint("support", (FootprintPad("1", Point(0, 0), Size.mm("0.4", "0.4")),), Size.mm(1, 1))
+    refs = {"USB_DP": "SUP_P", "USB_DM": "SUP_N"}
+    return replace(board, footprints={**board.footprints, "support": one},
+        placements=(*board.placements, Placement("SUP_P", "support", Point.mm(33, "10.5")),
+                    Placement("SUP_N", "support", Point.mm(33, "13.5"))),
+        nets=tuple(replace(n, pads=(*n.pads, PadReference(refs[n.name], "1"))) for n in board.nets),
+        net_routing_rules=tuple(replace(r, breakout_length_nm=4000000, breakout_width_nm=200000) for r in board.net_routing_rules))
+
+
+def test_separate_nearby_support_contacts_keep_two_real_main_endpoints():
+    from pcbir import route_global, route_critical_nets
+    board = support_fixture()
+    guides = route_global(board)
+    # Failed coarse access must not grant connectivity or lose any real pad.
+    guides = replace(guides, routes=tuple(replace(g, connected=False, segments=(), vias=()) for g in guides.routes))
+    result = route_critical_nets(board, guides, pair_state_limit=6000)
+    assert result.nets[0].connected, result.nets
+    assert result.nets[0].local_preparation.status == "joint_support_contacts"
+    assert not result.nets[0].local_preparation.pending_contacts
+    assert 0 < result.nets[0].local_preparation.support_trials <= 16
+    assert result.nets[0].local_preparation.support_expanded_states <= 1200
+    assert all(not g.connected for g in guides.routes)
+    graph = explicit_copper_connectivity(result.board)
+    assert all(graph.net_connected(n) for n in board.nets)
+    assert board.tracks == board.vias == ()
+    assert not [f for f in run_physical_drc(result.board,
+        policy=PhysicalDrcPolicy(require_completed_detailed_route=False)).findings if f.severity.value == "error"]
+
+
+@pytest.mark.parametrize("mode", ("remote", "ambiguous", "no-contract"))
+def test_support_contacts_require_one_source_declared_local_endpoint(mode):
+    board = support_fixture()
+    if mode == "remote":
+        board = replace(board, placements=tuple(replace(p, position=Point.mm(20, 4))
+            if p.reference == "SUP_P" else p for p in board.placements))
+    elif mode == "ambiguous":
+        board = replace(board, net_routing_rules=tuple(replace(r, breakout_length_nm=40000000)
+            for r in board.net_routing_rules))
+    else:
+        board = replace(board, net_routing_rules=tuple(replace(r, breakout_length_nm=None, breakout_width_nm=None)
+            for r in board.net_routing_rules))
+    from pcbir.pair_terminals import PairTerminalPreparationStats
+    report = PairTerminalPreparationStats()
+    _, a, b, pairs, returns = prepare_pair_terminals(board, *board.net_routing_rules, {}, report=report)
+    assert not (a or b or pairs or returns)
+    assert report.status == "unsupported"
+    assert board.tracks == board.vias == ()

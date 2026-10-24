@@ -107,6 +107,16 @@ def test_ipcd356_six_character_reference_without_whitespace_before_separator(tmp
         parse_ipcd356(path)
 
 
+@pytest.mark.parametrize('separator', ('', '-    '))
+def test_ipcd356_via_with_or_without_empty_pad_separator(tmp_path, separator):
+    path = tmp_path / 'native.d356'
+    path.write_text('P  UNITS CUST 0\n317RAIL             VIA   ' + separator
+        + 'MD0120PA00X+019150Y+009250X0240Y         S3\n999\n')
+    parsed = parse_ipcd356(path)
+    assert not parsed.points
+    assert parsed.vias == (TestVia('RAIL', 48641000, 23495000, 304800),)
+
+
 def test_alias_partition_handles_truncated_references_but_rejects_merged_nets():
     native = {"contacts": [
         {"net": "very.long.source.signal.a", "component": "PWR_C_ONE", "pad": "1", "position": [1000, 2000]},

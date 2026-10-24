@@ -1,4 +1,471 @@
+## Preserve macro boundary access during source-copper reuse (2026-10-24)
+
+Union/find root labels do not distinguish private macro copper from public
+access. Existing-copper anchors now yield to the group's declared macro ports;
+plane-joined witnesses are also limited to the actual public port nodes. This
+preserves ordinary pad-rooted exit reuse and real via barrel spans while stopping
+an internal via from bypassing an immutable boundary stub. Required package-exit
+witnesses remain authoritative. No macro copper is deleted or rewritten.
+
+The regression fixture fails on both Python and native kernels before the fix,
+then connects through the declared free-track port with exact ownership intact.
+An independent KiCad10.0.6 refill reports zero opens or dangling tracks. Related
+macro, source-access and router tests pass. Ladder323 exposed this issue as one
+MODEM_EN dangling stub on the asset tracker despite 120/120 signal connectivity;
+the full native consumer replay is pending and must not be claimed as passing.
+
+## Preserve signal reservations through plane preparation (2026-10-24)
+
+Early package-exit masks now survive critical routing, bypass work, BGA planning
+and plane stitching. They are removed only when ordinary negotiation takes
+ownership. Removing them before plane stitching allowed a later GND/supply via
+to occupy a promised signal site. Final physical boards do not retain these
+temporary masks; original declared keepouts remain authoritative.
+
+A functional four-layer fixture demonstrates that an otherwise legal competing
+GND-via site stays blocked during preparation and is released for negotiation.
+The corrected fixture fails on frozen b7c1046 (control321), passes after the
+change (319), and the 50-case related set passes (322). Earlier controls317/318
+used a one-pad package, which has no neighbouring-land escape demand; those
+failures were invalid evidence and are retained. Control320 accidentally imported
+the active compiler through pytest configuration and is also not a valid control.
+The matched control explicitly pins pytest's configuration and compiler path.
+
+Ladder323 improves round LED from 50/51 to 51/51 signals with zero geometry errors,
+40 vias and 582.844 mm (formerly 41 vias and 552.542 mm). It retains nRF52 35/35,
+44 vias and 350.563 mm. The separate LED consumer passes fresh native with zero
+opens/violations, 33 vias and 545.708 mm (formerly 35 vias and 545.611 mm).
+The 30.302 mm extra round-LED copper and 0.097 mm extra consumer copper remain
+tradeoffs; loaded timing is not an isolated speed comparison. Asset tracker
+finishes with 120/120 signals and zero native opens, but one immutable MODEM_EN
+port stub is dangling. This is a compatibility regression, not a native pass.
+
+Actual restored critical replay316 connects both MDI pairs and all five clocks.
+Support/plane screen319 retains the masks until negotiation and all physical
+prefix copper. Subsequent coarse RMII replay324 connects all six nets. Fresh
+KiCad10.0.6 refill has zero selected MDI/clock/RMII or GND opens and zero geometry
+errors; 456 other opens and 12 dangling-track warnings remain on the partial
+export. The largest existing ground-return distance is 2.134574 mm within the
+source 2.2 mm bound, with no ground-via changes during RMII routing. The screen
+excludes pending-support release retry and full ordinary routing: fresh complete
+pipeline validation is still required.
+
+## Revalidate collateral escape-reservation release (2026-10-24)
+
+Bypass preparation may release provisional package-exit keepouts in a proximity
+box to retry a pending capacitor. That box can include a complete signal exit
+which does not conflict with the selected bypass copper. Removing its reservation
+lets a later clock or pair route occupy the exit. The flow now checks every
+original track and via of an affected net against the actual immutable/bypass
+prefix, including its return-via rule. It restores only complete legal groups
+whose proxy masks also clear that prefix. No copper or source pose is modified.
+
+The new temporary mask context requires newly verified bypass paths and strict
+source/prefix admission. Original ledgers are not rewritten to waive a context
+change. Any failed witness or admission check rolls back the whole restoration.
+A functional fixture shows a clock occupying the unprotected exit, then keeping
+it clear after restoration. Tests also reject a legal via with a blocked stem
+and exercise new-ledger validation and rollback. The 77-case related set passes.
+
+On actual combined preparation, 37 collateral keepouts across 18 nets can be
+restored, including RXD0 and CRS_DV. RXD1's original proposal conflicts with the
+bypass prefix and stays withdrawn. Fresh exact bypass admission passes without
+changing its 344 tracks or 108 vias, source poses, arrays or declared rules.
+Critical replay316 is pending; this is not a full-board pass.
+
+Ladder315 retains the prior copper/completion: nRF52 35/35, zero geometry errors,
+44 vias and 350.563 mm in 31.1 s; round LED remains 50/51 with DEC3 open,
+41 vias and 552.542 mm in 88.4 s; the separate LED consumer passes fresh native
+with zero opens or violations, 35 vias and 545.611 mm in 73.5 s. Concurrent
+runtimes do not establish a performance improvement or an unchanged-consumer
+runtime guarantee.
+
+## Explicit unified search-state budget (2026-10-23)
+
+`route-board --unified-search-states N` now sets the existing maximum expanded
+states per path search. The default remains 400000. The effective value is retained
+in `work_limits` and saved replay options, and non-positive values are rejected.
+This computational bound changes no width, clearance, layer or via requirements.
+A bounded no-path result does not establish that no legal path exists.
+
+Actual prepared consumer controls use identical inputs, 16 negotiation iterations,
+three commit rounds and 90 s: TARGET_OE_N leaves four groups open at 400000 states
+but connects at 2000000 states with zero exact geometry errors. Fresh KiCad10.0.6
+refill has zero opens on that net and the retained MDI/clock prefix, zero geometry
+errors, 499 unrelated open items and 12 dangling-track warnings. This remains a
+partial diagnostic, without full-board or electrical qualification.
+
+The 37-case CLI/router set passes. The CLI test compares an intentionally exhausted
+one-state search with a 2000000-state search and checks actual connectivity,
+reported work limits and typed replay settings. Ladder304 with the larger budget
+retains 35/35 nRF52 signals, zero geometry errors, 44 vias and 350.563 mm in 57.2 s.
+Concurrent timing is not a whole-board performance claim.
+
+## Reuse existing copper independently of graph-root labels (2026-10-23)
+
+Explicit connectivity can retain a pad identity as the root of a group already
+joined to tracks and vias. The unified router previously omitted those copper
+anchors whenever the root began with `pad:`. It now follows actual group
+membership, retains all original copper, and exposes each via only on its real
+barrel span. Required verified package accesses still replace these alternative
+anchors, so this does not authorize bypassing a protected exit.
+
+A front-layer barrier fixture has two existing pad-to-via exits and no remaining
+via budget. It fails before the correction and connects on the back layer after
+it, with zero exact geometry errors and unchanged source tracks/vias. Both search
+kernels pass; a blind-via variant cannot invent a back-layer anchor. The 42-case
+router/return set and 55-case native dependency/bypass ownership set pass.
+
+Ladder298 retains the prior copper and completion: nRF52 35/35, zero geometry
+errors, 44 vias and 350.563 mm; round LED 50/51 with DEC3 still open, zero geometry
+errors, 41 vias and 552.542 mm. The separate LED consumer passes native with zero
+opens and violations, 35 vias and 545.611 mm. nRF52 took 79.9 s under concurrent
+jobs and the unchanged control300 took 77.7 s with identical copper. Loaded
+timing is inconclusive; no runtime improvement is claimed.
+Actual control-net replay299 remains partial: ADC_SDO connects but TARGET_OE_N
+still cannot reach four groups. This generic correction is not presented as
+closure of that board fault.
+
 # Routing performance and optimization assessment
+
+## Net-aware via halos outside pad annuli (2026-10-23)
+
+The via raster now distinguishes a pad's foreign-net clearance halo from the
+annulus exclusion that applies to every net. Exact `can_via` already makes this
+distinction. Previously the raster marked the entire expanded pad halo foreign,
+discarding legal same-net transitions between opposite-face lands. Foreign
+copper and drill clearances retain their original envelopes. The inner pad
+exclusion uses the actual annulus radius, including when the effective foreign
+drill envelope is larger. No annulus may touch pad copper; exact commits remain
+mandatory and no routing rule is reduced.
+
+Both regression tests fail before the correction. One compares raster ownership
+with exact via legality at an ordinary opposite-face gap, including foreign-net
+queries, forbidden annulus contact and two hole-clearance values. The other
+keeps a 2.2 mm route budget: the former detour is 2.571320 mm; the correction
+connects the lands within the original budget with one ordinary via and zero
+exact DRC errors. The 39-case router/CLI/coupled/bypass set passes.
+
+Actual prepared consumer replay246 connects all eight ADC input networks on
+the original coarse grid (control235 connects six). No source geometry, width,
+clearance, layer, via-count or length rule changes. Fresh KiCad10.0.6 refill
+has no selected-network opens and zero geometry errors;499other unconnected
+items and12dangling-track warnings remain because ordinary routing is excluded.
+This is not complete-board, noise, assembly or CAM acceptance.
+
+Ladder250 retains35/35signals and zero geometry errors, using44vias and
+350.563mm rather than40vias/346.483mm. Its72.9s flags the old22.9s timing
+baseline. Unchanged compiler control251 also flags its old baseline at74.3s
+under concurrent jobs; the timing comparison is inconclusive. The extra vias
+and length are retained tradeoffs, not a claim of general routing-quality or
+runtime improvement.
+
+## Bounded fine-grid diagnostics (2026-10-23)
+
+The optional `grid_window_nm` restricts a unified replay's raster/search nodes
+while retaining the original lattice phase and complete physical board.
+Attempted terminals outside the requested rectangle are refused; original
+pads, keepouts, source copper, holes, outline and exact commit checks remain.
+Geometry entering the window from outside is still an obstacle. Default runs
+keep their previous grid and behavior.
+
+A real two-lane fixture has a 1.05 mm corridor for two 0.2 mm traces with
+0.2 mm clearances. The 0.25 mm grid cannot fit both; a bounded 0.025 mm grid
+connects both with zero exact DRC errors and unchanged rules. Tests also cover
+whole-source preservation, entering obstacles and invalid/excluded terminals.
+The 35-case router/CLI/bypass set passes. nRF52 ladder244 retains35/35signals,
+zero geometry errors,40vias and346.483mm in22.9s, with no regression.
+
+In the actual prepared eight-channel consumer diagnostic, coarse control235
+connects six channels; finer windows242/245 connect seven. This diagnostic
+isolates a precision limitation but does not close the bank or establish native,
+noise or complete-board acceptance. It also exposed overly conservative via
+pad halos for a separate correction.
+
+## Located unified replay failures (2026-10-23)
+
+`copper issues` now reads the existing unified subset replay summary's attempted
+failure map. Previously a replay with two exact-commit rejections displayed zero
+issues because it had no full-pipeline `detailed` section. Unattempted open nets
+remain excluded; grouping and pad-derived windows use the existing machinery.
+The 19-case iteration-tools set passes. Ladder237 retains 35/35 signals, zero
+exact geometry errors, 40 vias and 346.483 mm in 19.2 s; no regression against
+control233, with no routing or verification acceptance change.
+
+## Check the deadline before each repair alternative (2026-10-23)
+
+The unified router now checks its existing deadline before each unseeded or
+seeded repair attempt. Previously the outer round alone checked time: an
+unseeded attempt could use the remaining budget and still launch a full escape
+seeder afterward. It retains the best completed attempt before reporting the
+skipped alternative. This does not interrupt a running search, geometry check
+or seeder, and is not a hard wall-time guarantee.
+
+A real-search regression expires a controlled clock as the unseeded repair
+ends. Before the fix a third negotiation/seed starts; afterward exactly two
+negotiations run, the seeder is never called, the connected fixed net stays
+connected and the unresolved net remains explicit. The 32-case unified,
+coupled-order and bypass-flow set passes. Ladder233 retains all 35 signals,
+zero exact geometry errors, 40 vias and 346.483 mm; 45.9 s versus unchanged
+control228's 71.6 s flags no regression, without a speedup claim.
+
+## Native filled-polygon parity index (2026-10-23)
+
+The native slit-bridge decoder indexes nonhorizontal edges by their exact
+half-open Y intervals before evaluating polygonized faces. It retains original
+oriented edges and the original even/odd crossing arithmetic. No geometry is
+healed, rounded, buffered, or cached; representation rejection and linework
+checks remain unchanged. The median lower endpoint gives the interval tree a
+finite, balanced construction even when coordinates repeat.
+
+`bench/native_fill.py` measures the public decoder, using `pcbir.workbench`
+to load native PCB fills. On the identical 15,005-vertex synthetic walk,
+controls223 took 7.57 s before and 1.65 s after. On the saved consumer native
+37,210-vertex GND/In1.Cu region, controls224/223 took 6.83 s and 3.72 s.
+Input hashes, area and normalized WKB hashes match exactly in each comparison.
+These are isolated decode timings under concurrent workloads, not a claim
+about complete routing or native feedback duration. A one-second sample of
+the earlier full consumer verification was inside the former all-edge scan;
+repeated complete verification still needs its own measurement.
+
+The 76-case parity, qualification and filled-feedback test set passes. Boundary
+tests compare active edge multisets and parity at vertices and neighboring
+floating-point values in millimetre and nanometre scales; a 400-hole walk
+retains its exact area and every void. Native connectivity, electrical/RF/PDN,
+assembly and CAM qualification remain separate.
+
+The matching unified nRF52 ladder227 retains all 35 signal connections, zero
+exact geometry errors, 40 vias and 346.483 mm. Its 93.7 s versus control214's
+19.7 s triggers the timing warning under concurrent full-board jobs; no whole
+route speedup or clean timing gate is claimed. The unchanged active compiler
+control228 also takes 71.6 s and flags the same earlier baseline; this timing
+comparison remains inconclusive. Run225 omitted the unified
+override and is an extra legacy control, not a comparable unified result.
+
+## Coupled groups before equal-priority singles (2026-10-23)
+
+Critical job ordering preserves explicit source priority and places coupled
+groups before singles at an equal priority. The old alphabetical kind ordering
+put clocks first; a legal single trace could wall off the same package's paired
+exit. Coupled lanes require one contiguous joint channel and cannot use the
+independent single fallback. The new tie-break is forward ordering, with no
+additional portal, search, state, retry or rip-up allowance.
+
+A real crossing fixture connects both a surface-only pair and an equal-priority
+clock, using the clock's permitted layer transition. Giving the clock a higher
+explicit priority preserves that choice and the blocked pair remains failed.
+Both cases preserve all inputs and complete geometry checks. The 62-case
+routing/flow set passes. The nRF52 ladder214 retains35/35connections, zero exact
+geometry errors,40vias and346.483mm, with no regression.
+
+In full consumer controls198/205, the clock's13-segment surface path runs
+between paired package lands and termination supports; both pairs fail before
+main search. Replay212 of the actual prepared input, including all344bypass
+tracks,108vias and ordinary reservations, connects both pairs and all five
+clocks with the new order. TX uses470states and RX3070, each under6000. The
+two clock branches tune to23.106233mm each with two legal bumps. Fresh
+KiCad10.0.6 refill has zero geometry errors and no selected-net opens;499
+unrelated whole-board open items and12dangling-track warnings remain. This
+is a prepared-critical subset, not a full ordinary-routing or SI result.
+
+## Exact bypass reservations at the critical boundary (2026-10-23)
+
+The standard flow can hold its complete planned bypass contribution as actual
+copper through the existing validated critical-prefix interface. This preserves
+net identity, real track/via shapes and holes, permits legal same-net joins, and
+locks the complete accepted contribution through critical routing. The previous
+all-net rectangular keepouts can forbid such joins and approximate round
+geometry conservatively. An unsupported or ambiguous semantic ownership claim
+retains that conservative protocol with an explicit reason; no proposed piece
+is filtered out to manufacture a passing claim.
+
+Exact source fields, prefix occurrence multiplicity, original admitted return
+paths, every declared association and hard geometry are checked afresh. Changed
+temporary reservation context can therefore refuse reuse too; that adaptation
+is not silently authorized. The existing initial pair-state option now also
+bounds the standard critical path, rather than only package-access preflight.
+No maze search or retry allowance is added.
+
+Checkpoint-directory builds save first and retry critical inputs. Bypass-only
+replay restores each decoded edge to a unique equal original occurrence, then
+runs all normal admission checks. Missing/duplicate occurrences, changed
+values, context digests and stale source remain rejected. Restoration changes
+no routing value and grants no acceptance authority. Workbench views show the
+reserved proposal as diagnostic geometry.
+
+Six new real-geometry/flow tests cover a ground join rejected by the old proxy,
+foreign-net collisions, complete cross-face supply/return preservation,
+serialized replay, ambiguous/stale ownership refusal and the aggregate pair
+bound. A 64-case flow/admission/replay set passes. The nRF52 ladder206 retains
+35/35 connections, zero exact geometry errors,40vias and346.483mm, with no
+regression. Full-consumer205 admits all344planned tracks and108vias as copper;
+clock-first ordering still obstructs its paired exits. Removing ordinary
+reservations changes an original witness context and correctly retains the
+conservative fallback rather than rebinding it without authority. Prepared
+replay212, using the changed coupled-first order, needs no such release and
+passes selected-native verification. No improved full-board result is claimed.
+
+## Joint separate-support completion (2026-10-23)
+
+Pairs with exactly two shared endpoint packages and one source-bounded separate
+support contact per member keep those support contacts as obligations while
+forming each escape. A proposed signal collar and its required ground return
+are reserved before both local ties are completed against fresh exact geometry.
+Changing the return site can therefore change the temporary support topology.
+Only the ordinary complete-pair gates may adopt the resulting group; failure
+rolls back all generated copper and retains every pending source contact.
+Macro-owned, ambiguous, remote and unsupported contact trees keep their existing
+preparation. Fixed copper and required via-array multiplicity remain immutable.
+
+Eight distinct surface and eight transition proposals share the former
+600-state local allowance per member: 300 states per family/member across all
+local calls, at most 1200 total. Each support samples at most eight attachment
+points on actual connected collar copper within its original breakout region.
+An exact repeated local proposal can reuse geometric work across pitches only
+with identical non-copper source fields, tracks/vias including occurrence
+multiplicity, and exact caller prefixes. This transaction-local cache holds at
+most 16 outcomes; it never certifies whole-pair acceptance or reuses a clearance
+index. Every final candidate receives fresh complete validation.
+
+Transition-pair ranking also checks each endpoint's one-pitch straight
+continuation against its own complete local proposal. A clear continuation is
+a preference inside the existing 128 combinations and search/state allowances,
+not an admission gate: a shorter goal tail may reach another legal collar.
+Compact attempted-endpoint telemetry reports at most 16 orientations, expanded
+states, legal advances and closest approaches, excluding private frontiers and
+routing identity.
+
+On one unchanged 389-component consumer, serial preparation produced no PHY
+transitions and failed TX. Joint completion produces 23 transitions, but its
+first channel ranking still fails at 6000 and 60000 states. Endpoint approach
+ranking then connects all six TX contacts in 4032 of 6000 states, with one signal
+transition pair and its required ground return. Independent KiCad 10.0.6 refill
+has zero geometry errors and no TX opens; unrelated board opens remain. RX also
+retains all six contacts. Copper-total skew is about 0.5 mm and is not an
+endpoint-delay or SI qualification. No capacitor or source-rule change is needed.
+
+The nRF52 ladder controls188/194 retain 35/35 signal connections, zero exact
+geometry errors, 40 vias and 346.483 mm, with no regression. Concurrent runtimes
+19.3/18.9 seconds are observations, not a speedup claim. Full-board, native plane
+and engineering qualification remain separate from these selected-net results.
+
+## Terminal-transition rejection diagnostics (2026-10-23)
+
+Critical replay now reports finite transition-stage counters and at most 16
+rejection examples per terminal/layer/pitch, with two examples per stage and
+eight exact blocker identities per example. Local access distinguishes an
+exhausted frontier from its separate state limit. These observations do not
+change candidate order, state allowances, copper ownership or acceptance.
+
+One consumer's baseline has three short collars: one violates signal
+via-in-pad policy and two collide with opposite-face bypass lands. Its local
+fallback samples 155 sites, finds 12 legal via pairs and spends 32 local path
+calls without a complete collar. A retained capacitor-move trial generates
+six signal collars but rejects all 2472 sampled return sites, including sites
+blocked by its own disposable termination branches. This identifies serial
+support/escape/return preparation as a limitation; it is not a proof that the
+physical placement has no valid route. Both diagnostics export byte-identical
+PCBs and routing fingerprints to their corresponding pre-telemetry controls.
+
+The 41-case pair/replay set, 51-case local/IPC/telemetry set and 58-case
+transition/return set pass (overlapping sets). The nRF52 ladder case180 retains
+35/35 signal connections, zero exact geometry errors, 40 vias and 346.483 mm;
+38.3 seconds versus the prior 40.1-second control, with no ladder regression.
+Native/plane and engineering gates remain open; no speedup claim is made.
+
+The reference IPC reader also accepts an explicit empty-pad separator on a
+plated via record. A named manufacturer via is classified as a via, not a
+component with an empty pad. Units, drill dimensions and net identities remain
+explicit; unsupported records still fail closed.
+
+## Offset collars for staggered plated rows (2026-10-23)
+
+Round plated terminals with a source breakout contract can now propose lateral
+collars derived from neighboring land edges. At most two proposals per cardinal
+heading are retained, with one opportunity on each lateral side. Lead-ins and
+oriented tails use the existing exact source-width and whole-board clearance
+checks; main search/state limits and complete-pair acceptance are unchanged.
+The change is generic, rotation/mirror independent and has no board selectors.
+
+On one consumer's unchanged revised placement, baseline161 failed both MDI
+pairs after ten states each. Candidate160 connected RX within the same 6000-state
+bound (3070 states, one complete candidate); TX still failed. Reported RX total
+copper skew is zero, but includes termination branches and is not endpoint-delay
+qualification. Independent KiCad refill of the RX diagnostic has zero geometry
+errors and no RX opens; unrelated board opens remain. Transition diagnostics
+then locate TX's missing generated launches at its surface-mounted terminal,
+while its plated terminal offers twelve direct opposite-face contacts.
+
+The 122-case routing set passed before the final lateral-slot diversification.
+After that change, 58 targeted cases passed; 38 cases including new directional
+and transition-inventory assertions also passed (sets overlap). The early nRF52
+run157 retains all 35 signal connections, zero exact geometry errors, 40 vias,
+346.483 mm and byte-identical PCB SHA256
+`9f05741a655c1d478e1d53beeec7d1aaef80c5e75ea8e14ef6a539680b6014d3`.
+Its concurrent runtime 16.1 to 67.5 seconds triggers the ladder timing warning;
+this is retained without a speed claim. A first control launch167 accidentally
+used the original editable install and failed CLI parsing; it is not a routing
+comparison. Explicit-PYTHONPATH control168 and candidate169 repeat the same case.
+Both retain byte-identical copper and all signal connections, with 75.4 and
+40.1 seconds respectively and no ladder regression. External workloads differed;
+this is not a whole-board speedup claim.
+Native plane and engineering gates remain incomplete in this example subset.
+
+## Direct unified pipeline subset (2026-10-23)
+
+| Ladder case | Flow | Signal opens / connections | Exact DRC errors | Vias | Length mm | Time s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| round-led-ring | retained legacy baseline | 2 / 51 | 0 | 33 | 523.802 | 178.2 |
+| round-led-ring | direct unified | 0 / 51 | 0 | 39 | 591.697 | 77.2 |
+| nrf52 | unified with bootstrap | 0 / 35 | 0 | 40 | 346.483 | 27.9 |
+| nrf52 | direct unified, older export contacts | 0 / 35 | 0 | 37 | 360.121 | 21.8 |
+| nrf52 | strict unified only | 0 / 35 | 0 | 35 | 359.121 | 11.7 |
+| nrf52 | standard unified with exact neck emission | 0 / 35 | 0 | 40 | 346.483 | 74.5 |
+
+Runs: `build/bench-main-baseline109`, `build/bench-unified-direct115`,
+`build/bench-unified-nrf-baseline118`, `build/bench-unified-nrf-direct119`,
+`build/bench-unified-only-nrf123`, `build/bench-unified-standard131`.
+Native verification was not run; route status remains failed with deferred
+plane/evidence gates. The nRF52 timings were concurrent with each other and a
+consumer run. This is a measured subset, not full-ladder or release acceptance. The standard
+neck-emission run reproduced the standard baseline completion, DRC, via count
+and track length. The ladder flags its total wall time (27.9 to 74.5 s); loads
+were not controlled. Instrumented unified-stage times were 7.69 and 7.92 s,
+and export finished at 22.57 and 22.29 s respectively. The larger
+process-level timing difference is retained without a cause or speed claim.
+
+
+## Fine-grid keepout windows (2026-10-23)
+
+A read-only stack sample of the consumer's standard unified pipeline caught its
+critical-clock prepass in `detailed._blocked_nodes`: every fine-grid point
+scanned all keepouts on every layer. The new broad phase visits each keepout's
+inclusive axis window and retains the exact polygon and board-material
+predicates. Source keepouts, layer membership, node coordinates and the result
+set are unchanged; no geometry or routing budget is relaxed.
+
+The existing hotspot runner now accepts `--only grid`. On its synthetic
+six-layer fixture (120 small reservations, irregular axis coordinates), five
+alternating samples gave median 4.280 s before and 0.311 s after (13.78x).
+Every blocked-node output matched exactly. This measures grid construction,
+not a full-board speedup or qualification. Working results:
+`build/grid-hotspot132.json`.
+
+The 64-test detailed/reuse/grid set passed 63 tests and initially rejected a
+new invalid test fixture that named a layer outside its board stackup. The
+corrected fixture and both existing grid-equivalence checks then passed.
+All 32 critical/pipeline tests also passed. A warm same-checkout nRF52 ladder comparison used the exact original
+`detailed.py` for the baseline and restored the committed candidate for the
+second run. Both completed 35/35 signal connections with zero exact DRC errors,
+40 vias and 346.483 mm; the emitted KiCad PCB bytes were identical
+(SHA-256 `9f05741a655c1d478e1d53beeec7d1aaef80c5e75ea8e14ef6a539680b6014d3`).
+Total times were 45.4 and 44.1 s and the ladder reports no regression.
+The earlier cold-copy/concurrent attempt (108.6 s) and its warning remain in
+`build/bench-grid133`; the warm baseline/candidate are
+`build/bench-grid-baseline135` and `build/bench-grid-candidate136`.
+Native verification was not run on these ladder cases. Full-board routing and
+native verification remain separate pending checks.
+
 
 ## Isolated hotspot experiments (2026-10-12)
 
@@ -559,3 +1026,47 @@ On one 414-track/69-via consumer control, eight repeated index builds and region
 queries took 1.65 s before and 0.15 s after. The membership result digest and
 complete physical DRC report were identical. This isolates repeated source
 membership work, not complete-route performance or any engineering acceptance.
+
+
+### Exact decoupling path-point lookup
+
+The path graph narrows point candidates by inclusive X/Y bounds, selecting the
+smaller sorted interval. The original integer collinearity test, distance order,
+track/via occurrences and BFS state bound remain authoritative. The index is
+local to one graph construction; it caches no witness or clearance decision.
+
+`bench/decoupling_paths.py` loads saved inputs through `pcbir.workbench` and calls
+the public verifier. Before259/after261 on eight opposite-surface associations
+retain identical input and path hashes: 0.4969 s versus 0.2367 s. This is a
+prepared-prefix measurement, not a whole-board runtime claim. A 55-case related
+set passes, including randomized inclusive/reversed/diagonal lookup parity and
+an 80-versus-6400 exact-candidate count. The initial test used an illegal zero-
+length track and was corrected; track validation was not relaxed.
+
+The nRF52 ladder263 retains 35/35 signals, zero exact geometry errors, 44 vias and
+350.563 mm in 20.7 s. Its loaded baseline257 took70.9s with identical copper;
+this comparison does not establish a whole-board speedup.
+
+
+### Single-ended existing-return reuse
+
+The source's existing return-via fields now constrain ordinary launch candidates,
+maze proposals and final reservations, plus the unified Python/native via mask
+and exact commit. The shared checker uses integer squared distance and actual
+barrel spans. Independent DRC reports `DRC-RETURN-VIA` and coverage; it does not
+prove native filled-ground continuity or SI. No return copper is invented and
+all immutable copper is preserved. This is existing-via reuse, not a return-via
+generator or a shared-reference waiver.
+
+The regression fixture previously crossed without any permitted return in both
+kernels; the new mask finds a source-covered transition or leaves it unresolved.
+Exact-commit fault injection, distance boundaries, span mismatches, early launch
+paths and a real two-face native refill fixture are covered. The related68-case
+set passes. `replay-unified --save-result FILE` retains a typed result for further
+workbench inspection and refuses to overwrite an existing result; it carries no
+source/native admission authority.
+
+Ladder281 retains35/35 signals, zero geometry errors,44 vias and350.563mm, with a
+55.9s timing warning against an old20.7s baseline. Unchanged control283 takes35.9s;
+final candidate285 takes30.7s with identical copper and no new warning. Concurrent
+board verification makes these timings unsuitable as a whole-board speed claim.

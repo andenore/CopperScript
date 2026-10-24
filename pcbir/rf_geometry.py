@@ -6,8 +6,52 @@ or exported-Gerber fidelity. Missing support or fill is explicitly incomplete.
 from __future__ import annotations
 
 from math import hypot
+from bisect import bisect_right
 from .qualification import check
 from .power_integrity import number
+
+
+class _EdgeYIndex:
+    """Exact half-open Y-interval index for the existing even/odd ray test.
+
+    Original oriented edges and the original crossing arithmetic are retained.
+    Horizontal edges never cross a horizontal ray. Selecting a median lower
+    endpoint guarantees progress even with repeated coordinates or tiny spans.
+    """
+    __slots__ = ('center','low','high','lower','upper','left','right')
+
+    def __init__(self, edges):
+        records = [(min(a[1],b[1]),max(a[1],b[1]),(a,b)) for a,b in edges if a[1]!=b[1]]
+        self.center = None
+        if not records:
+            return
+        self.center = sorted(record[0] for record in records)[len(records)//2]
+        left, right, crossing = [], [], []
+        for low, high, edge in records:
+            if high <= self.center:
+                left.append(edge)
+            elif low > self.center:
+                right.append(edge)
+            else:
+                crossing.append((low,high,edge))
+        lower = sorted(crossing,key=lambda record:record[0])
+        upper = sorted(crossing,key=lambda record:record[1])
+        self.lower = tuple(record[0] for record in lower)
+        self.upper = tuple(record[1] for record in upper)
+        self.low = tuple(record[2] for record in lower)
+        self.high = tuple(record[2] for record in upper)
+        self.left = _EdgeYIndex(left) if left else None
+        self.right = _EdgeYIndex(right) if right else None
+
+    def at(self, y):
+        node = self
+        while node is not None and node.center is not None:
+            if y < node.center:
+                yield from node.low[:bisect_right(node.lower,y)]
+                node = node.left
+            else:
+                yield from node.high[bisect_right(node.upper,y):]
+                node = node.right if y > node.center else None
 
 
 def native_fill_polygon(fill):
@@ -39,9 +83,10 @@ def native_fill_polygon(fill):
     linework = unary_union(lines)
     if not linework.difference(unary_union([face.boundary for face in faces])).is_empty:
         raise ValueError("native hole bridge has dropped/crossing linework")
+    crossing_edges = _EdgeYIndex(edges)
     def inside(point):
         x, y, result = point.x, point.y, False
-        for a, b in edges:
+        for a, b in crossing_edges.at(y):
             if (a[1] > y) != (b[1] > y) and x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]:
                 result = not result
         return result

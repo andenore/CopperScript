@@ -78,10 +78,16 @@ def dependency_case(renamed=False, settled_witness=False):
     return original, fixed, area, area_vias, signal
 
 
+@pytest.mark.parametrize('unified', (False, True))
 @pytest.mark.parametrize('renamed', (False, True))
 @pytest.mark.parametrize('settled_witness', (False, True))
-def test_dependency_reroute_keeps_reserved_vias_multilayer_connected(native_cli, renamed, settled_witness):
+def test_dependency_reroute_keeps_reserved_vias_multilayer_connected(native_cli, renamed, settled_witness, unified):
     initial, fixed, area, area_vias, signal = dependency_case(renamed, settled_witness)
+    if unified:
+        from pcbir.unified_router import UnifiedRouterOptions
+        initial = replace(initial, unified_options=UnifiedRouterOptions(
+            pitch_nm=nm_from_mm('0.25'), maximum_iterations=4, commit_rounds=2,
+            time_budget_s=10))
     before = verify_filled_planes(initial.board, kicad_cli=native_cli)
     assert before.unconnected_count == 1 and before.other_violation_count == 0, before.findings
     repair = _reroute_local_dependencies(initial, fixed, area, area_vias,
@@ -247,3 +253,50 @@ def test_native_opposite_layer_items_use_only_existing_copper_transitions(
         assert not tuple(_proposals(initial.board, before, 64))
         assert result.board == initial.board and not result.trials
         assert result.stop_reason == 'no_eligible_surface_bridge'
+
+
+def test_unified_dependency_uses_verified_ports_without_overwriting_main_inputs(tmp_path, monkeypatch):
+    import pcbir.escape_feedback as feedback
+    from pcbir.unified_router import UnifiedRouterOptions
+    initial, fixed, area, area_vias, signal = dependency_case()
+    replay = tmp_path / "main-inputs.state.json"
+    replay.write_text("main run input must survive")
+    options = UnifiedRouterOptions(pitch_nm=nm_from_mm('0.25'), maximum_iterations=4,
+        commit_rounds=2, time_budget_s=10, save_inputs_path=str(replay))
+    initial = replace(initial, unified_options=options)
+    def legacy_forbidden(*args, **kwargs):
+        raise AssertionError("unified transaction called the legacy router")
+    monkeypatch.setattr(feedback, 'route_detailed', legacy_forbidden)
+    events = []
+    repaired = _reroute_local_dependencies(initial, fixed, area, area_vias,
+        frozenset({signal}), frozenset({signal}),
+        DetailedRouterOptions(escape_terminals=True), EscapeFeedbackOptions(),
+        on_progress=lambda phase, event, data: events.append((phase, event, data)))
+    assert repaired is not None
+    assert repaired[1].board.metadata['detailed_router'] == 'unified'
+    assert replay.read_text() == "main run input must survive"
+    assert any(phase == 'zone_subset_search' and event == 'started' and data['router'] == 'unified'
+               for phase, event, data in events)
+
+
+def test_required_unified_ports_survive_replay_and_reject_stale_witnesses(tmp_path):
+    from pcbir.unified_router import UnifiedRouterOptions, route_unified, replay_unified
+    from pcbir.state_codec import load_state, save_state
+    initial, fixed, _, _, signal = dependency_case()
+    path = tmp_path / 'required.state.json'
+    options = UnifiedRouterOptions(pitch_nm=nm_from_mm('0.25'), maximum_iterations=4,
+        commit_rounds=2, time_budget_s=10, save_inputs_path=str(path))
+    routed = route_unified(fixed, initial.placement_and_global.global_route, options,
+        only_nets=frozenset({signal}), required_accesses=initial.fanout.boundary_accesses)
+    replayed = replay_unified(path, save_inputs_path=None)
+    assert replayed.board.tracks == routed.board.tracks
+    assert replayed.board.vias == routed.board.vias
+    saved = load_state(path)
+    witness = next(iter(saved['required_accesses'].values())).path[0]
+    tracks = list(saved['board'].tracks)
+    tracks.remove(witness)
+    saved['board'] = replace(saved['board'], tracks=tuple(tracks))
+    stale = tmp_path / 'stale.state.json'
+    save_state(stale, saved)
+    with pytest.raises(ValueError, match='required routing access is stale or invalid'):
+        replay_unified(stale, save_inputs_path=None)

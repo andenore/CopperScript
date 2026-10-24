@@ -6,10 +6,54 @@ accepts routing flags as proof, or grants ownership of an immutable prefix.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import fields
+from dataclasses import fields, replace
 
 from .fanout import FanoutResult
 from .physical import PhysicalBoard, RouteKind, TrackSegment, Via
+
+
+def restore_bypass_reservation_edges(reserved: FanoutResult) -> FanoutResult:
+    """Restore unique original-edge identities after a value-only state decode.
+
+    This changes no value, context digest, counter, contact or ownership claim.
+    Missing/duplicate occurrences fail closed. The caller must still run ordinary
+    fresh critical-prefix/association/geometry admission on the restored value.
+    Only the bypass-only prefix emitted by the standard flow is supported here.
+    """
+    if not isinstance(reserved, FanoutResult) or not isinstance(reserved.board, PhysicalBoard):
+        raise ValueError("critical replay requires a typed bypass reservation")
+    from .decoupling_paths import DecouplingCrossLayerWitness, DecouplingCopperPath, DecouplingPathStep
+    for sequence, kind in ((reserved.created_tracks,TrackSegment),(reserved.decoupling_tracks,TrackSegment),
+                           (reserved.created_vias,Via),(reserved.decoupling_vias,Via)):
+        if not isinstance(sequence,tuple) or any(not isinstance(edge,kind) for edge in sequence):
+            raise ValueError("critical replay has untyped bypass contribution edges")
+    if (not isinstance(reserved.decoupling_witnesses,tuple)
+            or any(not isinstance(w,DecouplingCrossLayerWitness)
+                   or any(not isinstance(p,DecouplingCopperPath) or not isinstance(p.steps,tuple)
+                          or any(not isinstance(s,DecouplingPathStep) or not isinstance(s.edge,(TrackSegment,Via))
+                                 for s in p.steps) for p in (w.supply_path,w.return_path))
+                   for w in reserved.decoupling_witnesses)):
+        raise ValueError("critical replay has an untyped bypass witness")
+    if (reserved.routing_accesses or reserved.pending_pads
+            or Counter(reserved.created_tracks) != Counter(reserved.decoupling_tracks)
+            or Counter(reserved.created_vias) != Counter(reserved.decoupling_vias)):
+        raise ValueError("critical replay requires an exact bypass-only reservation")
+    edges = {}
+    for edge in (*reserved.board.tracks, *reserved.board.vias):
+        edges.setdefault(edge, []).append(edge)
+    def original(edge):
+        found = edges.get(edge, ())
+        if len(found) != 1:
+            raise ValueError("bypass replay has a missing or ambiguous original edge occurrence")
+        return found[0]
+    def path(value):
+        return replace(value, steps=tuple(replace(step, edge=original(step.edge)) for step in value.steps))
+    witnesses = tuple(replace(w, supply_path=path(w.supply_path), return_path=path(w.return_path))
+                      for w in reserved.decoupling_witnesses)
+    return replace(reserved, created_tracks=tuple(map(original, reserved.created_tracks)),
+        created_vias=tuple(map(original, reserved.created_vias)),
+        decoupling_tracks=tuple(map(original, reserved.decoupling_tracks)),
+        decoupling_vias=tuple(map(original, reserved.decoupling_vias)), decoupling_witnesses=witnesses)
 
 
 def verified_bypass_reservations(

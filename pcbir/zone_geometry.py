@@ -55,6 +55,19 @@ def _rectangle(parameters):
         origin=Point(_length(parameters, "x"), _length(parameters, "y")))
 
 
+def polygon_boundary(value, *, context="copper_zone"):
+    """Parse an exact fixed-point mm polygon shared by placement and copper."""
+    if not isinstance(value, str):
+        raise ValueError(f"{context} polygon_mm must be a string of x,y pairs")
+    try:
+        pairs = [tuple(item.strip() for item in vertex.split(",")) for vertex in value.split(";")]
+        if any(len(pair) != 2 for pair in pairs):
+            raise ValueError("expected x,y pairs")
+        return BoardOutline(tuple(Point.mm(*pair) for pair in pairs))
+    except (ValueError, ArithmeticError) as exc:
+        raise ValueError(f"invalid {context} polygon_mm: {exc}") from exc
+
+
 def lower_zone_outline(parameters, board_outline, constraints):
     """Resolve rectangle, mm polygon, placement region, or default board outline.
 
@@ -69,23 +82,20 @@ def lower_zone_outline(parameters, board_outline, constraints):
     if rectangle:
         boundary = _rectangle(parameters)
     elif "polygon_mm" in parameters:
-        value = parameters["polygon_mm"]
-        if not isinstance(value, str):
-            raise ValueError("copper_zone polygon_mm must be a string of x,y pairs")
-        try:
-            pairs = [tuple(item.strip() for item in vertex.split(",")) for vertex in value.split(";")]
-            if any(len(pair) != 2 for pair in pairs):
-                raise ValueError("expected x,y pairs")
-            boundary = BoardOutline(tuple(Point.mm(*pair) for pair in pairs))
-        except (ValueError, ArithmeticError) as exc:
-            raise ValueError(f"invalid copper_zone polygon_mm: {exc}") from exc
+        boundary = polygon_boundary(parameters["polygon_mm"])
     elif "region" in parameters:
         name = parameters["region"]
         regions = [c for i, c in enumerate(constraints) if c.kind is ConstraintKind.PLACEMENT_REGION
                    and c.parameters.get("name", f"region:{i}") == name]
         if not isinstance(name, str) or len(regions) != 1:
             raise ValueError(f"copper_zone references unknown or ambiguous placement region {name!r}")
-        boundary = _rectangle(regions[0].parameters)
+        region_parameters = regions[0].parameters
+        if "polygon_mm" in region_parameters:
+            if any(k in region_parameters for k in ("x", "y", "width", "height")):
+                raise ValueError("placement_region boundary parameters are mutually exclusive")
+            boundary = polygon_boundary(region_parameters["polygon_mm"], context="placement_region")
+        else:
+            boundary = _rectangle(region_parameters)
     inset = _length(parameters, "inset")
     if inset < 0:
         raise ValueError("copper_zone inset cannot be negative")

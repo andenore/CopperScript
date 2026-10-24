@@ -2,11 +2,12 @@
 
 Coarse access is a routing heuristic, not a certificate. These physical terminal
 records have no global grid node and never make a failed global guide connected.
-Short same-package branches are returned as disposable candidate copper; only
+Short same-package or source-bounded support branches are disposable candidate copper; only
 the complete pair's ordinary atomic geometry/connectivity gates may adopt them.
 """
 from dataclasses import dataclass, field, fields, replace
 from itertools import permutations
+from collections import Counter
 from time import perf_counter
 from .physical import BoardSide, CopperLayer, PadKind, PadReference, Point, TrackSegment, Via
 from .placement import transformed_pad_position
@@ -78,6 +79,10 @@ class PairTerminalPreparation:
     blocking_nets: tuple[str, ...] = ()
     blocking_objects: tuple[RoutingBlocker, ...] = ()
     rejection_examples: tuple[str, ...] = ()
+    pending_contacts: tuple[PadReference, ...] = ()
+    support_trials: int = 0
+    support_path_calls: int = 0
+    support_expanded_states: int = 0
 
 @dataclass(slots=True)
 class PairTerminalPreparationStats:
@@ -103,6 +108,10 @@ class PairTerminalPreparationStats:
     blocking_nets: tuple[str, ...] = ()
     blocking_objects: tuple[RoutingBlocker, ...] = ()
     rejection_examples: tuple[str, ...] = ()
+    pending_contacts: tuple[PadReference, ...] = ()
+    support_trials: int = 0
+    support_path_calls: int = 0
+    support_expanded_states: int = 0
 
     def snapshot(self) -> PairTerminalPreparation:
         return PairTerminalPreparation(**{item.name: getattr(self, item.name)
@@ -141,6 +150,145 @@ class PairTerminal:
     via: Via | None = None
     region_only: bool = True
     tracks: tuple[TrackSegment, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PairSupportPlan:
+    """Two real main contacts and one source-bounded local support per lane."""
+    guides: tuple[GlobalNetRoute, GlobalNetRoute]
+    contacts: tuple[tuple[PairTerminal, PairTerminal], tuple[PairTerminal, PairTerminal]]
+
+
+def plan_pair_supports(board, first, second, routes):
+    """Defer separate supports without forgetting or certifying any contact.
+
+    Duplicated contacts, private macro pads and ambiguous/remote support trees
+    retain their established preparation. This finite family has one separate
+    support per lane, beside one of exactly two common endpoint components.
+    """
+    from .hard_macros import macro_owned_pads
+    owned = macro_owned_pads(board)
+    guides = tuple(source_terminal_guide(board, r.net, routes.get(r.net)) for r in (first, second))
+    if any(g is None or len(g.accesses) != 3 for g in guides):
+        return None
+    common = set(a.pad.component for a in guides[0].accesses) & set(a.pad.component for a in guides[1].accesses)
+    if len(common) != 2:
+        return None
+    normalized, contacts = [], []
+    for rule, guide in zip((first, second), guides):
+        if any(a.pad in owned for a in guide.accesses) or rule.breakout_length_nm is None:
+            return None
+        anchors = tuple(a for a in guide.accesses if a.pad.component in common)
+        extras = tuple(a for a in guide.accesses if a.pad.component not in common)
+        if len(anchors) != 2 or len({a.pad.component for a in anchors}) != 2 or len(extras) != 1:
+            return None
+        other = extras[0]
+        choices = tuple(a for a in anchors if a.layer is other.layer
+            and a.layer in terminal_copper_layers(board, a.pad)
+            and other.layer in terminal_copper_layers(board, other.pad)
+            and (a.pad_position.x_nm-other.pad_position.x_nm)**2
+                + (a.pad_position.y_nm-other.pad_position.y_nm)**2 <= rule.breakout_length_nm**2)
+        if len(choices) != 1:
+            return None
+        contacts.append((choices[0], other))
+        normalized.append(replace(guide, accesses=anchors, connected=False, segments=(), vias=()))
+    if contacts[0][0].pad.component != contacts[1][0].pad.component or terminal_partners(*normalized) is None:
+        return None
+    return PairSupportPlan(tuple(normalized), tuple(contacts))
+
+
+class PairSupportCompletion:
+    """Complete disposable support ties against each proposed escape/return.
+
+    Eight surface and eight transition trials share the former 600-state
+    allowance per support: 300 per family, across all its local path calls.
+    Checked geometric paths try at most eight actual collar attachment points.
+    No prefix copper is released and no support is accepted by this planner.
+    """
+    def __init__(self, plan, first, second, report, *, source):
+        self.plan, self.rules, self.report = plan, (first, second), report
+        self.source = source
+        self.trials = {"surface": 0, "transition": 0}
+        self.remaining = {(kind, i): 300 for kind in self.trials for i in (0, 1)}
+        self.completed = {}
+
+    def __call__(self, component, held, first_tracks, second_tracks, kind):
+        if component != self.plan.contacts[0][0].pad.component:
+            return (), ()
+        # Only exact repeated proposals in this immutable source transaction
+        # can reuse local work across grid pitches. Occurrence multiplicity,
+        # all candidate copper and every non-copper source field participate.
+        if (any(getattr(held,f.name) != getattr(self.source,f.name)
+                for f in fields(held) if f.name not in {"tracks","vias"})
+                or not Counter(held.tracks) >= Counter(self.source.tracks)
+                or not Counter(held.vias) >= Counter(self.source.vias)):
+            return None
+        key = kind, component, held.tracks, held.vias, first_tracks, second_tracks
+        if key in self.completed:
+            return self.completed[key]
+        if self.trials[kind] >= 8:
+            return None
+        self.trials[kind] += 1
+        self.report.support_trials += 1
+        started = perf_counter()
+        try:
+            result = self._complete(component, held, (first_tracks, second_tracks), kind)
+            self.completed[key] = result
+            return result
+        finally:
+            self.report.elapsed_seconds += perf_counter()-started
+
+    def _complete(self, component, held, prefixes, kind):
+        from .pair_search import _PairAccessIndex
+        from .pin_access import LocalAccessStats
+        index = _PairAccessIndex(held)
+        branches = []
+        for i, (rule, (anchor, support), prefix) in enumerate(zip(self.rules, self.plan.contacts, prefixes)):
+            # Every sampled attachment is on actual connected collar copper,
+            # inside this support's unchanged source breakout region.
+            points = {anchor.pad_position}
+            for track in prefix:
+                if track.net != rule.net or track.layer is not support.layer:
+                    continue
+                points.update((track.start, track.end))
+                dx, dy = track.end.x_nm-track.start.x_nm, track.end.y_nm-track.start.y_nm
+                denominator = dx*dx+dy*dy
+                if denominator:
+                    numerator = ((support.pad_position.x_nm-track.start.x_nm)*dx
+                               + (support.pad_position.y_nm-track.start.y_nm)*dy)
+                    from fractions import Fraction
+                    amount = max(Fraction(0), min(Fraction(1), Fraction(numerator, denominator)))
+                    point = Point(round(track.start.x_nm+amount*dx), round(track.start.y_nm+amount*dy))
+                    if (point.x_nm-track.start.x_nm)*dy == (point.y_nm-track.start.y_nm)*dx:
+                        points.add(point)
+            limit = rule.breakout_length_nm
+            assert limit is not None
+            points = sorted((p for p in points if
+                (p.x_nm-anchor.pad_position.x_nm)**2+(p.y_nm-anchor.pad_position.y_nm)**2 <= limit**2),
+                key=lambda p: ((p.x_nm-support.pad_position.x_nm)**2+(p.y_nm-support.pad_position.y_nm)**2,
+                               p.x_nm, p.y_nm))[:8]
+            width = rule.width_nm or held.rules.default_track_width_nm
+            path = None
+            for point in points:
+                path = checked_access_path(held, index, rule.net, support.pad_position, point, width, support.layer)
+                if path is not None:
+                    break
+            remaining = self.remaining[kind, i]
+            if path is None and points and remaining:
+                stats = LocalAccessStats()
+                self.report.support_path_calls += 1
+                path = local_access_path(held, index, rule.net, support.pad_position, points[0], support.layer, width,
+                    step_nm=125000, detour_nm=limit, maximum_states=remaining, stats=stats)
+                self.remaining[kind, i] -= stats.expanded_states
+                self.report.support_expanded_states += stats.expanded_states
+            if path is None:
+                self.report.reject("joint escape/return has no bounded support tie")
+                return None
+            for track in path:
+                index.add_track(track, locked=True)
+            branches.append(path)
+        self.report.candidates += 1
+        return tuple(branches)
 
 def terminal_partners(first, second):
     """Pair two ends geometrically while preserving every original pad identity.
@@ -231,6 +379,7 @@ def _surface_pair_terminals(board, first, second, routes):
     owned = macro_owned_pads(board)
     guides=[source_terminal_guide(board,r.net,routes.get(r.net)) for r in (first,second)]
     if any(g is None for g in guides): return None,(),()
+    common = set(a.pad.component for a in guides[0].accesses) & set(a.pad.component for a in guides[1].accesses)
     all_branches=[]
     normalized=[]
     from .pair_search import _PairAccessIndex
@@ -238,6 +387,25 @@ def _surface_pair_terminals(board, first, second, routes):
     for rule,guide in zip((first,second),guides):
         groups={}
         for a in guide.accesses: groups.setdefault(a.pad.component,[]).append(a)
+        fixed_anchors = {}
+        if len(groups) > 2:
+            # A separate nearby termination/support is another real contact,
+            # not a third main endpoint. Both lanes must still share exactly
+            # two endpoint components. Attach only to one unambiguous source
+            # breakout region, retaining that component's actual main contact.
+            if len(common) != 2 or rule.breakout_length_nm is None:
+                return None,(),()
+            fixed_anchors = {c: _main_contact(board, rule, groups[c]) for c in sorted(common)}
+            extra = [a for c, items in sorted(groups.items()) if c not in common for a in items]
+            groups = {c: list(groups[c]) for c in sorted(common)}
+            for contact in extra:
+                choices = [c for c, anchor in fixed_anchors.items()
+                    if anchor.layer is contact.layer
+                    and (anchor.pad_position.x_nm-contact.pad_position.x_nm)**2
+                        + (anchor.pad_position.y_nm-contact.pad_position.y_nm)**2 <= rule.breakout_length_nm**2]
+                if len(choices) != 1:
+                    return None,(),()
+                groups[choices[0]].append(contact)
         if len(groups)!=2 or sum(len(v)-1 for v in groups.values())>8:
             return None,(),()  # fixed bound on disposable local branches
         anchors=[]
@@ -245,7 +413,7 @@ def _surface_pair_terminals(board, first, second, routes):
         for component,terminals in sorted(groups.items()):
             if len(terminals)>1 and any(a.pad in owned for a in terminals):
                 return None,(),()  # Never tie private contacts or replace a prescribed port.
-            anchor=_main_contact(board, rule, terminals)
+            anchor=fixed_anchors.get(component) or _main_contact(board, rule, terminals)
             anchors.append(anchor)
             for other in sorted(terminals,key=lambda a:str(a.pad)):
                 if other is anchor: continue

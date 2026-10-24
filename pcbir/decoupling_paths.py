@@ -7,6 +7,7 @@ a physical join to a source-declared net terminal, not electrical qualification.
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from itertools import chain, islice
@@ -239,6 +240,28 @@ def _cached_path_edges(board_key, index_key, additions, rules, net):
     return tracks, vias
 
 
+class _PathPoints:
+    """Exact track-bound candidates without rescanning every net point.
+
+    This index only narrows candidates. Collinearity, inclusive endpoints and
+    the original distance ordering still decide the graph's exact edges.
+    """
+    def __init__(self, points):
+        self.by_x = sorted(points, key=lambda p: (p.x_nm, p.y_nm))
+        self.by_y = sorted(points, key=lambda p: (p.y_nm, p.x_nm))
+        self.xs = [p.x_nm for p in self.by_x]
+        self.ys = [p.y_nm for p in self.by_y]
+
+    def on(self, track):
+        x0, x1 = sorted((track.start.x_nm, track.end.x_nm))
+        y0, y1 = sorted((track.start.y_nm, track.end.y_nm))
+        xa, xb = bisect_left(self.xs, x0), bisect_right(self.xs, x1)
+        ya, yb = bisect_left(self.ys, y0), bisect_right(self.ys, y1)
+        candidates = self.by_x[xa:xb] if xb-xa <= yb-ya else self.by_y[ya:yb]
+        return sorted((point for point in candidates if _on(point, track)),
+            key=lambda p: (p.x_nm-track.start.x_nm)**2+(p.y_nm-track.start.y_nm)**2)
+
+
 def _find_path(board, start, ends, net, index, maximum_states):
     origin = _land(board, start)
     terminals = {land[2]: ref for ref in ends if (land := _land(board, ref)) is not None}
@@ -253,9 +276,9 @@ def _find_path(board, start, ends, net, index, maximum_states):
     points = {first.position, *(n.position for n in terminals),
               *(p for t in tracks for p in (t.start,t.end)), *(v.position for v in vias)}
     graph = defaultdict(list)
+    point_index = _PathPoints(points)
     for track in tracks:
-        on = sorted((p for p in points if _on(p, track)),
-                    key=lambda p: (p.x_nm-track.start.x_nm)**2+(p.y_nm-track.start.y_nm)**2)
+        on = point_index.on(track)
         for a,b in zip(on,on[1:]):
             x,y = DecouplingPathNode(a,track.layer),DecouplingPathNode(b,track.layer)
             graph[x].append((y,track));graph[y].append((x,track))
