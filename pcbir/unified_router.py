@@ -121,6 +121,8 @@ class UnifiedRouterOptions:
     ball_field_via_sites: bool = False       # new vias inside a ball array only at cell centres
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
+    # Soft deadline: setup, exact final checks and an in-flight bounded native
+    # search may finish. Expiry prevents starting another net/search/iteration.
     time_budget_s: float | None = None
     # Optional diagnostic raster/search window, not a replacement outline or
     # copper keepout. All source geometry and final exact checks remain whole.
@@ -555,6 +557,7 @@ class _Router:
         # by lying in a pour piece (pour re-check, see route_unified).
         self.explicit_pads = frozenset(explicit_pads)
         self.options = options
+        self.deadline: float | None = None
         self.on_progress = on_progress
         pitch = options.pitch_nm or choose_pitch(board)
         self.pitch = pitch
@@ -763,7 +766,7 @@ class _Router:
                         board.rules.default_via_size_nm, board.rules.default_via_drill_nm,
                         layers, [], 0)
         spec.target_only = target_only
-        if rule is not None and rule.max_vias:
+        if rule is not None and rule.max_vias is not None:
             spec.via_factor = 4.0
             existing = sum(1 for via in board.vias if via.net == net.name)
             spec.via_budget = max(0, rule.max_vias - existing)
@@ -1266,7 +1269,9 @@ class _Router:
                 missing += not optional
                 continue
             excluded = spec.explicit.get(position)
-            if excluded is None and (any(node in targets for node, _, _ in component)
+            # A reachable grid node is not existing copper. If reaching the
+            # plane needs a lead-in, route even a one-node path so commit emits it.
+            if excluded is None and (any(node in targets and not lead for node, lead, _ in component)
                                      or any(node in targets for node in spec.joined.get(position, ()))):
                 if position >= first_island:
                     targets.update(node for node, _, _ in component)
@@ -1322,6 +1327,8 @@ class _Router:
             direct = self._route_net_budgeted(spec, 0.0)
             if direct.connected and self._route_length_nm(direct) < self._route_length_nm(route):
                 route = direct
+        if not route.connected and self._expired():
+            route.reason = "time budget exhausted"
         return route
 
     def _route_net_budgeted(self, spec: _NetSpec, present: float) -> _NetRoute:
@@ -1563,6 +1570,8 @@ class _Router:
 
     def _search(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
                 target_extra=None):
+        if self._expired():
+            return None
         g, options = self.grid, self.options
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self._via_owners(spec)
@@ -1600,6 +1609,8 @@ class _Router:
     def _astar(self, spec, sources, targets, present, box, tbox, owner, mid_owner, via_owner,
                target_extra=None):
         """A* over the shared grid; arrays are reused across searches."""
+        if self._expired():
+            return None
         if self.native is not None:
             result = self._astar_native(spec, sources, targets, present, box, tbox, target_extra)
             if result is NotImplemented and self._grow_native_buffers():
@@ -1655,6 +1666,8 @@ class _Router:
                 table.append((dx, dy, dy * nx + dx, base, bool(dx and dy), cell_dy * nx + cell_dx))
             move_tables.append(table)
         while heap:
+            if expansions % 1024 == 0 and self._expired():
+                break
             f, cost, node = pop(heap)
             if node < 0:
                 found = -node - 1  # a target, completed with its lead-in price
@@ -1754,6 +1767,8 @@ class _Router:
 
     def _astar_native(self, spec, sources, targets, present, box, tbox, target_extra):
         """The same search in the C kernel; NotImplemented asks for the Python path."""
+        if self._expired():
+            return None
         import ctypes
         g = self.grid
         owner, mid_owner = self.rasters.track_arrays(spec.width, spec.clearance)
@@ -1861,9 +1876,13 @@ class _Router:
                     else:
                         hist[owner] += inc
 
+    def _expired(self) -> bool:
+        return self.deadline is not None and perf_counter() >= self.deadline
+
     def negotiate(self, deadline: float | None, only: set[str] | None = None):
         """PathFinder loop. Routes persist on the router between calls."""
         options = self.options
+        self.deadline = deadline
         specs = sorted(self.specs, key=lambda s: (s.span, s.name))
         routes = self.routes
         present = self.present
@@ -1872,14 +1891,22 @@ class _Router:
         pending = [s.name for s in specs if only is None or s.name in only or s.name not in routes]
         by_name = {s.name: s for s in specs}
         iteration = 0
-        for iteration in range(1, options.maximum_iterations + 1):
+        for next_iteration in range(1, options.maximum_iterations + 1):
+            if self._expired():
+                break
+            iteration = next_iteration
             emit(self.on_progress, "unified_iteration", "started", iteration=iteration, nets=len(pending))
             for name in pending:
+                if self._expired():
+                    break
                 spec = by_name[name]
                 old = routes.get(name)
                 if old is not None:
                     self.occupancy.add(old, -1)
                 route = self._route_net(spec, present)
+                if self._expired() and not route.connected and old is not None:
+                    # Cancellation must not destroy an earlier incumbent.
+                    route = old
                 routes[name] = route
                 self.occupancy.add(route, +1)
             conflicts = self._conflicts(routes)
@@ -1888,7 +1915,7 @@ class _Router:
             # margin would otherwise stay invisible.
             for name in pending:
                 self.conflict_age[name] = self.conflict_age.get(name, 0) + 1 if name in conflicts else 0
-            failed = {name for name, route in routes.items() if not route.connected}
+            failed = {s.name for s in specs if s.name not in routes or not routes[s.name].connected}
             score = (len(failed) + len(conflicts), sum(r.length for r in routes.values()))
             if best_snapshot is None or score < best_snapshot[0]:
                 best_snapshot = (score, dict(routes), set(conflicts))
@@ -1913,7 +1940,8 @@ class _Router:
                 pending = [s.name for s in specs if s.name not in failed or iteration in (3, 6)]
             if not pending:
                 break
-        _, snapshot, conflicts = best_snapshot
+        snapshot, conflicts = (best_snapshot[1:] if best_snapshot is not None
+                               else (dict(routes), self._conflicts(routes)))
         if snapshot != routes:
             for route in routes.values():
                 self.occupancy.add(route, -1)
@@ -1921,6 +1949,10 @@ class _Router:
             routes.update(snapshot)
             for route in routes.values():
                 self.occupancy.add(route, +1)
+        for spec in specs:
+            if spec.name not in routes:
+                routes[spec.name] = _NetRoute([], [], set(), set(), set(), set(), False, 0.0,
+                                             "time budget exhausted")
         return dict(routes), conflicts, iteration
 
     # -- materialisation --------------------------------------------------
@@ -2488,13 +2520,32 @@ def route_unified(
     spec_names = {s.name for s in router.specs} | bus_complete
     if options.route_smoothing and accepted:
         accepted = _smoothed(board, accepted)
+    # Search and tentative commit flags are not whole-net budget checks.
+    # Measure final, smoothed copper exactly as DRC does, including the fixed
+    # prefix and all repair additions. Reject only this call's mutable copper.
+    budget_errors = {}
+    for net in (*nets, *already):
+        rule = rules.get(net.name)
+        if rule is None or (rule.max_length_nm is None and rule.max_vias is None):
+            continue
+        tracks, vias = accepted.get(net.name, ((), ()))
+        errors = []
+        length = _net_track_length(board, net.name, tracks)
+        if rule.max_length_nm is not None and length > rule.max_length_nm:
+            errors.append(f"route length {length} nm exceeds {rule.max_length_nm} nm")
+        count = sum(v.net == net.name for v in board.vias) + len(vias)
+        if rule.max_vias is not None and count > rule.max_vias:
+            errors.append(f"via count {count} exceeds {rule.max_vias}")
+        if errors:
+            budget_errors[net.name] = tuple(errors)
+            accepted.pop(net.name, None)
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
     all_tracks = (*board.tracks, *new_tracks)
     all_vias = (*board.vias, *new_vias)
     metadata = dict(board.metadata)
-    routed_names = set(complete) | {net.name for net in already}
-    unrouted = [net.name for net in nets if net.name not in complete]
+    routed_names = (set(complete) | {net.name for net in already}) - budget_errors.keys()
+    unrouted = [net.name for net in (*nets, *already) if net.name not in routed_names]
     success = not unrouted
     metadata.update({"detailed_routing": "complete" if success else "partial",
                      "detailed_router": "unified",
@@ -2506,7 +2557,9 @@ def route_unified(
     for net in [*nets, *already]:
         tracks, vias = accepted.get(net.name, ((), ()))
         diagnostics = ()
-        if net.name not in routed_names:
+        if net.name in budget_errors:
+            diagnostics = budget_errors[net.name]
+        elif net.name not in routed_names:
             last = router.routes.get(net.name)
             diagnostics = (_rejection_text(router, net.name),) if net.name in rejected else (
                 ("unified: no routable layer",) if net.name not in spec_names else

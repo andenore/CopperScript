@@ -400,7 +400,7 @@ def test_bus_members_route_first_and_are_reported_as_routed() -> None:
     assert by_name["D0"].connected and by_name["D1"].connected and by_name["D0"].track_count > 0
 
 
-def test_bus_members_over_their_length_leave_the_bus_phase_and_still_route() -> None:
+def test_bus_members_over_their_length_leave_the_bus_phase_and_fail_final_budget() -> None:
     from pcbir.physical import NetMatchGroup, NetRoutingRule, RouteKind
     board = _board({"D0": ((2, 7), (18, 7)), "D1": ((2, 9), (18, 9)), "X": ((10, 2), (10, 16))})
     rules = (NetRoutingRule("D0", RouteKind.GENERAL, max_length_nm=nm_from_mm("10")),)
@@ -411,10 +411,13 @@ def test_bus_members_over_their_length_leave_the_bus_phase_and_still_route() -> 
     result = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_length_budget=True),
                            on_progress=lambda *args, **kwargs: events.append(args))
     buses = [e[2] for e in events if e and e[0] == "unified_buses"]
-    # D0 needs 16 mm against a 10 mm limit: no bus copper, the main negotiation routes it.
+    # D0 needs 16 mm against a 10 mm limit: the main negotiation tries it,
+    # but must not publish its over-budget copper as a completed route.
     assert buses and buses[0]["complete"] == 1 and buses[0]["over_length"] == 1
     by_name = {net.net: net for net in result.nets}
-    assert by_name["D0"].connected and by_name["D1"].connected
+    assert not by_name["D0"].connected and by_name["D1"].connected
+    assert "exceeds" in " ".join(by_name["D0"].diagnostics)
+    assert not any(t.net == "D0" for t in result.board.tracks)
 
 
 def test_a_length_limited_net_takes_the_short_path_through_congestion() -> None:
