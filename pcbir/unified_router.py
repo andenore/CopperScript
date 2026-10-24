@@ -2787,98 +2787,6 @@ def _disc_offsets_cached(radius: float):
 # ---------------------------------------------------------------------------
 # Congestion export (congestion-driven placement feedback, stage A1)
 
-# Utilisation of a tile with demand but without routing capacity (wholly
-# covered by obstacles, or outside board material): large but finite, so
-# sorting and sums stay well defined. A tile with neither is 0.
-_NO_CAPACITY_UTILISATION = 1e6
-
-
-@dataclass(frozen=True, slots=True, eq=False)
-class _RouterCongestion:
-    """Stand-in for ``congestion_feedback.CongestionMap`` (same fields and
-    methods), used only while that module is absent.
-
-    ``demand`` and ``capacity`` are (ny, nx) arrays; tile (ix, iy) covers
-    ``[x0 + ix * tile, x0 + (ix + 1) * tile)`` and likewise in y.
-    """
-
-    tile_nm: int
-    x0_nm: int
-    y0_nm: int
-    nx: int
-    ny: int
-    demand: np.ndarray
-    capacity: np.ndarray
-    source: str
-    failed_points: tuple[tuple[str, Point], ...] = ()
-
-    def utilisation(self) -> np.ndarray:
-        """demand / capacity; _NO_CAPACITY_UTILISATION where only capacity
-        is 0, and 0 where both are."""
-        demand = np.asarray(self.demand, dtype=np.float64)
-        capacity = np.asarray(self.capacity, dtype=np.float64)
-        result = np.zeros(demand.shape)
-        np.divide(demand, capacity, out=result, where=capacity > 0)
-        result[(capacity <= 0) & (demand > 0)] = _NO_CAPACITY_UTILISATION
-        return result
-
-    def tile_of(self, point: Point) -> tuple[int, int]:
-        """(ix, iy) of the tile holding ``point``, clamped to the lattice."""
-        ix = (point.x_nm - self.x0_nm) // self.tile_nm
-        iy = (point.y_nm - self.y0_nm) // self.tile_nm
-        return int(min(max(ix, 0), self.nx - 1)), int(min(max(iy, 0), self.ny - 1))
-
-    def value_at(self, point: Point) -> float:
-        ix, iy = self.tile_of(point)
-        return float(self.utilisation()[iy, ix])
-
-    def gradient_at(self, point: Point, radius_tiles: int = 2) -> tuple[float, float]:
-        """Unit vector toward decreasing utilisation around ``point``'s tile.
-
-        Inverse-square weighted sum of the utilisation of the tiles with
-        capacity within ``radius_tiles`` (tiles without capacity and beyond
-        the lattice are left out); (0, 0) when the neighbourhood is flat.
-        """
-        r = max(1, int(radius_tiles))
-        ix, iy = self.tile_of(point)
-        usable = np.where(np.asarray(self.capacity) > 0, self.utilisation(), 0.0)
-        window = np.pad(usable, r)[iy:iy + 2 * r + 1, ix:ix + 2 * r + 1]
-        offsets = np.arange(-r, r + 1, dtype=np.float64)
-        dx, dy = np.meshgrid(offsets, offsets)
-        d2 = dx * dx + dy * dy
-        d2[r, r] = np.inf
-        gx = float((window * dx / d2).sum())
-        gy = float((window * dy / d2).sum())
-        norm = hypot(gx, gy)
-        return (0.0, 0.0) if norm == 0 else (-gx / norm, -gy / norm)
-
-    def hot_tiles(self, limit: int) -> tuple[tuple[int, int, float], ...]:
-        """(ix, iy, utilisation) of tiles with positive utilisation, hottest first."""
-        utilisation = self.utilisation()
-        iys, ixs = np.nonzero(utilisation > 0)
-        order = sorted(zip(ixs.tolist(), iys.tolist()),
-                       key=lambda tile: (-utilisation[tile[1], tile[0]], tile[1], tile[0]))
-        return tuple((ix, iy, float(utilisation[iy, ix])) for ix, iy in order[:max(0, limit)])
-
-    def combined(self, other, weight: float):
-        """This map's demand plus ``weight`` times ``other``'s, on the same
-        lattice; capacity stays this map's."""
-        if (self.tile_nm, self.x0_nm, self.y0_nm, self.nx, self.ny) != (
-                other.tile_nm, other.x0_nm, other.y0_nm, other.nx, other.ny):
-            raise ValueError("congestion maps must share one tile lattice")
-        points = (*self.failed_points, *(p for p in other.failed_points if p not in self.failed_points))
-        return replace(self, demand=np.asarray(self.demand) + weight * np.asarray(other.demand),
-                       source="combined", failed_points=points)
-
-
-def _congestion_class():
-    try:
-        from .congestion_feedback import CongestionMap
-    except ImportError:
-        return _RouterCongestion
-    return CongestionMap
-
-
 def _failed_points(router: _Router, failed: Iterable[str]) -> tuple[tuple[str, Point], ...]:
     """(net, point) where each failed net was blocked or could not be reached.
 
@@ -2949,7 +2857,8 @@ def _congestion_map(router: _Router, failed: Iterable[str], tile_nm: int):
     free = (owner[layers] == _FREE).sum(axis=0) if layers else np.zeros((ny, nx))
     lane = (width + clearance) / g.pitch
     capacity = np.bincount(tile_ids, weights=free.ravel() / lane, minlength=count).reshape(tiles_y, tiles_x)
-    return _congestion_class()(
+    from .congestion_feedback import CongestionMap
+    return CongestionMap(
         tile_nm=tile_nm, x0_nm=int(g.x0), y0_nm=int(g.y0), nx=tiles_x, ny=tiles_y,
         demand=demand, capacity=capacity, source="unified_router",
         failed_points=_failed_points(router, failed))
