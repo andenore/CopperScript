@@ -1,3 +1,25 @@
+## Shared single-ended critical negotiation (2026-10-24)
+
+When unified routing is selected, contiguous same-priority single-ended critical
+jobs now share one bounded negotiation, preserving each original source profile.
+Clocks, differential pairs and retained verified owners keep their existing job
+boundaries. Each proposed net receives a fresh exact commit check; failed owners
+add no copper. Changed input prefixes and added foreign owners are rejected.
+No congestion-experiment commits or board-specific selectors are included.
+
+The 153 related critical, retained-copper, pair, and unified regressions pass.
+The four standard examples with explicit unified selection and native refill
+complete with zero opens and geometry errors. The initial omitted-router run
+was interrupted and is not a matched comparison. On CopperBench's saved early
+critical input, the coarse cohort connects four of six RMII nets versus three
+in the earlier sequential full run; all MDI and clock connections remain. Fresh
+native checking confirms RXD0/RXD1 each retain two open items, all other selected
+nets connect, and source macro/array copper is retained. That diagnostic uses
+400000 search expansions rather than the historical full run's 2000000, so no
+matched runtime or pure algorithm attribution is claimed. A 0.125 mm /2000000
+expansion diagnostic leaves three RMII nets open and is not selected. Whole-board
+routing and engineering qualification remain separate.
+
 ## Reproducible router review fixes (2026-10-24)
 
 Unified plane contacts now materialize a required pad-to-grid lead before
