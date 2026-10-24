@@ -55,6 +55,32 @@ remain in progress at integration; results from the excluded congestion compiler
 must not be substituted. The broader experimental-branch Python run394 is also
 incomplete and failing; five failures independently reproduce on upstream main.
 No all-tests, complete CopperBench, or hardware qualification claim is made.
+## Exact off-grid lead/via interactions and bounded via-price families (2026-10-24)
+
+The earlier half-diagonal lead sampling can mark legal copper as conflicted.
+Control370 demonstrates four false positives across both kernels and mirrored
+placements. Negotiation now retains the original raster centre sampling and
+checks actual emitted lead fragments against tentative full-span vias through a
+fresh clearance index. Only exact mutable lead occurrences receive feedback;
+source copper stays locked. Lead-specific prices and via prices persist across
+repair history. Declared breakout clipping uses the same operation as exact
+commit. No source keepout, return requirement, via limit or acceptance is relaxed.
+
+A connected via-bounded net first tries four bounded via-price multipliers with
+ordinary congestion/history intact. Discounting is retained only as a final
+proposal family. This lets hard-budget nets negotiate with one another instead
+of repeatedly selecting the same cheapest path after erasing their soft costs.
+The valid two-net corridor has a passing unpriced control; frozen6fc36fd fails
+both priced-kernel cases367, while after366 connects both within two vias each
+with zero exact geometry errors. Earlier359-365 used overlapping terminal bodies
+or an unproven narrow corridor and are retained as invalid fixture experiments.
+
+All19 focused cases371 pass, including real collisions, a nearby legal pair,
+mirroring, stale history, occupied corridors and a real impassable wall. Related
+router/return/source/macro/array checks372 pass with four optional skips. Actual
+fresh PHY baseline358 and price-only368 remain incomplete; combined exact replay
+373 and fresh native comparison are pending. Neither diagnostic establishes full
+board, electrical, assembly or production qualification.
 
 ## Reserve required pad-via arrays during placement (2026-10-24)
 
@@ -79,7 +105,7 @@ Actual PHY search350 previously failed during array materialization; corrected
 search353 finds a legal back-side INTSEL location while all other trial poses
 remain fixed. Source regeneration and complete routing/native validation remain
 required before adopting the two-component reference adaptation.
-## Negotiate off-grid lead and via conflicts (2026-10-24)
+## Earlier off-grid sampling trial, superseded by exact interactions above
 
 Half-pitch sampling can miss every representative grid node of a short off-grid
 lead near a cell corner. Lead centre sampling and lead congestion pricing now

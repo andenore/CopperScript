@@ -631,6 +631,7 @@ class _Router:
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
         self.routes: dict[str, _NetRoute] = {}
         self._lead_nodes: dict[tuple, list[int]] = {}
+        self._lead_history: dict[TrackSegment, float] = {}
         self.present = options.present_factor
         self.conflict_age: dict[str, int] = {}
 
@@ -1337,12 +1338,19 @@ class _Router:
             # Over the net's via budget: search again with vias priced far
             # higher; a budget overrun stays a failure, not a DRC error.
             factor = spec.via_factor
-            spec.via_factor = factor * 10
             try:
-                retry = self._route_net_once(spec, present)
-                if retry.connected and len(retry.via_xy) < len(route.via_xy):
-                    route = retry
+                # Keep negotiating real soft costs before using a discounted
+                # proposal. A single fixed via price can leave several hard-
+                # budget nets repeatedly selecting the same conflicting path.
+                for multiplier in (10, 100, 1000, 10000):
+                    spec.via_factor = factor * multiplier
+                    retry = self._route_net_once(spec, present)
+                    if retry.connected and len(retry.via_xy) < len(route.via_xy):
+                        route = retry
+                    if route.connected and len(route.via_xy) <= spec.via_budget:
+                        break
                 if len(route.via_xy) > spec.via_budget:
+                    spec.via_factor = factor * 10
                     # A hard via budget must be able to contest a corridor
                     # priced out by mutable routes or stale history. Retain all
                     # source obstacles and return masks; only proposal costs
@@ -1474,10 +1482,7 @@ class _Router:
             for track in leads:
                 layer = layer_of[track.layer]
                 radius_nm = track.width_nm / 2 + spec.clearance + max(self.default_width, track.width_nm) / 2
-                # A short off-grid lead may lie at a grid-cell corner: half
-                # a pitch misses all nearby nodes. Include the nearest cell
-                # centres so via-to-lead conflicts participate in negotiation.
-                near = hypot(g.pitch, g.pitch) / 2 + 1
+                near = g.pitch / 2
                 for node, distance in self._segment_nodes(track.start, track.end, layer, radius_nm):
                     claims.add(node)
                     if distance <= near:
@@ -1526,15 +1531,16 @@ class _Router:
             nodes = []
             for track in lead:
                 nodes.extend(node for node, distance in self._segment_nodes(
-                    track.start, track.end, layer_of[track.layer], hypot(g.pitch, g.pitch) / 2 + 1) )
+                    track.start, track.end, layer_of[track.layer], g.pitch / 2 + 1) )
             self._lead_nodes[lead] = nodes
+        exact = sum(self._lead_history.get(track, 0.0) for track in lead)
         if not nodes:
-            return 0.0
+            return exact
         hist, occ = self.occupancy.history, self.occupancy.occ
         if not self.occupancy.arrays:
-            return sum(hist[n] + present * occ[n] for n in nodes)
+            return exact + sum(hist[n] + present * occ[n] for n in nodes)
         index = np.asarray(nodes, dtype=np.int64)
-        return float(hist[index].sum() + present * occ[index].sum())
+        return exact + float(hist[index].sum() + present * occ[index].sum())
 
     def _segment_nodes(self, start: Point, end: Point, layer: int, radius_nm: float):
         """(node, distance) for grid nodes strictly within radius of a segment."""
@@ -1869,31 +1875,59 @@ class _Router:
 
     # -- negotiation ------------------------------------------------------
 
-    def _conflicts(self, routes: Mapping[str, _NetRoute]) -> set[str]:
-        occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
+    def _lead_via_conflicts(self, routes):
+        """Exact mutable lead/via interactions, without fictitious centre cells."""
+        self._exact_lead_conflicts, self._exact_via_conflicts = {}, {}
+        if not any(route.connected and route.via_xy for route in routes.values()):
+            return set()
+        index, lead_sources = None, {}
+        for name, route in sorted(routes.items()):
+            if not route.connected:
+                continue
+            for track in dict.fromkeys(t for lead in route.leads for t in lead):
+                if index is None:
+                    index = RoutingClearanceIndex(self.board)
+                # Use exactly the emitted widths, including declared breakout
+                # clipping. Source copper stays immutable in this fresh index.
+                for fragment in self.clearance.breakout.neck_down((track,)):
+                    token = f"proposal-lead:{len(lead_sources)}"
+                    lead_sources[token] = (name, track)
+                    index.add_track(fragment, locked=False, occurrence=token)
+        if index is None:
+            return set()
+        specs = {spec.name: spec for spec in self.specs}
         bad = set()
-        contested, via_contested = set(), set()
         for name, route in routes.items():
             if not route.connected:
                 continue
-            blocked = {node for node in route.nodes
-                       if occ[node] - (1 if node in route.claims else 0) > 0}
-            blocked.update(node for node in route.body
-                           if occ[node] - (1 if node in route.claims else 0) > 0)
-            via_blocked = {xy for xy in route.via_xy
-                           if via_occ[xy] - (1 if xy in route.via_claims else 0) > 0}
-            if blocked or via_blocked:
-                bad.add(name)
-                contested.update(blocked)
-                via_contested.update(via_blocked)
-        # An off-grid lead may see a via's clearance claim while the via's
-        # centre sees no lead claim. Both mutable owners must negotiate.
-        self._contested_xy = {node % self.grid.plane for node in contested}
-        for name, route in routes.items():
-            if route.connected and (not route.claims.isdisjoint(contested)
-                                    or not route.via_claims.isdisjoint(via_contested)):
-                bad.add(name)
+            spec = specs[name]
+            for xy in route.via_xy:
+                via = Via(name, self.grid.point(xy), spec.via_size, spec.via_drill,
+                          self.grid.layers[0], self.grid.layers[-1])
+                for record in index.via_blocker_records(via):
+                    if record.immutable or record.occurrence not in lead_sources:
+                        continue
+                    owner, track = lead_sources[record.occurrence]
+                    bad.update((name, owner))
+                    self._exact_via_conflicts.setdefault(name, set()).add(xy)
+                    self._exact_lead_conflicts.setdefault(owner, set()).add(track)
         return bad
+
+    def _conflicts(self, routes: Mapping[str, _NetRoute]) -> set[str]:
+        occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
+        bad = set()
+        for name, route in routes.items():
+            if not route.connected:
+                continue
+            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.nodes):
+                bad.add(name)
+                continue
+            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.body):
+                bad.add(name)
+                continue
+            if any(via_occ[xy] - (1 if xy in route.via_claims else 0) > 0 for xy in route.via_xy):
+                bad.add(name)
+        return bad | self._lead_via_conflicts(routes)
 
     def _penalise(self, routes: Mapping[str, _NetRoute], names: Iterable[str]) -> None:
         occ, hist = self.occupancy.occ, self.occupancy.history
@@ -1904,18 +1938,12 @@ class _Router:
             for node in route.nodes:
                 if occ[node] - (1 if node in route.claims else 0) > 0:
                     hist[node] += inc
-            spec = next(spec for spec in self.specs if spec.name == name)
-            reach = max(spec.via_size / 2 + spec.clearance,
-                        spec.via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
-            radius = (reach + self.default_width / 2) / self.grid.pitch
             for xy in route.via_xy:
-                y, x = divmod(xy, self.grid.nx)
-                lead_conflict = any(
-                    (y + oy) * self.grid.nx + x + ox in self._contested_xy
-                    for ox, oy in _disc_offsets_cached(radius)
-                    if 0 <= x + ox < self.grid.nx and 0 <= y + oy < self.grid.ny)
-                if lead_conflict or via_occ[xy] - (1 if xy in route.via_claims else 0) > 0:
+                if (xy in self._exact_via_conflicts.get(name, ())
+                        or via_occ[xy] - (1 if xy in route.via_claims else 0) > 0):
                     via_hist[xy] += inc
+            for track in self._exact_lead_conflicts.get(name, ()):
+                self._lead_history[track] = self._lead_history.get(track, 0.0) + inc
             for node, owner in route.body.items():
                 if occ[node] - (1 if node in route.claims else 0) > 0:
                     if isinstance(owner, tuple):
@@ -2122,6 +2150,7 @@ class _Router:
             self.occupancy.copy_history(other.occupancy)
             self.present = other.present
             self.conflict_age = dict(other.conflict_age)
+            self._lead_history = dict(other._lead_history)
 
     def penalise_points(self, name: str, points: list[Point], amount: float) -> None:
         g = self.grid
