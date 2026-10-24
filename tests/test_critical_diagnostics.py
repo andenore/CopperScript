@@ -14,7 +14,7 @@ from pcbir import (
     route_global, run_physical_drc,
 )
 from pcbir.critical import (
-    CriticalNetResult, _budget_diagnostics, _reject_reserved_plane_tracks, _rejection_gate,
+    CriticalNetResult, _budget_diagnostics, _budget_warnings, _reject_reserved_plane_tracks, _rejection_gate,
     _rejection_summary, _route_pair, critical_lane_table,
 )
 from pcbir.engineering import propagation_delay
@@ -47,7 +47,8 @@ def test_every_candidate_gate_has_a_named_first_failing_reason() -> None:
     track = TrackSegment("A", Point.mm(0, 0), Point.mm(5, 0), nm_from_mm("0.25"), CopperLayer.BACK)
     via = Via("A", Point.mm(5, 0), nm_from_mm("0.8"), nm_from_mm("0.4"),
               CopperLayer.FRONT, CopperLayer.BACK)
-    length, vias = _budget_diagnostics(rule, (track,), (via,))
+    (vias,) = _budget_diagnostics(rule, (track,), (via,))
+    (length,) = _budget_warnings(rule, (track,))   # a length miss warns; it is not a hard gate
     assert _rejection_gate((length,))[0] == "length_budget"
     assert _rejection_gate((vias,))[0] == "via_budget"
     board = _pair_board()
@@ -64,9 +65,9 @@ def test_every_candidate_gate_has_a_named_first_failing_reason() -> None:
     guides = {route.net: route for route in route_global(
         board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5"))).routes}
     skewed, _, _ = _route_pair(board, *tight, guides, exact_tracks=lanes)
-    # The skew gate is evaluated before the uncoupled-length gate.
-    assert [_rejection_gate((item,))[0] for item in skewed.diagnostics] == ["skew", "uncoupled_length"]
-    assert _rejection_gate(skewed.diagnostics)[0] == "skew"
+    # Skew is a review warning; the uncoupled length stays a hard gate.
+    assert [_rejection_gate((item,))[0] for item in skewed.warnings] == ["skew"]
+    assert [_rejection_gate((item,))[0] for item in skewed.diagnostics] == ["uncoupled_length"]
     unpaired, _, _ = _route_pair(board, first, second, guides, exact_tracks=lanes,
                                  exact_via_pairs=((replace(via, net=first.net),
                                                    replace(via, net=second.net)),))
@@ -109,17 +110,21 @@ def test_rejected_exact_pair_candidates_are_counted_in_report_and_progress() -> 
     result = route_critical_nets(board, guides, pair_state_limit=2000,
                                  on_progress=critical_progress(lambda *event: events.append(event)))
     pair = result.nets[0]
-    assert not pair.connected and pair.candidate_attempts > 0
-    # Without tuning every exact candidate fails the skew gate first.
-    assert pair.rejections == (("skew", pair.candidate_attempts),)
+    # Without tuning every exact candidate misses the skew budget: the search
+    # counts each, and keeps the best one connected with a skew warning.
+    assert pair.connected and pair.candidate_attempts > 0 and not pair.diagnostics
+    assert any(warning.startswith("pair skew ") for warning in pair.warnings)
+    # Candidates that also fail a hard gate (uncoupled length) count under it.
+    gates = dict(pair.rejections)
+    assert sum(gates.values()) == pair.candidate_attempts and gates["skew"] > 0
+    assert set(gates) <= {"skew", "uncoupled_length"}
     assert 1 <= len(pair.rejection_examples) <= 3
-    assert all(example.startswith("pair skew ") for example in pair.rejection_examples)
-    assert pair.diagnostics[-1].endswith(f"none accepted (first-failing gates: skew={pair.candidate_attempts})")
+    assert pair.rejection_examples[0].startswith("pair skew ")
     document = json.loads(result.to_json())["nets"][0]
-    assert document["rejections"] == {"skew": pair.candidate_attempts}
+    assert document["rejections"] == gates
     assert document["rejection_examples"] == list(pair.rejection_examples)
     finished = events[-1][2]
-    assert finished["rejections"] == {"skew": pair.candidate_attempts}
+    assert finished["rejections"] == gates
     assert route_critical_nets(board, guides, pair_state_limit=2000) == result
 
 

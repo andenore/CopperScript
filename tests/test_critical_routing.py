@@ -108,7 +108,7 @@ def test_critical_pair_is_routed_as_locked_exact_copper() -> None:
                for track in first.locked_tracks)
 
 
-def test_critical_single_net_enforces_length_budget() -> None:
+def test_critical_single_net_over_its_length_budget_is_kept_with_a_warning() -> None:
     board = _pair_board()
     critical = replace(
         board,
@@ -125,8 +125,11 @@ def test_critical_single_net_enforces_length_budget() -> None:
 
     result = route_critical_nets(critical, guides)
 
-    assert result.status is CriticalRoutingStatus.FAILED
-    assert "exceeds" in result.nets[0].diagnostics[0]
+    # Routable but over its 1 mm budget: connected copper, a review warning.
+    assert result.status is CriticalRoutingStatus.WARNING
+    assert result.nets[0].connected and not result.nets[0].diagnostics
+    assert "exceeds" in result.nets[0].warnings[0]
+    assert any(t.net == "USB_DP" for t in result.board.tracks)
 
 
 def test_pair_rules_must_be_symmetric() -> None:

@@ -6,7 +6,7 @@ from pcbir import (BoardOutline, CopperLayer, FootprintPad, GlobalRouterOptions,
                    NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint,
                    PhysicalNet, Placement, Point, Size, RouteKind, TrackSegment,
                    nm_from_mm, route_global, route_critical_nets)
-from pcbir.physical import DecouplingLink, DesignRules
+from pcbir.physical import BoardSide, DecouplingLink, DesignRules
 from pcbir.fanout import route_fanout
 from pcbir.critical import CriticalRoutingStatus, _fingerprint
 from pcbir.critical_reuse import prepare_single_critical_reuse, validate_single_critical_reuse
@@ -28,7 +28,9 @@ def routed():
          Placement("U", terminal.name, Point.mm(7, 10)),
          Placement("C", capacitor.name, Point.mm(7, 6)),
          Placement("BL", terminal.name, Point.mm(5, 14)),
-         Placement("BR", terminal.name, Point.mm(15, 14))),
+         # BAD's far terminal is on the back and its profile forbids vias:
+         # a hard failure (a length miss alone would only warn).
+         Placement("BR", terminal.name, Point.mm(15, 14), side=BoardSide.BACK)),
         (PhysicalNet("CLK", (PadReference("L", "1"), PadReference("R", "1"))),
          PhysicalNet("VDD", (PadReference("U", "1"), PadReference("C", "1"))),
          PhysicalNet("GND", (PadReference("C", "2"),)),

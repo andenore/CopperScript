@@ -244,15 +244,18 @@ def test_length_match_verification_reports_member_lengths_and_group_skew() -> No
     assert coverage.status.value == "executed" and coverage.required
 
 
-def test_group_skew_over_the_limit_is_a_hard_drc_failure() -> None:
+def test_group_skew_over_the_limit_is_a_drc_review_warning() -> None:
+    # Connected copper over its group skew: a review warning, not a geometry
+    # error (requirement verification still fails the declared group).
     routed = _routed_lanes({"CKP": "10", "D0P": "12"}, "1.5")
     report = run_physical_drc(routed)
     finding = next(item for item in report.findings if item.code == "DRC-LENGTH-MATCH")
-    assert finding.severity.value == "error"
+    assert finding.severity.value == "warning"
     assert (finding.required_nm, finding.measured_nm) == (nm_from_mm("1.5"), nm_from_mm(2))
     assert finding.nets == ("CKP", "D0P")
     assert finding.objects == ("match_group:lanes",)
-    assert report.decision.value == "fail"
+    assert not [item for item in report.findings if item.severity.value == "error"
+                and item.code == "DRC-LENGTH-MATCH"]
 
 
 def test_incompletely_routed_groups_are_not_judged() -> None:

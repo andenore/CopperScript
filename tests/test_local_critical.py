@@ -37,7 +37,10 @@ def fixture(tree=True):
 
 
 def hard_findings(board):
-    return [f for f in run_physical_drc(board).findings if f.code != "DRC-ROUTE-INCOMPLETE"]
+    # A length miss of connected copper is a review warning, reported separately.
+    from pcbir.drc import ROUTING_BUDGET_WARNING_CODES
+    return [f for f in run_physical_drc(board).findings
+            if f.code != "DRC-ROUTE-INCOMPLETE" and f.code not in ROUTING_BUDGET_WARNING_CODES]
 
 
 def test_length_bounded_surface_repair_uses_fine_geometric_search(monkeypatch):
@@ -95,14 +98,15 @@ def test_bounded_critical_surface_maze_preserves_length_and_source_owners(rename
                                 for track in alternatives[0])
     guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("0.5")))
     result = route_critical_nets(board, guides)
-    assert result.nets[0].connected == (length_mm == 9)
+    # A route over the budget is still kept: connected, with a length warning.
+    assert result.nets[0].connected and not result.nets[0].diagnostics
     assert result.board.placements == board.placements and result.board.copper_keepouts == (wall,)
-    assert not result.board.vias
+    assert not result.board.vias and not hard_findings(result.board)
     if length_mm == 9:
-        assert result.nets[0].lengths_nm[0] <= rule.max_length_nm
-        assert not hard_findings(result.board)
+        assert result.nets[0].lengths_nm[0] <= rule.max_length_nm and not result.nets[0].warnings
     else:
-        assert not result.board.tracks
+        assert result.nets[0].lengths_nm[0] > rule.max_length_nm
+        assert "exceeds" in " ".join(result.nets[0].warnings)
 
 
 def test_short_tree_replaces_legal_detour_and_preserves_every_branch():
@@ -147,16 +151,19 @@ def test_local_tree_never_drops_an_unreachable_terminal():
     assert not tuple(local_surface_candidates(replace(board, copper_keepouts=(wall,)), board.net_routing_rules[0]))
 
 
-def test_local_candidate_must_satisfy_original_length_budget():
+def test_local_candidate_over_the_original_length_budget_is_kept_with_a_warning():
     board, guides = fixture()
     rule = replace(board.net_routing_rules[0], max_length_nm=nm_from_mm(2))
     board = replace(board, net_routing_rules=(rule,))
     original, tracks, vias = _route_single(board, rule, guides.routes[0])
     original, tracks, vias = _validate_candidate(board, original, tracks, vias, [], [])
+    assert original.connected and original.warnings
     result, tracks, vias = _improve_single_surface(board, rule, guides.routes[0], original, tracks, vias, [], [])
-    assert not result.connected and result.local_candidate_attempts == 1
-    assert tracks == vias == ()
-    assert any("exceeds" in diagnostic for diagnostic in result.diagnostics)
+    # No candidate meets the budget: the shorter connected route is kept, still warning.
+    assert result.connected and result.local_candidate_attempts == 1 and tracks
+    assert result.lengths_nm[0] <= original.lengths_nm[0]
+    assert any("exceeds" in warning for warning in result.warnings) and not result.diagnostics
+    assert rule.max_length_nm == nm_from_mm(2)
 
 
 def test_previous_critical_reservation_is_not_crossed_or_mutated():
@@ -319,17 +326,18 @@ def test_explicit_via_free_rf_tree_preserves_every_shunt_and_original_budgets(na
     guide = replace(guides.routes[0], net=name, segments=tuple(replace(s, net=name) for s in guides.routes[0].segments))
     guides = replace(guides, routes=(guide,))
     result = route_critical_nets(board, guides)
-    assert result.nets[0].connected == (length_mm == 12)
+    # Over the budget the route is kept with a length warning, never left open.
+    assert result.nets[0].connected and not result.nets[0].diagnostics
     assert board.net_routing_rules == (rule,)
     assert result.board.placements == board.placements and not result.board.vias
+    assert not hard_findings(result.board)
+    assert all(t.net == name and t.width_nm == rule.width_nm and t.layer is CopperLayer.FRONT
+               for t in result.board.tracks)
     if length_mm == 12:
         assert result.nets[0].strategy == 'local_surface_tree'
-        assert not hard_findings(result.board)
-        assert all(t.net == name and t.width_nm == rule.width_nm and t.layer is CopperLayer.FRONT
-                   for t in result.board.tracks)
-        assert result.nets[0].lengths_nm[0] <= rule.max_length_nm
+        assert result.nets[0].lengths_nm[0] <= rule.max_length_nm and not result.nets[0].warnings
     else:
-        assert not result.board.tracks
+        assert "exceeds" in " ".join(result.nets[0].warnings)
 
 
 def test_rf_tree_opt_in_does_not_enable_clocks_or_permitted_vias():

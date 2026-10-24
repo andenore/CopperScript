@@ -75,6 +75,12 @@ def _hard(board: PhysicalBoard) -> set[str]:
             if finding.severity.value == "error" and finding.code not in {"DRC-ROUTE-INCOMPLETE", "DRC-OPEN-NET"}}
 
 
+def _budget_warnings(board: PhysicalBoard) -> set[str]:
+    """Length/skew review warnings of connected copper (not opens or errors)."""
+    return {finding.code for finding in run_physical_drc(board).findings
+            if finding.severity.value == "warning" and finding.code.startswith(("DRC-LENGTH", "DRC-MAX-LENGTH"))}
+
+
 def _lane(tracks, name: str) -> tuple[TrackSegment, ...]:
     return tuple(track for track in tracks if track.net.startswith(f"{name}_"))
 
@@ -246,7 +252,7 @@ def test_tuning_lands_where_there_is_room_along_the_member() -> None:
     ({"amplitude": None}, "LANE_B_N/LANE_B_P: no tuning_amplitude_limit is declared"),
     ({"uncoupled": "2"}, "LANE_B_N/LANE_B_P: pair uncoupled length"),
 ))
-def test_impossible_tuning_restores_the_copper_and_fails_verification(options, reason) -> None:
+def test_impossible_tuning_restores_the_copper_and_warns(options, reason) -> None:
     board = _lanes_board(TWO_LANES, **options)
     guides = route_global(board)
     result = route_critical_nets(board, guides)
@@ -256,15 +262,15 @@ def test_impossible_tuning_restores_the_copper_and_fails_verification(options, r
     assert tuning.skew_before_nm == tuning.skew_after_nm == nm_from_mm(4)
     assert tuning.bumps == 0 and all(member.added_length_nm == 0 for member in tuning.members)
     # Every pair is still accepted; the copper and results are exactly those
-    # of never tuning, and the stage fails.
+    # of never tuning, and the stage warns: the group is left for review.
     assert all(item.connected and not item.diagnostics for item in result.nets)
     assert result.locked_tracks == baseline.locked_tracks
     assert result.locked_vias == baseline.locked_vias
     assert result.nets == baseline.nets
     assert result.routing_fingerprint == baseline.routing_fingerprint
-    assert result.status is CriticalRoutingStatus.FAILED and baseline.status is not CriticalRoutingStatus.FAILED
-    assert result.board.metadata["critical_routing"] == "failed"
-    assert "DRC-LENGTH-MATCH" in _hard(result.board)
+    assert result.status is CriticalRoutingStatus.WARNING and baseline.status is not CriticalRoutingStatus.FAILED
+    assert result.board.metadata["critical_routing"] == "complete"
+    assert "DRC-LENGTH-MATCH" in _budget_warnings(result.board) and "DRC-LENGTH-MATCH" not in _hard(result.board)
     assert json.loads(result.to_json())["match_tuning"][0]["reason"] == tuning.reason
 
 
@@ -319,7 +325,7 @@ def test_candidates_completing_an_over_skew_group_are_not_rejected_during_routin
     tracks_a, tracks_b = _lane(routed.locked_tracks, "LANE_A"), _lane(routed.locked_tracks, "LANE_B")
     # Together the two pairs violate the group skew, yet the candidate that
     # completes the group passes validation: the tuning pass judges the group.
-    assert "DRC-LENGTH-MATCH" in _hard(replace(board, tracks=(*tracks_a, *tracks_b)))
+    assert "DRC-LENGTH-MATCH" in _budget_warnings(replace(board, tracks=(*tracks_a, *tracks_b)))
     accepted, accepted_tracks, _ = _validate_candidate(board, second, tracks_b, (), list(tracks_a), [])
     assert accepted.connected and not accepted.diagnostics and accepted_tracks == tracks_b
     # Other hard findings still reject it.

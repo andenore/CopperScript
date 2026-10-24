@@ -108,6 +108,10 @@ class CriticalNetResult:
     pair_ports: tuple[PairPortInventory, ...] = field(default=(), compare=False)
     pair_transitions: tuple[PairTransitionInventory, ...] = field(default=(), compare=False)
     pair_attempts: tuple[PairSearchAttempt, ...] = field(default=(), compare=False)
+    # Declared length/skew budgets the connected copper misses: review
+    # warnings for placement or manual review, never a reason to leave the
+    # group open (see ``drc.ROUTING_BUDGET_WARNING_CODES``).
+    warnings: tuple[str, ...] = ()
 
 
 def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
@@ -120,6 +124,7 @@ def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
         "lengths_nm": list(item.lengths_nm),
         "skew_nm": item.skew_nm,
         "diagnostics": list(item.diagnostics),
+        "warnings": list(item.warnings),
         "assumptions": list(item.assumptions),
         "coupled_length_nm": item.coupled_length_nm,
         "uncoupled_lengths_nm": list(item.uncoupled_lengths_nm),
@@ -520,7 +525,8 @@ def route_critical_nets(
                     diagnostics += ("pre-routed differential macro requires a paired geometry/return certificate",)
                 result = CriticalNetResult(group, not diagnostics, len(owned_tracks), len(owned_vias),
                     (_track_length(owned_tracks),), 0, diagnostics, _external_assumptions(rule),
-                    evidence_digests=_external_evidence(rule), strategy="immutable_hard_macro")
+                    evidence_digests=_external_evidence(rule), strategy="immutable_hard_macro",
+                    warnings=_budget_warnings(rule, owned_tracks))
                 result_index[group] = len(results)
                 results.append(result)
                 if on_progress:
@@ -555,12 +561,18 @@ def route_critical_nets(
                 board, rule, partner_rule, routes, rules, tracks, vias, pair_state_limit, blockers,
                 crossings.get(group), nested.get(group), turns,
             )
-            if not result.connected and group in bundle_of:
+            # Connected only over its length/skew budget counts as blocked here,
+            # but the over-budget route stays the fallback.
+            over_budget = result.connected and bool(result.warnings)
+            if (not result.connected or over_budget) and group in bundle_of:
                 index = bundle_of[group]
                 bundle_groups = set(bundles[index].order)
                 tuned_here = [position for position, (entry, _, _) in enumerate(committed)
                               if entry in bundle_groups and entry in as_routed]
                 if tuned_here:
+                    saved = (list(committed), list(results), list(early), dict(failed_targets),
+                             dict(routed), dict(as_routed), tracks, vias,
+                             (result, pair_tracks, pair_vias))
                     # Tuning while routing may block this pair (plan R12):
                     # route it again with that tuning removed, before any rip-up.
                     for position in tuned_here:
@@ -577,10 +589,21 @@ def route_critical_nets(
                     tracks = [*base_tracks, *(t for _, items, _ in committed for t in items)]
                     vias = [*base_vias, *(v for _, _, items in committed for v in items)]
                     blockers = set()
-                    result, pair_tracks, pair_vias = _route_pair_group(
+                    retry = _route_pair_group(
                         board, rule, partner_rule, routes, rules, tracks, vias, pair_state_limit, blockers,
                         crossings.get(group),
                     )
+                    if over_budget and not _within_or_shorter(retry[0], result):
+                        # Removing the tuning did not help: keep it and the
+                        # over-budget route.
+                        committed[:], results[:], early[:] = saved[0], saved[1], saved[2]
+                        failed_targets.clear(); failed_targets.update(saved[3])
+                        routed.clear(); routed.update(saved[4])
+                        as_routed.clear(); as_routed.update(saved[5])
+                        tracks, vias = saved[6], saved[7]
+                        result, pair_tracks, pair_vias = saved[8]
+                    else:
+                        result, pair_tracks, pair_vias = retry
             if not result.connected and group in bundle_of:
                 suspects = [entry for entry, entry_tracks, entry_vias in committed
                             if entry in bundle_groups and (entry_tracks or entry_vias)
@@ -629,16 +652,20 @@ def route_critical_nets(
                 )
                 # Single-ended critical nets can reuse the exact octilinear maze
                 # engine. Pairs must NEVER be repaired as independent ordinary nets.
-                if (not result.connected and routes.get(rule.net) is not None
+                # An over-length route is kept only as a fallback: the exact
+                # search may still find one within the budget.
+                if ((not result.connected or result.warnings) and routes.get(rule.net) is not None
                         and routes[rule.net].connected
                         and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
                              or len(routes[rule.net].accesses) == 2
                              or (rule.kind is RouteKind.RF_FEED and rule.topology == "tree" and rule.max_vias == 0))):
-                    repaired_single, net_tracks, net_vias = _route_single_exact(
+                    repaired_single, repaired_tracks, repaired_vias = _route_single_exact(
                         board, rule, global_route, tracks, vias, unified_options=unified_options,
                     )
-                    result = replace(repaired_single, local_candidate_attempts=result.local_candidate_attempts,
-                                     guide_length_nm=result.guide_length_nm)
+                    if not result.connected or _within_or_shorter(repaired_single, result):
+                        net_tracks, net_vias = repaired_tracks, repaired_vias
+                        result = replace(repaired_single, local_candidate_attempts=result.local_candidate_attempts,
+                                         guide_length_nm=result.guide_length_nm)
                 elif (result.connected and result.strategy == "global_guide"
                         and len(net_by_name[rule.net].pads) >= 3
                         and rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}):
@@ -708,9 +735,11 @@ def route_critical_nets(
                 conflict_diagnostics,
             )
         )
-    failed = (any(not item.connected or item.diagnostics for item in results)
-              or any(item.status == "failed" for item in match_tuning))
-    warnings = any(item.assumptions for item in results)
+    # A length/skew miss (a member's budget or a group left over max_skew)
+    # is a review warning: the copper is connected and kept.
+    failed = any(not item.connected or item.diagnostics for item in results)
+    warnings = (any(item.assumptions or item.warnings for item in results)
+                or any(item.status == "failed" for item in match_tuning))
     status = (
         CriticalRoutingStatus.FAILED
         if failed
@@ -1304,16 +1333,18 @@ def _retuned_result(
     per_net = [tuple(t for t in tracks if t.net == net) for net in original.nets]
     lengths = tuple(_track_length(items) for items in per_net)
     diagnostics: list[str] = []
+    warnings: list[str] = []
     for net, items in zip(original.nets, per_net):
         diagnostics.extend(_budget_diagnostics(rules[net], items, tuple(v for v in vias if v.net == net)))
+        warnings.extend(_budget_warnings(rules[net], items))
     if len(original.nets) != 2:
         return replace(original, track_count=len(tracks), lengths_nm=lengths,
-                       diagnostics=tuple(diagnostics))
+                       diagnostics=tuple(diagnostics), warnings=tuple(warnings))
     first, second = rules[original.nets[0]], rules[original.nets[1]]
     skew = abs(lengths[0] - lengths[1])
     skews = [value for value in (first.max_skew_nm, second.max_skew_nm) if value is not None]
     if skews and skew > min(skews):
-        diagnostics.append(f"pair skew {skew} nm exceeds {min(skews)} nm")
+        warnings.append(f"pair skew {skew} nm exceeds {min(skews)} nm")
     spacing = (first.width_nm or board.rules.default_track_width_nm) + (first.pair_gap_nm or second.pair_gap_nm or 0)
     coupled = _coupled_length(list(per_net[0]), list(per_net[1]), spacing)
     uncoupled = tuple(max(0, length - coupled) for length in lengths)
@@ -1323,7 +1354,7 @@ def _retuned_result(
         diagnostics.append(f"pair uncoupled length {max(uncoupled)} nm exceeds {min(limits)} nm")
     return replace(original, track_count=len(tracks), lengths_nm=lengths, skew_nm=skew,
                    coupled_length_nm=coupled, uncoupled_lengths_nm=uncoupled,
-                   diagnostics=tuple(diagnostics))
+                   diagnostics=tuple(diagnostics), warnings=tuple(warnings))
 
 
 # First-failing gates that name another net's copper as the obstacle.
@@ -1417,9 +1448,18 @@ def _route_pair_group(
             strategy="planned_crossing", pair_search_order="planned_crossing")
         if crossing.layer is None:
             return reported((result, pair_tracks, pair_vias))
+    # A candidate over its length/skew budget is kept only as a fallback:
+    # the searches below continue for one within it (``_within_or_shorter``).
+    fallback = (result, pair_tracks, pair_vias) if result.connected and result.warnings else None
+
+    def keep(attempt, attempt_tracks, attempt_vias):
+        nonlocal fallback
+        if attempt.connected and (fallback is None or _within_or_shorter(attempt, fallback[0])):
+            fallback = (attempt, attempt_tracks, attempt_vias)
+
     guided = all(routes.get(name) is not None and routes[name].connected
                  for name in (rule.net, partner_name))
-    if (not result.connected and guided and crossing is None and not (first_branches or second_branches)
+    if (not _within_budget(result) and guided and crossing is None and not (first_branches or second_branches)
             and any(a.tracks for name in (first.net, second.net) for a in routes[name].accesses)):
         # A coarse guide may already carry a checked multi-leg package exit.
         # Try one whole-pair proposal that retains those actual lead-ins rather
@@ -1431,8 +1471,9 @@ def _route_pair_group(
             board, attempt, proposed_tracks, proposed_vias, rules)
         attempt, proposed_tracks, proposed_vias = _validate_candidate(
             board, attempt, proposed_tracks, proposed_vias, tracks, vias)
-        if attempt.connected:
+        if _within_budget(attempt):
             return reported((attempt, proposed_tracks, proposed_vias))
+        keep(attempt, proposed_tracks, proposed_vias)
     if crossing is not None and not guided:
         result = replace(result, diagnostics=("both pair members require connected global guides",))
     supported = (routes.get(first.net) is not None and routes.get(second.net) is not None
@@ -1443,7 +1484,7 @@ def _route_pair_group(
     from .pair_terminals import macro_terminal_guides_proved
     proved_ports = protected_ends and macro_terminal_guides_proved(
         board, (routes.get(first.net), routes.get(second.net)))
-    if not result.connected and supported and (guided or not protected_ends or proved_ports):
+    if not _within_budget(result) and supported and (guided or not protected_ends or proved_ports):
         search_board = replace(board, tracks=(*tracks, *first_branches, *second_branches),
                                vias=(*vias, *[v for pair in branch_via_pairs for v in pair], *branch_return_vias))
         stats = PairSearchStats()
@@ -1529,16 +1570,20 @@ def _route_pair_group(
                     **({"terminal_completion": completion} if completion is not None else {}), **limits,
                 ):
                     attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
-                    if attempt.connected:
+                    if _within_budget(attempt):
                         result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
                         break
+                    if attempt.connected:
+                        keep(attempt, proposed_tracks, proposed_vias)
+                        rejected.append(_rejection_gate(attempt.warnings))
+                        continue
                     observe(attempt, found)
                     rejected.append(_rejection_gate(attempt.diagnostics))
-                if result.connected:
+                if _within_budget(result):
                     break
-            if result.connected:
+            if _within_budget(result):
                 break
-        if not result.connected and pair_state_limit is not None and stats.expanded_states < pair_state_limit:
+        if not _within_budget(result) and pair_state_limit is not None and stats.expanded_states < pair_state_limit:
             # Sampling both families/pitches may leave a productive portal's
             # exact frontier suspended at its slice. Continue that same owned
             # search with unused aggregate states; no new portal/slot is added.
@@ -1546,11 +1591,17 @@ def _route_pair_group(
             for candidate in resume_pair_candidates(stats, board=search_board,
                                                      maximum_total_states=pair_state_limit):
                 attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
-                if attempt.connected:
+                if _within_budget(attempt):
                     result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
                     break
+                if attempt.connected:
+                    keep(attempt, proposed_tracks, proposed_vias)
+                    rejected.append(_rejection_gate(attempt.warnings))
+                    continue
                 observe(attempt, found)
                 rejected.append(_rejection_gate(attempt.diagnostics))
+        if not _within_budget(result) and fallback is not None and _within_or_shorter(fallback[0], result):
+            result, pair_tracks, pair_vias = fallback
         rejections, examples = _rejection_summary(rejected)
         result = replace(result, search_states=stats.expanded_states,
                          candidate_attempts=stats.candidates, pair_searches=stats.searches,
@@ -1810,7 +1861,10 @@ def _improve_pair_spine(
             board, proposed, tracks, vias, {first.net: first, second.net: second},
         )
         proposed, tracks, vias = _validate_candidate(board, proposed, tracks, vias, committed_tracks, committed_vias)
-        if (proposed.connected and all(a <= b for a, b in zip(proposed.lengths_nm, incumbent.lengths_nm))
+        # A shortcut never trades a budget the incumbent meets for length.
+        if (proposed.connected and (len(proposed.warnings), proposed.skew_nm if proposed.warnings else 0)
+                <= (len(incumbent.warnings), incumbent.skew_nm if incumbent.warnings else 0)
+                and all(a <= b for a, b in zip(proposed.lengths_nm, incumbent.lengths_nm))
                 and (sum(proposed.lengths_nm), len(tracks)) < (sum(incumbent.lengths_nm), len(incumbent_tracks))):
             incumbent = replace(proposed, strategy="joint_pair_refined")
             incumbent_tracks, incumbent_vias = tracks, vias
@@ -1985,24 +2039,54 @@ def _route_single_exact(
         len(tracks), len(vias), (_track_length(tracks),), 0,
         (*net.diagnostics, *_budget_diagnostics(rule, tracks, vias)) if net is not None else ("no exact critical-net attempt",),
         _external_assumptions(rule), evidence_digests=_external_evidence(rule),
-        strategy=strategy,
+        strategy=strategy, warnings=_budget_warnings(rule, tracks),
     )
-    if (not result.connected and rule.max_vias == 0
+    fallback = None
+    if ((not result.connected or result.warnings) and rule.max_vias == 0
             and any(item.net == rule.net and item.connected for item in global_route.routes)):
         # A board-wide fine grid can spend its whole budget far from a short
         # surface connection. Reuse the exact bounded local maze; acceptance
-        # still enforces the original specialized length and clearance rules.
+        # still enforces the original clearance rules, and a candidate within
+        # the length budget wins over any over-length one.
         owner_board = replace(board, tracks=tuple(committed_tracks), vias=tuple(committed_vias))
         for candidate_tracks in local_surface_candidates(owner_board, rule, maze=True):
             candidate = replace(result, connected=True, track_count=len(candidate_tracks), via_count=0,
                 lengths_nm=(_track_length(candidate_tracks),),
-                diagnostics=_budget_diagnostics(rule, candidate_tracks, ()), strategy="local_surface_maze")
+                diagnostics=_budget_diagnostics(rule, candidate_tracks, ()),
+                warnings=_budget_warnings(rule, candidate_tracks), strategy="local_surface_maze")
             candidate, candidate_tracks, candidate_vias = _validate_candidate(
                 board, candidate, candidate_tracks, (), committed_tracks, committed_vias)
-            if candidate.connected:
+            if candidate.connected and not candidate.warnings:
                 return candidate, candidate_tracks, candidate_vias
-    return _validate_candidate(board, result, tracks, vias,
-                               committed_tracks, committed_vias)
+            if candidate.connected and (fallback is None or _within_or_shorter(candidate, fallback[0])):
+                fallback = (candidate, candidate_tracks, candidate_vias)
+    validated = _validate_candidate(board, result, tracks, vias,
+                                    committed_tracks, committed_vias)
+    if fallback is not None and (not validated[0].connected or _within_or_shorter(fallback[0], validated[0])):
+        return fallback
+    return validated
+
+
+def _within_budget(result: CriticalNetResult) -> bool:
+    """Connected and within every length/skew budget: no reason to search on."""
+    return result.connected and not result.warnings
+
+
+def _within_or_shorter(candidate: CriticalNetResult, incumbent: CriticalNetResult) -> bool:
+    """Whether ``candidate`` should replace ``incumbent`` as the group's route.
+
+    Connected beats open, and copper within its length/skew budget beats
+    copper over it. Between two over-budget routes, fewer misses, then the
+    smaller pair skew, then the shorter copper is closer to the declared intent.
+    """
+    if not candidate.connected:
+        return False
+    if not incumbent.connected:
+        return True
+    if not incumbent.warnings:
+        return False
+    rank = lambda item: (bool(item.warnings), len(item.warnings), item.skew_nm, sum(item.lengths_nm))
+    return rank(candidate) < rank(incumbent)
 
 
 def _improve_single_surface(
@@ -2031,7 +2115,7 @@ def _improve_single_surface(
             continue
         candidate = CriticalNetResult(
             (rule.net,), True, len(tracks), 0, (length,), 0,
-            diagnostics=_budget_diagnostics(rule, tracks, ()),
+            diagnostics=_budget_diagnostics(rule, tracks, ()), warnings=_budget_warnings(rule, tracks),
             assumptions=_external_assumptions(rule), evidence_digests=_external_evidence(rule),
             strategy="local_surface_tree",
         )
@@ -2103,6 +2187,7 @@ def _route_single(
             0,
             0,
             evidence,
+            warnings=_budget_warnings(rule, tuple(tracks)),
         ),
         tuple(tracks),
         vias,
@@ -2301,6 +2386,7 @@ def _route_pair(
     diagnostics.extend(
         _budget_diagnostics(second, tuple(second_tracks), tuple(v for v in pair_vias if v.net == second.net))
     )
+    warnings = [*_budget_warnings(first, tuple(first_tracks)), *_budget_warnings(second, tuple(second_tracks))]
     shared_references: list[CopperLayer] = []
     if exact_via_pairs:
         # Via-pad spacing is deliberately wider than trace pitch. Require
@@ -2341,7 +2427,7 @@ def _route_pair(
                 for r in requested) for v in return_vias):
                 diagnostics.append("paired transition lacks a permitted nearby return via")
     if max_skew is not None and skew > max_skew:
-        diagnostics.append(f"pair skew {skew} nm exceeds {max_skew} nm")
+        warnings.append(f"pair skew {skew} nm exceeds {max_skew} nm")
     uncoupled_limit = min(
         value
         for value in (first.maximum_uncoupled_length_nm, second.maximum_uncoupled_length_nm)
@@ -2402,6 +2488,7 @@ def _route_pair(
                       "joint_pair_search" if exact_tracks is not None else
                       "aligned_pair" if aligned is not None else "global_guide"),
             shared_reference_transition_count=len(shared_references),
+            warnings=tuple(warnings),
         ),
         tracks,
         tuple((*pair_vias, *return_vias)),
@@ -2940,13 +3027,19 @@ def _budget_diagnostics(
     tracks: tuple[TrackSegment, ...],
     vias: tuple[Via, ...],
 ) -> tuple[str, ...]:
+    """Hard profile budgets of candidate copper (the via budget)."""
     diagnostics: list[str] = []
-    length = _track_length(tracks)
-    if rule.max_length_nm is not None and length > rule.max_length_nm:
-        diagnostics.append(f"route length {length} nm exceeds {rule.max_length_nm} nm")
     if rule.max_vias is not None and len(vias) > rule.max_vias:
         diagnostics.append(f"via count {len(vias)} exceeds {rule.max_vias}")
     return tuple(diagnostics)
+
+
+def _budget_warnings(rule: NetRoutingRule, tracks: tuple[TrackSegment, ...]) -> tuple[str, ...]:
+    """Length budget misses of connected copper: review warnings, not gates."""
+    length = _track_length(tracks)
+    if rule.max_length_nm is not None and length > rule.max_length_nm:
+        return (f"route length {length} nm exceeds {rule.max_length_nm} nm",)
+    return ()
 
 
 # Candidate gates in the order they are evaluated: profile budgets and pair

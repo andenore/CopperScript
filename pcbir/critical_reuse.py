@@ -167,7 +167,7 @@ def validate_single_critical_reuse(
     Call at the normal single-net job's turn. Current earlier critical copper may
     reject it even when preparation succeeded. Inputs and donor remain unchanged.
     """
-    from .critical import (CriticalNetResult, _budget_diagnostics, _external_assumptions,
+    from .critical import (CriticalNetResult, _budget_diagnostics, _budget_warnings, _external_assumptions,
                            _external_evidence, _reject_reserved_plane_tracks,
                            _track_length, _validate_candidate)
     tracks, vias = tuple(committed_tracks), tuple(committed_vias)
@@ -190,6 +190,7 @@ def validate_single_critical_reuse(
     result = CriticalNetResult((name,), True, len(candidate.tracks), len(candidate.vias),
         (_track_length(candidate.tracks),), 0,
         diagnostics=_budget_diagnostics(rule, candidate.tracks, candidate.vias),
+        warnings=_budget_warnings(rule, candidate.tracks),
         assumptions=_external_assumptions(rule), evidence_digests=_external_evidence(rule),
         strategy="revalidated_single_net")
     result, proposed_tracks, proposed_vias = _reject_reserved_plane_tracks(
@@ -197,4 +198,9 @@ def validate_single_critical_reuse(
     if not result.connected or result.diagnostics:
         return replace(result, connected=False, track_count=0, via_count=0,
                        candidate_rejected=True), (), ()
+    if result.warnings:
+        # Donor copper over its current length budget is not reused: a fresh
+        # route may still meet it, and keeps the over-length fallback if not.
+        return replace(result, connected=False, track_count=0, via_count=0, diagnostics=result.warnings,
+                       warnings=(), candidate_rejected=True), (), ()
     return _validate_candidate(board, result, proposed_tracks, proposed_vias, list(tracks), list(vias))

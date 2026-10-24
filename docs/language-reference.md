@@ -868,6 +868,18 @@ placement/routing defaults when neither is stated. Routing parameters lower to
 `tuning_spacing` and `tuning_group` (see
 [signal-integrity routing intent](#signal-integrity-routing-intent)).
 
+Length and skew budgets (`max_length`, a pair's `max_skew`, a
+`length_match` group's `max_skew`) are review warnings on connected copper,
+not opens or geometry errors. Every router keeps searching for a route within
+the budget and prefers it; when none is found it keeps the best connected
+route (fewest misses, then the smaller pair skew, then the shorter copper)
+and reports the miss in the net result's `warnings`. DRC reports
+`DRC-MAX-LENGTH`, `DRC-DIFF-SKEW` and `DRC-LENGTH-MATCH` as warnings,
+`copper issues` lists them as `review` issues (`B1`, ...) to resolve by
+placement or manual review, and requirement verification still fails the
+declared constraint. `max_vias`, `maximum_uncoupled_length` and every other
+profile gate stay hard. Reused critical copper must meet its current budget.
+
 USB/differential profiles need not be top-layer-only. For example,
 `allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;` permits matched terminal
 transitions and another-layer paired middle route. `max_vias` counts signal
@@ -1347,7 +1359,8 @@ member, so a tight `maximum_uncoupled_length` can rule tuning out.
 A group's copper changes only when every unit is accepted and the group ends
 within `max_skew`. Otherwise its copper and results are kept exactly as
 routed, the group is reported `failed` with the reason, the critical stage
-fails, and final verification reports `DRC-LENGTH-MATCH`. Groups within their
+warns, and final verification reports the `DRC-LENGTH-MATCH` review warning
+(requirement verification fails the group). Groups within their
 limit are untouched. Groups with a member that is not connected after critical
 routing (for example an ordinary net) are `incomplete` and left to final
 verification. Candidate validation during critical routing does not reject a
@@ -1573,8 +1586,9 @@ constraint length_match(CSI_SRC_CKP, CSI_SRC_CKN, CSI_SRC_DA0P, CSI_SRC_DA0N) {
   metadata. A group without `id` is named `length_match:<index>`. A member's
   length is its total routed track length (via barrels are not counted) and
   the group skew is the longest minus the shortest member. Once every member
-  net is connected, a skew above `max_skew` is the hard DRC finding
-  `DRC-LENGTH-MATCH`; before that the group is reported as incomplete. The
+  net is connected, a skew above `max_skew` is the DRC review warning
+  `DRC-LENGTH-MATCH` (requirement verification fails it); before that the
+  group is reported as incomplete. The
   critical router tunes critically routed members toward the group's longest
   member (see [critical routing](#critical-routing-and-qualification)).
 

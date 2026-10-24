@@ -714,7 +714,7 @@ def _unified_profile_review(detailed, global_route, drc):
     """
     from math import hypot
     from .critical import CriticalNetResult
-    from .drc import DrcSeverity, explicit_copper_connectivity
+    from .drc import ROUTING_BUDGET_WARNING_CODES, DrcSeverity, explicit_copper_connectivity
     board = detailed.board
     graph = explicit_copper_connectivity(board)
     nets = {net.name: net for net in board.nets}
@@ -732,14 +732,17 @@ def _unified_profile_review(detailed, global_route, drc):
         connected = all(net in nets and graph.net_connected(nets[net]) for net in group)
         diagnostics = [f.message for f in drc.findings
                        if f.severity is DrcSeverity.ERROR and set(f.nets).intersection(group)]
+        warnings = tuple(dict.fromkeys(f.message for f in drc.findings
+                         if f.code in ROUTING_BUDGET_WARNING_CODES and set(f.nets).intersection(group)))
         if not connected:
             diagnostics.append("unified routing left profile terminals disconnected")
         if rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
             diagnostics.append("unified differential coupling and return-path verification is not implemented")
         results.append(CriticalNetResult(group, connected and not diagnostics, len(tracks), len(vias),
             lengths, max(lengths)-min(lengths) if lengths else 0,
-            tuple(dict.fromkeys(diagnostics)), strategy="unified_final_review"))
+            tuple(dict.fromkeys(diagnostics)), strategy="unified_final_review", warnings=warnings))
     status = (CriticalRoutingStatus.FAILED if any(not item.connected for item in results)
+              else CriticalRoutingStatus.WARNING if any(item.warnings for item in results)
               else CriticalRoutingStatus.SUCCESS)
     return CriticalRoutingResult(status, board, tuple(results), (), (),
         global_route.routing_fingerprint, detailed.routing_fingerprint)

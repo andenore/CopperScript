@@ -243,6 +243,26 @@ def test_route_report_placement_findings_become_located_warnings(tmp_path, run_d
     assert [i.id for i in issues if i.stage == "placement"] == ["W1"]
 
 
+def test_length_and_skew_warnings_become_review_issues_not_opens(tmp_path, run_dir):
+    run_copy = tmp_path / "budget"
+    run_copy.mkdir()
+    (run_copy / "board.kicad_pcb").write_text((run_dir / "board.kicad_pcb").read_text())
+    report = json.loads((run_dir / "route-report.json").read_text())
+    net = next(iter({pad.net for pad in load_run(run_dir).scene().pads if pad.net}))
+    report.setdefault("drc", {}).setdefault("findings", []).append(
+        {"code": "DRC-MAX-LENGTH", "severity": "warning", "message": f"net {net!r} exceeds its maximum routed length",
+         "nets": [net], "required_nm": 5_000_000, "measured_nm": 6_250_000, "objects": [], "layers": []})
+    (run_copy / "route-report.json").write_text(json.dumps(report))
+    issues = run_issues(load_run(run_copy))
+    review = find_issue(issues, "B1")
+    assert review.stage == "review" and review.code == "DRC-MAX-LENGTH" and review.nets == [net]
+    assert "6.25 mm against 5.00 mm" in review.title
+    # The warning adds no open or physical-error issue of its own.
+    baseline = run_issues(load_run(run_dir))
+    assert len(issues) == len(baseline) + 1
+    assert [i.id for i in filter_issues(issues, stage="review")] == ["B1"]
+
+
 def test_route_report_escape_findings_become_located_issues(tmp_path, run_dir):
     run_copy = tmp_path / "escape"
     run_copy.mkdir()

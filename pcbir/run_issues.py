@@ -373,6 +373,19 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
                                nets=nets, layers=layers, objects=objects,
                                points=_physical_object_points(scene, objects, nets, layers)))
 
+    # Connected copper that misses a declared length/skew budget: a review
+    # warning for placement or manual review, not an open.
+    budget = [f for f in drc if f.get("severity") == "warning"
+              and f.get("code") in {"DRC-MAX-LENGTH", "DRC-DIFF-SKEW", "DRC-LENGTH-MATCH"}]
+    for index, finding in enumerate(budget, 1):
+        nets = list(finding.get("nets") or [])
+        measured, required = finding.get("measured_nm"), finding.get("required_nm")
+        detail = (f" ({measured / _NM:.2f} mm against {required / _NM:.2f} mm)"
+                  if isinstance(measured, int) and isinstance(required, int) else "")
+        issues.append(RunIssue(f"B{index}", "review", finding.get("code", "DRC"),
+                               finding.get("message", "") + detail, nets=nets,
+                               points=_net_points(scene, nets) if len(nets) <= 6 else []))
+
     for result in _items(_section(report, "critical").get("nets")):
         if not isinstance(result, dict) or result.get("connected") is not False:
             continue

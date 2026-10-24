@@ -137,8 +137,8 @@ def _placement(constraint, lowered, board):
 
 
 def _routing(constraint, lowered, board, drc):
-    from .drc import (_check_track_rules, _check_vias, _check_differential_rules,
-                      explicit_copper_connectivity)
+    from .drc import (ROUTING_BUDGET_WARNING_CODES, _check_track_rules, _check_vias,
+                      _check_differential_rules, explicit_copper_connectivity)
     expected = lowered[5][0]
     current = next((r for r in board.net_routing_rules if r.net == expected.net), None)
     if current is None:
@@ -150,7 +150,9 @@ def _routing(constraint, lowered, board, drc):
     _check_vias(view, findings)
     _check_differential_rules(view, findings)
     related = {expected.net, expected.differential_partner} - {None}
-    errors = [f for f in findings if f.severity.value == "error" and set(f.nets) & related]
+    # Length and skew misses are DRC review warnings; the declared limit still fails here.
+    errors = [f for f in findings if (f.severity.value == "error" or f.code in ROUTING_BUDGET_WARNING_CODES)
+              and set(f.nets) & related]
     measurements = [{"property": f.code, "actual_nm": f.measured_nm,
                      "limit_nm": f.required_nm} for f in errors]
     if errors:

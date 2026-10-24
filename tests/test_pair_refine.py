@@ -116,8 +116,10 @@ def test_owner_preserves_complete_accepted_incumbent_on_bad_shortcut(monkeypatch
         far = Point(edge.end.x_nm - nm_from_mm(.1), bump.y_nm)
         lane[i:i + 1] = [replace(edge, end=bump), replace(edge, start=bump, end=far), replace(edge, start=far)]
         proposal = proposal[0], tuple(lane)
+        # Over its skew budget the shortcut is only a warned fallback, never
+        # better than an incumbent within it.
         rejected = _route_pair(board, *rules, routes, exact_tracks=proposal)[0]
-        assert any("skew" in diagnostic for diagnostic in rejected.diagnostics)
+        assert any("skew" in warning for warning in rejected.warnings)
     elif defect == "width":
         proposal = tuple(tuple(replace(t, width_nm=nm_from_mm(.2)) for t in lane) for lane in proposal)
     elif defect == "layer":

@@ -2807,23 +2807,23 @@ def route_unified(
         accepted = {**(_smoothed(_with(board, held), rest) if rest else {}), **held}
     # Search and tentative commit flags are not whole-net budget checks.
     # Measure final, smoothed copper exactly as DRC does, including the fixed
-    # prefix and all repair additions. Reject only this call's mutable copper.
-    budget_errors = {}
+    # prefix and all repair additions. A via budget is hard: reject only this
+    # call's mutable copper. A length miss keeps the connected copper and is a
+    # review warning (placement or manual review decides what to change).
+    budget_errors, budget_warnings = {}, {}
     for net in (*nets, *already):
         rule = rules.get(net.name)
         if rule is None or (rule.max_length_nm is None and rule.max_vias is None):
             continue
         tracks, vias = accepted.get(net.name, ((), ()))
-        errors = []
-        length = _net_track_length(board, net.name, tracks)
-        if rule.max_length_nm is not None and length > rule.max_length_nm:
-            errors.append(f"route length {length} nm exceeds {rule.max_length_nm} nm")
         count = sum(v.net == net.name for v in board.vias) + len(vias)
         if rule.max_vias is not None and count > rule.max_vias:
-            errors.append(f"via count {count} exceeds {rule.max_vias}")
-        if errors:
-            budget_errors[net.name] = tuple(errors)
+            budget_errors[net.name] = (f"via count {count} exceeds {rule.max_vias}",)
             accepted.pop(net.name, None)
+            continue
+        length = _net_track_length(board, net.name, tracks)
+        if rule.max_length_nm is not None and length > rule.max_length_nm:
+            budget_warnings[net.name] = (f"route length {length} nm exceeds {rule.max_length_nm} nm",)
     new_tracks = tuple(t for name in sorted(accepted) for t in accepted[name][0])
     new_vias = tuple(v for name in sorted(accepted) for v in accepted[name][1])
     all_tracks = (*board.tracks, *new_tracks)
@@ -2856,7 +2856,7 @@ def route_unified(
         results.append(DetailedNetResult(
             net.name, net.name in routed_names, len(tracks), len(vias),
             int(sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm) for t in tracks)),
-            0, diagnostics))
+            0, diagnostics, warnings=budget_warnings.get(net.name, ()) if net.name in routed_names else ()))
     metrics = DetailedRoutingMetrics(
         routed_net_count=sum(r.connected for r in results),
         unrouted_net_count=sum(not r.connected for r in results),

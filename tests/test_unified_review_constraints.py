@@ -66,30 +66,33 @@ def test_native_fill_confirms_the_plane_lead_in_connection(tmp_path):
     assert checked.passed, checked.findings
 
 
-@pytest.mark.parametrize("limit,connected", [(8, False), (12, True)])
-def test_final_length_budget_includes_fixed_tracks(search_backend, limit, connected):
+@pytest.mark.parametrize("limit,over", [(8, True), (12, False)])
+def test_final_length_budget_includes_fixed_tracks(search_backend, limit, over):
     board = _board({"N": ((2, 3), (8, 3), (14, 3))})
     fixed = TrackSegment("N", Point.mm(5, 6), Point.mm(11, 6), nm_from_mm("0.2"), CopperLayer.FRONT)
     board = replace(board, tracks=(fixed,), net_routing_rules=(NetRoutingRule(
         "N", max_length_nm=nm_from_mm(limit)),))
     result, _, summary = _route(board, maximum_iterations=5, commit_rounds=1)
-    assert result.nets[0].connected is connected
-    assert Counter(board.tracks) <= Counter(result.board.tracks)
+    # Routable copper is kept either way; a length miss is a review warning.
+    assert result.nets[0].connected and not result.nets[0].diagnostics
+    assert Counter(board.tracks) < Counter(result.board.tracks)
     assert "DRC-MAX-LENGTH" not in summary["drc"]["errors_by_code"]
-    if not connected:
-        assert result.board.tracks == board.tracks and result.board.vias == board.vias
-        assert "12000000 nm exceeds 8000000 nm" in " ".join(result.nets[0].diagnostics)
+    if over:
+        assert "12000000 nm exceeds 8000000 nm" in " ".join(result.nets[0].warnings)
+        assert summary["drc"]["budget_warnings_by_code"] == {"DRC-MAX-LENGTH": 1}
+    else:
+        assert not result.nets[0].warnings and summary["drc"]["budget_warnings_by_code"] == {}
 
 
-def test_already_connected_source_over_budget_is_preserved_but_not_certified():
+def test_already_connected_source_over_budget_is_preserved_with_a_warning():
     board = _board({"N": ((2, 3), (8, 3))})
     fixed = TrackSegment("N", Point.mm(5, 6), Point.mm(11, 6), nm_from_mm("0.2"), CopperLayer.FRONT)
     board = replace(board, tracks=(fixed,), net_routing_rules=(NetRoutingRule(
         "N", max_length_nm=nm_from_mm(5)),))
     result, _, _ = _route(board, maximum_iterations=1, commit_rounds=1)
-    assert not result.nets[0].connected and result.status.value == "partial"
+    assert result.nets[0].connected and result.status.value == "success"
     assert result.board.tracks == board.tracks and result.board.vias == board.vias
-    assert "6000000 nm exceeds 5000000 nm" in " ".join(result.nets[0].diagnostics)
+    assert "6000000 nm exceeds 5000000 nm" in " ".join(result.nets[0].warnings)
 
 
 @pytest.mark.parametrize("expire_at", ["unified_setup", "unified_iteration"])

@@ -182,6 +182,9 @@ class DetailedNetResult:
     resumed_branch_count: int = 0
     search_budget_exhausted: bool = False
     retry_heuristic_weight_percent: int | None = None
+    # Declared length budgets the connected copper misses: review warnings,
+    # never a reason to report the net open (drc.ROUTING_BUDGET_WARNING_CODES).
+    warnings: tuple[str, ...] = ()
     # Work of the attempt that produced this result; a reused search reports
     # the original attempt's work. Telemetry only (see DetailedSearchStats).
     search_stats: DetailedSearchStats | None = field(default=None, compare=False)
@@ -266,6 +269,7 @@ class DetailedRoutingResult:
                     "length_nm": item.length_nm,
                     "guide_deviation_count": item.guide_deviation_count,
                     "diagnostics": list(item.diagnostics),
+                    "warnings": list(item.warnings),
                     "orthogonal_mode_used": item.orthogonal_mode_used,
                     "search_policy": asdict(item.search_policy) if item.search_policy else None,
                     "resumed_branch_count": item.resumed_branch_count,
@@ -1617,25 +1621,36 @@ def _route_repair_net(
                          clearance, options, allow_movable_conflicts=allow_movable_conflicts,
                          fanout_accesses=fanout_accesses, resume=resume)
     checkpoint = attempt.checkpoint
+    pitch = options.pitch_nm
+
+    def over_length(item: _NetAttempt) -> bool:
+        # Connected, but its length budget is only a warning: a finer mesh
+        # may still find a route within it.
+        return item.result.connected and any(message.startswith("route length ")
+                                             for message in item.result.warnings)
+
     for _ in range(4):
-        if (attempt.result.connected
-                or not any("cannot reach" in message
-                           or (message.startswith("route length ") and " exceeds " in message)
-                           for message in attempt.result.diagnostics)
+        if ((attempt.result.connected and not over_length(attempt))
+                or not (over_length(attempt)
+                        or any("cannot reach" in message for message in attempt.result.diagnostics))
                 or options.pitch_nm <= options.minimum_repair_pitch_nm):
             break
         options = replace(options,
             pitch_nm=max(options.minimum_repair_pitch_nm, options.pitch_nm // 2))
-        attempt = _route_net(
+        refined = _route_net(
             board, _build_grid(board, options, pads, fanout_accesses, reuse), name, pads,
             rule, guide, usage, history, clearance, options,
             allow_movable_conflicts=allow_movable_conflicts,
             fanout_accesses=fanout_accesses,
         )
-        if attempt.checkpoint is not None and (checkpoint is None
-                or len(attempt.checkpoint.chosen) > len(checkpoint.chosen)):
-            checkpoint = attempt.checkpoint
-    return replace(attempt, pitch_nm=options.pitch_nm,
+        if refined.checkpoint is not None and (checkpoint is None
+                or len(refined.checkpoint.chosen) > len(checkpoint.chosen)):
+            checkpoint = refined.checkpoint
+        if over_length(attempt) and not (refined.result.connected
+                                         and refined.result.length_nm < attempt.result.length_nm):
+            continue  # keep the connected incumbent; try a finer mesh
+        attempt, pitch = refined, options.pitch_nm
+    return replace(attempt, pitch_nm=pitch,
                    checkpoint=None if attempt.result.connected else checkpoint)
 
 
@@ -2020,8 +2035,9 @@ def _route_net(
                 return retry
         return _failed(name, "candidate vias violate drill spacing or existing copper")
     diagnostics: list[str] = []
+    warnings: list[str] = []
     if rule and rule.max_length_nm is not None and length > rule.max_length_nm:
-        diagnostics.append(f"route length {length} nm exceeds {rule.max_length_nm} nm")
+        warnings.append(f"route length {length} nm exceeds {rule.max_length_nm} nm")
     if rule and rule.max_vias is not None:
         # Source launches and required arrays remain in the emitted board.
         # Only genuinely reused vias were excluded from the new list above.
@@ -2039,6 +2055,7 @@ def _route_net(
             tuple(diagnostics),
             orthogonal_mode_used,
             resumed_branch_count=resumed_branches,
+            warnings=tuple(warnings),
         ),
         tuple(tracks),
         tuple(vias),

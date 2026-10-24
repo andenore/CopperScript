@@ -16,7 +16,7 @@ from .boundary_access import BoundaryAccessOptions, BoundaryAccessResult, analyz
 from .clusters import move_placement_unit
 from .critical import (CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets,
                        _fingerprint as _critical_fingerprint)
-from .critical_feedback import _failures
+from .critical_feedback import _failures, over_budget_nets
 from .detailed import (DetailedNetResult, DetailedRoutingMetrics, DetailedRoutingResult,
                        DetailedRoutingStatus, _fingerprint)
 from .fanout import FanoutOptions, FanoutResult, route_fanout
@@ -164,6 +164,10 @@ class PackageAccessResult:
     placement_constraints: tuple[PackagePlacementConstraint, ...] = ()
     coupled_placement_attempts: tuple[CoupledPlacementAttempt, ...] = ()
     placement_probe_slots_spent: int = 0
+    # The part of ``failed_critical_nets`` that is connected, only over a
+    # length/skew budget: search still tries to improve it, but it is a review
+    # warning and does not hold access back.
+    over_budget_critical_nets: frozenset[str] = frozenset()
 
     @property
     def board(self) -> PhysicalBoard:
@@ -179,7 +183,8 @@ class PackageAccessResult:
     def ready(self) -> bool:
         return (self.global_route.status is GlobalRoutingStatus.SUCCESS
                 and self.critical.status is not CriticalRoutingStatus.FAILED
-                and not self.pending_pads and not self.failed_critical_nets and not self.hard_findings
+                and not self.pending_pads and not (self.failed_critical_nets - self.over_budget_critical_nets)
+                and not self.hard_findings
                 and self.boundary is not None and self.boundary.ready)
 
 
@@ -288,7 +293,8 @@ def _access_result(
     emit(on_progress, "package_boundary_access", "finished", allocated=len(boundary.ports),
          pending_pads=[f"{p.component}.{p.pad}" for p in boundary.pending_pads],
          native_accepted=boundary.native_accepted)
-    return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard, boundary=boundary)
+    return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard, boundary=boundary,
+                               over_budget_critical_nets=over_budget_nets(critical) & failed)
 
 
 def preflight_prepared_power_access(board, guides, preparation, fanout_options,

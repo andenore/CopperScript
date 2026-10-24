@@ -173,6 +173,13 @@ def test_width_contract_does_not_relax_other_routing_limits(tmp_path, constraint
     rule = (replace(rule, max_length_nm=1000000) if constraint == "length" else
             replace(rule, allowed_layers=(CopperLayer.BACK,)))
     source = replace(source, net_routing_rules=(rule,))
+    if constraint == "length":
+        # A length miss of macro copper is a review warning, still reported.
+        from pcbir.drc import run_physical_drc
+        board = materialize_hard_macros(bind(input_board=source))
+        findings = [f for f in run_physical_drc(board).findings if f.code == code]
+        assert findings and all(f.severity.value == "warning" for f in findings)
+        return
     with pytest.raises(ValueError, match=code):
         materialize_hard_macros(bind(input_board=source))
 
@@ -522,21 +529,18 @@ def test_complete_pipeline_routes_external_free_ports_without_replacing_owner(tm
     assert result.board.nets == source.nets
 
 
-@pytest.mark.parametrize("limit,connected", [(3000000,True),(1000000,False)])
-def test_single_ended_critical_owner_is_reused_and_budgeted(tmp_path,limit,connected):
+@pytest.mark.parametrize("limit,over", [(3000000,False),(1000000,True)])
+def test_single_ended_critical_owner_is_reused_and_budgeted(tmp_path,limit,over):
     original,_,bind = fixture(tmp_path)
     from pcbir.physical import NetRoutingRule, RouteKind
     from pcbir.routing import route_global
     from pcbir.critical import route_critical_nets
     source = bind(input_board=replace(original,net_routing_rules=(NetRoutingRule(
         "N",RouteKind.CRITICAL,max_length_nm=limit),)))
-    if not connected:
-        with pytest.raises(ValueError,match="DRC-MAX-LENGTH"):
-            route_global(source)
-        assert not source.tracks
-        return
     result = route_critical_nets(source,route_global(source))
-    assert result.nets[0].connected == connected
+    # Over its budget the owner copper is still the route, with a length warning.
+    assert result.nets[0].connected and not result.nets[0].diagnostics
+    assert bool(result.nets[0].warnings) == over
     assert result.nets[0].strategy == "immutable_hard_macro"
     assert result.nets[0].lengths_nm == (2000000,)
     assert result.board.tracks == materialize_hard_macros(source).tracks

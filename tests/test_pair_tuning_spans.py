@@ -110,8 +110,10 @@ def test_exact_constructor_uses_fallback_only_with_full_held_context():
     rs=board.net_routing_rules;g=guides(board)
     legacy=_route_pair(board,*rs,g,exact_tracks=parts)
     fixed=_route_pair(board,*rs,g,exact_tracks=parts,tuning_board=board)
-    assert not legacy[0].connected and legacy[0].skew_nm==451703
-    assert fixed[0].connected and fixed[0].skew_nm<=SKEW
+    # Untuned, the pair connects over its skew budget (a warning); the full
+    # held context lets the span fallback tune it within the budget.
+    assert legacy[0].connected and legacy[0].skew_nm==451703 and legacy[0].warnings
+    assert fixed[0].connected and fixed[0].skew_nm<=SKEW and not fixed[0].warnings
     assert fixed[0].tuned_length_nm>0
 
 

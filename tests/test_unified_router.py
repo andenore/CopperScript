@@ -556,7 +556,7 @@ def test_bus_defaults_leave_a_board_without_match_groups_unchanged() -> None:
     assert "bus_skew" not in default.board.metadata
 
 
-def test_bus_members_over_their_length_leave_the_bus_phase_and_fail_final_budget() -> None:
+def test_bus_members_over_their_length_leave_the_bus_phase_and_route_with_a_warning() -> None:
     from pcbir.physical import NetMatchGroup, NetRoutingRule, RouteKind
     board = _board({"D0": ((2, 7), (18, 7)), "D1": ((2, 9), (18, 9)), "X": ((10, 2), (10, 16))})
     rules = (NetRoutingRule("D0", RouteKind.GENERAL, max_length_nm=nm_from_mm("10")),)
@@ -567,13 +567,13 @@ def test_bus_members_over_their_length_leave_the_bus_phase_and_fail_final_budget
     result = route_unified(board, global_route, UnifiedRouterOptions(buses_first=True, bus_length_budget=True),
                            on_progress=lambda *args, **kwargs: events.append(args))
     buses = [e[2] for e in events if e and e[0] == "unified_buses"]
-    # D0 needs 16 mm against a 10 mm limit: the main negotiation tries it,
-    # but must not publish its over-budget copper as a completed route.
+    # D0 needs 16 mm against a 10 mm limit: the main negotiation routes it,
+    # and its connected copper is kept with a length warning, not an open.
     assert buses and buses[0]["complete"] == 1 and buses[0]["over_length"] == 1
     by_name = {net.net: net for net in result.nets}
-    assert not by_name["D0"].connected and by_name["D1"].connected
-    assert "exceeds" in " ".join(by_name["D0"].diagnostics)
-    assert not any(t.net == "D0" for t in result.board.tracks)
+    assert by_name["D0"].connected and by_name["D1"].connected and not by_name["D0"].diagnostics
+    assert "exceeds" in " ".join(by_name["D0"].warnings)
+    assert any(t.net == "D0" for t in result.board.tracks)
 
 
 def test_a_length_limited_net_takes_the_short_path_through_congestion() -> None:

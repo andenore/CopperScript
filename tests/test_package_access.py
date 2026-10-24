@@ -399,7 +399,10 @@ def test_unavoidable_critical_failure_skips_repeated_pattern_search(monkeypatch)
         return baseline.critical
     monkeypatch.setattr(access, "route_critical_nets", critical)
     result = access.preflight_package_access(board, guides, settings)
-    assert not result.ready and result.board == baseline.board
+    # A is routed, only over its length budget: still a failure for the search
+    # to improve, but a review warning that does not hold access back.
+    assert result.failed_critical_nets == result.over_budget_critical_nets == {"A"}
+    assert result.ready and result.board == baseline.board
     assert len(calls) == 2 and calls[0] is not None and calls[1] is None
     assert not result.pattern_trials
 
@@ -412,8 +415,9 @@ def test_pipeline_obeys_pattern_budget_before_starting_area(monkeypatch, budget)
     result = run_routing_pipeline(board, legacy_gates=True, fanout_options=settings,
         package_access_options=access.PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=budget),
         detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm(.5), maximum_passes=1))
-    assert result.package_access.ready == bool(budget)
-    assert result.detailed.metrics.passes == budget
+    # Without a pattern trial A stays over its length budget: a warning, not a block.
+    assert result.package_access.ready
+    assert result.package_access.over_budget_critical_nets == (frozenset() if budget else {"A"})
     assert len(result.package_access.pattern_trials) == budget
 
 

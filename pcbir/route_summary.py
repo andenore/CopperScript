@@ -70,8 +70,13 @@ def connection_summary(board: PhysicalBoard, drc=None, *, native=None, estimate_
                         if finding.severity.value == "error" and finding.disposition.value == "active")
         codes.pop("DRC-OPEN-NET", None)  # Opens are counted above, per connection.
         codes.pop("DRC-ROUTE-INCOMPLETE", None)  # Likewise (it also flags unfilled zone nets).
+        # Length/skew misses of connected copper are review warnings, not opens or errors.
+        from .drc import ROUTING_BUDGET_WARNING_CODES
+        budget = Counter(finding.code for finding in drc.findings
+                         if finding.code in ROUTING_BUDGET_WARNING_CODES and finding.severity.value == "warning"
+                         and finding.disposition.value == "active")
         result["drc"] = {"decision": drc.decision.value, "errors_by_code": dict(sorted(codes.items())),
-                         "errors": sum(codes.values())}
+                         "errors": sum(codes.values()), "budget_warnings_by_code": dict(sorted(budget.items()))}
     if native is not None:
         result["native"] = {"passed": native.passed, "unconnected": native.unconnected_count,
                             "islands": native.island_count, "violations": native.other_violation_count}

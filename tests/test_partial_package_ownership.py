@@ -107,7 +107,7 @@ def test_partial_final_gate_rejects_unconnectable_source_without_owner_loss(tmp_
     proposed, _, _, _, _ = _partial_ordinary_pattern(baseline.fanout, owner, probe.board, settings, 8)
     candidate = _access_result(board, guides, proposed,
         route_critical_nets(board, guides, reserved_accesses=proposed), None)
-    assert not candidate.ready and _improvement_outcome(baseline, candidate) != "accepted"
+    assert candidate.failed_critical_nets and _improvement_outcome(baseline, candidate) != "accepted"
     assert baseline.source == board and baseline.board.placements == board.placements
     validate_hard_macros(baseline.board)
     require_via_in_pad_arrays(baseline.board, "failed final partial gate")
@@ -140,7 +140,7 @@ def test_partial_fallback_shares_pattern_budget_after_first_all_owner_search_exh
         assert calls[-1] == {"only_nets": frozenset({"B"})}
         assert result.ready and result.source == board
     else:
-        assert not result.ready and result.board == baseline.board
+        assert result.failed_critical_nets and result.board == baseline.board
 
 
 def test_cli_partial_owner_budget_is_explicit_and_zero_disables():
@@ -270,7 +270,7 @@ def test_real_partial_pattern_preserves_scarce_neighbor_after_all_owner_ordering
     all_owner = preflight_package_access(board,guides,settings,options=PackageAccessOptions(maximum_pattern_trials=1))
     result = preflight_package_access(board,guides,settings)
     assert baseline.failed_critical_nets and not baseline.pending_pads
-    assert all_owner.pattern_trials[0].outcome == "lost_ordinary_access" and not all_owner.ready
+    assert all_owner.pattern_trials[0].outcome == "lost_ordinary_access" and all_owner.failed_critical_nets
     assert result.ready and len(result.pattern_trials) == 2
     trial = result.pattern_trials[1]
     assert trial.strategy == "partial_ordinary" and trial.outcome == "accepted" and trial.revalidated

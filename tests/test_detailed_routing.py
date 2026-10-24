@@ -832,7 +832,7 @@ def test_refinement_is_bounded_and_never_triggered_by_budget_exhaustion(monkeypa
     assert pitches == [nm_from_mm(pitch) for pitch in (8, 8, 8, 4, 2, 1, .5)]
 
 
-def test_length_budget_failure_refines_without_weakening_rule(monkeypatch) -> None:
+def test_length_budget_miss_refines_without_weakening_rule(monkeypatch) -> None:
     board = _board()
     rule = NetRoutingRule("SIGNAL", max_length_nm=nm_from_mm(8))
     board = replace(board, net_routing_rules=(rule,))
@@ -843,7 +843,11 @@ def test_length_budget_failure_refines_without_weakening_rule(monkeypatch) -> No
     def attempt(*args, **kwargs):
         pitches.append(args[9].pitch_nm)
         assert args[4].max_length_nm == nm_from_mm(8)
-        return detailed_module._failed(args[2], "route length 9000000 nm exceeds 8000000 nm")
+        # Connected, but over its length budget: a warning, and a reason to refine.
+        length = nm_from_mm(9) - len(pitches)
+        return detailed_module._NetAttempt(detailed_module.DetailedNetResult(
+            args[2], True, 1, 0, length, 0, warnings=(f"route length {length} nm exceeds 8000000 nm",)),
+            (), (), frozenset())
 
     monkeypatch.setattr(detailed_module, "_route_net", attempt)
     grid = detailed_module._build_grid(board, options, board.nets[0].pads)
@@ -851,7 +855,9 @@ def test_length_budget_failure_refines_without_weakening_rule(monkeypatch) -> No
     result = detailed_module._route_repair_net(board, grid, "SIGNAL", board.nets[0].pads,
         rule, guide.routes[0], {}, {}, RoutingClearanceIndex(board), options)
     assert pitches == [nm_from_mm(p) for p in (.5, .25, .125, .1)]
-    assert not result.result.connected
+    # Every finer attempt was shorter, so the last one is kept: connected, still warning.
+    assert result.result.connected and result.result.length_nm == nm_from_mm(9) - len(pitches)
+    assert result.result.warnings and not result.result.diagnostics
     assert board.net_routing_rules == (rule,)
 
 

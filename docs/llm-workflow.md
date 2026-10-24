@@ -33,7 +33,9 @@ copper view build/BOARD/runs/STAMP --issue P1 --reference REF.kicad_pcb --align 
 spatially (`P`); native gaps (unconnected items) per net and place, other native
 kinds (dangling copper, clearance) per type (`N`); repeated consequences collapse
 into one line with `caused_by` (for example every net blocked by
-package-access preflight, `<- P1..P17`). Layout reports list failed gates (`L`)
+package-access preflight, `<- P1..P17`). Connected copper over a declared
+length or skew budget is a `review` issue (`B`), not an open: decide by
+placement or manual review. Layout reports list failed gates (`L`)
 and non-passing findings (`F`). `--cluster-mm` changes grouping and ids, so
 pass the same value to `view`. Lists are balanced across stages; use
 `--stage`, `--net`, `--code` or `--limit 0`. `--json` emits

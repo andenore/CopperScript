@@ -37,11 +37,23 @@ class CriticalPlacementFeedbackResult:
     accepted_moves: int
 
 
+def over_budget_nets(result: CriticalRoutingResult) -> frozenset[str]:
+    """Critical nets routed only over a length/skew budget (review warnings)."""
+    return frozenset(net for item in result.nets if item.connected and not item.diagnostics and item.warnings
+                     for net in item.nets if not net.startswith("<"))
+
+
 def _failures(board: PhysicalBoard, result: CriticalRoutingResult) -> tuple[frozenset[str], int]:
+    """Critical nets placement and access search should still improve.
+
+    A net connected only over its length/skew budget counts: its copper is
+    kept with a warning, but a move or exit pattern that brings it within the
+    budget is an improvement (``over_budget_nets`` tells the two apart).
+    """
     expected = {rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
     reported = {net for item in result.nets for net in item.nets if not net.startswith("<")}
     failed = expected - reported
-    failed.update(net for item in result.nets if not item.connected or item.diagnostics
+    failed.update(net for item in result.nets if not item.connected or item.diagnostics or item.warnings
                   for net in item.nets if net in expected)
     if any((not item.connected or item.diagnostics) and any(net.startswith("<") for net in item.nets)
            for item in result.nets):

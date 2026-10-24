@@ -71,6 +71,11 @@ class DrcCompleteness(str, Enum):
 # Board metadata key: "external" when placement legality is established by the
 # board's source tool (an imported placement), not by CopperScript's planner.
 EXTERNAL_PLACEMENT_KEY = "placement_legality"
+# Declared length and skew budgets of connected copper. A miss is a review
+# warning, not an open or a geometry error: the copper is legal and kept, and
+# placement or manual review decides what to change. Requirement verification
+# still fails the declared constraint, so qualification is unchanged.
+ROUTING_BUDGET_WARNING_CODES = frozenset({"DRC-MAX-LENGTH", "DRC-DIFF-SKEW", "DRC-LENGTH-MATCH"})
 
 
 class DrcCoverageStatus(str, Enum):
@@ -701,7 +706,7 @@ def _check_track_rules(board: PhysicalBoard, findings: list[DrcFinding],
         net_tracks = [item for item in board.tracks if item.net == net]
         length = sum(round(hypot(item.end.x_nm - item.start.x_nm, item.end.y_nm - item.start.y_nm)) for item in net_tracks)
         if rule.max_length_nm is not None and length > rule.max_length_nm:
-            findings.append(_finding("DRC-MAX-LENGTH", DrcSeverity.ERROR, f"net {net!r} exceeds its maximum routed length", nets=(net,), required_nm=rule.max_length_nm, measured_nm=length))
+            findings.append(_finding("DRC-MAX-LENGTH", DrcSeverity.WARNING, f"net {net!r} exceeds its maximum routed length", nets=(net,), required_nm=rule.max_length_nm, measured_nm=length))
         disallowed = [item for item in net_tracks if rule.allowed_layers and item.layer not in rule.allowed_layers]
         if disallowed:
             findings.append(_finding("DRC-LAYER", DrcSeverity.ERROR, f"net {net!r} uses a layer excluded by its routing profile", nets=(net,), layers=tuple(sorted({item.layer.value for item in disallowed}))))
@@ -747,7 +752,7 @@ def _check_differential_rules(board: PhysicalBoard, findings: list[DrcFinding]) 
         limit_values = [value for value in (rule.max_skew_nm, partner.max_skew_nm)
                         if value is not None]
         if limit_values and skew > min(limit_values):
-            findings.append(_finding("DRC-DIFF-SKEW", DrcSeverity.ERROR,
+            findings.append(_finding("DRC-DIFF-SKEW", DrcSeverity.WARNING,
                                      f"differential pair skew is {skew} nm",
                                      nets=tuple(sorted(pair)), required_nm=min(limit_values),
                                      measured_nm=skew))
@@ -774,7 +779,7 @@ def _check_single_ended_return_vias(board: PhysicalBoard, findings: list[DrcFind
 
 
 def _check_length_match(board: PhysicalBoard, findings: list[DrcFinding]) -> None:
-    """Hard group-skew check for fully routed ``length_match`` groups."""
+    """Group-skew review warning for fully routed ``length_match`` groups."""
     if not board.match_groups:
         return
     from .signal_integrity import verify_match_groups
@@ -784,7 +789,7 @@ def _check_length_match(board: PhysicalBoard, findings: list[DrcFinding]) -> Non
             continue
         members = ", ".join(f"{member.net} {member.length_nm} nm" for member in result.members)
         findings.append(_finding(
-            "DRC-LENGTH-MATCH", DrcSeverity.ERROR,
+            "DRC-LENGTH-MATCH", DrcSeverity.WARNING,
             f"length-match group {result.id!r} skew is {result.skew_nm} nm ({members})",
             objects=(f"match_group:{result.id}",),
             nets=tuple(sorted(member.net for member in result.members)),

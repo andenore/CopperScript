@@ -94,6 +94,31 @@ def test_missing_connectivity_does_not_pass_length_or_via_limits():
     assert row(source, replace(physical, tracks=()))["status"] == "blocked"
 
 
+def test_length_and_skew_misses_warn_in_drc_but_still_fail_their_requirements():
+    from pcbir.drc import DrcSeverity
+    # The 10 mm tracks are connected copper: a 5 mm limit is a review warning
+    # in DRC (no open, no geometry error), but the declared limit still fails.
+    source, physical = design('constraint routing(N) { max_length = 5mm; }')
+    drc = run_physical_drc(physical)
+    length = [f for f in drc.findings if f.code == "DRC-MAX-LENGTH"]
+    assert length and all(f.severity is DrcSeverity.WARNING for f in length)
+    result = row(source, physical)
+    assert result["status"] == "fail" and "maximum routed length" in result["detail"]
+    assert row(*design('constraint routing(N) { max_length = 20mm; }'))["status"] == "pass"
+    # A 2 mm detour on M against a 1 mm group skew limit: the same split.
+    source, physical = design('constraint length_match(N, M) { max_skew = 1mm; }')
+    assert physical.match_groups
+    m = physical.tracks[1]
+    up = Point(m.start.x_nm, m.start.y_nm + nm_from_mm(1))
+    over = Point(m.end.x_nm, m.end.y_nm + nm_from_mm(1))
+    detour = (replace(m, end=up), replace(m, start=up, end=over), replace(m, start=over))
+    longer = replace(physical, tracks=(physical.tracks[0], *detour))
+    match = [f for f in run_physical_drc(longer).findings if f.code == "DRC-LENGTH-MATCH"]
+    assert match and all(f.severity is DrcSeverity.WARNING for f in match)
+    assert row(source, longer)["status"] == "fail"
+    assert row(source, physical)["status"] == "pass"
+
+
 def test_stale_drc_and_geometry_bindings():
     source, physical = design('constraint routing(N) { width = 0.2mm; }')
     drc = run_physical_drc(physical)
