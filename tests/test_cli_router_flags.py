@@ -126,7 +126,7 @@ def test_unified_critical_feedback_trials_map_onto_the_congestion_loop(tmp_path,
     data = json.loads(report.read_text())
     assert data["work_limits"]["unified_mapped_flags"] == ["--critical-feedback-trials"]
     assert data["work_limits"]["unified_ignored_flags"] == []
-    assert data["work_limits"]["congestion_feedback_trials"] == 2
+    assert data["work_limits"]["congestion_feedback_trials"] == 4  # max(default 4, mapped 2)
     assert "critical_placement_feedback" not in data
     feedback = data["placement_feedback"]
     assert feedback["stop_reason"] == "no_failed_nets" and feedback["trials"] == []

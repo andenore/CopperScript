@@ -330,7 +330,7 @@ and `route_global` rate best rerun the pipeline tail (critical routing,
 plane stitch, ordinary routing, land closure, DRC), and a move is kept only if it
 lowers the whole-board score (hard DRC, opens, critical failures, unrouted nets,
 overflow, length, vias). `--congestion-feedback-trials N` bounds the reruns
-(default 0, off); `--detailed-feedback-trials` and `--critical-feedback-trials`
+(default 4; 0 disables; a run with no failed nets never reruns); `--detailed-feedback-trials` and `--critical-feedback-trials`
 map onto it, with a budget of `max(N, detailed + critical)`, and the report
 lists them under `work_limits.unified_mapped_flags`. The report's
 `placement_feedback` block lists every trial, the accepted moves and up to 16

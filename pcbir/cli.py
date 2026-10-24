@@ -944,10 +944,10 @@ def _parser() -> argparse.ArgumentParser:
              "the unified router maps it onto --congestion-feedback-trials",
     )
     board_route_parser.add_argument(
-        "--congestion-feedback-trials", type=_nonnegative_int, default=0,
+        "--congestion-feedback-trials", type=_nonnegative_int, default=4,
         help="unified router: congestion-driven placement feedback, at most this many full reruns of the "
              "pipeline tail; the budget is max(N, --detailed-feedback-trials + --critical-feedback-trials) "
-             "(default: 0)",
+             "(default: 4; 0 disables; costs nothing when every net routes)",
     )
     board_route_parser.add_argument(
         "--zone-escape-trials", type=int, default=4,
