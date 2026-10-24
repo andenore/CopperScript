@@ -12,13 +12,15 @@ from .fanout import FanoutResult
 from .physical import PhysicalBoard, RouteKind, TrackSegment, Via
 
 
-def restore_bypass_reservation_edges(reserved: FanoutResult) -> FanoutResult:
+def restore_bypass_reservation_edges(reserved: FanoutResult, *, allow_ordinary: bool = False) -> FanoutResult:
     """Restore unique edge identities after decoding or fixed-prefix rematerialization.
 
     This changes no value, context digest, counter, contact or ownership claim.
     Missing/duplicate occurrences fail closed. The caller must still run ordinary
     fresh critical-prefix/association/geometry admission on the restored value.
-    Only the bypass-only prefix emitted by the standard flow is supported here.
+    By default only the bypass-only prefix is supported. Critical replay may
+    restore a mixed ordinary prefix; its full ordinary ownership, source and
+    physical checks must still run after restoration.
     """
     if not isinstance(reserved, FanoutResult) or not isinstance(reserved.board, PhysicalBoard):
         raise ValueError("critical replay requires a typed bypass reservation")
@@ -35,8 +37,11 @@ def restore_bypass_reservation_edges(reserved: FanoutResult) -> FanoutResult:
                    for w in reserved.decoupling_witnesses)):
         raise ValueError("critical replay has an untyped bypass witness")
     if (reserved.routing_accesses or reserved.pending_pads
-            or Counter(reserved.created_tracks) != Counter(reserved.decoupling_tracks)
-            or Counter(reserved.created_vias) != Counter(reserved.decoupling_vias)):
+            or not Counter(reserved.decoupling_tracks) <= Counter(reserved.created_tracks)
+            or not Counter(reserved.decoupling_vias) <= Counter(reserved.created_vias)
+            or not allow_ordinary and (
+                Counter(reserved.created_tracks) != Counter(reserved.decoupling_tracks)
+                or Counter(reserved.created_vias) != Counter(reserved.decoupling_vias))):
         raise ValueError("critical replay requires an exact bypass-only reservation")
     edges = {}
     for edge in (*reserved.board.tracks, *reserved.board.vias):

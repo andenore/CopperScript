@@ -147,6 +147,9 @@ class UnifiedRouterOptions:
     direct: bool = False
     # Escape crowded ordinary pins (fanout.route_fanout) before critical routing.
     escapes_first: bool = True
+    # Opt-in: retain validated planned ordinary exits as real critical-prefix
+    # copper rather than releasing their temporary masks for a critical retry.
+    retain_escape_copper: bool = False
     # commit/via options
     # One exact clearance index per route_unified call: commits add accepted
     # copper to it, repair rounds and the pour re-check rip nets out of it
@@ -3115,6 +3118,13 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
     saved = load_state(path)
     options = replace(saved["options"], **overrides)
     if only_nets is not None:
+        known = {net.name for net in saved["board"].nets}
+        unknown = only_nets - known
+        if unknown:
+            raise ValueError("unknown replay nets: " + ", ".join(sorted(unknown)))
+        excluded = only_nets - saved["only_nets"] if saved["only_nets"] is not None else set()
+        if excluded:
+            raise ValueError("nets outside saved replay selection: " + ", ".join(sorted(excluded)))
         saved["only_nets"] = only_nets if saved["only_nets"] is None else saved["only_nets"] & only_nets
     return route_unified(saved["board"], saved["global_route"], options,
                          fanout_accesses=saved["fanout_accesses"],

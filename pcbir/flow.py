@@ -309,6 +309,13 @@ def run_routing_pipeline(
                  mode="copper" if bypass_accesses is not None else "keepouts", reason=reason)
             return source, bypass_accesses
         source, bypass_accesses = critical_inputs(reserved[2] if reserved else ())
+        if reserved is not None and getattr(unified_options, "retain_escape_copper", False):
+            bound_source, bound_accesses, reason = bind_ordinary_escape_copper(source, bypass_accesses, reserved)
+            emit(on_progress, "ordinary_escape_copper", "bound" if reason is None else "rejected",
+                 reason=reason, tracks=len(reserved[0]), vias=len(reserved[1]))
+            if reason is None:
+                source, bypass_accesses = bound_source, bound_accesses
+                reserved = None  # These exact exits now belong to the immutable prefix.
         held_as_copper = bypass_accesses is not None
         if on_stage is not None:
             on_stage("critical-inputs", {"board": source, "global_route": placement.global_route,
@@ -684,6 +691,55 @@ def _unified_profile_review(detailed, global_route, drc):
               else CriticalRoutingStatus.SUCCESS)
     return CriticalRoutingResult(status, board, tuple(results), (), (),
         global_route.routing_fingerprint, detailed.routing_fingerprint)
+
+
+def bind_ordinary_escape_copper(source, bypass, planned):
+    """Atomically replace temporary exit masks by the complete checked plan.
+
+    No individual edge is filtered to obtain admission. Rejected plans keep the
+    incumbent source, masks and bypass witnesses unchanged.
+    """
+    from .hard_macros import macro_source, materialize_hard_macros
+    from .bypass_reservations import rebind_bypass_keepout_removal, verified_bypass_reservations
+    from .drc import DrcSeverity
+    from collections import Counter
+    tracks, vias, masks = planned
+    temporary = {mask.id for mask in masks}
+    if any(mask not in source.copper_keepouts for mask in masks):
+        return source, bypass, "stale ordinary escape masks"
+    clean = replace(source, copper_keepouts=tuple(k for k in source.copper_keepouts if k.id not in temporary))
+    frame = materialize_hard_macros(macro_source(clean))
+    if bypass is not None:
+        rebound, reason = rebind_bypass_keepout_removal(source, bypass, clean)
+        if reason is not None:
+            return source, bypass, reason
+    else:
+        rebound = FanoutResult(frame, {}, (), 0, 0)
+    if (len(set(tracks)) != len(tracks) or len(set(vias)) != len(vias)
+            or Counter(tracks) & Counter(rebound.board.tracks)
+            or Counter(vias) & Counter(rebound.board.vias)):
+        return source, bypass, "ordinary exit plan has duplicate or immutable ownership"
+    rules = {r.net: r for r in frame.net_routing_rules}
+    supply = {z.net for z in frame.zones}
+    supply |= {l.net for l in frame.decoupling_links} | {l.return_net for l in frame.decoupling_links}
+    known = {n.name for n in frame.nets}
+    if any(e.net not in known or e.net in supply or
+           (e.net in rules and rules[e.net].kind is not RouteKind.GENERAL) for e in (*tracks, *vias)):
+        return source, bypass, "ordinary exit plan contains unknown or protected copper"
+    candidate = replace(rebound,
+        board=replace(rebound.board, tracks=(*rebound.board.tracks, *tracks), vias=(*rebound.board.vias, *vias)),
+        created_tracks=(*rebound.created_tracks, *tracks), created_vias=(*rebound.created_vias, *vias),
+        added_track_count=rebound.added_track_count + len(tracks),
+        added_via_count=rebound.added_via_count + len(vias))
+    _, _, reason = verified_bypass_reservations(frame, candidate)
+    if reason is not None:
+        return source, bypass, reason
+    def errors(board):
+        return {f.fingerprint for f in run_physical_drc(board).findings
+                if f.severity is DrcSeverity.ERROR and f.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}}
+    if errors(candidate.board) - errors(frame):
+        return source, bypass, "ordinary escape copper introduces physical violations"
+    return clean, candidate, None
 
 
 def _plan_ordinary_escapes(board, fanout_options, on_progress):

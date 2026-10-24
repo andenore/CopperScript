@@ -52,6 +52,9 @@ renders one of them; see [routing and placement iteration](llm-workflow.md#routi
 them on its exported PCB. Other open nets in a subset replay's whole-board
 summary are deliberately excluded from those attempted-failure issues. An empty
 replay issue list does not establish complete-board routing or native acceptance.
+Select multiple nets with repeated flags (`--only DATA --only IRQ`). Unknown names
+and names outside the saved selection are rejected; `selected_nets` records the
+actual replay scope.
 For a bounded fine-grid diagnostic, `replay-unified --set pitch_nm=25000
 --set 'grid_window_nm=[1000000,1000000,21000000,21000000]'` limits the raster
 and search to an explicit rectangle in nanometres. Include every attempted
@@ -68,6 +71,15 @@ capture the actual temporary reservations and can be viewed or passed to
 occurrence, complete-association and geometry admission; it is never accepted
 as arbitrary routed input. Value-only decoding restores original-edge identities
 only for unique exact occurrences, preserving all values and context digests.
+The completed export also saves `final-board.state.json`, including on routing
+failure. It captures final geometry for investigation; it is not a new approval.
+
+`--unified-retain-escape-copper` experimentally replaces temporary ordinary exit
+masks with the complete planned copper after fresh bypass and physical admission.
+The prefix remains fixed through critical retries and ordinary negotiation. An
+invalid plan is rejected atomically and retains the incumbent masks and witnesses.
+Critical replay restores mixed ordinary/bypass prefixes only before the same
+source, ownership, association and physical checks. The default policy is unchanged.
 
 `route-board` uses the unified router by default: unified negotiation after the
 established coupled differential/critical routing and decoupler preparation.

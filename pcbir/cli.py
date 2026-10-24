@@ -202,6 +202,7 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
     drc = run_physical_drc(result.board)
     summary = connection_summary(result.board, drc)
     document = {"state": str(args.state), "overrides": overrides, "seconds": seconds,
+                "selected_nets": sorted(net.net for net in result.nets),
                 "unrouted": {net.net: list(net.diagnostics) for net in sorted(result.nets, key=lambda n: n.net)
                              if not net.connected}, **summary}
     text = json.dumps(document, indent=1, sort_keys=True)
@@ -906,6 +907,8 @@ def _parser() -> argparse.ArgumentParser:
         help="unified router: negotiate all nets from source-fixed copper without legacy critical or bypass routing")
     board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
         help="unified router: route decoupling capacitors with everything else instead of first")
+    board_route_parser.add_argument("--unified-retain-escape-copper", action="store_true",
+        help="retain the complete validated ordinary package escape plan through critical routing")
     board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
         help="unified router: carve islands for decoupled supply rails out of a spare plane layer "
              "(auto picks the outermost layer of a net with two plane layers)")
@@ -1161,6 +1164,7 @@ def _unified_options(args):
         return getattr(args, name, getattr(defaults, name))
     pitch_mm, direct, save_inputs = value("unified_pitch_mm"), value("unified_direct"), value("unified_save_inputs")
     return UnifiedRouterOptions(pitch_nm=nm_from_mm(pitch_mm) if pitch_mm else None,
+                                retain_escape_copper=value("unified_retain_escape_copper"),
                                 maximum_iterations=value("unified_iterations"),
                                 maximum_expansions=value("unified_search_states"),
                                 time_budget_s=value("unified_time_budget_s"),
@@ -2029,7 +2033,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
-                    "router", "unified_direct", "unified_iterations", "unified_time_budget_s", "unified_search_states",
+                    "router", "unified_direct", "unified_retain_escape_copper", "unified_iterations", "unified_time_budget_s", "unified_search_states",
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
@@ -2356,6 +2360,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             report["routing_quality"] = routing_quality(output_board, plane_verification)
             try:
                 emit(progress, "export", "started")
+                if args.checkpoint_dir:
+                    from .workbench import save_state
+                    save_state(args.checkpoint_dir / "final-board.state.json", output_board,
+                               note="Final route-board geometry; consult the source-bound report for closure and qualification")
                 report_path.parent.mkdir(parents=True, exist_ok=True)
                 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 report_path.with_name(report_path.stem + ".error.json").unlink(missing_ok=True)

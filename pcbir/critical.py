@@ -3215,7 +3215,7 @@ def replay_critical(path, *, only_nets: frozenset[str] | None = None,
     reserved = saved.get("reserved_accesses") if isinstance(saved, dict) else None
     if reserved is not None:
         from .bypass_reservations import restore_bypass_reservation_edges
-        reserved = restore_bypass_reservation_edges(reserved)
+        reserved = restore_bypass_reservation_edges(reserved, allow_ordinary=True)
     return route_critical_nets(board, global_route, only_nets=only_nets,
                               reserved_accesses=reserved,
                               pair_state_limit=pair_state_limit, unified_options=unified_options,

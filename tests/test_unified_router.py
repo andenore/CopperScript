@@ -278,6 +278,26 @@ def test_saved_inputs_replay_to_the_same_copper(tmp_path) -> None:
     assert set(again.board.vias) == set(first.board.vias)
 
 
+def test_replay_rejects_unknown_and_excluded_net_selection(tmp_path):
+    import pytest
+    from pcbir.unified_router import replay_unified
+    from pcbir.workbench import load_state, save_state
+    board = _board({"H": ((2, 10), (18, 10)), "V": ((10, 2), (10, 18))})
+    state = tmp_path / "inputs.state.json"
+    _route(board, save_inputs_path=str(state))
+    with pytest.raises(ValueError, match="unknown replay nets: H,V"):
+        replay_unified(state, only_nets=frozenset({"H,V"}))
+    saved = load_state(state)
+    saved["only_nets"] = frozenset({"H"})
+    limited = tmp_path / "limited.state.json"
+    save_state(limited, saved)
+    with pytest.raises(ValueError, match="outside saved replay selection: V"):
+        replay_unified(limited, only_nets=frozenset({"H", "V"}))
+    result = replay_unified(limited, only_nets=frozenset({"H"}))
+    assert {net.net for net in result.nets} == {"H"}
+    assert all(net.connected for net in result.nets)
+
+
 def test_ball_field_via_mask_keeps_only_cell_centres() -> None:
     from types import SimpleNamespace
     from pcbir.package_patterns import circular_array  # noqa: F401  (array detection is exercised on real boards)

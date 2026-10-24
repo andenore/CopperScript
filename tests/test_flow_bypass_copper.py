@@ -67,6 +67,58 @@ def test_unwitnessed_or_stale_bypass_proposal_is_not_filtered_into_acceptance():
                                       planned.admitted_path_witnesses)[0] is None
 
 
+def test_ordinary_copper_binding_preserves_whole_plan_and_rejects_invalid_trial(tmp_path):
+    from pcbir.flow import bind_ordinary_escape_copper
+    from test_unified_router import _board
+    from pcbir import TrackSegment, Via, nm_from_mm
+    source = _board({"A": ((3, 10), (17, 10)), "B": ((10, 3), (10, 17))})
+    track = TrackSegment("A", Point.mm(6,13), Point.mm(7,13), nm_from_mm("0.2"), CopperLayer.FRONT)
+    via = Via("A", Point.mm(7,13), nm_from_mm("0.6"), nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK)
+    masks = tuple(_copper_keepouts(source, (track,), (via,), "escape-reserve"))
+    masked = replace(source, copper_keepouts=masks)
+    clean, held, reason = bind_ordinary_escape_copper(masked, None, ((track,), (via,), masks))
+    assert reason is None and clean == source
+    assert held.created_tracks == (track,) and held.created_vias == (via,)
+    assert held.board.tracks == (track,) and held.board.vias == (via,)
+    path = save_state(tmp_path/'ordinary-prefix.state.json',
+        {'board':clean, 'global_route':route_global(clean), 'reserved_accesses':held})
+    replay = replay_critical(path)
+    assert Counter(held.board.tracks) <= Counter(replay.board.tracks)
+    assert Counter(held.board.vias) <= Counter(replay.board.vias)
+    # A crossing is rejected atomically, with no accepted subset or mask loss.
+    crossing = TrackSegment("B", Point.mm(6.5,12), Point.mm(6.5,14), nm_from_mm("0.2"), CopperLayer.FRONT)
+    rejected, prior, reason = bind_ordinary_escape_copper(masked, None, ((track,crossing), (via,), masks))
+    assert reason and rejected is masked and prior is None
+    assert source.tracks == source.vias == () and masked.copper_keepouts == masks
+
+
+def test_mixed_escape_prefix_keeps_fresh_bypass_witnesses_after_checkpoint(tmp_path):
+    from pcbir.flow import bind_ordinary_escape_copper
+    from pcbir import PhysicalFootprint, FootprintPad, Size, Placement, PhysicalNet, PadReference, TrackSegment
+    source, link = fixture()
+    fp = PhysicalFootprint('signal', (FootprintPad('1',Point(0,0),Size.mm(.4,.4)),),Size.mm(1,1))
+    source = replace(source, footprints={**source.footprints, fp.name:fp},
+        placements=(*source.placements,Placement('J1',fp.name,Point.mm(18,4)),Placement('J2',fp.name,Point.mm(20,4))),
+        nets=(*source.nets,PhysicalNet('DATA',(PadReference('J1','1'),PadReference('J2','1')))))
+    edge = TrackSegment('DATA',Point.mm(18,4),Point.mm(19,4),150000,CopperLayer.FRONT)
+    masks = tuple(_copper_keepouts(source,(edge,),(),'escape-reserve'))
+    masked = replace(source,copper_keepouts=masks)
+    bypass = route_decouplers(masked)
+    held,reason = _bypass_copper_reservations(masked,bypass.created_tracks,bypass.created_vias,
+        bypass.admitted_path_witnesses)
+    assert reason is None
+    clean,mixed,reason = bind_ordinary_escape_copper(masked,held,((edge,),(),masks))
+    assert reason is None
+    assert verified_bypass_reservations(clean,mixed)[2] is None
+    assert Counter(held.created_tracks) <= Counter(mixed.created_tracks)
+    assert Counter(held.created_vias) == Counter(mixed.created_vias)
+    path = save_state(tmp_path/'mixed.state.json',
+        {'board':clean,'global_route':route_global(clean),'reserved_accesses':mixed})
+    replay = replay_critical(path)
+    assert Counter(mixed.board.tracks) <= Counter(replay.board.tracks)
+    assert Counter(mixed.board.vias) <= Counter(replay.board.vias)
+
+
 @pytest.mark.parametrize("required_array", (False, True))
 def test_standard_pipeline_keeps_whole_bypass_prefix_and_emits_replayable_input(tmp_path, required_array):
     from pcbir.flow import run_routing_pipeline
