@@ -7,8 +7,8 @@ from test_unified_router import _board
 
 @pytest.mark.parametrize("native", (False, True))
 @pytest.mark.parametrize("sign", (-1,1))
-@pytest.mark.parametrize("close", (False,True))
-def test_short_off_grid_lead_reports_a_real_via_clearance_conflict(monkeypatch, native, sign, close):
+@pytest.mark.parametrize("offset,close", ((.375,True),(.625,False),(.875,False)))
+def test_short_off_grid_lead_reports_a_real_via_clearance_conflict(monkeypatch, native, sign, offset, close):
     if not native:
         import pcbir.native
         monkeypatch.setattr(pcbir.native, "astar", lambda: None)
@@ -22,7 +22,6 @@ def test_short_off_grid_lead_reports_a_real_via_clearance_conflict(monkeypatch, 
     front, back = CopperLayer.FRONT, CopperLayer.BACK
     a = _NetRoute([[node(front,13,13),node(back,13,13)]], [()],
                   set(),set(),set(),set(),True,0.0)
-    offset = .375 if close else .875
     start, end = Point.mm(13+sign*offset,13.125), Point.mm(13+sign*(offset+.125),13.25)
     lead = TrackSegment("B", start, end,
                         nm_from_mm("0.2"), front)
