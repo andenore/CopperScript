@@ -710,6 +710,31 @@ def route_critical_nets(
                 tracks = [*base_tracks, *(t for _, items, _ in committed for t in items)]
                 vias = [*base_vias, *(v for _, _, items in committed for v in items)]
 
+    # A bounded cohort can reject one owner while committing its peers. Give
+    # that empty owner one exact retry after all accepted jobs are present.
+    # Never reopen a pair, discard partial copper, or reuse a corrupt proposal.
+    if unified_options is not None:
+        for position, (group, owned_tracks, owned_vias) in enumerate(committed):
+            incumbent = results[result_index[group]]
+            if (len(group) != 1 or incumbent.connected or owned_tracks or owned_vias
+                    or incumbent.strategy != "unified_critical_cohort"):
+                continue
+            rule = rules[group[0]]
+            if rule.kind not in {RouteKind.CRITICAL, RouteKind.CLOCK}:
+                continue
+            if on_progress:
+                on_progress("retry_started", group, None)
+            candidate, extra_tracks, extra_vias = _route_single_exact(
+                board, rule, global_route, tracks, vias, unified_options=unified_options)
+            if candidate.connected:
+                candidate = replace(candidate, strategy="unified_critical_cohort_retry")
+                committed[position] = (group, tuple(extra_tracks), tuple(extra_vias))
+                results[result_index[group]] = candidate
+                tracks.extend(extra_tracks)
+                vias.extend(extra_vias)
+            if on_progress:
+                on_progress("retry_finished", group, candidate)
+
     match_tuning = _tune_match_groups(board, rules, base_tracks, base_vias, committed, results, result_index,
                                       early, routed, group_failures)
     if any(item.status == "tuned" for item in match_tuning):
@@ -1983,7 +2008,8 @@ def _route_critical_cohort(board, rules, global_route, committed_tracks, committ
         result = CriticalNetResult((rule.net,), net is not None and net.connected and not integrity,
             len(tracks), len(vias), (_track_length(tracks),), 0,
             (*diagnostics, *integrity), _external_assumptions(rule),
-            evidence_digests=_external_evidence(rule), strategy="unified_critical_cohort")
+            evidence_digests=_external_evidence(rule), strategy=("unified_critical_cohort_integrity_rejected"
+                if integrity else "unified_critical_cohort"))
         candidates[rule.net] = result, tracks, vias
     return candidates
 

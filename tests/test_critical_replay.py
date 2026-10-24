@@ -162,7 +162,8 @@ def test_critical_cohort_uses_shared_engine_and_preserves_profile(monkeypatch, l
     monkeypatch.setattr(unified, "route_unified", record)
     result = route_critical_nets(board, route_global(board),
         unified_options=unified.UnifiedRouterOptions(time_budget_s=10))
-    assert calls == [frozenset({"USB_DM", "USB_DP"})]
+    assert calls == ([frozenset({"USB_DM", "USB_DP"})]
+        + ([frozenset({"USB_DM"})] if length_limit == 1000000 else []))
     outcomes = {item.nets[0]: item for item in result.nets}
     assert outcomes["USB_DP"].connected
     assert outcomes["USB_DM"].connected is (length_limit == 40000000)
@@ -174,6 +175,44 @@ def test_critical_cohort_uses_shared_engine_and_preserves_profile(monkeypatch, l
     else:
         assert not hard_findings(result.board)
     assert board.tracks == ()
+
+
+@pytest.mark.parametrize("kind", (RouteKind.CRITICAL, RouteKind.CLOCK))
+def test_failed_cohort_owner_retries_without_reopening_accepted_peer(monkeypatch, kind):
+    import pcbir.unified_router as unified
+    import pcbir.detailed as detailed
+    from test_local_critical import hard_findings
+    board = _single_critical_board()
+    board = replace(board, net_routing_rules=tuple(replace(r, kind=kind)
+        for r in board.net_routing_rules))
+    original = unified.route_unified
+    accepted = []
+    calls = []
+    def bounded_miss(search_board, guide, options, **kwargs):
+        selected = kwargs["only_nets"]
+        calls.append(selected)
+        if len(selected) == 1:
+            assert search_board.tracks == tuple(accepted)
+        result = original(search_board, guide, options, **kwargs)
+        if len(selected) > 1:
+            accepted.extend(t for t in result.board.tracks if t.net == "USB_DP")
+            result = replace(result,
+                board=replace(result.board, tracks=tuple(accepted)),
+                nets=tuple(replace(n, connected=False, track_count=0, length_nm=0)
+                    if n.net == "USB_DM" else n for n in result.nets))
+        return result
+    def forbidden(*args, **kwargs):
+        raise AssertionError("cohort retry used legacy routing")
+    monkeypatch.setattr(unified, "route_unified", bounded_miss)
+    monkeypatch.setattr(detailed, "route_detailed", forbidden)
+    result = route_critical_nets(board, route_global(board),
+        unified_options=unified.UnifiedRouterOptions(time_budget_s=10))
+    assert calls == [frozenset({"USB_DM", "USB_DP"}), frozenset({"USB_DM"})]
+    assert all(n.connected for n in result.nets)
+    assert next(n for n in result.nets if n.nets == ("USB_DM",)).strategy == "unified_critical_cohort_retry"
+    assert tuple(t for t in result.board.tracks if t.net == "USB_DP") == tuple(accepted)
+    assert not hard_findings(result.board)
+    assert not board.tracks and not result.board.vias
 
 
 @pytest.mark.parametrize("damage", ("prefix", "owner"))
@@ -200,6 +239,28 @@ def test_critical_cohort_rejects_changed_prefix_or_foreign_owner(monkeypatch, da
                for result, tracks, vias in results.values())
     assert all("changed input copper" in result.diagnostics[-1]
                for result, _, _ in results.values())
+    assert all(result.strategy == "unified_critical_cohort_integrity_rejected"
+               for result, _, _ in results.values())
+
+
+def test_corrupt_cohort_is_not_hidden_by_a_single_net_retry(monkeypatch):
+    import pcbir.unified_router as unified
+    board = _single_critical_board()
+    board = replace(board, nets=(*board.nets, PhysicalNet("foreign", ())))
+    original = unified.route_unified
+    calls = []
+    def corrupt(search_board, guide, options, **kwargs):
+        calls.append(kwargs["only_nets"])
+        result = original(search_board, guide, options, **kwargs)
+        foreign = replace(result.board.tracks[0], net="foreign")
+        return replace(result, board=replace(result.board,
+            tracks=(*result.board.tracks, foreign)))
+    monkeypatch.setattr(unified, "route_unified", corrupt)
+    result = route_critical_nets(board, route_global(board),
+        unified_options=unified.UnifiedRouterOptions(time_budget_s=10))
+    assert calls == [frozenset({"USB_DM", "USB_DP"})]
+    assert all(not n.connected for n in result.nets)
+    assert result.board.tracks == board.tracks == ()
 
 
 @pytest.mark.parametrize("first_kind", (RouteKind.CRITICAL, RouteKind.CLOCK))
@@ -221,7 +282,9 @@ def test_clock_and_data_priorities_negotiate_together(monkeypatch, first_kind):
     assert all(item.strategy == "unified_critical_cohort" for item in result.nets)
 
 
-def test_shared_clock_cohort_still_tunes_declared_matching_group():
+@pytest.mark.parametrize("retry", (False, True))
+def test_shared_clock_cohort_still_tunes_declared_matching_group(monkeypatch, retry):
+    import pcbir.unified_router as unified
     from pcbir.physical import NetMatchGroup
     from pcbir import run_physical_drc
     from pcbir.unified_router import UnifiedRouterOptions
@@ -237,6 +300,17 @@ def test_shared_clock_cohort_still_tunes_declared_matching_group():
             priority=80 if r.net=="USB_DM" else 70,tuning_amplitude_limit_nm=1000000)
             for r in board.net_routing_rules),
         match_groups=(NetMatchGroup("matched-clocks",("USB_DM","USB_DP"),1000000),))
+    if retry:
+        original = unified.route_unified
+        def miss(search_board, guide, options, **kwargs):
+            result = original(search_board, guide, options, **kwargs)
+            if len(kwargs["only_nets"]) > 1:
+                result = replace(result, board=replace(result.board,
+                    tracks=tuple(t for t in result.board.tracks if t.net != "USB_DM")),
+                    nets=tuple(replace(n, connected=False, track_count=0, length_nm=0)
+                        if n.net == "USB_DM" else n for n in result.nets))
+            return result
+        monkeypatch.setattr(unified, "route_unified", miss)
     result = route_critical_nets(board,route_global(board),
         unified_options=UnifiedRouterOptions(time_budget_s=10))
     assert all(n.connected for n in result.nets)
