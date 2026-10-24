@@ -55,6 +55,7 @@ from .progress import ProgressCallback, emit
 from .routing import GlobalRoutingResult
 from .routing_clearance import RoutingClearanceIndex
 from .routing_layers import routing_layers, signal_layer_preferences
+from .routing_vias import physical_via_span
 
 _FOREIGN = -2  # Obstacle owned by another net, by several nets or by none.
 _FREE = -1
@@ -146,6 +147,12 @@ class UnifiedRouterOptions:
     direct: bool = False
     # Escape crowded ordinary pins (fanout.route_fanout) before critical routing.
     escapes_first: bool = True
+    # commit/via options
+    # One exact clearance index per route_unified call: commits add accepted
+    # copper to it, repair rounds and the pour re-check rip nets out of it
+    # (RoutingClearanceIndex.remove) instead of building one per router.
+    # False builds a fresh index for every router (former behaviour; tests).
+    share_commit_index: bool = True
 
     # -- Failed-net retries during negotiation ------------------------------
     # Conflicted nets reroute every iteration; nets that failed outright are
@@ -616,7 +623,7 @@ def _segment_offsets(dx: int, dy: int, radius_in_pitches: float) -> tuple[tuple[
 class _Router:
     def __init__(self, board: PhysicalBoard, options: UnifiedRouterOptions,
                  nets: list, on_progress, *, explicit_pads: frozenset[PadReference] = frozenset(),
-                 required_accesses=None) -> None:
+                 required_accesses=None, clearance: RoutingClearanceIndex | None = None) -> None:
         self.board = board
         # Plane pads that must reach the plane with copper of their own, not
         # by lying in a pour piece (pour re-check, see route_unified).
@@ -649,7 +656,14 @@ class _Router:
                             raise ValueError(f"terminal {ref.component}.{ref.pad} is outside grid_window_nm")
         self.rules: dict[str, NetRoutingRule] = {r.net: r for r in board.net_routing_rules}
         self.zone_nets = {zone.net for zone in board.zones}
-        self.clearance = RoutingClearanceIndex(board)
+        # ``clearance`` may be a shared index (route_unified) that holds
+        # exactly this board's copper; commit adds accepted copper to it.
+        if clearance is not None and not _index_holds(clearance, board):
+            raise ValueError("shared clearance index does not hold this router's board copper")
+        self.clearance = clearance if clearance is not None else RoutingClearanceIndex(board)
+        # Physical via spans by (low, high) layer index; board vias by (net, xy).
+        self._via_span_cache: dict[tuple[int, int], tuple | None] = {}
+        self._board_via_sites: dict[tuple[str, Point], list[Via]] | None = None
         self.net_ids: dict[str, int] = {}
         for net in board.nets:
             self.net_ids.setdefault(net.name, len(self.net_ids))
@@ -1489,7 +1503,6 @@ class _Router:
     def _finish_route(self, route: _NetRoute, spec: _NetSpec) -> None:
         g = self.grid
         nodes: set[int] = set()
-        via_xy: set[int] = set()
         claims: set[int] = set()
         via_claims: set[int] = set()
         body: dict = {}
@@ -1507,13 +1520,17 @@ class _Router:
         via_radius = (via_reach + self.default_width / 2) / g.pitch
         via_via_radius = (via_reach + spec.via_size / 2) / g.pitch
         length = 0.0
+        # Layer-change sites: one via per xy, spanning every layer the
+        # route changes between there (see _site_spans).
+        changes: dict[int, tuple[int, int]] = {}
         for path in route.paths:
             for a, b in zip(path, path[1:]):
                 la, xa, ya = g.unpack(a)
                 lb, xb, yb = g.unpack(b)
                 if la != lb:
                     xy = ya * g.nx + xa
-                    via_xy.add(xy)
+                    low, high = changes.get(xy, (la, la))
+                    changes[xy] = (min(low, la, lb), max(high, la, lb))
                     continue
                 dx, dy = xb - xa, yb - ya
                 length += hypot(dx, dy)
@@ -1540,18 +1557,30 @@ class _Router:
                     claims.add(node)
                     if distance <= near:
                         nodes.add(node)
+        via_xy = set(changes)
+        spans = self._site_spans(spec.name, changes)
         for xy in via_xy:
             yv, xv = divmod(xy, g.nx)
+            # A via's copper claims only the layers it spans (all of them for
+            # a through via, or where no technology serves the site and the
+            # copper falls back to the outer span). Via-to-via spacing below
+            # stays per xy: drills clear each other whatever their spans.
+            span = spans[xy]
+            if span is None:
+                via_layers = range(g.nl)
+            else:
+                low, high = sorted((g.layers.index(span[0]), g.layers.index(span[1])))
+                via_layers = range(low, high + 1)
             if via_body >= 0.5:
                 for ox, oy in _disc_offsets_cached(via_body):
                     x, y = xv + ox, yv + oy
                     if 0 <= x < g.nx and 0 <= y < g.ny:
-                        for layer in range(g.nl):
+                        for layer in via_layers:
                             body[layer * g.plane + y * g.nx + x] = ("via", xy)
             for ox, oy in _disc_offsets_cached(via_radius):
                 x, y = xv + ox, yv + oy
                 if 0 <= x < g.nx and 0 <= y < g.ny:
-                    for layer in range(g.nl):
+                    for layer in via_layers:
                         claims.add(layer * g.plane + y * g.nx + x)
             for ox, oy in _disc_offsets_cached(via_via_radius):
                 x, y = xv + ox, yv + oy
@@ -2046,9 +2075,68 @@ class _Router:
 
     # -- materialisation --------------------------------------------------
 
-    def copper(self, spec: _NetSpec, path: list[int], leads: tuple[TrackSegment, ...]):
-        """Tracks and vias of one path, with its lead-ins."""
+    def _via_sites(self, name: str, paths) -> dict[int, tuple | None]:
+        """``_site_spans`` for every layer-change site of ``paths`` (one route)."""
+        plane = self.grid.plane
+        changes: dict[int, tuple[int, int]] = {}
+        for path in paths:
+            for a, b in zip(path, path[1:]):
+                la, lb = a // plane, b // plane
+                if la != lb:
+                    xy = a % plane
+                    low, high = changes.get(xy, (la, la))
+                    changes[xy] = (min(low, la, lb), max(high, la, lb))
+        return self._site_spans(name, changes)
+
+    def _site_spans(self, name: str, changes: Mapping[int, tuple[int, int]]) -> dict[int, tuple | None]:
+        """The via of each layer-change site: xy -> (from, to, technology) or None.
+
+        ``changes`` maps a site to the lowest and highest layer index a route
+        changes between there; the route gets one via per site spanning them.
+        Without via technologies that is the stackup's through via. With
+        them, an existing via of the net at the site that spans those layers
+        is reused as it is; otherwise ``physical_via_span`` selects the span
+        (through, blind or buried), then the outer span. None: no declared
+        technology serves the site (commit rejects the path).
+        """
         g = self.grid
+        if not self.board.stackup.via_technologies:
+            return dict.fromkeys(changes, (g.layers[0], g.layers[-1], None))
+        if self._board_via_sites is None:
+            sites: dict[tuple[str, Point], list[Via]] = {}
+            for via in self.board.vias:
+                sites.setdefault((via.net, via.position), []).append(via)
+            self._board_via_sites = sites
+        order = {layer: i for i, layer in enumerate(g.layers)}
+        result: dict[int, tuple | None] = {}
+        for xy, (low, high) in changes.items():
+            existing = next((via for via in self._board_via_sites.get((name, g.point(xy)), ())
+                             if via.from_layer in order and via.to_layer in order
+                             and min(order[via.from_layer], order[via.to_layer]) <= low
+                             and high <= max(order[via.from_layer], order[via.to_layer])), None)
+            if existing is not None:
+                result[xy] = (existing.from_layer, existing.to_layer, existing.technology)
+                continue
+            key = (low, high)
+            if key not in self._via_span_cache:
+                span = physical_via_span(self.board, g.layers[low], g.layers[high])
+                if span is None:
+                    span = physical_via_span(self.board, g.layers[0], g.layers[-1])
+                self._via_span_cache[key] = span
+            result[xy] = self._via_span_cache[key]
+        return result
+
+    def copper(self, spec: _NetSpec, path: list[int], leads: tuple[TrackSegment, ...],
+               spans: Mapping[int, tuple | None] | None = None):
+        """Tracks and vias of one path, with its lead-ins.
+
+        ``spans`` (``_via_sites`` of the whole route) gives each layer-change
+        site its via; by default the sites of this path alone. A site without
+        a span gets the outer span here; commit rejects it.
+        """
+        g = self.grid
+        if spans is None:
+            spans = self._via_sites(spec.name, [path])
         tracks: list[TrackSegment] = list(leads)
         vias: list[Via] = []
         neck, region = spec.neck, spec.region
@@ -2068,8 +2156,8 @@ class _Router:
                     if run_start != prev:
                         tracks.append(TrackSegment(spec.name, g.point(run_start), g.point(prev),
                                                    run_width, g.layers[la]))
-                    vias.append(Via(spec.name, g.point(prev), spec.via_size, spec.via_drill,
-                                    g.layers[0], g.layers[-1]))
+                    span = spans.get(ya * g.nx + xa) or (g.layers[0], g.layers[-1], None)
+                    vias.append(Via(spec.name, g.point(prev), spec.via_size, spec.via_drill, *span))
                     run_start, prev, direction, run_width = node, node, None, None
                     continue
                 step = (xb - xa, yb - ya)
@@ -2090,9 +2178,18 @@ class _Router:
         return tracks, list(dict.fromkeys(vias))
 
     def commit(self, routes: Mapping[str, _NetRoute], conflicts=frozenset()):
-        """Exact check of every path; returns accepted copper, rejections, complete nets."""
+        """Exact check of every path; returns accepted copper, rejections, complete nets.
+
+        Checks against ``self.clearance`` and adds the accepted copper to it,
+        so the router's search model no longer matches its index afterwards:
+        commit once. A shared index (route_unified) then holds this commit's
+        copper for the next router. Blockers are named by net for all copper
+        the index holds as mutable (this call's copper); board and locked
+        copper count as fixed.
+        """
         from .surface_path import _track_inside_board
-        index = RoutingClearanceIndex(self.board)
+        index = self.clearance
+        g = self.grid
         self.rejections: dict[str, list[tuple[Point, str, tuple[str, ...], bool]]] = {}
         accepted: dict[str, tuple[list[TrackSegment], list[Via]]] = {}
         rejected: dict[str, list[Point]] = {}
@@ -2109,9 +2206,17 @@ class _Router:
             all_ok = route.connected
             net_tracks: list[TrackSegment] = []
             net_vias: list[Via] = []
+            spans = self._via_sites(name, route.paths)
+            unserved = {xy for xy, span in spans.items() if span is None}
             for path, leads in zip(route.paths, route.leads):
-                tracks, vias = self.copper(spec, path, leads)
+                tracks, vias = self.copper(spec, path, leads, spans)
                 bad: list[Point] = []
+                if unserved:
+                    for a, b in zip(path, path[1:]):
+                        if a // g.plane != b // g.plane and a % g.plane in unserved:
+                            bad.append(g.point(a))
+                            self.rejections.setdefault(name, []).append(
+                                (g.point(a), "via", (), False, "no_via_technology"))
                 for track in tracks:
                     if not (index.can_track(name, track.start, track.end, track.width_nm, track.layer)
                             and _track_inside_board(self.board, track.start, track.end, track.width_nm)):
@@ -2242,8 +2347,82 @@ def _merge(accepted, more):
     return merged
 
 
+def _same_but_copper(board: PhysicalBoard, other: PhysicalBoard) -> bool:
+    """Whether two boards differ at most in their tracks and vias."""
+    from dataclasses import fields
+    return board is other or all(
+        getattr(board, item.name) is getattr(other, item.name)
+        or getattr(board, item.name) == getattr(other, item.name)
+        for item in fields(board) if item.name not in ("tracks", "vias"))
+
+
+def _index_holds(index: RoutingClearanceIndex, board: PhysicalBoard) -> bool:
+    """Whether ``index`` answers legality queries as a fresh index of ``board``.
+
+    True when the index's own board differs from ``board`` only in copper and
+    its additions (its board's copper, locked, then mutable additions) are
+    ``board``'s copper as multisets. The exact legality checks read neither
+    lock flags nor insertion order; only blocker naming (mutable additions
+    are named by net, board copper counts as fixed) and snapshot-local
+    occurrence labels differ.
+    """
+    from collections import Counter
+    if not _same_but_copper(index.board, board):
+        return False
+    tracks, vias = Counter(), Counter()
+    for item, _ in index.additions():
+        (vias if isinstance(item, Via) else tracks)[item] += 1
+    return tracks == Counter(board.tracks) and vias == Counter(board.vias)
+
+
+class _SharedIndex:
+    """One exact index of a base board plus a chosen part of this call's copper.
+
+    ``held`` is that copper per net, exactly what the index holds as mutable
+    additions on top of its base. ``added`` records what a commit into the
+    index accepted; ``hold`` switches to another selection by ripping out
+    (``RoutingClearanceIndex.remove``) and re-adding only the nets whose
+    copper differs. Repair rounds and the pour re-check use it instead of
+    building an index per router; copper outside ``held`` (the board's, or
+    bus copper frozen into the base) is never touched.
+    """
+
+    def __init__(self, index: RoutingClearanceIndex) -> None:
+        self.index = index
+        self.held: dict[str, tuple[tuple[TrackSegment, ...], tuple[Via, ...]]] = {}
+        self.frozen: set[str] = set()
+
+    def added(self, more) -> None:
+        for name, (tracks, vias) in more.items():
+            old_tracks, old_vias = self.held.get(name, ((), ()))
+            self.held[name] = (old_tracks + tuple(tracks), old_vias + tuple(vias))
+
+    def freeze(self) -> None:
+        """Make the copper held now part of the base (it is never ripped)."""
+        self.frozen |= self.held.keys()
+        self.held = {}
+
+    def hold(self, target) -> None:
+        for name in sorted(self.held.keys() | target.keys()):
+            old_tracks, old_vias = self.held.get(name, ((), ()))
+            tracks, vias = target.get(name, ((), ()))
+            if old_tracks == tuple(tracks) and old_vias == tuple(vias):
+                continue
+            if name in self.frozen:
+                raise AssertionError(f"net {name} has frozen copper in the shared index")
+            self.index.remove(name)
+            if self.index.owned_count(name):
+                raise AssertionError(f"ripped net {name} keeps mutable copper in the shared index")
+            for track in tracks:
+                self.index.add_track(track)
+            for via in vias:
+                self.index.add_via(via)
+        self.held = {name: (tuple(tracks), tuple(vias)) for name, (tracks, vias) in target.items()
+                     if tracks or vias}
+
+
 def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadline, on_progress,
-                   required_accesses=None):
+                   required_accesses=None, shared: _SharedIndex | None = None):
     """Reconnect plane pads that committed signal copper walled off from their pour.
 
     Plane pieces are labelled once, from fixed copper, so signal copper
@@ -2256,6 +2435,10 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
     2. For pads still cut off, rip up the signal copper crowding them, route
        the plane net first with explicit copper for those pads (lying in a
        pour piece does not count), then route the ripped nets around it.
+
+    ``shared`` (holding ``board`` plus ``accepted``) serves every step's
+    router and commit: rip-ups and rejected steps are removed from it, and it
+    holds the returned copper on return.
     """
     before = _pour_estimate(board, accepted)
     routed_planes = {net.name for net in nets if net.name in plane_nets}
@@ -2274,13 +2457,26 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
                                f"signal opens {signal_before}->{signal}" + ("" if ok else " (not kept)"))
         return ok
 
+    def router(copper, route_nets, **extra):
+        """A router over ``board`` plus ``copper``, on the shared index if any."""
+        if shared is not None:
+            shared.hold(copper)
+        return _Router(_with(board, copper), options, route_nets, on_progress,
+                       required_accesses=required_accesses,
+                       clearance=shared.index if shared is not None else None, **extra)
+
+    def commit(step_router, routes, conflicts):
+        result = step_router.commit(routes, conflicts)
+        if shared is not None:
+            shared.added(result[0])
+        return result
+
     current = (accepted, before)
     # Step 1: plane nets only, everything else fixed.
-    step = _Router(_with(board, accepted), options, plane_list, on_progress,
-                   required_accesses=required_accesses)
+    step = router(accepted, plane_list)
     routes, conflicts, used = step.negotiate(deadline)
     report["iterations"] += used
-    more, _, _ = step.commit(routes, conflicts)
+    more, _, _ = commit(step, routes, conflicts)
     candidate = _merge(accepted, more)
     estimate = _pour_estimate(board, candidate)
     if keep(candidate, estimate, "plane reroute", complete):
@@ -2294,23 +2490,20 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
         crowd = {name for name in _neighbour_nets(board, focus, current[0], options.repair_neighbour_reach_nm)
                  if name not in plane_nets}
         ripped = {name: value for name, value in current[0].items() if name not in crowd}
-        partial = _with(board, ripped)
-        first = _Router(partial, options, [net for net in nets if net.name in still], on_progress,
-                        explicit_pads=pads, required_accesses=required_accesses)
+        first = router(ripped, [net for net in nets if net.name in still], explicit_pads=pads)
         routes, conflicts, used = first.negotiate(deadline)
         report["iterations"] += used
-        plane_more, plane_rejected, _ = first.commit(routes, conflicts)
+        plane_more, plane_rejected, _ = commit(first, routes, conflicts)
         report["explicit_route"] = {
             name: {"copper": [len(part) for part in plane_more.get(name, ((), ()))],
                    "reason": (routes[name].reason if name in routes else "not routed"),
                    "rejected": _rejection_text(first, name) if name in plane_rejected else ""}
             for name in still}
         candidate = _merge(ripped, plane_more)
-        second = _Router(_with(board, candidate), options, [net for net in nets if net.name in crowd], on_progress,
-                         required_accesses=required_accesses)
+        second = router(candidate, [net for net in nets if net.name in crowd])
         routes, conflicts, used = second.negotiate(deadline)
         report["iterations"] += used
-        signal_more, _, signal_complete = second.commit(routes, conflicts)
+        signal_more, _, signal_complete = commit(second, routes, conflicts)
         candidate = _merge(candidate, signal_more)
         estimate = _pour_estimate(board, candidate)
         candidate_complete = (complete - crowd) | set(signal_complete)
@@ -2318,6 +2511,8 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
             current = (candidate, estimate)
             complete = candidate_complete
     report["adopted"] = current[0] is not accepted
+    if shared is not None:
+        shared.hold(current[0])
     report["still_cut_off"] = sorted(p for name, group in current[1].open_pads.items()
                                      if name in routed_planes for p in group)[:12]
     return current[0], complete, report
@@ -2496,6 +2691,8 @@ def route_unified(
                and (options.direct or rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
                and connectivity.net_connected(net)]
     original_board, all_nets = board, nets
+    # One exact index for this call's commits and repairs (share_commit_index).
+    shared: _SharedIndex | None = None
     bus_accepted: dict = {}
     bus_complete: set[str] = set()
     bus_names = {name for group in board.match_groups for name in group.nets} & {net.name for net in nets}
@@ -2507,6 +2704,9 @@ def route_unified(
                              required_accesses=required_accesses)
         bus_routes, bus_conflicts, used = bus_router.negotiate(deadline)
         bus_accepted, _, bus_complete = bus_router.commit(bus_routes, bus_conflicts)
+        if options.share_commit_index:
+            shared = _SharedIndex(bus_router.clearance)
+            shared.added(bus_accepted)
         over_length = set()
         if options.bus_length_budget:
             # The DRC measure: every track of the net, existing copper included.
@@ -2517,19 +2717,30 @@ def route_unified(
                     over_length.add(name)
             bus_complete = set(bus_complete) - over_length
         bus_accepted = {name: value for name, value in bus_accepted.items() if name in bus_complete}
+        if shared is not None:
+            # Kept bus copper is fixed for the other nets, as on ``board`` below.
+            shared.hold(bus_accepted)
+            shared.freeze()
         emit(on_progress, "unified_buses", "finished", nets=len(bus_names), complete=len(bus_complete),
              over_length=len(over_length), iterations=used)
         if bus_accepted:
             board = _with(board, bus_accepted)
             nets = [net for net in nets if net.name not in bus_complete]
     emit(on_progress, "unified_setup", "started", nets=len(nets))
-    router = _Router(board, options, nets, on_progress, required_accesses=required_accesses)
+    router = _Router(board, options, nets, on_progress, required_accesses=required_accesses,
+                     clearance=shared.index if shared is not None else None)
+    if options.share_commit_index and shared is None:
+        shared = _SharedIndex(router.clearance)
     emit(on_progress, "unified_setup", "finished", nets=len(router.specs),
          grid=[router.grid.nx, router.grid.ny, router.grid.nl], seconds=round(perf_counter() - started, 2))
     routes, conflicts, iterations = router.negotiate(deadline)
+    commit_started = perf_counter()
     accepted, rejected, complete = router.commit(routes, conflicts)
+    if shared is not None:
+        shared.added(accepted)
     emit(on_progress, "unified_commit", "finished", round=1,
-         accepted=len(accepted), rejected=len(rejected), conflicted=len(conflicts))
+         accepted=len(accepted), rejected=len(rejected), conflicted=len(conflicts),
+         seconds=round(perf_counter() - commit_started, 3))
     # Rip-in repair: committed copper becomes a fixed obstacle and the
     # remaining nets are routed again against it. This settles the residual
     # cases where the raster and the exact check disagree (off-grid lead-ins).
@@ -2553,6 +2764,10 @@ def route_unified(
         partial = replace(board,
             tracks=(*board.tracks, *(t for name in sorted(work) for t in work[name][0])),
             vias=(*board.vias, *(v for name in sorted(work) for v in work[name][1])))
+        # The shared index rips the crowd out (remove) instead of being rebuilt.
+        share = shared is not None
+        if share:
+            shared.hold(work)
         if seed:
             failed_signal = frozenset(net.name for net in remaining
                                       if net.name not in plane_nets and net.name not in crowd)
@@ -2564,13 +2779,23 @@ def route_unified(
                 work.setdefault(track.net, ([], []))[0].append(track)
             for via in (Counter(seeded.vias) - Counter(partial.vias)).elements():
                 work.setdefault(via.net, ([], []))[1].append(via)
+            # Seeded escapes join the shared index only if the seeder just
+            # added copper; any other change gets a fresh index of its board.
+            share = share and _same_but_copper(seeded, partial) and not (
+                Counter(partial.tracks) - Counter(seeded.tracks)) and not (
+                Counter(partial.vias) - Counter(seeded.vias))
+            if share:
+                shared.hold(work)
             partial = seeded
         fixed = explicit_copper_connectivity(partial)
         remaining = [net for net in remaining if not fixed.net_connected(net) or net.name in plane_nets]
-        repair = _Router(partial, options, remaining, on_progress, required_accesses=required_accesses)
+        repair = _Router(partial, options, remaining, on_progress, required_accesses=required_accesses,
+                         clearance=shared.index if share else None)
         repair.history_seed(router)
         more_routes, more_conflicts, used = repair.negotiate(deadline)
         more, more_rejected, more_complete = repair.commit(more_routes, more_conflicts)
+        if share:
+            shared.added(more)
         for name, (tracks, vias) in more.items():
             old_tracks, old_vias = work.get(name, ([], []))
             work[name] = (old_tracks + tracks, old_vias + vias)
@@ -2584,6 +2809,7 @@ def route_unified(
     for round_index in range(1, options.commit_rounds):
         if all(net.name in complete for net in nets) or (deadline is not None and perf_counter() > deadline):
             break
+        round_started = perf_counter()
         baseline = _open_count(board, nets, accepted, plane_nets, complete)
         best_attempt = None
         for seed in ((False, True) if escape_seeder is not None else (False,)):
@@ -2606,14 +2832,17 @@ def route_unified(
             router.rejections = {**router.rejections, **rejections}
             for name, route in more_routes.items():
                 router.routes[name] = route
+        if shared is not None:
+            # Back to the adopted copper (attempts left their own in the index).
+            shared.hold(accepted)
         emit(on_progress, "unified_commit", "finished", round=round_index + 1, adopted=improved,
-             seeded=bool(improved and seeded))
+             seeded=bool(improved and seeded), seconds=round(perf_counter() - round_started, 3))
         if not improved:
             break
     if options.pour_recheck and plane_nets and (deadline is None or perf_counter() <= deadline):
         accepted, complete, recheck = _recheck_pours(
             board, nets, plane_nets, accepted, set(complete), options, deadline, on_progress,
-            required_accesses=required_accesses)
+            required_accesses=required_accesses, shared=shared)
         iterations += recheck.pop("iterations", 0)
         emit(on_progress, "unified_pour_recheck", "finished", **recheck)
     if bus_accepted:
