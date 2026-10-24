@@ -170,7 +170,7 @@ def _run_issues(args: argparse.Namespace) -> int:
 
 
 def _run_replay_unified(args: argparse.Namespace) -> int:
-    from dataclasses import fields
+    from dataclasses import fields, replace
     from time import perf_counter
     from .drc import run_physical_drc
     from .route_summary import connection_summary
@@ -210,7 +210,8 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
                                 on_progress=console_progress() if args.progress else None,
                                 **overrides)
         if result_path is not None:
-            save_state(result_path, result, note="Scoped unified replay result; not source/native admission or board qualification")
+            # The congestion map (numpy telemetry) is not part of the typed state.
+            save_state(result_path, replace(result, congestion=None), note="Scoped unified replay result; not source/native admission or board qualification")
     except (StateError, OSError, ValueError) as exc:
         print(f"REPLAY ERROR: {exc}")
         return 2
@@ -885,7 +886,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--router-iterations", type=int, default=5)
     board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
     board_route_parser.add_argument("--critical-feedback-trials", type=int, default=0,
-                                    help="bounded critical placement trials; with --fanout adds budget to the package-access controller")
+                                    help="bounded critical placement trials; with --fanout adds budget to the package-access "
+                                         "controller (--router legacy); the unified router maps it onto "
+                                         "--congestion-feedback-trials")
     board_route_parser.add_argument("--pitch-mm", default="1")
     board_route_parser.add_argument("--passes", type=int, default=1)
     board_route_parser.add_argument("--search-budget", type=int, default=50_000)
@@ -916,8 +919,9 @@ def _parser() -> argparse.ArgumentParser:
         "--fanout", action=argparse.BooleanOptionalAction, default=True,
         help="reserve and negotiate package exits and plane access before area routing (default; --no-fanout opts out)",
     )
-    board_route_parser.add_argument("--router", choices=("legacy", "unified"), default="legacy",
-        help="ordinary detailed router: the pass-based legacy router or the unified negotiated router")
+    board_route_parser.add_argument("--router", choices=("legacy", "unified"), default="unified",
+        help="ordinary detailed router: the unified negotiated router (default) or the pre-refactor "
+             "pass-based legacy pipeline")
     board_route_parser.add_argument("--escape-plan", action=argparse.BooleanOptionalAction, default=False,
         help="plan crossing bundles between two parts (layer per net, route order) and give the plan "
              "to escape generation and the router (docs/escape-planning.md)")
@@ -980,7 +984,14 @@ def _parser() -> argparse.ArgumentParser:
         help="initial package-access placement repair distance (default: 0.5 mm)")
     board_route_parser.add_argument(
         "--detailed-feedback-trials", type=int, default=0,
-        help="bounded legal placement retries guided by detailed-route failures",
+        help="bounded legal placement retries guided by detailed-route failures (--router legacy); "
+             "the unified router maps it onto --congestion-feedback-trials",
+    )
+    board_route_parser.add_argument(
+        "--congestion-feedback-trials", type=_nonnegative_int, default=4,
+        help="unified router: congestion-driven placement feedback, at most this many full reruns of the "
+             "pipeline tail; the budget is max(N, --detailed-feedback-trials + --critical-feedback-trials) "
+             "(default: 4; 0 disables; costs nothing when every net routes)",
     )
     board_route_parser.add_argument(
         "--zone-escape-trials", type=int, default=4,
@@ -1192,24 +1203,90 @@ def _apply_routing_profile(args, argv):
 
 
 def _unified_options(args):
-    if getattr(args, "router", "legacy") != "unified":
+    if getattr(args, "router", "unified") != "unified":
         if getattr(args, "unified_direct", False):
             raise ValueError("--unified-direct requires --router unified")
         return None
     from .bench import unified_overrides
     from .unified_router import UnifiedRouterOptions
-    options = dict(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
-                   maximum_iterations=args.unified_iterations,
-                   maximum_expansions=args.unified_search_states,
-                   time_budget_s=args.unified_time_budget_s,
-                   power_islands=None if args.power_islands == "off" else args.power_islands,
-                   pre_route_decouplers=not args.unified_no_decouplers and not args.unified_direct,
-                   direct=args.unified_direct,
-                   route_smoothing=not args.no_route_smoothing,
-                   save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
+    # Absent attributes (a namespace not built by the route-board parser) keep
+    # the route-board defaults, i.e. the UnifiedRouterOptions defaults.
+    defaults = _parser().parse_args(["route-board", "board.copper"])
+    def value(name):
+        return getattr(args, name, getattr(defaults, name))
+    pitch_mm, direct, save_inputs = value("unified_pitch_mm"), value("unified_direct"), value("unified_save_inputs")
+    options = dict(pitch_nm=nm_from_mm(pitch_mm) if pitch_mm else None,
+                   maximum_iterations=value("unified_iterations"),
+                   maximum_expansions=value("unified_search_states"),
+                   time_budget_s=value("unified_time_budget_s"),
+                   power_islands=None if value("power_islands") == "off" else value("power_islands"),
+                   pre_route_decouplers=not value("unified_no_decouplers") and not direct,
+                   direct=direct,
+                   route_smoothing=not value("no_route_smoothing"),
+                   save_inputs_path=str(save_inputs) if save_inputs else None)
     # --unified-set reaches every option; it wins over the dedicated flags above.
-    options.update(unified_overrides(getattr(args, "unified_set", ())))
+    options.update(unified_overrides(value("unified_set")))
     return UnifiedRouterOptions(**options)
+
+
+# route-board options read only by DetailedRouterOptions. With the unified router
+# (the default) the pipeline discards that object (flow._route_unified_compat), so they have
+# no effect. --pitch-mm also sets the global local-demand lane pitch, which is
+# read only with --local-demand-cost > 0.
+_LEGACY_ORDINARY_ROUTER_FLAGS = (
+    "pitch_mm", "passes", "search_budget", "minimum_repair_pitch_mm", "heuristic_weight",
+    "soft_ripup", "constrained_pins_first", "progressive_guides", "guide_distance_heuristic",
+    "repair_budget_multiplier", "search_reuse_entries", "guide_escape_mm", "no_escape_terminals",
+)
+# route-board options of stages the unified pipeline skips: package-access
+# search (and its --legacy-gates stop), power preparation/area planning and the
+# late zone-escape repair (improve_zone_escapes).
+_UNIFIED_SKIPPED_STAGE_FLAGS = (
+    "package_access_trials", "package_placement_probes", "package_pattern_trials",
+    "package_partial_owner_nets", "package_initial_pair_states", "package_boundary_step_mm",
+    "package_destination_ports", "package_access_movement_mm", "legacy_gates",
+    "plan_power_areas", "power_area_net", "power_area_config",
+    "zone_escape_trials", "zone_local_ripup_trials", "zone_escape_movement_mm",
+    "no_incremental_placement_repair",
+)
+
+
+# route-board placement-feedback flags whose budget the unified router spends
+# on its congestion-driven loop (run_placement_feedback) instead.
+_UNIFIED_MAPPED_FLAGS = ("detailed_feedback_trials", "critical_feedback_trials")
+
+
+def _unified_flag_notes(args) -> dict[str, list[str]] | None:
+    """Name route-board flags that a unified-router run (the default) does not apply.
+
+    A flag counts as given when its value differs from the parser default
+    (a --routing-profile value counts too). Skipped-stage flags are listed only
+    when they would enable work (non-zero, true or non-empty). Advisory only:
+    routing is unchanged.
+    """
+    if getattr(args, "router", "unified") != "unified":
+        return None
+    defaults = _parser().parse_args(["route-board", str(getattr(args, "board", "board.copper"))])
+    def given(name):
+        # An absent attribute was not given on this command line.
+        return getattr(args, name, getattr(defaults, name)) != getattr(defaults, name)
+    def flag(name):
+        return "--" + name.replace("_", "-")
+    ignored = [flag(name) for name in _LEGACY_ORDINARY_ROUTER_FLAGS if given(name)
+               and not (name == "pitch_mm" and getattr(args, "local_demand_cost", 0) > 0)]
+    skipped = [flag(name) for name in _UNIFIED_SKIPPED_STAGE_FLAGS
+               if given(name) and getattr(args, name)]
+    # The legacy placement controllers' budgets become the congestion loop's.
+    mapped = [flag(name) for name in _UNIFIED_MAPPED_FLAGS if given(name) and getattr(args, name)]
+    return {"ignored_flags": ignored, "skipped_stage_flags": skipped, "mapped_flags": mapped}
+
+
+def _congestion_feedback_budget(args) -> int:
+    """Trials of the unified congestion-driven placement loop (0 on the legacy router)."""
+    if getattr(args, "router", "unified") != "unified":
+        return 0
+    return max(getattr(args, "congestion_feedback_trials", 0),
+               getattr(args, "detailed_feedback_trials", 0) + getattr(args, "critical_feedback_trials", 0))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1621,6 +1698,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("Board routing stopped because ERC reported errors.")
                 return 1
             stage_tracker, placement_reuse, checkpoints = None, None, {}
+            unified_flag_notes = _unified_flag_notes(args)
             try:
                 physical_options = PrototypePhysicalOptions(
                     copper_layers=args.layers, fabrication_profile=args.fab_profile,
@@ -1777,6 +1855,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if progress is not None:
                     # Remember the open stage so a failure leaves a located record.
                     stage_tracker = progress = StageTracker(progress)
+                if unified_flag_notes and (unified_flag_notes["ignored_flags"]
+                                           or unified_flag_notes["skipped_stage_flags"]):
+                    # Advisory: these flags do not reach the unified pipeline.
+                    emit(progress, "router_options", "ignored", router="unified",
+                         ignored_flags=unified_flag_notes["ignored_flags"],
+                         skipped_stage_flags=unified_flag_notes["skipped_stage_flags"])
+                if unified_flag_notes and unified_flag_notes["mapped_flags"]:
+                    emit(progress, "router_options", "mapped", router="unified",
+                         mapped_flags=unified_flag_notes["mapped_flags"],
+                         congestion_feedback_trials=_congestion_feedback_budget(args))
                 checkpoint_key = (placement_key(physical_board, placement_options, router_options,
                                                 feedback_options)
                                   if args.checkpoint_dir or args.reuse_placement else None)
@@ -1822,6 +1910,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     plane_stitch_options=early_options,
                     detailed_feedback_trials=args.detailed_feedback_trials,
                     critical_feedback_trials=args.critical_feedback_trials,
+                    placement_feedback_trials=getattr(args, "congestion_feedback_trials", 0),
                     package_access_options=PackageAccessOptions(
                         maximum_trials=args.package_access_trials,
                         maximum_placement_probes=args.package_placement_probes,
@@ -1876,7 +1965,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                              or args.zone_local_ripup_trials)
                       # The unified router joins plane pads itself; the legacy
                       # late-escape repair reruns the legacy pipeline.
-                      and getattr(args, "router", "legacy") != "unified"
+                      and getattr(args, "router", "unified") != "unified"
                       and result.stopped_after is None else None
                 )
                 if escape_feedback is not None:
@@ -2030,7 +2119,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
-                    "filled_copper_search_states")},
+                    "filled_copper_search_states")} | {
+                    "congestion_feedback_trials": _congestion_feedback_budget(args)} | ({
+                    "unified_ignored_flags": unified_flag_notes["ignored_flags"],
+                    "unified_skipped_stage_flags": unified_flag_notes["skipped_stage_flags"],
+                    "unified_mapped_flags": unified_flag_notes["mapped_flags"],
+                } if unified_flag_notes is not None else {}),
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run",
                     "final_copper_processing": "skipped_for_stopped_run"}
@@ -2070,6 +2164,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "return_preparation": result.power_preparation.report() if result.power_preparation else None,
                     "return_preservation": final_power_preparation,
                 }
+            if result.placement_feedback is not None:
+                # Unified router: congestion-driven placement feedback (trials, moves, hot tiles).
+                report["placement_feedback"] = result.placement_feedback.report()
             if result.critical_feedback is not None:
                 report["critical_placement_feedback"] = {
                     "accepted_moves": result.critical_feedback.accepted_moves,

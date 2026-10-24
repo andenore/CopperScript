@@ -88,7 +88,9 @@ def test_route_board_unified_set_reaches_any_unified_option():
                                  "--unified-set", "buses_first=true", "--unified-set", "present_growth=2.0"])
     options = _unified_options(args)
     assert options.buses_first is True and options.present_growth == 2.0
-    assert _unified_options(_parser().parse_args(["route-board", "board.copper"])) is None
+    # The unified router is the default; the legacy router takes no unified options.
+    assert _unified_options(_parser().parse_args(["route-board", "board.copper"])) is not None
+    assert _unified_options(_parser().parse_args(["route-board", "board.copper", "--router", "legacy"])) is None
     with pytest.raises(ValueError):
         _unified_options(_parser().parse_args(["route-board", "board.copper", "--router", "unified",
                                                "--unified-set", "no_such_option=1"]))

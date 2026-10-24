@@ -56,6 +56,7 @@ from .routing import GlobalRoutingResult
 from .routing_clearance import RoutingClearanceIndex
 from .routing_costs import LayerBias
 from .routing_layers import routing_layers, signal_layer_preferences
+from .routing_vias import physical_via_span
 
 _FOREIGN = -2  # Obstacle owned by another net, by several nets or by none.
 _FREE = -1
@@ -114,9 +115,6 @@ class UnifiedRouterOptions:
     # 0.852); the pushed-aside nets lose more than the length rule gains.
     length_priority: bool = False
     full_reroute_every: int = 0     # also reroute every net every N iterations (0: never)
-    # Retry nets without a path every N iterations, as congestion moves (VPR
-    # never drops an unrouted connection); 0 keeps the old rule: iterations 3 and 6.
-    retry_failed_every: int = 0
     # Repair rounds add this much history around each point where the exact
     # commit check rejected a path (0 disables).
     rejection_marker_cost: float = 0.0
@@ -191,6 +189,92 @@ class UnifiedRouterOptions:
     escape_net_order: tuple[str, ...] = ()
     escape_layer_biases: tuple[LayerBias, ...] = ()
 
+    # commit/via options
+    # One exact clearance index per route_unified call: commits add accepted
+    # copper to it, repair rounds and the pour re-check rip nets out of it
+    # (RoutingClearanceIndex.remove) instead of building one per router.
+    # False builds a fresh index for every router (former behaviour; tests).
+    share_commit_index: bool = True
+
+    # -- Failed-net retries during negotiation ------------------------------
+    # Conflicted nets reroute every iteration; nets that failed outright are
+    # retried after every this many iterations (0: never), since congestion
+    # elsewhere may have moved. The limit caps how many of these retry points
+    # one negotiation uses (0: no cap). The former schedule (after iterations
+    # 3 and 6 only, no exit retry) is every=3, limit=2, before_exit=False.
+    failed_retry_every: int = 3
+    failed_retry_limit: int = 0
+    # When conflicts clear while nets are still failed and none has been
+    # retried yet, run one extra iteration that retries them before stopping.
+    failed_retry_before_exit: bool = True
+
+    # -- Terminal access tuning ---------------------------------------------
+    # A land farther than this from its package centre gets an outward axis
+    # (fine-pitch lead-ins along the pin, see _attach_extended).
+    outward_axis_threshold_nm: int = nm_from_mm("0.3")
+    # Straight stems tried along the outward axis, shortest first, and how far
+    # from the stem's end a grid node may be for the checked lead-in.
+    attach_extension_steps_nm: tuple[int, ...] = tuple(
+        nm_from_mm(step) for step in ("0.3", "0.5", "0.75", "1.0", "1.5"))
+    attach_extension_reach_nm: int = nm_from_mm("0.6")
+    # Exact local maze for trapped pins (pin_access.local_access_path).
+    local_escape_detour_nm: int = nm_from_mm("0.5")
+    local_escape_states: int = 20000
+    # Cells a pin's flood may visit before it counts as reaching open space.
+    open_flood_limit: int = 600
+    # Free region at least this large (nm^2; default (2 mm)^2) is open space.
+    open_space_area_nm2: int = nm_from_mm("2") ** 2
+
+    # -- Plane pieces (_zone_regions) ---------------------------------------
+    # Fill pieces smaller than this (nm^2; default (0.8 mm)^2) are ignored,
+    # except a layer's largest piece.
+    plane_piece_area_nm2: int = nm_from_mm("0.8") ** 2
+    # A layer's largest piece is plane copper when it is at least this
+    # fraction of the overall largest piece; smaller ones are islands to join.
+    plane_piece_fraction: float = 0.25
+
+    # -- Repair --------------------------------------------------------------
+    # Nets with new copper this close to a remaining net's pads are ripped up
+    # with it (repair rounds and the pour re-check).
+    repair_neighbour_reach_nm: int = nm_from_mm("1.0")
+
+    # -- Via budgets ---------------------------------------------------------
+    # Via cost multiplier for nets with a max_vias rule, and the extra factor
+    # of the re-search when a route exceeds the budget.
+    via_budget_factor: float = 4.0
+    via_overrun_factor: float = 10.0
+
+    # -- Search cost terms (plan section 3, "Costs") -------------------------
+    # Turn cost per 45 degrees of heading change, in pitch steps (as via_cost
+    # is after its mm conversion); a 90-degree turn pays twice this. The
+    # search state stays one node: the incoming heading is that of the
+    # node's best parent (parent[node]), not a separate per-heading state.
+    # This is not exact (a node keeps only its cheapest arrival, so a
+    # slightly dearer arrival with a better heading is dropped), but it keeps
+    # memory, the expansion budget and the native kernel's buffers as they
+    # are. Arrival by via and source nodes have no heading (no turn charged).
+    # 0 leaves the search byte-identical to having no turn term. Default 0.25
+    # (owner decision 2026-10-24): on cm4, nrf52 and full-vertical it cuts
+    # bends 27-40 % with equal completion and DRC and slightly shorter
+    # routes; round-led-ring pays a few extra vias.
+    bend_cost: float = 0.25
+    # Soft cost per pitch step whose target node lies outside the net's
+    # connected global-route corridor (guide segments on their layer within
+    # guide_half_width_nm + guide_margin_nm; pin accesses within the margin
+    # square). Nets without a connected guide pay nothing. Never a restriction
+    # and never part of the legality rasters. 0 disables (byte-identical).
+    guide_cost: float = 0.0
+    guide_margin_nm: int = nm_from_mm("1")
+
+    # -- Congestion export (congestion-driven placement feedback) -----------
+    # After the final commit, bin the main negotiation's contention (claim
+    # overflow plus history) and the free track capacity into square tiles
+    # of this size on a lattice anchored at the grid origin, and attach the
+    # map as DetailedRoutingResult.congestion (see _congestion_map). Telemetry
+    # only: it never changes copper. The tile must be at least one pitch.
+    congestion_tile_nm: int = nm_from_mm("1")
+    export_congestion: bool = True
+
     def __post_init__(self) -> None:
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0 or self.maximum_expansions <= 0:
             raise ValueError("unified router pitch, iterations and search states must be positive")
@@ -198,6 +282,25 @@ class UnifiedRouterOptions:
             raise ValueError("escape layer biases cannot be negative")
         if self.stall_iterations < 0:
             raise ValueError("unified router stall iterations must not be negative")
+        if self.failed_retry_every < 0 or self.failed_retry_limit < 0:
+            raise ValueError("unified router failed-net retry interval and limit must not be negative")
+        steps = self.attach_extension_steps_nm
+        if (not isinstance(steps, (tuple, list)) or not steps
+                or any(type(step) is not int or step <= 0 for step in steps)):
+            raise ValueError("attach_extension_steps_nm requires positive integer nanometre steps")
+        object.__setattr__(self, "attach_extension_steps_nm", tuple(steps))
+        if (self.outward_axis_threshold_nm < 0 or self.attach_extension_reach_nm < 0
+                or self.local_escape_detour_nm < 0 or self.repair_neighbour_reach_nm < 0
+                or self.open_space_area_nm2 < 0 or self.plane_piece_area_nm2 < 0):
+            raise ValueError("unified router distances and areas must not be negative")
+        if self.local_escape_states <= 0 or self.open_flood_limit <= 0:
+            raise ValueError("unified router local escape states and open flood limit must be positive")
+        if not 0 < self.plane_piece_fraction <= 1:
+            raise ValueError("plane_piece_fraction must be in (0, 1]")
+        if self.via_budget_factor <= 0 or self.via_overrun_factor < 1:
+            raise ValueError("via_budget_factor must be positive and via_overrun_factor at least 1")
+        if not (self.bend_cost >= 0 and self.guide_cost >= 0) or self.guide_margin_nm < 0:
+            raise ValueError("bend_cost, guide_cost and guide_margin_nm must not be negative")
         if self.grid_window_nm is not None:
             bounds = self.grid_window_nm
             if (not isinstance(bounds, (tuple, list)) or len(bounds) != 4
@@ -205,6 +308,9 @@ class UnifiedRouterOptions:
                     or bounds[0] >= bounds[2] or bounds[1] >= bounds[3]):
                 raise ValueError("grid_window_nm requires four ordered integer nanometre coordinates")
             object.__setattr__(self, "grid_window_nm", tuple(bounds))
+        if type(self.congestion_tile_nm) is not int or self.congestion_tile_nm <= 0 or (
+                self.pitch_nm is not None and self.congestion_tile_nm < self.pitch_nm):
+            raise ValueError("congestion_tile_nm must be a positive integer of at least one pitch")
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +457,7 @@ class _Rasters:
         # with the balls) obstacles are rasterized exactly, without the margin.
         self.exact_boxes = exact_boxes
         self._track: dict[tuple[int, int], tuple[list[int], list[int]]] = {}
-        self._via: dict[tuple[int, int, int], tuple] = {}
+        self._via: dict[tuple[int, int, int, tuple[int, int]], tuple] = {}
         self.via_mask = None        # (ny, nx) bool: False forbids a new via there
         g = grid
         self.px, self.py = np.meshgrid(g.xs, g.ys)                      # node centres
@@ -399,9 +505,10 @@ class _Rasters:
             self._track[key] = (nodes.tolist(), cells.tolist(), nodes, cells)
         return self._track[key]
 
-    def via(self, size: int, drill: int, clearance: int) -> list[int]:
-        """Owner list (one plane) for a through via centred on each node."""
-        key = (size, drill, clearance)
+    def via(self, size: int, drill: int, clearance: int, span=None) -> list[int]:
+        """Owner list for a physical via span; drill spacing stays layer independent."""
+        span = span if span is not None else (0, self.grid.nl - 1)
+        key = (size, drill, clearance, span)
         if key not in self._via:
             g = self.grid
             # Copper spacing, or the drill's hole clearance to copper if larger.
@@ -409,8 +516,9 @@ class _Rasters:
             stacked = self._build(half, clearance, self.px, self.py, self.inside_nodes,
                                   self.edge_nodes, for_via=True, as_array=True,
                                   via_annulus_half_width=size / 2)
-            owner = stacked[0].copy()
-            for layer in range(1, g.nl):
+            low, high = span
+            owner = stacked[low].copy()
+            for layer in range(low + 1, high + 1):
                 other = stacked[layer]
                 both = (owner != other)
                 owner = np.where(both & (owner == _FREE), other, owner)
@@ -430,9 +538,10 @@ class _Rasters:
             self._via[key] = (flat.tolist(), flat)
         return self._via[key][0]
 
-    def via_array(self, size: int, drill: int, clearance: int):
-        self.via(size, drill, clearance)
-        return self._via[(size, drill, clearance)][1]
+    def via_array(self, size: int, drill: int, clearance: int, span=None):
+        span = span if span is not None else (0, self.grid.nl - 1)
+        self.via(size, drill, clearance, span)
+        return self._via[(size, drill, clearance, span)][1]
 
     def _margin_at(self, xs, ys) -> int:
         """The raster margin for an obstacle: none when it lies in an exact box."""
@@ -524,6 +633,9 @@ class _NetSpec:
     islands: int = 0                         # trailing components that are plane pieces
     joined: dict = field(default_factory=dict)  # per component: grid nodes of its own vias
     explicit: dict = field(default_factory=dict)  # component index -> layers its plane path may not end on
+    # Per pad-group component (not plane pieces): the anchor positions its
+    # attach candidates were sought from (failed-point export).
+    anchors: list = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -608,7 +720,8 @@ def _segment_offsets(dx: int, dy: int, radius_in_pitches: float) -> tuple[tuple[
 class _Router:
     def __init__(self, board: PhysicalBoard, options: UnifiedRouterOptions,
                  nets: list, on_progress, *, explicit_pads: frozenset[PadReference] = frozenset(),
-                 required_accesses=None) -> None:
+                 required_accesses=None, guides: GlobalRoutingResult | None = None,
+                 clearance: RoutingClearanceIndex | None = None) -> None:
         self.board = board
         # Plane pads that must reach the plane with copper of their own, not
         # by lying in a pour piece (pour re-check, see route_unified).
@@ -616,6 +729,21 @@ class _Router:
         self.options = options
         self.deadline: float | None = None
         self.on_progress = on_progress
+        # Lazy state, filled while specs are built and during search:
+        # open-space masks per (width, clearance) raster, the move-cost
+        # table, and how many exact local mazes were spent (local_escape_limit).
+        self._open_cache: dict[tuple[int, int], np.ndarray] = {}
+        self._move_cache: np.ndarray | None = None
+        self._local_spent = 0
+        # Search cost terms (bend_cost, guide_cost): the turn table and, per
+        # net, the global-route corridor nodes (None: no connected guide).
+        self._turn_cache: np.ndarray | None = None
+        self._guide_cache: dict[str, tuple | None] = {}
+        self.guides: dict[str, tuple] = {}
+        if guides is not None and options.guide_cost:
+            for route in guides.routes:
+                if route.connected and (route.segments or route.accesses):
+                    self.guides[route.net] = (*self.guides.get(route.net, ()), route)
         pitch = options.pitch_nm or choose_pitch(board)
         self.pitch = pitch
         self.via_cost = options.via_cost_mm * 1_000_000 / pitch
@@ -635,7 +763,14 @@ class _Router:
                             raise ValueError(f"terminal {ref.component}.{ref.pad} is outside grid_window_nm")
         self.rules: dict[str, NetRoutingRule] = {r.net: r for r in board.net_routing_rules}
         self.zone_nets = {zone.net for zone in board.zones}
-        self.clearance = RoutingClearanceIndex(board)
+        # ``clearance`` may be a shared index (route_unified) that holds
+        # exactly this board's copper; commit adds accepted copper to it.
+        if clearance is not None and not _index_holds(clearance, board):
+            raise ValueError("shared clearance index does not hold this router's board copper")
+        self.clearance = clearance if clearance is not None else RoutingClearanceIndex(board)
+        # Physical via spans by (low, high) layer index; board vias by (net, xy).
+        self._via_span_cache: dict[tuple[int, int], tuple | None] = {}
+        self._board_via_sites: dict[tuple[str, Point], list[Via]] | None = None
         self.net_ids: dict[str, int] = {}
         for net in board.nets:
             self.net_ids.setdefault(net.name, len(self.net_ids))
@@ -663,12 +798,19 @@ class _Router:
             self._n_touched = np.zeros(self._n_touched_cap, dtype=np.int32)
             self._n_path_cap = 1_000_000
             self._n_path = np.zeros(self._n_path_cap, dtype=np.int32)
+            # Per-node guide penalty for the kernel: guide_cost outside the
+            # searched net's corridor, 0 inside (set and restored per search;
+            # allocated on the first guided search).
+            self._n_guide: np.ndarray | None = None
         ranks, headings = signal_layer_preferences(board)
         g = self.grid
         self.layer_cost = [options.outer_layer_cost if i in (0, g.nl - 1) else 0.0 for i in range(g.nl)]
         self.heading = [headings.get(layer) for layer in g.layers]
         default_width = board.rules.default_track_width_nm
         self.default_width = default_width
+        # (layer, iy0, iy1, ix0, ix1, cost) windows of seeded ball-field
+        # history: a routing preference, not contention (_congestion_map).
+        self._seeded_history: list[tuple[int, int, int, int, int, float]] = []
         self._seed_ball_field_cost()
         # A local transaction may own the area copper but not the launch vias
         # or collar witnesses. Such pads attach only at fresh verified ports.
@@ -705,6 +847,7 @@ class _Router:
             ix0, iy0, ix1, iy1 = g.window(min(p.x_nm for p in corners), min(p.y_nm for p in corners),
                                           max(p.x_nm for p in corners), max(p.y_nm for p in corners))
             layer = g.layers.index(CopperLayer.FRONT if pose.side.value == "front" else CopperLayer.BACK)
+            self._seeded_history.append((layer, iy0, iy1, ix0, ix1, cost))
             for iy in range(iy0, iy1 + 1):
                 for ix in range(ix0, ix1 + 1):
                     hist[g.index(layer, ix, iy)] += cost
@@ -892,7 +1035,7 @@ class _Router:
                         layers, [], 0)
         spec.target_only = target_only
         if rule is not None and rule.max_vias is not None:
-            spec.via_factor = 4.0
+            spec.via_factor = self.options.via_budget_factor
             existing = sum(1 for via in board.vias if via.net == net.name)
             spec.via_budget = max(0, rule.max_vias - existing)
         if rule is not None and rule.max_length_nm:
@@ -1002,7 +1145,7 @@ class _Router:
                 index = g.layers.index(layer)
                 mask = inside & free[index]
                 per_layer[index] = per_layer[index] | mask if index in per_layer else mask
-        minimum = max(4, int(nm_from_mm("0.8") ** 2 // (g.pitch * g.pitch)))
+        minimum = max(4, int(self.options.plane_piece_area_nm2 // (g.pitch * g.pitch)))
         pieces: dict[int, list[np.ndarray]] = {}
         for index, mask in per_layer.items():
             labels, count = _label(mask)
@@ -1023,7 +1166,7 @@ class _Router:
         planes, islands, optional = set(), [], []
         for index, found in pieces.items():
             first, rest = found[0], found[1:]
-            if first.size * 4 >= largest:
+            if first.size >= largest * self.options.plane_piece_fraction:
                 planes.update(first.tolist())
             else:
                 islands.append(first.tolist())
@@ -1146,9 +1289,12 @@ class _Router:
             if joined:
                 spec.joined[len(components)] = joined
             components.append(self._attach(anchors, spec))
+            spec.anchors.append(tuple(anchor[0] for anchor in anchors))
             if self.explicit_pads and set(members) & self.explicit_pads:
                 spec.explicit[len(components) - 1] = self._explicit_exclusion(members, spec)
-        components.extend(self._attach(anchors, spec) for anchors in separate)
+        for anchors in separate:
+            components.append(self._attach(anchors, spec))
+            spec.anchors.append(tuple(anchor[0] for anchor in anchors))
         return components
 
     def _separate_land_pieces(self, pad: PadReference) -> tuple[frozenset[Point], ...]:
@@ -1189,7 +1335,7 @@ class _Router:
             # Outward axis from the package centre, for fine-pitch lead-ins.
             dx, dy = position.x_nm - pose.position.x_nm, position.y_nm - pose.position.y_nm
             outward = None
-            if max(abs(dx), abs(dy)) > nm_from_mm("0.3"):
+            if max(abs(dx), abs(dy)) > self.options.outward_axis_threshold_nm:
                 outward = (1 if dx > 0 else -1, 0) if abs(dx) >= abs(dy) else (0, 1 if dy > 0 else -1)
             result.append((position, layers, outward))
         return result
@@ -1249,12 +1395,12 @@ class _Router:
         width = spec.neck_width or spec.width
         clearance = spec.neck_clearance or spec.clearance
         key = (width, clearance)
-        cache = self.__dict__.setdefault("_open_cache", {})
+        cache = self._open_cache
         if key not in cache:
             g = self.grid
             owner, _ = self.rasters.track(width, clearance)
             arr = np.asarray(owner, dtype=np.int32).reshape(g.nl, g.ny, g.nx)
-            minimum = max(16, int(nm_from_mm("2") ** 2 // (g.pitch * g.pitch)))
+            minimum = max(16, int(self.options.open_space_area_nm2 // (g.pitch * g.pitch)))
             result = np.zeros(g.size, dtype=bool)
             for layer in range(g.nl):
                 labels, count = _label(arr[layer] == _FREE)
@@ -1267,11 +1413,13 @@ class _Router:
             cache[key] = result
         return cache[key]
 
-    def _reaches_open(self, nodes, spec: _NetSpec, limit: int = 600) -> bool:
+    def _reaches_open(self, nodes, spec: _NetSpec, limit: int | None = None) -> bool:
         """Whether a short flood from ``nodes`` (through free or own-net cells
         on the same layer, at the net's narrowest width) reaches open space."""
         if not nodes:
             return False
+        if limit is None:
+            limit = self.options.open_flood_limit
         g = self.grid
         open_space = self._open_space(spec)
         owner, _ = self.rasters.track(spec.neck_width or spec.width, spec.neck_clearance or spec.clearance)
@@ -1301,10 +1449,9 @@ class _Router:
         """
         from .pin_access import local_access_path
         g, options = self.grid, self.options
-        spent = self.__dict__.get("_local_spent", 0)
-        if spent >= options.local_escape_limit:
+        if self._local_spent >= options.local_escape_limit:
             return
-        self._local_spent = spent + 1
+        self._local_spent += 1
         open_space = self._open_space(spec)
         width = spec.neck_width or spec.width
         reach = options.local_escape_radius_nm
@@ -1332,7 +1479,8 @@ class _Router:
             target = Point(g.x0 + ix * g.pitch, g.y0 + iy * g.pitch)
             path = local_access_path(self.board, self.clearance, spec.name, position, target,
                                      g.layers[layer], width, step_nm=options.local_escape_step_nm,
-                                     detour_nm=nm_from_mm("0.5"), maximum_states=20000)
+                                     detour_nm=options.local_escape_detour_nm,
+                                     maximum_states=options.local_escape_states)
             if not path:
                 misses += 1
                 continue
@@ -1353,14 +1501,13 @@ class _Router:
         from .pin_escape import checked_access_path
         g = self.grid
         widths = [spec.width] + ([spec.neck_width] if spec.neck_width else [])
-        for extension_mm in ("0.3", "0.5", "0.75", "1.0", "1.5"):
-            extension = nm_from_mm(extension_mm)
+        reach = self.options.attach_extension_reach_nm
+        for extension in self.options.attach_extension_steps_nm:
             corner = Point(position.x_nm + outward[0] * extension, position.y_nm + outward[1] * extension)
             for width in widths:
                 if not self.clearance.can_track(spec.name, position, corner, width, g.layers[layer]):
                     continue
                 stem = TrackSegment(spec.name, position, corner, width, g.layers[layer])
-                reach = nm_from_mm("0.6")
                 ix0, iy0, ix1, iy1 = g.window(corner.x_nm - reach, corner.y_nm - reach,
                                               corner.x_nm + reach, corner.y_nm + reach)
                 near = sorted(((hypot(g.x0 + ix * g.pitch - corner.x_nm, g.y0 + iy * g.pitch - corner.y_nm), ix, iy)
@@ -1391,7 +1538,6 @@ class _Router:
         g = self.grid
         route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0)
         targets = set(spec.plane)
-        used_leads: dict[int, tuple[TrackSegment, ...]] = {}
         missing = 0
         whole = (0, 0, g.nx - 1, g.ny - 1)
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
@@ -1469,6 +1615,9 @@ class _Router:
                 route = direct
         if not route.connected and self._expired():
             route.reason = "time budget exhausted"
+        elif not route.connected and len(spec.layers) > 1 and self.board.stackup.via_technologies:
+            if not self._via_transitions(spec)[0]:
+                route.reason += "; no_via_technology for allowed layer transitions"
         return route
 
     def _route_net_budgeted(self, spec: _NetSpec, present: float) -> _NetRoute:
@@ -1477,12 +1626,15 @@ class _Router:
             # Over the net's via budget: search again with vias priced far
             # higher; a budget overrun stays a failure, not a DRC error.
             factor = spec.via_factor
-            spec.via_factor = factor * 10
+            spec.via_factor = factor * self.options.via_overrun_factor
             try:
                 retry = self._route_net_once(spec, present)
             finally:
                 spec.via_factor = factor
-            route = retry if len(retry.via_xy) <= len(route.via_xy) else route
+            # An unconnected retry trivially has fewer vias; keep the original
+            # route then, so the failure names the via shortfall.
+            if retry.connected and len(retry.via_xy) <= len(route.via_xy):
+                route = retry
             if len(route.via_xy) > spec.via_budget:
                 route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0,
                                   f"needs {len(route.via_xy)} new vias, max_vias leaves {spec.via_budget}")
@@ -1555,7 +1707,6 @@ class _Router:
     def _finish_route(self, route: _NetRoute, spec: _NetSpec) -> None:
         g = self.grid
         nodes: set[int] = set()
-        via_xy: set[int] = set()
         claims: set[int] = set()
         via_claims: set[int] = set()
         body: dict = {}
@@ -1573,13 +1724,17 @@ class _Router:
         via_radius = (via_reach + self.default_width / 2) / g.pitch
         via_via_radius = (via_reach + spec.via_size / 2) / g.pitch
         length = 0.0
+        # Layer-change sites: one via per xy, spanning every layer the
+        # route changes between there (see _site_spans).
+        changes: dict[int, tuple[int, int]] = {}
         for path in route.paths:
             for a, b in zip(path, path[1:]):
                 la, xa, ya = g.unpack(a)
                 lb, xb, yb = g.unpack(b)
                 if la != lb:
                     xy = ya * g.nx + xa
-                    via_xy.add(xy)
+                    low, high = changes.get(xy, (la, la))
+                    changes[xy] = (min(low, la, lb), max(high, la, lb))
                     continue
                 dx, dy = xb - xa, yb - ya
                 length += hypot(dx, dy)
@@ -1606,18 +1761,30 @@ class _Router:
                     claims.add(node)
                     if distance <= near:
                         nodes.add(node)
+        via_xy = set(changes)
+        spans = self._site_spans(spec.name, changes)
         for xy in via_xy:
             yv, xv = divmod(xy, g.nx)
+            # A via's copper claims only the layers it spans (all of them for
+            # a through via, or where no technology serves the site and the
+            # copper falls back to the outer span). Via-to-via spacing below
+            # stays per xy: drills clear each other whatever their spans.
+            span = spans[xy]
+            if span is None:
+                via_layers = range(g.nl)
+            else:
+                low, high = sorted((g.layers.index(span[0]), g.layers.index(span[1])))
+                via_layers = range(low, high + 1)
             if via_body >= 0.5:
                 for ox, oy in _disc_offsets_cached(via_body):
                     x, y = xv + ox, yv + oy
                     if 0 <= x < g.nx and 0 <= y < g.ny:
-                        for layer in range(g.nl):
+                        for layer in via_layers:
                             body[layer * g.plane + y * g.nx + x] = ("via", xy)
             for ox, oy in _disc_offsets_cached(via_radius):
                 x, y = xv + ox, yv + oy
                 if 0 <= x < g.nx and 0 <= y < g.ny:
-                    for layer in range(g.nl):
+                    for layer in via_layers:
                         claims.add(layer * g.plane + y * g.nx + x)
             for ox, oy in _disc_offsets_cached(via_via_radius):
                 x, y = xv + ox, yv + oy
@@ -1673,7 +1840,7 @@ class _Router:
         scale = min(self.options.window_growth_limit, 1 + age // 3)
         return int(self.options.window_margin_nm * scale // self.grid.pitch)
 
-    def _via_owners(self, spec: _NetSpec, *, as_array=False):
+    def _via_owners(self, spec: _NetSpec, *, as_array=False, span=None):
         """Via proposals for a single-ended net must have existing returns.
 
         The raster narrows proposals only. Exact integer distance/span checks
@@ -1681,18 +1848,20 @@ class _Router:
         """
         rule = self.rules.get(spec.name)
         if rule is None or not rule.require_return_vias or rule.differential_partner is not None:
-            return (self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance) if as_array
-                    else self.rasters.via(spec.via_size, spec.via_drill, spec.clearance))
-        cached = spec.arrays.get("return_via_owner")
+            return (self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance, span) if as_array
+                    else self.rasters.via(spec.via_size, spec.via_drill, spec.clearance, span))
+        key = ("return_via_owner", span)
+        cached = spec.arrays.get(key)
         if cached is not None:
             return cached
         from .return_paths import return_span_covers
         g = self.grid
+        low, high = span if span is not None else (0, g.nl - 1)
         mask = np.zeros((g.ny, g.nx), dtype=bool)
         limit = rule.maximum_return_via_distance_nm
         for via in self.board.vias:
             if (via.net != rule.return_via_net or via.net == spec.name
-                    or not return_span_covers(self.board, via, g.layers[0], g.layers[-1])):
+                    or not return_span_covers(self.board, via, g.layers[low], g.layers[high])):
                 continue
             x, y = via.position.x_nm, via.position.y_nm
             x0, y0, x1, y1 = g.window(x-limit, y-limit, x+limit, y+limit)
@@ -1703,10 +1872,37 @@ class _Router:
             distance = np.hypot(self.rasters.px[y0:y1+1, x0:x1+1]-x,
                                 self.rasters.py[y0:y1+1, x0:x1+1]-y)
             mask[y0:y1+1, x0:x1+1] |= distance <= limit
-        owners = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance).copy()
+        owners = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance, span).copy()
         owners.reshape((g.ny, g.nx))[~mask] = _FOREIGN
-        spec.arrays["return_via_owner"] = owners
+        spec.arrays[key] = owners
         return owners
+
+    def _via_transitions(self, spec: _NetSpec):
+        """Optional span-specific owner arrays and native pointer table.
+
+        Boards without a technology catalog keep the single-mask fast path. A null
+        entry in the table means no technology serves that layer transition.
+        Arrays are retained in the spec for the lifetime of the native call.
+        """
+        if not self.board.stackup.via_technologies:
+            return None
+        if "via_transitions" not in spec.arrays:
+            g = self.grid
+            owners = {}
+            pointers = np.zeros(g.nl * g.nl, dtype=np.uintp)
+            for low in spec.layers:
+                for high in spec.layers:
+                    if low >= high:
+                        continue
+                    physical = self._transition_span(low, high)
+                    if physical is None:
+                        continue
+                    span = tuple(sorted((g.layers.index(physical[0]), g.layers.index(physical[1]))))
+                    mask = self._via_owners(spec, as_array=True, span=span)
+                    owners[low, high] = owners[high, low] = mask
+                    pointers[low * g.nl + high] = pointers[high * g.nl + low] = mask.ctypes.data
+            spec.arrays["via_transitions"] = owners, pointers
+        return spec.arrays["via_transitions"]
 
     def _search(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
                 target_extra=None):
@@ -1783,6 +1979,12 @@ class _Router:
         bx1 = min(nx - 1, max(tx1, max(x for x, _ in src_xy)) + margin)
         by0 = max(0, min(ty0, min(y for _, y in src_xy)) - margin)
         by1 = min(g.ny - 1, max(ty1, max(y for _, y in src_xy)) + margin)
+        corridor = self._guide_corridor(spec) if self.guides else None
+        if corridor is not None:
+            # A guided net's window covers its corridor, so the soft guide
+            # cost can be followed where the guide detours.
+            cx0, cy0, cx1, cy1 = corridor[2]
+            bx0, by0, bx1, by1 = min(bx0, cx0), min(by0, cy0), max(bx1, cx1), max(by1, cy1)
         for attempt in range(3):
             result = self._astar(spec, sources, targets, present, (bx0, by0, bx1, by1),
                                  (tx0, ty0, tx1, ty1), owner, mid_owner, via_owner, target_extra)
@@ -1848,14 +2050,25 @@ class _Router:
             head = heading[layer]
             lc = layer_cost[layer]
             table = []
-            for dx, dy, step in _MOVES:
+            for m, (dx, dy, step) in enumerate(_MOVES):
                 base = step * (1.0 + lc)
                 if head is not None and (head == "h" and dy and not dx or head == "n" and dx and not dy):
                     base += wrong * step
                 cell_dy = 0 if dy > 0 else -1
                 cell_dx = 0 if dx > 0 else -1
-                table.append((dx, dy, dy * nx + dx, base, bool(dx and dy), cell_dy * nx + cell_dx))
+                table.append((dx, dy, dy * nx + dx, base, bool(dx and dy), cell_dy * nx + cell_dx, m, step))
             move_tables.append(table)
+        # Soft cost terms (see UnifiedRouterOptions.bend_cost/guide_cost);
+        # the kernel adds them in the same order.
+        turns = arrival = None
+        if options.bend_cost:
+            table = self._turn_table().tolist()
+            turns = [table[8 * m:8 * m + 8] for m in range(8)]
+            arrival = {dy * nx + dx: m for m, (dx, dy, _) in enumerate(_MOVES)}
+        corridor = self._guide_corridor(spec) if self.guides else None
+        inside = corridor[0] if corridor is not None else None
+        guide_cost = options.guide_cost
+        transitions = self._via_transitions(spec)
         while heap:
             if expansions % 1024 == 0 and self._expired():
                 break
@@ -1881,7 +2094,14 @@ class _Router:
             # outside the region: that step would be drawn at full width.
             here_neck_only = here_in_region and node in neck
             only_targets = layer in target_only
-            for dx, dy, dn, base, diagonal, dcell in move_tables[layer]:
+            # Turn cost from the heading of this node's best parent (none
+            # after a via or at a source).
+            turn = None
+            if turns is not None:
+                p = parent[node]
+                if p != -1 and p // plane == layer:
+                    turn = turns[arrival[node - p]]
+            for dx, dy, dn, base, diagonal, dcell, m, step in move_tables[layer]:
                 x2 = x + dx
                 y2 = y + dy
                 if x2 < bx0 or x2 > bx1 or y2 < by0 or y2 > by1:
@@ -1900,6 +2120,10 @@ class _Router:
                     if o != -1 and o != nid and not (here_in_region and n2 in region and cell in neck_mid):
                         continue
                 c = cost + base * (1.0 + hist[n2]) * (1.0 + present * occ[n2])
+                if turn is not None:
+                    c += turn[m]
+                if inside is not None and n2 not in inside:
+                    c += step * guide_cost
                 if c < best[n2]:
                     if best[n2] >= INF:
                         touched.append(n2)
@@ -1908,9 +2132,9 @@ class _Router:
                     hx = tx0 - x2 if x2 < tx0 else (x2 - tx1 if x2 > tx1 else 0)
                     hy = ty0 - y2 if y2 < ty0 else (y2 - ty1 if y2 > ty1 else 0)
                     push(heap, (c + (hx if hx > hy else hy) + 0.41421356 * (hy if hx > hy else hx), c, n2))
-            # Layer changes through a through via at this xy.
+            # Layer changes through the selected physical via span.
             o = via_owner[rest]
-            if o != -1 and o != nid:
+            if transitions is None and o != -1 and o != nid:
                 continue
             vpen = via_cost * (1.0 + via_hist[rest]) * (1.0 + present * via_occ[rest])
             hx = tx0 - x if x < tx0 else (x - tx1 if x > tx1 else 0)
@@ -1919,6 +2143,10 @@ class _Router:
             for layer2 in layers:
                 if layer2 == layer:
                     continue
+                if transitions is not None:
+                    mask = transitions[0].get((layer, layer2))
+                    if mask is None or mask[rest] not in (_FREE, nid):
+                        continue
                 n2 = layer2 * plane + rest
                 if layer2 in target_only and n2 not in targets:
                     continue
@@ -1964,6 +2192,7 @@ class _Router:
         g = self.grid
         owner, mid_owner = self.rasters.track_arrays(spec.width, spec.clearance)
         via_owner = self._via_owners(spec, as_array=True)
+        transitions = self._via_transitions(spec)
         occupancy = self.occupancy
         flags, extra = self._n_flags, self._n_extra
         layers = np.asarray([layer | (0x100 if layer in spec.target_only else 0) for layer in spec.layers],
@@ -1987,6 +2216,14 @@ class _Router:
             keys = np.fromiter(target_extra.keys(), dtype=np.int64, count=len(target_extra))
             extra[keys] = np.fromiter(target_extra.values(), dtype=np.float64, count=len(target_extra))
             extra_pointer = extra.ctypes.data
+        turn_pointer = self._turn_table().ctypes.data if self.options.bend_cost else None
+        corridor = self._guide_corridor(spec) if self.guides else None
+        guide_pointer = None
+        if corridor is not None:
+            if self._n_guide is None:
+                self._n_guide = np.full(g.size, float(self.options.guide_cost), dtype=np.float64)
+            self._n_guide[corridor[1]] = 0.0
+            guide_pointer = self._n_guide.ctypes.data
         touched_count = ctypes.c_int(0)
         P = lambda a: a.ctypes.data
         length = self.native(
@@ -1996,7 +2233,8 @@ class _Router:
             float(present), float(self.via_cost * spec.via_factor),
             *box, *tbox,
             P(source_nodes), P(source_costs), len(source_nodes),
-            extra_pointer, self.options.maximum_expansions,
+            extra_pointer, turn_pointer, guide_pointer,
+            transitions[1].ctypes.data if transitions is not None else None, self.options.maximum_expansions,
             P(self._n_best), P(self._n_parent), P(self._n_heap), self._n_heap_cap,
             P(self._n_touched), self._n_touched_cap, ctypes.byref(touched_count),
             P(self._n_path), self._n_path_cap)
@@ -2007,6 +2245,8 @@ class _Router:
                 flags[nodes] = 0
         if target_extra:
             extra[keys] = 0.0
+        if corridor is not None:
+            self._n_guide[corridor[1]] = float(self.options.guide_cost)
         if length < 0:
             return NotImplemented
         if length == 0:
@@ -2015,7 +2255,7 @@ class _Router:
         return path, path[-1]
 
     def _move_base(self, spec) -> np.ndarray:
-        cache = getattr(self, "_move_cache", None)
+        cache = self._move_cache
         if cache is None:
             g, options = self.grid, self.options
             table = []
@@ -2029,6 +2269,75 @@ class _Router:
                     table.append(base)
             cache = self._move_cache = np.asarray(table, dtype=np.float64)
         return cache
+
+    def _turn_table(self) -> np.ndarray:
+        """bend_cost times the 45-degree turns from move a to move b, at [8 * a + b]."""
+        cache = self._turn_cache
+        if cache is None:
+            headings = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
+            index = [headings.index((dx, dy)) for dx, dy, _ in _MOVES]
+            bend = self.options.bend_cost
+            cache = self._turn_cache = np.asarray(
+                [bend * min(abs(a - b), 8 - abs(a - b)) for a in index for b in index], dtype=np.float64)
+        return cache
+
+    def _guide_corridor(self, spec: _NetSpec):
+        """The net's global-route corridor as grid nodes (set, int64 array, xy box), or None.
+
+        Matches the legacy corridor (detailed._inside_guide): guide segments
+        on their own layer within guide_half_width_nm + guide_margin_nm, and
+        pin accesses within the margin square on their layer.
+        """
+        if spec.name in self._guide_cache:
+            return self._guide_cache[spec.name]
+        routes = self.guides.get(spec.name)
+        result = None
+        if routes:
+            g = self.grid
+            margin = self.options.guide_margin_nm
+            index = {layer: i for i, layer in enumerate(g.layers)}
+            parts = []
+
+            def add(layer, ix0, iy0, inside):
+                iy, ix = np.nonzero(inside)
+                parts.append(layer * g.plane + (iy + iy0) * g.nx + (ix + ix0))
+
+            for route in routes:
+                for segment in route.segments:
+                    layer = index.get(segment.layer)
+                    if layer is None:
+                        continue
+                    r = segment.guide_half_width_nm + margin
+                    a, b = segment.start, segment.end
+                    ix0, iy0, ix1, iy1 = g.window(min(a.x_nm, b.x_nm) - r, min(a.y_nm, b.y_nm) - r,
+                                                  max(a.x_nm, b.x_nm) + r, max(a.y_nm, b.y_nm) + r)
+                    if ix0 > ix1 or iy0 > iy1:
+                        continue
+                    px = g.xs[ix0:ix1 + 1][None, :]
+                    py = g.ys[iy0:iy1 + 1][:, None]
+                    add(layer, ix0, iy0, _segment_distance(
+                        px, py, float(a.x_nm), float(a.y_nm), float(b.x_nm), float(b.y_nm)) <= r)
+                for access in route.accesses:
+                    layer = index.get(access.layer)
+                    if layer is None:
+                        continue
+                    c = access.access_position
+                    ix0, iy0, ix1, iy1 = g.window(c.x_nm - margin, c.y_nm - margin,
+                                                  c.x_nm + margin, c.y_nm + margin)
+                    if ix0 > ix1 or iy0 > iy1:
+                        continue
+                    px = g.xs[ix0:ix1 + 1][None, :]
+                    py = g.ys[iy0:iy1 + 1][:, None]
+                    add(layer, ix0, iy0,
+                        (np.abs(px - c.x_nm) <= margin) & (np.abs(py - c.y_nm) <= margin))
+            nodes = np.unique(np.concatenate(parts)).astype(np.int64) if parts else np.zeros(0, np.int64)
+            if nodes.size:
+                rest = nodes % g.plane
+                xs, ys = rest % g.nx, rest // g.nx
+                box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+                result = (frozenset(nodes.tolist()), nodes, box)
+        self._guide_cache[spec.name] = result
+        return result
 
     # -- negotiation ------------------------------------------------------
 
@@ -2083,11 +2392,15 @@ class _Router:
         pending = [s.name for s in specs if only is None or s.name in only or s.name not in routes]
         by_name = {s.name: s for s in specs}
         iteration = 0
+        failed: set[str] = set()
+        retries = 0          # periodic retry points passed so far
+        retried = False      # whether any failed net has been routed again
         for next_iteration in range(1, options.maximum_iterations + 1):
             if self._expired():
                 break
             iteration = next_iteration
             emit(self.on_progress, "unified_iteration", "started", iteration=iteration, nets=len(pending))
+            retried = retried or any(name in failed for name in pending)
             for name in pending:
                 if self._expired():
                     break
@@ -2115,6 +2428,14 @@ class _Router:
             emit(self.on_progress, "unified_iteration", "finished", iteration=iteration,
                  conflicted=len(conflicts), failed=len(failed))
             if not conflicts:
+                if (options.failed_retry_before_exit and failed and not retried
+                        and iteration < options.maximum_iterations):
+                    # Conflicts cleared before any failed net was retried:
+                    # give them one more try against the settled copper.
+                    pending = [s.name for s in specs if s.name in failed]
+                    emit(self.on_progress, "unified_iteration", "failed_retry",
+                         iteration=iteration + 1, nets=len(pending))
+                    continue
                 break
             if options.stall_iterations and iteration - best_iteration >= options.stall_iterations:
                 break
@@ -2127,8 +2448,9 @@ class _Router:
             self.present = present
             # Reroute conflicted nets; retry failed nets now and then, since
             # congestion elsewhere may have moved.
-            every = options.retry_failed_every
-            retry = iteration % every == 0 if every else iteration in (3, 6)
+            retry = bool(options.failed_retry_every and iteration % options.failed_retry_every == 0
+                         and (not options.failed_retry_limit or retries < options.failed_retry_limit))
+            retries += retry
             pending = [s.name for s in specs if s.name in conflicts or (s.name in failed and retry)]
             if options.full_reroute_every and iteration % options.full_reroute_every == 0:
                 pending = [s.name for s in specs if s.name not in failed or retry]
@@ -2151,9 +2473,69 @@ class _Router:
 
     # -- materialisation --------------------------------------------------
 
-    def copper(self, spec: _NetSpec, path: list[int], leads: tuple[TrackSegment, ...]):
-        """Tracks and vias of one path, with its lead-ins."""
+    def _transition_span(self, low: int, high: int):
+        key = (low, high)
+        if key not in self._via_span_cache:
+            g = self.grid
+            self._via_span_cache[key] = physical_via_span(self.board, g.layers[low], g.layers[high])
+        return self._via_span_cache[key]
+
+    def _via_sites(self, name: str, paths) -> dict[int, tuple | None]:
+        """``_site_spans`` for every layer-change site of ``paths`` (one route)."""
+        plane = self.grid.plane
+        changes: dict[int, tuple[int, int]] = {}
+        for path in paths:
+            for a, b in zip(path, path[1:]):
+                la, lb = a // plane, b // plane
+                if la != lb:
+                    xy = a % plane
+                    low, high = changes.get(xy, (la, la))
+                    changes[xy] = (min(low, la, lb), max(high, la, lb))
+        return self._site_spans(name, changes)
+
+    def _site_spans(self, name: str, changes: Mapping[int, tuple[int, int]]) -> dict[int, tuple | None]:
+        """The via of each layer-change site: xy -> (from, to, technology) or None.
+
+        ``changes`` maps a site to the lowest and highest layer index a route
+        changes between there; the route gets one via per site spanning them.
+        Without via technologies that is the stackup's through via. With
+        them, an existing via of the net at the site that spans those layers
+        is reused as it is; otherwise ``physical_via_span`` selects the span
+        (through, blind or buried), then the outer span. None: no declared
+        technology serves the site (commit rejects the path).
+        """
         g = self.grid
+        if not self.board.stackup.via_technologies:
+            return dict.fromkeys(changes, (g.layers[0], g.layers[-1], None))
+        if self._board_via_sites is None:
+            sites: dict[tuple[str, Point], list[Via]] = {}
+            for via in self.board.vias:
+                sites.setdefault((via.net, via.position), []).append(via)
+            self._board_via_sites = sites
+        order = {layer: i for i, layer in enumerate(g.layers)}
+        result: dict[int, tuple | None] = {}
+        for xy, (low, high) in changes.items():
+            existing = next((via for via in self._board_via_sites.get((name, g.point(xy)), ())
+                             if via.from_layer in order and via.to_layer in order
+                             and min(order[via.from_layer], order[via.to_layer]) <= low
+                             and high <= max(order[via.from_layer], order[via.to_layer])), None)
+            if existing is not None:
+                result[xy] = (existing.from_layer, existing.to_layer, existing.technology)
+                continue
+            result[xy] = self._transition_span(low, high)
+        return result
+
+    def copper(self, spec: _NetSpec, path: list[int], leads: tuple[TrackSegment, ...],
+               spans: Mapping[int, tuple | None] | None = None):
+        """Tracks and vias of one path, with its lead-ins.
+
+        ``spans`` (``_via_sites`` of the whole route) gives each layer-change
+        site its via; by default the sites of this path alone. A site without
+        a span gets the outer span here; commit rejects it.
+        """
+        g = self.grid
+        if spans is None:
+            spans = self._via_sites(spec.name, [path])
         tracks: list[TrackSegment] = list(leads)
         vias: list[Via] = []
         neck, region = spec.neck, spec.region
@@ -2173,8 +2555,8 @@ class _Router:
                     if run_start != prev:
                         tracks.append(TrackSegment(spec.name, g.point(run_start), g.point(prev),
                                                    run_width, g.layers[la]))
-                    vias.append(Via(spec.name, g.point(prev), spec.via_size, spec.via_drill,
-                                    g.layers[0], g.layers[-1]))
+                    span = spans.get(ya * g.nx + xa) or (g.layers[0], g.layers[-1], None)
+                    vias.append(Via(spec.name, g.point(prev), spec.via_size, spec.via_drill, *span))
                     run_start, prev, direction, run_width = node, node, None, None
                     continue
                 step = (xb - xa, yb - ya)
@@ -2195,9 +2577,18 @@ class _Router:
         return tracks, list(dict.fromkeys(vias))
 
     def commit(self, routes: Mapping[str, _NetRoute], conflicts=frozenset()):
-        """Exact check of every path; returns accepted copper, rejections, complete nets."""
+        """Exact check of every path; returns accepted copper, rejections, complete nets.
+
+        Checks against ``self.clearance`` and adds the accepted copper to it,
+        so the router's search model no longer matches its index afterwards:
+        commit once. A shared index (route_unified) then holds this commit's
+        copper for the next router. Blockers are named by net for all copper
+        the index holds as mutable (this call's copper); board and locked
+        copper count as fixed.
+        """
         from .surface_path import _track_inside_board
-        index = RoutingClearanceIndex(self.board)
+        index = self.clearance
+        g = self.grid
         self.rejections: dict[str, list[tuple[Point, str, tuple[str, ...], bool]]] = {}
         accepted: dict[str, tuple[list[TrackSegment], list[Via]]] = {}
         rejected: dict[str, list[Point]] = {}
@@ -2214,9 +2605,17 @@ class _Router:
             all_ok = route.connected
             net_tracks: list[TrackSegment] = []
             net_vias: list[Via] = []
+            spans = self._via_sites(name, route.paths)
+            unserved = {xy for xy, span in spans.items() if span is None}
             for path, leads in zip(route.paths, route.leads):
-                tracks, vias = self.copper(spec, path, leads)
+                tracks, vias = self.copper(spec, path, leads, spans)
                 bad: list[Point] = []
+                if unserved:
+                    for a, b in zip(path, path[1:]):
+                        if a // g.plane != b // g.plane and a % g.plane in unserved:
+                            bad.append(g.point(a))
+                            self.rejections.setdefault(name, []).append(
+                                (g.point(a), "via", (), False, "no_via_technology"))
                 for track in tracks:
                     if not (index.can_track(name, track.start, track.end, track.width_nm, track.layer)
                             and _track_inside_board(self.board, track.start, track.end, track.width_nm)):
@@ -2285,8 +2684,12 @@ class _Router:
                         hist[layer * g.plane + y * g.nx + x] += amount
 
 
-def _open_count(board: PhysicalBoard, nets, accepted, plane_nets) -> tuple[int, int]:
-    """(open signal connections, incomplete plane nets) with ``accepted`` copper."""
+def _open_count(board: PhysicalBoard, nets, accepted, plane_nets, complete) -> tuple[int, int]:
+    """(open signal connections, incomplete plane nets) with ``accepted`` copper.
+
+    A plane net is incomplete unless it is in ``complete``: a complete plane
+    net may have no new copper at all (every pad group already in its fill).
+    """
     from .drc import explicit_copper_connectivity
     names = {net.name for net in nets}
     candidate = replace(board,
@@ -2306,7 +2709,7 @@ def _open_count(board: PhysicalBoard, nets, accepted, plane_nets) -> tuple[int, 
             else:
                 isolated += 1
         opens += max(0, len(roots) + isolated - 1)
-    planes = sum(1 for net in nets if net.name in plane_nets and net.name not in accepted)
+    planes = sum(1 for net in nets if net.name in plane_nets and net.name not in complete)
     return opens, planes
 
 
@@ -2399,8 +2802,82 @@ def _merge(accepted, more):
     return merged
 
 
+def _same_but_copper(board: PhysicalBoard, other: PhysicalBoard) -> bool:
+    """Whether two boards differ at most in their tracks and vias."""
+    from dataclasses import fields
+    return board is other or all(
+        getattr(board, item.name) is getattr(other, item.name)
+        or getattr(board, item.name) == getattr(other, item.name)
+        for item in fields(board) if item.name not in ("tracks", "vias"))
+
+
+def _index_holds(index: RoutingClearanceIndex, board: PhysicalBoard) -> bool:
+    """Whether ``index`` answers legality queries as a fresh index of ``board``.
+
+    True when the index's own board differs from ``board`` only in copper and
+    its additions (its board's copper, locked, then mutable additions) are
+    ``board``'s copper as multisets. The exact legality checks read neither
+    lock flags nor insertion order; only blocker naming (mutable additions
+    are named by net, board copper counts as fixed) and snapshot-local
+    occurrence labels differ.
+    """
+    from collections import Counter
+    if not _same_but_copper(index.board, board):
+        return False
+    tracks, vias = Counter(), Counter()
+    for item, _ in index.additions():
+        (vias if isinstance(item, Via) else tracks)[item] += 1
+    return tracks == Counter(board.tracks) and vias == Counter(board.vias)
+
+
+class _SharedIndex:
+    """One exact index of a base board plus a chosen part of this call's copper.
+
+    ``held`` is that copper per net, exactly what the index holds as mutable
+    additions on top of its base. ``added`` records what a commit into the
+    index accepted; ``hold`` switches to another selection by ripping out
+    (``RoutingClearanceIndex.remove``) and re-adding only the nets whose
+    copper differs. Repair rounds and the pour re-check use it instead of
+    building an index per router; copper outside ``held`` (the board's, or
+    bus copper frozen into the base) is never touched.
+    """
+
+    def __init__(self, index: RoutingClearanceIndex) -> None:
+        self.index = index
+        self.held: dict[str, tuple[tuple[TrackSegment, ...], tuple[Via, ...]]] = {}
+        self.frozen: set[str] = set()
+
+    def added(self, more) -> None:
+        for name, (tracks, vias) in more.items():
+            old_tracks, old_vias = self.held.get(name, ((), ()))
+            self.held[name] = (old_tracks + tuple(tracks), old_vias + tuple(vias))
+
+    def freeze(self) -> None:
+        """Make the copper held now part of the base (it is never ripped)."""
+        self.frozen |= self.held.keys()
+        self.held = {}
+
+    def hold(self, target) -> None:
+        for name in sorted(self.held.keys() | target.keys()):
+            old_tracks, old_vias = self.held.get(name, ((), ()))
+            tracks, vias = target.get(name, ((), ()))
+            if old_tracks == tuple(tracks) and old_vias == tuple(vias):
+                continue
+            if name in self.frozen:
+                raise AssertionError(f"net {name} has frozen copper in the shared index")
+            self.index.remove(name)
+            if self.index.owned_count(name):
+                raise AssertionError(f"ripped net {name} keeps mutable copper in the shared index")
+            for track in tracks:
+                self.index.add_track(track)
+            for via in vias:
+                self.index.add_via(via)
+        self.held = {name: (tuple(tracks), tuple(vias)) for name, (tracks, vias) in target.items()
+                     if tracks or vias}
+
+
 def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadline, on_progress,
-                   required_accesses=None):
+                   required_accesses=None, shared: _SharedIndex | None = None, guides=None):
     """Reconnect plane pads that committed signal copper walled off from their pour.
 
     Plane pieces are labelled once, from fixed copper, so signal copper
@@ -2413,6 +2890,10 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
     2. For pads still cut off, rip up the signal copper crowding them, route
        the plane net first with explicit copper for those pads (lying in a
        pour piece does not count), then route the ripped nets around it.
+
+    ``shared`` (holding ``board`` plus ``accepted``) serves every step's
+    router and commit: rip-ups and rejected steps are removed from it, and it
+    holds the returned copper on return.
     """
     before = _pour_estimate(board, accepted)
     routed_planes = {net.name for net in nets if net.name in plane_nets}
@@ -2421,26 +2902,39 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
               "pads": sorted(p for pads in cut.values() for p in pads)[:12], "steps": [], "iterations": 0}
     if not cut:
         return accepted, complete, report
-    signal_before = _open_count(board, nets, accepted, plane_nets)[0]
+    signal_before = _open_count(board, nets, accepted, plane_nets, complete)[0]
     plane_list = [net for net in nets if net.name in cut]
 
-    def keep(candidate, estimate, label):
-        signal = _open_count(board, nets, candidate, plane_nets)[0]
+    def keep(candidate, estimate, label, candidate_complete):
+        signal = _open_count(board, nets, candidate, plane_nets, candidate_complete)[0]
         ok = estimate.opens < current[1].opens and signal <= signal_before
         report["steps"].append(f"{label}: pour opens {current[1].opens}->{estimate.opens}, "
                                f"signal opens {signal_before}->{signal}" + ("" if ok else " (not kept)"))
         return ok
 
+    def router(copper, route_nets, **extra):
+        """A router over ``board`` plus ``copper``, on the shared index if any."""
+        if shared is not None:
+            shared.hold(copper)
+        return _Router(_with(board, copper), options, route_nets, on_progress,
+                       required_accesses=required_accesses, guides=guides,
+                       clearance=shared.index if shared is not None else None, **extra)
+
+    def commit(step_router, routes, conflicts):
+        result = step_router.commit(routes, conflicts)
+        if shared is not None:
+            shared.added(result[0])
+        return result
+
     current = (accepted, before)
     # Step 1: plane nets only, everything else fixed.
-    step = _Router(_with(board, accepted), options, plane_list, on_progress,
-                   required_accesses=required_accesses)
+    step = router(accepted, plane_list)
     routes, conflicts, used = step.negotiate(deadline)
     report["iterations"] += used
-    more, _, _ = step.commit(routes, conflicts)
+    more, _, _ = commit(step, routes, conflicts)
     candidate = _merge(accepted, more)
     estimate = _pour_estimate(board, candidate)
-    if keep(candidate, estimate, "plane reroute"):
+    if keep(candidate, estimate, "plane reroute", complete):
         current = (candidate, estimate)
     still = {name: pads for name, pads in current[1].open_pads.items() if name in routed_planes}
     if still and (deadline is None or perf_counter() <= deadline):
@@ -2448,32 +2942,32 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
         pads = frozenset(PadReference(*pad.rsplit(".", 1)) for group in still.values() for pad in group)
         focus = [PhysicalNet(name, tuple(PadReference(*pad.rsplit(".", 1)) for pad in group))
                  for name, group in sorted(still.items())]
-        crowd = {name for name in _neighbour_nets(board, focus, current[0], nm_from_mm("1.0"))
+        crowd = {name for name in _neighbour_nets(board, focus, current[0], options.repair_neighbour_reach_nm)
                  if name not in plane_nets}
         ripped = {name: value for name, value in current[0].items() if name not in crowd}
-        partial = _with(board, ripped)
-        first = _Router(partial, options, [net for net in nets if net.name in still], on_progress,
-                        explicit_pads=pads, required_accesses=required_accesses)
+        first = router(ripped, [net for net in nets if net.name in still], explicit_pads=pads)
         routes, conflicts, used = first.negotiate(deadline)
         report["iterations"] += used
-        plane_more, plane_rejected, _ = first.commit(routes, conflicts)
+        plane_more, plane_rejected, _ = commit(first, routes, conflicts)
         report["explicit_route"] = {
             name: {"copper": [len(part) for part in plane_more.get(name, ((), ()))],
                    "reason": (routes[name].reason if name in routes else "not routed"),
                    "rejected": _rejection_text(first, name) if name in plane_rejected else ""}
             for name in still}
         candidate = _merge(ripped, plane_more)
-        second = _Router(_with(board, candidate), options, [net for net in nets if net.name in crowd], on_progress,
-                         required_accesses=required_accesses)
+        second = router(candidate, [net for net in nets if net.name in crowd])
         routes, conflicts, used = second.negotiate(deadline)
         report["iterations"] += used
-        signal_more, _, signal_complete = second.commit(routes, conflicts)
+        signal_more, _, signal_complete = commit(second, routes, conflicts)
         candidate = _merge(candidate, signal_more)
         estimate = _pour_estimate(board, candidate)
-        if keep(candidate, estimate, f"explicit copper, {len(crowd)} net(s) ripped up"):
+        candidate_complete = (complete - crowd) | set(signal_complete)
+        if keep(candidate, estimate, f"explicit copper, {len(crowd)} net(s) ripped up", candidate_complete):
             current = (candidate, estimate)
-            complete = (complete - crowd) | set(signal_complete)
+            complete = candidate_complete
     report["adopted"] = current[0] is not accepted
+    if shared is not None:
+        shared.hold(current[0])
     report["still_cut_off"] = sorted(p for name, group in current[1].open_pads.items()
                                      if name in routed_planes for p in group)[:12]
     return current[0], complete, report
@@ -2594,6 +3088,86 @@ def _disc_offsets_cached(radius: float):
 
 
 # ---------------------------------------------------------------------------
+# Congestion export (congestion-driven placement feedback, stage A1)
+
+def _failed_points(router: _Router, failed: Iterable[str]) -> tuple[tuple[str, Point], ...]:
+    """(net, point) where each failed net was blocked or could not be reached.
+
+    Points are the exact commit check's rejection sites, plus the anchor
+    positions of pad groups the net's route never reached: groups without
+    any attach candidate, and (for a route that did not connect) groups its
+    paths do not touch. Plane nets count only groups outside their plane.
+    """
+    specs = {spec.name: spec for spec in router.specs}
+    rejections = getattr(router, "rejections", {})
+    result: list[tuple[str, Point]] = []
+    for name in sorted(failed):
+        points = [record[0] for record in rejections.get(name, ())]
+        spec, route = specs.get(name), router.routes.get(name)
+        if spec is not None:
+            disconnected = route is None or not route.connected
+            touched = route.nodes if route is not None else set()
+            for component, anchors in zip(spec.components, spec.anchors):
+                if component and not disconnected:
+                    continue
+                if component and (any(node in touched for node, _, _ in component)
+                                  or any(node in spec.plane for node, _, _ in component)):
+                    continue
+                points.extend(anchors)
+        result.extend((name, point) for point in dict.fromkeys(points))
+    return tuple(result)
+
+
+def _congestion_map(router: _Router, failed: Iterable[str], tile_nm: int):
+    """Per-tile contention of ``router``'s final negotiated state.
+
+    Demand per tile, summed over every node of every layer in it:
+    ``max(0, occ - 1)`` (claims beyond the first; via sites count as one more
+    layer) plus ``history / history_increment``, so one unit is about one
+    conflicting net on one node for one iteration. Seeded ball-field history
+    is a routing preference, not contention, and is left out.
+
+    Capacity per tile: the free nodes (``_FREE``) of the default track
+    raster (board default width, minimum clearance) on every signal layer,
+    divided by the pitches one track lane occupies,
+    ``(default width + clearance) / pitch``: default-width tracks that fit
+    across the tile, times the tile edge in pitches. Outside board material
+    every node is foreign, so capacity is 0 there.
+    """
+    g = router.grid
+    occupancy = router.occupancy
+    nl, ny, nx = g.nl, g.ny, g.nx
+    occ = np.asarray(occupancy.occ, dtype=np.int64).reshape(nl, ny, nx)
+    node_demand = np.maximum(occ - 1, 0).sum(axis=0).astype(np.float64)
+    node_demand += np.maximum(np.asarray(occupancy.via_occ, dtype=np.int64).reshape(ny, nx) - 1, 0)
+    increment = router.options.history_increment
+    if increment > 0:
+        history = np.asarray(occupancy.history, dtype=np.float64).reshape(nl, ny, nx).sum(axis=0)
+        for _, iy0, iy1, ix0, ix1, cost in router._seeded_history:
+            history[iy0:iy1 + 1, ix0:ix1 + 1] -= cost
+        history += np.asarray(occupancy.via_history, dtype=np.float64).reshape(ny, nx)
+        node_demand += np.maximum(history, 0.0) / increment
+    tx = (np.arange(nx, dtype=np.int64) * g.pitch) // tile_nm
+    ty = (np.arange(ny, dtype=np.int64) * g.pitch) // tile_nm
+    tiles_x, tiles_y = int(tx[-1]) + 1, int(ty[-1]) + 1
+    tile_ids = (ty[:, None] * tiles_x + tx[None, :]).ravel()
+    count = tiles_x * tiles_y
+    demand = np.bincount(tile_ids, weights=node_demand.ravel(), minlength=count).reshape(tiles_y, tiles_x)
+    width, clearance = router.default_width, router.board.rules.minimum_clearance_nm
+    owner = router.rasters.track_arrays(width, clearance)[0].reshape(nl, ny, nx)
+    signal = set(routing_layers(router.board, "", None))
+    layers = [i for i, layer in enumerate(g.layers) if layer in signal]
+    free = (owner[layers] == _FREE).sum(axis=0) if layers else np.zeros((ny, nx))
+    lane = (width + clearance) / g.pitch
+    capacity = np.bincount(tile_ids, weights=free.ravel() / lane, minlength=count).reshape(tiles_y, tiles_x)
+    from .congestion_feedback import CongestionMap
+    return CongestionMap(
+        tile_nm=tile_nm, x0_nm=int(g.x0), y0_nm=int(g.y0), nx=tiles_x, ny=tiles_y,
+        demand=demand, capacity=capacity, source="unified_router",
+        failed_points=_failed_points(router, failed))
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 
 
@@ -2621,8 +3195,18 @@ def route_unified(
 
     Signature-compatible with :func:`pcbir.detailed.route_detailed`.
     Existing copper is fixed; zone nets are deferred to fill.
+    ``fanout_accesses``, ``fanout_created_vias`` and ``fanout_created_tracks``
+    are only recorded in the replay state. A ``fanout_accesses`` entry that is
+    not also passed (unchanged) in ``required_accesses`` raises ValueError.
     """
 
+    if fanout_accesses and any(required_accesses is None or pad not in required_accesses
+                               or required_accesses[pad] != access
+                               for pad, access in fanout_accesses.items()):
+        # Pad launches reach this router only as required_accesses (verified,
+        # immutable ports); silently ignoring other fanout accesses would
+        # drop the caller's package exits.
+        raise ValueError("unified router does not consume verified fanout accesses; pass required_accesses")
     options = options or UnifiedRouterOptions()
     if options.save_inputs_path:
         # A replayable input state for iterating on the router alone
@@ -2656,6 +3240,8 @@ def route_unified(
                and (options.direct or rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL)
                and connectivity.net_connected(net)]
     original_board, all_nets = board, nets
+    # One exact index for this call's commits and repairs (share_commit_index).
+    shared: _SharedIndex | None = None
     bus_accepted: dict = {}
     bus_complete: set[str] = set()
     skew_notes: list[str] = []
@@ -2671,9 +3257,12 @@ def route_unified(
         # net it loses it piecemeal. Its members route first, among themselves.
         bus_options = replace(options, length_priority=True) if options.bus_length_budget else options
         bus_router = _Router(board, bus_options, [net for net in nets if net.name in bus_names], on_progress,
-                             required_accesses=required_accesses)
+                             required_accesses=required_accesses, guides=global_route)
         bus_routes, bus_conflicts, used = bus_router.negotiate(deadline)
         bus_accepted, _, bus_complete = bus_router.commit(bus_routes, bus_conflicts)
+        if options.share_commit_index:
+            shared = _SharedIndex(bus_router.clearance)
+            shared.added(bus_accepted)
         over_length = set()
         if options.bus_length_budget:
             # The DRC measure: every track of the net, existing copper included.
@@ -2690,19 +3279,32 @@ def route_unified(
             if options.route_smoothing:
                 bus_accepted = _smoothed(board, bus_accepted)
             bus_accepted, skew_notes = _tune_bus_skew(board, bus_accepted, rules)
+        if shared is not None:
+            # Kept bus copper is fixed for the other nets, as on ``board`` below.
+            shared.hold(bus_accepted)
+            shared.freeze()
         emit(on_progress, "unified_buses", "finished", nets=len(bus_names), complete=len(bus_complete),
              over_length=len(over_length), iterations=used, skew_notes=skew_notes)
         if bus_accepted:
             board = _with(board, bus_accepted)
             nets = [net for net in nets if net.name not in bus_complete]
     emit(on_progress, "unified_setup", "started", nets=len(nets))
-    router = _Router(board, options, nets, on_progress, required_accesses=required_accesses)
+    router = _Router(board, options, nets, on_progress, required_accesses=required_accesses,
+                     guides=global_route, clearance=shared.index if shared is not None else None)
+    if options.share_commit_index and shared is None:
+        shared = _SharedIndex(router.clearance)
+    if options.export_congestion and options.congestion_tile_nm < router.pitch:
+        raise ValueError("congestion_tile_nm must be at least the router pitch")
     emit(on_progress, "unified_setup", "finished", nets=len(router.specs),
          grid=[router.grid.nx, router.grid.ny, router.grid.nl], seconds=round(perf_counter() - started, 2))
     routes, conflicts, iterations = router.negotiate(deadline)
+    commit_started = perf_counter()
     accepted, rejected, complete = router.commit(routes, conflicts)
+    if shared is not None:
+        shared.added(accepted)
     emit(on_progress, "unified_commit", "finished", round=1,
-         accepted=len(accepted), rejected=len(rejected), conflicted=len(conflicts))
+         accepted=len(accepted), rejected=len(rejected), conflicted=len(conflicts),
+         seconds=round(perf_counter() - commit_started, 3))
     # Rip-in repair: committed copper becomes a fixed obstacle and the
     # remaining nets are routed again against it. This settles the residual
     # cases where the raster and the exact check disagree (off-grid lead-ins).
@@ -2713,7 +3315,7 @@ def route_unified(
         remaining = [net for net in nets if net.name not in done]
         # Rip up neighbours whose new copper crowds the remaining nets' pads,
         # so they renegotiate together; everything else stays fixed.
-        crowd = _neighbour_nets(board, remaining, work, nm_from_mm("1.0"))
+        crowd = _neighbour_nets(board, remaining, work, options.repair_neighbour_reach_nm)
         # The exact check names what blocked a rejected path: rip those too.
         remaining_names = {net.name for net in remaining}
         crowd |= {blocker for name in remaining_names
@@ -2726,6 +3328,10 @@ def route_unified(
         partial = replace(board,
             tracks=(*board.tracks, *(t for name in sorted(work) for t in work[name][0])),
             vias=(*board.vias, *(v for name in sorted(work) for v in work[name][1])))
+        # The shared index rips the crowd out (remove) instead of being rebuilt.
+        share = shared is not None
+        if share:
+            shared.hold(work)
         if seed:
             failed_signal = frozenset(net.name for net in remaining
                                       if net.name not in plane_nets and net.name not in crowd)
@@ -2737,10 +3343,18 @@ def route_unified(
                 work.setdefault(track.net, ([], []))[0].append(track)
             for via in (Counter(seeded.vias) - Counter(partial.vias)).elements():
                 work.setdefault(via.net, ([], []))[1].append(via)
+            # Seeded escapes join the shared index only if the seeder just
+            # added copper; any other change gets a fresh index of its board.
+            share = share and _same_but_copper(seeded, partial) and not (
+                Counter(partial.tracks) - Counter(seeded.tracks)) and not (
+                Counter(partial.vias) - Counter(seeded.vias))
+            if share:
+                shared.hold(work)
             partial = seeded
         fixed = explicit_copper_connectivity(partial)
         remaining = [net for net in remaining if not fixed.net_connected(net) or net.name in plane_nets]
-        repair = _Router(partial, options, remaining, on_progress, required_accesses=required_accesses)
+        repair = _Router(partial, options, remaining, on_progress, required_accesses=required_accesses,
+                         clearance=shared.index if share else None, guides=global_route)
         repair.history_seed(router)
         if options.rejection_marker_cost:
             # Where the exact check rejected a path, the raster was too
@@ -2752,6 +3366,8 @@ def route_unified(
                     repair.penalise_points(name, points, options.rejection_marker_cost)
         more_routes, more_conflicts, used = repair.negotiate(deadline)
         more, more_rejected, more_complete = repair.commit(more_routes, more_conflicts)
+        if share:
+            shared.added(more)
         for name, (tracks, vias) in more.items():
             old_tracks, old_vias = work.get(name, ([], []))
             work[name] = (old_tracks + tracks, old_vias + vias)
@@ -2765,7 +3381,8 @@ def route_unified(
     for round_index in range(1, options.commit_rounds):
         if all(net.name in complete for net in nets) or (deadline is not None and perf_counter() > deadline):
             break
-        baseline = _open_count(board, nets, accepted, plane_nets)
+        round_started = perf_counter()
+        baseline = _open_count(board, nets, accepted, plane_nets, complete)
         best_attempt = None
         for seed in ((False, True) if escape_seeder is not None else (False,)):
             if deadline is not None and perf_counter() >= deadline:
@@ -2776,7 +3393,7 @@ def route_unified(
             if attempt is None:
                 continue
             iterations += attempt[4][3]
-            score = _open_count(board, nets, attempt[0], plane_nets)
+            score = _open_count(board, nets, attempt[0], plane_nets, attempt[1])
             if score < baseline and (best_attempt is None or score < best_attempt[0]):
                 best_attempt = (score, attempt, seed)
             if best_attempt is not None and best_attempt[0][0] == 0:
@@ -2787,14 +3404,17 @@ def route_unified(
             router.rejections = {**router.rejections, **rejections}
             for name, route in more_routes.items():
                 router.routes[name] = route
+        if shared is not None:
+            # Back to the adopted copper (attempts left their own in the index).
+            shared.hold(accepted)
         emit(on_progress, "unified_commit", "finished", round=round_index + 1, adopted=improved,
-             seeded=bool(improved and seeded))
+             seeded=bool(improved and seeded), seconds=round(perf_counter() - round_started, 3))
         if not improved:
             break
     if options.pour_recheck and plane_nets and (deadline is None or perf_counter() <= deadline):
         accepted, complete, recheck = _recheck_pours(
             board, nets, plane_nets, accepted, set(complete), options, deadline, on_progress,
-            required_accesses=required_accesses)
+            required_accesses=required_accesses, shared=shared, guides=global_route)
         iterations += recheck.pop("iterations", 0)
         emit(on_progress, "unified_pour_recheck", "finished", **recheck)
     if bus_accepted:
@@ -2834,6 +3454,15 @@ def route_unified(
     routed_names = (set(complete) | {net.name for net in already}) - budget_errors.keys()
     unrouted = [net.name for net in (*nets, *already) if net.name not in routed_names]
     success = not unrouted
+    congestion = None
+    if options.export_congestion:
+        export_started = perf_counter()
+        congestion = _congestion_map(router, unrouted, options.congestion_tile_nm)
+        utilisation = congestion.utilisation()
+        emit(on_progress, "unified_congestion", "finished", tiles=int(congestion.nx * congestion.ny),
+             hot_tiles=int(np.count_nonzero((utilisation > 1) & (np.asarray(congestion.demand) > 0))),
+             failed_points=len(congestion.failed_points),
+             seconds=round(perf_counter() - export_started, 3))
     metadata.update({"detailed_routing": "complete" if success else "partial",
                      "detailed_router": "unified",
                      "global_routing_fingerprint": global_route.routing_fingerprint,
@@ -2868,10 +3497,11 @@ def route_unified(
     emit(on_progress, "unified_route", "finished", routed=len(accepted), unrouted=len(unrouted),
          seconds=round(perf_counter() - started, 2))
     fingerprint = _fingerprint(global_route.routing_fingerprint, routed, metrics)
-    status = DetailedRoutingStatus.SUCCESS if success and not any(
-        not r.connected and "zone net" not in " ".join(r.diagnostics) for r in results) else DetailedRoutingStatus.PARTIAL
+    # Every result is connected when nothing is unrouted.
+    status = DetailedRoutingStatus.SUCCESS if success else DetailedRoutingStatus.PARTIAL
     return DetailedRoutingResult(status, routed, tuple(results), metrics, len(board.tracks),
-                                 len(board.vias), global_route.routing_fingerprint, fingerprint)
+                                 len(board.vias), global_route.routing_fingerprint, fingerprint,
+                                 congestion=congestion)
 
 
 def replay_unified(path, on_progress: ProgressCallback | None = None, *,

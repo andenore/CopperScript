@@ -39,7 +39,7 @@ def astar():
     D = ctypes.c_double
     function.restype = I
     function.argtypes = [I, I, I, P, P, P, P, P, P, P, P, I, P, I, P, D, D,
-                         I, I, I, I, I, I, I, I, P, P, I, P, I, P, P, P, I, P, I,
+                         I, I, I, I, I, I, I, I, P, P, I, P, P, P, P, I, P, P, P, I, P, I,
                          ctypes.POINTER(I), P, I]
     _loaded = function
     return function

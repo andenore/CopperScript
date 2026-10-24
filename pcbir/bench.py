@@ -14,7 +14,7 @@ Usage: python -m pcbir.bench route BOARD.kicad_pcb --out DIR
        python -m pcbir.bench score DIR --kicad-cli kicad-cli
        python -m pcbir.bench summarize RESULTS_ROOT
        python -m pcbir.bench causes RESULTS_ROOT    (unrouted nets per cause class)
-       python -m pcbir.bench run BOARDS --out RESULTS --router unified --kicad-cli kicad-cli --pcbnew-python python
+       python -m pcbir.bench run BOARDS --out RESULTS --kicad-cli kicad-cli --pcbnew-python python
        python -m pcbir.bench versus LEGACY/baseline.json UNIFIED/baseline.json --names legacy unified
 
 ``run`` is the local benchmark: it routes and scores every prepared board in
@@ -22,6 +22,9 @@ BOARDS (``BOARDS/<id>/processed_v9_guide_v3.kicad_pcb`` with its
 ``.kicad_pro``, as the CI's ``bench-boards`` artifact holds them) in parallel,
 each in its own process under a time limit, and writes per-board records,
 ``summary.md``, ``baseline.json`` and ``record.txt`` like the CI run.
+``route`` and ``run`` use the unified router by default, as
+``copper route-board`` does; ``--router legacy`` routes with the pre-refactor
+pass-based router for comparison.
 """
 from __future__ import annotations
 
@@ -48,7 +51,7 @@ _ROUTING_TAGS = ("segment", "arc", "via")
 # --------------------------------------------------------------------------- routing
 
 def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20_000,
-                     passes: int = 2, pitch_mm: str = "1", router: str = "legacy",
+                     passes: int = 2, pitch_mm: str = "1", router: str = "unified",
                      unified: dict | None = None,
                      escape_plan: bool = False, array_flow: bool = False, bus_layers: bool = False) -> dict:
     """Import, route with fixed placement, write the routed board and a result record."""
@@ -531,7 +534,7 @@ def score_drc_report(report: dict) -> dict:
 
 # --------------------------------------------------------------------------- local runs
 
-def run_boards(boards: Path, out_root: Path, *, router: str = "legacy", unified_set=(), workers: int = 4,
+def run_boards(boards: Path, out_root: Path, *, router: str = "unified", unified_set=(), workers: int = 4,
                board_seconds: int = 1200, kicad_cli: str | None = None, pcbnew_python: str | None = None,
                only: tuple[str, ...] = (), limit: int = 0, python: str = sys.executable,
                progress=print) -> dict:
@@ -944,10 +947,10 @@ def main(argv: list[str] | None = None) -> int:
                        help="choose ball-grid surface escapes by min-cost flow (escape planning E2)")
     route.add_argument("--escape-plan", action="store_true",
                        help="give the ordinary router a two-end escape plan (escape planning E3)")
-    route.add_argument("--router", choices=("legacy", "unified"), default="legacy",
-                       help="ordinary detailed router, as copper route-board --router")
+    route.add_argument("--router", choices=("legacy", "unified"), default="unified",
+                       help="ordinary detailed router, as copper route-board --router (default: unified)")
     route.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="unified_set",
-                       help="UnifiedRouterOptions override for --router unified (repeatable)")
+                       help="UnifiedRouterOptions override for the unified router (repeatable)")
     reference = commands.add_parser("reference")
     reference.add_argument("board", type=Path)
     reference.add_argument("--out", type=Path, required=True)
@@ -976,9 +979,10 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser("run", help="route and score every prepared board in a directory (local benchmark)")
     run.add_argument("boards", type=Path, help="directory of <id>/processed_v9_guide_v3.kicad_pcb boards")
     run.add_argument("--out", type=Path, required=True, help="new, empty results directory")
-    run.add_argument("--router", choices=("legacy", "unified"), default="legacy")
+    run.add_argument("--router", choices=("legacy", "unified"), default="unified",
+                     help="ordinary detailed router, as copper route-board --router (default: unified)")
     run.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="unified_set",
-                     help="UnifiedRouterOptions override for --router unified (repeatable)")
+                     help="UnifiedRouterOptions override for the unified router (repeatable)")
     run.add_argument("--workers", type=int, default=4)
     run.add_argument("--board-seconds", type=int, default=1200, help="time limit per board (CI: 1200)")
     run.add_argument("--kicad-cli", help="score with this kicad-cli (no scoring without it)")

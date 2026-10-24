@@ -114,6 +114,8 @@ def test_stopped_cli_exports_exact_stage_copper_without_final_processing(tmp_pat
     output = tmp_path / "board.kicad_pcb"
     code = cli.main([
         "route-board", str(source), "--allow-proxy-footprints", "--stop-after", stage,
+        # Package stops end the legacy package-access stage; unified has none.
+        *(("--router", "legacy") if stage != "placement" else ()),
         "--candidates", "1", "--checkpoint-dir", str(tmp_path / "checkpoint"),
         "--report", str(report), "-o", str(output), "--verify-plane-fill", "must-not-run",
     ])

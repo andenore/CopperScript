@@ -238,6 +238,10 @@ class DetailedRoutingResult:
     # All bounded searches of this run, including rejected passes, repair
     # trials and probes. Telemetry only (see DetailedSearchStats).
     search_work: DetailedSearchStats | None = field(default=None, compare=False)
+    # Per-tile routing congestion of the run (a congestion_feedback
+    # CongestionMap; unified router only, None otherwise). Placement-feedback
+    # telemetry: not compared and not part of to_json.
+    congestion: object | None = field(default=None, compare=False)
 
     def to_json(self) -> str:
         document = {

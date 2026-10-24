@@ -1,3 +1,29 @@
+## Physical via spans and guide costs through repair (2026-10-24)
+
+Python and native search now choose a legality mask for each layer transition's
+physical via span. Blind and buried vias ignore copper keepouts on layers their
+barrels do not reach; through-via fallbacks still check the complete barrel.
+Drill spacing remains layer independent, return vias must cover the proposed
+barrel, and unsupported transitions are excluded before exact commit. Existing
+source copper and final exact validation retain their authority.
+
+Ordinary repair and both pour-recheck steps receive the original global guides,
+so nonzero guide costs remain active after the initial negotiation. Regression
+fixtures cover both search backends, occupied and unoccupied span layers, drill
+spacing, return coverage, through-via fallback and guide handoff. The broader
+router/index/CLI/checkpoint set passes 170 tests.
+
+Both native kernels are rebuilt with Zig 0.13.0 using
+`python tools/build_kernel.py --zig PATH_TO_ZIG`. The Windows kernel and Python
+fallback are exercised locally; the Linux kernel is cross-built but not run on
+this Windows host. The C source uses LF to keep its digest platform independent.
+
+The matched standard ladder against clean `67f1c82` has no quality regressions:
+round-led-ring retains 51/51 connections, 48 vias and 604.833 mm; nRF52 retains
+35/35, 42 vias and 345.115 mm. Both have zero exact geometry errors and zero
+estimated plane opens. Concurrent timings are not a speed comparison, and these
+ladder runs do not include whole-board KiCad refill or hardware qualification.
+
 ## Reproducible router review fixes (2026-10-24)
 
 Unified plane contacts now materialize a required pad-to-grid lead before
