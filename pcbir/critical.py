@@ -3218,5 +3218,7 @@ def replay_critical(path, *, only_nets: frozenset[str] | None = None,
         reserved = restore_bypass_reservation_edges(reserved, allow_ordinary=True)
     return route_critical_nets(board, global_route, only_nets=only_nets,
                               reserved_accesses=reserved,
+                              plane_stitch_options=(saved.get("plane_stitch_options")
+                                                    if isinstance(saved, dict) else None),
                               pair_state_limit=pair_state_limit, unified_options=unified_options,
                               on_progress=on_progress)

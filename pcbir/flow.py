@@ -310,13 +310,17 @@ def run_routing_pipeline(
             return source, bypass_accesses
         source, bypass_accesses = critical_inputs(reserved[2] if reserved else ())
         held_as_copper = bypass_accesses is not None
+        return_options = (critical_return_plane_options(source, plane_stitch_options)
+                          if unified_options is not None else None)
         if on_stage is not None:
             on_stage("critical-inputs", {"board": source, "global_route": placement.global_route,
-                                         "reserved_accesses": bypass_accesses})
+                                         "reserved_accesses": bypass_accesses,
+                                         "plane_stitch_options": return_options})
         pair_limit = (package_access_options.initial_pair_state_limit or None
                       if package_access_options is not None else None)
         critical = route_critical_nets(source, placement.global_route,
             reserved_accesses=bypass_accesses, pair_state_limit=pair_limit,
+            plane_stitch_options=return_options,
             on_progress=critical_progress(on_progress), unified_options=unified_options)
         if reserved is not None:
             failed = {name for item in critical.nets if not item.connected for name in item.nets}
@@ -344,9 +348,11 @@ def run_routing_pipeline(
                         retry_source = None
                     if retry_source is not None and on_stage is not None:
                         on_stage("critical-retry-inputs", {"board": retry_source,
-                            "global_route": placement.global_route, "reserved_accesses": retry_accesses})
+                            "global_route": placement.global_route, "reserved_accesses": retry_accesses,
+                            "plane_stitch_options": return_options})
                     retry = (route_critical_nets(retry_source, placement.global_route,
                         reserved_accesses=retry_accesses, pair_state_limit=pair_limit,
+                        plane_stitch_options=return_options,
                         on_progress=critical_progress(on_progress), unified_options=unified_options)
                         if retry_source is not None else None)
                     if retry is not None and sum(not item.connected for item in retry.nets) < len(
@@ -563,7 +569,10 @@ def run_routing_pipeline(
                 from .hard_macros import materialize_hard_macros
                 trial_critical = replace(critical, board=materialize_hard_macros(trial_board), nets=())
             else:
-                trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global, unified_options=unified_options)
+                trial_critical = trial_access.critical if trial_access else route_critical_nets(
+                    trial_board, trial_global, unified_options=unified_options,
+                    plane_stitch_options=(critical_return_plane_options(trial_board, plane_stitch_options)
+                                          if unified_options is not None else None))
             if trial_critical.status is CriticalRoutingStatus.FAILED:
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="critical_failed")
@@ -698,6 +707,24 @@ def _unified_profile_review(detailed, global_route, drc):
               else CriticalRoutingStatus.SUCCESS)
     return CriticalRoutingResult(status, board, tuple(results), (), (),
         global_route.routing_fingerprint, detailed.routing_fingerprint)
+
+
+def critical_return_plane_options(board, options):
+    """Prepare declared return contacts before a critical search needs them.
+
+    Respect the caller's early-contact opt-out and pad selection. The critical
+    router owns this freshly generated prefix separately from ordinary escapes.
+    Zone outlines remain intent, not evidence of actual filled connectivity.
+    """
+    if options is None:
+        return None
+    returns = {r.return_via_net for r in board.net_routing_rules
+               if r.kind is not RouteKind.GENERAL and r.require_return_vias}
+    returns &= {zone.net for zone in board.zones}
+    pads = frozenset(p for net in board.nets if net.name in returns for p in net.pads)
+    if options.only_pads is not None:
+        pads &= options.only_pads
+    return replace(options, only_pads=pads) if pads else None
 
 
 def ordinary_escape_retry_plan(planned, kept):
