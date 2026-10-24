@@ -1,3 +1,22 @@
+## Reuse declared via arrays in cross-layer bypasses (2026-10-24)
+
+The bypass path graph previously ignored filled/capped vias, including exact
+required source arrays already present beneath exposed ground pads. The planner
+could therefore miss a physical return through an existing array and reject a
+complete supply/return transaction. It now recognizes only original occurrences
+matching required array geometry, checks current copper/drill/land clearances
+against the specific declared pad, and writes an explicit checked lead inside
+that same land when needed. Unrelated pad groups and component internals remain
+unsupported. New proposals still create ordinary through vias only.
+
+The focused 48-test set covers existing path contracts, one- and nine-via arrays,
+whole-net via budgets, exact occurrence preservation, idempotence, missing or
+altered declarations/geometry and new foreign obstacles. CopperBench's original
+PHY capacitor placement now obtains an explicit supply and return witness in a
+bounded diagnostic (six added tracks, two ordinary vias), whereas the same
+planner input previously exhausted its candidates. This is a scoped result;
+whole-board routing, native evidence and engineering qualification are separate.
+
 ## Shared single-ended critical negotiation (2026-10-24)
 
 When unified routing is selected, contiguous same-priority single-ended critical
