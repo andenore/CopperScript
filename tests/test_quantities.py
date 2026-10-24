@@ -15,6 +15,21 @@ def test_units_normalize_to_base_units() -> None:
     assert millivolts(3300).base_value == volts(3.3).base_value
 
 
+@pytest.mark.parametrize("kind", [Voltage, Resistance, Capacitance, Inductance,
+    Length, Current, Frequency, Impedance, Time, Power, Energy, Charge])
+def test_equality_and_hashing_use_normalized_values(kind):
+    values = [kind.of(Decimal(1) / scale, unit) for unit, scale in kind.UNITS.items()]
+    assert all(value == values[0] and value <= values[0] for value in values)
+    assert len(set(values)) == 1
+    assert values[0] != kind.of(2, next(iter(kind.UNITS)))
+    assert len({str(value) for value in values}) == len(values)
+
+
+def test_equality_keeps_dimensions_distinct():
+    assert Voltage.of(1, "V") != Current.of(1, "A")
+    assert Resistance.of(1, "ohm") != Impedance.of(1, "ohm")
+
+
 def test_cross_dimension_comparison_is_rejected() -> None:
     with pytest.raises(TypeError):
         _ = volts(3.3) < ohms(10)
