@@ -317,6 +317,25 @@ def test_plane_fill_width_sees_a_wide_rail_plane_and_taps_a_crowded_via() -> Non
     assert narrow_taps == 0 and fill_taps > 0   # the crowded via counts as joined to its plane
 
 
+def test_a_pad_with_its_own_dogbone_attaches_on_every_layer_of_the_via() -> None:
+    from pcbir.physical import Via
+    from pcbir.unified_router import _Router
+    # A's first pad (at (6, 6) mm) has a stub to its via: the pad group must offer the via
+    # on every layer, whatever node the connectivity graph picks as the group's root.
+    board = _board({"A": ((3, 3), (15, 15))}, layers=4)
+    layers = board.stackup.copper_layers
+    via = Via("A", Point.mm(7, 7), nm_from_mm("0.6"), nm_from_mm("0.3"), layers[0], layers[-1])
+    stub = TrackSegment("A", Point.mm(6, 6), Point.mm(7, 7), nm_from_mm("0.2"), layers[0])
+    board = replace(board, tracks=(stub,), vias=(via,))
+    router = _Router(board, UnifiedRouterOptions(pitch_nm=nm_from_mm("0.25")), list(board.nets), None)
+    (spec,) = router.specs
+    g = router.grid
+    near_via = [comp for comp in spec.components
+                if any(abs(g.x0 + g.unpack(n)[1] * g.pitch - via.position.x_nm) < nm_from_mm(2) for n, _, _ in comp)]
+    attach_layers = {g.unpack(n)[0] for comp in near_via for n, _, _ in comp}
+    assert attach_layers == set(range(g.nl))
+
+
 def test_via_budget_is_never_exceeded() -> None:
     from pcbir.physical import NetRoutingRule, RouteKind
     # V may not use vias and H only one: whatever H does, it stays in budget.

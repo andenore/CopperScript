@@ -1033,16 +1033,19 @@ class _Router:
                     separate.append([anchor for anchor in pad_anchors if anchor[0] in piece])
                     pad_anchors = [anchor for anchor in pad_anchors if anchor[0] not in piece]
                 anchors.extend(pad_anchors)
-            if not root.startswith("pad:"):
-                # Existing copper of this group (fanout, plane taps, partial routes).
-                for index, via in enumerate(board.vias):
-                    if via.net == net.name and graph.roots.get(f"via:{index}") == root:
-                        anchors.append((via.position, tuple(range(self.grid.nl))))
-                for index, track in enumerate(board.tracks):
-                    if track.net == net.name and graph.roots.get(f"track:{index}") == root:
-                        layer = self.grid.layers.index(track.layer)
-                        anchors.append((track.start, (layer,)))
-                        anchors.append((track.end, (layer,)))
+            # Existing copper of this group (fanout dogbones, plane taps,
+            # partial routes). The group's root may be one of its pads, so the
+            # copper is found by root, not by the root's name: a ball whose
+            # dogbone via was ignored had to leave on its surface layer, where
+            # the field often walls it in.
+            for index, via in enumerate(board.vias):
+                if via.net == net.name and graph.roots.get(f"via:{index}") == root:
+                    anchors.append((via.position, tuple(range(self.grid.nl))))
+            for index, track in enumerate(board.tracks):
+                if track.net == net.name and graph.roots.get(f"track:{index}") == root:
+                    layer = self.grid.layers.index(track.layer)
+                    anchors.append((track.start, (layer,)))
+                    anchors.append((track.end, (layer,)))
             components.append(self._attach(anchors, spec))
             if self.explicit_pads and set(members) & self.explicit_pads:
                 spec.explicit[len(components) - 1] = self._explicit_exclusion(members, spec)
