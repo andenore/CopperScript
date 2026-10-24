@@ -9,7 +9,9 @@ No congestion-experiment commits or board-specific selectors are included.
 
 The 153 related critical, retained-copper, pair, and unified regressions pass.
 The four standard examples with explicit unified selection and native refill
-complete with zero opens and geometry errors. The initial omitted-router run
+complete with zero native opens and geometry errors. Ring and nRF still fail
+the overall gate on native warnings; only full-vertical and cm4 pass overall.
+These are connectivity results, not four clean passes. The initial omitted-router run
 was interrupted and is not a matched comparison. On CopperBench's saved early
 critical input, the coarse cohort connects four of six RMII nets versus three
 in the earlier sequential full run; all MDI and clock connections remain. Fresh
