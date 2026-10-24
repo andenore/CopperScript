@@ -107,6 +107,121 @@ def test_unroutable_net_is_reported_not_raised() -> None:
     assert not result.nets[0].connected or summary["signal"]["opens"] == 0
 
 
+def test_expired_repair_budget_does_not_start_another_escape_seed(monkeypatch):
+    import pcbir.unified_router as unified
+    fixed = TrackSegment("B", Point.mm(6, 5), Point.mm(20, 5),
+                         nm_from_mm("0.2"), CopperLayer.FRONT)
+    board = _board({"A": ((3, 10), (17, 10)), "B": ((3, 2), (17, 2))}, tracks=(fixed,))
+    guides = route_global(replace(board, tracks=()), GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    clock = [0.0]
+    events, seeds = [], []
+    monkeypatch.setattr(unified, "perf_counter", lambda: clock[0])
+
+    def observe(phase, event, details):
+        events.append((phase, event, details))
+        iterations = sum(p == "unified_iteration" and e == "finished" for p, e, _ in events)
+        # The initial negotiation and the first unseeded repair run normally.
+        # The clock expires as that repair ends, before a seeded alternative.
+        if iterations == 2:
+            clock[0] = 11.0
+
+    def seed(partial, names):
+        seeds.append(names)
+        return partial
+
+    result = unified.route_unified(board, guides,
+        UnifiedRouterOptions(maximum_iterations=1, maximum_expansions=1,
+                             commit_rounds=2, time_budget_s=10),
+        on_progress=observe, escape_seeder=seed)
+    assert sum(p == "unified_iteration" and e == "finished" for p, e, _ in events) == 2
+    assert not seeds
+    assert fixed in result.board.tracks and result.board.placements == board.placements
+    assert next(net for net in result.nets if net.net == "B").connected
+    assert not next(net for net in result.nets if net.net == "A").connected
+    assert any(p == "unified_repair" and e == "skipped" and d["reason"] == "time_budget"
+               for p, e, d in events)
+
+
+def test_local_grid_window_preserves_whole_source_and_exact_copper():
+    fixed = TrackSegment("B", Point.mm(6, 5), Point.mm(20, 5), nm_from_mm("0.2"), CopperLayer.FRONT)
+    board = _board({"A": ((3, 10), (17, 10)), "B": ((3, 2), (17, 2))}, tracks=(fixed,))
+    guides = route_global(replace(board, tracks=()), GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    events = []
+    result = route_unified(board, guides,
+        UnifiedRouterOptions(pitch_nm=nm_from_mm("0.1"),
+                             grid_window_nm=[nm_from_mm(v) for v in (5, 11, 21, 15)]),
+        only_nets=frozenset({"A"}), on_progress=lambda *args: events.append(args))
+    assert result.nets[0].connected
+    assert result.board.outline == board.outline and result.board.placements == board.placements
+    assert result.board.tracks[:1] == (fixed,) and result.board.nets == board.nets
+    assert not [f for f in run_physical_drc(result.board).findings if f.severity.value == "error"]
+    setup = next(d for p, e, d in events if p == "unified_setup" and e == "finished")
+    assert setup["grid"] == [161, 41, 2]
+
+
+def test_geometry_entering_a_grid_window_still_blocks_it():
+    walls = tuple(TrackSegment("W", Point.mm(13, 10), Point.mm(13, 16),
+                               nm_from_mm("0.3"), layer)
+                  for layer in (CopperLayer.FRONT, CopperLayer.BACK))
+    board = _board({"A": ((3, 10), (17, 10)), "W": ()}, tracks=walls)
+    guides = route_global(replace(board, tracks=()), GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    result = route_unified(board, guides,
+        UnifiedRouterOptions(maximum_iterations=2, commit_rounds=1,
+                             grid_window_nm=tuple(nm_from_mm(v) for v in (5, 11, 21, 15))),
+        only_nets=frozenset({"A"}))
+    assert not result.nets[0].connected
+    assert result.board.tracks[:2] == walls and result.board.outline == board.outline
+
+
+def test_grid_window_refuses_invalid_bounds_and_excluded_targets():
+    import pytest
+    for bounds in ((0, 0, 1), (1, 0, 0, 1), (0, 0, True, 1), (0, 0, 1.0, 1)):
+        with pytest.raises(ValueError, match="grid_window_nm"):
+            UnifiedRouterOptions(grid_window_nm=bounds)
+    board = _board({"A": ((3, 10), (17, 10))})
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    for bounds in ((10, 11, 18, 15), (30, 30, 40, 40)):
+        with pytest.raises(ValueError, match="grid_window_nm"):
+            route_unified(board, guides, UnifiedRouterOptions(
+                grid_window_nm=tuple(nm_from_mm(v) for v in bounds)))
+
+
+def test_fine_window_fits_two_declared_widths_without_relaxing_clearance():
+    from pcbir.physical import CopperKeepout, PolygonWithHoles, PolygonRing, NetRoutingRule
+    pad = PhysicalFootprint("tiny", (FootprintPad("1", Point(0, 0), Size.mm("0.15", "0.15")),), Size.mm("0.3", "0.3"))
+    poses, nets = [], []
+    for name, x in (("A", "10.3"), ("B", "10.75")):
+        refs = []
+        for i, y in enumerate(("3.5", "20.5") if name == "A" else ("4.5", "21.5")):
+            ref = name + str(i)
+            poses.append(Placement(ref, pad.name, Point.mm(x, y)))
+            refs.append(PadReference(ref, "1"))
+        nets.append(PhysicalNet(name, tuple(refs)))
+    walls = tuple(CopperKeepout(name, (CopperLayer.FRONT, CopperLayer.BACK),
+        PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in points))))
+        for name, points in (("left", ((.5,6),(10,6),(10,18),(.5,18))),
+                             ("right", ((11.05,6),(25.5,6),(25.5,18),(11.05,18)))))
+    board = PhysicalBoard("FineChannels", BoardOutline.rectangle(26, 26), {pad.name: pad},
+        tuple(poses), tuple(nets), copper_keepouts=walls,
+        net_routing_rules=tuple(NetRoutingRule(n.name, width_nm=nm_from_mm("0.2"),
+            clearance_nm=nm_from_mm("0.2"), allowed_layers=(CopperLayer.FRONT,), max_vias=0) for n in nets))
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    results = []
+    for pitch in ("0.25", "0.025"):
+        result = route_unified(board, guides, UnifiedRouterOptions(pitch_nm=nm_from_mm(pitch),
+            maximum_iterations=16, commit_rounds=2,
+            grid_window_nm=tuple(nm_from_mm(v) for v in (9, 2, 12, 22))))
+        assert result.board.copper_keepouts == board.copper_keepouts
+        assert result.board.net_routing_rules == board.net_routing_rules
+        drc = run_physical_drc(result.board)
+        assert not [f for f in drc.findings if f.severity.value == "error"
+                    and f.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}]
+        results.append(result)
+    assert not all(net.connected for net in results[0].nets)
+    assert all(net.connected for net in results[1].nets)
+    assert not [f for f in run_physical_drc(results[1].board).findings if f.severity.value == "error"]
+
+
 def test_pad_groups_sharing_an_attach_node_both_keep_their_lead_ins() -> None:
     # A fine-pitch connector row on one net (like a board-to-board supply
     # row): neighbouring pads attach to the same grid node, and each needs
@@ -487,8 +602,14 @@ def test_replay_cli_routes_saved_inputs_with_overrides(tmp_path, capsys) -> None
     state = tmp_path / "inputs.json"
     global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
     route_unified(board, global_route, UnifiedRouterOptions(save_inputs_path=str(state)))
+    result_state = tmp_path / "routed.state.json"
     assert main(["replay-unified", str(state), "--set", "maximum_iterations=3",
-                 "--report", str(tmp_path / "replay.json")]) == 0
+                 "--report", str(tmp_path / "replay.json"), "--save-result", str(result_state)]) == 0
+    from pcbir.workbench import load_state
+    assert load_state(result_state).board.placements == board.placements
+    previous_bytes = result_state.read_bytes()
+    assert main(["replay-unified", str(state), "--save-result", str(result_state)]) == 2
+    assert result_state.read_bytes() == previous_bytes
     document = json.loads((tmp_path / "replay.json").read_text(encoding="utf-8"))
     assert document["overrides"] == {"maximum_iterations": 3}
     assert document["signal"]["opens"] == 0 and document["unrouted"] == {}
@@ -707,3 +828,112 @@ def test_tuned_bus_copper_survives_route_smoothing() -> None:
     assert abs(length(tuned, "B") - length(tuned, "A")) <= nm_from_mm(2)
     drc = run_physical_drc(tuned.board)
     assert not [f for f in drc.findings if f.severity.value == "error"]
+
+
+def _stitched_pad_board() -> PhysicalBoard:
+    from pcbir import CopperZone, PolygonRing, PolygonWithHoles
+    from pcbir.physical import Via
+    # Pad positions are offset by +3 mm in _board. Each GND pad reaches the
+    # B.Cu plane only through its own via-in-pad, as an exposed pad's array
+    # does, and a ring of foreign copper leaves no room for a new via beside it.
+    board = _board({"GND": ((5, 5), (15, 15))})
+    w = nm_from_mm("0.2")
+    wall = []
+    for cx, cy in ((8, 8), (18, 18)):
+        corners = [(cx - 0.8, cy - 0.8), (cx + 0.8, cy - 0.8), (cx + 0.8, cy + 0.8),
+                   (cx - 0.8, cy + 0.8), (cx - 0.8, cy - 0.8)]
+        wall += [TrackSegment("W", Point.mm(*a), Point.mm(*b), w, CopperLayer.FRONT)
+                 for a, b in zip(corners, corners[1:])]
+    in_pad = tuple(Via("GND", Point.mm(x, y), nm_from_mm("0.3"), nm_from_mm("0.15"),
+                       CopperLayer.FRONT, CopperLayer.BACK) for x, y in ((8, 8), (18, 18)))
+    plane = PolygonWithHoles(PolygonRing((Point.mm(0.5, 0.5), Point.mm(25.5, 0.5),
+                                          Point.mm(25.5, 25.5), Point.mm(0.5, 25.5))))
+    return replace(board, tracks=tuple(wall), vias=in_pad,
+                   zones=(CopperZone("gnd-b", "GND", (CopperLayer.BACK,), plane),),
+                   nets=(*board.nets, PhysicalNet("W", ())))
+
+
+def test_pads_already_stitched_into_their_plane_count_as_joined() -> None:
+    board = _stitched_pad_board()
+    result, _, _ = _route(board)
+    gnd = next(net for net in result.nets if net.net == "GND")
+    assert gnd.connected and gnd.diagnostics == ()
+    # Nothing new is added for a plane net whose pads already reach it.
+    assert [v for v in result.board.vias if v.net == "GND"] == list(board.vias)
+    assert not [t for t in result.board.tracks if t.net == "GND"]
+
+
+def test_adjacent_breakout_regions_do_not_emit_an_illegal_merged_neck():
+    from pcbir.physical import NetRoutingRule
+    board = _board({"N": ((3, 10), (8, 10)), "BLOCK": ()})
+    wall = TrackSegment("BLOCK", Point.mm(5, "13.65"), Point.mm(12, "13.65"),
+                        nm_from_mm("0.2"), CopperLayer.FRONT)
+    rule = NetRoutingRule("N", width_nm=nm_from_mm(1), breakout_width_nm=nm_from_mm("0.2"),
+                          breakout_length_nm=nm_from_mm(3), allowed_layers=(CopperLayer.FRONT,), max_vias=0)
+    board = replace(board, tracks=(wall,), net_routing_rules=(rule,))
+    result, drc, summary = _route(board, direct=True, route_smoothing=False, maximum_iterations=4)
+    assert result.nets[0].connected
+    assert summary["signal"]["opens"] == 0
+    assert not [f for f in drc.findings if f.code == "DRC-TRACK-WIDTH"]
+    assert wall in result.board.tracks
+
+
+def _opposite_pad_via_board(hole_clearance):
+    from pcbir.physical import BoardSide, NetRoutingRule
+    cap = PhysicalFootprint("cap", (FootprintPad("1", Point(0, 0), Size.mm("0.95", "0.9")),), Size.mm("1.6", "1"))
+    pin = PhysicalFootprint("pin", (FootprintPad("1", Point(0, 0), Size.mm("0.3", "1.55")),), Size.mm("1", "2"))
+    return PhysicalBoard("OwnPadVia", BoardOutline.rectangle(26, 26), {cap.name: cap, pin.name: pin},
+        (Placement("C", cap.name, Point.mm(13, 10), side=BoardSide.BACK),
+         Placement("U", pin.name, Point.mm(13, "11.95"))),
+        (PhysicalNet("N", (PadReference("C", "1"), PadReference("U", "1"))), PhysicalNet("X", ())),
+        rules=DesignRules(minimum_clearance_nm=nm_from_mm("0.2"),
+            default_track_width_nm=nm_from_mm("0.2"), default_via_size_nm=nm_from_mm("0.45"),
+            default_via_drill_nm=nm_from_mm("0.2"), minimum_hole_clearance_nm=nm_from_mm(hole_clearance)),
+        net_routing_rules=(NetRoutingRule("N", width_nm=nm_from_mm("0.2"),
+            clearance_nm=nm_from_mm("0.2"), max_vias=1, max_length_nm=nm_from_mm("2.2")),))
+
+
+def test_via_raster_distinguishes_own_pad_halo_from_forbidden_annulus():
+    from pcbir.unified_router import _Router, _FOREIGN
+    from pcbir.routing_clearance import RoutingClearanceIndex
+    for hole_clearance in ("0.2", "0.5"):
+        board = _opposite_pad_via_board(hole_clearance)
+        router = _Router(board, UnifiedRouterOptions(pitch_nm=nm_from_mm("0.25")), [board.nets[0]], None)
+        g = router.grid
+        position = Point.mm(13, "10.75")
+        index = RoutingClearanceIndex(board)
+        assert index.can_via("N", position, nm_from_mm("0.45"), CopperLayer.FRONT, CopperLayer.BACK,
+                             drill_nm=nm_from_mm("0.2"))
+        assert not index.can_via("X", position, nm_from_mm("0.45"), CopperLayer.FRONT, CopperLayer.BACK,
+                                 drill_nm=nm_from_mm("0.2"))
+        owners = router.rasters.via_array(nm_from_mm("0.45"), nm_from_mm("0.2"), nm_from_mm("0.2"))
+        xy = lambda x, y: round((nm_from_mm(y)-g.y0)/g.pitch)*g.nx + round((nm_from_mm(x)-g.x0)/g.pitch)
+        assert owners[xy(13, "10.75")] == router.net_ids["N"]
+        assert owners[xy(13, "10.5")] == _FOREIGN
+        assert not index.can_via("N", Point.mm(13, "10.5"), nm_from_mm("0.45"), CopperLayer.FRONT,
+                                 CopperLayer.BACK, drill_nm=nm_from_mm("0.2"))
+
+
+def test_opposite_face_pad_gap_routes_with_ordinary_via_and_exact_length_budget():
+    board = _opposite_pad_via_board("0.2")
+    result, drc, summary = _route(board, maximum_iterations=8, commit_rounds=2)
+    assert next(net for net in result.nets if net.net == "N").connected
+    assert summary["signal"]["opens"] == 0 and summary["drc"]["errors"] == 0, drc.to_json()
+    assert len(result.board.vias) == 1
+    assert result.board.net_routing_rules == board.net_routing_rules
+
+
+def test_pipeline_keeps_unified_settings_for_later_native_transactions():
+    from pcbir.flow import run_routing_pipeline
+    from pcbir.placement import PlacementPlannerOptions
+    from pcbir.routeflow import PlacementRoutingFeedbackOptions
+    board = _board({"A": ((3, 10), (17, 10))})
+    options = UnifiedRouterOptions(maximum_iterations=3, commit_rounds=1)
+    for stop in (None, "placement"):
+        result = run_routing_pipeline(board, unified_options=options, stop_after=stop,
+            placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
+                refinement_passes=0, fixed_references=frozenset(p.reference for p in board.placements)),
+            feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1))
+        assert result.unified_options is options
+        if stop is None:
+            assert result.detailed.board.metadata["detailed_router"] == "unified"

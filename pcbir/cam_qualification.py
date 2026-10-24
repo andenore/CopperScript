@@ -557,7 +557,7 @@ def parse_ipcd356(path: Path) -> NormalizedTestNet:
         r".*?X(?P<x>[+-]\d+)Y(?P<y>[+-]\d+)"
     )
     via_pattern = re.compile(
-        r"^317(?P<net>\S+)\s+VIA\s+MD(?P<drill>\d+)PA\d+"
+        r"^317(?P<net>\S+)\s+VIA\s+(?:-\s+)?MD(?P<drill>\d+)PA\d+"
         r"X(?P<x>[+-]\d+)Y(?P<y>[+-]\d+)"
     )
     for line in text.splitlines():

@@ -513,12 +513,14 @@ def _maze_choices(board, clearance, net, pins, options) -> tuple[EscapeCandidate
         if span is None:
             continue
         pad_shape = placed_pad_shape(position, pad, placement)
+        from .return_paths import existing_returns_permit
         result = surface_path_to_via(
             board, clearance, net, position, width, side,
             step_nm=options.refinement_step_nm, radius_nm=options.maximum_radius_nm,
             via_size_nm=size, via_drill_nm=drill, via_layers=span[:2],
             state_budget=options.maze_state_budget,
-            accept_via=lambda p: shapes_clear(RoundedConvexShape((p,), size // 2), pad_shape, 1),
+            accept_via=lambda p: (shapes_clear(RoundedConvexShape((p,), size // 2), pad_shape, 1)
+                and existing_returns_permit(board, rule, Via(net, p, size, drill, *span))),
             # The shared via predicate excludes exact pad copper on every
             # crossed layer, including same-net/unassigned pads. A rectangular
             # pad bound would wrongly exclude circular-land interstices.
@@ -570,6 +572,11 @@ def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: 
                     blockers=lambda: clearance.via_blocker_records(proposal))
             continue
         via = None if existing else Via(net, endpoint, size, drill, *span)
+        from .return_paths import existing_returns_permit
+        if not existing_returns_permit(board, rule, via or existing):
+            if recorder is not None:
+                recorder.record(endpoint, phase, "required_return_via", via=via or existing)
+            continue
         if via is not None and not clearance.can_via(net, endpoint, size, span[0], span[1], drill_nm=drill):
             if recorder is not None:
                 recorder.record(endpoint, phase, "via_blocked", via=via,
@@ -594,6 +601,11 @@ def _legal_choices(board: PhysicalBoard, clearance: RoutingClearanceIndex, net: 
 
 def _reserve(board, clearance, tracks, vias, candidate: EscapeCandidate) -> bool:
     path, via = candidate
+    if via is not None:
+        from .return_paths import existing_returns_permit
+        rule = next((r for r in board.net_routing_rules if r.net == via.net), None)
+        if not existing_returns_permit(board, rule, via):
+            return False
     # Same-net X crossings pass electrical DRC, but independent package exits
     # should retain ordered lanes. Only selected escapes are negotiable here;
     # existing owner copper and deliberate shared trunks remain unchanged.

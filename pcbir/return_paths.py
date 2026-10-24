@@ -84,3 +84,38 @@ def pair_reference_intent_covers(
     return all(shapes_clear(RoundedConvexShape((track.start, track.end), (track.width_nm + 1) // 2),
                             RoundedConvexShape(keepout.outline.outer.vertices), 0)
                for track in tracks for keepout in keepouts)
+
+
+def return_span_covers(board: PhysicalBoard, returned: Via,
+                       first: CopperLayer, last: CopperLayer) -> bool:
+    """Actual source barrel span, without inferring a technology or fill join."""
+    layers = board.stackup.copper_layers
+    try:
+        a, b = sorted((layers.index(first), layers.index(last)))
+        x, y = sorted((layers.index(returned.from_layer), layers.index(returned.to_layer)))
+    except ValueError:
+        return False
+    return x <= a and y >= b
+
+
+def covering_return_vias(board: PhysicalBoard, rule: NetRoutingRule, signal: Via) -> tuple[Via, ...]:
+    """Exact nearby existing barrels; not filled-plane or electrical proof.
+
+    Single-ended reuse conservatively requires a return across the full physical
+    signal barrel, including unused stub layers. No shared-reference waiver or
+    new ground copper is inferred.
+    """
+    limit = rule.maximum_return_via_distance_nm
+    if not rule.require_return_vias or limit is None or rule.return_via_net == signal.net:
+        return ()
+    return tuple(via for via in board.vias
+        if via.net == rule.return_via_net
+        and return_span_covers(board, via, signal.from_layer, signal.to_layer)
+        and (via.position.x_nm-signal.position.x_nm)**2
+            + (via.position.y_nm-signal.position.y_nm)**2 <= limit**2)
+
+
+def existing_returns_permit(board: PhysicalBoard, rule: NetRoutingRule | None, signal: Via) -> bool:
+    """Single-ended requirement used by launch planning and exact commit."""
+    return (rule is None or not rule.require_return_vias or rule.differential_partner is not None
+            or bool(covering_return_vias(board, rule, signal)))

@@ -55,6 +55,8 @@ class RoutingPipelineResult:
     power_preparation_validation: object | None = None
     power_native_verifier: object | None = field(default=None, repr=False, compare=False)
     stopped_after: str | None = None
+    # Retain the selected backend for later transactional dependency repairs.
+    unified_options: object | None = None
 
     @property
     def board(self) -> PhysicalBoard:
@@ -186,7 +188,7 @@ def run_routing_pipeline(
         emit(on_progress, "ordinary_area", "stopped", reason="stop_after_placement")
         critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
         return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
-                                     stopped_after="placement")
+                                     stopped_after="placement", unified_options=unified_options)
     array_plans = surface_balls = None
     if escape_plan_options is not None and escape_plan_options.array_flow:
         # Ball grids: which balls escape on the surface (min-cost flow); the
@@ -277,8 +279,17 @@ def run_routing_pipeline(
                 FanoutResult(preparation.source, {}, (), 0, 0), preparation.critical,
                 None, frozenset(), 0)
     reserved = held = None
+    held_as_copper = False
     stopped = None
-    if fanout_options is not None:
+    if unified_options is not None and getattr(unified_options, "direct", False):
+        from .hard_macros import materialize_hard_macros
+        source = materialize_hard_macros(placement.board)
+        critical = CriticalRoutingResult(CriticalRoutingStatus.WARNING, source, (), (), (),
+            placement.global_route.routing_fingerprint, placement.global_route.routing_fingerprint)
+        plane_stitch_options = None
+        emit(on_progress, "unified_direct", "started",
+             reason="all mutable nets negotiate together; only source-fixed copper is retained")
+    elif fanout_options is not None:
         access_options = package_access_options or PackageAccessOptions()
         if preparation is None:
             access = preflight_package_access(placement.board, placement.global_route,
@@ -317,7 +328,7 @@ def run_routing_pipeline(
                 power_area_status=(preparation.status if preparation and not preparation.accepted else
                                    "package_access_incomplete") if power_area_options is not None else "disabled",
                 power_area_options=power_area_options, power_preparation=preparation,
-                power_native_verifier=power_native_verifier, stopped_after=stopped)
+                power_native_verifier=power_native_verifier, stopped_after=stopped, unified_options=unified_options)
         if not access.ready:
             emit(on_progress, "package_access", "incomplete", pending_pads=len(access.pending_pads))
         critical = access.critical
@@ -336,14 +347,34 @@ def run_routing_pipeline(
             held = _plan_decouplers(placement.board, reserved[2] if reserved else (), on_progress,
                                     prefix=lattice[:2] if lattice else ((), ()))
             if reserved is not None and held[3]:
-                dropped = {keepout.id for keepout in held[3]}
-                reserved = (reserved[0], reserved[1], tuple(k for k in reserved[2] if k.id not in dropped))
-        source = placement.board
-        extra = (*(reserved[2] if reserved else ()), *(held[2] if held else ()), *(lattice[2] if lattice else ()))
-        if extra:
-            source = replace(source, copper_keepouts=(*source.copper_keepouts, *extra))
+                reserved, held, restored = _revalidate_released_escapes(placement.board, reserved, held)
+                emit(on_progress, "ordinary_escapes", "revalidated", **restored)
+        def critical_inputs(escape_keepouts):
+            source = replace(placement.board,
+                copper_keepouts=(*placement.board.copper_keepouts, *escape_keepouts))
+            bypass_accesses, reason = (_bypass_copper_reservations(source, held[0], held[1], held[4])
+                                      if held is not None else (None, None))
+            if held is not None and bypass_accesses is None:
+                # Unsupported/ambiguous ownership keeps its original conservative
+                # reservation. Never drop it or infer semantic authority by net.
+                source = replace(source, copper_keepouts=(*source.copper_keepouts, *held[2]))
+            emit(on_progress, "bypass_reservation", "bound",
+                 mode="copper" if bypass_accesses is not None else "keepouts", reason=reason)
+            if lattice is not None:
+                # Lattice vias are reserved for their balls while critical
+                # nets route; they join the board afterwards.
+                source = replace(source, copper_keepouts=(*source.copper_keepouts, *lattice[2]))
+            return source, bypass_accesses
+        source, bypass_accesses = critical_inputs(reserved[2] if reserved else ())
+        held_as_copper = bypass_accesses is not None
+        if on_stage is not None:
+            on_stage("critical-inputs", {"board": source, "global_route": placement.global_route,
+                                         "reserved_accesses": bypass_accesses})
+        pair_limit = (package_access_options.initial_pair_state_limit or None
+                      if package_access_options is not None else None)
         critical = route_critical_nets(source, placement.global_route,
-                                       on_progress=critical_progress(on_progress))
+            reserved_accesses=bypass_accesses, pair_state_limit=pair_limit,
+            on_progress=critical_progress(on_progress), unified_options=unified_options)
         if reserved is not None:
             failed = {name for item in critical.nets if not item.connected for name in item.nets}
             if failed:
@@ -354,20 +385,23 @@ def run_routing_pipeline(
                 if len(kept) < len(reserved[2]):
                     emit(on_progress, "ordinary_escapes", "released",
                          nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
-                    retry = route_critical_nets(
-                        replace(placement.board, copper_keepouts=(*placement.board.copper_keepouts, *kept,
-                                                                  *(held[2] if held else ()),
-                                                                  *(lattice[2] if lattice else ()))),
-                        placement.global_route, on_progress=critical_progress(on_progress))
+                    retry_source, retry_accesses = critical_inputs(kept)
+                    if on_stage is not None:
+                        on_stage("critical-retry-inputs", {"board": retry_source,
+                            "global_route": placement.global_route, "reserved_accesses": retry_accesses})
+                    retry = route_critical_nets(retry_source, placement.global_route,
+                        reserved_accesses=retry_accesses, pair_state_limit=pair_limit,
+                        on_progress=critical_progress(on_progress), unified_options=unified_options)
                     if sum(not item.connected for item in retry.nets) < len(
                             [item for item in critical.nets if not item.connected]):
                         critical = retry
                         reserved = (reserved[0], reserved[1], kept)
+                        held_as_copper = retry_accesses is not None
     critical_feedback = None
-    if critical_feedback_trials and access is None:
+    if critical_feedback_trials and access is None and not getattr(unified_options, "direct", False):
         critical_feedback = improve_critical_placement(
             placement.board, placement.global_route, critical, maximum_trials=critical_feedback_trials,
-            placement_options=placement_options, global_options=global_options,
+            placement_options=placement_options, global_options=global_options, unified_options=unified_options,
         )
         critical = critical_feedback.critical
         if critical_feedback.accepted_moves:
@@ -380,38 +414,20 @@ def run_routing_pipeline(
         lattice = None  # placement moved: the lattice no longer applies
         critical = replace(critical, board=replace(critical.board, copper_keepouts=tuple(
             k for k in critical.board.copper_keepouts if not k.id.startswith("lattice-reserve"))))
-    if lattice is not None:
-        # The lattice copper joins the board first (bypasses were planned on it).
-        held = (*lattice[:2], lattice[2], ()) if held is None else (
-            (*lattice[0], *held[0]), (*lattice[1], *held[1]), (*held[2], *lattice[2]), held[3])
     if held is not None and critical_feedback is not None and critical_feedback.accepted_moves:
         held = None  # placement moved: the planned bypass copper no longer applies
         critical = replace(critical, board=replace(critical.board, copper_keepouts=tuple(
             k for k in critical.board.copper_keepouts if not k.id.startswith("bypass-reserve"))))
-    if held is not None:
+    if lattice is not None:
+        # The lattice copper joins the board first (bypasses were planned on it).
+        critical = replace(critical, board=_join_reserved_copper(critical.board, *lattice))
+    if held is not None and not held_as_copper:
         # The critical router kept clear of the reserved bypass copper, so it
         # joins the board unchanged.
-        board = critical.board
-        temporary = {keepout.id for keepout in held[2]}
-        board = replace(board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary))
-        # Each piece is checked exactly: a reservation left out next to fixed
-        # macro copper did not bind the critical router there.
-        from .routing_clearance import RoutingClearanceIndex
-        index = RoutingClearanceIndex(board)
-        tracks, vias = [], []
-        for via in held[1]:
-            if index.can_via(via.net, via.position, via.size_nm, via.from_layer, via.to_layer,
-                             drill_nm=via.drill_nm):
-                index.add_via(via)
-                vias.append(via)
-        for track in held[0]:
-            if index.can_track(track.net, track.start, track.end, track.width_nm, track.layer):
-                index.add_track(track)
-                tracks.append(track)
-        critical = replace(critical, board=replace(
-            board, tracks=(*board.tracks, *tracks), vias=(*board.vias, *vias)))
-    if access is None and critical.board.decoupling_links and getattr(
-            unified_options, "pre_route_decouplers", True):
+        critical = replace(critical, board=_join_reserved_copper(critical.board, *held[:3]))
+    if (access is None and critical.board.decoupling_links
+            and not getattr(unified_options, "direct", False)
+            and getattr(unified_options, "pre_route_decouplers", True)):
         from .decoupling import route_decouplers
         bypass = route_decouplers(critical.board)
         critical = replace(critical, board=bypass.board)
@@ -430,15 +446,6 @@ def run_routing_pipeline(
                 if len(retry.pending) < len(pending):
                     critical = replace(critical, board=replace(retry.board,
                                                                copper_keepouts=board.copper_keepouts))
-    if reserved is not None:
-        # The reservations also held while decouplers routed. The escapes
-        # themselves are not kept: the unified router finds its own exact
-        # access, and a fixed escape of one pin can block a neighbour that the
-        # escape generator left pending.
-        temporary = {keepout.id for keepout in reserved[2]}
-        board = critical.board
-        critical = replace(critical, board=replace(
-            board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary)))
     if unified_options is not None and getattr(unified_options, "power_islands", None):
         from .physical import CopperLayer
         from .power_islands import auto_power_layer, plan_power_islands
@@ -532,11 +539,25 @@ def run_routing_pipeline(
                 fanout=blocked.fanout, package_access=blocked, power_area_plan=power_plan,
                 power_area_status='power_preparation_boundary_rejected', power_area_options=power_area_options,
                 power_preparation=preparation, power_preparation_validation=preparation_validation,
-                power_native_verifier=power_native_verifier)
+                power_native_verifier=power_native_verifier, unified_options=unified_options)
     elif power_area_options is not None:
         pre_detailed, power_plan, power_status = plan_distribution(pre_detailed, fanout)
         deferred_zones = (frozenset(deferred_zone_nets(pre_detailed))
                           if detailed_options.defer_zone_nets else frozenset())
+    if reserved is not None:
+        # Keep promised exits through every preparation step, including plane
+        # contacts. Remove only these temporary masks when the shared ordinary
+        # router takes ownership; a later GND via must not occupy the launch.
+        temporary = {keepout.id for keepout in reserved[2]}
+        def release_masks(current):
+            return replace(current,copper_keepouts=tuple(
+                k for k in current.copper_keepouts if k.id not in temporary))
+        critical = replace(critical,board=release_masks(critical.board))
+        if plane_stitch is not None:
+            plane_stitch = replace(plane_stitch,board=release_masks(plane_stitch.board))
+        if fanout is not None:
+            fanout = replace(fanout,board=release_masks(fanout.board))
+        pre_detailed = release_masks(pre_detailed)
     emit(on_progress, "ordinary_area", "started")
     detailed = route_ordinary(
         pre_detailed, placement.global_route,
@@ -582,7 +603,11 @@ def run_routing_pipeline(
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="package_access_failed")
                 continue
-            trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global)
+            if getattr(unified_options, "direct", False):
+                from .hard_macros import materialize_hard_macros
+                trial_critical = replace(critical, board=materialize_hard_macros(trial_board), nets=())
+            else:
+                trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global, unified_options=unified_options)
             if trial_critical.status is CriticalRoutingStatus.FAILED:
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="critical_failed")
@@ -649,6 +674,8 @@ def run_routing_pipeline(
             access = blocked
             plane_stitch, duplicate_stitch = None, None
             power_status = 'power_preparation_ordinary_rejected'
+    if getattr(unified_options, "direct", False):
+        critical = _unified_profile_review(detailed, placement.global_route, drc)
     passed = (
         routing_nets is None and placement.full_route_certified
         and critical.status is not CriticalRoutingStatus.FAILED
@@ -675,7 +702,47 @@ def run_routing_pipeline(
         power_preparation=preparation,
         power_preparation_validation=preparation_validation,
         power_native_verifier=power_native_verifier,
+        unified_options=unified_options,
     )
+
+
+def _unified_profile_review(detailed, global_route, drc):
+    """Report final profile copper without calling a legacy routing solver.
+
+    Independent exact paths do not certify differential coupling/returns. Keep
+    that unsupported obligation explicit and fail closed for those profiles.
+    """
+    from math import hypot
+    from .critical import CriticalNetResult
+    from .drc import DrcSeverity, explicit_copper_connectivity
+    board = detailed.board
+    graph = explicit_copper_connectivity(board)
+    nets = {net.name: net for net in board.nets}
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    results, seen = [], set()
+    for name, rule in sorted(rules.items()):
+        if rule.kind is RouteKind.GENERAL or name in seen:
+            continue
+        group = tuple(sorted({name, rule.differential_partner})) if rule.differential_partner else (name,)
+        seen.update(group)
+        tracks = tuple(t for t in board.tracks if t.net in group)
+        vias = tuple(v for v in board.vias if v.net in group)
+        lengths = tuple(sum(round(hypot(t.end.x_nm-t.start.x_nm, t.end.y_nm-t.start.y_nm))
+                            for t in tracks if t.net == net) for net in group)
+        connected = all(net in nets and graph.net_connected(nets[net]) for net in group)
+        diagnostics = [f.message for f in drc.findings
+                       if f.severity is DrcSeverity.ERROR and set(f.nets).intersection(group)]
+        if not connected:
+            diagnostics.append("unified routing left profile terminals disconnected")
+        if rule.kind in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}:
+            diagnostics.append("unified differential coupling and return-path verification is not implemented")
+        results.append(CriticalNetResult(group, connected and not diagnostics, len(tracks), len(vias),
+            lengths, max(lengths)-min(lengths) if lengths else 0,
+            tuple(dict.fromkeys(diagnostics)), strategy="unified_final_review"))
+    status = (CriticalRoutingStatus.FAILED if any(not item.connected for item in results)
+              else CriticalRoutingStatus.SUCCESS)
+    return CriticalRoutingResult(status, board, tuple(results), (), (),
+        global_route.routing_fingerprint, detailed.routing_fingerprint)
 
 
 def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ())):
@@ -712,6 +779,29 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ()
     emit(on_progress, "ordinary_escapes", "finished", vias=len(vias), tracks=len(tracks),
          pending=len(escapes.pending_pads))
     return tuple(tracks), tuple(vias), tuple(keepouts)
+
+
+def _join_reserved_copper(board, tracks, vias, keepouts):
+    """Drop a stage's reservation keepouts and add the copper they held.
+
+    Each piece is checked exactly: a reservation left out next to fixed macro
+    copper did not bind the critical router there.
+    """
+    from .routing_clearance import RoutingClearanceIndex
+    temporary = {keepout.id for keepout in keepouts}
+    board = replace(board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary))
+    index = RoutingClearanceIndex(board)
+    kept_tracks, kept_vias = [], []
+    for via in vias:
+        if index.can_via(via.net, via.position, via.size_nm, via.from_layer, via.to_layer,
+                         drill_nm=via.drill_nm):
+            index.add_via(via)
+            kept_vias.append(via)
+    for track in tracks:
+        if index.can_track(track.net, track.start, track.end, track.width_nm, track.layer):
+            index.add_track(track)
+            kept_tracks.append(track)
+    return replace(board, tracks=(*board.tracks, *kept_tracks), vias=(*board.vias, *kept_vias))
 
 
 def _copper_keepouts(board, tracks, vias, prefix, fixed=None):
@@ -771,6 +861,24 @@ def _copper_keepouts(board, tracks, vias, prefix, fixed=None):
     return tuple(keepouts)
 
 
+def _bypass_copper_reservations(source, tracks, vias, witnesses=()):
+    """Fresh admission of the exact planned bypass contribution, without routing.
+
+    Keep real net/shape/hole identity rather than inflating it into all-net
+    rectangular keepouts. The ordinary public critical-prefix admission still
+    verifies every source field, occurrence, complete association and hard DRC.
+    No generated piece is filtered out to manufacture a valid ownership claim.
+    """
+    from .hard_macros import macro_source, materialize_hard_macros
+    from .bypass_reservations import verified_bypass_reservations
+    frame = materialize_hard_macros(macro_source(source))
+    reserved = FanoutResult(replace(frame, tracks=(*frame.tracks, *tracks), vias=(*frame.vias, *vias)),
+        {}, (), len(tracks), len(vias), created_tracks=tracks, created_vias=vias,
+        decoupling_tracks=tracks, decoupling_vias=vias, decoupling_witnesses=witnesses)
+    _, _, reason = verified_bypass_reservations(frame, reserved)
+    return (reserved, None) if reason is None else (None, reason)
+
+
 def _plan_decouplers(board, reserved_keepouts, on_progress, *, prefix=((), ())):
     """Bypass copper routed before critical nets, held as keepouts meanwhile.
 
@@ -807,7 +915,67 @@ def _plan_decouplers(board, reserved_keepouts, on_progress, *, prefix=((), ())):
     emit(on_progress, "bypass_reservation", "finished", tracks=len(tracks), vias=len(vias),
          pending=len(result.pending), released=len(released))
     return (tuple(tracks), tuple(vias), _copper_keepouts(board, tracks, vias, "bypass-reserve", fixed=frame),
-            released)
+            released, result.admitted_path_witnesses)
+
+
+
+def _revalidate_released_escapes(board, reserved, held):
+    """Restore collateral reservations only as complete, freshly legal net groups.
+
+    Bypass planning releases proximity boxes, not proven conflicting exits. A
+    surviving complete launch must still constrain subsequent critical routing.
+    No copper is changed. A new temporary keepout context gets a fresh bypass
+    ledger and ordinary strict prefix admission; any failed check rolls back
+    the entire restoration, without editing the original witnesses.
+    """
+    from .hard_macros import macro_source, materialize_hard_macros
+    from .routing_clearance import RoutingClearanceIndex
+    from .return_paths import existing_returns_permit
+    from .decoupling_paths import verify_crosslayer_decoupling
+    frame = materialize_hard_macros(macro_source(board))
+    fixed = replace(frame, tracks=(*frame.tracks, *held[0]), vias=(*frame.vias, *held[1]))
+    index = RoutingClearanceIndex(fixed)
+    tracks, vias, keepouts = reserved
+    released = {k.id for k in held[3]}
+    baseline = (tracks, vias, tuple(k for k in keepouts if k.id not in released))
+    owners = {**{f"escape-reserve-track-{i}": t.net for i,t in enumerate(tracks)},
+              **{f"escape-reserve-via-{i}": v.net for i,v in enumerate(vias)}}
+    affected = {owners[k.id] for k in keepouts if k.id in released and k.id in owners}
+    # Preserve the complete original group, not a legal via with a blocked stem.
+    rules = {r.net:r for r in board.net_routing_rules}
+    legal = {net for net in affected
+             if all(index.can_track(t.net,t.start,t.end,t.width_nm,t.layer)
+                    for t in tracks if t.net == net)
+             and all(index.can_via(v.net,v.position,v.size_nm,v.from_layer,v.to_layer,drill_nm=v.drill_nm)
+                     and existing_returns_permit(fixed,rules.get(v.net),v)
+                     for v in vias if v.net == net)}
+    # Proxy keepouts must themselves avoid the real immutable/bypass prefix.
+    safe_ids = {k.id for k in _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=fixed)}
+    legal = {net for net in legal if all(k.id in safe_ids for k in keepouts
+                                        if k.id in released and owners.get(k.id) == net)}
+    kept = tuple(k for k in keepouts if k.id not in released or owners.get(k.id) in legal)
+    count = len(kept) - len(baseline[2])
+    report = {"restored_keepouts":0, "restored_nets":[],
+              "unrestored_nets":sorted(affected), "outcome":"no_complete_legal_group"}
+    if not count:
+        return baseline, held, report
+    context = replace(fixed,copper_keepouts=(*board.copper_keepouts,*kept))
+    fresh = RoutingClearanceIndex(context)
+    witnesses=[]
+    for witness in held[4]:
+        checked = verify_crosslayer_decoupling(context,witness.link,
+                    return_target=witness.return_target,index=fresh)
+        if checked.witness is None:
+            return baseline, held, {**report,"outcome":"bypass_revalidation_failed","reason":checked.reason}
+        witnesses.append(checked.witness)
+    source = replace(board,copper_keepouts=context.copper_keepouts)
+    _, reason = _bypass_copper_reservations(source,held[0],held[1],tuple(witnesses))
+    if reason is not None:
+        return baseline, held, {**report,"outcome":"prefix_admission_failed","reason":reason}
+    remaining = tuple(k for k in held[3] if k.id not in {x.id for x in kept})
+    updated = (*held[:3],remaining,tuple(witnesses))
+    return (tracks,vias,kept), updated, {**report,"restored_keepouts":count,
+        "restored_nets":sorted(legal),"unrestored_nets":sorted(affected-legal),"outcome":"restored"}
 
 
 def _release_reservations(board, keepouts, nets, margin_nm=nm_from_mm("2"), *, pads=()):
@@ -851,7 +1019,7 @@ def _route_unified_compat(unified_options, board, global_route, _detailed_option
                           escape_options=None, **kwargs):
     from .unified_router import route_unified
     seeder = None
-    if escape_options is not None:
+    if escape_options is not None and not getattr(unified_options, "direct", False):
         from .fanout import route_fanout
 
         def seeder(partial, nets):

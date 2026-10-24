@@ -308,11 +308,16 @@ def _logo(identity, position, size, rotation, side, material=ArtworkMaterial.SIL
     return artwork
 
 
-def physical_artwork(design, outline):
+def physical_artwork(design, outline, avoid=()):
+    """Board artwork with the branding mark placed.
+
+    ``avoid`` holds copper shapes known before placement (the pads of parts
+    with a fixed position); the default mark position keeps clear of them.
+    """
     artwork = list(design.artwork)
     mark = design.branding
     if mark.enabled:
-        position = mark.position or _default_position(mark, outline)
+        position = mark.position or _default_position(mark, outline, avoid)
         artwork.extend(_branding_artwork(mark, position))
     validate_artwork(artwork)
     return tuple(artwork)
@@ -334,14 +339,21 @@ def _branding_artwork(mark, position):
     return artwork
 
 
-def _default_position(mark, outline):
-    """Bounded material-only search; final pad/text clearance needs native DRC.
+# Gap kept between the default branding mark and copper of fixed parts.
+BRANDING_COPPER_GAP_NM = 300_000
+
+
+def _default_position(mark, outline, avoid=()):
+    """Bounded search inside the outline, clear of the ``avoid`` copper shapes.
 
     A conservative label envelope keeps the default off cutouts and curved
-    edges where space permits. Small boards retain the mark for explicit review
-    and repositioning/resizing or opt-out, rather than silently dropping it.
+    edges where space permits, and off the pads of fixed parts (a corner
+    connector), whose mask openings would clip the mark. Pads of parts the
+    placer moves later are not known here; final clearance needs native DRC.
+    Small boards retain the mark for explicit review and repositioning/resizing
+    or opt-out, rather than silently dropping it.
     """
-    from .geometry import RoundedConvexShape
+    from .geometry import RoundedConvexShape, shapes_clear
     from .mechanical import shape_in_outline
     xmin, xmax = min(p.x_nm for p in outline.vertices), max(p.x_nm for p in outline.vertices)
     ymin, ymax = min(p.y_nm for p in outline.vertices), max(p.y_nm for p in outline.vertices)
@@ -361,7 +373,9 @@ def _default_position(mark, outline):
             corners = (tuple(Point(x+px,y+py) for px,py in ((left,low),(right,low),(right,high),(left,high)))
                 if copper or mark.layout == "stacked" else tuple(_transform((Decimal(px)*42/s, Decimal(py)*42/s), Point(x,y), s,
                 mark.rotation_degrees, mark.side) for px,py in ((left,low),(right,low),(right,high),(left,high))))
-            if shape_in_outline(RoundedConvexShape(corners, 0), outline, 0):
+            envelope = RoundedConvexShape(corners, 0)
+            if shape_in_outline(envelope, outline, 0) and all(
+                    shapes_clear(envelope, shape, BRANDING_COPPER_GAP_NM) for shape in avoid):
                 return Point(x, y)
     return start
 

@@ -754,3 +754,53 @@ def test_pinned_legacy_module_asset_ids_bind_canonical_footprints(tmp_path, inva
         result = bind(input_board=canonical)
         assert all(m.footprint == identity for m in result.rigid_clusters[0].members)
         assert materialize_hard_macros(result).tracks
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_unified_router_uses_declared_macro_port_instead_of_internal_via(tmp_path, monkeypatch, native):
+    from collections import Counter
+    from pcbir.physical import BoardSide
+    from pcbir.routing import route_global
+    from pcbir.unified_router import route_unified, UnifiedRouterOptions
+    from pcbir.drc import run_physical_drc
+    from pcbir.route_summary import connection_summary
+    if not native:
+        import pcbir.native
+        monkeypatch.setattr(pcbir.native, "astar", lambda: None)
+    original, asset, bind = fixture(tmp_path)
+    asset["tracks"].append(dict(net="signal", width_nm=200000, layer="F.Cu",
+        points=[{"pad":["chip","1"]},[-1000000,0]]))
+    asset["vias"] = [dict(net="signal", position_nm=[1000000,0], size_nm=600000,
+        drill_nm=300000, from_layer="F.Cu", to_layer="B.Cu", technology=None)]
+    asset["ports"][0]["point"] = [-1000000,0]
+    asset["keepouts"][0]["block_vias"] = False
+    source = replace(original,
+        placements=(*original.placements, Placement("J1", "test", Point.mm(11,14), side=BoardSide.BACK)),
+        nets=(replace(original.nets[0], pads=(*original.nets[0].pads, PadReference("J1","1"))),))
+    source = bind(input_board=source)
+    guides = route_global(source)
+    board = materialize_hard_macros(source)
+    result = route_unified(board, guides, UnifiedRouterOptions(maximum_iterations=8, commit_rounds=2))
+    summary = connection_summary(result.board, run_physical_drc(result.board))
+    assert all(n.connected for n in result.nets), result.nets
+    assert summary["signal"]["opens"] == 0
+    assert summary["drc"]["errors"] == 0
+    assert Counter(board.tracks) <= Counter(result.board.tracks)
+    assert Counter(board.vias) <= Counter(result.board.vias)
+    host = Counter(result.board.tracks) - Counter(board.tracks)
+    port = Point.mm(9,10)
+    assert any(t.layer is CopperLayer.FRONT and port in (t.start,t.end) for t in host), (
+        "Host routing bypassed the declared boundary port and left its immutable stub dangling", host)
+    cli = Path("C:/Program Files/KiCad/10.0/bin/kicad-cli.exe")
+    if native and cli.is_file():
+        from pcbir.backends.kicad_pcb import KiCadPcbBackend
+        from pcbir.backends.kicad_project import write_kicad_project
+        path = tmp_path / "macro-port.kicad_pcb"
+        write_kicad_project(KiCadPcbBackend().generate(result.board), path)
+        report = tmp_path / "drc.json"
+        subprocess.run([str(cli), "pcb", "drc", "--format", "json", "--all-track-errors",
+                        "--refill-zones", "--save-board", "-o", str(report), str(path)],
+                       check=True, capture_output=True)
+        drc = json.loads(report.read_text())
+        assert not drc["unconnected_items"]
+        assert not [v for v in drc["violations"] if v["type"] == "track_dangling"], drc["violations"]

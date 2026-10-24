@@ -323,3 +323,47 @@ def test_run_folder_picks_the_route_report_over_other_records(tmp_path):
     (tmp_path / "route.json").write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
     assert (tmp_path / "route.json").read_text(encoding="utf-8").find('"schema"') > 4096
     assert load_run(tmp_path).report_path == tmp_path / "route.json"
+
+
+def test_unified_subset_replay_locates_only_its_attempted_failures(board, tmp_path):
+    pcb = next(a for a in KiCadPcbBackend().generate(board).artifacts if a.name.endswith(".kicad_pcb"))
+    (tmp_path / "board.kicad_pcb").write_text(pcb.content)
+    scene = scene_from_physical(board)
+    selected = next(p.net for p in scene.pads if p.net)
+    report = {"schema": "copperscript-route-summary/v1", "state": "prepared.state.json",
+              "unrouted": {selected: ["unified: rejected by exact commit check: copper clearance"]},
+              "signal": {"open_nets": [selected, "DELIBERATELY_NOT_ROUTED"]}}
+    (tmp_path / "route-report.json").write_text(json.dumps(report))
+    issues = run_issues(load_run(tmp_path))
+    assert len(issues) == 1
+    issue = find_issue(issues, "R1")
+    assert issue.code == "NET-UNROUTED" and issue.nets == [selected]
+    assert "exact commit" in issue.title and issue.window() is not None
+    report["unrouted"] = {}
+    (tmp_path / "route-report.json").write_text(json.dumps(report))
+    assert run_issues(load_run(tmp_path)) == []
+
+
+def test_physical_copper_findings_locate_tracks_and_vias(tmp_path):
+    from pcbir import BoardOutline, CopperLayer, PhysicalBoard, PhysicalNet, Point, TrackSegment, Via, nm_from_mm
+    from pcbir.drc import run_physical_drc
+    board = PhysicalBoard("CopperLocations", BoardOutline.rectangle(10, 10), {}, (),
+        (PhysicalNet("N", ()),),
+        tracks=(TrackSegment("N", Point.mm(2, 2), Point.mm(5, 2), nm_from_mm("0.1"), CopperLayer.FRONT),),
+        vias=(Via("N", Point.mm(5, 2), nm_from_mm("0.6"), nm_from_mm("0.3"), CopperLayer.FRONT, CopperLayer.BACK),))
+    pcb = KiCadPcbBackend().generate(board).artifacts[0]
+    (tmp_path / "board.kicad_pcb").write_text(pcb.content)
+    drc = json.loads(run_physical_drc(board).to_json())
+    assert any(f["code"] == "DRC-TRACK-WIDTH" for f in drc["findings"])
+    drc["findings"].extend([
+        {"code":"DRC-TEST-VIA", "severity":"error", "message":"Synthetic via geometry finding",
+         "nets":["N"], "layers":["F.Cu"], "objects":["via:0"]},
+        {"code":"DRC-STALE-OBJECT", "severity":"error", "message":"Mismatching object must stay unlocated",
+         "nets":["OTHER"], "layers":["B.Cu"], "objects":["track:0", "via:999"]}])
+    (tmp_path / "route-report.json").write_text(json.dumps({"schema":"copperscript-route-board/v0.1", "drc":drc}))
+    issues = run_issues(load_run(tmp_path))
+    width = next(i for i in issues if i.code == "DRC-TRACK-WIDTH")
+    assert width.objects == ["track:0"] and width.points == [(2.0, 2.0), (5.0, 2.0)]
+    assert width.window() is not None
+    assert next(i for i in issues if i.code == "DRC-TEST-VIA").points == [(5.0, 2.0)]
+    assert next(i for i in issues if i.code == "DRC-STALE-OBJECT").points == []

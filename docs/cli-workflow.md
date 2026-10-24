@@ -48,8 +48,71 @@ python -m copperscript query BOARD.copper nets             # one line per net
 
 After a routing or layout run, `issues` lists grouped, located failures and `view`
 renders one of them; see [routing and placement iteration](llm-workflow.md#routing-and-placement-iteration).
+`issues` also reads `replay-unified`'s attempted `unrouted` nets and locates
+them on its exported PCB. Other open nets in a subset replay's whole-board
+summary are deliberately excluded from those attempted-failure issues. An empty
+replay issue list does not establish complete-board routing or native acceptance.
+For a bounded fine-grid diagnostic, `replay-unified --set pitch_nm=25000
+--set 'grid_window_nm=[1000000,1000000,21000000,21000000]'` limits the raster
+and search to an explicit rectangle in nanometres. Include every attempted
+terminal. The full-board lattice phase, source outline, obstacles, fixed copper,
+macro/array intent and fresh exact commit checks remain in force. The window
+is a search bound, not a new board outline or permission to discard outside
+copper, and a successful subset is not complete-board or native acceptance.
 `route-board --stop-after STAGE`, `--checkpoint-dir` and `--reuse-placement`
 shorten reruns; see [shorter reruns](llm-workflow.md#shorter-reruns).
+The standard critical path also saves `critical-inputs.state.json` and, when
+used, `critical-retry-inputs.state.json` in the checkpoint directory. These
+capture the actual temporary reservations and can be viewed or passed to
+`replay-critical`. A saved bypass-only copper prefix must pass fresh source,
+occurrence, complete-association and geometry admission; it is never accepted
+as arbitrary routed input. Value-only decoding restores original-edge identities
+only for unique exact occurrences, preserving all values and context digests.
+
+`route-board --router unified` uses unified negotiation after the established
+coupled differential/critical routing and decoupler preparation. Pair routing,
+skew tuning and return-path checks remain available in this standard pipeline.
+Clock fallback uses the selected unified engine with the original clock profile;
+each clock is bounded to 60 seconds, 16 iterations and two commit rounds (or the
+smaller caller bounds). Complete-group matching and exact acceptance still apply.
+At equal explicit priority, coupled differential/CAN groups route before
+single-ended critical groups. This reserves their joint exit before a flexible
+single trace can obstruct it. An explicitly higher priority still takes
+precedence; no extra search or rip-up allowance is created.
+
+`replay-critical STATE --only NET --report RUN/route-report.json -o RUN/board.kicad_pcb`
+isolates critical routing from a placement checkpoint or source-only saved input.
+Selecting one differential member selects its whole existing group. All source
+rules remain active; arbitrary routed input copper is rejected. `--pair-states`
+bounds aggregate pair search (default 6000), and `--clock-router legacy|unified`
+selects the clock fallback for comparison. Failed groups have located `C` issues;
+pair reports include a bounded port inventory with headings and departure probes.
+The transition inventory distinguishes native plated-layer contacts from generated
+signal-via launches and exposes which terminal has no legal transition candidates.
+`pair_attempts` reports at most 16 tried endpoint orientations, state counts and
+closest approaches; it contains no resumable frontier or accepted copper.
+For a pair with two shared endpoint packages and one separate nearby support
+contact per member, local support ties remain pending while each surface or
+signal/return-via escape is formed. `pending_contacts` clears only after complete
+pair acceptance. The original breakout-distance, contact, via and geometry rules
+remain active. Ambiguous or unsupported contact trees retain the established
+preparation; no support is dropped to fit a two-terminal guide.
+This diagnostic does not rerun placement, bypass preparation or native checks,
+and never establishes full-board or current-source acceptance.
+
+`route-board --router unified --unified-direct` sends ordinary and profiled
+nets to unified negotiation from source-fixed copper. It skips the legacy
+critical, bypass, preliminary escape and late plane-contact routing stages;
+immutable macro copper and required via arrays still materialize. Legacy escape
+seeding and native bridge repair are also disabled, even after a partial result.
+Native refill/DRC still runs, and any needed repair must re-enter unified routing. Without `--unified-direct`, the current
+unified flow retains its legacy bootstrap. `--unified-time-budget-s 1800`
+bounds negotiation starting at the unified stage; placement/global planning
+and final native verification are separate. `--unified-save-inputs STATE`
+retains replay inputs. Direct mode reports final profile connectivity and
+physical DRC findings, but fails differential/CAN acceptance explicitly because
+unified coupling and return-path verification are not implemented. Independent
+pair paths and a zero-open signal summary do not establish pair qualification.
 
 ```console
 python -m copperscript issues build/BOARD/runs/STAMP
@@ -390,3 +453,10 @@ python -m pip install -e ".[test]"
 copper check examples/valid_board/board.copper
 python -m pytest
 ```
+
+For a search that exhausts the unified router's per-path work bound, use
+`--unified-search-states N` to choose a larger bounded search. The default is
+400000 expanded states per path. `--unified-time-budget-s` remains a separate
+wall-time limit. Both are computational settings; source and fabrication rules
+are unchanged. The effective state limit appears in `work_limits` and replay
+inputs. A failed bounded search is not proof that the connection is impossible.

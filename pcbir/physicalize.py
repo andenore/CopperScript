@@ -68,7 +68,7 @@ from .quantities import Length, Quantity
 from .design import Design
 from .mechanical_profiles import mechanical_provenance
 from .power_planning import lower_power_domains, lower_power_feeds
-from .zone_geometry import lower_zone_outline
+from .zone_geometry import lower_zone_outline, polygon_boundary
 
 
 @dataclass(frozen=True, slots=True)
@@ -450,7 +450,7 @@ def _physicalize(
                else Stackup(copper_layers=copper_layers))
     physical = PhysicalBoard(
         name=board.name,
-        silkscreen=physical_artwork(silkscreen, outline),
+        silkscreen=physical_artwork(silkscreen, outline, _fixed_pad_shapes(placements, footprints, fixed_rules)),
         outline=outline,
         stackup=stackup,
         rules=rules,
@@ -516,6 +516,22 @@ def _lower_decoupling(flat, nets):
         links.append(DecouplingLink(feed[0], target, returns[0], net, assigned[returns[0]]))
     return tuple(links)
 
+
+
+def _fixed_pad_shapes(placements, footprints, fixed_rules):
+    """Placed copper of every pad of a part with a fixed position (known before placement)."""
+    from .drc import placed_pad_shape
+    from .placement import transformed_local_point
+    shapes = []
+    for pose in placements:
+        rule = fixed_rules.get(pose.reference)
+        if rule is None or rule.fixed_position is None:
+            continue
+        for pad in footprints[pose.footprint].pads:
+            if pad.kind in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}:
+                continue
+            shapes.append(placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose))
+    return tuple(shapes)
 
 def _bind_profile_connectors(mechanical, flat, footprints, placements, rules):
     from .placement import transformed_local_point
@@ -760,16 +776,18 @@ def _lower_physical_constraints(
             if gap is not None and (not lowered_targets or any(target.pad is not None for target in lowered_targets)):
                 raise ValueError("placement_region courtyard_gap requires component targets, not pins")
             name = str(parameters.get("name", f"region:{index}"))
-            region = PlacementRegion(
-                name,
-                BoardOutline.rectangle(
+            if "polygon_mm" in parameters:
+                if any(k in parameters for k in ("x", "y", "width", "height")):
+                    raise ValueError("placement_region boundary parameters are mutually exclusive")
+                region_outline = polygon_boundary(parameters["polygon_mm"], context="placement_region")
+            else:
+                region_outline = BoardOutline.rectangle(
                     _constraint_length(parameters, "width") / 1_000_000,
                     _constraint_length(parameters, "height") / 1_000_000,
-                    origin=Point(
-                        _constraint_length(parameters, "x"),
-                        _constraint_length(parameters, "y"),
-                    ),
-                ),
+                    origin=Point(_constraint_length(parameters, "x"), _constraint_length(parameters, "y")))
+            region = PlacementRegion(
+                name,
+                region_outline,
                 _constraint_side(parameters.get("side")),
             )
             regions.append(region)

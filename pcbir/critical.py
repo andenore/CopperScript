@@ -48,7 +48,7 @@ from .routing_vias import physical_via_span
 from .routing_layers import routing_layers
 from .surface_path import via_inside_board
 from .drc import DrcSeverity, run_physical_drc
-from .pair_search import PairSearchCandidate, PairSearchStats, _legal, nested_exit_candidates, paired_candidates
+from .pair_search import PairSearchCandidate, PairSearchStats, PairPortInventory, PairTransitionInventory, PairSearchAttempt, pair_search_attempts, _legal, nested_exit_candidates, paired_candidates
 from .pair_vias import paired_via_candidates, transition_spacing
 from .pair_refine import PairRefinementStats, paired_shortcuts
 from .local_critical import local_surface_candidates
@@ -105,6 +105,9 @@ class CriticalNetResult:
     local_preparation: PairTerminalPreparation | None = field(default=None, compare=False)
     pair_resumed_states: int = 0
     pair_resumed_portals: int = 0
+    pair_ports: tuple[PairPortInventory, ...] = field(default=(), compare=False)
+    pair_transitions: tuple[PairTransitionInventory, ...] = field(default=(), compare=False)
+    pair_attempts: tuple[PairSearchAttempt, ...] = field(default=(), compare=False)
 
 
 def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
@@ -135,6 +138,9 @@ def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
         "pair_searches": item.pair_searches,
         "pair_resumed_states": item.pair_resumed_states,
         "pair_resumed_portals": item.pair_resumed_portals,
+        "pair_ports": [asdict(port) for port in item.pair_ports],
+        "pair_transitions": [asdict(item) for item in item.pair_transitions],
+        "pair_attempts": [asdict(item) for item in item.pair_attempts],
         "local_candidate_attempts": item.local_candidate_attempts,
         "guide_length_nm": item.guide_length_nm,
         "pair_refinement_attempts": item.pair_refinement_attempts,
@@ -331,6 +337,8 @@ def route_critical_nets(
     retained_accesses: FanoutResult | None = None,
     plane_stitch_options: PlaneStitchOptions | None = None,
     pair_state_limit: int | None = None,
+    only_nets: frozenset[str] | None = None,
+    unified_options=None,
     bundle_repair_limit: int = BUNDLE_REPAIR_LIMIT,
     plan_crossings: bool = True,
     nested_exits: bool = True,
@@ -466,6 +474,13 @@ def route_critical_nets(
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
     net_by_name = {n.name: n for n in board.nets}
     jobs = _critical_jobs(board)
+    if only_nets is not None:
+        unknown = set(only_nets) - {name for _, group in jobs for name in group}
+        if unknown:
+            raise ValueError("unknown critical nets: " + ", ".join(sorted(unknown)))
+        # Select whole existing jobs, keeping every source rule and all input
+        # copper. A single requested pair member never creates an independent lane.
+        jobs = [(rule, group) for rule, group in jobs if set(group).intersection(only_nets)]
     bundles = plan_bundles(board, jobs, rules, bundle_repair_limit, plan_crossings=plan_crossings,
                            plan_nested_exits=nested_exits)
     jobs = bundle_job_order(jobs, bundles)
@@ -620,7 +635,7 @@ def route_critical_nets(
                              or len(routes[rule.net].accesses) == 2
                              or (rule.kind is RouteKind.RF_FEED and rule.topology == "tree" and rule.max_vias == 0))):
                     repaired_single, net_tracks, net_vias = _route_single_exact(
-                        board, rule, global_route, tracks, vias,
+                        board, rule, global_route, tracks, vias, unified_options=unified_options,
                     )
                     result = replace(repaired_single, local_candidate_attempts=result.local_candidate_attempts,
                                      guide_length_nm=result.guide_length_nm)
@@ -631,7 +646,7 @@ def route_critical_nets(
                     # far from the shortest; keep the exact search's tree when it
                     # is shorter with no more vias.
                     exact, exact_tracks, exact_vias = _route_single_exact(
-                        board, rule, global_route, tracks, vias,
+                        board, rule, global_route, tracks, vias, unified_options=unified_options,
                     )
                     if (exact.connected and len(exact_vias) <= len(net_vias)
                             and exact.lengths_nm[0] < result.lengths_nm[0]):
@@ -771,7 +786,7 @@ def _nested_outcomes(
 
 
 def _critical_jobs(board: PhysicalBoard) -> list[tuple[NetRoutingRule, tuple[str, ...]]]:
-    """Critical groups in the default order: priority, kind, then net name.
+    """Critical groups: explicit priority, coupled groups, kind and net name.
 
     A pair is one group, placed at its first member's position. Each net
     belongs to the first group that names it.
@@ -780,7 +795,12 @@ def _critical_jobs(board: PhysicalBoard) -> list[tuple[NetRoutingRule, tuple[str
     seen: set[str] = set()
     for rule in sorted(
         (item for item in board.net_routing_rules if item.kind is not RouteKind.GENERAL),
-        key=lambda item: (-item.priority, item.kind.value, item.net),
+        # Coupled lanes need one contiguous joint exit and cannot use the
+        # independent single-ended fallback. At equal explicit priority reserve
+        # that narrower freedom before a flexible single-ended path can wall
+        # its own package's paired pins in. No extra trial or rip-up is added.
+        key=lambda item: (-item.priority,
+            item.kind not in {RouteKind.DIFFERENTIAL, RouteKind.CAN_BUS}, item.kind.value, item.net),
     ):
         if rule.net in seen:
             continue
@@ -1340,11 +1360,21 @@ def _route_pair_group(
 
     partner_name = partner_rule.net
     first, second = sorted((rule, partner_rule), key=lambda item: item.net)
-    from .pair_terminals import PairTerminalPreparationStats, prepare_pair_terminals, terminal_partners
+    from .pair_terminals import (PairTerminalPreparationStats, prepare_pair_terminals, terminal_partners,
+                                plan_pair_supports, PairSupportCompletion)
     preparation = PairTerminalPreparationStats()
-    routes, first_branches, second_branches, branch_via_pairs, branch_return_vias = prepare_pair_terminals(
-        replace(board, tracks=tuple(tracks), vias=tuple(vias)), first, second, routes, report=preparation)
-    evidence = preparation.snapshot() if preparation.status != "source_terminals" else None
+    held = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+    support_plan = plan_pair_supports(held, first, second, routes)
+    completion = None
+    if support_plan is not None:
+        routes = {**routes, **{g.net:g for g in support_plan.guides}}
+        first_branches = second_branches = branch_via_pairs = branch_return_vias = ()
+        preparation.status = "pending_support_contacts"
+        preparation.pending_contacts = tuple(contact.pad for _,contact in support_plan.contacts)
+        completion = PairSupportCompletion(support_plan, first, second, preparation, source=held)
+    else:
+        routes, first_branches, second_branches, branch_via_pairs, branch_return_vias = prepare_pair_terminals(
+            held, first, second, routes, report=preparation)
     def reported(outcome):
         result, additions, transitions = outcome
         if not result.connected and preparation.status in {"blocked", "unsupported"}:
@@ -1355,6 +1385,10 @@ def _route_pair_group(
                 if message == "coupled pair routing v0.1 requires two terminals per member" else message
                 for message in result.diagnostics)
             result = replace(result, diagnostics=diagnostics)
+        if completion is not None and result.connected:
+            preparation.status = "joint_support_contacts"
+            preparation.pending_contacts = ()
+        evidence = preparation.snapshot() if preparation.status != "source_terminals" else None
         return replace(result, local_preparation=evidence), additions, transitions
     found: set[str] = set()
     if nested is not None:
@@ -1470,7 +1504,7 @@ def _route_pair_group(
             if attempt.connected:
                 if crossing is not None:
                     attempt = replace(attempt, strategy="planned_crossing")
-                elif not candidate.via_pairs and not (first_branches or second_branches):
+                elif not candidate.via_pairs and not (first_branches or second_branches) and completion is None:
                     attempt, proposed_tracks, proposed_vias = _improve_pair_spine(
                         board, search_board, first, second, routes, candidate,
                         attempt, proposed_tracks, proposed_vias, tracks, vias)
@@ -1491,7 +1525,8 @@ def _route_pair_group(
                               "maximum_searches": 2}
                 for candidate in searcher(
                     search_board, first, second, routes[first.net], routes[second.net],
-                    stats=stats, pitch_nm=pitch_nm, **limits,
+                    stats=stats, pitch_nm=pitch_nm,
+                    **({"terminal_completion": completion} if completion is not None else {}), **limits,
                 ):
                     attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
                     if attempt.connected:
@@ -1521,6 +1556,9 @@ def _route_pair_group(
                          candidate_attempts=stats.candidates, pair_searches=stats.searches,
                          pair_resumed_states=stats.resumed_states,
                          pair_resumed_portals=stats.resumed_portals,
+                         pair_ports=tuple(stats.port_inventory),
+                         pair_transitions=tuple(stats.transition_inventory),
+                         pair_attempts=pair_search_attempts(stats),
                          pair_search_order=order,
                          pair_state_limit=pair_state_limit,
                          pair_budget_exhausted=(pair_state_limit is not None
@@ -1891,7 +1929,7 @@ def _guide_via(
 
 def _route_single_exact(
     board: PhysicalBoard, rule: NetRoutingRule, global_route: GlobalRoutingResult,
-    committed_tracks: list[TrackSegment], committed_vias: list[Via],
+    committed_tracks: list[TrackSegment], committed_vias: list[Via], *, unified_options=None,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     """Bounded single-net repair against immutable earlier critical copper."""
     from .detailed import DetailedRouterOptions, route_detailed
@@ -1924,10 +1962,21 @@ def _route_single_exact(
             for item in board.net_routing_rules
         ),
     )
-    detailed = route_detailed(
-        search_board, global_route,
-        options, only_nets=frozenset({rule.net}),
-    )
+    if rule.kind is RouteKind.CLOCK and unified_options is not None:
+        from .unified_router import route_unified
+        # Clock access uses the selected unified engine with the actual source
+        # profile. Per-clock work is bounded independently of later negotiation.
+        clock_options = replace(unified_options, direct=True, save_inputs_path=None,
+            maximum_iterations=min(16, unified_options.maximum_iterations),
+            time_budget_s=min(60.0, unified_options.time_budget_s or 60.0),
+            commit_rounds=min(2, unified_options.commit_rounds),
+            pre_route_decouplers=False, escapes_first=False)
+        detailed = route_unified(replace(search_board, net_routing_rules=board.net_routing_rules),
+            global_route, clock_options, only_nets=frozenset({rule.net}))
+        strategy = "unified_clock"
+    else:
+        detailed = route_detailed(search_board, global_route, options, only_nets=frozenset({rule.net}))
+        strategy = "exact_single_net"
     tracks = detailed.board.tracks[len(committed_tracks):]
     vias = detailed.board.vias[len(committed_vias):]
     net = next((item for item in detailed.nets if item.net == rule.net), None)
@@ -1936,7 +1985,7 @@ def _route_single_exact(
         len(tracks), len(vias), (_track_length(tracks),), 0,
         (*net.diagnostics, *_budget_diagnostics(rule, tracks, vias)) if net is not None else ("no exact critical-net attempt",),
         _external_assumptions(rule), evidence_digests=_external_evidence(rule),
-        strategy="exact_single_net",
+        strategy=strategy,
     )
     if (not result.connected and rule.max_vias == 0
             and any(item.net == rule.net and item.connected for item in global_route.routes)):
@@ -3059,3 +3108,28 @@ def _fingerprint(
         ],
     }
     return sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()
+
+
+def replay_critical(path, *, only_nets: frozenset[str] | None = None,
+                    pair_state_limit: int = 6000, unified_options=None, on_progress=None) -> CriticalRoutingResult:
+    """Bounded diagnostic from a placement checkpoint or saved source-only inputs.
+
+    Only proved macro/array copper is accepted; arbitrary routed snapshots are rejected.
+    All input rules stay in force; only complete selected critical jobs
+    are attempted. This does not rerun placement, bypass preparation or native
+    verification and cannot certify the current source or a complete board.
+    """
+    from .workbench import load_state
+    saved = load_state(path)
+    board = saved.get("board") if isinstance(saved, dict) else getattr(saved, "board", None)
+    global_route = saved.get("global_route") if isinstance(saved, dict) else getattr(saved, "global_route", None)
+    if not isinstance(board, PhysicalBoard) or not isinstance(global_route, GlobalRoutingResult):
+        raise ValueError("critical replay requires a board and global route from saved pipeline inputs")
+    reserved = saved.get("reserved_accesses") if isinstance(saved, dict) else None
+    if reserved is not None:
+        from .bypass_reservations import restore_bypass_reservation_edges
+        reserved = restore_bypass_reservation_edges(reserved)
+    return route_critical_nets(board, global_route, only_nets=only_nets,
+                              reserved_accesses=reserved,
+                              pair_state_limit=pair_state_limit, unified_options=unified_options,
+                              on_progress=on_progress)

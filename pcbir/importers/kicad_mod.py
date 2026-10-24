@@ -259,11 +259,12 @@ def _parse_footprint_keepout(
     if layer_node is None:
         raise KiCadModImportError(f"{source}: footprint keepout has no layers")
     raw_layers = tuple(item for item in layer_node[1:] if isinstance(item, str))
-    if not raw_layers or any(item not in {"F.Cu", "F.CrtYd"} for item in raw_layers):
+    copper_layers = {layer.value: layer for layer in CopperLayer}
+    if not raw_layers or any(item not in {*copper_layers, "F.CrtYd"} for item in raw_layers):
         raise KiCadModImportError(
             f"{source}: unsupported footprint keepout layers {raw_layers!r}"
         )
-    if "F.Cu" not in raw_layers:
+    if not any(item in copper_layers for item in raw_layers):
         raise KiCadModImportError(f"{source}: footprint keepout has no copper layer")
     placement_node = _first(node, "placement")
     if placement_node is not None:
@@ -317,7 +318,7 @@ def _parse_footprint_keepout(
     name = _atom(name_node, 1) if name_node is not None else None
     return CopperKeepout(
         id=f"{name or 'keepout'}-{index}",
-        layers=(CopperLayer.FRONT,),
+        layers=tuple(dict.fromkeys(copper_layers[item] for item in raw_layers if item in copper_layers)),
         outline=outline,
         block_tracks=blocked["tracks"],
         block_vias=blocked["vias"],

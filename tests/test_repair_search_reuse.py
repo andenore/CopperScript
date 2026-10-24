@@ -470,3 +470,23 @@ def test_benchmark_counts_reused_attempts_and_treats_the_bound_as_an_interventio
     assert reused["work"]["detailed_net_attempts"] == 2
     assert reused["work"]["reused_detailed_attempts"] == 1
     assert reused["routing_settings"] == plain["routing_settings"]
+
+
+def test_blocked_node_windows_keep_boundaries_irregular_axes_and_ignored_tracks():
+    board = _corridor_board(crossing=True)
+    def keepout(name, bounds, layers, tracks=True):
+        x0, y0, x1, y1 = bounds
+        return CopperKeepout(name, layers, PolygonWithHoles(PolygonRing((
+            Point.mm(x0, y0), Point.mm(x1, y0), Point.mm(x1, y1), Point.mm(x0, y1)))),
+            block_tracks=tracks)
+    board = replace(board, copper_keepouts=(
+        keepout("boundary", (0, 0, 5, 4), (CopperLayer.FRONT, CopperLayer.BACK)),
+        keepout("thin", ("5.01", 2, "5.02", 8), (CopperLayer.BACK,)),
+        keepout("outside", (30, 30, 40, 40), (CopperLayer.FRONT,)),
+        keepout("ignored", (0, 0, 20, 20), (CopperLayer.FRONT,), tracks=False),
+    ))
+    xs = tuple(nm_from_mm(x) for x in (-1, 0, "0.1", 5, "5.01", "5.015", "5.02", 6, 20, 31))
+    ys = tuple(nm_from_mm(y) for y in (-1, 0, 2, 4, 8, 12, 31))
+    assert _blocked_nodes(board, xs, ys) == _per_layer_blocked_oracle(board, xs, ys)
+    assert _blocked_nodes(board, (), ys) == frozenset()
+    assert _blocked_nodes(board, xs, ()) == frozenset()
