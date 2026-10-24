@@ -211,8 +211,11 @@ class UnifiedRouterOptions:
     # slightly dearer arrival with a better heading is dropped), but it keeps
     # memory, the expansion budget and the native kernel's buffers as they
     # are. Arrival by via and source nodes have no heading (no turn charged).
-    # 0 leaves the search byte-identical to having no turn term.
-    bend_cost: float = 0.0
+    # 0 leaves the search byte-identical to having no turn term. Default 0.25
+    # (owner decision 2026-10-24): on cm4, nrf52 and full-vertical it cuts
+    # bends 27-40 % with equal completion and DRC and slightly shorter
+    # routes; round-led-ring pays a few extra vias.
+    bend_cost: float = 0.25
     # Soft cost per pitch step whose target node lies outside the net's
     # connected global-route corridor (guide segments on their layer within
     # guide_half_width_nm + guide_margin_nm; pin accesses within the margin

@@ -48,9 +48,9 @@ def _corridor_guide(net: str, points, half_width_nm=nm_from_mm("0.2")):
     return SimpleNamespace(routes=(GlobalNetRoute(net, True, (), segments, (), 0),))
 
 
-def test_cost_options_default_off_and_reject_negative_values() -> None:
+def test_cost_options_defaults_and_reject_negative_values() -> None:
     options = UnifiedRouterOptions()
-    assert options.bend_cost == 0.0 and options.guide_cost == 0.0
+    assert options.bend_cost == 0.25 and options.guide_cost == 0.0
     assert options.guide_margin_nm == nm_from_mm("1")
     for field in ("bend_cost", "guide_cost", "guide_margin_nm"):
         with pytest.raises(ValueError):
@@ -74,7 +74,7 @@ def test_bend_cost_removes_staircases_at_equal_length(native) -> None:
     if native and kernels.astar() is None:
         pytest.skip("no native kernel for this platform")
     board = _board({"A": ((1, 1), (21, 21))})
-    plain = _router(board)
+    plain = _router(board, bend_cost=0.0)
     bent = _router(board, bend_cost=1.0)
     if not native:
         plain.native = bent.native = None
