@@ -52,24 +52,51 @@ def test_critical_replay_cli_is_explicitly_diagnostic_and_writes_locatable_repor
         main(["replay-critical", str(state), "--pair-states", "-1"])
 
 
-def test_unified_clock_fallback_keeps_the_real_clock_profile(monkeypatch):
+@pytest.mark.parametrize("kind", (RouteKind.CLOCK, RouteKind.CRITICAL))
+@pytest.mark.parametrize("length_limit", (1000000, 40000000))
+def test_unified_single_fallback_keeps_the_real_source_profile(monkeypatch, kind, length_limit):
     import pcbir.detailed as detailed
     from pcbir.critical import _route_single_exact
     from pcbir.unified_router import UnifiedRouterOptions
     board = _pair_board()
-    rule = NetRoutingRule("USB_DP", kind=RouteKind.CLOCK, width_nm=250000,
-        allowed_layers=(CopperLayer.FRONT,), max_vias=0, max_length_nm=40000000)
+    rule = NetRoutingRule("USB_DP", kind=kind, width_nm=250000,
+        allowed_layers=(CopperLayer.FRONT,), max_vias=0, max_length_nm=length_limit)
     board = replace(board, net_routing_rules=(rule,))
     guides = route_global(board)
     def forbidden(*args, **kwargs):
-        raise AssertionError("unified clock fallback used the legacy detailed engine")
+        raise AssertionError("selected unified fallback used the legacy detailed engine")
     monkeypatch.setattr(detailed, "route_detailed", forbidden)
     result, tracks, vias = _route_single_exact(board, rule, guides, [], [],
         unified_options=UnifiedRouterOptions(time_budget_s=10))
-    assert result.connected and result.strategy == "unified_clock"
-    assert tracks and not vias and all(t.layer is CopperLayer.FRONT for t in tracks)
+    assert result.strategy == (
+        "unified_clock" if kind is RouteKind.CLOCK else "unified_critical")
+    assert result.connected is (length_limit == 40000000)
+    if result.connected:
+        assert tracks and all(t.layer is CopperLayer.FRONT for t in tracks)
+    else:
+        assert tracks == ()
+    assert not vias
     assert sum(abs(t.end.x_nm-t.start.x_nm)+abs(t.end.y_nm-t.start.y_nm) for t in tracks) <= rule.max_length_nm
     assert board.tracks == () and board.net_routing_rules == (rule,)
+
+
+def test_unified_critical_fallback_connects_every_tree_terminal(monkeypatch):
+    import pcbir.detailed as detailed
+    from pcbir.critical import _route_single_exact
+    from pcbir.unified_router import UnifiedRouterOptions
+    from test_local_critical import fixture, hard_findings
+
+    board, guides = fixture(tree=True)
+    rule = board.net_routing_rules[0]
+    def forbidden(*args, **kwargs):
+        raise AssertionError("critical tree fell back to the legacy engine")
+    monkeypatch.setattr(detailed, "route_detailed", forbidden)
+    result, tracks, vias = _route_single_exact(board, rule, guides, [], [],
+        unified_options=UnifiedRouterOptions(time_budget_s=10))
+    assert result.connected and result.strategy == "unified_critical"
+    assert tracks and not vias
+    assert not hard_findings(replace(board, tracks=tracks, vias=vias))
+    assert board.tracks == () and len(board.nets[0].pads) == 3
 
 
 def test_failed_critical_replay_is_located_for_issues_and_view(tmp_path):

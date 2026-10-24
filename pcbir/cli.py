@@ -608,7 +608,7 @@ def _parser() -> argparse.ArgumentParser:
     critical_replay.add_argument("--pair-states", type=_nonnegative_int, default=6000,
         help="aggregate state bound per coupled pair (default: 6000)")
     critical_replay.add_argument("--clock-router", choices=("legacy", "unified"), default="unified",
-        help="clock fallback backend; differential groups retain their coupled engine")
+        help="clock and general critical fallback backend; differential groups retain their coupled engine")
     critical_replay.add_argument("--report", type=Path)
     critical_replay.add_argument("-o", "--output", type=Path, help="diagnostic KiCad board for copper view")
     from .design_query import QUERY_KINDS

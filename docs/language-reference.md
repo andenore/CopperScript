@@ -1211,6 +1211,11 @@ connectivity still gate the channel. Other pair geometries (for example
 midpoints that need a jog) depend on coarse-guide candidates and the joint
 searches and can fail preflight; joint package-access search remains necessary. Single-ended critical nets can
 use bounded exact search while earlier critical copper stays immutable.
+When the unified router is selected, clock and general `critical` single-net
+fallbacks use that engine with their original source rules. Each fallback is
+bounded to at most 16 iterations, two commit rounds and 60 seconds (or the
+smaller caller limits). Pair routing retains its coupled engine; RF/power
+profiles retain their existing specialized behavior.
 General fanout/subset repair skips critical nets. Duplicate-land cleanup may
 reuse an existing critical connection but leaves new bridges pending for the
 owning critical router rather than altering pair skew or adding RF stubs.

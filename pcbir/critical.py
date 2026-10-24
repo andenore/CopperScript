@@ -1962,18 +1962,18 @@ def _route_single_exact(
             for item in board.net_routing_rules
         ),
     )
-    if rule.kind is RouteKind.CLOCK and unified_options is not None:
+    if rule.kind in {RouteKind.CLOCK, RouteKind.CRITICAL} and unified_options is not None:
         from .unified_router import route_unified
-        # Clock access uses the selected unified engine with the actual source
-        # profile. Per-clock work is bounded independently of later negotiation.
-        clock_options = replace(unified_options, direct=True, save_inputs_path=None,
+        # Single-ended critical access uses the selected engine with the actual
+        # source profile. Bound each fallback independently of later negotiation.
+        single_options = replace(unified_options, direct=True, save_inputs_path=None,
             maximum_iterations=min(16, unified_options.maximum_iterations),
             time_budget_s=min(60.0, unified_options.time_budget_s or 60.0),
             commit_rounds=min(2, unified_options.commit_rounds),
             pre_route_decouplers=False, escapes_first=False)
         detailed = route_unified(replace(search_board, net_routing_rules=board.net_routing_rules),
-            global_route, clock_options, only_nets=frozenset({rule.net}))
-        strategy = "unified_clock"
+            global_route, single_options, only_nets=frozenset({rule.net}))
+        strategy = "unified_clock" if rule.kind is RouteKind.CLOCK else "unified_critical"
     else:
         detailed = route_detailed(search_board, global_route, options, only_nets=frozenset({rule.net}))
         strategy = "exact_single_net"

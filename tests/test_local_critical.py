@@ -254,7 +254,7 @@ def test_native_rejection_preserves_incumbent_even_if_builder_proposes_shorter_c
     original, tracks, _ = _route_single(board, board.net_routing_rules[0], guides.routes[0])
     # Isolate the local-candidate gate from the exact-tree comparison.
     monkeypatch.setattr("pcbir.critical._route_single_exact",
-                        lambda *args: (replace(original, connected=False), (), ()))
+                        lambda *args, **kwargs: (replace(original, connected=False), (), ()))
     result = route_critical_nets(board, guides)
     assert result.nets[0].connected and result.nets[0].strategy == "global_guide"
     assert result.locked_tracks == tracks
