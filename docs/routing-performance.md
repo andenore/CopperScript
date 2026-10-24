@@ -1,3 +1,26 @@
+## Main integration without congestion experiments (2026-10-24)
+
+This main selection merges the routing work through `053f4bb` and independently
+cherry-picks the required-array placement fix `6fc36fd` as `f208c9f`. The unified
+router implementation is unchanged from `053f4bb`. The congestion experiments
+`30dd622`, `adb9a39`, `172407d` and `1210438` are excluded from both code and
+ancestry; they remain on the experimental routing branch. Their lead/via-budget
+regression files and congestion-specific validation claims are not included here.
+
+On this exact selection, the related router, macro, placement-array, escape,
+pair, return, decoupling and native-fill set405 passes 177 tests with five optional
+skips. Repeating the skipped fixed-array/native refill case408 with KiCad on PATH
+passes as well. Four optional Nordic archive/source-layout fixtures remain
+unavailable in this checkout. These focused results are not a full-suite pass.
+
+Fresh ladder406/407 reruns use this selected compiler. Initial completed checks
+retain 51/51 signal connections on the legacy ring, 35/35 on nRF52, and native
+zero opens/geometry errors on CopperLedRing. Other selected full-board checks
+remain in progress at integration; results from the excluded congestion compiler
+must not be substituted. The broader experimental-branch Python run394 is also
+incomplete and failing; five failures independently reproduce on upstream main.
+No all-tests, complete CopperBench, or hardware qualification claim is made.
+
 ## Reserve required pad-via arrays during placement (2026-10-24)
 
 Incremental placement now reserves every declared filled/capped array's annulus
