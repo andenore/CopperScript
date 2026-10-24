@@ -293,11 +293,14 @@ def run_routing_pipeline(
             if reserved is not None and held[3]:
                 reserved, held, restored = _revalidate_released_escapes(placement.board, reserved, held)
                 emit(on_progress, "ordinary_escapes", "revalidated", **restored)
-        def critical_inputs(escape_keepouts):
+        def critical_inputs(escape_keepouts, previous=None):
             source = replace(placement.board,
                 copper_keepouts=(*placement.board.copper_keepouts, *escape_keepouts))
             bypass_accesses, reason = (_bypass_copper_reservations(source, held[0], held[1], held[4])
                                       if held is not None else (None, None))
+            if bypass_accesses is None and previous is not None and previous[1] is not None:
+                from .bypass_reservations import rebind_bypass_keepout_removal
+                bypass_accesses, reason = rebind_bypass_keepout_removal(previous[0], previous[1], source)
             if held is not None and bypass_accesses is None:
                 # Unsupported/ambiguous ownership keeps its original conservative
                 # reservation. Never drop it or infer semantic authority by net.
@@ -325,7 +328,7 @@ def run_routing_pipeline(
                 if len(kept) < len(reserved[2]):
                     emit(on_progress, "ordinary_escapes", "released",
                          nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
-                    retry_source, retry_accesses = critical_inputs(kept)
+                    retry_source, retry_accesses = critical_inputs(kept, (source, bypass_accesses))
                     if on_stage is not None:
                         on_stage("critical-retry-inputs", {"board": retry_source,
                             "global_route": placement.global_route, "reserved_accesses": retry_accesses})

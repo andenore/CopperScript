@@ -1,5 +1,14 @@
 # Bounded filled-copper feedback
 
+When a critical retry removes temporary ordinary-escape keepouts, an already
+admitted bypass reservation can be rebound to that exact removal. The original
+source and reservation must pass admission first; every non-keepout source field,
+ordered copper occurrence and generated ownership claim stays unchanged. Supply
+and return paths are derived again from the new geometry and pass full admission.
+Changed poses, rules, copper, added/reordered keepouts or incomplete paths reject
+the rebind. The previous reservation remains intact on failure. This does not
+waive a saved witness's context digest or remove authored constraints.
+
 `route-board` owns placement, package access, ordinary routing, late contacts,
 native refill and bounded native-open repair. No board-specific net/pad repair
 list is needed. CopperLib continues to own reusable parts and physical contracts;

@@ -133,3 +133,67 @@ def test_rematerialized_required_array_keeps_exact_bypass_witness():
     routed = route_critical_nets(source,route_global(source),reserved_accesses=held)
     assert Counter(routed.board.vias) >= Counter(source.vias)
     assert verify_crosslayer_decoupling(routed.board,link).witness is not None
+
+
+def keepout_fixture(*, required_array=False, renamed=False):
+    from pcbir.physical import CopperKeepout, PolygonWithHoles, PolygonRing
+    if required_array:
+        from test_decoupling_source_arrays import array_fixture
+        source, link = array_fixture(3)
+    else:
+        source, link = fixture(renamed=renamed)
+    keepout = CopperKeepout("temporary", (CopperLayer.FRONT,),
+        PolygonWithHoles(PolygonRing(tuple(Point.mm(x,y) for x,y in
+            ((1,1),(2,1),(2,2),(1,2))))))
+    source = replace(source, copper_keepouts=(keepout, replace(keepout,id="retained")))
+    planned = route_decouplers(source)
+    held, reason = _bypass_copper_reservations(source, planned.created_tracks,
+        planned.created_vias, planned.admitted_path_witnesses)
+    assert held is not None, reason
+    return source, link, held
+
+
+@pytest.mark.parametrize("required_array,renamed", ((False,False),(False,True),(True,False)))
+def test_keepout_removal_rederives_complete_paths_without_changing_copper(required_array, renamed):
+    from pcbir.bypass_reservations import rebind_bypass_keepout_removal
+    source, link, held = keepout_fixture(required_array=required_array,renamed=renamed)
+    after = replace(source,copper_keepouts=source.copper_keepouts[1:])
+    stale, reason = _bypass_copper_reservations(after, held.created_tracks,
+        held.created_vias, held.decoupling_witnesses)
+    assert stale is None and "stale_witness_context" in reason
+    rebound, reason = rebind_bypass_keepout_removal(source, held, after)
+    assert rebound is not None, reason
+    assert rebound.board.tracks == held.board.tracks and rebound.board.vias == held.board.vias
+    assert rebound.created_tracks == held.created_tracks and rebound.created_vias == held.created_vias
+    assert rebound.board.copper_keepouts == after.copper_keepouts
+    assert all(validate_crosslayer_witness(rebound.board,w)=="" for w in rebound.decoupling_witnesses)
+    assert verified_bypass_reservations(after,rebound)[2] is None
+    assert held.board.copper_keepouts == source.copper_keepouts
+    assert verified_bypass_reservations(source,held)[2] is None
+    assert Counter(rebound.board.vias) >= Counter(source.vias)
+
+
+def test_keepout_removal_rejects_other_changes_and_unproven_originals():
+    from pcbir.bypass_reservations import rebind_bypass_keepout_removal
+    source, _, held = keepout_fixture()
+    after = replace(source,copper_keepouts=source.copper_keepouts[1:])
+    changes = (
+        replace(after,rules=replace(after.rules,minimum_clearance_nm=110000)),
+        replace(after,placements=(replace(after.placements[0],position=Point.mm(7,8)),*after.placements[1:])),
+        replace(after,decoupling_links=()),
+        replace(after,copper_keepouts=(*after.copper_keepouts,replace(after.copper_keepouts[0],id="new"))),
+        replace(after,copper_keepouts=tuple(reversed(source.copper_keepouts))),
+    )
+    for changed in changes:
+        candidate, reason = rebind_bypass_keepout_removal(source,held,changed)
+        assert candidate is None and reason
+    invalid = (
+        replace(held,created_vias=()),
+        replace(held,board=replace(held.board,vias=())),
+        replace(held,board=replace(held.board,copper_keepouts=())),
+        replace(held,added_track_count=held.added_track_count+1),
+    )
+    for stale in invalid:
+        candidate, reason = rebind_bypass_keepout_removal(source,stale,after)
+        assert candidate is None and reason
+    assert verified_bypass_reservations(source,held)[2] is None
