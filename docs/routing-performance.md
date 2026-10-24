@@ -24,6 +24,91 @@ round-led-ring retains 51/51 connections, 48 vias and 604.833 mm; nRF52 retains
 estimated plane opens. Concurrent timings are not a speed comparison, and these
 ladder runs do not include whole-board KiCad refill or hardware qualification.
 
+## Rebind immutable prefix occurrences at bypass admission (2026-10-24)
+
+A full-board integration exposed a source-array witness identity mismatch:
+re-materializing the immutable prefix preserved exact geometry but created new
+source-edge objects. The complete bypass reservation was rejected and fell back
+to keepouts. The standard handoff now restores unique equal original occurrences
+using the existing strict restore helper, then runs unchanged fresh ownership,
+context, association and geometry admission. Missing or ambiguous occurrences
+still fail closed; no context digest or copper value is changed.
+
+A permanent regression reproduces the original witness_via_invalid failure and
+passes after the fix. The 56-case affected set (including the added array-backed
+standard pipeline case) passes across the completed runs. The full pipeline
+keeps copper-mode reservations, retains all required arrays, preserves the
+bypass through routing, and replays the checkpoint successfully. CopperBench
+full435 was interrupted after its binding failure; it has no final/native result.
+A new full run is required for the combined current-source result.
+
+## Shared clock/data cohorts (2026-10-24)
+
+Contiguous single-ended clock and critical jobs now negotiate together across
+priorities. Coupled pair boundaries and independently retained verified owners
+remain separate. The selected engine keeps each original profile and priority,
+and the existing critical matching pass runs against all accepted copper.
+
+On the same saved CopperBench early input, all 15 critical net names connect
+with zero exact non-open errors and zero native opens/geometry errors on those
+nets. Required source macro/array copper is retained. The two RMII clocks are
+28.409533/28.409534 mm after normal tuning (1 nm skew; 2.54 mm source limit).
+The partial export retains 499 unrelated open items and 17 dangling warnings;
+this is not whole-board qualification. A separate untuned joint diagnostic
+connected all eight clock/data nets but failed matching by 15.298 mm and was
+rejected. No source length, via, clearance or matching requirement was relaxed.
+
+The 60 critical/retained-copper regressions, including a fixture that requires
+real clock-length tuning, pass, along with 15 additional bundle/lane cases.
+All four standard unified examples retain zero native opens and geometry errors
+and identical copper metrics to the preceding cohort selection. Ring and nRF
+still fail overall on unchanged warnings; full-vertical and cm4 pass overall.
+A matched two-million-expansion early-stage control is pending; the preceding
+coarse diagnostic used 400000 expansions. These results are not a runtime claim.
+
+## Reuse declared via arrays in cross-layer bypasses (2026-10-24)
+
+The bypass path graph previously ignored filled/capped vias, including exact
+required source arrays already present beneath exposed ground pads. The planner
+could therefore miss a physical return through an existing array and reject a
+complete supply/return transaction. It now recognizes only original occurrences
+matching required array geometry, checks current copper/drill/land clearances
+against the specific declared pad, and writes an explicit checked lead inside
+that same land when needed. Unrelated pad groups and component internals remain
+unsupported. New proposals still create ordinary through vias only.
+
+The focused 48-test set covers existing path contracts, one- and nine-via arrays,
+whole-net via budgets, exact occurrence preservation, idempotence, missing or
+altered declarations/geometry and new foreign obstacles. CopperBench's original
+PHY capacitor placement now obtains an explicit supply and return witness in a
+bounded diagnostic (six added tracks, two ordinary vias), whereas the same
+planner input previously exhausted its candidates. This is a scoped result;
+whole-board routing, native evidence and engineering qualification are separate.
+
+## Shared single-ended critical negotiation (2026-10-24)
+
+When unified routing is selected, contiguous same-priority single-ended critical
+jobs now share one bounded negotiation, preserving each original source profile.
+Clocks, differential pairs and retained verified owners keep their existing job
+boundaries. Each proposed net receives a fresh exact commit check; failed owners
+add no copper. Changed input prefixes and added foreign owners are rejected.
+No congestion-experiment commits or board-specific selectors are included.
+
+The 153 related critical, retained-copper, pair, and unified regressions pass.
+The four standard examples with explicit unified selection and native refill
+complete with zero native opens and geometry errors. Ring and nRF still fail
+the overall gate on native warnings; only full-vertical and cm4 pass overall.
+These are connectivity results, not four clean passes. The initial omitted-router run
+was interrupted and is not a matched comparison. On CopperBench's saved early
+critical input, the coarse cohort connects four of six RMII nets versus three
+in the earlier sequential full run; all MDI and clock connections remain. Fresh
+native checking confirms RXD0/RXD1 each retain two open items, all other selected
+nets connect, and source macro/array copper is retained. That diagnostic uses
+400000 search expansions rather than the historical full run's 2000000, so no
+matched runtime or pure algorithm attribution is claimed. A 0.125 mm /2000000
+expansion diagnostic leaves three RMII nets open and is not selected. Whole-board
+routing and engineering qualification remain separate.
+
 ## Reproducible router review fixes (2026-10-24)
 
 Unified plane contacts now materialize a required pad-to-grid lead before
