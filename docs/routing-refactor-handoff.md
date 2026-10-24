@@ -135,7 +135,24 @@ The aim is one PR, `refactor/routing` → `main`, merged once the checks hold.
    numbers above are with `unified`). If it does, the legacy-only paths that
    the unified flow skips (late zone-escape repair, power-preparation
    allocator) need a decision: keep behind `--router legacy` or retire (plan
-   decision D4 allows deleting retired code).
+   decision D4 allows deleting retired code). What changes for a run that
+   does not pass `--router` when the default flips:
+   - Stops working: scoped routing (`run_routing_pipeline(routing_nets=...)`)
+     raises, because the unified path nulls `power_area_options`; the late
+     zone-escape repair (`improve_zone_escapes`) is skipped; power preparation
+     and area planning are skipped ("unified router uses declared planes");
+     package-access search is skipped (its `--fanout` options only seed
+     escapes), so `--stop-after package-preflight|package-access` is refused.
+   - Ignored flags: the legacy ordinary-router flags listed in
+     `cli-workflow.md` (`--passes`, `--search-budget`, `--soft-ripup`, ...)
+     stop having an effect; `route-board` reports them in
+     `work_limits.unified_ignored_flags` and `unified_skipped_stage_flags`.
+     `bench/ladder.json` still passes them; the D3 CI benchmark pins
+     `"router": "legacy"` in `.github/routing-benchmark.json` (item 4).
+   - Still runs: the CLI post-stitch (`stitch_zone_pads`,
+     `repair_cut_off_plane_pads`) on top of the unified plane routes (not with
+     `--unified-direct`), filled-copper feedback trials and detailed placement
+     feedback trials.
 4. Run `main`'s CI on the branch: `routing-benchmark.yml` (PCBWorld D3 boards
    scored by KiCad, baseline 81 / 99 clean in
    `.github/routing-benchmark-baseline.json`) and `board-routing.yml`. The

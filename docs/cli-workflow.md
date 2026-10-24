@@ -80,6 +80,28 @@ single-ended critical groups. This reserves their joint exit before a flexible
 single trace can obstruct it. An explicitly higher priority still takes
 precedence; no extra search or rip-up allowance is created.
 
+The unified router's own controls are the `--unified-*` flags and
+`--no-route-smoothing` (which reaches either router); `--fanout` options seed
+its pad escapes and repair rounds. It ignores the legacy ordinary-router
+flags `--pitch-mm` (unless `--local-demand-cost` is above 0), `--passes`,
+`--search-budget`, `--minimum-repair-pitch-mm`, `--heuristic-weight`,
+`--soft-ripup`, `--constrained-pins-first`, `--progressive-guides`,
+`--guide-distance-heuristic`, `--repair-budget-multiplier`,
+`--search-reuse-entries`, `--guide-escape-mm` and `--no-escape-terminals`.
+It also skips package-access search (`--package-*` flags and the
+`--legacy-gates` stop), power preparation and area planning
+(`--plan-power-areas`, `--power-area-net`, `--power-area-config`) and the late
+zone-escape repair (`--zone-escape-trials`, `--zone-local-ripup-trials`,
+`--zone-escape-movement-mm`, `--no-incremental-placement-repair`);
+`--stop-after package-preflight|package-access` is refused. The CLI plane
+post-stitch (`stitch_zone_pads`, then `repair_cut_off_plane_pads`) still runs
+unless `--unified-direct`. When any of these flags is given with a non-default
+value, `route-board` emits one `router_options` / `ignored` progress event and
+lists them in the report's `work_limits.unified_ignored_flags` and
+`work_limits.unified_skipped_stage_flags`; routing is unchanged.
+`bench/ladder.json` passes legacy flags that unified runs ignore, so a
+router comparison must change only `--router`.
+
 `replay-critical STATE --only NET --report RUN/route-report.json -o RUN/board.kicad_pcb`
 isolates critical routing from a placement checkpoint or source-only saved input.
 Selecting one differential member selects its whole existing group. All source

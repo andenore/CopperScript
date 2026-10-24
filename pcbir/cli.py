@@ -1164,6 +1164,50 @@ def _unified_options(args):
                                 save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
 
 
+# route-board options read only by DetailedRouterOptions. With --router unified
+# the pipeline discards that object (flow._route_unified_compat), so they have
+# no effect. --pitch-mm also sets the global local-demand lane pitch, which is
+# read only with --local-demand-cost > 0.
+_LEGACY_ORDINARY_ROUTER_FLAGS = (
+    "pitch_mm", "passes", "search_budget", "minimum_repair_pitch_mm", "heuristic_weight",
+    "soft_ripup", "constrained_pins_first", "progressive_guides", "guide_distance_heuristic",
+    "repair_budget_multiplier", "search_reuse_entries", "guide_escape_mm", "no_escape_terminals",
+)
+# route-board options of stages the unified pipeline skips: package-access
+# search (and its --legacy-gates stop), power preparation/area planning and the
+# late zone-escape repair (improve_zone_escapes).
+_UNIFIED_SKIPPED_STAGE_FLAGS = (
+    "package_access_trials", "package_placement_probes", "package_pattern_trials",
+    "package_partial_owner_nets", "package_initial_pair_states", "package_boundary_step_mm",
+    "package_destination_ports", "package_access_movement_mm", "legacy_gates",
+    "plan_power_areas", "power_area_net", "power_area_config",
+    "zone_escape_trials", "zone_local_ripup_trials", "zone_escape_movement_mm",
+    "no_incremental_placement_repair",
+)
+
+
+def _unified_flag_notes(args) -> dict[str, list[str]] | None:
+    """Name route-board flags that a --router unified run does not apply.
+
+    A flag counts as given when its value differs from the parser default
+    (a --routing-profile value counts too). Skipped-stage flags are listed only
+    when they would enable work (non-zero, true or non-empty). Advisory only:
+    routing is unchanged.
+    """
+    if getattr(args, "router", "legacy") != "unified":
+        return None
+    defaults = _parser().parse_args(["route-board", str(args.board)])
+    def given(name):
+        return getattr(args, name) != getattr(defaults, name)
+    def flag(name):
+        return "--" + name.replace("_", "-")
+    ignored = [flag(name) for name in _LEGACY_ORDINARY_ROUTER_FLAGS if given(name)
+               and not (name == "pitch_mm" and args.local_demand_cost > 0)]
+    skipped = [flag(name) for name in _UNIFIED_SKIPPED_STAGE_FLAGS
+               if given(name) and getattr(args, name)]
+    return {"ignored_flags": ignored, "skipped_stage_flags": skipped}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["bench"]:
@@ -1573,6 +1617,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("Board routing stopped because ERC reported errors.")
                 return 1
             stage_tracker, placement_reuse, checkpoints = None, None, {}
+            unified_flag_notes = _unified_flag_notes(args)
             try:
                 physical_options = PrototypePhysicalOptions(
                     copper_layers=args.layers, fabrication_profile=args.fab_profile,
@@ -1729,6 +1774,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if progress is not None:
                     # Remember the open stage so a failure leaves a located record.
                     stage_tracker = progress = StageTracker(progress)
+                if unified_flag_notes and any(unified_flag_notes.values()):
+                    # Advisory: these flags do not reach the unified pipeline.
+                    emit(progress, "router_options", "ignored", router="unified", **unified_flag_notes)
                 checkpoint_key = (placement_key(physical_board, placement_options, router_options,
                                                 feedback_options)
                                   if args.checkpoint_dir or args.reuse_placement else None)
@@ -1977,7 +2025,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
-                    "filled_copper_search_states")},
+                    "filled_copper_search_states")} | ({
+                    "unified_ignored_flags": unified_flag_notes["ignored_flags"],
+                    "unified_skipped_stage_flags": unified_flag_notes["skipped_stage_flags"],
+                } if unified_flag_notes is not None else {}),
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run",
                     "final_copper_processing": "skipped_for_stopped_run"}
