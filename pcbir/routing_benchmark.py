@@ -99,6 +99,9 @@ def summarize_run(directory: Path) -> dict:
               "manifest_status": manifest.get("status"), "exit_code": manifest.get("exit_code"),
               "elapsed_seconds": manifest.get("elapsed_seconds"), "profile_mode": profile,
               "provenance": manifest.get("provenance"), "routing_settings": _settings(manifest),
+              # Command lines without --router name different routers across the
+              # 2026-10-24 default change; the report records the one that ran.
+              "router": ((report or {}).get("work_limits") or {}).get("router"),
               "quality": None, "quality_missing_fields": [], "work": None,
               "reported_feedback_attempts": None}
     log = directory / "routing.log"
@@ -328,6 +331,8 @@ def compare_runs(baseline: dict, candidate: dict) -> dict:
             blockers.append(f"matching provenance required: {field}")
     if baseline["routing_settings"] is None or baseline["routing_settings"] != candidate["routing_settings"]:
         blockers.append("routing settings differ outside the explicit repair comparison switches")
+    if baseline.get("router") != candidate.get("router"):
+        blockers.append("recorded routers differ")
     if baseline["profile_mode"] != "none" or candidate["profile_mode"] != "none":
         blockers.append("wall-time comparison requires two uninstrumented runs")
     times = [baseline["elapsed_seconds"], candidate["elapsed_seconds"]]

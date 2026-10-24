@@ -99,6 +99,8 @@ EXPORT int pcbir_astar(
     int bx0, int by0, int bx1, int by1, int tx0, int ty0, int tx1, int ty1,
     const int32_t *sources, const double *source_cost, int n_sources,
     const double *target_extra, /* per node, or 0 */
+    const double *turn,         /* 8 * 8 turn costs [incoming move][move], or 0 */
+    const double *guide,        /* per node: cost per pitch step entering it, or 0 */
     int max_expansions,
     double *best, int32_t *parent,
     entry_t *heap, int heap_cap,
@@ -107,6 +109,9 @@ EXPORT int pcbir_astar(
 {
     static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
     static const int DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    /* Move lengths in pitches; the diagonal is Python's sqrt(2.0). */
+    static const double STEP[8] = {1.0, 1.0, 1.0, 1.0, 1.4142135623730951, 1.4142135623730951,
+                                   1.4142135623730951, 1.4142135623730951};
     const int plane = nx * ny;
     const double INF = 1e30;
     int heap_size = 0, touched_count = 0, expansions = 0, found = -1, i;
@@ -151,6 +156,17 @@ EXPORT int pcbir_astar(
            (that step would be drawn at full width). */
         int here_neck_only = here_in_region && (flags[node] & FLAG_NECK);
         const double *base = move_base + layer * 8;
+        /* Turn cost from the heading of this node's best parent (none after
+           a via or at a source); the same approximation as the Python search. */
+        const double *turn_row = 0;
+        if (turn) {
+            int p = parent[node];
+            if (p >= 0 && p / plane == layer) {
+                int d = node - p;
+                for (int m = 0; m < 8; m++)
+                    if (d == DY[m] * nx + DX[m]) { turn_row = turn + 8 * m; break; }
+            }
+        }
         for (int m = 0; m < 8; m++) {
             int x2 = x + DX[m], y2 = y + DY[m];
             if (x2 < bx0 || x2 > bx1 || y2 < by0 || y2 > by1) continue;
@@ -166,6 +182,8 @@ EXPORT int pcbir_astar(
                                               && (flags[cell] & FLAG_NECK_MID))) continue;
             }
             double c = cost + base[m] * (1.0 + hist[n2]) * (1.0 + present * occ[n2]);
+            if (turn_row) c += turn_row[m];
+            if (guide) c += STEP[m] * guide[n2];
             if (c < best[n2]) {
                 if (best[n2] >= INF) {
                     if (touched_count >= touched_cap) { *n_touched = touched_count; return -1; }

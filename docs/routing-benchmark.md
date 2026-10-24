@@ -93,11 +93,14 @@ dispatch.
 ## Router choice
 
 `router` in `.github/routing-benchmark.json` names the ordinary router the
-benchmark measures (`legacy` or `unified`, as `route-board --router`); a
-manual dispatch may override it with the `router` input. The committed
-baseline belongs to the pinned router, so a run of the other router fails the
-lost-board check by design. The per-board record also carries routable nets
-and routing seconds. To compare two runs on every recorded measure, save
+benchmark measures (`legacy` or `unified`, as `route-board --router`). It is
+`unified`, the `route-board` and `pcbir.bench` default since 2026-10-24; a
+manual dispatch may set the `router` input to `legacy` for comparison. The
+committed baseline belongs to the pinned router, so a run of the other router
+fails the lost-board check by design. The current baseline was still recorded
+with `legacy`, so unified runs may fail that check until it is re-recorded
+from a unified run's "Benchmark baseline record" (above). The per-board record
+also carries routable nets and routing seconds. To compare two runs on every recorded measure, save
 both runs' "Benchmark baseline record" annotations (or use two local
 `baseline.json` files) and run
 `python -m pcbir.bench versus FIRST SECOND --names legacy unified`. It reports
@@ -108,14 +111,15 @@ counts and the boards clean with only one of the two.
 
 ## Local runs
 
-`python -m pcbir.bench run BOARDS --out RESULTS --router unified --workers 6
+`python -m pcbir.bench run BOARDS --out RESULTS --workers 6
 --kicad-cli KICAD_CLI --pcbnew-python PY` routes and scores every prepared
 board in `BOARDS` (`BOARDS/<id>/processed_v9_guide_v3.kicad_pcb` with its
 `.kicad_pro`, the layout of the CI's `bench-boards` artifact: download it
 from any benchmark run). Each board routes in its own process under
-`--board-seconds` (default 1200, as CI). `RESULTS` must be new or empty; the
+`--board-seconds` (default 1200, as CI) with the unified router; add
+`--router legacy` for the pre-refactor router. `RESULTS` must be new or empty; the
 run writes per-board records, `summary.md`, `baseline.json` and `record.txt`.
-`--only` (board ids or number prefixes) and `--limit` select a subset; `--set OPTION=VALUE` (repeatable) overrides a `UnifiedRouterOptions` field for `--router unified`, so an option is measured before it becomes a default. On
+`--only` (board ids or number prefixes) and `--limit` select a subset; `--set OPTION=VALUE` (repeatable) overrides a `UnifiedRouterOptions` field of the unified router, so an option is measured before it becomes a default. On
 Windows, KiCad's own interpreter (`KiCad/10.0/bin/python.exe`) imports
 `pcbnew`. Local scores use the installed KiCad, so compare a local run with
 another local run, not with the KiCad 9 CI baseline.

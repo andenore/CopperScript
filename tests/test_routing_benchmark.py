@@ -169,6 +169,16 @@ def test_unknown_or_changed_comparison_inputs_are_blocked(tmp_path, change):
     assert result["comparison_blockers"] and not result["eligible_for_timing_review"]
 
 
+def test_same_command_line_with_different_recorded_routers_is_blocked(tmp_path):
+    # A command without --router ran legacy before 2026-10-24 and unified after.
+    legacy, unified = report(), report()
+    legacy["work_limits"] = {"router": "legacy"}
+    unified["work_limits"] = {"router": "unified"}
+    result = compare(tmp_path, before=legacy, after=unified)
+    assert "recorded routers differ" in result["comparison_blockers"]
+    assert not result["eligible_for_timing_review"]
+
+
 def test_running_manifest_is_not_complete_even_with_stale_report(tmp_path):
     save_run(tmp_path / "before")
     save_run(tmp_path / "after", running=True, final_report=report())
