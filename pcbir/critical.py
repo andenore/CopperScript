@@ -609,15 +609,16 @@ def route_critical_nets(
             coupled_pairs.add(frozenset((rule.net, partner_name)))
             net_tracks, net_vias = pair_tracks, pair_vias
         else:
-            # Equal-priority single-ended jobs share one negotiation rather than
+            # Contiguous single-ended jobs share one negotiation rather than
             # freezing the first path before its peers can contest that space.
             # Cohorts are contiguous in the existing job order. Do not move
-            # coupled jobs, clocks, or independently retained verified copper.
-            if (unified_options is not None and rule.kind is RouteKind.CRITICAL
+            # coupled jobs or independently retained verified copper. Priority
+            # remains a source cost within the selected engine, not a lock.
+            if (unified_options is not None and rule.kind in {RouteKind.CRITICAL, RouteKind.CLOCK}
                     and rule.net not in cohort_candidates and rule.net not in retained_by_net):
                 cohort = []
                 for peer, peer_group in jobs[job_index:]:
-                    if (peer.kind is not RouteKind.CRITICAL or peer.priority != rule.priority
+                    if (peer.kind not in {RouteKind.CRITICAL, RouteKind.CLOCK}
                             or len(peer_group) != 1 or peer.net in retained_by_net):
                         break
                     cohort.append(peer)

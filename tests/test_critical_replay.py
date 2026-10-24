@@ -202,15 +202,46 @@ def test_critical_cohort_rejects_changed_prefix_or_foreign_owner(monkeypatch, da
                for result, _, _ in results.values())
 
 
-def test_different_priority_critical_jobs_do_not_form_a_cohort(monkeypatch):
-    import pcbir.critical as critical
+@pytest.mark.parametrize("first_kind", (RouteKind.CRITICAL, RouteKind.CLOCK))
+def test_clock_and_data_priorities_negotiate_together(monkeypatch, first_kind):
+    import pcbir.unified_router as unified
+    board = _single_critical_board()
+    board = replace(board, net_routing_rules=(replace(board.net_routing_rules[0],kind=first_kind),
+        replace(board.net_routing_rules[1], priority=70)))
+    calls=[]
+    original=unified.route_unified
+    def record(board,guide,options,**kwargs):
+        calls.append(kwargs["only_nets"])
+        return original(board,guide,options,**kwargs)
+    monkeypatch.setattr(unified,"route_unified",record)
+    result = route_critical_nets(board, route_global(board),
+        unified_options=unified.UnifiedRouterOptions(time_budget_s=10))
+    assert calls == [frozenset({"USB_DM","USB_DP"})]
+    assert all(item.connected for item in result.nets)
+    assert all(item.strategy == "unified_critical_cohort" for item in result.nets)
+
+
+def test_shared_clock_cohort_still_tunes_declared_matching_group():
+    from pcbir.physical import NetMatchGroup
+    from pcbir import run_physical_drc
     from pcbir.unified_router import UnifiedRouterOptions
     board = _single_critical_board()
-    board = replace(board, net_routing_rules=(board.net_routing_rules[0],
-        replace(board.net_routing_rules[1], priority=70)))
-    def forbidden(*args, **kwargs):
-        raise AssertionError("different priority jobs formed a cohort")
-    monkeypatch.setattr(critical, "_route_critical_cohort", forbidden)
-    result = route_critical_nets(board, route_global(board),
+    source_fp = next(iter(board.footprints.values()))
+    target_fp = replace(source_fp, name="offset-target", pads=tuple(
+        replace(p, position=Point.mm(-4, "0.5")) if p.number == "2" else p
+        for p in source_fp.pads))
+    board = replace(board, footprints={**board.footprints,target_fp.name:target_fp},
+        placements=tuple(replace(p,footprint=target_fp.name) if p.reference=="J2" else p
+            for p in board.placements),
+        net_routing_rules=tuple(replace(r,kind=RouteKind.CLOCK,
+            priority=80 if r.net=="USB_DM" else 70,tuning_amplitude_limit_nm=1000000)
+            for r in board.net_routing_rules),
+        match_groups=(NetMatchGroup("matched-clocks",("USB_DM","USB_DP"),1000000),))
+    result = route_critical_nets(board,route_global(board),
         unified_options=UnifiedRouterOptions(time_budget_s=10))
-    assert all(item.connected for item in result.nets)
+    assert all(n.connected for n in result.nets)
+    assert not [f for f in run_physical_drc(result.board).findings
+                if f.severity.value=="error" and f.code!="DRC-ROUTE-INCOMPLETE"]
+    lengths=[n.lengths_nm[0] for n in result.nets]
+    assert max(lengths)-min(lengths)<=1000000
+    assert board.tracks==() and result.board.match_groups==board.match_groups
