@@ -1,3 +1,53 @@
+## Exact tentative copper and through-via congestion (2026-10-24)
+
+Unified negotiation now checks actual emitted tentative tracks and vias through
+one fresh clearance index. Mutable occurrences identify both conflicting owners;
+locked source copper never becomes a rip-up dependency. Emitted breakout widths
+match exact commit. Track, lead and via history prices the actual conflicting
+geometry instead of treating overlapping raster envelopes as proof of a clash.
+
+Through-via proposals also price foreign mutable tracks on every barrel layer,
+including layers the path does not visit. Both grid tracks and off-grid leads
+contribute to that reservation. The largest candidate via and clearance provide
+a conservative cost envelope; exact commit remains the acceptance gate. Required
+arrays, source copper, return coverage, via budgets and native checks are retained.
+
+Control376 exposes a real diagonal track/via clash between raster sample points.
+Control380 exposes a via crossing an internal-layer track while searching only
+front and back. Both Python and native kernels reproduce these cases. The latest
+focused router/lead/via-budget set passes all 54 cases (381; pre-push403 repeats it).
+The tested router file SHA-256 is
+`7b54f4e00ac8321099a4ac7c7b69722d25ad5d6107dcba2164ebad5ecb04dfb0`.
+
+All runs below use the standard pipeline with `--router unified`. Benchmark390
+routes the four examples; independent KiCad refill checks are retained alongside
+each output. Benchmark388 routes both maintained consumers with native verification.
+
+| Board | Signal connections | Native opens | Exact geometry errors | Vias | Track length (mm) | Wall time (s) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Legacy round LED ring | 51/51 | 1 | 0 | 47 | 654.422 | 181.0 |
+| nRF52 | 35/35 | 0 | 0 | 39 | 352.550 | 48.0 |
+| Full vertical | 86/86 | 0 | 0 | 186 | 1605.004 | 219.3 |
+| CM4 | 21/21 | 0 | 0 | 61 | 587.990 | 23.1 |
+| CopperLedRing | 51/51 | 0 | 0 | 37 | 542.624 | 94.7 |
+| CopperAssetTracker | 120/120 | 0 | 0 | 269 | 1995.230 | 1186.0 |
+
+The legacy ring remains incomplete: one GND open after native refill. The matched
+upstream-main control397 has two native opens and two signal opens. Example native
+reports retain footprint-library warnings; the legacy ring also has isolated
+copper and silkscreen warnings. Concurrent workloads make these timings unsuitable
+as a speedup claim. No equivalent legacy-router benchmark pass is asserted.
+
+All supported positive example check/compile targets391, all 22 physical-example
+layout/editor smoke checks395 and all 20 Node editor/LSP tests389 pass. The local
+Python suite394 is incomplete and has reported at least 13 failures. Five plane-
+first assertions also fail on unchanged upstream main `5fce7028` (control402): four
+expect a blocked intermediate result now found ready, and one expects the older
+`plane_first` strategy name instead of `critical_and_plane_first`. Other failures
+remain unclassified. Run384 had an invalid temporary-directory parent and is not
+validation evidence. This is not an all-tests pass, whole-board CopperBench
+closure, or electrical/assembly/CAM/hardware qualification.
+
 ## Exact off-grid lead/via interactions and bounded via-price families (2026-10-24)
 
 The earlier half-diagonal lead sampling can mark legal copper as conflicted.
