@@ -78,6 +78,22 @@ class _PadIndexTemplate:
     bins: tuple[tuple[tuple[CopperLayer, int, int], tuple[int, ...]], ...]
 
 
+class _Addition:
+    """One ``additions()`` entry and the index slots it created."""
+
+    __slots__ = ("entry", "kind", "default_occurrence", "objects", "hole")
+
+    def __init__(self, entry: tuple[TrackSegment | Via, bool], kind: str,
+                 default_occurrence: bool, objects: tuple[int, ...],
+                 hole: int | None) -> None:
+        self.entry = entry
+        self.kind = kind
+        # Default labels name the log position and follow it on removal.
+        self.default_occurrence = default_occurrence
+        self.objects = objects
+        self.hole = hole
+
+
 @lru_cache(maxsize=512)
 def _posed_pad_geometry(footprint_key: IdentityKey, pose_key: IdentityKey):
     """Only immutable original land geometry, with no rules or clearance result."""
@@ -197,10 +213,21 @@ class RoutingClearanceIndex:
             (frozenset(r.layers), RoundedConvexShape(r.outline.outer.vertices))
             for r in macro_reservations(board)
         )
-        self._objects: list[_CopperObject] = []
-        self._holes: list[_DrilledHole] = []
+        # Bins hold stable slot ids; ``remove`` leaves ``None`` in a slot
+        # until compaction. ``_objects``/``_holes`` list the live entries.
+        self._slots: list[_CopperObject | None] = []
+        self._hole_slots: list[_DrilledHole | None] = []
+        self._dead_slots = 0
+        self._dead_holes = 0
+        # Drill centres binned by position (layer independent, as drills are).
+        self._hole_bins: dict[tuple[int, int], list[int]] = {}
+        # Never decreases, so it bounds every live drill for the broad phase.
+        self._max_hole_radius_nm = 0
         # Ordered insertions; with ``board`` they determine the whole index.
         self._additions: list[tuple[TrackSegment | Via, bool]] = []
+        self._records: list[_Addition] = []
+        # Unlocked additions per net, in insertion order (``remove`` owners).
+        self._owned: dict[str, list[_Addition]] = {}
         self._bins: dict[tuple[CopperLayer, int, int], list[int]] = {}
         self._keepouts = tuple(
             _KeepoutObject(
@@ -226,8 +253,9 @@ class RoutingClearanceIndex:
         # The cached template is immutable. Each index owns fresh containers;
         # Source breakout-owner strings belong to that complete source epoch;
         # dynamic breakout queries and all mutable reservations remain local.
-        self._objects = list(template.objects)
-        self._holes = list(template.holes)
+        self._slots = list(template.objects)
+        for hole in template.holes:
+            self._add_hole(hole)
         self._bins = {key: list(ids) for key, ids in template.bins}
         if _deferred_components:
             # Private support-placement proposal view. The caller must restore
@@ -238,7 +266,7 @@ class RoutingClearanceIndex:
                     pad.kind is not PadKind.SMD
                     for ref in _deferred_components for pad in board.footprints[poses[ref].footprint].pads):
                 raise ValueError('deferred placement view requires known SMD-only components')
-            self._objects = []; self._bins = {}
+            self._slots = []; self._bins = {}
             for obj in template.objects:
                 if obj.pad_reference.component not in _deferred_components:
                     self._add(obj)
@@ -399,7 +427,8 @@ class RoutingClearanceIndex:
         self, net: str, position: Point, radius_nm: int,
         span: tuple[CopperLayer, CopperLayer],
     ) -> bool:
-        for hole in self._holes:
+        reach = radius_nm + self._max_hole_radius_nm + self.board.rules.minimum_hole_clearance_nm
+        for hole in self._nearby_holes(position, reach):
             distance_squared = ((position.x_nm - hole.position.x_nm) ** 2
                                 + (position.y_nm - hole.position.y_nm) ** 2)
             if (distance_squared == 0 and hole.net == net and hole.reusable
@@ -504,42 +533,202 @@ class RoutingClearanceIndex:
 
         All other index state derives from ``board`` and ``bin_size_nm``, so
         these three values identify an index exactly, e.g. for search reuse.
+        ``remove`` deletes its entries and keeps the others in order, so the
+        log still equals the additions of an equivalent fresh index.
         """
         return tuple(self._additions)
 
+    @property
+    def _objects(self) -> list[_CopperObject]:
+        """Live indexed copper in insertion order; callers must not mutate it."""
+        if not self._dead_slots:
+            return self._slots
+        return [item for item in self._slots if item is not None]
+
+    @property
+    def _holes(self) -> list[_DrilledHole]:
+        """Live drilled holes in insertion order; callers must not mutate it."""
+        if not self._dead_holes:
+            return self._hole_slots
+        return [hole for hole in self._hole_slots if hole is not None]
+
+    def owned_count(self, net: str) -> int:
+        """Unlocked additions (tracks and vias) of ``net`` that ``remove`` would delete.
+
+        Constant time. Zero means the net has no mutable copper indexed;
+        board-source copper and locked additions are never counted.
+        """
+        return len(self._owned.get(net, ()))
+
+    def remove(self, owner: str) -> int:
+        """Remove every unlocked track and via of net ``owner``; return how many.
+
+        The count is in ``additions()`` entries (a via is one entry, with its
+        annulus, drill copper and drilled hole). Board-source copper and locked
+        additions are never removed; an unknown owner removes nothing and
+        returns 0. Afterwards every query answers exactly as a fresh index of
+        ``board`` with the remaining ``additions()`` re-added in order,
+        including default occurrence labels, which follow their log position.
+        """
+        records = self._owned.pop(owner, None)
+        if not records:
+            return 0
+        for record in records:
+            for slot in record.objects:
+                self._drop_object(slot)
+            if record.hole is not None:
+                self._drop_hole(record.hole)
+        doomed = {id(record) for record in records}
+        first = next(position for position, record in enumerate(self._records)
+                     if id(record) in doomed)
+        kept = self._records[:first]
+        kept.extend(record for record in self._records[first:] if id(record) not in doomed)
+        for position in range(first, len(kept)):
+            record = kept[position]
+            if record.default_occurrence:
+                self._relabel(record, f"addition:{position}:{record.kind}")
+        self._records = kept
+        self._additions = [record.entry for record in kept]
+        if (self._dead_slots + self._dead_holes > self._COMPACT_MIN_DEAD
+                and 2 * self._dead_slots >= len(self._slots)):
+            self._compact()
+        return len(records)
+
+    # Tombstones tolerated before ``remove`` compacts slot ids (amortized).
+    _COMPACT_MIN_DEAD = 4096
+
+    def _record(self, entry: tuple[TrackSegment | Via, bool], kind: str, default: bool,
+                objects: tuple[int, ...], hole: int | None = None) -> None:
+        record = _Addition(entry, kind, default, objects, hole)
+        self._records.append(record)
+        if not entry[1]:
+            self._owned.setdefault(entry[0].net, []).append(record)
+
+    def _relabel(self, record: _Addition, occurrence: str) -> None:
+        for slot in record.objects:
+            item = self._slots[slot]
+            if item.occurrence != occurrence:
+                self._slots[slot] = replace(item, occurrence=occurrence)
+        if record.hole is not None:
+            hole = self._hole_slots[record.hole]
+            if hole.occurrence != occurrence:
+                self._hole_slots[record.hole] = replace(hole, occurrence=occurrence)
+
+    def _drop_object(self, slot: int) -> None:
+        """Undo exactly the bin insertions ``_add`` made for ``slot``."""
+        item = self._slots[slot]
+        bounds = item.shape.bounds
+        for layer in item.layers:
+            for x in range(bounds.min_x // self.bin_size_nm, bounds.max_x // self.bin_size_nm + 1):
+                for y in range(bounds.min_y // self.bin_size_nm, bounds.max_y // self.bin_size_nm + 1):
+                    ids = self._bins[(layer, x, y)]
+                    ids.remove(slot)
+                    if not ids:
+                        del self._bins[(layer, x, y)]
+        self._slots[slot] = None
+        self._dead_slots += 1
+
+    def _add_hole(self, hole: _DrilledHole) -> int:
+        slot = len(self._hole_slots)
+        self._hole_slots.append(hole)
+        key = (hole.position.x_nm // self.bin_size_nm, hole.position.y_nm // self.bin_size_nm)
+        self._hole_bins.setdefault(key, []).append(slot)
+        self._max_hole_radius_nm = max(self._max_hole_radius_nm, hole.radius_nm)
+        return slot
+
+    def _drop_hole(self, slot: int) -> None:
+        hole = self._hole_slots[slot]
+        key = (hole.position.x_nm // self.bin_size_nm, hole.position.y_nm // self.bin_size_nm)
+        ids = self._hole_bins[key]
+        ids.remove(slot)
+        if not ids:
+            del self._hole_bins[key]
+        self._hole_slots[slot] = None
+        self._dead_holes += 1
+
+    def _nearby_holes(self, position: Point, reach_nm: int) -> list[_DrilledHole]:
+        """Live drills centred within ``reach_nm`` per axis of ``position`` (broad phase).
+
+        Callers apply their exact predicate; a superset is always safe.
+        """
+        if reach_nm < 0:
+            return []
+        size = self.bin_size_nm
+        xs = range((position.x_nm - reach_nm) // size, (position.x_nm + reach_nm) // size + 1)
+        ys = range((position.y_nm - reach_nm) // size, (position.y_nm + reach_nm) // size + 1)
+        if len(xs) * len(ys) > len(self._hole_bins):
+            return list(self._holes)
+        slots, bins, found = self._hole_slots, self._hole_bins, []
+        for x in xs:
+            for y in ys:
+                ids = bins.get((x, y))
+                if ids:
+                    found.extend(slots[slot] for slot in ids)
+        return found
+
+    def _compact(self) -> None:
+        """Renumber live slots densely; relative (query) order is unchanged."""
+        remap: dict[int, int] = {}
+        live: list[_CopperObject] = []
+        for old, item in enumerate(self._slots):
+            if item is not None:
+                remap[old] = len(live)
+                live.append(item)
+        hole_remap: dict[int, int] = {}
+        holes: list[_DrilledHole] = []
+        for old, hole in enumerate(self._hole_slots):
+            if hole is not None:
+                hole_remap[old] = len(holes)
+                holes.append(hole)
+        self._slots, self._hole_slots = live, holes
+        self._dead_slots = self._dead_holes = 0
+        self._bins = {key: [remap[slot] for slot in ids] for key, ids in self._bins.items()}
+        self._hole_bins = {key: [hole_remap[slot] for slot in ids]
+                           for key, ids in self._hole_bins.items()}
+        for record in self._records:
+            record.objects = tuple(remap[slot] for slot in record.objects)
+            if record.hole is not None:
+                record.hole = hole_remap[record.hole]
+
     def add_track(self, track: TrackSegment, *, locked: bool = False,
                   occurrence: str | None = None) -> None:
+        default = not occurrence
         occurrence = occurrence or f"addition:{len(self._additions)}:track"
-        self._additions.append((track, locked))
-        self._add(_CopperObject(
+        entry = (track, locked)
+        self._additions.append(entry)
+        slot = self._add(_CopperObject(
             track.net, (track.layer,),
             RoundedConvexShape((track.start, track.end), track.width_nm // 2),
             locked=locked,
             occurrence=occurrence,
         ))
+        self._record(entry, "track", default, (slot,))
 
     def add_via(self, via: Via, *, locked: bool = False,
                 occurrence: str | None = None) -> None:
+        default = not occurrence
         occurrence = occurrence or f"addition:{len(self._additions)}:via"
-        self._additions.append((via, locked))
-        self._holes.append(_DrilledHole(
+        entry = (via, locked)
+        self._additions.append(entry)
+        hole = self._add_hole(_DrilledHole(
             via.net, via.position, via.drill_nm // 2, locked, True,
             (via.from_layer, via.to_layer),
             occurrence,
         ))
-        self._add(_CopperObject(
+        annulus = self._add(_CopperObject(
             via.net, self._via_layers(via.from_layer, via.to_layer),
             RoundedConvexShape((via.position,), via.size_nm // 2),
             locked=locked,
             occurrence=occurrence,
         ))
-        self._add(_CopperObject(
+        drill = self._add(_CopperObject(
             via.net, self._via_layers(via.from_layer, via.to_layer),
             RoundedConvexShape((via.position,), via.drill_nm // 2),
             clearance_nm=self.board.rules.minimum_hole_clearance_nm,
             locked=locked,
             occurrence=occurrence,
         ))
+        self._record(entry, "via", default, (annulus, drill), hole)
 
     def blocking_track_nets(self, track: TrackSegment) -> tuple[frozenset[str], bool]:
         """Return movable blocker nets and whether immutable geometry blocks a track."""
@@ -597,7 +786,8 @@ class RoutingClearanceIndex:
                     "via annulus must avoid pad copper", other.net, True,
                     tuple(layer.value for layer in other.layers),
                     tuple((p.x_nm, p.y_nm) for p in other.shape.spine), other.occurrence))
-        for hole in self._holes:
+        for hole in self._nearby_holes(via.position, via.drill_nm//2 + self._max_hole_radius_nm
+                                       + self.board.rules.minimum_hole_clearance_nm):
             distance = (via.position.x_nm-hole.position.x_nm)**2 + (via.position.y_nm-hole.position.y_nm)**2
             if (distance == 0 and hole.net == via.net and hole.reusable
                     and hole.span == (via.from_layer, via.to_layer)):
@@ -628,7 +818,7 @@ class RoutingClearanceIndex:
                 size_nm//2 + max(self._rule_clearance(net, land, other), other.clearance_nm),
                 drill_nm//2 + self.board.rules.minimum_hole_clearance_nm))
             boundaries.add(other.shape.bounds.expanded(margin))
-        for hole in self._holes:
+        for hole in self._nearby_holes(position, radius_nm+size_nm):
             if (abs(hole.position.x_nm-position.x_nm) <= radius_nm+size_nm
                     and abs(hole.position.y_nm-position.y_nm) <= radius_nm+size_nm):
                 margin = hole.radius_nm + drill_nm//2 + self.board.rules.minimum_hole_clearance_nm
@@ -667,7 +857,8 @@ class RoutingClearanceIndex:
         locked |= drill_locked
         locked = locked or not self.pad_copper_clear(shape, layers)
         movable = set(movable)
-        for hole in self._holes:
+        for hole in self._nearby_holes(via.position, via.drill_nm // 2 + self._max_hole_radius_nm
+                                       + self.board.rules.minimum_hole_clearance_nm):
             distance_squared = ((via.position.x_nm - hole.position.x_nm) ** 2
                                 + (via.position.y_nm - hole.position.y_nm) ** 2)
             if (distance_squared == 0 and hole.net == via.net and hole.reusable
@@ -713,16 +904,17 @@ class RoutingClearanceIndex:
         first, last = sorted((layers.index(from_layer), layers.index(to_layer)))
         return layers[first:last + 1]
 
-    def _add(self, item: _CopperObject) -> None:
+    def _add(self, item: _CopperObject) -> int:
         if item.net in self.breakout.declared:
             item = replace(item, breakout_land=self.breakout.region(item.net, item.shape.spine))
-        identity = len(self._objects)
-        self._objects.append(item)
+        identity = len(self._slots)
+        self._slots.append(item)
         bounds = item.shape.bounds
         for layer in item.layers:
             for x in range(bounds.min_x // self.bin_size_nm, bounds.max_x // self.bin_size_nm + 1):
                 for y in range(bounds.min_y // self.bin_size_nm, bounds.max_y // self.bin_size_nm + 1):
                     self._bins.setdefault((layer, x, y), []).append(identity)
+        return identity
 
     def _clear(
         self, net: str, shape: RoundedConvexShape, layers: tuple[CopperLayer, ...],
@@ -782,4 +974,4 @@ class RoutingClearanceIndex:
                         if identity in seen:
                             continue
                         seen.add(identity)
-                        yield self._objects[identity]
+                        yield self._slots[identity]
