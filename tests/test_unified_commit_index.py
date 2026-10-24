@@ -280,6 +280,15 @@ def test_routed_blind_vias_follow_the_declared_technology():
 
 def test_a_layer_change_no_technology_serves_is_rejected_with_its_reason():
     board = _four_layer((BLIND,), layers=(FRONT, BACK))
+    # Close the wall's end detours: span-aware search can now find the legal
+    # surface route around the original finite wall instead of proposing an
+    # unsupported through via and failing at commit.
+    from pcbir import CopperKeepout, PolygonRing, PolygonWithHoles
+    wall = PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in
+        ((12.8, 0), (13.2, 0), (13.2, 26), (12.8, 26)))))
+    board = replace(board, tracks=(), copper_keepouts=(CopperKeepout(
+        'wall', (FRONT,), wall, block_tracks=True, block_vias=False,
+        block_pads=False, block_zones=False),))
     assert physical_via_span(board, FRONT, BACK) is None
     result, _ = _run(board)
     (net,) = [n for n in result.nets if n.net == "A"]

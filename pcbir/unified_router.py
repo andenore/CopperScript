@@ -397,7 +397,7 @@ class _Rasters:
         self.holes = holes          # (owner, x, y, radius)
         self.margin = margin
         self._track: dict[tuple[int, int], tuple[list[int], list[int]]] = {}
-        self._via: dict[tuple[int, int, int], tuple] = {}
+        self._via: dict[tuple[int, int, int, tuple[int, int]], tuple] = {}
         self.via_mask = None        # (ny, nx) bool: False forbids a new via there
         g = grid
         self.px, self.py = np.meshgrid(g.xs, g.ys)                      # node centres
@@ -445,9 +445,10 @@ class _Rasters:
             self._track[key] = (nodes.tolist(), cells.tolist(), nodes, cells)
         return self._track[key]
 
-    def via(self, size: int, drill: int, clearance: int) -> list[int]:
-        """Owner list (one plane) for a through via centred on each node."""
-        key = (size, drill, clearance)
+    def via(self, size: int, drill: int, clearance: int, span=None) -> list[int]:
+        """Owner list for a physical via span; drill spacing stays layer independent."""
+        span = span if span is not None else (0, self.grid.nl - 1)
+        key = (size, drill, clearance, span)
         if key not in self._via:
             g = self.grid
             # Copper spacing, or the drill's hole clearance to copper if larger.
@@ -455,8 +456,9 @@ class _Rasters:
             stacked = self._build(half, clearance, self.px, self.py, self.inside_nodes,
                                   self.edge_nodes, for_via=True, as_array=True,
                                   via_annulus_half_width=size / 2)
-            owner = stacked[0].copy()
-            for layer in range(1, g.nl):
+            low, high = span
+            owner = stacked[low].copy()
+            for layer in range(low + 1, high + 1):
                 other = stacked[layer]
                 both = (owner != other)
                 owner = np.where(both & (owner == _FREE), other, owner)
@@ -476,9 +478,10 @@ class _Rasters:
             self._via[key] = (flat.tolist(), flat)
         return self._via[key][0]
 
-    def via_array(self, size: int, drill: int, clearance: int):
-        self.via(size, drill, clearance)
-        return self._via[(size, drill, clearance)][1]
+    def via_array(self, size: int, drill: int, clearance: int, span=None):
+        span = span if span is not None else (0, self.grid.nl - 1)
+        self.via(size, drill, clearance, span)
+        return self._via[(size, drill, clearance, span)][1]
 
     def _build(self, half_width: float, clearance: int, px, py, inside, edge, *,
                for_via: bool, as_array: bool = False, via_annulus_half_width=None):
@@ -1452,6 +1455,9 @@ class _Router:
                 route = direct
         if not route.connected and self._expired():
             route.reason = "time budget exhausted"
+        elif not route.connected and len(spec.layers) > 1 and self.board.stackup.via_technologies:
+            if not self._via_transitions(spec)[0]:
+                route.reason += "; no_via_technology for allowed layer transitions"
         return route
 
     def _route_net_budgeted(self, spec: _NetSpec, present: float) -> _NetRoute:
@@ -1674,7 +1680,7 @@ class _Router:
         scale = min(self.options.window_growth_limit, 1 + age // 3)
         return int(self.options.window_margin_nm * scale // self.grid.pitch)
 
-    def _via_owners(self, spec: _NetSpec, *, as_array=False):
+    def _via_owners(self, spec: _NetSpec, *, as_array=False, span=None):
         """Via proposals for a single-ended net must have existing returns.
 
         The raster narrows proposals only. Exact integer distance/span checks
@@ -1682,18 +1688,20 @@ class _Router:
         """
         rule = self.rules.get(spec.name)
         if rule is None or not rule.require_return_vias or rule.differential_partner is not None:
-            return (self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance) if as_array
-                    else self.rasters.via(spec.via_size, spec.via_drill, spec.clearance))
-        cached = spec.arrays.get("return_via_owner")
+            return (self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance, span) if as_array
+                    else self.rasters.via(spec.via_size, spec.via_drill, spec.clearance, span))
+        key = ("return_via_owner", span)
+        cached = spec.arrays.get(key)
         if cached is not None:
             return cached
         from .return_paths import return_span_covers
         g = self.grid
+        low, high = span if span is not None else (0, g.nl - 1)
         mask = np.zeros((g.ny, g.nx), dtype=bool)
         limit = rule.maximum_return_via_distance_nm
         for via in self.board.vias:
             if (via.net != rule.return_via_net or via.net == spec.name
-                    or not return_span_covers(self.board, via, g.layers[0], g.layers[-1])):
+                    or not return_span_covers(self.board, via, g.layers[low], g.layers[high])):
                 continue
             x, y = via.position.x_nm, via.position.y_nm
             x0, y0, x1, y1 = g.window(x-limit, y-limit, x+limit, y+limit)
@@ -1704,10 +1712,37 @@ class _Router:
             distance = np.hypot(self.rasters.px[y0:y1+1, x0:x1+1]-x,
                                 self.rasters.py[y0:y1+1, x0:x1+1]-y)
             mask[y0:y1+1, x0:x1+1] |= distance <= limit
-        owners = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance).copy()
+        owners = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance, span).copy()
         owners.reshape((g.ny, g.nx))[~mask] = _FOREIGN
-        spec.arrays["return_via_owner"] = owners
+        spec.arrays[key] = owners
         return owners
+
+    def _via_transitions(self, spec: _NetSpec):
+        """Optional span-specific owner arrays and native pointer table.
+
+        Boards without a technology catalog keep the single-mask fast path. A null
+        entry in the table means no technology serves that layer transition.
+        Arrays are retained in the spec for the lifetime of the native call.
+        """
+        if not self.board.stackup.via_technologies:
+            return None
+        if "via_transitions" not in spec.arrays:
+            g = self.grid
+            owners = {}
+            pointers = np.zeros(g.nl * g.nl, dtype=np.uintp)
+            for low in spec.layers:
+                for high in spec.layers:
+                    if low >= high:
+                        continue
+                    physical = self._transition_span(low, high)
+                    if physical is None:
+                        continue
+                    span = tuple(sorted((g.layers.index(physical[0]), g.layers.index(physical[1]))))
+                    mask = self._via_owners(spec, as_array=True, span=span)
+                    owners[low, high] = owners[high, low] = mask
+                    pointers[low * g.nl + high] = pointers[high * g.nl + low] = mask.ctypes.data
+            spec.arrays["via_transitions"] = owners, pointers
+        return spec.arrays["via_transitions"]
 
     def _search(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
                 target_extra=None):
@@ -1822,6 +1857,7 @@ class _Router:
         corridor = self._guide_corridor(spec) if self.guides else None
         inside = corridor[0] if corridor is not None else None
         guide_cost = options.guide_cost
+        transitions = self._via_transitions(spec)
         while heap:
             if expansions % 1024 == 0 and self._expired():
                 break
@@ -1885,9 +1921,9 @@ class _Router:
                     hx = tx0 - x2 if x2 < tx0 else (x2 - tx1 if x2 > tx1 else 0)
                     hy = ty0 - y2 if y2 < ty0 else (y2 - ty1 if y2 > ty1 else 0)
                     push(heap, (c + (hx if hx > hy else hy) + 0.41421356 * (hy if hx > hy else hx), c, n2))
-            # Layer changes through a through via at this xy.
+            # Layer changes through the selected physical via span.
             o = via_owner[rest]
-            if o != -1 and o != nid:
+            if transitions is None and o != -1 and o != nid:
                 continue
             vpen = via_cost * (1.0 + via_hist[rest]) * (1.0 + present * via_occ[rest])
             hx = tx0 - x if x < tx0 else (x - tx1 if x > tx1 else 0)
@@ -1896,6 +1932,10 @@ class _Router:
             for layer2 in layers:
                 if layer2 == layer:
                     continue
+                if transitions is not None:
+                    mask = transitions[0].get((layer, layer2))
+                    if mask is None or mask[rest] not in (_FREE, nid):
+                        continue
                 n2 = layer2 * plane + rest
                 if layer2 in target_only and n2 not in targets:
                     continue
@@ -1941,6 +1981,7 @@ class _Router:
         g = self.grid
         owner, mid_owner = self.rasters.track_arrays(spec.width, spec.clearance)
         via_owner = self._via_owners(spec, as_array=True)
+        transitions = self._via_transitions(spec)
         occupancy = self.occupancy
         flags, extra = self._n_flags, self._n_extra
         layers = np.asarray([layer | (0x100 if layer in spec.target_only else 0) for layer in spec.layers],
@@ -1981,7 +2022,8 @@ class _Router:
             float(present), float(self.via_cost * spec.via_factor),
             *box, *tbox,
             P(source_nodes), P(source_costs), len(source_nodes),
-            extra_pointer, turn_pointer, guide_pointer, self.options.maximum_expansions,
+            extra_pointer, turn_pointer, guide_pointer,
+            transitions[1].ctypes.data if transitions is not None else None, self.options.maximum_expansions,
             P(self._n_best), P(self._n_parent), P(self._n_heap), self._n_heap_cap,
             P(self._n_touched), self._n_touched_cap, ctypes.byref(touched_count),
             P(self._n_path), self._n_path_cap)
@@ -2219,6 +2261,13 @@ class _Router:
 
     # -- materialisation --------------------------------------------------
 
+    def _transition_span(self, low: int, high: int):
+        key = (low, high)
+        if key not in self._via_span_cache:
+            g = self.grid
+            self._via_span_cache[key] = physical_via_span(self.board, g.layers[low], g.layers[high])
+        return self._via_span_cache[key]
+
     def _via_sites(self, name: str, paths) -> dict[int, tuple | None]:
         """``_site_spans`` for every layer-change site of ``paths`` (one route)."""
         plane = self.grid.plane
@@ -2261,13 +2310,7 @@ class _Router:
             if existing is not None:
                 result[xy] = (existing.from_layer, existing.to_layer, existing.technology)
                 continue
-            key = (low, high)
-            if key not in self._via_span_cache:
-                span = physical_via_span(self.board, g.layers[low], g.layers[high])
-                if span is None:
-                    span = physical_via_span(self.board, g.layers[0], g.layers[-1])
-                self._via_span_cache[key] = span
-            result[xy] = self._via_span_cache[key]
+            result[xy] = self._transition_span(low, high)
         return result
 
     def copper(self, spec: _NetSpec, path: list[int], leads: tuple[TrackSegment, ...],
@@ -2566,7 +2609,7 @@ class _SharedIndex:
 
 
 def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadline, on_progress,
-                   required_accesses=None, shared: _SharedIndex | None = None):
+                   required_accesses=None, shared: _SharedIndex | None = None, guides=None):
     """Reconnect plane pads that committed signal copper walled off from their pour.
 
     Plane pieces are labelled once, from fixed copper, so signal copper
@@ -2606,7 +2649,7 @@ def _recheck_pours(board, nets, plane_nets, accepted, complete, options, deadlin
         if shared is not None:
             shared.hold(copper)
         return _Router(_with(board, copper), options, route_nets, on_progress,
-                       required_accesses=required_accesses,
+                       required_accesses=required_accesses, guides=guides,
                        clearance=shared.index if shared is not None else None, **extra)
 
     def commit(step_router, routes, conflicts):
@@ -2934,7 +2977,7 @@ def route_unified(
         fixed = explicit_copper_connectivity(partial)
         remaining = [net for net in remaining if not fixed.net_connected(net) or net.name in plane_nets]
         repair = _Router(partial, options, remaining, on_progress, required_accesses=required_accesses,
-                         clearance=shared.index if share else None)
+                         clearance=shared.index if share else None, guides=global_route)
         repair.history_seed(router)
         more_routes, more_conflicts, used = repair.negotiate(deadline)
         more, more_rejected, more_complete = repair.commit(more_routes, more_conflicts)
@@ -2986,7 +3029,7 @@ def route_unified(
     if options.pour_recheck and plane_nets and (deadline is None or perf_counter() <= deadline):
         accepted, complete, recheck = _recheck_pours(
             board, nets, plane_nets, accepted, set(complete), options, deadline, on_progress,
-            required_accesses=required_accesses, shared=shared)
+            required_accesses=required_accesses, shared=shared, guides=global_route)
         iterations += recheck.pop("iterations", 0)
         emit(on_progress, "unified_pour_recheck", "finished", **recheck)
     if bus_accepted:

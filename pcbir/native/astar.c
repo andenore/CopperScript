@@ -15,6 +15,12 @@
 #ifdef _WIN32
 #define EXPORT __declspec(dllexport)
 int _fltused = 0;
+/* Freestanding DLL entry for cross-compilers that require one. The usual
+   /noentry build does not call it; this kernel has no runtime to initialise. */
+int _DllMainCRTStartup(void *module, unsigned long reason, void *reserved) {
+    (void)module; (void)reason; (void)reserved;
+    return 1;
+}
 #else
 #define EXPORT __attribute__((visibility("default")))
 #endif
@@ -101,6 +107,7 @@ EXPORT int pcbir_astar(
     const double *target_extra, /* per node, or 0 */
     const double *turn,         /* 8 * 8 turn costs [incoming move][move], or 0 */
     const double *guide,        /* per node: cost per pitch step entering it, or 0 */
+    const int32_t *const *via_transitions, /* nl * nl span masks; null: through-only */
     int max_expansions,
     double *best, int32_t *parent,
     entry_t *heap, int heap_cap,
@@ -197,12 +204,16 @@ EXPORT int pcbir_astar(
             }
         }
         int vo = via_owner[rest];
-        if (vo != -1 && vo != nid) continue;
+        if (!via_transitions && vo != -1 && vo != nid) continue;
         double vpen = via_cost * (1.0 + via_hist[rest]) * (1.0 + present * via_occ[rest]);
         double h = octile(x, y, tx0, ty0, tx1, ty1);
         for (i = 0; i < n_layers; i++) {
             int layer2 = layers[i] & 0xff;
             if (layer2 == layer) continue;
+            if (via_transitions) {
+                const int32_t *mask = via_transitions[layer * nl + layer2];
+                if (!mask || (mask[rest] != -1 && mask[rest] != nid)) continue;
+            }
             int n2 = layer2 * plane + rest;
             if ((layers[i] & 0x100) && !(flags[n2] & FLAG_TARGET)) continue;
             int o = owner[n2];
