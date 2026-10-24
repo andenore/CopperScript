@@ -309,13 +309,6 @@ def run_routing_pipeline(
                  mode="copper" if bypass_accesses is not None else "keepouts", reason=reason)
             return source, bypass_accesses
         source, bypass_accesses = critical_inputs(reserved[2] if reserved else ())
-        if reserved is not None and getattr(unified_options, "retain_escape_copper", False):
-            bound_source, bound_accesses, reason = bind_ordinary_escape_copper(source, bypass_accesses, reserved)
-            emit(on_progress, "ordinary_escape_copper", "bound" if reason is None else "rejected",
-                 reason=reason, tracks=len(reserved[0]), vias=len(reserved[1]))
-            if reason is None:
-                source, bypass_accesses = bound_source, bound_accesses
-                reserved = None  # These exact exits now belong to the immutable prefix.
         held_as_copper = bypass_accesses is not None
         if on_stage is not None:
             on_stage("critical-inputs", {"board": source, "global_route": placement.global_route,
@@ -333,16 +326,30 @@ def run_routing_pipeline(
                 # whichever attempt connects more critical nets.
                 kept = _release_reservations(placement.board, reserved[2], failed)
                 if len(kept) < len(reserved[2]):
-                    emit(on_progress, "ordinary_escapes", "released",
-                         nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
-                    retry_source, retry_accesses = critical_inputs(kept, (source, bypass_accesses))
-                    if on_stage is not None:
+                    reason = None
+                    if getattr(unified_options, "retain_escape_copper", False):
+                        plan = ordinary_escape_retry_plan(reserved, kept)
+                        retry_source, retry_accesses, reason = bind_ordinary_escape_copper(source, bypass_accesses, plan)
+                        emit(on_progress, "ordinary_escape_copper", "bound" if reason is None else "rejected",
+                             reason=reason, nets=sorted({e.net for e in (*plan[0], *plan[1])}),
+                             tracks=len(plan[0]), vias=len(plan[1]))
+                        kept = tuple(k for k in reserved[2] if k not in plan[2])
+                    else:
+                        emit(on_progress, "ordinary_escapes", "released",
+                             nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
+                        retry_source, retry_accesses = critical_inputs(kept, (source, bypass_accesses))
+                    # A rejected conversion cannot authorize dropping the exits.
+                    # The incumbent remains untouched; no trial runs in this case.
+                    if reason is not None:
+                        retry_source = None
+                    if retry_source is not None and on_stage is not None:
                         on_stage("critical-retry-inputs", {"board": retry_source,
                             "global_route": placement.global_route, "reserved_accesses": retry_accesses})
-                    retry = route_critical_nets(retry_source, placement.global_route,
+                    retry = (route_critical_nets(retry_source, placement.global_route,
                         reserved_accesses=retry_accesses, pair_state_limit=pair_limit,
                         on_progress=critical_progress(on_progress), unified_options=unified_options)
-                    if sum(not item.connected for item in retry.nets) < len(
+                        if retry_source is not None else None)
+                    if retry is not None and sum(not item.connected for item in retry.nets) < len(
                             [item for item in critical.nets if not item.connected]):
                         critical = retry
                         reserved = (reserved[0], reserved[1], kept)
@@ -691,6 +698,19 @@ def _unified_profile_review(detailed, global_route, drc):
               else CriticalRoutingStatus.SUCCESS)
     return CriticalRoutingResult(status, board, tuple(results), (), (),
         global_route.routing_fingerprint, detailed.routing_fingerprint)
+
+
+def ordinary_escape_retry_plan(planned, kept):
+    """Whole owned escape groups affected by a proposed temporary-mask release."""
+    tracks, vias, masks = planned
+    owners = {**{f"escape-reserve-track-{i}": t.net for i,t in enumerate(tracks)},
+              **{f"escape-reserve-via-{i}": v.net for i,v in enumerate(vias)}}
+    if not set(kept) <= set(masks) or any(k.id not in owners for k in masks):
+        raise ValueError("stale ordinary escape retry ownership")
+    affected = {owners[k.id] for k in masks if k not in kept}
+    return (tuple(t for t in tracks if t.net in affected),
+            tuple(v for v in vias if v.net in affected),
+            tuple(k for k in masks if owners[k.id] in affected))
 
 
 def bind_ordinary_escape_copper(source, bypass, planned):

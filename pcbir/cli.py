@@ -908,7 +908,7 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
         help="unified router: route decoupling capacitors with everything else instead of first")
     board_route_parser.add_argument("--unified-retain-escape-copper", action="store_true",
-        help="retain the complete validated ordinary package escape plan through critical routing")
+        help="retain whole endangered ordinary escape groups when critical retries release their masks")
     board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
         help="unified router: carve islands for decoupled supply rails out of a spare plane layer "
              "(auto picks the outermost layer of a net with two plane layers)")

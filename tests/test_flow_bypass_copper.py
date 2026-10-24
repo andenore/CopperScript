@@ -119,6 +119,25 @@ def test_mixed_escape_prefix_keeps_fresh_bypass_witnesses_after_checkpoint(tmp_p
     assert Counter(mixed.board.vias) <= Counter(replay.board.vias)
 
 
+def test_escape_retry_selection_owns_remote_edges_without_unrelated_owners():
+    from pcbir.flow import ordinary_escape_retry_plan
+    from test_unified_router import _board
+    from pcbir import TrackSegment, Via
+    source = _board({'A':((3,10),(17,10)), 'B':((10,3),(10,17))})
+    tracks = (TrackSegment('A',Point.mm(6,13),Point.mm(7,13),200000,CopperLayer.FRONT),
+        TrackSegment('A',Point.mm(20,13),Point.mm(21,13),200000,CopperLayer.FRONT),
+        TrackSegment('B',Point.mm(13,6),Point.mm(14,6),200000,CopperLayer.FRONT))
+    vias = tuple(Via(t.net,t.end,600000,300000,CopperLayer.FRONT,CopperLayer.BACK) for t in tracks)
+    masks = tuple(_copper_keepouts(source,tracks,vias,'escape-reserve'))
+    kept = tuple(k for k in masks if k.id != 'escape-reserve-track-0')
+    selected = ordinary_escape_retry_plan((tracks,vias,masks),kept)
+    assert selected[0] == tracks[:2] and selected[1] == vias[:2]
+    assert {k.id for k in selected[2]} == {
+        'escape-reserve-track-0','escape-reserve-track-1','escape-reserve-via-0','escape-reserve-via-1'}
+    with pytest.raises(ValueError,match='stale'):
+        ordinary_escape_retry_plan((tracks,vias,masks),(*kept,replace(masks[0],id='unknown')))
+
+
 @pytest.mark.parametrize("required_array", (False, True))
 def test_standard_pipeline_keeps_whole_bypass_prefix_and_emits_replayable_input(tmp_path, required_array):
     from pcbir.flow import run_routing_pipeline

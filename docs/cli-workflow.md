@@ -74,10 +74,13 @@ only for unique exact occurrences, preserving all values and context digests.
 The completed export also saves `final-board.state.json`, including on routing
 failure. It captures final geometry for investigation; it is not a new approval.
 
-`--unified-retain-escape-copper` experimentally replaces temporary ordinary exit
-masks with the complete planned copper after fresh bypass and physical admission.
-The prefix remains fixed through critical retries and ordinary negotiation. An
-invalid plan is rejected atomically and retains the incumbent masks and witnesses.
+`--unified-retain-escape-copper` experimentally converts the ordinary escape
+groups that a failed critical retry would otherwise discard. Every planned edge
+and mask of each affected owner is handled together, including remote endpoints;
+unrelated owners retain their existing temporary reservations. Fresh bypass and
+physical admission are mandatory. Admitted copper remains fixed through critical
+retries and ordinary negotiation. An invalid plan is rejected atomically and
+retains the incumbent masks and witnesses without a release-only fallback.
 Critical replay restores mixed ordinary/bypass prefixes only before the same
 source, ownership, association and physical checks. The default policy is unchanged.
 

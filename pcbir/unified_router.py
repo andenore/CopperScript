@@ -147,8 +147,8 @@ class UnifiedRouterOptions:
     direct: bool = False
     # Escape crowded ordinary pins (fanout.route_fanout) before critical routing.
     escapes_first: bool = True
-    # Opt-in: retain validated planned ordinary exits as real critical-prefix
-    # copper rather than releasing their temporary masks for a critical retry.
+    # Opt-in: convert only endangered complete ordinary escape groups to real
+    # prefix copper when a critical retry would release their temporary masks.
     retain_escape_copper: bool = False
     # commit/via options
     # One exact clearance index per route_unified call: commits add accepted
