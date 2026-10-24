@@ -24,7 +24,7 @@ and every pose still passes ``placement_solution_is_legal``.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from math import ceil, hypot
 from typing import Iterable
@@ -261,6 +261,7 @@ def _pitch_estimates(board: PhysicalBoard) -> dict[str, float]:
 def estimate_demand(
     board: PhysicalBoard, tile_nm: int, *, nets: Iterable[str] | None = None,
     routing_layers: Iterable[CopperLayer] | None = None,
+    lattice: tuple[int, int, int, int] | None = None,
 ) -> CongestionMap:
     """RUDY wire density plus pin density against free area per signal layer.
 
@@ -275,7 +276,9 @@ def estimate_demand(
     (``routing_layers`` when given, else every layer that is not a dedicated
     plane), material area sampled at 4 x 4 points per tile minus pads on that
     layer and track-blocking copper keepouts. Both are divided by the default
-    ``lane_nm ** 2`` (see the module docstring for units).
+    ``lane_nm ** 2`` (see the module docstring for units). ``lattice``
+    (``x0_nm, y0_nm, nx, ny``) puts the estimate on another map's lattice,
+    e.g. the unified router's, instead of the outline's bounding box.
     """
     from .unified_router import _polygon_inside, _spine_distance
     from .drc import placed_pad_shape
@@ -283,7 +286,9 @@ def estimate_demand(
 
     if tile_nm <= 0:
         raise ValueError("estimate tile must be positive")
-    x0, y0, nx, ny = _lattice(board, tile_nm)
+    x0, y0, nx, ny = _lattice(board, tile_nm) if lattice is None else (int(v) for v in lattice)
+    if nx <= 0 or ny <= 0:
+        raise ValueError("estimate lattice requires positive tile counts")
     lane_nm = board.rules.default_track_width_nm + board.rules.minimum_clearance_nm
     lane_area = float(lane_nm) ** 2
     rules = {rule.net: rule for rule in board.net_routing_rules}
@@ -584,3 +589,272 @@ def screen(
          routed_count=len(routed), kept_count=len(result),
          best_overflow_delta=round(cheap[0][0][0], 6))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Feedback loop (stage B): map, propose, screen, rerun the pipeline tail
+
+
+#: Each map's utilisation is divided by this percentile of its own positive
+#: utilisation before the two are added, so neither scale dominates.
+NORMALISATION_PERCENTILE = 95.0
+
+#: Smallest translation step the loop halves down to.
+MINIMUM_STEP_NM = nm_from_mm("0.25")
+
+#: Meaning of each acceptance score component (``flow._feedback_score``); lower is better.
+SCORE_ORDER = ("hard_drc_errors", "open_signal_nets", "critical_failures", "unrouted_nets",
+               "conflict_overflow", "total_length_nm", "vias")
+
+
+def _normalised_utilisation(congestion: CongestionMap) -> np.ndarray:
+    utilisation = congestion.utilisation()
+    real = utilisation[(utilisation > 0) & (utilisation < UTILISATION_SENTINEL)]
+    if not real.size:
+        return np.zeros_like(utilisation)
+    # A tile with demand but no capacity counts as this map's hottest real tile.
+    utilisation = np.where(utilisation >= UTILISATION_SENTINEL, float(real.max()), utilisation)
+    return utilisation / float(np.percentile(real, NORMALISATION_PERCENTILE))
+
+
+def combine_normalised(primary: CongestionMap, other: CongestionMap, weight: float = 1.0) -> CongestionMap:
+    """Add two maps on one lattice after scaling each to its own 95th percentile.
+
+    The router map (lane cells of overflow and history per tile) and the
+    RUDY estimate (lane cells of expected wire per tile) are on different
+    scales, so each utilisation is divided by the 95th percentile of its own
+    positive, finite utilisation: a tile at 1 is as hot as that map's 95th
+    percentile tile, a sentinel tile (demand, no capacity) counts as the
+    map's hottest real tile, and an all-zero map contributes nothing. The
+    result is ``u = u_primary / p95_primary + weight * u_other / p95_other``
+    on the primary map's capacity (``demand = u * capacity``); tiles where
+    the primary has no capacity carry no demand, since no copper can go
+    there. ``failed_points`` are the primary's, then the other's new ones.
+    """
+    if primary._lattice() != other._lattice():
+        raise ValueError(f"congestion lattices differ: {primary._lattice()} != {other._lattice()}")
+    if not np.isfinite(weight):
+        raise ValueError("congestion combination weight must be finite")
+    utilisation = _normalised_utilisation(primary) + float(weight) * _normalised_utilisation(other)
+    capacity = primary.capacity
+    demand = np.where(capacity > 0, utilisation * capacity, 0.0)
+    failed = tuple(dict.fromkeys((*primary.failed_points, *other.failed_points)))
+    return CongestionMap(
+        tile_nm=primary.tile_nm, x0_nm=primary.x0_nm, y0_nm=primary.y0_nm, nx=primary.nx, ny=primary.ny,
+        demand=demand, capacity=capacity, source="combined", failed_points=failed)
+
+
+def feedback_map(board: PhysicalBoard, router_map: CongestionMap | None, *,
+                 tile_nm: int | None = None, weight: float = 1.0) -> CongestionMap:
+    """The loop's map: the router's contention plus the RUDY estimate on its lattice.
+
+    Both are normalised (:func:`combine_normalised`, weight 1.0 by default).
+    Without a router map (legacy router, export disabled) the estimate is
+    used alone, on its own lattice.
+    """
+    if router_map is None:
+        return estimate_demand(board, int(tile_nm or DEFAULT_TILE_NM))
+    estimate = estimate_demand(board, router_map.tile_nm, lattice=(
+        router_map.x0_nm, router_map.y0_nm, router_map.nx, router_map.ny))
+    return combine_normalised(router_map, estimate, weight)
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackState:
+    """One full pass of the pipeline tail on one placement.
+
+    ``board`` is the unrouted placement source the tail started from (moves
+    are proposed on it); ``critical``, ``detailed`` and ``drc`` are its
+    results; ``deferred_nets`` are zone nets awaiting fill, never counted as
+    failed; ``payload`` is whatever else the caller needs back on acceptance.
+    """
+
+    board: PhysicalBoard
+    global_route: GlobalRoutingResult
+    critical: object
+    detailed: object
+    drc: object
+    deferred_nets: frozenset[str] = frozenset()
+    payload: object = None
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackTrial:
+    index: int
+    round: int
+    reference: str
+    delta_nm: tuple[int, int]
+    rotation_degrees: str
+    reason: str
+    step_nm: int
+    outcome: str            # accepted | not_improved | global_failed
+    score: tuple[int, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackOutcome:
+    """What the loop did: every trial, the accepted moves and the final map."""
+
+    state: FeedbackState = field(repr=False, compare=False)
+    trials: tuple[FeedbackTrial, ...] = ()
+    accepted_moves: int = 0
+    reruns: int = 0         # pipeline-tail reruns spent (the trial budget's unit)
+    rounds: int = 0
+    stop_reason: str = "not_run"
+    initial_score: tuple[int, ...] | None = None
+    final_score: tuple[int, ...] | None = None
+    initial_failed_nets: tuple[str, ...] = ()
+    final_failed_nets: tuple[str, ...] = ()
+    congestion: CongestionMap | None = field(default=None, repr=False, compare=False)
+    initial_congestion: CongestionMap | None = field(default=None, repr=False, compare=False)
+
+    def hot_tiles(self, limit: int = 16, *, initial: bool = False) -> list[dict]:
+        """Hottest tiles of the final (or first) map: bounds in mm and utilisation."""
+        congestion = self.initial_congestion if initial else self.congestion
+        if congestion is None:
+            return []
+        result = []
+        for ix, iy, value in congestion.hot_tiles(limit):
+            bounds = congestion.tile_bounds(ix, iy)
+            result.append({"ix": ix, "iy": iy, "utilisation": round(value, 6),
+                           "bounds_mm": [float(Decimal(v) / Decimal(1_000_000)) for v in bounds]})
+        return result
+
+    def report(self) -> dict:
+        return {
+            "accepted_moves": self.accepted_moves,
+            "reruns": self.reruns,
+            "rounds": self.rounds,
+            "stop_reason": self.stop_reason,
+            "score_order": list(SCORE_ORDER),
+            "initial_score": list(self.initial_score) if self.initial_score is not None else None,
+            "final_score": list(self.final_score) if self.final_score is not None else None,
+            "initial_failed_nets": list(self.initial_failed_nets),
+            "final_failed_nets": list(self.final_failed_nets),
+            "map_source": self.congestion.source if self.congestion is not None else None,
+            "trials": [{"index": t.index, "round": t.round, "reference": t.reference,
+                        "delta_nm": list(t.delta_nm), "rotation_degrees": t.rotation_degrees,
+                        "reason": t.reason, "step_nm": t.step_nm, "outcome": t.outcome,
+                        "score": list(t.score) if t.score is not None else None} for t in self.trials],
+            "hot_tiles": self.hot_tiles(16),
+        }
+
+
+def failed_nets(state: FeedbackState) -> frozenset[str]:
+    """Unrouted ordinary nets, failed critical nets and DRC-open nets, less deferred zone nets."""
+    deferred = state.deferred_nets
+    failed = {item.net for item in getattr(state.detailed, "nets", ())
+              if not item.connected and item.net not in deferred}
+    for item in getattr(state.critical, "nets", ()):
+        if not item.connected or item.diagnostics:
+            failed.update(net for net in item.nets if not net.startswith("<"))
+    failed.update(net for finding in getattr(state.drc, "findings", ())
+                  if finding.code == "DRC-OPEN-NET" for net in finding.nets if net not in deferred)
+    return frozenset(failed)
+
+
+def _signature(board: PhysicalBoard) -> tuple:
+    return tuple(sorted((pose.reference, pose.position, pose.rotation_degrees, pose.side)
+                        for pose in board.placements))
+
+
+def run_placement_feedback(
+    state: FeedbackState, *, trials: int, movement_nm: int,
+    placement_options: PlacementPlannerOptions | None,
+    global_options: GlobalRouterOptions | None,
+    rerun, score, keep: int = 2, weight: float = 1.0,
+    on_progress: ProgressCallback | None = None,
+) -> FeedbackOutcome:
+    """Bounded routability-driven placement feedback around ``state``.
+
+    Each round builds :func:`feedback_map` from the incumbent's router map
+    (``state.detailed.congestion``) and board, proposes moves of parts on
+    the failed nets and on hot tiles (:func:`propose_moves`, ``step_nm``
+    starting at ``movement_nm``), keeps ``keep`` by :func:`screen`, and calls
+    ``rerun(board, global_route) -> FeedbackState`` on each kept proposal
+    whose global route succeeded; each rerun is one trial against ``trials``
+    (a failed global route is recorded but costs none). The round's best
+    trial is accepted when
+    ``score(critical, detailed, drc)`` is strictly lower than the
+    incumbent's; a round without acceptance halves the step (floor
+    0.25 mm). Stops when the budget is spent, when no failed nets remain or
+    after two consecutive rounds without acceptance. A pose is tried once.
+    """
+    from .routing import GlobalRoutingStatus
+
+    if trials < 0 or movement_nm <= 0 or keep <= 0:
+        raise ValueError("placement feedback bounds are invalid")
+    incumbent = state
+    initial_score = incumbent_score = tuple(score(state.critical, state.detailed, state.drc))
+    initial_failed = failed_nets(state)
+    records: list[FeedbackTrial] = []
+    accepted = rounds = stale = spent = 0
+    step = int(movement_nm)
+    floor = min(MINIMUM_STEP_NM, step)
+    tried = {_signature(state.board)}
+    first_map = last_map = map_owner = None
+    emit(on_progress, "placement_feedback", "started", trials=trials, failed_nets=sorted(initial_failed),
+         score=list(incumbent_score))
+    while True:
+        failed = failed_nets(incumbent)
+        if not failed:
+            stop = "no_failed_nets"
+            break
+        if spent >= trials:
+            stop = "trial_budget"
+            break
+        if stale >= 2:
+            stop = "no_improvement"
+            break
+        rounds += 1
+        congestion = feedback_map(incumbent.board, getattr(incumbent.detailed, "congestion", None),
+                                  weight=weight)
+        first_map = first_map or congestion
+        last_map, map_owner = congestion, incumbent
+        proposals = tuple(item for item in propose_moves(incumbent.board, congestion, failed,
+                                                         placement_options, step_nm=step)
+                          if _signature(item.board) not in tried)
+        kept = screen(incumbent.board, proposals, global_options, keep=keep,
+                      estimate_tile_nm=congestion.tile_nm, on_progress=on_progress)
+        best = None   # (score, state, record index)
+        for proposal, global_route in kept:
+            if spent >= trials:
+                break
+            tried.add(_signature(proposal.board))
+            index = len(records) + 1
+            emit(on_progress, "placement_feedback_trial", "started", index=index, round=rounds,
+                 reference=proposal.reference, delta_nm=list(proposal.delta_nm), reason=proposal.reason)
+            result = None
+            if global_route.status is GlobalRoutingStatus.SUCCESS:
+                spent += 1
+                result = rerun(proposal.board, global_route)
+            trial_score = (None if result is None
+                           else tuple(score(result.critical, result.detailed, result.drc)))
+            if trial_score is not None and trial_score < (best[0] if best else incumbent_score):
+                best = (trial_score, result, len(records))
+            records.append(FeedbackTrial(index, rounds, proposal.reference, proposal.delta_nm,
+                                         str(proposal.rotation_degrees), proposal.reason, step,
+                                         "global_failed" if result is None else "not_improved", trial_score))
+            emit(on_progress, "placement_feedback_trial", "finished", index=index,
+                 outcome=records[-1].outcome if result is None else (
+                     "improved" if best is not None and best[2] == len(records) - 1 else "not_improved"),
+                 score=list(trial_score) if trial_score is not None else None)
+        if best is not None:
+            incumbent_score, incumbent = best[0], best[1]
+            records[best[2]] = replace(records[best[2]], outcome="accepted")
+            accepted += 1
+            stale = 0
+        else:
+            stale += 1
+            step = max(step // 2, floor)
+    if last_map is not None and map_owner is not incumbent:
+        last_map = feedback_map(incumbent.board, getattr(incumbent.detailed, "congestion", None),
+                                weight=weight)
+    final_failed = failed_nets(incumbent)
+    emit(on_progress, "placement_feedback", "finished", stop_reason=stop, trials=spent,
+         accepted_moves=accepted, score=list(incumbent_score), failed_nets=sorted(final_failed))
+    return FeedbackOutcome(
+        state=incumbent, trials=tuple(records), accepted_moves=accepted, reruns=spent, rounds=rounds,
+        stop_reason=stop, initial_score=initial_score, final_score=incumbent_score,
+        initial_failed_nets=tuple(sorted(initial_failed)), final_failed_nets=tuple(sorted(final_failed)),
+        congestion=last_map, initial_congestion=first_map)

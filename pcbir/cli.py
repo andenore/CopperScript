@@ -857,7 +857,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--router-iterations", type=int, default=5)
     board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
     board_route_parser.add_argument("--critical-feedback-trials", type=int, default=0,
-                                    help="bounded critical placement trials; with --fanout adds budget to the package-access controller")
+                                    help="bounded critical placement trials; with --fanout adds budget to the package-access "
+                                         "controller (--router legacy); the unified router maps it onto "
+                                         "--congestion-feedback-trials")
     board_route_parser.add_argument("--pitch-mm", default="1")
     board_route_parser.add_argument("--passes", type=int, default=1)
     board_route_parser.add_argument("--search-budget", type=int, default=50_000)
@@ -938,7 +940,14 @@ def _parser() -> argparse.ArgumentParser:
         help="initial package-access placement repair distance (default: 0.5 mm)")
     board_route_parser.add_argument(
         "--detailed-feedback-trials", type=int, default=0,
-        help="bounded legal placement retries guided by detailed-route failures",
+        help="bounded legal placement retries guided by detailed-route failures (--router legacy); "
+             "the unified router maps it onto --congestion-feedback-trials",
+    )
+    board_route_parser.add_argument(
+        "--congestion-feedback-trials", type=_nonnegative_int, default=0,
+        help="unified router: congestion-driven placement feedback, at most this many full reruns of the "
+             "pipeline tail; the budget is max(N, --detailed-feedback-trials + --critical-feedback-trials) "
+             "(default: 0)",
     )
     board_route_parser.add_argument(
         "--zone-escape-trials", type=int, default=4,
@@ -1194,6 +1203,11 @@ _UNIFIED_SKIPPED_STAGE_FLAGS = (
 )
 
 
+# route-board placement-feedback flags whose budget the unified router spends
+# on its congestion-driven loop (run_placement_feedback) instead.
+_UNIFIED_MAPPED_FLAGS = ("detailed_feedback_trials", "critical_feedback_trials")
+
+
 def _unified_flag_notes(args) -> dict[str, list[str]] | None:
     """Name route-board flags that a unified-router run (the default) does not apply.
 
@@ -1214,7 +1228,17 @@ def _unified_flag_notes(args) -> dict[str, list[str]] | None:
                and not (name == "pitch_mm" and getattr(args, "local_demand_cost", 0) > 0)]
     skipped = [flag(name) for name in _UNIFIED_SKIPPED_STAGE_FLAGS
                if given(name) and getattr(args, name)]
-    return {"ignored_flags": ignored, "skipped_stage_flags": skipped}
+    # The legacy placement controllers' budgets become the congestion loop's.
+    mapped = [flag(name) for name in _UNIFIED_MAPPED_FLAGS if given(name) and getattr(args, name)]
+    return {"ignored_flags": ignored, "skipped_stage_flags": skipped, "mapped_flags": mapped}
+
+
+def _congestion_feedback_budget(args) -> int:
+    """Trials of the unified congestion-driven placement loop (0 on the legacy router)."""
+    if getattr(args, "router", "unified") != "unified":
+        return 0
+    return max(getattr(args, "congestion_feedback_trials", 0),
+               getattr(args, "detailed_feedback_trials", 0) + getattr(args, "critical_feedback_trials", 0))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1783,9 +1807,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if progress is not None:
                     # Remember the open stage so a failure leaves a located record.
                     stage_tracker = progress = StageTracker(progress)
-                if unified_flag_notes and any(unified_flag_notes.values()):
+                if unified_flag_notes and (unified_flag_notes["ignored_flags"]
+                                           or unified_flag_notes["skipped_stage_flags"]):
                     # Advisory: these flags do not reach the unified pipeline.
-                    emit(progress, "router_options", "ignored", router="unified", **unified_flag_notes)
+                    emit(progress, "router_options", "ignored", router="unified",
+                         ignored_flags=unified_flag_notes["ignored_flags"],
+                         skipped_stage_flags=unified_flag_notes["skipped_stage_flags"])
+                if unified_flag_notes and unified_flag_notes["mapped_flags"]:
+                    emit(progress, "router_options", "mapped", router="unified",
+                         mapped_flags=unified_flag_notes["mapped_flags"],
+                         congestion_feedback_trials=_congestion_feedback_budget(args))
                 checkpoint_key = (placement_key(physical_board, placement_options, router_options,
                                                 feedback_options)
                                   if args.checkpoint_dir or args.reuse_placement else None)
@@ -1831,6 +1862,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     plane_stitch_options=early_options,
                     detailed_feedback_trials=args.detailed_feedback_trials,
                     critical_feedback_trials=args.critical_feedback_trials,
+                    placement_feedback_trials=getattr(args, "congestion_feedback_trials", 0),
                     package_access_options=PackageAccessOptions(
                         maximum_trials=args.package_access_trials,
                         maximum_placement_probes=args.package_placement_probes,
@@ -2034,9 +2066,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
-                    "filled_copper_search_states")} | ({
+                    "filled_copper_search_states")} | {
+                    "congestion_feedback_trials": _congestion_feedback_budget(args)} | ({
                     "unified_ignored_flags": unified_flag_notes["ignored_flags"],
                     "unified_skipped_stage_flags": unified_flag_notes["skipped_stage_flags"],
+                    "unified_mapped_flags": unified_flag_notes["mapped_flags"],
                 } if unified_flag_notes is not None else {}),
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run",
@@ -2071,6 +2105,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "return_preparation": result.power_preparation.report() if result.power_preparation else None,
                     "return_preservation": final_power_preparation,
                 }
+            if result.placement_feedback is not None:
+                # Unified router: congestion-driven placement feedback (trials, moves, hot tiles).
+                report["placement_feedback"] = result.placement_feedback.report()
             if result.critical_feedback is not None:
                 report["critical_placement_feedback"] = {
                     "accepted_moves": result.critical_feedback.accepted_moves,
