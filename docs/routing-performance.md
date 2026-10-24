@@ -1,3 +1,27 @@
+## Shared clock/data cohorts (2026-10-24)
+
+Contiguous single-ended clock and critical jobs now negotiate together across
+priorities. Coupled pair boundaries and independently retained verified owners
+remain separate. The selected engine keeps each original profile and priority,
+and the existing critical matching pass runs against all accepted copper.
+
+On the same saved CopperBench early input, all 15 critical net names connect
+with zero exact non-open errors and zero native opens/geometry errors on those
+nets. Required source macro/array copper is retained. The two RMII clocks are
+28.409533/28.409534 mm after normal tuning (1 nm skew; 2.54 mm source limit).
+The partial export retains 499 unrelated open items and 17 dangling warnings;
+this is not whole-board qualification. A separate untuned joint diagnostic
+connected all eight clock/data nets but failed matching by 15.298 mm and was
+rejected. No source length, via, clearance or matching requirement was relaxed.
+
+The 60 critical/retained-copper regressions, including a fixture that requires
+real clock-length tuning, pass, along with 15 additional bundle/lane cases.
+All four standard unified examples retain zero native opens and geometry errors
+and identical copper metrics to the preceding cohort selection. Ring and nRF
+still fail overall on unchanged warnings; full-vertical and cm4 pass overall.
+A matched two-million-expansion early-stage control is pending; the preceding
+coarse diagnostic used 400000 expansions. These results are not a runtime claim.
+
 ## Reuse declared via arrays in cross-layer bypasses (2026-10-24)
 
 The bypass path graph previously ignored filled/capped vias, including exact
