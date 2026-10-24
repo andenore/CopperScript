@@ -779,11 +779,18 @@ def _bypass_copper_reservations(source, tracks, vias, witnesses=()):
     No generated piece is filtered out to manufacture a valid ownership claim.
     """
     from .hard_macros import macro_source, materialize_hard_macros
-    from .bypass_reservations import verified_bypass_reservations
+    from .bypass_reservations import verified_bypass_reservations, restore_bypass_reservation_edges
     frame = materialize_hard_macros(macro_source(source))
     reserved = FanoutResult(replace(frame, tracks=(*frame.tracks, *tracks), vias=(*frame.vias, *vias)),
         {}, (), len(tracks), len(vias), created_tracks=tracks, created_vias=vias,
         decoupling_tracks=tracks, decoupling_vias=vias, decoupling_witnesses=witnesses)
+    # Re-materializing immutable macro/array copper preserves values, but its
+    # source objects are fresh. Restore only unique equal original occurrences,
+    # then run the complete current ownership/context/geometry gate as usual.
+    try:
+        reserved = restore_bypass_reservation_edges(reserved)
+    except ValueError as exc:
+        return None, str(exc)
     _, _, reason = verified_bypass_reservations(frame, reserved)
     return (reserved, None) if reason is None else (None, reason)
 

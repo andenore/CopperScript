@@ -67,13 +67,18 @@ def test_unwitnessed_or_stale_bypass_proposal_is_not_filtered_into_acceptance():
                                       planned.admitted_path_witnesses)[0] is None
 
 
-def test_standard_pipeline_keeps_whole_bypass_prefix_and_emits_replayable_input(tmp_path):
+@pytest.mark.parametrize("required_array", (False, True))
+def test_standard_pipeline_keeps_whole_bypass_prefix_and_emits_replayable_input(tmp_path, required_array):
     from pcbir.flow import run_routing_pipeline
     from pcbir.placement import PlacementPlannerOptions
     from pcbir.routeflow import PlacementRoutingFeedbackOptions
     from pcbir.unified_router import UnifiedRouterOptions
     from pcbir.decoupling_paths import verify_crosslayer_decoupling
-    source,link=fixture()
+    if required_array:
+        from test_decoupling_source_arrays import array_fixture
+        source,link=array_fixture(3)
+    else:
+        source,link=fixture()
     stages,events={},[]
     result=run_routing_pipeline(source,
         placement_options=PlacementPlannerOptions(candidate_count=1,analytical_iterations=0,refinement_passes=0,
@@ -110,3 +115,21 @@ def test_standard_critical_stage_honors_its_existing_pair_state_bound():
     group=result.critical.nets[0]
     assert group.pair_state_limit==1 and group.search_states<=1
     assert not group.connected and len(group.local_preparation.pending_contacts)==2
+
+
+def test_rematerialized_required_array_keeps_exact_bypass_witness():
+    from test_decoupling_source_arrays import array_fixture
+    from pcbir import route_critical_nets
+    from pcbir.decoupling_paths import verify_crosslayer_decoupling
+    source, link = array_fixture(3)
+    planned = route_decouplers(source)
+    assert planned.admitted_path_witnesses
+    held, reason = _bypass_copper_reservations(source,planned.created_tracks,
+        planned.created_vias,planned.admitted_path_witnesses)
+    assert held is not None, reason
+    assert Counter(held.board.vias) >= Counter(source.vias)
+    assert not any(v.finish == "filled-capped" for v in held.created_vias)
+    assert all(validate_crosslayer_witness(held.board,w)=="" for w in held.decoupling_witnesses)
+    routed = route_critical_nets(source,route_global(source),reserved_accesses=held)
+    assert Counter(routed.board.vias) >= Counter(source.vias)
+    assert verify_crosslayer_decoupling(routed.board,link).witness is not None

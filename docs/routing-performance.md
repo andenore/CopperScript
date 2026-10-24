@@ -1,3 +1,21 @@
+## Rebind immutable prefix occurrences at bypass admission (2026-10-24)
+
+A full-board integration exposed a source-array witness identity mismatch:
+re-materializing the immutable prefix preserved exact geometry but created new
+source-edge objects. The complete bypass reservation was rejected and fell back
+to keepouts. The standard handoff now restores unique equal original occurrences
+using the existing strict restore helper, then runs unchanged fresh ownership,
+context, association and geometry admission. Missing or ambiguous occurrences
+still fail closed; no context digest or copper value is changed.
+
+A permanent regression reproduces the original witness_via_invalid failure and
+passes after the fix. The 56-case affected set (including the added array-backed
+standard pipeline case) passes across the completed runs. The full pipeline
+keeps copper-mode reservations, retains all required arrays, preserves the
+bypass through routing, and replays the checkpoint successfully. CopperBench
+full435 was interrupted after its binding failure; it has no final/native result.
+A new full run is required for the combined current-source result.
+
 ## Shared clock/data cohorts (2026-10-24)
 
 Contiguous single-ended clock and critical jobs now negotiate together across

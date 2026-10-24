@@ -13,7 +13,7 @@ from .physical import PhysicalBoard, RouteKind, TrackSegment, Via
 
 
 def restore_bypass_reservation_edges(reserved: FanoutResult) -> FanoutResult:
-    """Restore unique original-edge identities after a value-only state decode.
+    """Restore unique edge identities after decoding or fixed-prefix rematerialization.
 
     This changes no value, context digest, counter, contact or ownership claim.
     Missing/duplicate occurrences fail closed. The caller must still run ordinary
