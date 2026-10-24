@@ -887,8 +887,9 @@ def _parser() -> argparse.ArgumentParser:
         "--fanout", action=argparse.BooleanOptionalAction, default=True,
         help="reserve and negotiate package exits and plane access before area routing (default; --no-fanout opts out)",
     )
-    board_route_parser.add_argument("--router", choices=("legacy", "unified"), default="legacy",
-        help="ordinary detailed router: the pass-based legacy router or the unified negotiated router")
+    board_route_parser.add_argument("--router", choices=("legacy", "unified"), default="unified",
+        help="ordinary detailed router: the unified negotiated router (default) or the pre-refactor "
+             "pass-based legacy pipeline")
     board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
         help="grid pitch of the unified router (default: 0.25 mm, finer to align with ball grids)")
     board_route_parser.add_argument("--unified-iterations", type=int, default=150,
@@ -1148,24 +1149,30 @@ def _apply_routing_profile(args, argv):
 
 
 def _unified_options(args):
-    if getattr(args, "router", "legacy") != "unified":
+    if getattr(args, "router", "unified") != "unified":
         if getattr(args, "unified_direct", False):
             raise ValueError("--unified-direct requires --router unified")
         return None
     from .unified_router import UnifiedRouterOptions
-    return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
-                                maximum_iterations=args.unified_iterations,
-                                maximum_expansions=args.unified_search_states,
-                                time_budget_s=args.unified_time_budget_s,
-                                power_islands=None if args.power_islands == "off" else args.power_islands,
-                                pre_route_decouplers=not args.unified_no_decouplers and not args.unified_direct,
-                                direct=args.unified_direct,
-                                route_smoothing=not args.no_route_smoothing,
-                                save_inputs_path=str(args.unified_save_inputs) if args.unified_save_inputs else None)
+    # Absent attributes (a namespace not built by the route-board parser) keep
+    # the route-board defaults, i.e. the UnifiedRouterOptions defaults.
+    defaults = _parser().parse_args(["route-board", "board.copper"])
+    def value(name):
+        return getattr(args, name, getattr(defaults, name))
+    pitch_mm, direct, save_inputs = value("unified_pitch_mm"), value("unified_direct"), value("unified_save_inputs")
+    return UnifiedRouterOptions(pitch_nm=nm_from_mm(pitch_mm) if pitch_mm else None,
+                                maximum_iterations=value("unified_iterations"),
+                                maximum_expansions=value("unified_search_states"),
+                                time_budget_s=value("unified_time_budget_s"),
+                                power_islands=None if value("power_islands") == "off" else value("power_islands"),
+                                pre_route_decouplers=not value("unified_no_decouplers") and not direct,
+                                direct=direct,
+                                route_smoothing=not value("no_route_smoothing"),
+                                save_inputs_path=str(save_inputs) if save_inputs else None)
 
 
-# route-board options read only by DetailedRouterOptions. With --router unified
-# the pipeline discards that object (flow._route_unified_compat), so they have
+# route-board options read only by DetailedRouterOptions. With the unified router
+# (the default) the pipeline discards that object (flow._route_unified_compat), so they have
 # no effect. --pitch-mm also sets the global local-demand lane pitch, which is
 # read only with --local-demand-cost > 0.
 _LEGACY_ORDINARY_ROUTER_FLAGS = (
@@ -1187,22 +1194,23 @@ _UNIFIED_SKIPPED_STAGE_FLAGS = (
 
 
 def _unified_flag_notes(args) -> dict[str, list[str]] | None:
-    """Name route-board flags that a --router unified run does not apply.
+    """Name route-board flags that a unified-router run (the default) does not apply.
 
     A flag counts as given when its value differs from the parser default
     (a --routing-profile value counts too). Skipped-stage flags are listed only
     when they would enable work (non-zero, true or non-empty). Advisory only:
     routing is unchanged.
     """
-    if getattr(args, "router", "legacy") != "unified":
+    if getattr(args, "router", "unified") != "unified":
         return None
-    defaults = _parser().parse_args(["route-board", str(args.board)])
+    defaults = _parser().parse_args(["route-board", str(getattr(args, "board", "board.copper"))])
     def given(name):
-        return getattr(args, name) != getattr(defaults, name)
+        # An absent attribute was not given on this command line.
+        return getattr(args, name, getattr(defaults, name)) != getattr(defaults, name)
     def flag(name):
         return "--" + name.replace("_", "-")
     ignored = [flag(name) for name in _LEGACY_ORDINARY_ROUTER_FLAGS if given(name)
-               and not (name == "pitch_mm" and args.local_demand_cost > 0)]
+               and not (name == "pitch_mm" and getattr(args, "local_demand_cost", 0) > 0)]
     skipped = [flag(name) for name in _UNIFIED_SKIPPED_STAGE_FLAGS
                if given(name) and getattr(args, name)]
     return {"ignored_flags": ignored, "skipped_stage_flags": skipped}
@@ -1871,7 +1879,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                              or args.zone_local_ripup_trials)
                       # The unified router joins plane pads itself; the legacy
                       # late-escape repair reruns the legacy pipeline.
-                      and getattr(args, "router", "legacy") != "unified"
+                      and getattr(args, "router", "unified") != "unified"
                       and result.stopped_after is None else None
                 )
                 if escape_feedback is not None:

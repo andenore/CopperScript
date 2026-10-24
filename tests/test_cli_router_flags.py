@@ -1,4 +1,4 @@
-"""route-board names the legacy-only flags that a --router unified run ignores."""
+"""route-board names the legacy-only flags that a unified-router run (the default) ignores."""
 import json
 
 import pcbir.cli as cli
@@ -26,10 +26,10 @@ def _board(tmp_path):
     return source, library.parent
 
 
-def _route(tmp_path, source, footprints, name, *extra):
+def _route(tmp_path, source, footprints, name, *extra, router=("--router", "unified")):
     report = tmp_path / f"{name}.json"
     code = cli.main(["route-board", str(source), "--footprint-root", str(footprints),
-        "--router", "unified", "--unified-time-budget-s", "5",
+        *router, "--unified-time-budget-s", "5",
         "--candidates", "1", "--feedback-iterations", "1", "--router-iterations", "1",
         "--progress", "--report", str(report), *extra])
     return code, json.loads(report.read_text())
@@ -57,6 +57,11 @@ def test_unified_route_board_reports_ignored_legacy_flags(tmp_path, capsys):
     assert data["work_limits"]["unified_skipped_stage_flags"] == []
     assert _router_events(capsys.readouterr().out) == []
 
+    # Without --router, route-board runs (and records) the unified router.
+    code, data = _route(tmp_path, source, footprints, "default-router", router=())
+    assert code == 0
+    assert data["work_limits"]["router"] == "unified"
+
 
 def test_unified_flag_notes_name_skipped_stage_flags_and_respect_scope(tmp_path):
     def notes(*extra):
@@ -64,7 +69,9 @@ def test_unified_flag_notes_name_skipped_stage_flags_and_respect_scope(tmp_path)
         cli._apply_routing_profile(args, list(extra))
         return cli._unified_flag_notes(args)
 
-    assert notes("--passes", "7") is None  # legacy router: every flag applies
+    assert notes("--router", "legacy", "--passes", "7") is None  # legacy router: every flag applies
+    # The unified router is the default.
+    assert notes("--passes", "7") == {"ignored_flags": ["--passes"], "skipped_stage_flags": []}
     assert notes("--router", "unified") == {"ignored_flags": [], "skipped_stage_flags": []}
     assert notes("--router", "unified", "--fanout", "--no-route-smoothing",
                  "--layer-preference-cost", "2") == {"ignored_flags": [], "skipped_stage_flags": []}

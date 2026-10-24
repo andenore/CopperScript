@@ -157,6 +157,9 @@ def run_routing_pipeline(
         raise ValueError("routing placement feedback bounds are invalid")
     if stop_after is not None and stop_after not in STOP_STAGES:
         raise ValueError(f"stop_after must be one of {', '.join(STOP_STAGES)}")
+    if stop_after in {"package-preflight", "package-access"} and unified_options is not None:
+        raise ValueError(f"stopping after {stop_after} requires --router legacy "
+                         "(the unified router has no package-access stage)")
     if stop_after in {"package-preflight", "package-access"} and fanout_options is None:
         raise ValueError(f"stopping after {stop_after} requires package fanout (--fanout)")
     if initial_placement is not None:
