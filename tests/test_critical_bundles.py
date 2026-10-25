@@ -201,7 +201,9 @@ def test_bundle_repair_rips_up_a_blocking_pair_and_reroutes_both() -> None:
                            ("finished", _group("LANE_C"))]
     document = json.loads(result.to_json())["bundles"][0]
     assert document["repairs"] == [{"failed": list(_group("LANE_A")), "ripped_up": list(_group("LANE_C")),
-                                    "accepted": True, "reason": "both groups accepted"}]
+                                    "accepted": True, "reason": "both groups accepted",
+                                    "search_states": repair.search_states, "pair_budget_exhausted": False}]
+    assert 0 < repair.search_states <= 4000
 
 
 def test_a_squeezed_pair_without_spacing_findings_rips_up_its_nearest_neighbour() -> None:

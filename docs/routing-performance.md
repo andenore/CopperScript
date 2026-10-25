@@ -32,7 +32,13 @@ nothing is board-specific and nothing relaxes a declared rule.
   binds as copper, not as all-net keepouts (which blocked USB_DM/DP's collar).
 - **Rip-up for unbundled pairs.** A failed pair that no bundle covers tries
   the committed pairs sharing a terminal package as rip-up suspects under
-  the bundle repair limit (TX2_IC's route took TX1_IC's collar space).
+  the bundle repair limit (TX2_IC's route took TX1_IC's collar space). The
+  attempts are recorded on the failed group's result (`repairs` in the
+  critical report, the `critical_group` progress event and the
+  `CRITICAL-UNROUTED` issue), each with the ripped-up pair and how the failed
+  group's search ended without it (states used, bound exhausted or not): a
+  launch that is still blocked ends after a handful of states, a budget miss
+  exhausts the bound.
 
 Bounded CopperProbe runs through the critical stage (fresh placement): the
 critical stage now leaves only USB_TX1_IC open (two pairs before), with FB

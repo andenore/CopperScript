@@ -404,6 +404,13 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
         preparation = result.get("local_preparation") or {}
         if preparation.get("status") in {"blocked", "unsupported"}:
             reason += "; terminal preparation " + str(preparation.get("status")) + ": " + str(preparation.get("reason", ""))
+        for repair in _items(result.get("repairs")):
+            if isinstance(repair, dict):
+                # A rip-up of an earlier pair sharing the package that did not
+                # free this group: name it and how its search ended.
+                reason += (f"; ripping up {'/'.join(str(n) for n in _items(repair.get('ripped_up')))} did not help"
+                           f" ({repair.get('search_states', 0)} states"
+                           f"{', bound exhausted' if repair.get('pair_budget_exhausted') else ''})")
         issues.append(RunIssue(f"C{1+sum(i.stage == 'critical' for i in issues)}", "critical",
             "CRITICAL-UNROUTED", reason, nets=nets, points=_net_points(scene, nets)))
 

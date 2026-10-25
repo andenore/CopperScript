@@ -33,6 +33,7 @@ def critical_progress(callback: ProgressCallback | None):
         order = getattr(result, "pair_search_order", None)
         limit = getattr(result, "pair_state_limit", None)
         rejections = getattr(result, "rejections", ())
+        repairs = getattr(result, "repairs", ())
         emit(callback, "critical_group", event, nets=list(nets),
              **({"connected": result.connected, "strategy": result.strategy,
                  "search_states": result.search_states} if result is not None else {}),
@@ -40,7 +41,11 @@ def critical_progress(callback: ProgressCallback | None):
              **({"pair_state_limit": limit, "pair_budget_exhausted": result.pair_budget_exhausted}
                 if limit is not None else {}),
              **({"rejections": dict(rejections),
-                 "rejection_examples": list(result.rejection_examples)} if rejections else {}))
+                 "rejection_examples": list(result.rejection_examples)} if rejections else {}),
+             **({"repairs": [{"ripped_up": list(item.ripped_up), "accepted": item.accepted,
+                              "reason": item.reason, "search_states": item.search_states,
+                              "pair_budget_exhausted": item.pair_budget_exhausted} for item in repairs]}
+                if repairs else {}))
     return observe
 
 

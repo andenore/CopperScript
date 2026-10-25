@@ -54,6 +54,17 @@ class BundleRepair:
     ripped_up: tuple[str, ...]
     accepted: bool
     reason: str
+    # The failed group's search without the ripped-up copper: states used and
+    # whether it ran out of its bound (a blocked launch ends after a few).
+    search_states: int = 0
+    pair_budget_exhausted: bool = False
+
+
+def repair_document(item: BundleRepair) -> dict[str, object]:
+    """JSON-ready form of one rip-up attempt."""
+    return {"failed": list(item.failed), "ripped_up": list(item.ripped_up), "accepted": item.accepted,
+            "reason": item.reason, "search_states": item.search_states,
+            "pair_budget_exhausted": item.pair_budget_exhausted}
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,11 +165,7 @@ def bundle_document(bundle: CriticalBundle) -> dict[str, object]:
         "repair_limit": bundle.repair_limit,
         "repairs_attempted": bundle.repairs_attempted,
         "repairs_accepted": bundle.repairs_accepted,
-        "repairs": [
-            {"failed": list(item.failed), "ripped_up": list(item.ripped_up),
-             "accepted": item.accepted, "reason": item.reason}
-            for item in bundle.repairs
-        ],
+        "repairs": [repair_document(item) for item in bundle.repairs],
     }
     if bundle.crossings:
         document["crossings"] = [_crossing_document(item) for item in bundle.crossings]

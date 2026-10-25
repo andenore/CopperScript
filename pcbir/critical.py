@@ -55,7 +55,8 @@ from .local_critical import local_surface_candidates
 from .return_paths import (shared_reference_plane, transition_contact_layers,
                            pair_reference_intent_covers)
 from .critical_bundles import (BUNDLE_REPAIR_LIMIT, BundleRepair, CriticalBundle, NestedExit, PlannedCrossing,
-                               bundle_document, bundle_job_order, crossing_outcome, plan_bundles)
+                               bundle_document, bundle_job_order, crossing_outcome, plan_bundles,
+                               repair_document)
 from .critical_tuning import (MatchTuningMember, MatchTuningResult, MatchTuningUnit, TuningGroupOutcome, UnitTuner,
                               UnitTuning, bump_chamfers, bump_gain, bump_path, match_tuning_document)
 from .critical_group_tuning import GroupTuner
@@ -112,6 +113,10 @@ class CriticalNetResult:
     # warnings for placement or manual review, never a reason to leave the
     # group open (see ``drc.ROUTING_BUDGET_WARNING_CODES``).
     warnings: tuple[str, ...] = ()
+    # Rip-up attempts made for this group outside a planned bundle (earlier
+    # pairs sharing one of its packages); a bundle's own repairs are recorded
+    # on the bundle.
+    repairs: tuple[BundleRepair, ...] = field(default=(), compare=False)
 
 
 def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
@@ -119,6 +124,7 @@ def critical_net_document(item: CriticalNetResult) -> dict[str, object]:
     return {
         "nets": list(item.nets),
         "connected": item.connected,
+        "repairs": [repair_document(record) for record in item.repairs],
         "track_count": item.track_count,
         "via_count": item.via_count,
         "lengths_nm": list(item.lengths_nm),
@@ -660,6 +666,10 @@ def route_critical_nets(
                         vias = [*base_vias, *(v for _, _, items in committed for v in items)]
                         rerouted = (blocker, blocker_result, blocker_tracks, blocker_vias)
                         break
+                if loose and ledger:
+                    # Attempts outside a bundle have no bundle record: the
+                    # group's result carries them (reports, issues, replays).
+                    result = replace(result, repairs=tuple(ledger))
             coupled_pairs.add(frozenset((rule.net, partner_name)))
             net_tracks, net_vias = pair_tracks, pair_vias
         else:
@@ -1963,15 +1973,18 @@ def _bundle_repair(
                               crossing=crossings.get(failed), nested=nested.get(failed), turns=turns)
     if not first[0].connected:
         return BundleRepair(failed, blocker, False,
-                            "failed group still has no accepted candidate without the ripped-up copper"), None
+                            "failed group still has no accepted candidate without the ripped-up copper",
+                            first[0].search_states, first[0].pair_budget_exhausted), None
     second = _route_pair_group(board, rules[blocker[0]], rules[blocker[1]], routes, rules,
                                [*reduced_tracks, *first[1]], [*reduced_vias, *first[2]],
                                pair_state_limit, crossing=crossings.get(blocker),
                                nested=nested.get(blocker), turns=turns)
     if not second[0].connected:
         return BundleRepair(failed, blocker, False,
-                            "ripped-up group has no accepted candidate after the failed group"), None
-    return BundleRepair(failed, blocker, True, "both groups accepted"), (first, second)
+                            "ripped-up group has no accepted candidate after the failed group",
+                            first[0].search_states, first[0].pair_budget_exhausted), None
+    return BundleRepair(failed, blocker, True, "both groups accepted",
+                        first[0].search_states, first[0].pair_budget_exhausted), (first, second)
 
 
 def _improve_pair_spine(

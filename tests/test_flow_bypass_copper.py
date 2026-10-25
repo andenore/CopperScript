@@ -184,7 +184,11 @@ def test_standard_critical_stage_honors_its_existing_pair_state_bound():
         package_access_options=PackageAccessOptions(initial_pair_state_limit=1),
         unified_options=UnifiedRouterOptions(time_budget_s=2,maximum_iterations=1))
     group=result.critical.nets[0]
-    assert group.pair_state_limit==1 and group.search_states<=1
+    # The configured probe bound is used, not the default 6000; an exhausted
+    # tier continues once under the unified escalation factor (10 x 1) and the
+    # result records the bound it ended under.
+    escalation=UnifiedRouterOptions().critical_pair_state_escalation
+    assert group.pair_state_limit==escalation and group.search_states<=escalation
     assert not group.connected and len(group.local_preparation.pending_contacts)==2
 
 
