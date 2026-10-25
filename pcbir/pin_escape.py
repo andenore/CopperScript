@@ -85,17 +85,19 @@ def checked_access_path(
     board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
     start: Point, end: Point, width_nm: int, layer: CopperLayer,
     allow_movable_conflicts: bool = False, *, allow_orthogonal: bool = True,
+    on_rejected=None,
 ) -> tuple[TrackSegment, ...] | None:
     """Prefer outward terminal exits; emit precisely the checked fallback legs."""
     return next(checked_access_paths(board, clearance, net, start, end, width_nm,
                                     layer, allow_movable_conflicts,
-                                    allow_orthogonal=allow_orthogonal), None)
+                                    allow_orthogonal=allow_orthogonal, on_rejected=on_rejected), None)
 
 
 def checked_access_paths(
     board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
     start: Point, end: Point, width_nm: int, layer: CopperLayer,
     allow_movable_conflicts: bool = False, *, allow_orthogonal: bool = True,
+    on_rejected=None,
 ):
     """Lazily enumerate checked orders ranked by both terminal departures."""
     if start == end:
@@ -121,11 +123,17 @@ def checked_access_paths(
                        for piece in clearance.route_pieces(net, a, b, width_nm, layer))
         for track in tracks:
             if not _track_inside_board(board, track.start, track.end, track.width_nm):
+                if on_rejected is not None:
+                    on_rejected(tracks, track, "path_outside_board")
                 break
             if allow_movable_conflicts:
                 if clearance.blocking_track_nets(track)[1]:
+                    if on_rejected is not None:
+                        on_rejected(tracks, track, "immutable_path_blocker")
                     break
             elif not clearance.can_track(net, track.start, track.end, track.width_nm, layer):
+                if on_rejected is not None:
+                    on_rejected(tracks, track, "path_blocked")
                 break
         else:
             yield tracks

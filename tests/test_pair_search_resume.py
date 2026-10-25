@@ -48,6 +48,9 @@ def test_blocked_source_portal_does_not_consume_leftovers():
     assert list(resume_pair_candidates(stats,board=board,maximum_total_states=1000))==[]
     assert stats.expanded_states==1 and stats.searches==1
     assert stats.resumed_states==stats.resumed_portals==0
+    assert stats.blocked_launches==1
+    assert stats.launch_rejections and all('launch at (' in s for s in stats.launch_rejections)
+    assert board.tracks==board.vias==()
 
 
 def test_all_continuations_share_the_exact_aggregate_cap():

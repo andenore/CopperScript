@@ -16,7 +16,7 @@ from pcbir import (
 )
 from pcbir.critical import _drop_group_steps, _track_length
 from pcbir.critical_group_tuning import GroupTuner, lane_corners
-from pcbir.critical_tuning import MatchTuningUnit, bump_chamfers, match_tuning_line
+from pcbir.critical_tuning import MatchTuningUnit, UnitTuner, bump_chamfers, match_tuning_line
 from pcbir.geometry import segment_distance_squared
 from pcbir.physical import DesignRules
 from pcbir.routing_clearance import RoutingClearanceIndex
@@ -124,10 +124,17 @@ def test_a_hemmed_bundle_is_bent_as_one_group_while_routing(monkeypatch) -> None
     again = route_critical_nets(board, guides)
     assert again == result and again.to_json() == result.to_json()
 
-    # Pair by pair, LANE_A is hemmed in by the wall and LANE_B.
-    alone = route_critical_nets(_group_board(group=None), guides)
-    (tuning,) = alone.match_tuning
-    assert tuning.status == "failed" and "insufficient tuning room" in tuning.reason
+    # On the same straight routing, LANE_A cannot be bumped alone between
+    # the wall and LANE_B. A fresh whole-board route may now find a different
+    # legal collar/route, so it is not a control for this fixed-copper claim.
+    straight = route_critical_nets(replace(_group_board(group=None), match_groups=()), guides).board
+    pair = ("LANE_A_N", "LANE_A_P")
+    owned = tuple(t for t in straight.tracks if t.net in pair)
+    assert all(_track_length(tuple(t for t in owned if t.net == n)) == nm_from_mm(20) for n in pair)
+    obstacles = RoutingClearanceIndex(replace(straight, tracks=tuple(t for t in straight.tracks if t.net not in pair)))
+    proposed, _, reason = UnitTuner(straight, obstacles, owned, pair, SPACING,
+                                   nm_from_mm(2), nm_from_mm("0.1")).tune(nm_from_mm(4))
+    assert proposed is None and "insufficient tuning room" in reason
 
     # The final pass bends the group the same way when nothing ran while routing.
     _final_pass_only(monkeypatch)

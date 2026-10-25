@@ -41,10 +41,11 @@ class PlacementRoutingFeedbackOptions:
             self.maximum_iterations,
             self.initial_movement_nm,
             self.minimum_movement_nm,
-            self.maximum_trials_per_iteration,
             self.stagnation_limit,
         ) <= 0:
             raise ValueError("placement-routing feedback options must be positive")
+        if type(self.maximum_trials_per_iteration) is not int or self.maximum_trials_per_iteration < 0:
+            raise ValueError("placement-routing trial budget must be a nonnegative integer")
         if self.minimum_movement_nm > self.initial_movement_nm:
             raise ValueError("minimum feedback movement exceeds initial movement")
 
@@ -70,6 +71,8 @@ class PlacementRoutingResult:
     iterations: tuple[FeedbackIteration, ...]
     accepted_moves: int
     full_route_certified: bool
+    power_area_plan: object | None = None
+    package_patterns: tuple = ()
 
 
 def optimize_placement_for_routing(
@@ -77,7 +80,8 @@ def optimize_placement_for_routing(
     placement_options: PlacementPlannerOptions | None = None,
     router_options: GlobalRouterOptions | None = None,
     feedback_options: PlacementRoutingFeedbackOptions | None = None,
-    *, on_progress: ProgressCallback | None = None,
+    *, on_progress: ProgressCallback | None = None, power_area_options=None, power_native_verifier=None,
+    fanout_options=None, pair_state_limit=None,
 ) -> PlacementRoutingResult:
     """Place, fully global-route, and transactionally relieve congestion."""
 
@@ -88,11 +92,32 @@ def optimize_placement_for_routing(
     )
     progress_kwargs = {"on_progress": on_progress} if on_progress is not None else {}
     candidates = generate_placement_candidates(board, placement_options,
+        **(dict(power_area_options=power_area_options,power_native_verifier=power_native_verifier,
+                global_router_options=router_options,fanout_options=fanout_options,pair_state_limit=pair_state_limit)
+           if power_area_options is not None and placement_options.support_pattern_trials else {}),
         **({"progress": placement_progress(on_progress)} if on_progress is not None else {}))
     evaluated = [
         _evaluate_candidate(board, candidate, router_options, **progress_kwargs)
         for candidate in candidates
     ]
+    # Provisional geometry is evaluated on each complete legal placement, never
+    # installed in the mutable source. Discarding a trial discards its plan too.
+    plans = {}
+    def power_plan(placed):
+        if power_area_options is None:
+            return None
+        from .hard_macros import materialize_hard_macros
+        from .power_geometry import plan_power_areas
+        key = id(placed)
+        if key not in plans:
+            plans[key] = (placed, plan_power_areas(materialize_hard_macros(placed), power_area_options,
+                                                  on_progress=on_progress))
+        return plans[key][1]
+    def power_score(placed):
+        plan = power_plan(placed)
+        return plan.score[:2] if plan is not None else ()
+    for _, placed, _ in evaluated:
+        power_plan(placed)
     if feedback_options.preferred_candidate_id is not None:
         selected = [item for item in evaluated
                     if item[0].candidate_id == feedback_options.preferred_candidate_id]
@@ -107,6 +132,7 @@ def optimize_placement_for_routing(
         candidate, accepted_board, accepted_route = min(
             evaluated,
             key=lambda item: (
+                *power_score(item[1]),
                 *_route_score(item[2]),
                 *item[0].metrics.quality_vector,
                 item[0].seed,
@@ -117,9 +143,11 @@ def optimize_placement_for_routing(
     movement = feedback_options.initial_movement_nm
     stagnation = 0
     for iteration in range(1, feedback_options.maximum_iterations + 1):
-        if accepted_route.status is GlobalRoutingStatus.SUCCESS:
+        if feedback_options.maximum_trials_per_iteration == 0:
             break
-        current_score = _route_score(accepted_route)
+        if accepted_route.status is GlobalRoutingStatus.SUCCESS and not (power_score(accepted_board) or (0,))[0]:
+            break
+        current_score = (*power_score(accepted_board), *_route_score(accepted_route))
         best_trial: tuple[tuple[int, ...], PhysicalBoard, GlobalRoutingResult] | None = None
         trials = 0
         for trial_board in _movement_trials(
@@ -127,13 +155,16 @@ def optimize_placement_for_routing(
             accepted_route,
             placement_options,
             movement,
+            **({"extra_nets": frozenset(o.net for o in power_plan(accepted_board).obligations
+                if o.net not in {c.allocation.domain for c in power_plan(accepted_board).selected})
+                } if power_area_options is not None else {}),
         ):
             emit(on_progress, "placement_global_trial", "started", iteration=iteration, trial=trials + 1)
             trial_route = route_global(trial_board, router_options, **progress_kwargs)
             emit(on_progress, "placement_global_trial", "finished", iteration=iteration, trial=trials + 1,
                  global_status=trial_route.status.value)
             trials += 1
-            score = _route_score(trial_route)
+            score = (*power_score(trial_board), *_route_score(trial_route))
             if score < current_score and (
                 best_trial is None
                 or (score, trial_route.routing_fingerprint)
@@ -179,6 +210,8 @@ def optimize_placement_for_routing(
         tuple(records),
         accepted_moves,
         full_route_certified,
+        power_plan(accepted_board),
+        candidate.statistics.package_patterns,
     )
 
 
@@ -215,13 +248,16 @@ def _movement_trials(
     route: GlobalRoutingResult,
     placement_options: PlacementPlannerOptions,
     movement_nm: int,
+    *, extra_nets: frozenset[str] = frozenset(),
 ) -> tuple[PhysicalBoard, ...]:
+    if board.tracks or board.vias or board.polygons or board.zone_fills or board.materialized_macros:
+        return ()  # Never displace terminals beneath accepted copper.
     routes_by_net = {item.net: item for item in route.routes}
     pressured_nets = {
         net
         for hotspot in route.hotspots
         for net in hotspot.contributors
-    } | {net for net, item in routes_by_net.items() if not item.connected}
+    } | {net for net, item in routes_by_net.items() if not item.connected} | set(extra_nets)
     references = sorted(
         {
             pad.component

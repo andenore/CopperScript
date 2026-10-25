@@ -179,7 +179,8 @@ def improve_zone_escapes(
             ),
         )
         incremental = None
-        if options.incremental_placement and trial_board.placements != initial.board.placements:
+        if (options.incremental_placement and trial_board.placements != initial.board.placements
+                and initial.power_area_options is None):
             from .incremental_placement import repair_placement_trial
             emit(on_progress, "zone_incremental_trial", "started", index=routed_trials + 1,
                  description=description)
@@ -209,6 +210,8 @@ def improve_zone_escapes(
                 package_access_options=package_access_options,
                 plane_stitch_options=early_options,
                 on_progress=on_progress,
+                **({"power_area_options": initial.power_area_options} if initial.power_area_options is not None else {}),
+                **({"power_native_verifier": initial.power_native_verifier} if initial.power_native_verifier is not None else {}),
             )
         else:
             trial_pipeline = incremental.pipeline
@@ -323,7 +326,11 @@ def _repair_with_local_ripup(
                   initial.plane_stitch.board if initial.plane_stitch is not None else
                   initial.critical.board)
     locked_tracks = Counter(pre_detail.tracks)
+    from .power_geometry import owned_power_copper
+    power_tracks, power_vias = owned_power_copper(initial)
+    locked_tracks.update(power_tracks)
     locked_vias = Counter(pre_detail.vias)
+    locked_vias.update(power_vias)
     fixed_tracks = []
     movable_tracks = []
     fixed_vias = []

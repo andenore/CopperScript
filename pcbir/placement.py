@@ -77,8 +77,20 @@ class PlacementPlannerOptions:
     escape_spacing_passes: int = 2
     escape_max_movement_nm: Nanometres = nm_from_mm("16")
     power_domain_weight: float = 0.25
+    support_pattern_trials: int = 0
+    package_support_trials: int = 0
+    decoupling_placement_trials: int = 64
+    seed_count: int | None = None
 
     def __post_init__(self) -> None:
+        if self.seed_count is not None and (type(self.seed_count) is not int or self.seed_count < 1):
+            raise ValueError('placement seed count must be a positive integer')
+        if type(self.decoupling_placement_trials) is not int or self.decoupling_placement_trials < 0:
+            raise ValueError('decoupling placement trials must be a nonnegative integer')
+        if type(self.support_pattern_trials) is not int or self.support_pattern_trials < 0:
+            raise ValueError('support pattern trials must be a nonnegative integer')
+        if type(self.package_support_trials) is not int or self.package_support_trials < 0:
+            raise ValueError('package support trials must be a nonnegative integer')
         positive = (
             self.grid_step_nm,
             self.edge_clearance_nm,
@@ -177,12 +189,16 @@ class PlacementStatistics:
     refinement_swap_count: int
     routing_feedback_passes: int
     failed_seed_attempts: tuple[PlacementSeedFailure, ...] = ()
+    support_patterns: object = None
+    package_patterns: tuple = ()
 
 
 class PlacementAlgorithmError(ValueError):
-    def __init__(self, message, *, failed_seed_attempts=()):
+    def __init__(self, message, *, failed_seed_attempts=(), diagnostic_board=None, diagnostic_components=()):
         super().__init__(message)
         self.failed_seed_attempts = tuple(failed_seed_attempts)
+        self.diagnostic_board = diagnostic_board
+        self.diagnostic_components = tuple(diagnostic_components)
 
 
 class _BoundedLegalizationFailure(PlacementAlgorithmError):
@@ -234,7 +250,8 @@ class CorridorReservation:
 def generate_placement_candidates(
     board: PhysicalBoard,
     options: PlacementPlannerOptions | None = None,
-    *, progress=None,
+    *, progress=None, power_area_options=None, power_native_verifier=None,
+    global_router_options=None, fanout_options=None, pair_state_limit=None,
 ) -> tuple[PlacementCandidate, ...]:
     """Return a deterministic Pareto frontier of legal placement candidates."""
 
@@ -249,6 +266,36 @@ def generate_placement_candidates(
         raise PlacementAlgorithmError(
             f"fixed placement references unknown component {unknown_fixed[0]!r}"
         )
+    # Diagnose contradictory source/session locks before a soft placement
+    # phase tries to reserve decoupling paths through immutable macro copper.
+    # A fixed origin without a fixed angle does not prove a pin's location.
+    rules = _rules(board)
+    fixed_poses = {ref: pose for ref, pose in _fixed_placements(board, placements, options).items()
+                   if ref in options.fixed_references
+                   or rules[ref].fixed_rotation_degrees is not None}
+    fixed_violations = relative_placement_violations(board, fixed_poses)
+    if fixed_violations:
+        raise PlacementAlgorithmError("conflicting fixed placement constraints: "
+            + "; ".join(str(item["message"]) for item in fixed_violations),
+            diagnostic_board=replace(board,placements=tuple(fixed_poses.get(p.reference,p) for p in board.placements)),
+            diagnostic_components=tuple(sorted({ref for item in fixed_violations for ref in item['references']})))
+    # Fully specified poses cannot be repaired by the analytical pass. Check
+    # their actual courtyard/material legality before spending search work.
+    accepted_fixed = {}
+    for reference, pose in sorted(fixed_poses.items()):
+        if not _legal(pose, accepted_fixed, board, options):
+            blockers = [
+                other for other, held in accepted_fixed.items()
+                if not _legal(pose, {other: held}, board, options)
+            ] if _legal(pose, {}, board, options) else []
+            raise PlacementAlgorithmError(
+                f"fixed component {reference!r} violates board, keepout, region, or clearance constraints"
+                + (f"; fixed blockers: {', '.join(blockers)}" if blockers else ""),
+                diagnostic_board=replace(board, placements=tuple(
+                    fixed_poses.get(p.reference, p) for p in board.placements)),
+                diagnostic_components=(reference, *blockers)
+            )
+        accepted_fixed[reference] = pose
     conflicts = reserved_corridor_conflicts(
         board, _fixed_placements(board, placements, options)
     )
@@ -257,8 +304,9 @@ def generate_placement_candidates(
     attempts: list[PlacementCandidate] = []
     closest_rejected = None
     failed_seed_attempts: list[PlacementSeedFailure] = []
+    failed_seed_geometry = None
     spacing = _escape_model(board, options)
-    seeds = max(2, options.candidate_count)
+    seeds = options.seed_count if options.seed_count is not None else max(2, options.candidate_count)
     for seed in range(seeds):
         if progress:
             progress("analytical", seed, seeds)
@@ -271,11 +319,17 @@ def generate_placement_candidates(
         )
         try:
             legalized, exact_repairs = _legalize(
-                board, continuous, seeded_original, phase_options, seed
+                board, continuous, seeded_original, phase_options, seed,
+                progress=(lambda stage: progress(stage, seed, seeds)) if progress else None,
             )
         except _BoundedLegalizationFailure as exc:
             failed_seed_attempts.append(PlacementSeedFailure(seed,
                 exc.failed_reference, len(exc.accepted_placements), str(exc)))
+            rank = (len(exc.accepted_placements),-seed)
+            if failed_seed_geometry is None or rank>failed_seed_geometry[0]:
+                rejected = {**seeded_original,**continuous,
+                            **{p.reference:p for p in exc.accepted_placements}}
+                failed_seed_geometry = (rank,rejected,exc.failed_reference,seed)
             if progress:
                 progress("legalization_failed", seed, seeds)
             continue
@@ -285,14 +339,30 @@ def generate_placement_candidates(
         if progress:
             progress("refinement", seed, seeds)
         refined, moves, swaps, feedback_passes = _detailed_refine(
-            board, legalized, phase_options, seed, spacing
+            board, legalized, phase_options, seed, spacing,
+            progress=(lambda stage: progress(stage, seed, seeds)) if progress else None,
         )
         refined, relative_after = _repair_relative_constraints(
             board, refined, phase_options, spacing
         )
+        # Copper-aware bypass proposals require a legal complete placement.
+        # A bounded relative repair can leave an infeasible seed; retain it as
+        # diagnostic evidence and try the next seed before materializing macros.
+        penalty = _relative_penalty(board, refined)
+        if penalty or not placement_solution_is_legal(board, refined, options):
+            if closest_rejected is None or penalty < closest_rejected[0]:
+                closest_rejected = (penalty, refined)
+            if progress:
+                progress("constraints_rejected", seed, seeds)
+            continue
+        if progress:
+            progress("cluster_refinement", seed, seeds)
         refined, cluster_moves = _refine_rigid_clusters(board, refined, options, spacing_model=spacing)
         moves += cluster_moves
-        refined, spacing_moves = _spread_escape_components(board, refined, options, spacing)
+        if progress:
+            progress("escape_spacing", seed, seeds)
+        refined, spacing_moves = _spread_escape_components(board, refined, options, spacing,
+            progress=(lambda stage: progress(stage, seed, seeds)) if progress else None)
         moves += spacing_moves
         from .decoupling import improve_decoupling_placement
         # Cluster legalization adds phase-only locks at the current rigid poses.
@@ -300,8 +370,33 @@ def generate_placement_candidates(
         # Keep source rules intact and still validate against the original board
         # and caller's real session locks below before accepting the candidate.
         bypass_board = replace(board, placements=tuple(refined[p.reference] for p in board.placements))
-        refined, bypass_moves = improve_decoupling_placement(bypass_board, refined, phase_options)
+        if progress:
+            progress("decoupling_access", seed, seeds)
+        refined, bypass_moves = improve_decoupling_placement(bypass_board, refined, phase_options,
+            **({"progress": lambda stage: progress(stage, seed, seeds)} if progress else {}))
         moves += bypass_moves
+        support_report = None
+        if options.support_pattern_trials:
+            from .support_patterns import improve_support_placement, SupportPatternOptions
+            if progress:
+                progress('support_patterns', seed, seeds)
+            support_source = replace(board, placements=tuple(refined[p.reference] for p in board.placements))
+            support = improve_support_placement(support_source, refined, phase_options,
+                options=SupportPatternOptions(maximum_complete_checks=options.support_pattern_trials),
+                **(dict(power_area_options=power_area_options,power_native_verifier=power_native_verifier,
+                        global_router_options=global_router_options,fanout_options=fanout_options,
+                        pair_state_limit=pair_state_limit)
+                   if power_area_options is not None else {}))
+            support_report = support.report()
+            updated = {p.reference:p for p in support.board.placements}
+            moves += sum(updated[r] != p for r,p in refined.items())
+            refined = updated
+        package_report=()
+        if options.package_support_trials:
+            from .package_support import improve_package_support_placement
+            package_source=replace(board,placements=tuple(refined[p.reference] for p in board.placements))
+            updated,package_report=improve_package_support_placement(package_source,refined,phase_options)
+            moves+=sum(updated[r]!=p for r,p in refined.items());refined=updated
         metrics = placement_metrics(board, refined, options, spacing_model=spacing)
         if metrics.constraint_penalty_nm or not placement_solution_is_legal(board, refined, options):
             if closest_rejected is None or metrics.constraint_penalty_nm < closest_rejected[0]:
@@ -320,6 +415,8 @@ def generate_placement_candidates(
                     moves,
                     swaps,
                     feedback_passes,
+                    support_patterns=support_report,
+                    package_patterns=package_report,
                 ),
             )
         )
@@ -334,8 +431,18 @@ def generate_placement_candidates(
             message += f"; {best_failure.reason}; bounded seed attempts: " + "; ".join(
                 f"seed {failure.seed}: {failure.failed_reference} after {failure.accepted_count} accepted placements"
                 for failure in failed_seed_attempts)
+        diagnostic_poses = (closest_rejected[1] if closest_rejected else
+                            failed_seed_geometry[1] if failed_seed_geometry else None)
+        diagnostic_components = (tuple(sorted({ref for item in relative_placement_violations(
+            board,closest_rejected[1]) for ref in item['references']})) if closest_rejected else
+            (failed_seed_geometry[2],) if failed_seed_geometry else ())
         raise PlacementAlgorithmError(message,
-            failed_seed_attempts=tuple(failed_seed_attempts))
+            failed_seed_attempts=tuple(failed_seed_attempts),
+            diagnostic_components=diagnostic_components,
+            diagnostic_board=(replace(board, placements=tuple(
+                diagnostic_poses[p.reference] for p in board.placements),metadata={**board.metadata,
+                    'placement_diagnostic':'rejected_geometry_not_a_checkpoint'})
+                if diagnostic_poses else None))
     if failed_seed_attempts:
         failures = tuple(failed_seed_attempts)
         attempts = [replace(candidate, statistics=replace(candidate.statistics,
@@ -610,8 +717,7 @@ def placement_rejection_reasons(board: PhysicalBoard, placements: Mapping[str, P
     if not cluster_placement_matches(board, placements):
         errors.append("rigid cluster/hard-macro member poses must move together")
     if _relative_penalty(board, placements):
-        named = [v["message"] for v in relative_placement_violations(board, placements)]
-        errors.extend(named or ["relative placement constraint (alignment/distance) is not satisfied"])
+        errors.extend(str(item["message"]) for item in relative_placement_violations(board, placements))
     return tuple(dict.fromkeys(errors)) or ("pose violates a represented physical constraint",)
 
 
@@ -1112,6 +1218,8 @@ def _legalize(
     original: Mapping[str, Placement],
     options: PlacementPlannerOptions,
     seed: int,
+    *,
+    progress=None,
 ) -> tuple[dict[str, Placement], int]:
     fixed = _fixed_placements(board, original, options)
     placed: dict[str, Placement] = {}
@@ -1155,6 +1263,8 @@ def _legalize(
         if len(group) < 2:
             continue
         references = sorted(group, key=order.get)
+        if progress:
+            progress("support_pack:" + ",".join(references))
         packed = _pack_local_components(board, references, placed, targets, options, allow_general=False)
         if packed is not None:
             placed = packed
@@ -1166,6 +1276,8 @@ def _legalize(
                 if len(pack) < 2:
                     continue
                 members = sorted(pack, key=order.get)
+                if progress:
+                    progress("support_pack:" + ",".join(members))
                 packed = _pack_local_components(board, members, placed, targets, options, allow_general=False)
                 if packed is not None:
                     placed = packed
@@ -1174,6 +1286,8 @@ def _legalize(
     for reference in movable:
         if reference in placed:
             continue
+        if progress:
+            progress("legalize:" + reference)
         choice = _best_legal_choice(
             board,
             reference,
@@ -1324,6 +1438,44 @@ def _best_legal_choice(
 
 
 def _relative_candidates(
+    board: PhysicalBoard,
+    reference: str,
+    placement: Placement,
+    placed: Mapping[str, Placement],
+    options: PlacementPlannerOptions,
+    *, step_nm: int = nm_from_mm("0.25"),
+) -> tuple[Placement, ...]:
+    """Include both permitted surfaces for pin-associated SMD decouplers.
+
+    Source/session locks remain authoritative. Interleave finite domains so a
+    local-search budget cannot silently discard every opposite-side candidate.
+    Routing still has to prove both supply and return paths after placement.
+    """
+    primary = _relative_candidates_on_side(board, reference, placement, placed, options, step_nm=step_nm)
+    rule = _rules(board).get(reference)
+    links = tuple(link for link in board.decoupling_links if link.capacitor.component == reference)
+    if (reference in options.fixed_references
+            or (rule is not None and (rule.side is not None or rule.fixed_position is not None))
+            or not links
+            or any(pad.kind is not PadKind.SMD for pad in board.footprints[placement.footprint].pads)
+            or any(m.reference == reference for c in board.rigid_clusters for m in c.members)):
+        return primary
+    opposite = BoardSide.BACK if placement.side is BoardSide.FRONT else BoardSide.FRONT
+    from .routing_layers import routing_layers
+    layer = CopperLayer.BACK if opposite is BoardSide.BACK else CopperLayer.FRONT
+    copper_rules = {r.net: r for r in board.net_routing_rules}
+    for net in {net for link in links for net in (link.net, link.return_net)}:
+        route_rule = copper_rules.get(net)
+        if ((route_rule is not None and route_rule.max_vias == 0)
+                or layer not in routing_layers(board, net, route_rule)):
+            return primary
+    alternate = _relative_candidates_on_side(board, reference, replace(placement, side=opposite),
+        placed, options, step_nm=step_nm)
+    return tuple(pose for i in range(max(len(primary), len(alternate)))
+                 for domain in (primary, alternate) if i < len(domain) for pose in (domain[i],))
+
+
+def _relative_candidates_on_side(
     board: PhysicalBoard,
     reference: str,
     placement: Placement,
@@ -1901,6 +2053,8 @@ def _detailed_refine(
     options: PlacementPlannerOptions,
     seed: int,
     spacing: EscapeSpacingModel | None = None,
+    *,
+    progress=None,
 ) -> tuple[dict[str, Placement], int, int, int]:
     spacing = spacing or _escape_model(board, options)
     placements = dict(source)
@@ -1909,13 +2063,15 @@ def _detailed_refine(
     move_count = 0
     swap_count = 0
     feedback_passes = 0
-    for _ in range(options.refinement_passes):
+    for pass_index in range(options.refinement_passes):
         snapshot = dict(placements)
         before = placement_metrics(board, snapshot, options, spacing_model=spacing)
         changed = False
         for reference in sorted(placements):
             if reference in fixed:
                 continue
+            if progress:
+                progress(f"refine:{pass_index + 1}:{reference}")
             current = placements[reference]
             without = dict(placements)
             del without[reference]
@@ -1965,6 +2121,8 @@ def _detailed_refine(
                 if left not in fixed and right not in fixed
             }
         )
+        if progress:
+            progress(f"refine_swaps:{pass_index + 1}")
         for left, right in pairs[: max(8, len(placements))]:
             a, b = placements[left], placements[right]
             trial = dict(placements)
@@ -2317,6 +2475,59 @@ def _lands_meet_macro_copper(
     return False
 
 
+@lru_cache(maxsize=4096)
+def _required_array_copper(board_key: IdentityKey, pose: Placement):
+    from .pad_via_arrays import array_sites, ARRAY_VIA_SIZE_NM, ARRAY_VIA_DRILL_NM
+    board = board_key.value
+    owners = {pad: net.name for net in board.nets for pad in net.pads}
+    return tuple((rule.pad, tuple(Via(owners[rule.pad], site,
+        ARRAY_VIA_SIZE_NM, ARRAY_VIA_DRILL_NM,
+        board.stackup.copper_layers[0], board.stackup.copper_layers[-1],
+        finish="filled-capped") for _, _, site in array_sites(board, rule, pose)))
+        for rule in board.via_in_pad_rules
+        if rule.rows is not None and rule.pad.component == pose.reference)
+
+
+def _lands_touch_required_array(board, pose, owner_pad, vias):
+    """The full array annulus cannot overlap even a same-net foreign land."""
+    from .geometry import Bounds, RoundedConvexShape, shapes_clear
+    local, envelope = _local_land_shapes(IdentityKey(board.footprints[pose.footprint].pads),
+                                         pose.rotation_degrees, pose.side)
+    if envelope is None:
+        return False
+    x, y = pose.position.x_nm, pose.position.y_nm
+    envelope = Bounds(envelope.min_x + x, envelope.min_y + y,
+                      envelope.max_x + x, envelope.max_y + y)
+    copper, copper_bounds = _macro_copper_shapes(IdentityKey(()), IdentityKey(vias))
+    if not envelope.intersects_expanded(copper_bounds, 1):
+        return False
+    return any(PadReference(pose.reference, pad.number) != owner_pad
+        and not shapes_clear(RoundedConvexShape(
+            tuple(Point(p.x_nm + x, p.y_nm + y) for p in shape.spine), shape.radius_nm), via, 1)
+        for pad, shape in local for via in copper)
+
+
+def _required_array_lands_clear(board, candidate, placed):
+    """Reserve declared through-array copper on both sides before routing."""
+    owners = {rule.pad.component for rule in board.via_in_pad_rules if rule.rows is not None}
+    if not owners:
+        return True
+    poses = {**placed, candidate.reference: candidate}
+    for reference in owners:
+        owner = poses.get(reference)
+        if owner is None:
+            continue
+        # Moving an owner must recheck every held neighbor; moving a neighbor
+        # only needs its own lands checked against each held owner's array.
+        obstacles = tuple(poses.values()) if reference == candidate.reference else (candidate,)
+        for owner_pad, vias in _required_array_copper(IdentityKey(board), owner):
+            for obstacle in obstacles:
+                if (_lands_touch_required_array(board, obstacle, owner_pad, vias)
+                        or _lands_meet_macro_copper(board, obstacle, (), vias)):
+                    return False
+    return True
+
+
 def _legal(
     candidate: Placement,
     placed: Mapping[str, Placement],
@@ -2347,6 +2558,8 @@ def _legal(
             return False
     from .placement_holes import footprint_holes_clear
     if not footprint_holes_clear(board, candidate, placed):
+        return False
+    if not _required_array_lands_clear(board, candidate, placed):
         return False
     edge_clearance = (rule.edge_clearance_nm if rule and rule.edge_clearance_nm is not None
                       else options.edge_clearance_nm)
@@ -2408,6 +2621,8 @@ def _legal(
             polygon, keepout.outline.outer.vertices, 0
         ):
             return False
+        if keepout.block_pads and _lands_meet_keepout(board, candidate, keepout):
+            return False
     for other in placed.values():
         if other.side is not candidate.side:
             continue
@@ -2428,6 +2643,32 @@ def _legal(
             ):
                 return False
     return True
+
+
+def _lands_meet_keepout(board, pose, keepout):
+    """Respect pad-only isolation areas without forbidding insulating bodies."""
+    from .geometry import Bounds, RoundedConvexShape, shapes_touch_or_overlap
+    local, envelope = _local_land_shapes(IdentityKey(board.footprints[pose.footprint].pads),
+                                        pose.rotation_degrees, pose.side)
+    if envelope is None:
+        return False
+    region = RoundedConvexShape(keepout.outline.outer.vertices)
+    x, y = pose.position.x_nm, pose.position.y_nm
+    moved = Bounds(envelope.min_x+x, envelope.min_y+y, envelope.max_x+x, envelope.max_y+y)
+    if not moved.intersects_expanded(region.bounds, 0):
+        return False
+    side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
+    for pad, shape in local:
+        if pad.kind in {PadKind.APERTURE, PadKind.NON_PLATED_THROUGH_HOLE}:
+            continue
+        layers = {side} if pad.kind is PadKind.SMD else set(board.stackup.copper_layers)
+        if not layers.intersection(keepout.layers):
+            continue
+        copper = RoundedConvexShape(tuple(Point(p.x_nm+x, p.y_nm+y) for p in shape.spine),
+                                   shape.radius_nm)
+        if shapes_touch_or_overlap(region, copper):
+            return True
+    return False
 
 
 def _keepout_blocks(
@@ -3002,6 +3243,8 @@ def _spread_escape_components(
     source: Mapping[str, Placement],
     options: PlacementPlannerOptions,
     spacing: EscapeSpacingModel | None = None,
+    *,
+    progress=None,
 ) -> tuple[dict[str, Placement], int]:
     """Relieve facing channels by translating complete constrained units."""
 
@@ -3023,6 +3266,8 @@ def _spread_escape_components(
             visited.add(cluster)
             if cluster & fixed:
                 continue
+            if progress:
+                progress(f"escape_unit:{reference}")
             relevant = [c for c in spacing.channels(placements)
                         if (c.left in cluster) != (c.right in cluster)]
             if not relevant:
@@ -3060,10 +3305,11 @@ def _spread_escape_components(
                         current.position.x_nm + offset_x,
                         current.position.y_nm + offset_y,
                     ))
-                if not placement_solution_is_legal(board, trial, options):
-                    continue
                 rank = (_fast_score(board, trial, spacing, options.power_domain_weight), _hpwl(board, trial))
-                if rank < best_rank:
+                # Only an improving proposal can be selected.  Evaluate its
+                # inexpensive score before the complete geometric validator;
+                # every selected proposal still receives the same full check.
+                if rank < best_rank and placement_solution_is_legal(board, trial, options):
                     best, best_rank = trial, rank
             if (
                 best is not placements
@@ -3081,10 +3327,10 @@ def _spread_escape_components(
 def _fast_score(board: PhysicalBoard, placements: Mapping[str, Placement],
                 spacing: EscapeSpacingModel | None = None,
                 power_domain_weight: float = 0.25) -> tuple[int, int, int, int]:
-    channels = (spacing or EscapeSpacingModel(board)).channels(placements)
+    deficit = (spacing or EscapeSpacingModel(board)).deficit_nm(placements)
     return (
         _relative_penalty(board, placements),
-        sum(c.deficit_nm for c in channels),
+        deficit,
         _local_connection_length(board, placements),
         _planning_wirelength(board, placements) + _group_spread(board, placements) // 20
         + power_domain_penalty(board, placements, power_domain_weight),

@@ -73,6 +73,50 @@ def test_planner_keeps_rigid_geometry_and_is_deterministic():
     assert placement_solution_is_legal(first.board, mapping(first.board), options())
 
 
+def test_fixed_obstacle_collision_does_not_blame_unrelated_macro():
+    board = fixture_board()
+    fixed = ComponentPlacementRule('J1', fixed_position=Point.mm(23, 23))
+    other = ComponentPlacementRule('C1', fixed_position=Point.mm(23, 23))
+    board = replace(board, placements=board.placements + (
+        replace(board.placements[-1], reference='C1'),),
+        placement_rules=board.placement_rules + (fixed, other))
+    with pytest.raises(PlacementPlanningError, match="conflicting fixed placements.*C1.*J1"):
+        plan_placement(board, options())
+
+
+def test_physical_drc_names_rejected_component_pair():
+    board = fixture_board()
+    board = replace(board, placements=board.placements + (
+        replace(board.placements[-1], reference='C1'),))
+    report = run_physical_drc(board)
+    finding = next(f for f in report.findings if f.code == 'DRC-PLACEMENT')
+    assert 'J1 / C1' in finding.message
+
+
+def test_physical_drc_names_unmet_pad_distance():
+    from pcbir.physical import RelativePlacementKind, RelativePlacementRule
+    board = fixture_board()
+    board = replace(board, relative_rules=(RelativePlacementRule(
+        RelativePlacementKind.MAX_DISTANCE,
+        (PlacementTarget('U1', '1'), PlacementTarget('J1', '1')),
+        distance_nm=nm_from_mm(2)),))
+    finding = next(f for f in run_physical_drc(board).findings if f.code == 'DRC-PLACEMENT')
+    assert 'U1 to J1: maximum distance 2 mm, actual' in finding.message
+
+
+def test_fixed_pad_distance_fails_before_soft_placement():
+    from pcbir.physical import RelativePlacementKind, RelativePlacementRule
+    board = fixture_board()
+    board = replace(board, relative_rules=(RelativePlacementRule(
+        RelativePlacementKind.MAX_DISTANCE,
+        (PlacementTarget('U1', '1'), PlacementTarget('J1', '1')),
+        distance_nm=nm_from_mm(2)),))
+    with pytest.raises(PlacementPlanningError, match='conflicting fixed placement constraints.*U1 to J1') as caught:
+        plan_placement(board, options(fixed_references=frozenset({'U1', 'J1'})))
+    assert caught.value.__cause__.diagnostic_components==('J1','U1')
+    assert caught.value.__cause__.diagnostic_board is not None
+
+
 def test_fixed_nonanchor_member_freezes_complete_cluster():
     board = fixture_board()
     plan = plan_placement(board, options(fixed_references=frozenset({"L1"})))

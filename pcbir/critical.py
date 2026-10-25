@@ -613,7 +613,8 @@ def route_critical_nets(
                 if (not result.connected and routes.get(rule.net) is not None
                         and routes[rule.net].connected
                         and (rule.kind not in {RouteKind.RF_FEED, RouteKind.CLOCK}
-                             or len(routes[rule.net].accesses) == 2)):
+                             or len(routes[rule.net].accesses) == 2
+                             or (rule.kind is RouteKind.RF_FEED and rule.topology == "tree" and rule.max_vias == 0))):
                     repaired_single, net_tracks, net_vias = _route_single_exact(
                         board, rule, global_route, tracks, vias,
                     )
@@ -1334,6 +1335,7 @@ def _route_pair_group(
     first, second = sorted((rule, partner_rule), key=lambda item: item.net)
     from .pair_terminals import PairTerminalPreparationStats, prepare_pair_terminals, terminal_partners
     preparation = PairTerminalPreparationStats()
+    source_routes = routes
     routes, first_branches, second_branches, branch_via_pairs, branch_return_vias = prepare_pair_terminals(
         replace(board, tracks=tuple(tracks), vias=tuple(vias)), first, second, routes, report=preparation)
     evidence = preparation.snapshot() if preparation.status != "source_terminals" else None
@@ -1398,10 +1400,16 @@ def _route_pair_group(
     from .hard_macros import macro_owned_pads
     owned_terminals = macro_owned_pads(board)
     protected_ends = any(p in owned_terminals for n in board.nets if n.name in (first.net, second.net) for p in n.pads)
-    if not result.connected and supported and (guided or not protected_ends):
+    from .pair_terminals import macro_terminal_guides_proved
+    proved_ports = protected_ends and macro_terminal_guides_proved(
+        board, (routes.get(first.net), routes.get(second.net)))
+    if not result.connected and supported and (guided or not protected_ends or proved_ports):
         search_board = replace(board, tracks=(*tracks, *first_branches, *second_branches),
                                vias=(*vias, *[v for pair in branch_via_pairs for v in pair], *branch_return_vias))
         stats = PairSearchStats()
+        from .pair_terminals import joined_terminal_variants
+        variants = (joined_terminal_variants(search_board, first, second, source_routes, routes)
+                    if preparation.status == 'surface_contacts' else (routes,))
         if crossing is not None:
             assert crossing.layer is not None
             order = "planned_crossing"
@@ -1465,7 +1473,9 @@ def _route_pair_group(
                         attempt, proposed_tracks, proposed_vias, tracks, vias)
             return attempt, proposed_tracks, proposed_vias, candidate_blockers
         for searcher in searchers:
-            for pitch_nm in (1_000_000, 500_000, 250_000):
+            port_pairs_at_entry = stats.port_pairs
+            active_routes = routes
+            for tier, pitch_nm in enumerate((1_000_000, 500_000, 250_000)):
                 # A limited tier samples both families and all pitches,
                 # rather than spending its entire cap on the first port.
                 # Full-budget standalone calls retain historical bounds.
@@ -1478,8 +1488,13 @@ def _route_pair_group(
                     limits = {"maximum_total_states": stats.expanded_states + slice_size,
                               "maximum_states": max(1, (slice_size + 1) // 2),
                               "maximum_searches": 2}
+                # If no primary portal exists, spend an existing finer tier
+                # at a different freshly joined source contact. Branch copper
+                # and original-net acceptance remain unchanged.
+                if stats.port_pairs == port_pairs_at_entry:
+                    active_routes = variants[min(tier,len(variants)-1)]
                 for candidate in searcher(
-                    search_board, first, second, routes[first.net], routes[second.net],
+                    search_board, first, second, active_routes[first.net], active_routes[second.net],
                     stats=stats, pitch_nm=pitch_nm, **limits,
                 ):
                     attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
@@ -1523,7 +1538,8 @@ def _route_pair_group(
             result = replace(result, diagnostics=(*result.diagnostics,
                 f"{label}: {stats.searches} searches, {stats.expanded_states} states, "
                 f"{stats.candidates} candidates; none accepted"
-                + (f" (first-failing gates: {reasons})" if reasons else "")))
+                + (f" (first-failing gates: {reasons})" if reasons else ""),
+                *stats.terminal_port_rejections[:2],*stats.launch_rejections[:3]))
     return reported((result, pair_tracks, pair_vias))
 
 
@@ -1831,6 +1847,32 @@ def _route_single_exact(
         maximum_passes=2, maximum_search_states=20_000,
         progressive_guides=True, constrained_pins_first=True,
     )
+    connected_guide = any(item.net==rule.net and item.connected for item in global_route.routes)
+    def local_repair():
+        owner_board=replace(board,tracks=tuple(committed_tracks),vias=tuple(committed_vias))
+        maze_options = (dict(maze_state_budget=40_000, maze_phase_budget=20_000,
+                             maze_detour_nm=4_000_000) if rule.kind is RouteKind.CLOCK else {})
+        for candidate_tracks in local_surface_candidates(owner_board,rule,maze=True, **maze_options):
+            candidate=CriticalNetResult((rule.net,),True,len(candidate_tracks),0,
+                (_track_length(candidate_tracks),),0,
+                diagnostics=_budget_diagnostics(rule,candidate_tracks,()),
+                assumptions=_external_assumptions(rule),evidence_digests=_external_evidence(rule),
+                strategy='local_surface_maze')
+            outcome=_validate_candidate(board,candidate,candidate_tracks,(),committed_tracks,committed_vias)
+            if outcome[0].connected:
+                return outcome
+        return None
+    local_first=(connected_guide and rule.max_length_nm is not None and rule.max_vias==0
+                 and any(n.name==rule.net and (len(n.pads)==2 or
+                     rule.kind is RouteKind.CRITICAL and rule.topology=="tree" and len(n.pads)<=8)
+                     for n in board.nets))
+    if local_first:
+        # The same bounded local corridor can already satisfy a short surface
+        # clock. Try it before the much larger fine-grid fallback, with every
+        # original budget/ownership/physical gate; do not repeat it on failure.
+        local=local_repair()
+        if local is not None:
+            return local
     if rule.max_length_nm is not None and rule.max_vias == 0:
         # A bounded surface route has no layer-assignment tradeoff. Coarse
         # maze detours and preferred-heading penalties can consume its entire
@@ -1865,24 +1907,17 @@ def _route_single_exact(
     result = CriticalNetResult(
         (rule.net,), net is not None and net.connected,
         len(tracks), len(vias), (_track_length(tracks),), 0,
-        net.diagnostics if net is not None else ("no exact critical-net attempt",),
+        (*net.diagnostics, *_budget_diagnostics(rule, tracks, vias)) if net is not None else ("no exact critical-net attempt",),
         _external_assumptions(rule), evidence_digests=_external_evidence(rule),
         strategy="exact_single_net",
     )
-    if (not result.connected and rule.max_vias == 0
-            and any(item.net == rule.net and item.connected for item in global_route.routes)):
+    if not result.connected and rule.max_vias==0 and connected_guide and not local_first:
         # A board-wide fine grid can spend its whole budget far from a short
         # surface connection. Reuse the exact bounded local maze; acceptance
         # still enforces the original specialized length and clearance rules.
-        owner_board = replace(board, tracks=tuple(committed_tracks), vias=tuple(committed_vias))
-        for candidate_tracks in local_surface_candidates(owner_board, rule, maze=True):
-            candidate = replace(result, connected=True, track_count=len(candidate_tracks), via_count=0,
-                lengths_nm=(_track_length(candidate_tracks),),
-                diagnostics=_budget_diagnostics(rule, candidate_tracks, ()), strategy="local_surface_maze")
-            candidate, candidate_tracks, candidate_vias = _validate_candidate(
-                board, candidate, candidate_tracks, (), committed_tracks, committed_vias)
-            if candidate.connected:
-                return candidate, candidate_tracks, candidate_vias
+        local=local_repair()
+        if local is not None:
+            return local
     return _validate_candidate(board, result, tracks, vias,
                                committed_tracks, committed_vias)
 
@@ -1938,7 +1973,8 @@ def _route_single(
             (),
             (),
         )
-    if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(guide.accesses) != 2:
+    rf_tree = rule.kind is RouteKind.RF_FEED and rule.topology == "tree" and rule.max_vias == 0
+    if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(guide.accesses) != 2 and not rf_tree:
         return (
             CriticalNetResult(
                 (rule.net,),

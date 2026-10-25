@@ -47,6 +47,7 @@ class _CopperObject:
     pad_reference: PadReference | None = None
     # Terminal land whose breakout region holds this copper (plan R1).
     breakout_land: str | None = None
+    occurrence: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,7 @@ class _DrilledHole:
     locked: bool
     reusable: bool = False
     span: tuple[CopperLayer, CopperLayer] | None = None
+    occurrence: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,10 +116,12 @@ def _pad_index_template(poses_key: IdentityKey, footprints, nets_key: IdentityKe
                       if pad.kind is PadKind.SMD else stackup_key.value.copper_layers)
             if pad.kind is PadKind.THROUGH_HOLE and pad.drill is not None:
                 holes.append(_DrilledHole(net, position,
-                    max(pad.drill.width_nm, pad.drill.height_nm) // 2, True))
+                    max(pad.drill.width_nm, pad.drill.height_nm) // 2, True,
+                    occurrence=f"pad:{pose.reference}.{pad.number}:{pad_index}"))
             identity = len(objects)
             objects.append(_CopperObject(net, tuple(layers), shape, footprint.clearance_nm or 0,
-                                         is_pad=True, pad_reference=reference))
+                                         is_pad=True, pad_reference=reference,
+                                         occurrence=f"pad:{pose.reference}.{pad.number}:{pad_index}"))
             if reference in assigned and net in lengths:
                 length = lengths[net]
                 lands.setdefault(net, []).append(BreakoutLand(
@@ -149,6 +153,9 @@ class RoutingBlocker:
     immutable: bool
     layers: tuple[str, ...]
     positions_nm: tuple[tuple[int, int], ...]
+    # Snapshot-local occurrence, distinct even for geometrically equal objects.
+    # A lock flag is authority; this diagnostic label never grants mutability.
+    occurrence: str = ""
 
 
 def _geometry_identity(value) -> str:
@@ -170,7 +177,8 @@ def _geometry_identity(value) -> str:
 class RoutingClearanceIndex:
     """Reserve copper; same-net tracks may join, but vias must avoid pads."""
 
-    def __init__(self, board: PhysicalBoard, bin_size_nm: int = nm_from_mm(2)) -> None:
+    def __init__(self, board: PhysicalBoard, bin_size_nm: int = nm_from_mm(2), *,
+                 _deferred_components: frozenset[str] = frozenset()) -> None:
         if bin_size_nm <= 0:
             raise ValueError("clearance bin size must be positive")
         self.board = board
@@ -191,6 +199,8 @@ class RoutingClearanceIndex:
         )
         self._objects: list[_CopperObject] = []
         self._holes: list[_DrilledHole] = []
+        self._hole_bins: dict[tuple[int, int], list[int]] = {}
+        self._large_holes: list[int] = []
         # Ordered insertions; with ``board`` they determine the whole index.
         self._additions: list[tuple[TrackSegment | Via, bool]] = []
         self._bins: dict[tuple[CopperLayer, int, int], list[int]] = {}
@@ -219,17 +229,31 @@ class RoutingClearanceIndex:
         # Source breakout-owner strings belong to that complete source epoch;
         # dynamic breakout queries and all mutable reservations remain local.
         self._objects = list(template.objects)
-        self._holes = list(template.holes)
+        for hole in template.holes:
+            self._add_hole(hole)
         self._bins = {key: list(ids) for key, ids in template.bins}
+        if _deferred_components:
+            # Private support-placement proposal view. The caller must restore
+            # every land and validate the complete new pose before adoption.
+            # Never mutate the shared immutable pad template or its cache.
+            poses = {p.reference:p for p in board.placements}
+            if not _deferred_components <= poses.keys() or any(
+                    pad.kind is not PadKind.SMD
+                    for ref in _deferred_components for pad in board.footprints[poses[ref].footprint].pads):
+                raise ValueError('deferred placement view requires known SMD-only components')
+            self._objects = []; self._bins = {}
+            for obj in template.objects:
+                if obj.pad_reference.component not in _deferred_components:
+                    self._add(obj)
         for _, hole in non_plated_holes(board):
             self._add(_CopperObject(
                 "<non-plated-hole>", tuple(board.stackup.copper_layers), hole,
                 board.rules.minimum_hole_clearance_nm,
             ))
-        for track in board.tracks:
-            self.add_track(track, locked=True)
-        for via in board.vias:
-            self.add_via(via, locked=True)
+        for ordinal, track in enumerate(board.tracks):
+            self.add_track(track, locked=True, occurrence=f"track:{ordinal}")
+        for ordinal, via in enumerate(board.vias):
+            self.add_via(via, locked=True, occurrence=f"via:{ordinal}")
 
     def can_track(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer
@@ -378,7 +402,7 @@ class RoutingClearanceIndex:
         self, net: str, position: Point, radius_nm: int,
         span: tuple[CopperLayer, CopperLayer],
     ) -> bool:
-        for hole in self._holes:
+        for hole in self._nearby_holes(position, radius_nm + self.board.rules.minimum_hole_clearance_nm):
             distance_squared = ((position.x_nm - hole.position.x_nm) ** 2
                                 + (position.y_nm - hole.position.y_nm) ** 2)
             if (distance_squared == 0 and hole.net == net and hole.reusable
@@ -484,30 +508,38 @@ class RoutingClearanceIndex:
         """
         return tuple(self._additions)
 
-    def add_track(self, track: TrackSegment, *, locked: bool = False) -> None:
+    def add_track(self, track: TrackSegment, *, locked: bool = False,
+                  occurrence: str | None = None) -> None:
+        occurrence = occurrence or f"addition:{len(self._additions)}:track"
         self._additions.append((track, locked))
         self._add(_CopperObject(
             track.net, (track.layer,),
             RoundedConvexShape((track.start, track.end), track.width_nm // 2),
             locked=locked,
+            occurrence=occurrence,
         ))
 
-    def add_via(self, via: Via, *, locked: bool = False) -> None:
+    def add_via(self, via: Via, *, locked: bool = False,
+                occurrence: str | None = None) -> None:
+        occurrence = occurrence or f"addition:{len(self._additions)}:via"
         self._additions.append((via, locked))
-        self._holes.append(_DrilledHole(
+        self._add_hole(_DrilledHole(
             via.net, via.position, via.drill_nm // 2, locked, True,
             (via.from_layer, via.to_layer),
+            occurrence,
         ))
         self._add(_CopperObject(
             via.net, self._via_layers(via.from_layer, via.to_layer),
             RoundedConvexShape((via.position,), via.size_nm // 2),
             locked=locked,
+            occurrence=occurrence,
         ))
         self._add(_CopperObject(
             via.net, self._via_layers(via.from_layer, via.to_layer),
             RoundedConvexShape((via.position,), via.drill_nm // 2),
             clearance_nm=self.board.rules.minimum_hole_clearance_nm,
             locked=locked,
+            occurrence=occurrence,
         ))
 
     def blocking_track_nets(self, track: TrackSegment) -> tuple[frozenset[str], bool]:
@@ -522,10 +554,10 @@ class RoutingClearanceIndex:
 
     def _blocker_records(self, net, shape, layers, *, for_via, clearance_floor_nm=0):
         records = []
-        def add(identity, reason, other_net, locked, other_layers, points):
+        def add(identity, reason, other_net, locked, other_layers, points, occurrence=""):
             records.append(RoutingBlocker(identity, reason, other_net, locked,
                 tuple(layer.value for layer in other_layers),
-                tuple((p.x_nm, p.y_nm) for p in points)))
+                tuple((p.x_nm, p.y_nm) for p in points), occurrence))
         if not for_via:
             for layer in layers:
                 for zone in self.zone_reservations.blocking_zones(net, shape, layer):
@@ -546,12 +578,12 @@ class RoutingClearanceIndex:
                 identity = (f"pad:{other.pad_reference.component}.{other.pad_reference.pad}:"
                             if other.pad_reference else "copper:") + _geometry_identity(other)
                 add(identity, "pad clearance" if other.is_pad else "copper clearance",
-                    other.net, other.locked, other.layers, other.shape.spine)
+                    other.net, other.locked, other.layers, other.shape.spine, other.occurrence)
         if (not self._keepout_clear(shape, layers, for_via=for_via)
                 and not any(item.net is None for item in records)):
             add("board-material:" + _geometry_identity(self.board.outline),
                 "board material, hole or unsupported keepout geometry", None, True, layers, shape.spine)
-        return tuple(sorted(set(records), key=lambda item: item.identity))
+        return tuple(sorted(set(records), key=lambda item: (item.identity, item.occurrence, item.reason)))
 
     def via_blocker_records(self, via: Via) -> tuple[RoutingBlocker, ...]:
         layers = self._via_layers(via.from_layer, via.to_layer)
@@ -565,8 +597,9 @@ class RoutingClearanceIndex:
                 records.append(RoutingBlocker("pad-contact:" + _geometry_identity(other),
                     "via annulus must avoid pad copper", other.net, True,
                     tuple(layer.value for layer in other.layers),
-                    tuple((p.x_nm, p.y_nm) for p in other.shape.spine)))
-        for hole in self._holes:
+                    tuple((p.x_nm, p.y_nm) for p in other.shape.spine), other.occurrence))
+        for hole in self._nearby_holes(via.position,
+                via.drill_nm // 2 + self.board.rules.minimum_hole_clearance_nm):
             distance = (via.position.x_nm-hole.position.x_nm)**2 + (via.position.y_nm-hole.position.y_nm)**2
             if (distance == 0 and hole.net == via.net and hole.reusable
                     and hole.span == (via.from_layer, via.to_layer)):
@@ -575,8 +608,40 @@ class RoutingClearanceIndex:
             if distance < required**2:
                 records.append(RoutingBlocker("drill:" + _geometry_identity(hole), "drill spacing",
                     hole.net, hole.locked or hole.net == via.net,
-                    tuple(layer.value for layer in layers), ((hole.position.x_nm, hole.position.y_nm),)))
-        return tuple(sorted(set(records), key=lambda item: item.identity))
+                    tuple(layer.value for layer in layers), ((hole.position.x_nm, hole.position.y_nm),),
+                    hole.occurrence))
+        return tuple(sorted(set(records), key=lambda item: (item.identity, item.occurrence, item.reason)))
+
+    def via_obstacle_bounds(self, net, position, size_nm, drill_nm, from_layer, to_layer,
+                            radius_nm, maximum_obstacles):
+        """Bounded nearby frontier proposals, not a clearance approximation.
+
+        All spanned layers participate, including opposite-face same-net lands.
+        Rounded shapes keep their exact legality predicates elsewhere.
+        """
+        layers = self._via_layers(from_layer, to_layer)
+        shape = RoundedConvexShape((position,), size_nm // 2)
+        land = self._breakout_land(net, shape)
+        boundaries = set()
+        for other in self.nearby_copper(shape, layers, radius_nm):
+            if other.net == net and not other.is_pad:
+                continue
+            margin = (size_nm//2 + 1 if other.net == net else max(
+                size_nm//2 + max(self._rule_clearance(net, land, other), other.clearance_nm),
+                drill_nm//2 + self.board.rules.minimum_hole_clearance_nm))
+            boundaries.add(other.shape.bounds.expanded(margin))
+        for hole in self._nearby_holes(position, radius_nm + size_nm):
+            if (abs(hole.position.x_nm-position.x_nm) <= radius_nm+size_nm
+                    and abs(hole.position.y_nm-position.y_nm) <= radius_nm+size_nm):
+                margin = hole.radius_nm + drill_nm//2 + self.board.rules.minimum_hole_clearance_nm
+                boundaries.add(RoundedConvexShape((hole.position,), margin).bounds)
+        for region in self._overlapping_static_regions(
+                RoundedConvexShape((position,), radius_nm+size_nm//2), layers):
+            if region.block_vias:
+                boundaries.add(region.shape.bounds.expanded(size_nm//2+region.clearance_nm+1))
+        return tuple(sorted(boundaries, key=lambda b: (
+            max(b.min_x-position.x_nm, 0, position.x_nm-b.max_x)**2
+            + max(b.min_y-position.y_nm, 0, position.y_nm-b.max_y)**2, b))[:maximum_obstacles])
 
     def route_blockers(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer,
@@ -604,7 +669,8 @@ class RoutingClearanceIndex:
         locked |= drill_locked
         locked = locked or not self.pad_copper_clear(shape, layers)
         movable = set(movable)
-        for hole in self._holes:
+        for hole in self._nearby_holes(via.position,
+                via.drill_nm // 2 + self.board.rules.minimum_hole_clearance_nm):
             distance_squared = ((via.position.x_nm - hole.position.x_nm) ** 2
                                 + (via.position.y_nm - hole.position.y_nm) ** 2)
             if (distance_squared == 0 and hole.net == via.net and hole.reusable
@@ -618,6 +684,37 @@ class RoutingClearanceIndex:
                 else:
                     movable.add(hole.net)
         return frozenset(movable), locked
+
+    def _add_hole(self, hole: _DrilledHole) -> None:
+        identity = len(self._holes)
+        self._holes.append(hole)
+        xs = range((hole.position.x_nm-hole.radius_nm)//self.bin_size_nm,
+                   (hole.position.x_nm+hole.radius_nm)//self.bin_size_nm+1)
+        ys = range((hole.position.y_nm-hole.radius_nm)//self.bin_size_nm,
+                   (hole.position.y_nm+hole.radius_nm)//self.bin_size_nm+1)
+        if len(xs) * len(ys) > 512:
+            self._large_holes.append(identity)
+            return
+        for x in xs:
+            for y in ys:
+                self._hole_bins.setdefault((x, y), []).append(identity)
+
+    def _nearby_holes(self, position: Point, radius_nm: int):
+        """Conservative broad phase; callers retain exact drill predicates."""
+        identities = set(self._large_holes)
+        xs = range((position.x_nm-radius_nm)//self.bin_size_nm,
+                   (position.x_nm+radius_nm)//self.bin_size_nm+1)
+        ys = range((position.y_nm-radius_nm)//self.bin_size_nm,
+                   (position.y_nm+radius_nm)//self.bin_size_nm+1)
+        # An unusually large query can iterate the finite hole set directly.
+        if len(xs) * len(ys) > 512:
+            yield from self._holes
+            return
+        for x in xs:
+            for y in ys:
+                identities.update(self._hole_bins.get((x, y), ()))
+        for identity in sorted(identities):
+            yield self._holes[identity]
 
     def _blockers(
         self, net: str, shape: RoundedConvexShape,

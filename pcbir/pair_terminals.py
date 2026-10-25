@@ -22,6 +22,11 @@ def terminal_copper_layers(board, reference):
     numbers, missing references, apertures and unplated holes fail closed.
     Track policy is intersected separately by the caller.
     """
+    from .hard_macros import macro_routing_ports, macro_port_layers
+    net = next((n for n in board.nets if reference in n.pads), None)
+    port = macro_routing_ports(board, net.name).get(reference) if net else None
+    if port is not None:
+        return frozenset(macro_port_layers(board, port))
     pose = next((p for p in board.placements if p.reference == reference.component), None)
     if pose is None:
         return frozenset()
@@ -45,8 +50,45 @@ def _main_contact(board, rule, terminals):
     """
     from .routing_layers import routing_layers
     allowed = set(routing_layers(board, rule.net, rule))
+    poses = {p.reference:p for p in board.placements}
     return min(terminals, key=lambda a:(
-        -len(terminal_copper_layers(board, a.pad).intersection(allowed)), str(a.pad)))
+        -len(terminal_copper_layers(board, a.pad).intersection(allowed)),
+        -len(board.footprints[poses[a.pad.component].footprint].pads), str(a.pad)))
+
+
+def _local_terminal_groups(rule, accesses, owned):
+    """Bounded physical contact groups, including nearby support components.
+
+    Component identity retains existing duplicate-land groups. A third-component
+    branch may join one endpoint only inside the declared breakout radius, on
+    the same surface, with no private macro land. This proposes a partition;
+    every contact still needs actual branch copper and complete-pair validation.
+    """
+    groups = {}
+    for access in accesses:
+        groups.setdefault(access.pad.component, []).append(access)
+    limit = rule.breakout_length_nm
+    if len(groups) <= 2 or limit is None or sum(map(len, groups.values())) > 10:
+        return tuple(groups.values())
+    clusters = list(groups.values())
+    while len(clusters) > 2:
+        choices = []
+        for i, first in enumerate(clusters):
+            for j in range(i + 1, len(clusters)):
+                merged = (*first, *clusters[j])
+                if any(a.pad in owned for a in merged) or len({a.layer for a in merged}) != 1:
+                    continue
+                distances = [(a.pad_position.x_nm-b.pad_position.x_nm)**2
+                             + (a.pad_position.y_nm-b.pad_position.y_nm)**2
+                             for a in merged for b in merged]
+                if max(distances) <= limit**2:
+                    choices.append((max(distances), tuple(sorted(str(a.pad) for a in merged)), i, j))
+        if not choices:
+            break
+        _, _, i, j = min(choices)
+        clusters[i] = [*clusters[i], *clusters[j]]
+        del clusters[j]
+    return tuple(clusters)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,8 +208,18 @@ def source_terminal_guide(board, name, existing):
     net=next((n for n in board.nets if n.name==name),None)
     if net is None: return existing
     poses={p.reference:p for p in board.placements}
+    from .hard_macros import macro_routing_pads, macro_routing_ports, macro_owned_pads
+    ports = macro_routing_ports(board, name)
+    owned = macro_owned_pads(board)
+    references = macro_routing_pads(board, net)
     accesses=[]
-    for ref in net.pads:
+    for ref in references:
+        port = ports.get(ref)
+        if port is not None:
+            accesses.append(PairTerminal(ref,port.position,port.position,port.layer))
+            continue
+        if ref in owned:
+            return None  # An owned private land without a proved port is not an endpoint.
         pose=poses.get(ref.component)
         if pose is None: return existing
         lands=[p for p in board.footprints[pose.footprint].pads if p.number==ref.pad]
@@ -175,30 +227,61 @@ def source_terminal_guide(board, name, existing):
         pos=transformed_pad_position(board,pose,ref.pad)
         layer=CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
         accesses.append(PairTerminal(ref,pos,pos,layer))
-    if existing is not None and existing.connected and {a.pad for a in existing.accesses}==set(net.pads):
+    if (existing is not None and existing.connected
+            and {a.pad for a in existing.accesses}==set(references)
+            and all(a.pad not in ports or (a.pad_position==ports[a.pad].position
+                    and a.layer in terminal_copper_layers(board,a.pad)) for a in existing.accesses)):
         return existing
     return GlobalNetRoute(name,False,tuple(accesses),(),(),0,
         ('source terminals for exact search; no connected coarse guide',))
 
-def _surface_pair_terminals(board, first, second, routes):
+def macro_terminal_guides_proved(board, guides):
+    """Every private endpoint is represented by its actual proved boundary port."""
+    from .hard_macros import macro_owned_pads, macro_routing_ports
+    owned=macro_owned_pads(board)
+    for guide in guides:
+        if guide is None:
+            return False
+        net=next((n for n in board.nets if n.name==guide.net),None)
+        if net is None:
+            return False
+        private=set(net.pads)&owned
+        ports=macro_routing_ports(board,guide.net)
+        represented=set()
+        for access in guide.accesses:
+            port=ports.get(access.pad)
+            if port is None:
+                if access.pad in private:
+                    return False
+                continue
+            if (access.pad_position!=port.position or access.access_position!=port.position
+                    or access.layer not in terminal_copper_layers(board,access.pad)):
+                return False
+            represented.update(port.pads)
+        if not private<=represented:
+            return False
+    return True
+
+
+def _surface_pair_terminals(board, first, second, routes, *, joined_guides=None):
     from .hard_macros import macro_owned_pads
     owned = macro_owned_pads(board)
-    if any(p in owned for n in board.nets if n.name in (first.net, second.net) for p in n.pads):
-        return routes, (), ()  # keep prescribed macro ports and their existing access contract
-    guides=[source_terminal_guide(board,r.net,routes.get(r.net)) for r in (first,second)]
+    guides=(joined_guides if joined_guides is not None else
+            [source_terminal_guide(board,r.net,routes.get(r.net)) for r in (first,second)])
     if any(g is None for g in guides): return None,(),()
     all_branches=[]
     normalized=[]
     from .pair_search import _PairAccessIndex
     index=_PairAccessIndex(board)
     for rule,guide in zip((first,second),guides):
-        groups={}
-        for a in guide.accesses: groups.setdefault(a.pad.component,[]).append(a)
-        if len(groups)!=2 or sum(len(v)-1 for v in groups.values())>8:
+        groups = _local_terminal_groups(rule, guide.accesses, owned)
+        if len(groups)!=2 or sum(len(v)-1 for v in groups)>8:
             return None,(),()  # fixed bound on disposable local branches
         anchors=[]
         branches=[]
-        for component,terminals in sorted(groups.items()):
+        for terminals in sorted(groups, key=lambda items:tuple(sorted(str(a.pad) for a in items))):
+            if len(terminals)>1 and any(a.pad in owned for a in terminals):
+                return None,(),()  # Never tie private contacts or replace a prescribed port.
             anchor=_main_contact(board, rule, terminals)
             anchors.append(anchor)
             for other in sorted(terminals,key=lambda a:str(a.pad)):
@@ -222,6 +305,52 @@ def _surface_pair_terminals(board, first, second, routes):
         all_branches.append(tuple(branches))
     if terminal_partners(*normalized) is None: return None,(),()
     return {**routes,first.net:normalized[0],second.net:normalized[1]},*all_branches
+
+
+def joined_terminal_variants(board, first, second, source_routes, routes):
+    """At most one alternate joined contact per endpoint, retaining real identity.
+
+    This is only for freshly prepared surface branches. The caller retains all
+    those branches in every proposal and validates the complete original nets.
+    An alternate never grants a layer, absorbs a remote contact or changes a
+    private macro port. Existing maze/search allowances are shared by variants.
+    """
+    from .hard_macros import macro_owned_pads
+    owned = macro_owned_pads(board)
+    raw = [source_terminal_guide(board, r.net, source_routes.get(r.net)) for r in (first,second)]
+    if any(g is None for g in raw):
+        return (routes,)
+    groups = [_local_terminal_groups(rule,g.accesses,owned) for rule,g in zip((first,second),raw)]
+    if any(len(items)!=2 for items in groups):
+        return (routes,)
+    partners = terminal_partners(routes[first.net],routes[second.net])
+    if partners is None:
+        return (routes,)
+    variants = [routes]
+    for a in routes[first.net].accesses:
+        b = partners[a.pad]
+        alternatives = []
+        for current,clusters in zip((a,b),groups):
+            cluster = next((items for items in clusters if any(x.pad==current.pad for x in items)),())
+            if any(x.pad in owned for x in cluster):
+                alternatives = []
+                break
+            others = sorted((x for x in cluster if x.pad!=current.pad and x.layer is current.layer),
+                            key=lambda x:str(x.pad))
+            if not others:
+                alternatives = []
+                break
+            alternatives.append(others[0])
+        if len(alternatives)!=2:
+            continue
+        changed = dict(routes)
+        for rule,current,other in zip((first,second),(a,b),alternatives):
+            guide = routes[rule.net]
+            changed[rule.net] = replace(guide,accesses=tuple(
+                other if x.pad==current.pad else x for x in guide.accesses))
+        if terminal_partners(changed[first.net],changed[second.net]) is not None:
+            variants.append(changed)
+    return tuple(variants[:3])
 
 
 def prepare_pair_terminals(board, first, second, routes, *, report=None):
@@ -252,12 +381,12 @@ def prepare_pair_terminals(board, first, second, routes, *, report=None):
 
 def _paired_local_contacts(board, first, second, *, report=None):
     report = report if report is not None else PairTerminalPreparationStats()
-    # One local duplicated-contact group per member, two contacts each, with
-    # one remaining main endpoint. Broader trees stay explicitly unsupported.
+    # One duplicated-contact group per member, with at most one nearby support
+    # component. Its source-declared local cluster must still leave two ends.
     from .hard_macros import macro_owned_pads
     owned = macro_owned_pads(board)
     guides = [source_terminal_guide(board, r.net, None) for r in (first, second)]
-    if any(g is None or any(a.pad in owned for a in g.accesses) for g in guides):
+    if any(g is None for g in guides):
         return None
     groups = []
     for rule, guide in zip((first, second), guides):
@@ -265,9 +394,14 @@ def _paired_local_contacts(board, first, second, *, report=None):
         for a in guide.accesses:
             grouped.setdefault(a.pad.component, []).append(a)
         duplicate = [items for items in grouped.values() if len(items) == 2]
-        if len(grouped) != 2 or len(guide.accesses) != 3 or len(duplicate) != 1:
+        if len(grouped) not in (2,3) or len(guide.accesses) not in (3,4) or len(duplicate) != 1:
+            return None
+        clusters = _local_terminal_groups(rule, guide.accesses, owned)
+        if len(clusters) != 2 or any(a.pad in owned for cluster in clusters if len(cluster)>1 for a in cluster):
             return None
         contacts = tuple(sorted(duplicate[0], key=lambda a:str(a.pad)))
+        if any(a.pad in owned for a in contacts):
+            return None  # Only public duplicated contacts are disposable branch work.
         if (rule.breakout_length_nm is None or contacts[0].layer is not contacts[1].layer
             or (contacts[0].pad_position.x_nm-contacts[1].pad_position.x_nm)**2
                + (contacts[0].pad_position.y_nm-contacts[1].pad_position.y_nm)**2
@@ -307,6 +441,19 @@ def _paired_local_contacts(board, first, second, *, report=None):
                 branch_b = tuple(t for t in branch_tracks if t.net == second.net)
                 trial = replace(board, tracks=(*board.tracks, *branch_tracks),
                                 vias=(*board.vias, *vias))
+                normalized = [replace(g, connected=False, accesses=tuple(
+                    _main_contact(board, rule, items) for _,items in sorted(grouped.items())))
+                    for rule,g,(grouped,_) in zip((first,second),guides,groups)]
+                if any(len(g.accesses)>2 for g in normalized):
+                    joined, extra_a, extra_b = _surface_pair_terminals(
+                        trial, first, second, {}, joined_guides=normalized)
+                    if joined is None:
+                        report.reject('nearby support contact has no checked surface branch')
+                        continue
+                    branch_a,branch_b = (*branch_a,*extra_a),(*branch_b,*extra_b)
+                    branch_tracks = (*branch_a,*branch_b)
+                    trial = replace(trial, tracks=(*trial.tracks,*extra_a,*extra_b))
+                    normalized = [joined[r.net] for r in (first,second)]
                 graph = explicit_copper_connectivity(trial)
                 if not all(graph.net_connected(PhysicalNet(r.net, tuple(a.pad for a in g.accesses)))
                            for r,g in zip((first,second),local)):
@@ -323,9 +470,6 @@ def _paired_local_contacts(board, first, second, *, report=None):
                         report.reject(f"{finding.code}: {finding.message}",
                                       set(finding.nets) - {first.net, second.net})
                     continue
-                normalized = [replace(g, connected=False, accesses=tuple(
-                    _main_contact(board, rule, items) for _,items in sorted(grouped.items())))
-                    for rule,g,(grouped,_) in zip((first,second),guides,groups)]
                 return ({first.net:normalized[0], second.net:normalized[1]},
                         branch_a, branch_b, candidate.via_pairs, candidate.return_vias)
     report.port_pairs, report.searches = stats.port_pairs, stats.searches

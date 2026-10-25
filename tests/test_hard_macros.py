@@ -42,6 +42,19 @@ def fixture(tmp_path):
     return board,asset,bind
 
 
+def test_physical_acceptance_names_real_drc_pad_owners(tmp_path):
+    from pcbir.hard_macros import MacroAcceptanceError
+    _, _, bind = fixture(tmp_path)
+    board = bind()
+    resistor = next(p for p in board.placements if p.reference == 'R1')
+    board = replace(board, placements=(*board.placements, replace(resistor, reference='FOREIGN')),
+                    nets=(*board.nets, PhysicalNet('OTHER', (PadReference('FOREIGN', '1'),))))
+    with pytest.raises(MacroAcceptanceError) as caught:
+        materialize_hard_macros(board)
+    assert {'R1', 'FOREIGN'} <= set(caught.value.diagnostic_components)
+    assert caught.value.diagnostic_board is not None
+
+
 @pytest.mark.parametrize("rotation",[0,45,90])
 def test_materialization_is_transactional_and_rotates_all_geometry(tmp_path,rotation):
     original,_,bind = fixture(tmp_path)
@@ -387,7 +400,7 @@ def test_private_net_with_external_consumer_requires_a_boundary_port(tmp_path):
     board = replace(original, placements=(*original.placements, Placement("J", "test", Point.mm(5, 5))),
         nets=(replace(original.nets[0], pads=(*original.nets[0].pads, PadReference("J", "1"))),))
     with pytest.raises(ValueError, match="requires an external port"):
-        materialize_hard_macros(bind(input_board=board))
+        bind(input_board=board)
 
 
 def test_ports_cannot_silently_omit_disconnected_bound_pads(tmp_path):
@@ -395,7 +408,7 @@ def test_ports_cannot_silently_omit_disconnected_bound_pads(tmp_path):
     asset["ports"][0]["pads"] = [["chip", "1"]]
     asset["tracks"][0]["points"][-1] = [500000, 0]
     with pytest.raises(ValueError, match="ports omit private pads"):
-        materialize_hard_macros(bind())
+        bind()
 
 
 def test_macro_filled_via_finish_requires_scoped_permission_and_containment(tmp_path):

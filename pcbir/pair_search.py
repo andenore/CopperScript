@@ -3,7 +3,8 @@
 Both lanes follow one oriented spine. Pad fanout is selected jointly and turns
 use offset-line intersections, not independent D+/D- maze routes. This module
 proposes copper only: the critical stage owns profile/native-DRC acceptance.
-Layer transitions and non-octilinear terminal rows deliberately fail closed.
+Layer transitions are handled separately. Staggered terminal rows may propose
+octilinear collars; every emitted segment retains the exact geometry gates.
 """
 from __future__ import annotations
 
@@ -80,8 +81,29 @@ class PairSearchStats:
     candidates: int = 0
     resumed_states: int = 0
     resumed_portals: int = 0
+    blocked_launches: int = 0
+    launch_rejections: tuple[str, ...] = ()
+    terminal_port_rejections: tuple[str, ...] = ()
     # Private exact frontiers; never report, fingerprint or accepted copper.
     _continuations: list = field(default_factory=list, repr=False, compare=False)
+
+    def reject_launch(self, index, tracks):
+        """Bounded exact blocker evidence; never influences search ordering."""
+        self.blocked_launches += 1
+        if len(self.launch_rejections) >= 8:
+            return
+        from decimal import Decimal
+        from .quantities import Length
+        for track in tracks:
+            for blocker in index.track_blocker_records(track):
+                parts = blocker.identity.split(':')
+                label = ':'.join(parts[:2]) if parts[0] == 'pad' else parts[0]
+                at = ', '.join(str(Length.of(Decimal(v)/1000000, 'mm'))
+                               for v in (track.start.x_nm, track.start.y_nm))
+                message = f'{track.net} launch at ({at}): {blocker.reason}, {label}'
+                self.launch_rejections = tuple(dict.fromkeys((*self.launch_rejections, message)))[:8]
+                if len(self.launch_rejections) >= 8:
+                    return
 
 
 def _normal(heading: int, offset: int) -> Point:
@@ -199,6 +221,116 @@ def _collinear_fork(first, second, center, heading, sign, offset, expansion=1):
     return tuple(paths)
 
 
+def _converging_port(index, first_name, second_name, first, second,
+                     component, middle, heading, sign, distance, width, offset, layer,
+                     transverse_extra=0):
+    """Converge end-on round lands before turning both lanes outward.
+
+    This is an analytic proposal for the existing heading/order/length slot,
+    not extra maze work or acceptance authority. A round-land breakout and
+    its actual local width/gap determine the narrow stems. Both lanes turn
+    to one side of the land row, then taper to the requested port pitch only
+    beyond the farther land. All emitted copper still needs the joint exact
+    checks, including companion lands and opposite-face copper for transitions.
+    """
+    if heading % 2 or not index.breakout.pair(first_name, second_name):
+        return None
+    dx, dy = _HEADS[heading]
+    nx, ny = -dy, dx
+    if (first.x_nm-second.x_nm)*nx+(first.y_nm-second.y_nm)*ny:
+        return None
+    lands = tuple(index.breakout.region(net, (point,))
+                  for net, point in ((first_name, first), (second_name, second)))
+    for identity, point in zip(lands, (first, second)):
+        if identity is None or not identity.startswith(f"pad:{component}."):
+            return None
+        shape = index.breakout.land(identity).shape
+        if shape.spine != (point,) or shape.radius_nm <= 0:
+            return None  # Not an actual round terminal; never reinterpret a via port.
+    widths = tuple(index.breakout.track_width_nm(net, land, width)
+                   for net, land in zip((first_name, second_name), lands))
+    if widths[0] != widths[1]:
+        return None
+    gap = index.breakout.spacing_nm(first_name, lands[0], second_name, lands[1])
+    neck = (widths[0]+gap+1)//2
+    pitch = abs((first.x_nm-second.x_nm)*dx+(first.y_nm-second.y_nm)*dy)
+    converge = pitch//2-neck
+    diagonal = converge//3
+    transverse = pitch//2-widths[0]//4+transverse_extra
+    if (diagonal <= 0 or offset < neck
+            or transverse < diagonal+2*neck):
+        return None
+    lead = converge-diagonal
+    far = max((p.x_nm-middle.x_nm)*dx+(p.y_nm-middle.y_nm)*dy
+              for p in (first, second))
+    run = far+pitch//2
+    taper = offset-neck
+    if distance <= run+taper:
+        return None  # Preserve the selected length; never extend a short slot.
+    first_near = ((first.x_nm-middle.x_nm)*dx+(first.y_nm-middle.y_nm)*dy) < 0
+    side = sign if first_near else -sign
+    center = Point(middle.x_nm+dx*distance+nx*side*transverse,
+                   middle.y_nm+dy*distance+ny*side*transverse)
+    paths = []
+    for point, lane in ((first, sign), (second, -sign)):
+        u = (point.x_nm-middle.x_nm)*dx+(point.y_nm-middle.y_nm)*dy
+        inward = 1 if u < 0 else -1
+        stem = u+inward*converge
+        v = side*transverse+lane*neck
+        def at(a, b):
+            return Point(middle.x_nm+dx*a+nx*b, middle.y_nm+dy*a+ny*b)
+        points = (point, at(u+inward*lead, 0), at(stem, side*diagonal),
+                  at(stem, v-side*neck), at(stem+neck, v), at(run, v),
+                  at(run+taper, side*transverse+lane*offset),
+                  at(distance, side*transverse+lane*offset))
+        paths.append(_tracks((first_name, second_name)[len(paths)], points,
+                             width, layer, index.breakout))
+    return _Port(center, heading, sign, *paths, -1)
+
+
+def _lateral_port_centers(index, first_name, second_name, middle, heading, distance,
+                          width, offset, clearance, layer):
+    """Two nearest projected obstacle boundaries inside a finite lateral strip.
+
+    Bounding boxes only propose centers; complete emitted paths retain exact
+    checks. This spends empty analytic collar slots, never extra maze states.
+    """
+    if heading % 2:
+        return ()
+    from .geometry import RoundedConvexShape
+    dx,dy = _HEADS[heading]
+    nx,ny = -dy,dx
+    reach = min(distance,2_000_000)
+    margin = offset+(width+1)//2+clearance
+    def at(u,v):
+        return Point(middle.x_nm+dx*u+nx*v,middle.y_nm+dy*u+ny*v)
+    corridor = RoundedConvexShape((at(0,-reach-margin),at(distance+500000,-reach-margin),
+                                  at(distance+500000,reach+margin),at(0,reach+margin)))
+    intervals = []
+    for item in index.nearby_copper(corridor,(layer,),clearance):
+        if item.net in (first_name,second_name):
+            continue
+        box = item.shape.bounds
+        corners = ((x-middle.x_nm,y-middle.y_nm)
+                   for x in (box.min_x,box.max_x) for y in (box.min_y,box.max_y))
+        projections = tuple((dx*x+dy*y,nx*x+ny*y) for x,y in corners)
+        if max(u for u,v in projections)<0 or min(u for u,v in projections)>distance+500000:
+            continue
+        intervals.append((min(v for u,v in projections)-margin,
+                          max(v for u,v in projections)+margin))
+    merged = []
+    for lo,hi in sorted(intervals):
+        if merged and lo<=merged[-1][1]:
+            merged[-1]=(merged[-1][0],max(hi,merged[-1][1]))
+        else:
+            merged.append((lo,hi))
+    blocked = next(((lo,hi) for lo,hi in merged if lo<=0<=hi),None)
+    if blocked is None:
+        return ()
+    shifts = sorted((blocked[0]-1,blocked[1]+1),key=lambda value:(abs(value),value))
+    return tuple(at(distance,shift) for shift in shifts if abs(shift)<=reach)
+
+
 def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
            second_name: str, first: Point, second: Point, component: str,
            width: int, offset: int, clearance: int, layer: CopperLayer, *,
@@ -206,7 +338,16 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
            allow_local_fallback: bool = True) -> tuple[_Port, ...]:
     separation = _heading(second, first)
     if separation is None:
-        return ()
+        # A connector's staggered row need not itself be a routable segment.
+        # This direction only ranks the same eight existing collar headings;
+        # _paths and _legal still construct/check every actual copper segment.
+        # Compare normalized projections exactly, without coordinate rounding.
+        vx, vy = first.x_nm-second.x_nm, first.y_nm-second.y_nm
+        if not (vx or vy):
+            return ()
+        separation = max(range(8), key=lambda h: (
+            Fraction(max(0, vx*_HEADS[h][0]+vy*_HEADS[h][1])**2,
+                     _HEADS[h][0]**2+_HEADS[h][1]**2), -h))
     middle = Point((first.x_nm + second.x_nm) // 2, (first.y_nm + second.y_nm) // 2)
     placement = next(item for item in board.placements if item.reference == component)
     outward = Point(middle.x_nm - placement.position.x_nm, middle.y_nm - placement.position.y_nm)
@@ -229,6 +370,22 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
         for sign, length in product(signs, lengths):
             step = nm_from_mm(length)
             dx, dy = _HEADS[heading]
+            if dot == 0 and dx*outward.x_nm+dy*outward.y_nm > 0:
+                converging = None
+                # Staggered round-land rows can leave a channel beyond the
+                # default collar. Sample two clearance-scaled offsets in the
+                # same port slot; all source widths/gaps and obstacles retain
+                # the ordinary exact copper checks.
+                for extra in (0,clearance,2*clearance):
+                    candidate = _converging_port(index, first_name, second_name,
+                        first, second, component, middle, heading, sign, step, width, offset, layer,
+                        transverse_extra=extra)
+                    if candidate is not None and _legal(board,index,candidate.first,candidate.second,clearance):
+                        converging = candidate
+                        break
+                if converging is not None:
+                    ports.append(converging)
+                    continue  # One admitted collar per existing slot, as before.
             center = Point(middle.x_nm + dx * step, middle.y_nm + dy * step)
             targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
             admitted = False
@@ -243,6 +400,22 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
                     ports.append(_Port(center, heading, sign, first_tracks, second_tracks, preference))
                     admitted = True
                     break
+            if (not admitted and dot and not heading%2
+                    and index.breakout.pair(first_name,second_name)):
+                for shifted in _lateral_port_centers(index,first_name,second_name,middle,
+                        heading,step,width,offset,clearance,layer):
+                    shifted_targets=(_shift(shifted,normal,sign),_shift(shifted,normal,-sign))
+                    for a,b in product(_paths(first,shifted_targets[0]),_paths(second,shifted_targets[1])):
+                        if _heading(a[-2],a[-1])!=heading or _heading(b[-2],b[-1])!=heading:
+                            continue
+                        paths=(_tracks(first_name,a,width,layer,index.breakout),
+                               _tracks(second_name,b,width,layer,index.breakout))
+                        if _legal(board,index,*paths,clearance):
+                            ports.append(_Port(shifted,heading,sign,*paths,preference))
+                            admitted=True
+                            break
+                    if admitted:
+                        break
             if not admitted and dot == 0:
                 # Three analytic widths, at most one accepted collar in this
                 # existing slot. The initial transverse lead clears square
@@ -400,6 +573,10 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
     groups = [_ports(board, index, first_rule.net, second_rule.net, access.pad_position,
                      partners[access.pad].pad_position, access.pad.component,
                      width, offset, clearance, layer) for access in accesses]
+    for access,group in zip(accesses,groups):
+        if not group:
+            message=f'no exact paired collar at {access.pad.component} on {layer.value}'
+            stats.terminal_port_rejections=tuple(dict.fromkeys((*stats.terminal_port_rejections,message)))[:4]
     onward = _departure_preferences(board, groups, first_rule.net, second_rule.net,
                                     width, offset, clearance, layer, pitch_nm)
     combinations = sorted([(a, b) for a, b in product(*groups) if a.sign == -b.sign],
@@ -410,6 +587,9 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
                                             pair[0].center.x_nm, pair[0].center.y_nm,
                                             pair[1].center.x_nm, pair[1].center.y_nm))
     stats.port_pairs += len(combinations)
+    if all(groups) and not combinations:
+        stats.terminal_port_rejections=tuple(dict.fromkeys((*stats.terminal_port_rejections,
+            'paired collars have no compatible lane order')))[-4:]
     searches_at_entry = stats.searches
     for search_index, (start, end) in enumerate(combinations[:128], 1):
         if stats.searches-searches_at_entry >= maximum_searches:
@@ -424,6 +604,12 @@ def paired_candidates(board: PhysicalBoard, first_rule: NetRoutingRule, second_r
         escaped_index = RoutingClearanceIndex(escaped_board)
         if not _can_depart(escaped_board, escaped_index, first_rule.net, second_rule.net,
                            start, width, offset, clearance, layer, pitch_nm):
+            dx, dy = _HEADS[start.heading]
+            ahead = Point(start.center.x_nm+dx*pitch_nm, start.center.y_nm+dy*pitch_nm)
+            lanes = _lane_paths((start.center,ahead),start.heading,start.heading,offset,start.sign)
+            if lanes is not None:
+                stats.reject_launch(escaped_index, (*_tracks(first_rule.net,lanes[0],width,layer,index.breakout),
+                                                    *_tracks(second_rule.net,lanes[1],width,layer,index.breakout)))
             continue
         stats.searches += 1
         candidate = _search(escaped_board, escaped_index, first_rule.net,
@@ -629,6 +815,9 @@ def _search_steps(board: PhysicalBoard, index: RoutingClearanceIndex, first_name
             legal_cache[key] = lanes is not None and _legal(
                 board, index, _tracks(first_name, lanes[0], width, layer, index.breakout),
                 _tracks(second_name, lanes[1], width, layer, index.breakout), clearance)
+            if continuation.expanded_states <= 4 and lanes is not None and not legal_cache[key]:
+                stats.reject_launch(index, (*_tracks(first_name,lanes[0],width,layer,index.breakout),
+                                            *_tracks(second_name,lanes[1],width,layer,index.breakout)))
         return legal_cache[key]
 
     while queue:

@@ -117,7 +117,14 @@ def render_report(plan, waveforms, measurements, summary: dict, output: Path):
             rows = len(panels)
             interactive = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=min(.1, .25 / rows),
                                         subplot_titles=[p["title"] for p in panels])
-            static = Figure(figsize=(10, max(3, rows * 2.6)), layout="constrained")
+            # Reserve space for sweep legends instead of letting a large case
+            # count collapse the axes during constrained layout.
+            legend_entries = max((len(results) * len(p["signals"]) for p in panels), default=0)
+            legend_columns = 2 if legend_entries > 8 else 1
+            legend_rows = (legend_entries + legend_columns - 1) // legend_columns
+            static = Figure(figsize=(12 if legend_columns == 2 else 10,
+                                     max(3, rows * (2.6 + max(0, legend_rows - 5) * .18))),
+                            layout="constrained")
             FigureCanvasAgg(static)
             axes = static.subplots(rows, 1, sharex=True, squeeze=False)[:, 0]
             logarithmic = analysis.kind == "ac" and plot.get("frequency_scale", "log") == "log"
@@ -152,6 +159,7 @@ def render_report(plan, waveforms, measurements, summary: dict, output: Path):
                         ax.plot(x, [v if v is not None else float("nan") for v in values], label=label, color=color, linewidth=1.5,
                                 linestyle=("-", "--", ":", "-.")[signal_index % 4])
                 markers = plot.get("markers", {})
+                shown_windows = set()
                 for measurement in measurements:
                     if measurement["analysis"] != analysis.name or measurement["probe"] not in panel["signals"]:
                         continue
@@ -176,8 +184,10 @@ def render_report(plan, waveforms, measurements, summary: dict, output: Path):
                             name=f"{measurement['case']} · {measurement['name']} ({measurement['status']})",
                             marker={"color": color, "size": 8, "symbol": "diamond"}, showlegend=False), row=row, col=1)
                         ax.scatter([measurement["x"] * scale], [y_value], color=color, marker="D", s=18, zorder=5)
-                    if markers.get("measurements", True) and "window" in measurement:
+                    if (markers.get("measurements", True) and "window" in measurement
+                            and tuple(measurement["window"]) not in shown_windows):
                         lower, upper = measurement["window"]
+                        shown_windows.add((lower, upper))
                         interactive.add_vrect(x0=lower * scale, x1=upper * scale, fillcolor="#2563eb", opacity=.035, line_width=0, row=row, col=1)
                         ax.axvspan(lower * scale, upper * scale, color="#2563eb", alpha=.025)
                 if analysis.kind == "transient" and markers.get("source_events", True):
@@ -191,7 +201,11 @@ def render_report(plan, waveforms, measurements, summary: dict, output: Path):
                     interactive.add_annotation(text="No complete waveform data. See solver logs.", x=.5, y=.5,
                         xref="x domain", yref="y domain", showarrow=False, font={"color": "#dc2626"}, row=row, col=1)
                 if results:
-                    ax.legend(loc="best", fontsize=8)
+                    if legend_entries > 8:
+                        ax.legend(loc="upper center", bbox_to_anchor=(.5, -.25),
+                                  fontsize=7, ncol=legend_columns)
+                    else:
+                        ax.legend(loc="best", fontsize=7)
             title = f"{plan.name} · {analysis.name} · {plot['name']}"
             static.suptitle(title, fontsize=12)
             axes[-1].set_xlabel(axis_label)
@@ -227,9 +241,13 @@ def render_report(plan, waveforms, measurements, summary: dict, output: Path):
         links = [(f"{prefix}/run.log", "Solver log"), (f"{prefix}/deck.cir", "SPICE deck"),
                  (f"data/{run['analysis']}/{run['case']}/waveforms.csv", "CSV"), (f"data/{run['analysis']}/{run['case']}/waveforms.json", "JSON")]
         downloads = " · ".join(f'<a href="{path}" download>{label}</a>' for path, label in links if (output / path).is_file())
+        solver_messages = "".join(f"<li>{html.escape(message)}</li>" for message in run.get("solver_messages", []))
+        if run.get("solver_messages_omitted"):
+            solver_messages += f'<li>{run["solver_messages_omitted"]} more messages in the solver log.</li>'
         run_links.append(f'<li>{html.escape(run["case"])} · {html.escape(run["analysis"])}: '
             f'<strong>{html.escape(run["status"])}</strong> · {downloads}'
-            + (f'<p>{html.escape(run["error"])}</p>' if run.get("error") else "") + "</li>")
+            + (f'<p>{html.escape(run["error"])}</p>' if run.get("error") else "")
+            + (f'<details><summary>Solver convergence messages</summary><ul>{solver_messages}</ul></details>' if solver_messages else "") + "</li>")
     assumptions = "".join(f"<li>{html.escape(a)}</li>" for a in plan.assumptions)
     diagnostics = "".join(f"<li>{html.escape(message)}</li>" for r in waveforms for message in r.diagnostics)
     summary_text = {"passed": "All numerical analyses completed and all specified checks passed.",

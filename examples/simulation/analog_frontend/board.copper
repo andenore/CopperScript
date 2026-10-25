@@ -1,0 +1,57 @@
+// OPA2197 signal-conditioning example; electrical/simulation evidence only.
+// TI SBOS737C sections 9/10: local bypassing and short feedback geometry.
+board AnalogFrontEnd {
+    use library "tiny";
+    import amps "github.com/copperscript/examples/compatibility";
+    import headers "github.com/andenore/CopperLib/packages/generic/headers";
+
+    component U1: amps.OPA2197ID { footprint = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"; }
+    component U2: amps.OPA2197ID { footprint = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"; }
+    component J_PWR: headers.HEADER_1X02;
+    component J_IN: headers.HEADER_1X02;
+    component J_OUT: headers.HEADER_1X02;
+    component TP_REF: headers.HEADER_1X02;
+    component TP_GAIN: headers.HEADER_1X02;
+    component TP_FILTER: headers.HEADER_1X02;
+
+    component R_REF_TOP: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_REF_BOTTOM: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component C_REF: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component R_GAIN_FB: RESISTOR { value = 30kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_GAIN_REF: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LP1_A: RESISTOR { value = 7.32kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LP1_B: RESISTOR { value = 7.32kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component C_LP1_FB: CAPACITOR { value = 12nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_LP1_REF: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component R_LP2_A: RESISTOR { value = 3.01kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LP2_B: RESISTOR { value = 3.01kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component C_LP2_FB: CAPACITOR { value = 68nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_LP2_REF: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component R_ISO: RESISTOR { value = 47ohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    // Populated bench termination; stress cases change its total equivalent load.
+    component R_TERM: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component C_TERM: CAPACITOR { value = 1nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_U1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; role = decoupling; decouples = "U1.VP"; }
+    component C_U2: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0603_1608Metric"; role = decoupling; decouples = "U2.VP"; }
+    component C_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
+
+    net V5 { J_PWR.1; U1.VP; U2.VP; R_REF_TOP.1; C_U1.1; C_U2.1; C_BULK.1; }
+    net VDIV { R_REF_TOP.2; R_REF_BOTTOM.1; C_REF.1; U1.A.INP; }
+    net VREF { U1.A.OUT; U1.A.INN; R_GAIN_REF.2; C_LP1_REF.2; C_LP2_REF.2; TP_REF.1; }
+    net VIN { J_IN.1; U1.B.INP; }
+    net GAIN_FB { U1.B.INN; R_GAIN_FB.2; R_GAIN_REF.1; }
+    net GAIN_OUT { U1.B.OUT; R_GAIN_FB.1; R_LP1_A.1; TP_GAIN.1; }
+    net LP1_MID { R_LP1_A.2; R_LP1_B.1; C_LP1_FB.1; }
+    net LP1_IN { R_LP1_B.2; U2.A.INP; C_LP1_REF.1; }
+    net LP1_OUT { U2.A.OUT; U2.A.INN; C_LP1_FB.2; R_LP2_A.1; TP_FILTER.1; }
+    net LP2_MID { R_LP2_A.2; R_LP2_B.1; C_LP2_FB.1; }
+    net LP2_IN { R_LP2_B.2; U2.B.INP; C_LP2_REF.1; }
+    net FILTER_OUT { U2.B.OUT; U2.B.INN; C_LP2_FB.2; R_ISO.1; }
+    net VOUT { R_ISO.2; R_TERM.1; C_TERM.1; J_OUT.1; }
+    net GND { J_PWR.2; J_IN.2; J_OUT.2; TP_REF.2; TP_GAIN.2; TP_FILTER.2;
+        U1.VN; U2.VN; R_REF_BOTTOM.2; C_REF.2; R_TERM.2; C_TERM.2; C_U1.2; C_U2.2; C_BULK.2; }
+
+    supply ANALOG { voltage = 5V; net = V5; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+    mechanical { outline rectangle { width = 60mm; height = 40mm; } }
+}

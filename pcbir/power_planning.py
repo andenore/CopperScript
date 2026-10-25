@@ -10,8 +10,55 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 
-from .model import ComponentInstance, DeviceDefinition, Direction, FlatElectricalView, PartDefinition, SignalDomain
+from .model import ComponentInstance, DeviceDefinition, Direction, FlatElectricalView, PartDefinition, PinType, SignalDomain
 from .physical import PadReference, PhysicalBoard, PhysicalNet, PhysicalPowerDomain, Placement, Point
+
+
+def lower_power_feeds(flat, physical_nets, pin_number):
+    """Orient explicit passive paths by distance from a declared real source.
+
+    Equal-distance bridges are not guessed directions. An external supply can
+    establish upstream reachability, but does not invent a physical source pad.
+    """
+    from .physical import PowerFeedBoundary
+    domains = lower_power_domains(flat, physical_nets, pin_number)
+    distance = {d.net: 0 for d in domains if d.sources}
+    distance.update({s.net: 0 for s in flat.supplies if s.externally_driven or s.source is not None})
+    memberships = {}
+    for n in physical_nets:
+        for p in n.pads:
+            memberships.setdefault(p, set()).add(n.name)
+    membership = {p: next(iter(names)) for p, names in memberships.items() if len(names) == 1}
+    links = []
+    for component in flat.components:
+        part = flat.library[component.part]
+        if not part.assembled or not part.dc_power_path:
+            continue
+        pads = tuple(PadReference(component.ref, number) for name in part.dc_power_path
+                     if (number := pin_number(component, part, flat.devices, name)) is not None)
+        if len(pads) == 2 and all(p in membership for p in pads):
+            a, b = pads
+            if membership[a] != membership[b]:
+                links.append((membership[a], a, membership[b], b))
+    # Bounded breadth expansion, without turning cycles into sources.
+    for depth in range(len(links)):
+        additions = {}
+        for a, _, b, _ in links:
+            if distance.get(a) == depth and b not in distance:
+                additions[b] = depth + 1
+            if distance.get(b) == depth and a not in distance:
+                additions[a] = depth + 1
+        if not additions:
+            break
+        distance.update(additions)
+    feeds = []
+    for a, ap, b, bp in links:
+        if a not in distance or b not in distance or distance[a] == distance[b]:
+            continue
+        if distance[a] > distance[b]:
+            a, ap, b, bp = b, bp, a, ap
+        feeds.append(PowerFeedBoundary(b, bp, a, ap))
+    return tuple(sorted(feeds, key=lambda f: (f.net, f.terminal, f.upstream_net)))
 
 
 def lower_power_domains(
@@ -25,9 +72,25 @@ def lower_power_domains(
     The callback is the normal frontend's unit/terminal-to-package resolution.
     """
     components = {component.ref: component for component in flat.components}
+    physical_nets = tuple(physical_nets)
     declared = {supply.net for supply in flat.supplies if supply.voltage.base_value != 0}
     zero_rails = {supply.net for supply in flat.supplies if supply.voltage.base_value == 0}
     sources = {}
+    source_ports = {}
+    # Elaboration represents a module-sourced supply as external to its flat
+    # components. Its explicit power_out port still identifies a physical
+    # boundary. Keep every internal terminal of that boundary, not an arbitrary
+    # capacitor/inductor chosen from a net name. Connectivity remains unproven.
+    for instance in flat.module_instances:
+        for port, net_name in instance.connections.items():
+            if instance.ports.get(port) is not PinType.POWER_OUT:
+                continue
+            terminals = {p for net in physical_nets if net.name == net_name for p in net.pads
+                         if p.component.startswith(instance.path + '/')}
+            if terminals:
+                declared.add(net_name)
+                sources.setdefault(net_name, set()).update(terminals)
+                source_ports.setdefault(net_name, set()).add(f'{instance.path}.{port}')
     for supply in flat.supplies:
         if supply.source is not None:
             component = components.get(supply.source.component)
@@ -57,14 +120,17 @@ def lower_power_domains(
                                 and (pad.when is None or pad.when.matches(component.modes))):
                             profiles.append(pad.profile)
             for profile in profiles:
-                if SignalDomain.GROUND in profile.domains:
+                # A compatible-domain set is not the pin's assigned function.
+                # General test points/connectors accepting ground AND signals
+                # must not erase a regulator rail or manufacture a supply.
+                if profile.domains == frozenset({SignalDomain.GROUND}):
                     zero_rails.add(net.name)
-                elif SignalDomain.POWER in profile.domains:
+                elif profile.domains == frozenset({SignalDomain.POWER}):
                     declared.add(net.name)
                     if Direction.OUTPUT in profile.directions and number is not None:
                         sources.setdefault(net.name, set()).add(PadReference(component.ref, number))
     return tuple(PhysicalPowerDomain(net.name, net.pads,
-        tuple(sorted(sources.get(net.name, set()) & set(net.pads))))
+        tuple(sorted(sources.get(net.name, set()) & set(net.pads))), tuple(sorted(source_ports.get(net.name, ()))))
         for net in physical_nets if net.name in declared - zero_rails)
 
 

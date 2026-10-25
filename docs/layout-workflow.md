@@ -39,14 +39,23 @@ Run it with:
 python -m copperscript plan-layout examples/valid_board/board.copper \
   --allow-proxy-footprints \
   --candidates 3 \
-  -o planned.kicad_pcb \
-  --report layout-report.json
+  -o build/planned.kicad_pcb \
+  --report build/layout-report.json
 ```
 
 Proxy footprints are useful only for exercising the workflow. For meaningful
 physical results, use resolved `.kicad_mod` footprints. In either case the
 result remains non-fabrication-ready because no detailed routes or sign-off
 checks have run.
+
+`--support-pattern-trials 8` enables bounded joint capacitor-bank refinement on
+`plan-layout`, `route-global` and `route-board`. It tries source-bound bank
+patterns with actual local supply/return and reserved signal-path checks before
+power/contact preparation is frozen. The default is disabled. Fixed/rigid
+intent and region/rotation restrictions remain binding; the option cannot
+unlock a fixed bank. Each seed's `support_patterns` statistics report its finite
+work, selected families, unresolved scope and geometry-only status. See the
+[support placement contract](placement-internals.md#joint-support-bank-patterns).
 
 For a routing-capacity experiment, `--layers 6 --fab-profile jlcpcb-six-layer`
 is also accepted by the PCB export, placement, global-route, and board-route

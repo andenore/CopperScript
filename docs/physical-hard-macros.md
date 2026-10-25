@@ -13,6 +13,14 @@ the first trial explicitly bound component instances through JSON scenes.
 Source bindings now use `physical_macro` declarations with explicit member/net
 mappings; automatic component-name inference is not supported.
 
+A single package may own a local escape macro without an artificial companion
+component. Its one-member rigid cluster retains the same pose, footprint,
+rotation, ownership and port-continuity checks; empty clusters are invalid.
+Partial paired escapes can use proved boundary ports even when coarse guides
+fail. Public duplicated contacts at the other endpoint may be prepared locally,
+but private contacts cannot become disposable ties. Exact pair routing preserves
+the owner prefix and checks the complete candidate against physical/profile gates.
+
 - Pin asset content, exact member/footprint identities and explicit pad/net
   role bindings. Isolated lands remain present and unassigned. Different packages
   require reviewed adaptations, not automatic stretching.
@@ -24,6 +32,8 @@ mappings; automatic component-name inference is not supported.
   routing, including same-net shortcuts and soft rip-up. Owner lead-ins reach
   external ports outside the regions. Verify actual port/private-pad copper
   continuity, not just equal net names.
+  Missing external ports and incomplete private-pad coverage fail at binding;
+  placement is not required to diagnose these interface errors.
 - Specify fill exclusions separately. Ground-return geometry may be essential:
   generic fill/stitching must not bypass a matching capacitor's prescribed path.
 - Check layer/span/technology compatibility and bind geometry/ownership into

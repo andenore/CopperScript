@@ -10,6 +10,36 @@ from pcbir.placement import _fast_score, placement_metrics
 from pcbir.power_planning import power_domain_gradient, power_domain_penalty
 
 
+def test_declared_module_power_output_keeps_all_internal_boundary_terminals(tmp_path):
+    from pcbir.compiler import compile_design_file
+    parts = tmp_path/'parts'
+    parts.mkdir()
+    (parts/'stage.copper').write_text('''module Stage {
+        use library "tiny";
+        port OUT: power_out;
+        component R: RESISTOR { footprint="0402"; }
+        component C: CAPACITOR { footprint="0402"; }
+        net OUTPUT { port.OUT; R.2; C.1; }
+        net INPUT { R.1; C.2; }
+    }''')
+    source = tmp_path/'board.copper'
+    source.write_text('''board Test {
+        use library "tiny";
+        import p "./parts";
+        module STAGE: p.Stage;
+        component LOAD: RESISTOR { footprint="0402"; }
+        net RAIL { STAGE.OUT; LOAD.1; }
+        supply RAIL { voltage=3.3 V; source=STAGE.OUT; }
+    }''')
+    b = prototype_physicalize(compile_design_file(source))
+    rail = next(d for d in b.power_domains if d.net == 'RAIL')
+    assert set(rail.sources) == {PadReference('STAGE/R', '2'), PadReference('STAGE/C', '1')}
+    assert rail.source_ports == ('STAGE.OUT',)
+    (parts/'stage.copper').write_text((parts/'stage.copper').read_text().replace('power_out', 'passive'))
+    b = prototype_physicalize(compile_design_file(source))
+    assert not next(d for d in b.power_domains if d.net == 'RAIL').sources
+
+
 def board():
     one = PhysicalFootprint("source", (FootprintPad("1", Point(0, 0), Size.mm(.5, .5)),), Size.mm(1, 1))
     bridge = PhysicalFootprint("bridge", (FootprintPad("1", Point.mm(-1, 0), Size.mm(.5, .5)),
@@ -127,3 +157,29 @@ def test_power_profile_identifies_source_without_supply_annotation():
     assert len(physical.power_domains) == 1
     assert physical.power_domains[0].net == "RAIL"
     assert physical.power_domains[0].sources[0].component == "P1"
+
+
+def test_multidomain_passive_testpoint_does_not_turn_regulator_rail_into_ground():
+    from pcbir.power_planning import lower_power_domains
+    from pcbir.elaborate import elaborate
+    from pcbir.physicalize import _physical_pin_number
+    from pcbir.model import SignalDomain, Direction
+    electrical = compile_source('''board CompatibleTestpoint {
+        use library "tiny";
+        component P1: VOLTAGE_SOURCE { footprint = "source"; }
+        component R1: RESISTOR { footprint = "0402"; }
+        net RAIL { P1.OUT; R1.1; }
+        net SIGNAL { R1.2; }
+    }''')
+    flat = elaborate(electrical)
+    component = next(c for c in flat.components if c.ref == 'R1')
+    part = flat.library[component.part]
+    pin = next(p for p in part.pins.values() if p.number == '1')
+    profile = replace(pin.profile, domains=frozenset({SignalDomain.GROUND, SignalDomain.POWER, SignalDomain.DIGITAL}),
+                      directions=frozenset({Direction.PASSIVE}))
+    changed = replace(part, pins={name: replace(p, profile=profile) for name, p in part.pins.items()})
+    flat = replace(flat, library={**flat.library, component.part: changed})
+    nets = prototype_physicalize(electrical).nets
+    domains = lower_power_domains(flat, nets, _physical_pin_number)
+    assert len(domains) == 1 and domains[0].net == 'RAIL'
+    assert domains[0].sources == (PadReference('P1', '1'),)

@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Mapping
 
 from ._cache import IdentityKey
-from .geometry import RoundedConvexShape, shapes_clear
+from .geometry import Bounds, RoundedConvexShape, shapes_clear
 from .physical import BoardSide, PadKind, PadShape, PhysicalBoard, Placement, Point
 
 
@@ -23,6 +23,8 @@ class _PlacedDrill:
 class _PlacedFootprintGeometry:
     holes: tuple[_PlacedDrill, ...]
     copper: tuple[RoundedConvexShape, ...]
+    envelope: Bounds
+    lands: tuple[tuple[str, PadKind, RoundedConvexShape], ...] = ()
 
 
 @lru_cache(maxsize=256)
@@ -35,10 +37,10 @@ def _has_drills(footprint_key: IdentityKey) -> bool:
 def _transformed_geometry(footprint_key: IdentityKey, position: Point, rotation, side: BoardSide):
     """Cache exact immutable footprint/pose geometry, never acceptance or rules."""
     from .drc import placed_pad_shape
-    from .placement import transformed_local_point
+    from .placement import transformed_local_point, _placed_courtyard
     footprint = footprint_key.value
     pose = Placement("geometry", footprint.name, position, rotation, side)
-    holes, copper = [], []
+    holes, copper, lands = [], [], []
     for pad in footprint.pads:
         center = transformed_local_point(pose, pad.position)
         if pad.kind in {PadKind.THROUGH_HOLE, PadKind.NON_PLATED_THROUGH_HOLE}:
@@ -52,8 +54,24 @@ def _transformed_geometry(footprint_key: IdentityKey, position: Point, rotation,
                                 else PadShape.OVAL)
             holes.append(_PlacedDrill(placed_pad_shape(center, drill_pad, pose), pad.kind))
         if pad.kind not in {PadKind.NON_PLATED_THROUGH_HOLE, PadKind.APERTURE}:
-            copper.append(placed_pad_shape(center, pad, pose))
-    return _PlacedFootprintGeometry(tuple(holes), tuple(copper))
+            shape = placed_pad_shape(center, pad, pose)
+            copper.append(shape)
+            lands.append((pad.number,pad.kind,shape))
+    # Include copper, drill and courtyard extents: pads or plated slots can
+    # extend beyond a package's nominal body or authored courtyard.
+    boxes = [shape.bounds for shape in copper]
+    boxes.extend(hole.shape.bounds for hole in holes)
+    courtyard = _placed_courtyard(footprint_key, position, rotation, side)
+    boxes.append(RoundedConvexShape(courtyard).bounds)
+    envelope = Bounds(min(b.min_x for b in boxes), min(b.min_y for b in boxes),
+                      max(b.max_x for b in boxes), max(b.max_y for b in boxes))
+    return _PlacedFootprintGeometry(tuple(holes), tuple(copper), envelope,tuple(lands))
+
+
+@lru_cache(maxsize=16)
+def _assigned_nets(nets_key: IdentityKey):
+    from .physical import PadReference
+    return {pad:net.name for net in nets_key.value for pad in net.pads}
 
 
 def _geometry(board: PhysicalBoard, pose: Placement) -> _PlacedFootprintGeometry:
@@ -106,6 +124,26 @@ def footprint_holes_clear(board: PhysicalBoard, candidate: Placement,
         if candidate_geometry is None:
             candidate_geometry = _geometry(board, candidate)
         other_geometry = _geometry(board, other)
+        if not candidate_geometry.envelope.intersects_expanded(
+                other_geometry.envelope, max(clearance, board.rules.minimum_clearance_nm, 1)):
+            continue
+        if candidate.side is not other.side:
+            # A plated annulus exists on the opposite face even when its drill
+            # misses the SMD land/courtyard. Reject foreign-net copper closer
+            # than the board minimum now; later DRC still owns any larger
+            # net/profile-specific spacing and routed-copper checks.
+            from .physical import PadReference
+            assigned = _assigned_nets(IdentityKey(board.nets))
+            for a_number,a_kind,a_shape in candidate_geometry.lands:
+                for b_number,b_kind,b_shape in other_geometry.lands:
+                    if PadKind.THROUGH_HOLE not in (a_kind,b_kind):
+                        continue
+                    a_net = assigned.get(PadReference(candidate.reference,a_number))
+                    b_net = assigned.get(PadReference(other.reference,b_number))
+                    if a_net is not None and a_net==b_net:
+                        continue
+                    if not shapes_clear(a_shape,b_shape,board.rules.minimum_clearance_nm):
+                        return False
         if candidate_geometry.holes and (
             not _drills_clear_courtyard(candidate_geometry.holes, board, other)
             or any(not shapes_clear(hole.shape, pad, clearance)

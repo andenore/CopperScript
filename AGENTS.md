@@ -20,6 +20,14 @@ Accepted architectural rationale is opt-in; follow current task references.
   while a net is partial. Mutable dependency trials need exact ownership,
   fresh validation and complete rollback. Do not add board-specific repair
   selectors. See [routing invariants](docs/filled-copper-feedback.md).
+- For every blocked package exit or package-escape fault, compare the failing
+  geometry with the applicable manufacturer reference layout before choosing a
+  repair. Align package/pin coordinates and inspect relevant layers, vias,
+  support placement and power/ground topology. Explain the differences, then
+  improve generic placement/routing algorithms to reproduce the reference's
+  applicable structure under the actual design rules. Validate the improvement
+  on a bounded subset and retain before/after evidence. Missing references and
+  unsupported adaptations remain explicit. See [integration guidance](docs/component-integration-guidelines.md).
 - For component/circuit changes, follow [integration guidance](docs/component-integration-guidelines.md):
   exact source facts, pin-associated decoupling, RF matching/reference layout and
   source-backed switched-power macros or strong physical constraints. Retrieve

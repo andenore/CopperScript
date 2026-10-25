@@ -20,6 +20,7 @@ from .drc import placed_pad_shape
 from .geometry import RoundedConvexShape, point_in_polygon, point_segment_distance_squared
 from .mechanical import point_in_material, shape_in_board
 from .pin_access import local_access_path
+from .pin_escape import RoutingAccess
 from .physical import (
     BoardSide,
     CopperLayer,
@@ -69,6 +70,7 @@ class PinAccess:
     tracks: tuple[TrackSegment, ...] = ()
     via: Via | None = None
     region_only: bool = False
+    retained_via: Via | None = None
 
     @property
     def estimated_cost_nm(self) -> int:
@@ -156,6 +158,7 @@ class GlobalRoutingResult:
     metrics: GlobalRoutingMetrics
     placement_fingerprint: str
     routing_fingerprint: str
+    fixed_prefix_digest: str | None = None
 
     def to_json(self) -> str:
         document = {
@@ -163,6 +166,7 @@ class GlobalRoutingResult:
             "status": self.status.value,
             "placement_fingerprint": self.placement_fingerprint,
             "routing_fingerprint": self.routing_fingerprint,
+            **({"fixed_prefix_digest": self.fixed_prefix_digest} if self.fixed_prefix_digest else {}),
             "metrics": {
                 "routed_net_count": self.metrics.routed_net_count,
                 "unrouted_net_count": self.metrics.unrouted_net_count,
@@ -209,6 +213,9 @@ class GlobalRoutingResult:
                                 if access.via else None
                             ),
                             "region_only": access.region_only,
+                            **({"retained_via_nm": [access.retained_via.position.x_nm,
+                                                     access.retained_via.position.y_nm]}
+                               if access.retained_via is not None else {}),
                         }
                         for access in route.accesses
                     ],
@@ -269,12 +276,15 @@ class GlobalRouterOptions:
     pin_access_candidates: int = 4
     escape_radius_nm: int = nm_from_mm("3")
     escape_step_nm: int = nm_from_mm("0.5")
+    critical_escape_step_nm: int | None = None
 
     def __post_init__(self) -> None:
         if self.tile_size_nm <= 0 or self.maximum_iterations <= 0:
             raise ValueError("global router dimensions and iteration count must be positive")
         if min(self.pin_access_candidates, self.escape_radius_nm, self.escape_step_nm) <= 0:
             raise ValueError("pin-access options must be positive")
+        if self.critical_escape_step_nm is not None and (type(self.critical_escape_step_nm) is not int or self.critical_escape_step_nm <= 0):
+            raise ValueError("critical pin-access refinement must be a positive integer")
         if min(
             self.present_penalty,
             self.present_penalty_growth,
@@ -377,13 +387,28 @@ def route_global(
     board: PhysicalBoard,
     options: GlobalRouterOptions | None = None,
     *, on_progress: ProgressCallback | None = None,
+    reserved_accesses: Mapping[PadReference, Point | RoutingAccess] | None = None,
+    fixed_prefix: PhysicalBoard | None = None,
 ) -> GlobalRoutingResult:
-    """Route all multi-terminal nets into deterministic multilayer guides."""
+    """Route all multi-terminal nets into deterministic multilayer guides.
+
+    An explicit ``fixed_prefix`` may append immutable copper to the clean
+    source. Its exact source contracts, macro/array prefix and fresh physical
+    DRC must pass before reserved ports can enter the coarse graph. No input
+    copper is moved or released; the prefix digest binds the new certificate.
+    """
 
     options = options or GlobalRouterOptions()
     emit(on_progress, "global_route", "started", maximum_iterations=options.maximum_iterations)
     from .hard_macros import macro_source, materialize_hard_macros, macro_routing_pads
     board = materialize_hard_macros(macro_source(board))
+    prefix_digest = None
+    if fixed_prefix is not None:
+        from .global_reserved_access import admit_fixed_prefix
+        prefix_digest = admit_fixed_prefix(board, fixed_prefix)
+        board = fixed_prefix
+    elif reserved_accesses:
+        raise ValueError("reserved global accesses require an explicitly fixed copper prefix")
     emit(on_progress, "global_graph", "started")
     graph = _build_graph(board, options)
     if on_progress is not None:
@@ -392,24 +417,31 @@ def route_global(
     emit(on_progress, "global_pin_access", "started")
     rules = {rule.net: rule for rule in board.net_routing_rules}
     clearance = RoutingClearanceIndex(board)
-    from .zone_geometry import distribution_zone_nets
-    zone_nets = distribution_zone_nets(board)
+    from .zone_geometry import deferred_zone_nets
+    zone_nets = deferred_zone_nets(board)
     from .drc import explicit_copper_connectivity
-    owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
+    owner_graph = explicit_copper_connectivity(board) if board.tracks or board.vias else None
     owner_connected = {net.name for net in board.nets if owner_graph is not None and owner_graph.net_connected(net)}
+    from .global_reserved_access import reserved_pin_access_candidates
+    if reserved_accesses is not None and not set(reserved_accesses) <= {p for n in board.nets for p in n.pads}:
+        raise ValueError("reserved global access references an unknown terminal")
     access_options = {
-        (net.name, pad): _pin_access_candidates(
-            board, graph, pad, net.name,
-            routing_layers(board, net.name, rules.get(net.name)),
-            rules.get(net.name), clearance, options,
-        )
+        (net.name, pad): (reserved_pin_access_candidates(board, graph, pad, net.name,
+            routing_layers(board, net.name, rules.get(net.name)), rules.get(net.name), clearance, options,
+            reserved_accesses[pad]) if reserved_accesses is not None and pad in reserved_accesses
+            else _global_pin_access_candidates(board, graph, pad, net.name,
+                routing_layers(board, net.name, rules.get(net.name)), rules.get(net.name), clearance, options))
         for net in board.nets if len(net.pads) >= 2 and net.name not in zone_nets and net.name not in owner_connected
         for pad in macro_routing_pads(board, net)
     }
-    from .global_terminals import register_terminal_capacity
+    from .global_terminals import register_terminal_capacity, terminal_access_failures
+    generated_accesses = access_options
     graph, access_options = register_terminal_capacity(board, graph, access_options)
+    access_failures = terminal_access_failures(generated_accesses, access_options)
     if on_progress is not None:
-        emit(on_progress, "global_pin_access", "finished", terminal_count=len(access_options))
+        emit(on_progress, "global_pin_access", "finished", terminal_count=len(access_options),
+             missing_local_access_count=sum(not counts[0] for counts in access_failures.values()),
+             capacity_rejected_terminal_count=sum(bool(counts[0]) for counts in access_failures.values()))
     capacities = {
         resource.identifier: resource.capacity
         for resource in graph.resources.values()
@@ -476,20 +508,42 @@ def route_global(
         else GlobalRoutingStatus.SUCCESS
     )
     placement_fingerprint = _placement_fingerprint(board)
+    reported_routes = tuple(
+        replace(route, diagnostics=(*route.diagnostics, *(
+            f"terminal access {pad.component}.{pad.pad}: generated {generated} candidate(s), "
+            f"registered {registered}; " + ("local escape search found no candidate"
+                if not generated else "shared transition capacity rejected every candidate")
+            for (net, pad), (generated, registered) in sorted(access_failures.items())
+            if net == route.net
+        ))) if not route.connected else route
+        for route in best.routes
+    )
     routing_fingerprint = _routing_fingerprint(
-        placement_fingerprint, best.routes, metrics, options
+        placement_fingerprint, reported_routes, metrics, options, fixed_prefix_digest=prefix_digest
     )
     result = GlobalRoutingResult(
         status,
-        best.routes,
+        reported_routes,
         hotspots,
         metrics,
         placement_fingerprint,
         routing_fingerprint,
+        prefix_digest,
     )
     emit(on_progress, "global_route", "finished", status=status.value, iterations=completed_iterations,
          unrouted_net_count=metrics.unrouted_net_count, total_overflow=metrics.total_overflow)
     return result
+
+
+def _global_pin_access_candidates(board, graph, pad, net, layers, rule, clearance, options):
+    """One opt-in finer retry for a failed specialized terminal, never all nets."""
+    candidates = _pin_access_candidates(board, graph, pad, net, layers, rule, clearance, options)
+    if (not candidates and rule is not None and rule.kind is not RouteKind.GENERAL
+            and options.critical_escape_step_nm is not None
+            and options.critical_escape_step_nm < options.escape_step_nm):
+        candidates = _pin_access_candidates(board, graph, pad, net, layers, rule, clearance,
+            replace(options, escape_step_nm=options.critical_escape_step_nm, critical_escape_step_nm=None))
+    return candidates
 
 
 def _route_iteration(
@@ -509,14 +563,14 @@ def _route_iteration(
         key=lambda net: _net_order(net.name, rules.get(net.name)),
     )
     from .hard_macros import macro_routing_pads
-    from .zone_geometry import distribution_zone_nets
+    from .zone_geometry import deferred_zone_nets
     from .drc import explicit_copper_connectivity
-    owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
-    zone_nets = distribution_zone_nets(board)
+    owner_graph = explicit_copper_connectivity(board) if board.tracks or board.vias else None
+    zone_nets = deferred_zone_nets(board)
     for net in ordered_nets:
         if owner_graph is not None and owner_graph.net_connected(net):
             routes.append(GlobalNetRoute(net.name, True, (), (), (), 0,
-                          ("connected by immutable hard-macro copper",)))
+                          ("connected by immutable input copper",)))
             continue
         if net.name in zone_nets:
             routes.append(GlobalNetRoute(
@@ -917,10 +971,9 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
     # Courtyards are assembly geometry; they are not copper obstructions.
     from .hard_macros import macro_reservations
     copper_keepouts = (*resolved_copper_keepouts(board), *macro_reservations(board))
-    track_keepouts = tuple(
-        (item.layers, _bounds(item.outline.outer.vertices))
-        for item in copper_keepouts if item.block_tracks
-    )
+    from .global_keepouts import GlobalTrackKeepout
+    track_keepouts = tuple(GlobalTrackKeepout.from_keepout(item)
+                           for item in copper_keepouts if item.block_tracks)
     pad_obstacles: list[tuple[tuple[CopperLayer, ...], tuple[int, int, int, int]]] = []
     for placement in board.placements:
         footprint = board.footprints[placement.footprint]
@@ -951,8 +1004,8 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
                 if not point_in_material(board, point):
                     continue
                 if any(
-                    layer in layers and _point_in_box(point, box)
-                    for layers, box in track_keepouts
+                    keepout.blocks_node(point, layer)
+                    for keepout in track_keepouts
                 ):
                     continue
                 legal.add(GridNode(layer_index, x_index, y_index))
@@ -973,7 +1026,7 @@ def _build_graph(board: PhysicalBoard, options: GlobalRouterOptions) -> _Graph:
                     Point(xs[node.x_index], ys[node.y_index]),
                     Point(xs[neighbor.x_index], ys[neighbor.y_index]),
                     options.tile_size_nm, pitch, board.rules.minimum_clearance_nm,
-                    layer, pad_obstacles, track_keepouts,
+                    layer, pad_obstacles, (), polygon_keepouts=track_keepouts,
                 )
                 if capacity:
                     _add_resource(resources, node, neighbor, capacity, layer)
@@ -1029,6 +1082,7 @@ def _planar_capacity(
     clearance_nm: int, layer: CopperLayer,
     pads: Iterable[tuple[tuple[CopperLayer, ...], tuple[int, int, int, int]]],
     keepouts: Iterable[tuple[tuple[CopperLayer, ...], tuple[int, int, int, int]]],
+    *, polygon_keepouts=(),
 ) -> int:
     """Count usable crossing lanes, conservatively clipping copper obstacles."""
     horizontal = first.y_nm == second.y_nm
@@ -1045,6 +1099,10 @@ def _planar_capacity(
             continue
         start, end = (y0, y1) if horizontal else (x0, x1)
         blocked.append((max(low, start - clearance_nm), min(high, end + clearance_nm)))
+    for keepout in polygon_keepouts:
+        blocked.extend((max(low, start), min(high, end))
+                       for start, end in keepout.blocked_intervals(
+                           first, second, tile_size_nm // 2, clearance_nm, layer))
     cursor = low
     capacity = 0
     for start, end in sorted(blocked):
@@ -1602,9 +1660,11 @@ def _routing_fingerprint(
     routes: tuple[GlobalNetRoute, ...],
     metrics: GlobalRoutingMetrics,
     options: GlobalRouterOptions,
+    *, fixed_prefix_digest: str | None = None,
 ) -> str:
     document = {
         "placement": placement_fingerprint,
+        **({"fixed_prefix_digest": fixed_prefix_digest} if fixed_prefix_digest else {}),
         "routes": [
             (
                 route.net,
@@ -1615,6 +1675,7 @@ def _routing_fingerprint(
                        access.region_only,
                        access.via.position.x_nm if access.via else None,
                        access.via.position.y_nm if access.via else None)
+                      + ((repr(access.retained_via),) if access.retained_via is not None else ())
                       for access in route.accesses),
                 tuple(segment.resource_id for segment in route.segments),
                 tuple(via.resource_id for via in route.vias),

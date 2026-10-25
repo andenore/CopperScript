@@ -232,12 +232,44 @@ referenced evidence invalidates the corresponding report. Reviewers/solver/bench
 attestations are accountable external evidence, not independently verified truths.
 
 Impedance/transient simulation and RF/power prototype measurements remain mandatory.
+`pcbir.rf_cross_section.sample_coplanar_cross_sections` screens actual native
+filled-ground gaps against explicit cross-section dimensions. It reports both
+sides, wrong widths/layers, signal vias, missing ground and all caller-declared
+launch/bend exclusions. Matching samples always remain `incomplete`: this is not
+continuous gap verification, a field solver or electrical return qualification.
+`routing(...){ clearance = ...; }` is also exported to same-stem KiCad custom
+rules so native zone refill retains source net clearance. Stricter matching net
+rules take precedence; explicit breakout clearance exports only its lower bound
+and still requires CopperScript's authoritative region/ownership checks.
+Keep the `.kicad_dru` alongside the PCB and project. A source clearance is a
+minimum, not proof that coplanar ground is present or at a uniform RF gap.
 The `divider_voltage_window` explicit-input calculation reports independent
 feedback-reference/resistor corners and an explicit positive/negative regulation
 budget against an operating window. Its remaining voltage margins are not
 measured droop: ripple, dynamic response, bias/leakage, wiring loss, temperature
 and startup need their own bounds/evidence. No nominal-voltage screen can replace
 mandatory supply/interface simulation and prototype qualification.
+
+`python -m pcbir.rf_layout_review PCB --kicad-python PYTHON --signal-net NET
+--ground-net GND --signal-layer F.Cu --reference-layer In1.Cu --port-component REF
+--interference-net OTHER --report NEW.json --native-report NEW-native.json`
+adds a read-only native land/return/noise inventory. Explicit selectors are caller
+inputs, never board-specific code. It keeps duplicated physical ground lands,
+tests positive-area modeled copper joins to spanning return annuli and adjacent
+reference copper, and reports projected neighboring-conductor distances.
+Optional `--source SOURCE --hard-macro SCENE --fabrication-profile PROFILE`
+adds the shared locked/offline source/native land, pose and immutable-copper
+checkpoint; repeat `--hard-macro` for every applicable scene. No rerouting, refill
+or board save occurs. Prepare source and managed footprint inventories first with
+the standard `copper lock SOURCE --offline`; electrical compilation alone does
+not populate the footprint-provider lock. Source/lock/macro bytes are checked
+unchanged during readback. New report paths are exclusive. Exit 0 means inventory
+completed, not RF approval: `status=incomplete` and `qualified_release=false`
+remain mandatory. Circular conductors use a declared polygonal approximation;
+unsupported land holes/vias fail closed. Centre/edge distance is not return
+inductance, XY overlap behind a ground reference is not a short, and missing
+modeled joins are not proof of an electrical open. Model pads, bends, return
+webs, protection, matching, materials and antenna installation separately.
 See [implementation checklist](qualification-todo.md) and CopperLib's
 `docs/engineering-contracts.md` for unresolved integration/qualification work.
 

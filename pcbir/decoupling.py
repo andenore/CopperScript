@@ -63,7 +63,7 @@ def _surface_candidates(board, index, link, target, cap, width, layer):
                 yield (*prefix, *tail)
 
 
-def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=None):
+def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=None, progress=None):
     """Reserve explicit bypass feeds before ordinary package exits.
 
     Existing same-surface supply paths retain their original semantics.
@@ -123,6 +123,11 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=N
         if only_links is not None and link not in only_links:
             continue
         if only_nets is not None and link.net not in only_nets:
+            continue
+        if progress:
+            progress(f"decoupler_route:{link.capacitor.component}")
+        if fanout_options is not None and link.net in fanout_options.plane_return_nets:
+            pending.append((link, 'native_plane_return_pending'))
             continue
         if link.target in owned or link.capacitor in owned:
             continue  # Prescribed local copper is never regenerated.
@@ -226,7 +231,7 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=N
                                  accesses=MappingProxyType(accesses), admitted_path_witnesses=original_witnesses)
 
 
-def improve_decoupling_placement(board, placements, options):
+def improve_decoupling_placement(board, placements, options, *, progress=None):
     """Bounded legal pad-relative relocation after ordinary placement refinement.
 
     Same side and a legal direct surface path win, then pad-centre distance.
@@ -239,7 +244,9 @@ def improve_decoupling_placement(board, placements, options):
     source-associated witness remains reserved, including later source links.
     An obstructed layout keeps its existing pose; explicit limits need source
     intent. No count improvement permits losing an already verified identity.
-    At most 64 locally legal poses receive a copper-access check per capacitor.
+    The planner's decoupling_placement_trials limits copper-access trials per
+    capacitor. Zero disables this pose heuristic, retaining source validation
+    and all subsequent physical/routing gates.
     """
     from .placement import (_fixed_placements, _allowed_orientations, _legal,
                             placement_solution_is_legal, transformed_pad_position)
@@ -264,12 +271,16 @@ def improve_decoupling_placement(board, placements, options):
     # this complete baseline once, then retain its exact generated prefix while
     # incrementally adding pending feeds. Successful labels alone are not proof.
     frame = materialize_hard_macros(replace(board, placements=tuple(poses.values())))
+    if options.decoupling_placement_trials == 0:
+        return placements, 0
     if all(link.capacitor.component in fixed for link in board.decoupling_links):
         # This phase only proposes poses. With no movable capacitor, a full
         # disposable routing pass cannot change its result. Source/macro
         # validation above and subsequent package routing remain mandatory.
         return placements, 0
-    reservation = route_decouplers(frame)
+    if progress:
+        progress("decoupler_baseline")
+    reservation = route_decouplers(frame, **({"progress": progress} if progress else {}))
     baseline_nets = {link.net for link in board.decoupling_links}
     witnesses, via_witnesses = {}, {}
     verified = _verified_bypass_links(reservation.board, baseline_nets,
@@ -292,6 +303,8 @@ def improve_decoupling_placement(board, placements, options):
         if ((link not in pending_links and link not in verified) or reference in fixed
                 or link.target in macro_owned or link.capacitor in macro_owned):
             continue
+        if progress:
+            progress(f"decoupler_refine:{reference}")
         current, target = poses[reference], poses[link.target.component]
         point = transformed_pad_position(board, target, link.target.pad)
         cap_fp, target_fp = board.footprints[current.footprint], board.footprints[target.footprint]
@@ -403,7 +416,7 @@ def improve_decoupling_placement(board, placements, options):
         ordered = sorted(candidates, key=rank)
         if not current_access and len(sides) > 1:
             # An unrestricted pending association must not spend its entire
-            # 64-pose allowance on the target face. Interleave the existing
+            # pose allowance on the target face. Interleave the existing
             # ranked domains; explicit side rules still have one domain.
             domains = [[p for p in ordered if p.side is side] for side in sides]
             ordered = [domain[i] for i in range(max(map(len, domains)))
@@ -413,13 +426,15 @@ def improve_decoupling_placement(board, placements, options):
                 break
             if _legal(candidate, others, board, options):
                 access_trials += 1
+                if progress:
+                    progress(f"decoupler_trial:{reference}:{access_trials}")
                 trial = direct_access(candidate)
                 if trial is None:
-                    if access_trials >= 64:
+                    if access_trials >= options.decoupling_placement_trials:
                         break
                     continue
                 if not placement_solution_is_legal(board, {**poses, reference: candidate}, options):
-                    if access_trials >= 64:
+                    if access_trials >= options.decoupling_placement_trials:
                         break
                     continue
                 poses[reference] = candidate
@@ -430,8 +445,10 @@ def improve_decoupling_placement(board, placements, options):
         # The public output is unrouted poses, not a relabelled feed macro.
         # Fresh normal regeneration must preserve identities as well as the
         # internal proposal ledger; otherwise roll back this bounded heuristic.
+        if progress:
+            progress("decoupler_regenerate")
         regenerated = route_decouplers(materialize_hard_macros(replace(board,
-            placements=tuple(poses.values()))))
+            placements=tuple(poses.values()))), **({"progress": progress} if progress else {}))
         if not (baseline_verified | verified) <= _verified_bypass_links(regenerated.board, baseline_nets):
             return dict(placements), 0
         regenerated_hard = {finding.fingerprint for finding in run_physical_drc(regenerated.board).findings

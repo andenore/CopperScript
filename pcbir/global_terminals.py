@@ -6,31 +6,42 @@ from .routing_clearance import RoutingClearanceIndex
 
 MAX_TERMINAL_CAPACITY_PROPOSALS = 4096
 
+def terminal_access_failures(generated, registered):
+    """Explain empty terminals without altering candidate admission or routing.
+
+    A missing local escape and a legal escape rejected by shared transition
+    capacity need different repairs. Preserve both counts instead of reporting
+    every failure as a geometric impossibility.
+    """
+    return {
+        key: (len(choices), len(registered.get(key, ())))
+        for key, choices in generated.items()
+        if not registered.get(key)
+    }
+
+
 def register_terminal_capacity(board, graph, access_options):
     from .routing import _via_resource_id, _Resource, GridNode, _edge_key
-    sites = dict(graph.via_sites)
+    # Sampled sites are provisional capacity witnesses, never input copper.
+    # Admit checked terminal launches first, then refill the remaining sample
+    # pool. Rebuilding the graph counts the surviving coexisting sites; it
+    # does not add a terminal alias on top of an overlapping sampled slot.
+    sites = {identifier: () for identifier in graph.via_sites}
     index = RoutingClearanceIndex(board)
-    # Existing sampled slots remain in their original order. They are capacity
-    # witnesses, never committed board copper; all new sites must coexist.
-    seen = set()
-    for identifier, positions in sorted(sites.items()):
-        _,low,high,_,_ = identifier.split(':')
-        span = (graph.layers[int(low)],graph.layers[int(high)])
-        for point in positions:
-            key=(span,point)
-            if key not in seen:
-                seen.add(key)
-                index.add_via(Via('<capacity-'+str(len(seen))+'>',point,board.rules.default_via_size_nm,
-                    board.rules.default_via_drill_nm,*span),locked=True)
-    accepted = {}
+    selected = set()
+    ordered = sorted(access_options.items(), key=lambda item: (item[0][0], str(item[0][1])))
+    accepted_indexes = {key: set() for key, _ in ordered}
     proposals = 0
-    changed = set()
-    for key, choices in sorted(access_options.items(),key=lambda item:(item[0][0],str(item[0][1]))):
-        held=[]
-        for access in choices:
+    # One candidate per terminal per round prevents an early terminal's
+    # alternatives from filling every free site before its peers are seen.
+    for depth in range(max((len(choices) for _, choices in ordered), default=0)):
+        for key, choices in ordered:
+            if depth >= len(choices):
+                continue
+            access = choices[depth]
             via=access.via
             if via is None:
-                held.append(access)
+                accepted_indexes[key].add(depth)
                 continue
             identifier=_via_resource_id(graph,access.node,via.from_layer,via.to_layer)
             _,low,high,x,y=identifier.split(':')
@@ -39,23 +50,47 @@ def register_terminal_capacity(board, graph, access_options):
                 continue
             positions=sites.get(identifier,())
             if via.position not in positions:
-                if proposals >= MAX_TERMINAL_CAPACITY_PROPOSALS:
+                sampled = via.position in graph.via_sites.get(identifier, ())
+                if not sampled and proposals >= MAX_TERMINAL_CAPACITY_PROPOSALS:
                     continue
-                proposals+=1
-                capacity_net='<capacity-proposal-'+str(proposals)+'>'
-                if not index.can_via(capacity_net,via.position,via.size_nm,
-                        via.from_layer,via.to_layer,via.drill_nm,check_hole_copper=True):
-                    continue
+                if not sampled:
+                    proposals += 1
+                identity = (via.from_layer, via.to_layer, via.position)
+                if identity not in selected:
+                    capacity_net = '<capacity-terminal-' + str(len(selected)) + '>'
+                    if not index.can_via(capacity_net,via.position,via.size_nm,
+                            via.from_layer,via.to_layer,via.drill_nm,check_hole_copper=True):
+                        continue
+                    selected.add(identity)
+                    index.add_via(replace(via,net=capacity_net),locked=True)
                 sites[identifier]=(*positions,via.position)
-                index.add_via(replace(via,net=capacity_net),locked=True)
-                changed.add(identifier)
-            held.append(access)
-        accepted[key]=tuple(held)
-    resources=dict(graph.resources)
-    for identifier in sorted(changed):
+            accepted_indexes[key].add(depth)
+    accepted = {key: tuple(a for i, a in enumerate(choices) if i in accepted_indexes[key])
+                for key, choices in ordered}
+    if not selected:
+        return graph, accepted
+    for identifier, positions in sorted(graph.via_sites.items()):
+        _, low, high, _, _ = identifier.split(':')
+        span = graph.layers[int(low)], graph.layers[int(high)]
+        for point in positions:
+            identity = (*span, point)
+            if identity not in selected:
+                via = Via('<capacity-sample-' + str(len(selected)) + '>', point,
+                          board.rules.default_via_size_nm, board.rules.default_via_drill_nm, *span)
+                if not index.can_via(via.net, point, via.size_nm, *span, via.drill_nm,
+                                     check_hole_copper=True):
+                    continue
+                selected.add(identity)
+                index.add_via(via, locked=True)
+            if point not in sites[identifier]:
+                sites[identifier] = (*sites[identifier], point)
+    resources={key: resource for key, resource in graph.resources.items() if resource.layer is not None}
+    for identifier, positions in sorted(sites.items()):
+        if not positions:
+            continue
         _,low,high,x,y=identifier.split(':')
         low,high,x,y=map(int,(low,high,x,y))
-        capacity=len(sites[identifier])
+        capacity=len(positions)
         # A through launch contacts all declared copper layers in its span.
         # Only already-existing legal graph nodes receive alias edges.
         for first in range(low,high):

@@ -20,6 +20,7 @@ from ..model import Board
 from ..serializer import board_to_json
 from .measure import evaluate, validate_dimensions
 from .model import SimulationError, SimulationPlan
+from .models import CODE_MODELS
 from .raw import parse_raw
 from .report import render_report, require_reporting
 from .result import normalize, represented
@@ -31,10 +32,46 @@ def save_json(path: Path, data):
     path.write_text(json.dumps(data, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
 
 
-def _configuration(folder: Path) -> dict:
+def runtime_profile(circuits, engine: Path, code_model_root: Path | None = None) -> dict:
+    models = [model for circuit in circuits for model in circuit.models]
+    dialects = {model.dialect for model in models}
+    if len(dialects) > 1:
+        raise SimulationError("mixed native and pspice model bundles need separate simulation plans")
+    dialect = next(iter(dialects), "native")
+    root = (code_model_root or engine.parent.parent / "lib" / "ngspice").resolve()
+    libraries = []
+    for name in sorted({name for model in models for name in model.code_models}):
+        path = root / f"{name}.cm"
+        if not path.is_file():
+            raise SimulationError(f"required ngspice library {name}.cm was not found at {root}; use --code-model-root for the selected engine's libraries")
+        libraries.append({"name": name, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    return {"dialect": dialect, "code_models": libraries}
+
+
+def _configuration(folder: Path, profile: dict | None = None) -> dict:
     init = folder / "initialization"
     init.mkdir(parents=True, exist_ok=True)
-    (init / "spinit").write_text("* CopperScript controlled initialization; native models only.\nset num_threads=1\n", encoding="ascii")
+    lines = ["* CopperScript controlled initialization.", "set num_threads=1"]
+    profile = profile or {"dialect": "native", "code_models": []}
+    if profile["dialect"] not in {"native", "pspice"}:
+        raise SimulationError("unsupported engine runtime profile")
+    if profile["dialect"] == "pspice":
+        # Translate checked includes, leaving the generated SPICE3 deck unchanged.
+        lines.append("set ngbehavior=ps")
+    for index, library in enumerate(profile["code_models"]):
+        if library["name"] not in CODE_MODELS or profile["dialect"] != "pspice":
+            raise SimulationError("unsupported engine code-model library")
+        data = Path(library["path"]).read_bytes()
+        if hashlib.sha256(data).hexdigest() != library["sha256"]:
+            raise SimulationError("engine code-model library changed after identification")
+        copied = init / f"{library['name']}.cm"
+        copied.write_bytes(data)
+        locator = copied.resolve().as_posix()
+        if any(char in locator for char in '\r\n"$`'):
+            raise SimulationError("output path cannot be represented in controlled ngspice initialization")
+        # Variable expansion preserves spaces without passing literal quotes to codemodel.
+        lines += [f'set copper_cm_{index} = "{locator}"', f"codemodel $copper_cm_{index}"]
+    (init / "spinit").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (init / ".spiceinit").write_text("* CopperScript controlled user initialization.\n", encoding="ascii")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SPICE_", "NGSPICE_"))}
     env.update({"SPICE_SCRIPTS": str(init), "SPICE_USERINIT_DIR": str(init), "SPICE_ASCIIRAWFILE": "1", "LC_NUMERIC": "C"})
@@ -43,8 +80,8 @@ def _configuration(folder: Path) -> dict:
     return env
 
 
-def _execute(command: list[str], cwd: Path, timeout: float):
-    options = {"cwd": cwd, "env": _configuration(cwd), "text": True, "encoding": "utf-8", "errors": "replace",
+def _execute(command: list[str], cwd: Path, timeout: float, *, profile: dict | None = None):
+    options = {"cwd": cwd, "env": _configuration(cwd, profile), "text": True, "encoding": "utf-8", "errors": "replace",
                "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
     if os.name == "nt":
         options["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -156,7 +193,7 @@ def _export_waveforms(data, output, formats):
 
 
 def run_simulation(board: Board, plan: SimulationPlan, output: str | Path, *, ngspice: str | Path | None = None,
-                   timeout: float = 60, source_path: Path | None = None) -> dict:
+                   timeout: float = 60, source_path: Path | None = None, code_model_root: str | Path | None = None) -> dict:
     if not math.isfinite(timeout) or timeout <= 0:
         raise SimulationError("timeout must be positive and finite")
     output = Path(output).resolve()
@@ -166,6 +203,9 @@ def run_simulation(board: Board, plan: SimulationPlan, output: str | Path, *, ng
     require_reporting()
     engine, shared = resolve_engine(ngspice)
     identity = engine_identity(engine, shared, timeout)
+    profile = runtime_profile(circuits.values(), engine, Path(code_model_root) if code_model_root else None)
+    identity["runtime_profile"] = profile
+    identity["initialization"] = f"controlled spinit and .spiceinit; {profile['dialect']} profile; no inherited SPICE environment"
     for circuit in circuits.values():
         for model in circuit.models:
             if identity["major_version"] not in model.versions:
@@ -193,11 +233,16 @@ def run_simulation(board: Board, plan: SimulationPlan, output: str | Path, *, ng
             command = _command(engine, shared)
             record = {"case": case, "analysis": analysis.name, "kind": analysis.kind, "status": "failed", "command": command}
             try:
-                code, console, timed_out = _execute(command, folder, timeout)
+                code, console, timed_out = _execute(command, folder, timeout, profile=profile)
                 (folder / "console.log").write_text(console, encoding="utf-8")
                 if not (folder / "run.log").exists():
                     (folder / "run.log").write_text(console, encoding="utf-8")
                 record.update({"exit_code": code, "timed_out": timed_out})
+                solver_log = (folder / "run.log").read_text(encoding="utf-8", errors="replace")
+                messages = [line for line in solver_log.splitlines()
+                            if re.search(r"warning:|gmin stepping|source stepping", line, re.I)]
+                record["solver_messages"] = messages[:30]
+                record["solver_messages_omitted"] = max(0, len(messages) - 30)
                 if timed_out or code:
                     raise SimulationError("simulator timed out" if timed_out else f"simulator exited with status {code}")
                 try:

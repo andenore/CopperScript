@@ -28,8 +28,24 @@ and [placement](placement-internals.md). Board qualification stays in consumers.
   branch-safe octilinear cleanup; preserve junctions, pads/vias and owner scope.
 - [ ] Extend exact same-net crossing preferences from package escapes to ordinary
   area topology while allowing intentional shared trunks and T junctions.
-- [ ] Add joint placement feedback for mutually blocked decouplers; current greedy
-  ranking must report unresolved access rather than relax fixed intent.
+- [x] Add bounded joint placement selection for mutually blocked decouplers using
+  [parameterized support patterns and complete contact/escape checks](power-area-planning-plan.md#pattern-based-support-placement-research-2026-10-17).
+  Opt-in `--support-pattern-trials` retains fixed intent, complete local
+  supply/return witnesses and ordinary reservations. Optimize support/contact
+  envelopes, not just component bodies. Native/PDN qualification remains separate.
+- [ ] Demonstrate the pattern search on an authored mutable CopperProbe bank,
+  including onward D18 area access and all prior native return/contact groups.
+  A separate four-component mutable candidate now passes the D18 subset on
+  In3.Cu, with 112 returns and 15 critical nets preserved. Combined eleven-domain
+  planning remains unresolved after 12 regeneration trials / 730 allocator
+  states: sampled FX_USB18 blockers include trial-mutable ground-return, D18
+  bypass and FX_V33 bypass copper. Exact area/contact feedback now repairs L9
+  with fresh preservation of 112 returns, 28 ordinary ports and 15 critical
+  nets. With seven neighboring areas held, FX_USB18 still has no complete tree.
+  Sampled complete dependency closures span 362–391 occurrences / 76–88 source
+  obligations. Implement retained shared trunks and exact continuation boundary
+  witnesses before broader repair; keep the 64-occurrence / 12-obligation local
+  release limits. Preserve the old incumbent and require combined native proof.
 - [ ] Localize neutral-cost fallback and use clearance-aware demand/failure pressure
   while retaining explicit layer/reference restrictions and truthful policy reports.
 - [ ] Reserve whole-bundle corner-wrap corridors, not only each pair's terminal band;
@@ -48,7 +64,21 @@ and [placement](placement-internals.md). Board qualification stays in consumers.
 
 ## Separate power/ground copper-area planning stage
 
-- [ ] Add an explicit bounded planning stage that couples placement and routing
+Implementation sequence, subset trials and promotion gates are specified in the
+[power area planning implementation plan](power-area-planning-plan.md). Start
+with the consumer-owned single-domain baseline before expanding to the FX10 bank
+or launching a new full-board comparison.
+
+The opt-in standard pipeline now evaluates joint physical area proposals during
+placement, adds bounded distribution/contact copper after package-boundary
+reservation, and reports native continuity plus explicit-model DC mesh refinement.
+Source/filter provenance, external return boundaries, exact ownership and local
+associations remain separate contracts. Single- and two-domain CopperProbe
+experiments, the USB power-bank partition and ADC supply with retained clock
+copper pass scoped native continuity. Active bank/USB coexistence and full-board promotion remain
+unfinished. See the plan for precise tested scope and remaining gates.
+
+- [x] Add an explicit bounded planning stage that couples placement and routing
   through proposed power and ground areas. Run initial domain planning after
   coarse placement and before package access/detail routing, and feed infeasible
   pad access and corridor conflicts back to placement.
@@ -62,8 +92,10 @@ and [placement](placement-internals.md). Board qualification stays in consumers.
   local high-frequency return-loop quality and engineering qualification separate.
   Preserve immutable geometry, required via multiplicity and verified exits;
   invalidate stale evidence and completely roll back rejected alternatives.
+- [ ] Complete expanded consumer acceptance with active critical routes, all FX10
+  domains and ADC/analog preservation before the normal full-board comparison.
   Test split islands, necks, antipads, signal reference discontinuities, competing
-  rails, unavailable tools and renamed geometries. Generic algorithms belong in
+  rails, filtered downstream domains, unavailable tools and renamed geometries. Generic algorithms belong in
   CopperScript; board-specific supply policy and evidence remain in consumers.
 
 

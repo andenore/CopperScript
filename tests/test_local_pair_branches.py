@@ -59,6 +59,31 @@ def test_rejected_main_pair_keeps_all_local_crossover_copper_disposable():
     assert result.board.tracks==board.tracks and result.board.vias==board.vias
 
 
+@pytest.mark.parametrize('remote', (False, True))
+def test_crossover_with_support_keeps_every_contact_and_rejects_remote_branch(remote):
+    board=fixture()
+    support=PhysicalFootprint('support',(
+        FootprintPad('1',Point.mm(0,-.25),Size.mm(.4,.3)),
+        FootprintPad('2',Point.mm(0,.25),Size.mm(.4,.3))),Size.mm(1,1))
+    board=replace(board,footprints={**board.footprints,'support':support},
+        placements=(*board.placements,Placement('ESD','support',Point.mm(18 if remote else 23,12))),
+        nets=tuple(replace(n,pads=(*n.pads,PadReference('ESD',str(i)))) for i,n in enumerate(board.nets,1)),
+        net_routing_rules=tuple(replace(r,breakout_length_nm=4500000) for r in board.net_routing_rules))
+    routes,a,b,pairs,returns=prepare_pair_terminals(board,*board.net_routing_rules,{})
+    if remote:
+        assert not a and not b and not pairs
+    else:
+        assert routes and len(pairs)==2
+        assert all(len(g.accesses)==2 for g in routes.values())
+        local=replace(board,tracks=(*a,*b),vias=(*[v for pair in pairs for v in pair],*returns))
+        graph=explicit_copper_connectivity(local)
+        for net in board.nets:
+            assert graph.net_connected(replace(net,pads=tuple(p for p in net.pads if p.component!='U')))
+        assert not [f for f in run_physical_drc(local,policy=PhysicalDrcPolicy(require_completed_detailed_route=False)).findings
+            if f.severity.value=='error' and f.code!='DRC-OPEN-NET']
+    assert board.tracks==board.vias==()
+
+
 def test_complete_pair_accepts_matched_branch_and_preserves_all_source_contacts():
     from pcbir import route_global,route_critical_nets
     board=fixture()

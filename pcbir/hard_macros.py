@@ -28,6 +28,18 @@ from .physical import (
 )
 
 
+class MacroAcceptanceError(ValueError):
+    """Keep the exact rejected geometry available to ordinary iteration tools."""
+
+    def __init__(self, message, board, findings=()):
+        super().__init__(message)
+        self.diagnostic_board = board
+        objects = tuple(obj for finding in findings for obj in finding.objects)
+        self.diagnostic_components = tuple(sorted(p.reference for p in board.placements
+            if any(obj.startswith(f"pad:{p.reference}.") or obj == f"component:{p.reference}"
+                   for obj in objects)))
+
+
 def _point(value):
     if not isinstance(value, list) or len(value) != 2 or any(type(x) is not int for x in value):
         raise ValueError("macro coordinates require two integer nanometres")
@@ -440,6 +452,18 @@ def validate_hard_macros(board):
             if (len({pad for pad, _ in plane.dedicated_contacts}) != len(plane.dedicated_contacts)
                     or len({xy for _, xy in plane.dedicated_contacts}) != len(plane.dedicated_contacts)):
                 raise ValueError("macro plane contacts require distinct pads and vias")
+        # Interface coverage is independent of placement. Reject it when the
+        # owner is bound, before spending time on placement or copper proofs.
+        port_nets = {port.net for port in macro.ports}
+        plane_nets = {plane.net for plane in macro.plane_returns}
+        for net_name in {binding.net for binding in macro.pad_bindings}:
+            bound = {binding.pad for binding in macro.pad_bindings if binding.net == net_name}
+            if net_name in port_nets:
+                covered = {pad for port in macro.ports if port.net == net_name for pad in port.pads}
+                if not bound <= covered:
+                    raise ValueError(f"macro ports omit private pads on net {net_name!r}")
+            elif net_name not in plane_nets and any(pad not in bound for pad in nets[net_name].pads):
+                raise ValueError(f"macro net {net_name!r} requires an external port")
     if not board.materialized_macros:
         if board.polygons:
             raise ValueError("fixed copper polygons require a materialized hard-macro owner")
@@ -649,7 +673,7 @@ def materialize_macro_copper(board: PhysicalBoard) -> PhysicalBoard:
     report = run_physical_drc(result, policy=PhysicalDrcPolicy(require_completed_detailed_route=False))
     fatal = [f for f in report.findings if f.severity is DrcSeverity.ERROR and f.code != "DRC-OPEN-NET"]
     if fatal:
-        raise ValueError("hard-macro physical acceptance failed: " + "; ".join(f"{f.code}: {f.message}" for f in fatal))
+        raise MacroAcceptanceError("hard-macro physical acceptance failed: " + "; ".join(f"{f.code}: {f.message}" for f in fatal), result, fatal)
     # Verify port -> private-pad continuity using actual copper, not role names.
     for macro in board.hard_macros:
         t, v, ports, _ = resolved_macro_geometry(result, macro)

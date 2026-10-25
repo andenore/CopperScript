@@ -6,7 +6,8 @@ import pytest
 
 from pcbir.cam_audit import audit_cam, reconcile_native_ipc, load_cam_evidence_index
 from pcbir.cam_qualification import (parse_ipcd356, NormalizedTestNet, TestPoint, TestVia,
-    PyGerberAdapter, CamCorpusCase, ToolIdentity, CamQualificationProfile, run_cam_qualification_matrix)
+    PyGerberAdapter, CamCorpusCase, ToolIdentity, CamQualificationProfile,
+    NormalizedCamLayer, run_cam_qualification_matrix)
 from pcbir.cli import main
 from pcbir.manufacturing import CommandResult
 from pcbir.manufacturing_files import export_manufacturing_files
@@ -133,6 +134,49 @@ def test_expanded_positive_negative_pygerber_corpus_does_not_fake_second_parser(
     assert result.status.value == "incomplete"
     assert len(result.cells) == len(cases)
     assert all(cell.passed for cell in result.cells), result.cells
+
+
+def test_cam_audit_reports_each_failed_pinned_corpus_cell(tmp_path):
+    root = package(tmp_path)
+    fixture = Path(__file__).parent / "fixtures/cam"
+
+    class FixtureAdapter:
+        def __init__(self, name, accepts_missing_end):
+            self.identity = ToolIdentity(name, "fixture-1", sha256(name.encode()).hexdigest())
+            self.accepts_missing_end = accepts_missing_end
+
+        def parse_gerber(self, path):
+            if path.name == "negative_undefined_aperture.gbr":
+                raise ValueError("undefined aperture")
+            if path.name == "negative_missing_end.gbr" and not self.accepts_missing_end:
+                raise ValueError("missing M02")
+            return NormalizedCamLayer(
+                "Copper,L1,Top", "Positive", "mm", (0, 0, 10_000_000, 10_000_000), "fixture"
+            )
+
+    permissive = FixtureAdapter("permissive-parser", accepts_missing_end=True)
+    strict = FixtureAdapter("strict-parser", accepts_missing_end=False)
+    profile = CamQualificationProfile(
+        "corpus-report-regression", "fixture Gerber subset", "fixture XNC subset",
+        (permissive.identity, strict.identity),
+    )
+    cases = (
+        CamCorpusCase("negative-missing-end", fixture / "negative_missing_end.gbr", False),
+        CamCorpusCase("negative-undefined-aperture", fixture / "negative_undefined_aperture.gbr", False),
+        CamCorpusCase("positive-line", fixture / "positive_line.gbr", True),
+    )
+
+    result = audit_cam(root, profile=profile, cases=cases, adapters=(permissive, strict))
+    corpus = by_id(result, "cam.parser-corpus")
+    assert corpus["status"] == "fail"
+    failed = [cell for cell in corpus["metrics"]["cells"] if not cell["passed"]]
+    assert failed == [{
+        "case_id": "negative-missing-end",
+        "tool": "permissive-parser",
+        "tool_version": "fixture-1",
+        "passed": False,
+        "detail": "malformed case was accepted",
+    }]
 
 
 def test_cam_external_evidence_retains_bytes_and_rejects_changed_report(tmp_path):

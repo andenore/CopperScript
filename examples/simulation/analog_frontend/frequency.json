@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "name": "analog-frequency",
+  "circuit": {
+    "components": [
+      "U1",
+      "U2",
+      "R_REF_TOP",
+      "R_REF_BOTTOM",
+      "C_REF",
+      "R_GAIN_FB",
+      "R_GAIN_REF",
+      "R_LP1_A",
+      "R_LP1_B",
+      "C_LP1_FB",
+      "C_LP1_REF",
+      "R_LP2_A",
+      "R_LP2_B",
+      "C_LP2_FB",
+      "C_LP2_REF",
+      "R_ISO",
+      "R_TERM",
+      "C_TERM",
+      "C_U1",
+      "C_U2",
+      "C_BULK"
+    ],
+    "reference_node": "GND",
+    "open_boundaries": {
+      "TP_REF.1": "Open measurement header or output connector; no external instrument loading. R_TERM/C_TERM define total termination.",
+      "TP_REF.2": "Open measurement header or output connector; no external instrument loading. R_TERM/C_TERM define total termination.",
+      "TP_GAIN.1": "Open measurement header or output connector; no external instrument loading. R_TERM/C_TERM define total termination.",
+      "TP_GAIN.2": "Open measurement header or output connector; no external instrument loading. R_TERM/C_TERM define total termination.",
+      "TP_FILTER.1": "Open measurement header or output connector; no external instrument loading. R_TERM/C_TERM define total termination.",
+      "TP_FILTER.2": "Open measurement header or output connector; no external instrument loading. R_TERM/C_TERM define total termination.",
+      "J_OUT.1": "Open measurement header or output connector; no external instrument loading. R_TERM/C_TERM define total termination.",
+      "J_OUT.2": "Open measurement header or output connector; no external instrument loading. R_TERM/C_TERM define total termination."
+    }
+  },
+  "models": {
+    "registry": "models/registry.json",
+    "bindings": {
+      "U1": "ti/opa2197-sboma34d",
+      "U2": "ti/opa2197-sboma34d"
+    }
+  },
+  "sources": {
+    "supply": {
+      "kind": "voltage",
+      "positive": "V5",
+      "negative": "GND",
+      "dc": "5 V",
+      "series_resistance": "0.5 ohm",
+      "covers": [
+        "J_PWR.1",
+        "J_PWR.2"
+      ]
+    },
+    "sensor": {
+      "kind": "voltage",
+      "positive": "VIN",
+      "negative": "GND",
+      "dc": "2.5 V",
+      "series_resistance": "1 kohm",
+      "ac": {
+        "magnitude": "1 V"
+      },
+      "covers": [
+        "J_IN.1",
+        "J_IN.2"
+      ]
+    }
+  },
+  "probes": {
+    "supply_voltage": {
+      "kind": "voltage",
+      "positive": "V5",
+      "negative": "GND"
+    },
+    "reference_voltage": {
+      "kind": "voltage",
+      "positive": "VREF",
+      "negative": "GND"
+    },
+    "reference_upper": {
+      "kind": "voltage",
+      "positive": "V5",
+      "negative": "VREF"
+    },
+    "input_signal": {
+      "kind": "voltage",
+      "positive": "VIN",
+      "negative": "VREF"
+    },
+    "gain_output": {
+      "kind": "voltage",
+      "positive": "GAIN_OUT",
+      "negative": "VREF"
+    },
+    "first_filter": {
+      "kind": "voltage",
+      "positive": "LP1_OUT",
+      "negative": "VREF"
+    },
+    "output_signal": {
+      "kind": "voltage",
+      "positive": "VOUT",
+      "negative": "VREF"
+    },
+    "output_voltage": {
+      "kind": "voltage",
+      "positive": "VOUT",
+      "negative": "GND"
+    },
+    "supply_current": {
+      "kind": "source_current",
+      "source": "supply",
+      "positive_direction": "delivered"
+    }
+  },
+  "derived_signals": {
+    "midpoint_error": {
+      "kind": "difference",
+      "left": "reference_upper",
+      "right": "reference_voltage"
+    },
+    "gain": {
+      "kind": "ratio",
+      "analysis": "frequency",
+      "numerator": "output_signal",
+      "denominator": "input_signal"
+    }
+  },
+  "assumptions": [
+    "TI OPAx197 Final 1.3 typical model with explicit dual wrapper; no generic fallback.",
+    "Source resistance is 0.5 ohm supply and 1 kohm sensor; no PCB parasitics or capacitor ESR included.",
+    "R_TERM/C_TERM are populated bench termination; cases represent changed total equivalent termination.",
+    "Test/output headers are open. No ADC acquisition or instrument loading is claimed."
+  ],
+  "analyses": {
+    "bias": {
+      "kind": "op"
+    },
+    "frequency": {
+      "kind": "ac",
+      "sweep": "decade",
+      "start": "10 Hz",
+      "stop": "1 MHz",
+      "points_per_decade": 100
+    }
+  },
+  "cases": {
+    "nominal": {},
+    "rc_low": {
+      "values": {
+        "R_LP1_A": "7.2468 kohm",
+        "R_LP1_B": "7.2468 kohm",
+        "R_LP2_A": "2.9799 kohm",
+        "R_LP2_B": "2.9799 kohm",
+        "C_LP1_FB": "11.4 nF",
+        "C_LP1_REF": "9.5 nF",
+        "C_LP2_FB": "64.6 nF",
+        "C_LP2_REF": "9.5 nF"
+      }
+    },
+    "rc_high": {
+      "values": {
+        "R_LP1_A": "7.3932 kohm",
+        "R_LP1_B": "7.3932 kohm",
+        "R_LP2_A": "3.0401 kohm",
+        "R_LP2_B": "3.0401 kohm",
+        "C_LP1_FB": "12.6 nF",
+        "C_LP1_REF": "10.5 nF",
+        "C_LP2_FB": "71.4 nF",
+        "C_LP2_REF": "10.5 nF"
+      }
+    },
+    "high_q": {
+      "values": {
+        "C_LP1_FB": "12.6 nF",
+        "C_LP1_REF": "9.5 nF",
+        "C_LP2_FB": "71.4 nF",
+        "C_LP2_REF": "9.5 nF"
+      }
+    },
+    "low_q": {
+      "values": {
+        "C_LP1_FB": "11.4 nF",
+        "C_LP1_REF": "10.5 nF",
+        "C_LP2_FB": "64.6 nF",
+        "C_LP2_REF": "10.5 nF"
+      }
+    },
+    "low_supply": {
+      "sources": {
+        "supply": {
+          "dc": "4.75 V"
+        },
+        "sensor": {
+          "dc": "2.375 V"
+        }
+      }
+    },
+    "high_supply": {
+      "sources": {
+        "supply": {
+          "dc": "5.25 V"
+        },
+        "sensor": {
+          "dc": "2.625 V"
+        }
+      }
+    },
+    "heavy_load": {
+      "values": {
+        "R_TERM": "2 kohm",
+        "C_TERM": "10 nF"
+      }
+    },
+    "high_sensor_impedance": {
+      "sources": {
+        "sensor": {
+          "series_resistance": "10 kohm"
+        }
+      }
+    }
+  },
+  "checks": [
+    {
+      "name": "reference_midpoint",
+      "analysis": "bias",
+      "probe": "midpoint_error",
+      "operation": "at",
+      "at": 0,
+      "minimum": "-20 mV",
+      "maximum": "20 mV"
+    },
+    {
+      "name": "output_bias",
+      "analysis": "bias",
+      "probe": "output_voltage",
+      "operation": "at",
+      "at": 0,
+      "minimum": "0.5 V",
+      "maximum": "4.25 V"
+    },
+    {
+      "name": "gain_corner_envelope",
+      "analysis": "frequency",
+      "probe": "gain",
+      "operation": "at",
+      "at": "100 Hz",
+      "representation": "dB",
+      "minimum": "11.8 dB",
+      "maximum": "12.3 dB"
+    }
+  ],
+  "plots": [
+    {
+      "name": "signal_path",
+      "kind": "bode",
+      "analysis": "frequency",
+      "signal": "gain",
+      "unwrap_phase": true
+    }
+  ]
+}

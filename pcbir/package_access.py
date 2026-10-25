@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields, replace
 from collections import Counter
 from types import MappingProxyType
-from typing import Iterator
+from typing import Callable, Iterator
 
 from .boundary_access import BoundaryAccessOptions, BoundaryAccessResult, analyze_boundary_access
 from .clusters import move_placement_unit
@@ -40,6 +40,8 @@ class PackageAccessOptions:
     reserve_plane_contacts: bool = True
     maximum_placement_probes: int = 16
     maximum_partial_owner_nets: int = 8
+    guide_replan_options: GlobalRouterOptions | None = None
+    full_pair_state_limit: int = 0
 
     def __post_init__(self):
         if self.maximum_trials < 0 or self.movement_nm <= 0:
@@ -48,6 +50,8 @@ class PackageAccessOptions:
             raise ValueError("package-access pattern trial budget must be 0..2")
         if self.initial_pair_state_limit < 0:
             raise ValueError("initial pair state limit must be non-negative (0 disables staging)")
+        if type(self.full_pair_state_limit) is not int or self.full_pair_state_limit < 0:
+            raise ValueError("full pair state limit must be a non-negative integer (0 retains historical bounds)")
         if type(self.maximum_placement_probes) is not int or self.maximum_placement_probes < 0:
             raise ValueError("package placement probe budget must be a non-negative integer")
         if type(self.maximum_partial_owner_nets) is not int or not 0 <= self.maximum_partial_owner_nets <= 8:
@@ -188,6 +192,7 @@ def preflight_package_access(
     plane_options: PlaneStitchOptions | None = None,
     *, options: PackageAccessOptions | None = None,
     on_progress: ProgressCallback | None = None,
+    on_checkpoint: Callable[[str, object], None] | None = None,
 ) -> PackageAccessResult:
     """Reserve compatible ordinary exits before any critical long route.
 
@@ -206,6 +211,8 @@ def preflight_package_access(
         raise ValueError("package-access global guides are stale")
     emit(on_progress, "ordinary_package_exits", "started")
     fanout = route_fanout(owner_board, fanout_options)
+    if on_checkpoint is not None:
+        on_checkpoint("ordinary-fanout", fanout)
     emit(on_progress, "ordinary_package_exits", "finished",
          escaped=len(fanout.accesses), pending=len(fanout.pending_pads),
          pending_pads=[f"{p.component}.{p.pad}" for p in fanout.pending_pads],
@@ -222,9 +229,15 @@ def preflight_package_access(
         critical = _critical_search(board, global_route, fanout, on_progress, limit, work)
         candidate = _access_result(board, global_route, fanout, critical, plane_options,
                                    options.boundary_options, on_progress)
+        if on_checkpoint is not None:
+            on_checkpoint(f"package-{name}-baseline", candidate)
+        candidate = _refresh_package_guides(candidate, options.guide_replan_options, on_progress)
+        before_patterns = candidate.board
         candidate = _negotiate_patterns(candidate, owner_board, fanout_options,
             options, plane_options, on_progress, pair_state_limit=limit, search_work=work,
             search_tier=name)
+        if candidate.board is not before_patterns:
+            candidate = _refresh_package_guides(candidate, options.guide_replan_options, on_progress)
         tier = PackageSearchTier(name, limit, work.critical_passes,
                                  work.pair_searches, work.expanded_states, candidate.ready,
                                  local_contact_searches=work.local_contact_searches,
@@ -240,13 +253,13 @@ def preflight_package_access(
         return candidate
 
     result = run_tier("initial" if staged else "full",
-                      options.initial_pair_state_limit if staged else None)
+                      options.initial_pair_state_limit if staged else options.full_pair_state_limit or None)
     selected = 0
     if staged and not result.ready:
         # Restart from the ORIGINAL ordinary pattern with historical search
         # bounds. Limited failure is never interpreted as proof of no solution.
         emit(on_progress, "package_search_fallback", "started", reason="initial_access_incomplete")
-        full = run_tier("full", None)
+        full = run_tier("full", options.full_pair_state_limit or None)
         if _improvement_outcome(result, full, allow_equal=True) == "accepted":
             result, selected = full, 1
         emit(on_progress, "package_search_fallback", "finished", selected=tiers[selected].name,
@@ -258,6 +271,22 @@ def preflight_package_access(
          pending_pads=[f"{p.component}.{p.pad}" for p in sorted(result.pending_pads)],
          failed_critical_nets=sorted(result.failed_critical_nets), hard_findings=result.hard_findings)
     return result
+
+
+def _refresh_package_guides(result, global_options, on_progress):
+    """Replan a failed coarse certificate using the now fixed package prefix."""
+    if (global_options is None or result.global_route.status is GlobalRoutingStatus.SUCCESS
+            or result.failed_critical_nets or result.pending_pads or result.hard_findings
+            or result.boundary is None or not result.boundary.ready):
+        return result
+    emit(on_progress, 'package_global_replan', 'started',
+         previous_unrouted=result.global_route.metrics.unrouted_net_count)
+    refreshed = route_global(result.source, global_options, fixed_prefix=result.board,
+        reserved_accesses=result.fanout.routing_accesses, on_progress=on_progress)
+    emit(on_progress, 'package_global_replan', 'finished', status=refreshed.status.value,
+         unrouted=refreshed.metrics.unrouted_net_count, overflow=refreshed.metrics.total_overflow,
+         fixed_prefix_digest=refreshed.fixed_prefix_digest)
+    return replace(result, global_route=refreshed)
 
 
 def _access_result(
@@ -289,6 +318,42 @@ def _access_result(
          pending_pads=[f"{p.component}.{p.pad}" for p in boundary.pending_pads],
          native_accepted=boundary.native_accepted)
     return PackageAccessResult(board, guides, fanout, critical, plane, failed, hard, boundary=boundary)
+
+
+def preflight_prepared_power_access(board, guides, preparation, fanout_options,
+                                    plane_options=None, *, options=None, on_progress=None, only_nets=None):
+    """Ordinary exits around a separately native-accepted, protected prefix.
+
+    No old explicit witness is converted into a plane witness. Changed poses
+    need a new preparation; this path does not negotiate or release its owners.
+    The caller must freshly refill the combined boundary before area routing.
+    """
+    from .hard_macros import materialize_hard_macros
+    from .power_preparation import (preparation_preserved, required_return_contacts,
+                                    assess_native_return_contacts)
+    if (materialize_hard_macros(board) != preparation.source
+            or not preparation_preserved(preparation, preparation.board)
+            or preparation.evidence is None or not preparation.evidence.matches(preparation.board)
+            or guides.placement_fingerprint != _placement_fingerprint(board)):
+        raise ValueError('stale power preparation source or native certificate')
+    returned = required_return_contacts(preparation.board, preparation.plan)
+    returns = assess_native_return_contacts(preparation.board, preparation.evidence, returned)
+    if returns['status'] not in {'native_connected', 'not_requested'}:
+        raise ValueError('power preparation has unverified required return contacts')
+    if plane_options is not None:
+        # These exact lands already have a protected, freshly checked native
+        # return. Repeating a local site search can reject a large land whose
+        # accepted contact lies beyond its centre-based search radius. Every
+        # other requested contact remains, and combined native admission still
+        # runs at the boundary. No held contact copper is changed or discarded.
+        requested = (frozenset(p for net in preparation.board.nets for p in net.pads)
+                     if plane_options.only_pads is None else plane_options.only_pads)
+        plane_options = replace(plane_options, only_pads=requested-returned)
+    fanout = route_fanout(preparation.board, fanout_options, only_nets=only_nets)
+    critical = replace(preparation.critical, board=fanout.board,
+                       locked_tracks=fanout.board.tracks, locked_vias=fanout.board.vias)
+    return _access_result(board, guides, fanout, critical, plane_options,
+                          (options or PackageAccessOptions()).boundary_options, on_progress)
 
 
 def _missing_bypass_links(source, before, after):
@@ -432,11 +497,16 @@ def _negotiate_patterns(
     emit(on_progress, "package_pattern_probe", "finished",
          failed_critical_nets=sorted(probe_failed), hard_findings=probe_hard, reused_critical=reuse,
          search_tier=search_tier)
-    # Spend the bounded budget on clean-source probes with a strictly smaller
-    # failure set, or on failed plane access. This is a heuristic, not proof
-    # that the skipped joint search has no solution.
+    # A clean-source ordering may exchange failed critical owners rather than
+    # produce a strict subset: one pair becomes routable while another loses
+    # its launch. Its successful copper is still useful as a disposable
+    # obstacle for a new ordinary pattern. Spend the same bounded proposal
+    # budget on a changed, no-larger failure set; NEVER accept that exchange
+    # itself. Final all-owner validation retains the strict identity gate.
+    changed_probe = (probe_failed != baseline.failed_critical_nets
+                     and len(probe_failed) <= len(baseline.failed_critical_nets))
     if probe_hard or (not (plane_pending or ordinary_pending)
-                      and not probe_failed < baseline.failed_critical_nets):
+                      and not changed_probe):
         return baseline
     include_planes = bool(plane_options and baseline.source.zones and (plane_pending or ordinary_pending))
     strategies = (["critical_and_plane_first", "critical_first"] if include_planes else

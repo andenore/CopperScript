@@ -227,6 +227,21 @@ def test_preserves_embedded_keepout_zone() -> None:
     )
 
 
+def test_preserves_multilayer_isolation_keepout() -> None:
+    source = '''(footprint "isolated-module" (layer "F.Cu")
+      (zone (net 0) (net_name "") (layers "F.Cu" "In1.Cu" "In2.Cu" "B.Cu")
+        (keepout (tracks not_allowed) (vias not_allowed)
+          (pads not_allowed) (copperpour not_allowed) (footprints allowed))
+        (polygon (pts (xy 0 0) (xy 3 0) (xy 3 20) (xy 0 20)))))'''
+    keepout = parse_kicad_mod(source).footprint.keepouts[0]
+    assert keepout.layers == (
+        CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+        CopperLayer.INTERNAL_2, CopperLayer.BACK,
+    )
+    assert keepout.block_tracks and keepout.block_vias
+    assert keepout.block_pads and keepout.block_zones
+
+
 def test_preserves_footprint_placement_keepout() -> None:
     source = """(footprint "Socket" (layer "F.Cu")
       (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask"))

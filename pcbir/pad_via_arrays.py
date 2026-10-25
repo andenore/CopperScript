@@ -34,6 +34,15 @@ _PITCH_GRID_NM = nm_from_mm("0.01")
 _UNROTATED = SimpleNamespace(rotation_degrees=Decimal(0))
 
 
+class ViaArrayPlacementError(ValueError):
+    """Keep the posed board available for the standard issue/view workflow."""
+
+    def __init__(self, message, board, component):
+        super().__init__(message)
+        self.diagnostic_board = board
+        self.diagnostic_components = (component,)
+
+
 def array_rules(board: PhysicalBoard) -> tuple[PadViaInPadRule, ...]:
     """Permissions that require an array, in deterministic pad order."""
     return tuple(sorted((rule for rule in board.via_in_pad_rules if rule.rows is not None),
@@ -86,9 +95,16 @@ def _land(board: PhysicalBoard, reference: PadReference) -> tuple[Placement, Foo
     return placement, pad
 
 
-def _sites(board: PhysicalBoard, rule: PadViaInPadRule) -> tuple[tuple[int, int, Point], ...]:
+def array_sites(board: PhysicalBoard, rule: PadViaInPadRule,
+                placement: Placement | None = None) -> tuple[tuple[int, int, Point], ...]:
     """Board positions, rotated with the land exactly as DRC shapes it."""
-    placement, pad = _land(board, rule.pad)
+    if placement is None:
+        placement, pad = _land(board, rule.pad)
+    else:
+        if placement.reference != rule.pad.component:
+            raise ValueError("array placement must belong to its declared pad")
+        pad = next(p for p in board.footprints[placement.footprint].pads
+                   if p.number == rule.pad.pad and p.kind is PadKind.SMD)
     centre = transformed_local_point(placement, pad.position)
     angle = -float(placement.rotation_degrees + pad.rotation_degrees)
     return tuple((row, column, _rotate_offset(centre, dx, dy, angle))
@@ -105,7 +121,7 @@ def via_in_pad_array_vias(board: PhysicalBoard) -> tuple[Via, ...]:
     return tuple(
         Via(net_by_pad[rule.pad], site, ARRAY_VIA_SIZE_NM, ARRAY_VIA_DRILL_NM,
             outer[0], outer[1], finish="filled-capped")
-        for rule in rules for _, _, site in _sites(board, rule)
+        for rule in rules for _, _, site in array_sites(board, rule)
     )
 
 
@@ -147,7 +163,7 @@ def materialize_via_in_pad_arrays(board: PhysicalBoard) -> PhysicalBoard:
                        and any(layer not in outer for layer in zone.layers))
         placement, pad = _land(board, rule.pad)
         land = placed_pad_shape(transformed_local_point(placement, pad.position), pad, placement)
-        for row, column, site in _sites(board, rule):
+        for row, column, site in array_sites(board, rule):
             shape = RoundedConvexShape((site,), ARRAY_VIA_SIZE_NM // 2)
             reason = (
                 "leaves the land" if not circle_inside_shape(site, ARRAY_VIA_SIZE_NM // 2, land)
@@ -168,9 +184,10 @@ def materialize_via_in_pad_arrays(board: PhysicalBoard) -> PhysicalBoard:
                 else None
             )
             if reason is not None:
-                raise ValueError(
+                raise ViaArrayPlacementError(
                     f"via_in_pad array {rule.pad.component}.{rule.pad.pad}: site row {row} "
-                    f"column {column} at ({_mm(site.x_nm)}, {_mm(site.y_nm)}) mm {reason}")
+                    f"column {column} at ({_mm(site.x_nm)}, {_mm(site.y_nm)}) mm {reason}",
+                    board, rule.pad.component)
             via = Via(net, site, ARRAY_VIA_SIZE_NM, ARRAY_VIA_DRILL_NM, outer[0], outer[1],
                       finish="filled-capped")
             # Later sites, including this array's own, check against it.

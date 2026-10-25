@@ -39,6 +39,7 @@ from .geometry import (
     segment_distance_squared,
     shape_distance_squared,
     shapes_clear,
+    shapes_touch_or_overlap,
 )
 from .placement import placement_solution_is_legal
 from .breakout import BreakoutRegions
@@ -267,7 +268,10 @@ def run_physical_drc(
     if not placement_solution_is_legal(
         board, {item.reference: item for item in board.placements}
     ):
-        findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR, "component placement violates board, keepout, or courtyard legality"))
+        from .placement import placement_rejection_reasons
+        reasons = placement_rejection_reasons(board, {item.reference: item for item in board.placements})
+        findings.append(_finding("DRC-PLACEMENT", DrcSeverity.ERROR,
+            "component placement violates board, keepout, or courtyard legality: " + "; ".join(reasons)))
     coverage.append(DrcCoverage("placement_legality", DrcCoverageStatus.EXECUTED, True))
     coverage.append(DrcCoverage("courtyard_gap",
         DrcCoverageStatus.EXECUTED if any(rule.additional_courtyard_gap_nm is not None
@@ -492,6 +496,7 @@ def physical_board_digest(board: PhysicalBoard) -> str:
                 (net.name, [(pad.component, pad.pad) for pad in sorted(net.pads)])
                 for net in sorted(board.nets, key=lambda item: item.name)
             ],
+            **({"power_feeds": [repr(f) for f in board.power_feeds]} if board.power_feeds else {}),
             "tracks": [_track_identity(track) for track in sorted(board.tracks, key=_track_identity)],
             "vias": [_via_identity(via) for via in sorted(board.vias, key=_via_identity)],
             **({"polygons": [repr(p) for p in sorted(board.polygons, key=lambda p: p.id)]}
@@ -954,16 +959,29 @@ def _check_zone_priorities(board: PhysicalBoard, findings: list[DrcFinding]) -> 
     priority nor merges pours or claims filled continuity.
     """
     from .zone_geometry import _inside, _ring_edges
-    from .geometry import segments_intersect
+    from .geometry import bounds, segments_intersect
     zones = sorted(board.zones, key=lambda zone: zone.id)
+    # Detailed retained copper can have hundreds of curved-polygon samples.
+    # Cache each boundary once and reject disjoint envelopes before the exact
+    # edge tests. Strict separation preserves touching-boundary diagnostics.
+    boundaries = []
+    for zone in zones:
+        polygon = zone.outline
+        points = tuple(point for ring in (polygon.outer, *polygon.holes)
+                       for point in ring.vertices)
+        edges = tuple(edge for ring in (polygon.outer, *polygon.holes)
+                      for edge in _ring_edges(ring.vertices))
+        boundaries.append((bounds(points), edges))
     for index, first in enumerate(zones):
-        for second in zones[:index]:
+        first_bounds, edges_a = boundaries[index]
+        for second_index, second in enumerate(zones[:index]):
             layers = set(first.layers).intersection(second.layers)
             if first.priority != second.priority or not layers:
                 continue
+            second_bounds, edges_b = boundaries[second_index]
+            if not first_bounds.intersects(second_bounds):
+                continue
             a, b = first.outline, second.outline
-            edges_a = tuple(edge for ring in (a.outer, *a.holes) for edge in _ring_edges(ring.vertices))
-            edges_b = tuple(edge for ring in (b.outer, *b.holes) for edge in _ring_edges(ring.vertices))
             if (any(segments_intersect(*x, *y) for x in edges_a for y in edges_b)
                     or any(_inside(point, b) for point in a.outer.vertices)
                     or any(_inside(point, a) for point in b.outer.vertices)):
@@ -1013,7 +1031,7 @@ def _check_copper_keepouts(
             if not keepout.block_tracks or track.layer not in keepout.layers:
                 continue
             copper = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
-            if not shapes_clear(region, copper):
+            if shapes_touch_or_overlap(region, copper):
                 findings.append(_finding(
                     "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
                     f"track {index} enters copper keepout {keepout.id}",
@@ -1026,7 +1044,7 @@ def _check_copper_keepouts(
             ):
                 continue
             copper = RoundedConvexShape((via.position,), via.size_nm // 2)
-            if not shapes_clear(region, copper):
+            if shapes_touch_or_overlap(region, copper):
                 findings.append(_finding(
                     "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
                     f"via {index} enters copper keepout {keepout.id}",
@@ -1050,7 +1068,7 @@ def _check_copper_keepouts(
                         continue
                     point = transformed_local_point(placement, pad.position)
                     copper = placed_pad_shape(point, pad, placement)
-                    if not shapes_clear(region, copper):
+                    if shapes_touch_or_overlap(region, copper):
                         findings.append(_finding(
                             "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
                             f"pad {placement.reference}.{pad.number} enters copper keepout {keepout.id}",

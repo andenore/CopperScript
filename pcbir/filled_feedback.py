@@ -322,6 +322,10 @@ def improve_filled_copper(
     prefix = (initial.fanout.board if initial.fanout else
               initial.plane_stitch.board if initial.plane_stitch else initial.critical.board)
     protected_tracks, protected_vias = Counter(prefix.tracks), Counter(prefix.vias)
+    from .power_geometry import owned_power_copper
+    power_tracks, power_vias = owned_power_copper(initial)
+    protected_tracks.update(power_tracks)
+    protected_vias.update(power_vias)
     def partition(objects, protected):
         fixed, mutable = [], []
         remaining = protected.copy()
@@ -422,7 +426,16 @@ def improve_filled_copper(
                                 before_cleanup = candidate
                                 candidate, checked = remove_native_dangling_copper(candidate, checked,
                                     Counter(reserved.tracks), Counter(reserved.vias),
-                                    eligible_nets=displaced, kicad_cli=kicad_cli, verifier=verify)
+                                    # Unrelated completed area routes may also
+                                    # contain native dangling ends. Their
+                                    # disposable ownership is already excluded
+                                    # from reserved/fixed copper; limiting cleanup
+                                    # to displaced nets can deadlock a valid rail
+                                    # bridge on an old, independently removable end.
+                                    # Cleanup still demands exact ownership,
+                                    # before/after connectivity and fresh native
+                                    # no-regression proof for EVERY affected net.
+                                    eligible_nets=eligible, kicad_cli=kicad_cli, verifier=verify)
                                 cleaned_tracks = len(before_cleanup.tracks) - len(candidate.tracks)
                                 cleaned_vias = len(before_cleanup.vias) - len(candidate.vias)
                                 digest = physical_board_digest(candidate)

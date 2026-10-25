@@ -36,12 +36,12 @@ def local_access_path(
     target = (xs.index(end.x_nm), ys.index(end.y_nm))
     best = {start_node: 0}
     previous: dict[tuple[int, int], tuple[int, int] | None] = {start_node: None}
-    queue: list[tuple[int, int, int, tuple[int, int]]] = []
+    queue: list[tuple[int, int, int, int, tuple[int, int]]] = []
     serial = 0
-    heappush(queue, (_distance(start, end), 0, serial, start_node))
+    heappush(queue, (_distance(start, end), _distance(start, end), 0, serial, start_node))
     expanded = 0
     while queue and expanded < maximum_states:
-        _, cost, _, node = heappop(queue)
+        _, _, cost, _, node = heappop(queue)
         if cost != best.get(node):
             continue
         if node == target:
@@ -64,7 +64,11 @@ def local_access_path(
             best[neighbor] = candidate_cost
             previous[neighbor] = node
             serial += 1
-            heappush(queue, (candidate_cost + _distance(point, end),
+            # Equal estimated costs are common with the Manhattan metric.
+            # Prefer progress to the goal instead of flooding the complete
+            # shortest-path rectangle before reaching a recessed terminal.
+            remaining = _distance(point, end)
+            heappush(queue, (candidate_cost + remaining, remaining,
                              candidate_cost, serial, neighbor))
     if target not in previous:
         return None

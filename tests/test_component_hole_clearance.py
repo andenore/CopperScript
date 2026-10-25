@@ -394,7 +394,10 @@ def test_physical_board_validates_scoped_rules() -> None:
 GOLDEN_BOARD_DIGEST = "e81641e915f7bb4c2d432820c42f6713050039262c0bd94782b64cdd57130b06"
 # Broadening via-hole checks renamed the coverage entry to via_hole_to_copper;
 # independent HEAD comparison found only that name and its report/token digests changed.
-GOLDEN_REPORT_SHA256 = "afcab4d1d64c868dd3ae72f3167908ec229da37f235e4efec0e46350ccca7ece"
+# Located placement diagnostics append the actual rejecting components/reasons.
+# Replacing only that message and recomputing the token reproduces the prior
+# afcab4d1... report exactly; geometry, other findings and coverage are unchanged.
+GOLDEN_REPORT_SHA256 = "5c7fbf61ce430f0953c597850c7333d382e5cc5f6109e31c982ad422e18faa76"
 # Export now also binds the authored drill-to-drill spacing to its native key;
 # exact before/after artifacts differ only by that project setting.
 GOLDEN_KICAD_EXPORT_DIGEST = "e250fe232d315ecfbcbb8a4e9ecba509b4036a825860515bdef7bce6c65bc39c"
@@ -405,6 +408,8 @@ def test_unscoped_board_retains_geometry_and_current_report_export_contract() ->
     report = run_physical_drc(board)
     assert physical_board_digest(board) == GOLDEN_BOARD_DIGEST
     assert sha256(report.to_json().encode()).hexdigest() == GOLDEN_REPORT_SHA256
+    assert any(f.code == "DRC-PLACEMENT" and "J1: own non-plated drill" in f.message
+               for f in report.findings)
     assert "hole_clearance_relaxations" not in report.to_json()
     assert "component_hole_clearance" not in {item.check for item in report.coverage}
     manifest = KiCadPcbBackend().generate(board)

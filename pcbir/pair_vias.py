@@ -13,7 +13,8 @@ from math import hypot, sqrt
 from typing import Callable, Iterator
 
 from .pair_search import (PairSearchCandidate, PairSearchStats, _Port, _HEADS,
-                          _legal, _ports, _search, _remaining_states, _can_depart)
+                          _legal, _ports, _search, _remaining_states, _can_depart,
+                          _PairAccessIndex, _normal, _shift, _tracks)
 from .drc import placed_pad_shape
 from .geometry import RoundedConvexShape, shapes_clear
 from .placement import transformed_local_point
@@ -244,11 +245,85 @@ def _return_via(board: PhysicalBoard, index: RoutingClearanceIndex,
     return None
 
 
+def _local_via_ports(board, first, second, a, b, component, surface, layer):
+    """Finite recessed-land fallback: choose legal vias before searching collars.
+
+    Surface-only portals can sit above opposite-face bypass pads or ground
+    vias. Searching their lead-ins first hides the usable sites farther out.
+    The stagger follows the terminal pitch, with 16 legal sites and 32 local
+    path calls at most. Every path keeps both lanes, holes and old copper as
+    obstacles; the normal transition and owner gates still run afterwards.
+    """
+    from .pin_access import local_access_path
+    span = physical_via_span(board, surface, layer)
+    if span is None:
+        return ()
+    width = first.width_nm or board.rules.default_track_width_nm
+    clearance = max(board.rules.minimum_clearance_nm, first.clearance_nm or 0,
+                    second.clearance_nm or 0)
+    offset = (transition_spacing(board, first, second)+1)//2
+    middle = Point((a.x_nm+b.x_nm)//2, (a.y_nm+b.y_nm)//2)
+    pitch = max(abs(a.x_nm-b.x_nm), abs(a.y_nm-b.y_nm))
+    pose = next(p for p in board.placements if p.reference == component)
+    outward = Point(middle.x_nm-pose.position.x_nm, middle.y_nm-pose.position.y_nm)
+    headings = sorted((0, 2, 4, 6), key=lambda h:
+        (-(_HEADS[h][0]*outward.x_nm+_HEADS[h][1]*outward.y_nm), h))
+    results = []
+    sites = calls = 0
+    for heading, length, transverse, sign in product(headings,
+            (.5, .75, 1, 1.5, 2, 3, 4, 4.5, 5, 6),
+            (0, -pitch//2, pitch//2, -pitch, pitch), (-1, 1)):
+        if sites >= 16 or calls >= 32 or len(results) >= 8:
+            break
+        dx, dy = _HEADS[heading]
+        distance = nm_from_mm(length)
+        center = Point(middle.x_nm+dx*distance-dy*transverse,
+                       middle.y_nm+dy*distance+dx*transverse)
+        normal = _normal(heading, offset)
+        targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
+        pair = tuple(Via(rule.net, point, board.rules.default_via_size_nm,
+                         board.rules.default_via_drill_nm, *span)
+                     for rule, point in zip((first, second), targets))
+        if (not _signal_drills_outside_smd(board, pair)
+                or not _reserve_vias(board, RoutingClearanceIndex(board), pair)):
+            continue
+        sites += 1
+        approaches = tuple(Point(p.x_nm-dx*125000, p.y_nm-dy*125000) for p in targets)
+        tails = tuple(_tracks(rule.net, (approach, target), width, surface,
+                              RoutingClearanceIndex(board).breakout)
+                      for rule, approach, target in zip((first, second), approaches, targets))
+        if not _legal(board, RoutingClearanceIndex(board), *tails, clearance):
+            continue
+        for order in ((0, 1), (1, 0)):
+            held = replace(board, tracks=(*board.tracks, *tails[0], *tails[1]),
+                           vias=(*board.vias, *pair))
+            index = _PairAccessIndex(held)
+            paths = [None, None]
+            for member in order:
+                if calls >= 32:
+                    break
+                calls += 1
+                path = local_access_path(held, index, (first.net, second.net)[member],
+                    (a, b)[member], approaches[member], surface, width,
+                    step_nm=25000, detour_nm=500000, maximum_states=2400)
+                if path is None:
+                    break
+                paths[member] = (*path, *tails[member])
+                for track in path:
+                    index.add_track(track, locked=True)
+            if (all(p is not None for p in paths)
+                    and _legal(board, RoutingClearanceIndex(held), *paths, clearance)):
+                results.append(_Port(center, heading, sign, *paths, 8))
+                break
+    return tuple(results)
+
+
 def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRoutingRule,
                  first_position: Point, second_position: Point, component: str,
                  surface: CopperLayer, layer: CopperLayer,
                  site_rank: Callable[[tuple[Via, ...]], int | None] | None = None,
                  *, include_outer: bool = False,
+                 stats: PairSearchStats | None = None,
                  ) -> tuple[_Transition, ...]:
     if surface is layer:
         # An opposite-face pair may use this terminal's own signal layer as
@@ -283,43 +358,62 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                   component, width, (transition_spacing(board, first, second)+1)//2,
                   clearance, surface)
     results = []
+    rejections = Counter()
     # Local callers retain short-collar-first fallback. Joint channel search
     # also samples four outer collars beyond an opposite-side pad bank, even
     # when legal short collars exist but lead into isolated routing pockets.
     # These remain explicit source-profiled tracks, not wider breakout regions.
     # No local maze allowance is added by this fallback.
-    for family in range(2):
-        if family:
+    for family in range(3):
+        if family == 1:
             if results and not include_outer:
                 break
             wide = _ports(board, index, first.net, second.net, first_position, second_position,
                           component, width, (transition_spacing(board, first, second)+1)//2,
                           clearance, surface, lengths=(4, 4.5, 5, 6), allow_local_fallback=False)
+        elif family == 2:
+            if results:
+                break
+            wide = _local_via_ports(board, first, second, first_position,
+                                    second_position, component, surface, layer)
         for collar in wide:
+            rejections['collars'] += 1
             pair = tuple(Via(net, tracks[-1].end, board.rules.default_via_size_nm,
                              board.rules.default_via_drill_nm, *span)
                          for net, tracks in ((first.net, collar.first), (second.net, collar.second)))
             if not _signal_drills_outside_smd(board,pair):
+                rejections['drill_over_smd'] += 1
                 continue
             escaped = replace(board, tracks=(*board.tracks, *collar.first, *collar.second))
             reserved = RoutingClearanceIndex(escaped)
             if not _reserve_vias(board, reserved, pair):
+                rejections['signal_vias_blocked'] += 1
                 continue
             returns = _return_via(board, reserved, collar, pair, first, second, surface, layer)
             if returns is None:
+                rejections['return_via_blocked'] += 1
                 continue
             # A caller's site rank may drop a transition (``None``) or order it
             # ahead of others; it never admits a site the checks above refused.
             rank = 0 if site_rank is None else site_rank((*pair, *returns))
             if rank is None:
+                rejections['site_rank_rejected'] += 1
                 continue
             escaped = replace(escaped, vias=(*board.vias, *pair, *returns))
-            for inner in _ports(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
+            inners = _ports(escaped, RoutingClearanceIndex(escaped), first.net, second.net,
                                 pair[0].position, pair[1].position, component,
-                                width, offset, clearance, layer):
+                                width, offset, clearance, layer)
+            if not inners:
+                rejections['onward_collars_blocked'] += 1
+            for inner in inners:
                 results.append(_Transition(replace(inner,
                     first=(*collar.first, *inner.first), second=(*collar.second, *inner.second),
                     preference=collar.preference+inner.preference), pair, returns, rank, bool(family)))
+    if not results and stats is not None:
+        message = (f"{component} {surface.value} to {layer.value}: no exact transition; "
+                   + ', '.join(f'{key}={count}' for key, count in sorted(rejections.items())))
+        stats.terminal_port_rejections = tuple(dict.fromkeys((
+            *stats.terminal_port_rejections, message)))[:4]
     # Preserve orientation diversity, then short collars; domain bound is
     # independent of maze expansion and never mutates previously locked copper.
     ordered = sorted(results, key=lambda t: (t.rank, t.port.preference,
@@ -439,9 +533,17 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
                          for domain in domains)
         groups = tuple(_transitions(board, first, second, a.pad_position,
             partners[a.pad].pad_position, a.pad.component, surface, layer, site_rank,
-            include_outer=True)
+            include_outer=True, stats=stats)
             for a, surface in zip(accesses, surfaces))
         total_pairs, combinations = _transition_pairs(groups)
+        if not total_pairs:
+            domains_text = "; ".join(
+                f"{access.pad.component} {surface.value} to {layer.value}: "
+                f"{len(group)} exact transitions, lane orders "
+                f"{','.join(str(sign) for sign in sorted({t.port.sign for t in group})) or 'none'}"
+                for access, surface, group in zip(accesses, surfaces, groups))
+            stats.terminal_port_rejections = tuple(dict.fromkeys((
+                *stats.terminal_port_rejections, domains_text)))[:4]
         stats.port_pairs += total_pairs
         searches_at_entry = stats.searches
         for ordinal,(a,b) in enumerate(combinations[:128],1):
@@ -463,6 +565,12 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             escaped_index = RoutingClearanceIndex(escaped)
             if not _can_depart(escaped, escaped_index, first.net, second.net,
                                start, width, offset, clearance, layer, pitch_nm):
+                dx, dy = _HEADS[start.heading]
+                ahead = Point(start.center.x_nm+dx*pitch_nm, start.center.y_nm+dy*pitch_nm)
+                normal = _normal(start.heading,offset)
+                stats.reject_launch(escaped_index, (*_tracks(first.net,
+                    (_shift(start.center,normal,start.sign),_shift(ahead,normal,start.sign)),width,layer,escaped_index.breakout),
+                    *_tracks(second.net,(_shift(start.center,normal,-start.sign),_shift(ahead,normal,-start.sign)),width,layer,escaped_index.breakout)))
                 continue
             stats.searches += 1
             candidate = _search(escaped, escaped_index, first.net, second.net,

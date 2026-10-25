@@ -503,8 +503,8 @@ def route_detailed(
     fanout_accesses = fanout_accesses or {}
     rules = {item.net: item for item in board.net_routing_rules}
     guides = {item.net: item for item in global_route.routes}
-    from .zone_geometry import distribution_zone_nets
-    zone_nets = distribution_zone_nets(board) if options.defer_zone_nets else set()
+    from .zone_geometry import deferred_zone_nets
+    zone_nets = deferred_zone_nets(board) if options.defer_zone_nets else set()
     if only_nets is not None:
         unknown = only_nets - {net.name for net in board.nets}
         if unknown:
@@ -1694,8 +1694,12 @@ def _route_net(
     diagnostics: list[str] = []
     if rule and rule.max_length_nm is not None and length > rule.max_length_nm:
         diagnostics.append(f"route length {length} nm exceeds {rule.max_length_nm} nm")
-    if rule and rule.max_vias is not None and len(vias) > rule.max_vias:
-        diagnostics.append(f"via count {len(vias)} exceeds {rule.max_vias}")
+    if rule and rule.max_vias is not None:
+        # Source launches and required arrays remain in the emitted board.
+        # Only genuinely reused vias were excluded from the new list above.
+        total_vias = sum(via.net == name for via in board.vias) + len(vias)
+        if total_vias > rule.max_vias:
+            diagnostics.append(f"via count {total_vias} exceeds {rule.max_vias}")
     return _NetAttempt(
         DetailedNetResult(
             name,

@@ -169,15 +169,15 @@ def test_the_pair_that_can_swap_layers_is_the_one_moved() -> None:
 def test_crossing_pair_routes_with_one_planned_paired_swap_and_return_vias() -> None:
     board = _swapped()
     guides = route_global(board)
-    # Without R5 the crossing pair is left to the surface-first joint search,
-    # behind the surface pair; within the same bounded budget it finds no
-    # candidate at all.
+    # Without R5 the surface-first search can now find a legal recessed via
+    # escape. Planning the crossing still assigns the moving pair in advance
+    # and keeps the other pair on its surface.
     without = route_critical_nets(board, guides, pair_state_limit=2000, plan_crossings=False)
     (bundle,) = without.bundles
     assert bundle.crossings == () and "crossings" not in json.loads(without.to_json())["bundles"][0]
-    failed = _result(without, "LANE_A")
-    assert not failed.connected and failed.pair_search_order == "surface_first"
-    assert failed.diagnostics[-1].startswith("joint pair search:") and "0 candidates" in failed.diagnostics[-1]
+    unplanned = _result(without, "LANE_A")
+    assert unplanned.connected and unplanned.pair_search_order == "surface_first"
+    assert unplanned.paired_via_transitions == 2 and not _hard(without.board)
 
     result = route_critical_nets(board, guides, pair_state_limit=2000)
     assert result.status is not CriticalRoutingStatus.FAILED

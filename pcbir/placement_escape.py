@@ -112,6 +112,40 @@ class EscapeSpacingModel:
         # all unaffected pairs without recalculating their envelopes/demands.
         self._positioned = {}
         self._pairs = {}
+        self._deficit_poses = None
+        self._deficit_by_pair = {}
+        self._deficit_total = 0
+
+    def deficit_nm(self, placements: Mapping[str, Placement]) -> int:
+        """Exact channel deficit, updating only pairs touched by changed poses.
+
+        A channel depends on its two placements and this immutable source model.
+        Keep one current inventory, including rejected trial poses; moving back
+        to an earlier pose is another ordinary update, not a rollback shortcut.
+        """
+        previous = self._deficit_poses
+        if previous is None or previous.keys() != placements.keys():
+            by_pair = {}
+            for channel in self.channels(placements):
+                key = (channel.left, channel.right)
+                by_pair[key] = by_pair.get(key, 0) + channel.deficit_nm
+            self._deficit_by_pair = by_pair
+            self._deficit_total = sum(by_pair.values())
+        else:
+            changed = {ref for ref, pose in placements.items() if previous[ref] != pose}
+            touched = {tuple(sorted((left, right))) for left in changed
+                       for right in placements if left != right}
+            for left, right in sorted(touched):
+                key = (left, right)
+                value = sum(c.deficit_nm for c in self.channels(
+                    {left: placements[left], right: placements[right]}))
+                self._deficit_total += value - self._deficit_by_pair.get(key, 0)
+                if value:
+                    self._deficit_by_pair[key] = value
+                else:
+                    self._deficit_by_pair.pop(key, None)
+        self._deficit_poses = dict(placements)
+        return self._deficit_total
 
     def profile(self, placement: Placement) -> PackageEscapeProfile:
         key = (placement.reference, placement.footprint, placement.side, placement.rotation_degrees)

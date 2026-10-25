@@ -95,10 +95,13 @@ def regenerate_contact_owners(
         return None
     baseline_records = _blockers(RoutingClearanceIndex(baseline.board), tracks, vias)
     generated_index = RoutingClearanceIndex(board)
-    for track in baseline.created_tracks:
-        generated_index.add_track(track, locked=True)
-    for via in baseline.created_vias:
-        generated_index.add_via(via, locked=True)
+    # Use the complete snapshot's occurrence names. Incremental diagnostic
+    # labels otherwise differ from an index reconstructed from baseline.board,
+    # even though both describe the very same generated occurrence.
+    for ordinal, track in enumerate(baseline.created_tracks, len(board.tracks)):
+        generated_index.add_track(track, locked=True, occurrence=f"track:{ordinal}")
+    for ordinal, via in enumerate(baseline.created_vias, len(board.vias)):
+        generated_index.add_via(via, locked=True, occurrence=f"via:{ordinal}")
     generated_records = _blockers(generated_index, tracks, vias)
     generated_identities = {record.identity for record in generated_records}
     if (not baseline_records or any(record.identity not in generated_identities or record.net is None
