@@ -216,3 +216,36 @@ def test_loop_halves_the_step_and_stops_after_two_rounds_without_improvement():
         placement_options=PlacementPlannerOptions(fixed_references=("S1", "S2")),
         global_options=GLOBAL, rerun=rerun, score=flow._feedback_score)
     assert budget.stop_reason == "trial_budget" and budget.reruns == len(calls) == 3
+
+
+def test_saved_replay_inputs_belong_to_the_accepted_placement(tmp_path):
+    from pcbir.workbench import load_state
+    path = tmp_path / "inputs.state.json"
+    result = _run(_boxed_in_board(), placement_feedback_trials=4,
+                  unified_options=UnifiedRouterOptions(time_budget_s=30, save_inputs_path=str(path)))
+    feedback = result.placement_feedback
+    assert feedback.accepted_moves >= 1 and feedback.reruns >= 2, feedback.report()
+    # A trial rerun after the accepted one must not leave its placement here.
+    saved = load_state(path)
+    assert {p.reference: p for p in saved["board"].placements}["B"] == _pose(result, "B")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["inputs.state.json"]
+
+
+def test_rejected_trials_keep_the_original_replay_inputs(tmp_path, monkeypatch):
+    from pcbir.congestion_feedback import run_placement_feedback
+    from pcbir.workbench import load_state
+    import pcbir.congestion_feedback as feedback_module
+    path = tmp_path / "inputs.state.json"
+
+    def reject_everything(state, *, rerun, score, **kwargs):
+        # Every trial reruns the tail and is then judged worse than the incumbent.
+        return run_placement_feedback(state, rerun=rerun, score=lambda *parts: (1 << 60,), **kwargs)
+
+    monkeypatch.setattr(feedback_module, "run_placement_feedback", reject_everything)
+    baseline = _run(_boxed_in_board())
+    result = _run(_boxed_in_board(), placement_feedback_trials=2,
+                  unified_options=UnifiedRouterOptions(time_budget_s=30, save_inputs_path=str(path)))
+    assert result.placement_feedback.reruns >= 1 and not result.placement_feedback.accepted_moves
+    saved = load_state(path)
+    assert {p.reference: p for p in saved["board"].placements}["B"] == _pose(baseline, "B")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["inputs.state.json"]

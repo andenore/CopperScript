@@ -194,8 +194,7 @@ def _run_replay_unified(args: argparse.Namespace) -> int:
             raise ValueError(f"preserve the existing result state: {result_path}")
         result = replay_unified(args.state, only_nets=frozenset(args.only) if args.only else None, **overrides)
         if result_path is not None:
-            # The congestion map (numpy telemetry) is not part of the typed state.
-            save_state(result_path, replace(result, congestion=None), note="Scoped unified replay result; not source/native admission or board qualification")
+            save_state(result_path, result, note="Scoped unified replay result; not source/native admission or board qualification")
     except (StateError, OSError, ValueError) as exc:
         print(f"REPLAY ERROR: {exc}")
         return 2
