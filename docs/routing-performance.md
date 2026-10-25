@@ -44,6 +44,46 @@ Bounded CopperProbe runs through the critical stage (fresh placement): the
 critical stage now leaves only USB_TX1_IC open (two pairs before), with FB
 routed and the bypass copper bound as copper. Full-board results follow.
 
+## CopperProbe after the generic fixes (2026-10-25)
+
+Full `route-board` runs with the fixes above (`bd2eba0`), `--fine-regions
+arrays`, unified defaults. Run A routes the original board from the same
+placement checkpoint as the `arrays` baseline below, so the two differ only
+in the router. Run B routes the board with its three feasibility pins relaxed
+(CopperProbe `6de0e82`: FB_XTAL, C_FX10_M8 and the TX1 coupling capacitors
+become placement regions) from a fresh placement. Both ran at the same time
+on one machine, so their times are inflated against the baseline's.
+
+| Run | Open / connections | Signal nets open | Plane pads open | Vias | Track | Length/skew warnings | Commit rounds | Total |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `arrays` baseline (`ea0e23b`) | 11 / 237 | 10 | 3 (GND N4/N6, V33 FB_XTAL.1) | 335 | 2,587 mm | 4 | 2 (none adopted) | 6,720 s |
+| A: fixes, original board | 6 / 237 | 5 | 2 (GND N4/N6) | 331 | 2,748 mm | 7 | 3 (one adopted) | 11,874 s |
+| B: fixes, relaxed pins, fresh placement | (running) | | | | | | | |
+
+Run A connects the USB_RX1 pair (escalated search; 2.19 mm skew warning
+against 0.127 mm), FB, FX_XTAL, ACQ_EN, SWDIO and the V33 pad of FB_XTAL. Of
+the baseline's open nets only USB_TX1_IC, ADC_OVR and FX_V33 remain; XTALOUT
+is new. The remaining opens have two causes:
+
+- **USB_TX1_IC** fails in both critical passes after 10 states each: its
+  launch is still blocked, and ripping up USB_TX2_IC did not free it (the
+  attempts are now recorded on the result; this run predates that record).
+  The capacitors under and beside the macro ports are the remaining wall,
+  which run B tests.
+- **ADC_OVR, FX_V33, XTALOUT** have no global route: "shared transition
+  capacity rejected every candidate" at their FX10 balls (C4/D3, L11/M10,
+  L3/L5). The array escapes consume the via transitions those balls need, so
+  the detailed stage never sees them. This is an escape-capacity problem for
+  the planner (reserve a transition per connected ball, as the kit does), not
+  a search budget.
+- **GND N4/N6** stay inside the `FX10_USB_ESCAPE` macro fan without a via;
+  the macro needs GND vias (consumer).
+
+The length/skew warnings grew from 4 to 7 because more nets are connected:
+SENSE (9.87 mm against 4 mm), the DM/DP skew (0.94 mm against 0.5 mm), the
+RX1 skew, the ADC bus skew (7.08 mm against 5 mm) and three ADC lines over
+35 mm.
+
 ## CopperProbe: why the 11 open connections fail (2026-10-25)
 
 Causes of the `--fine-regions arrays` run above (`ea0e23b`, fresh placement),
