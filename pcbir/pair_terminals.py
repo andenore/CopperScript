@@ -426,12 +426,19 @@ def _surface_pair_terminals(board, first, second, routes, *, joined_guides=None)
         groups={}
         for a in guide.accesses: groups.setdefault(a.pad.component,[]).append(a)
         fixed_anchors = {}
-        if len(groups) > 2:
+        if len(groups) > 2 and len(common) != 2:
+            # Separate endpoint components and nearby shared supports do not
+            # necessarily give both lanes two common component names. Use the
+            # bounded physical partition, then validate every branch below.
+            clusters = _local_terminal_groups(rule, guide.accesses, owned)
+            groups = {str(_main_contact(board, rule, items).pad): list(items)
+                      for items in clusters}
+        elif len(groups) > 2:
             # A separate nearby termination/support is another real contact,
             # not a third main endpoint. Both lanes must still share exactly
             # two endpoint components. Attach only to one unambiguous source
             # breakout region, retaining that component's actual main contact.
-            if len(common) != 2 or rule.breakout_length_nm is None:
+            if rule.breakout_length_nm is None:
                 return None,(),()
             fixed_anchors = {c: _main_contact(board, rule, groups[c]) for c in sorted(common)}
             extra = [a for c, items in sorted(groups.items()) if c not in common for a in items]

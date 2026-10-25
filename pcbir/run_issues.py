@@ -133,8 +133,6 @@ def load_run(path: str | Path) -> Run:
             # intent.json sorts first); the route or layout report is the run's.
             report = next((p for p in candidates if _schema(p).startswith(
                 ("copperscript-route-board", "copperscript-route-error", "copperscript-layout-report"))), None)
-            if report is None:
-                report = next((p for p in candidates if _schema(p).startswith("copperscript-")), None)
     if report is not None and not report.name.endswith(".error.json"):
         # A later run into the same place that failed leaves only an error record.
         error = report.with_name(report.stem + ".error.json")

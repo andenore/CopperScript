@@ -367,11 +367,16 @@ def test_real_stdio_server_startup_and_exit(entry):
 
 def test_vscode_encoded_drive_uris_decode_on_windows():
     import nturl2path
+    from pathlib import PureWindowsPath
     from pcbir.lsp.text import local_path_text
-    assert local_path_text('file:///c%3A/Users/me/proj/board.copper', nturl2path.url2pathname) == r'C:\Users\me\proj\board.copper'
-    assert local_path_text('file:///C:/p%20x/board.copper', nturl2path.url2pathname) == r'C:\p x\board.copper'
+    # Python versions differ in drive-letter casing; Windows path identity
+    # does not. Preserve the path/escaping contract on every supported host.
+    def decoded(uri):
+        return PureWindowsPath(local_path_text(uri, nturl2path.url2pathname))
+    assert decoded('file:///c%3A/Users/me/proj/board.copper') == PureWindowsPath(r'C:\Users\me\proj\board.copper')
+    assert decoded('file:///C:/p%20x/board.copper') == PureWindowsPath(r'C:\p x\board.copper')
     # Only the drive colon is decoded early; other escapes are decoded exactly once.
-    assert local_path_text('file:///c%3a/a%25b/board.copper', nturl2path.url2pathname) == r'C:\a%b\board.copper'
+    assert decoded('file:///c%3a/a%25b/board.copper') == PureWindowsPath(r'C:\a%b\board.copper')
 
 
 def test_replies_use_the_uri_the_client_opened(tmp_path):

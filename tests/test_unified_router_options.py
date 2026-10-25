@@ -141,7 +141,8 @@ def _budget_router(monkeypatch, retry_connected: bool):
 def test_unconnected_via_budget_retry_keeps_the_shortfall_diagnostic(monkeypatch) -> None:
     router, spec, factors = _budget_router(monkeypatch, retry_connected=False)
     route = router._route_net_budgeted(spec, 0.0)
-    assert factors == [4.0, 40.0] and spec.via_factor == 4.0
+    assert factors == [4.0, 40.0, 400.0, 4000.0, 40000.0, 40.0]
+    assert spec.via_factor == 4.0
     assert not route.connected
     assert route.reason == "needs 2 new vias, max_vias leaves 1"
 

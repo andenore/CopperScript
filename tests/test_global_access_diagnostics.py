@@ -8,8 +8,8 @@ def test_global_report_preserves_capacity_rejection_cause(monkeypatch):
     import pcbir.global_terminals as terminals
     real = terminals.register_terminal_capacity
 
-    def reject_one(board, graph, accesses):
-        graph, accepted = real(board, graph, accesses)
+    def reject_one(board, graph, accesses, expand=None):
+        graph, accepted = real(board, graph, accesses, expand)
         key = next(key for key, choices in accesses.items() if choices)
         return graph, {**accepted, key: ()}
 

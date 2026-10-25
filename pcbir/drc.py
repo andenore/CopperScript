@@ -1067,7 +1067,7 @@ def _check_copper_keepouts(
             if not keepout.block_tracks or track.layer not in keepout.layers:
                 continue
             copper = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
-            if shapes_touch_or_overlap(region, copper):
+            if not shapes_clear(region, copper):
                 findings.append(_finding(
                     "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
                     f"track {index} enters copper keepout {keepout.id}",
@@ -1080,7 +1080,7 @@ def _check_copper_keepouts(
             ):
                 continue
             copper = RoundedConvexShape((via.position,), via.size_nm // 2)
-            if shapes_touch_or_overlap(region, copper):
+            if not shapes_clear(region, copper):
                 findings.append(_finding(
                     "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
                     f"via {index} enters copper keepout {keepout.id}",

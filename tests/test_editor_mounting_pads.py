@@ -51,6 +51,7 @@ def test_terminal_editor_loads_real_footprint_with_unnumbered_mounting_hole(tmp_
       (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Mask"))
       (pad "" np_thru_hole circle (at 0 3) (size 1 1) (drill 1) (layers "*.Cu" "*.Mask")))''')
     source = tmp_path / "board.copper"
+    (tmp_path / "copper.mod").write_text("module example.test/mounting\n", encoding="utf-8")
     source.write_text('''board Mounting {
       use library "standard";
       component R1: RESISTOR { footprint = "Mount.kicad_mod"; }

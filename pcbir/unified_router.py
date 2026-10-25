@@ -1514,7 +1514,7 @@ class _Router:
                     if route.connected and len(route.via_xy) <= spec.via_budget:
                         break
                 if len(route.via_xy) > spec.via_budget:
-                    spec.via_factor = factor * 10
+                    spec.via_factor = factor * self.options.via_overrun_factor
                     # A hard via budget must be able to contest a corridor
                     # priced out by mutable routes or stale history. Retain all
                     # source obstacles and return masks; only proposal costs

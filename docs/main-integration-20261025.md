@@ -42,3 +42,10 @@ the scarce-contact fixture now succeeds in its first joint pattern, and the
 hemmed length-match bundle needs explicit group tuning. Tests retain all owner
 and geometry checks and require an honest length-match failure for independent
 pair tuning; they do not relax physical rules or label that result successful.
+
+The last local plane-repair regression exposed a keepout-policy mismatch:
+pending pad-overlap work also changed track/via tangency, while the router's
+existing exact contract allows zero-clearance tangency. Track/via DRC retains
+that contract; the pad polygon-crossing correction remains. A boundary regression
+now checks tangent and one-nanometre-penetrating tracks/vias against physical DRC.
+Bounded nearby-support grouping and route-only report discovery are also restored.

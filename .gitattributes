@@ -3,6 +3,7 @@
 copper.mod text eol=lf
 # Checksum-pinned reference assets must retain exact bytes on every platform.
 *.dxf -text
+tests/fixtures/kicad-conformance/*.kicad_pcb -text
 # Hard-macro/reference JSON needs stable inventory and provenance bytes.
 *.json text eol=lf
 # The analog model registry pins the authored wrapper's exact bytes.

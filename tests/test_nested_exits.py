@@ -158,9 +158,11 @@ def test_an_outer_pair_turns_as_soon_as_it_clears_the_inner_pair() -> None:
     guides = route_global(board)
     before = route_critical_nets(board, guides, nested_exits=False, pair_state_limit=4000)
     after = route_critical_nets(board, guides, pair_state_limit=4000)
-    # Today OUTER runs 2 mm past its column and leaves INNER no legal route.
+    # The ordinary search now also connects INNER, but OUTER still overshoots
+    # its column. The nested plan below must retain its tighter legal turn.
     assert _westmost(before, "OUTER") <= nm_from_mm("8.3")
-    assert not _result(before, "INNER").connected
+    assert _result(before, "INNER").connected
+    assert not _hard(before)
     assert all(item.connected for item in after.nets)
     inner, outer = after.bundles[0].nested_exits
     assert (inner.status, inner.routed_turn_nm) == ("routed", 1_262_500)
