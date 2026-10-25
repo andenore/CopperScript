@@ -505,6 +505,7 @@ def route_critical_nets(
                            plan_nested_exits=nested_exits)
     jobs = bundle_job_order(jobs, bundles)
     bundle_of = {group: index for index, bundle in enumerate(bundles) for group in bundle.order}
+    loose_repairs: dict[tuple[str, ...], list] = {}
     crossings = {item.group: item for bundle in bundles for item in bundle.crossings}
     nested = {item.group: item for bundle in bundles for item in bundle.nested_exits}
     # Turn and chamfer of each group's accepted nested exit, for the report.
@@ -620,7 +621,20 @@ def route_critical_nets(
                         result, pair_tracks, pair_vias = saved[8]
                     else:
                         result, pair_tracks, pair_vias = retry
-            if not result.connected and group in bundle_of:
+            loose = not result.connected and group not in bundle_of
+            if loose:
+                # Pairs leaving the same package were not planned as a bundle,
+                # yet an earlier one can wall a later one's exit in (both FX10
+                # TX pairs leave the USB escape macro on one side). Treat the
+                # committed pairs that share a terminal package as suspects for
+                # the same rip-up-and-reroute repair, under the same limit.
+                shared = {pad.component for name in group for pad in net_by_name[name].pads}
+                suspects = [entry for entry, entry_tracks, entry_vias in committed
+                            if len(entry) == 2 and (entry_tracks or entry_vias)
+                            and shared & {pad.component for name in entry for pad in net_by_name[name].pads}]
+                suspects.sort(key=lambda entry: (not blockers.intersection(entry), entry))
+                ledger = loose_repairs.setdefault(group, [])
+            elif not result.connected:
                 suspects = [entry for entry, entry_tracks, entry_vias in committed
                             if entry in bundle_groups and (entry_tracks or entry_vias)
                             and blockers.intersection(entry)]
@@ -628,14 +642,16 @@ def route_critical_nets(
                     suspects = _bundle_neighbours(board, group, [
                         entry for entry, entry_tracks, entry_vias in committed
                         if entry in bundle_groups and (entry_tracks or entry_vias)])
+                ledger = repairs[index]
+            if not result.connected:
                 for blocker in suspects:
-                    if len(repairs[index]) >= bundle_repair_limit:
+                    if len(ledger) >= bundle_repair_limit:
                         break
                     record, repaired = _bundle_repair(
                         board, routes, rules, pair_state_limit, base_tracks, base_vias, committed,
                         (rule, partner_rule), group, blocker, crossings, nested, turns,
                     )
-                    repairs[index].append(record)
+                    ledger.append(record)
                     if repaired is not None:
                         (result, pair_tracks, pair_vias), (blocker_result, blocker_tracks, blocker_vias) = repaired
                         committed = [entry for entry in committed if entry[0] != blocker]
