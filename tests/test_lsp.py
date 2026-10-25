@@ -379,7 +379,12 @@ def test_replies_use_the_uri_the_client_opened(tmp_path):
     real.mkdir()
     (real / 'board.copper').write_text(SOURCE, encoding='utf-8')
     link = tmp_path / 'link'
-    link.symlink_to(real, target_is_directory=True)
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is unavailable")
+        raise
     uri = (link / 'board.copper').as_uri()
     ws = Workspace()
     ws.update(uri, 1, SOURCE)

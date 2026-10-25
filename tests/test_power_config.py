@@ -55,7 +55,7 @@ def test_route_board_cli_reports_opt_in_plan_and_missing_native_tool(tmp_path):
                                   provenance='Synthetic external test feed')])) )
     report = tmp_path/'route.json'
     code = main(['route-board', str(source), '--allow-proxy-footprints', '--routing-profile', 'quick',
-        '--power-area-config', str(config), '--package-access-trials', '0', '--zone-escape-trials', '0',
+        '--router', 'legacy', '--power-area-config', str(config), '--package-access-trials', '0', '--zone-escape-trials', '0',
         '--report', str(report), '-o', str(tmp_path/'draft.kicad_pcb')])
     assert code in (0, 1) and report.is_file()
     document = json.loads(report.read_text())

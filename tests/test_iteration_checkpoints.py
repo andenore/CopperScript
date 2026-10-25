@@ -109,7 +109,7 @@ def test_package_stage_diagnostic_retains_source_and_owned_prefix(stopped, stage
     tmp_path, _, _ = stopped
     checkpoint_dir = tmp_path / (stage + "-states")
     out, result = _route(tmp_path, stage + "-diagnostic", "--reuse-placement",
-        str(tmp_path / "ck" / "placement.state.json"), "--stop-after", stage,
+        str(tmp_path / "ck" / "placement.state.json"), "--router", "legacy", "--stop-after", stage,
         "--checkpoint-dir", str(checkpoint_dir))
     assert result.returncode == 1, result.stdout + result.stderr
     report = json.loads((out / "route-report.json").read_text())

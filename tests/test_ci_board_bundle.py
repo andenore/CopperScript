@@ -32,6 +32,7 @@ RELEASE = module("ci_publish_release")
 
 def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
     import pcbir.compiler
+    import pcbir.macro_bindings
     monkeypatch.setattr(CI, "ROOT", tmp_path)
     (tmp_path / "examples").mkdir()
     (tmp_path / ".github").mkdir()
@@ -53,7 +54,17 @@ def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
         return SimpleNamespace(version="a" * 40, module_path=CI.LIBRARY_MODULE, checksum="fixture")
     monkeypatch.setattr(CI, "library_module", resolve)
     monkeypatch.setattr(CI, "git", lambda *args: "b" * 40)
-    monkeypatch.setattr(pcbir.compiler, "compile_file", lambda source, **kw: calls.append((source, kw)))
+    board = object()
+    def compile_fixture(source, **kwargs):
+        calls.append((source, kwargs))
+        return board
+    macro_calls = []
+    def prepare_macros(source_board, **kwargs):
+        assert source_board is board and kwargs == {"locked": True, "offline": True}
+        macro_calls.append(source_board)
+        return ()
+    monkeypatch.setattr(pcbir.compiler, "compile_file", compile_fixture)
+    monkeypatch.setattr(pcbir.macro_bindings, "prepare_macro_bindings", prepare_macros)
     CI.prepare(tmp_path / "build/run")
     assert (tmp_path / "copper.lock").read_bytes() == original
     assert all(kwargs["locked"] is True for _, kwargs in calls)
@@ -62,7 +73,8 @@ def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
     standalone = {"cm4_baseboard", "nrf52_coin_cell", "nrf_antenna_macro"}
     assert {path.parts[-2] for path, kwargs in calls if not kwargs["offline"]} == standalone
     for example in standalone:
-        assert sum(example in path.parts for path, _ in calls) == 2
+        assert sum(example in path.parts for path, _ in calls) == (2 if example == "cm4_baseboard" else 3)
+    assert len(macro_calls) == 4
     assert all(kwargs["offline"] is True
                for path, kwargs in calls if "full_vertical" in path.parts)
     provenance = json.loads((tmp_path / "build/run/provenance.json").read_text())
@@ -74,9 +86,9 @@ def test_prepare_uses_locked_url_cache_without_relocking(tmp_path, monkeypatch):
 def test_managed_library_rejects_local_override_or_unpinned_revision(monkeypatch, replacement, version):
     import pcbir.packages
     resolver = SimpleNamespace(manifest=SimpleNamespace(replacements={CI.LIBRARY_MODULE: "../manual"}
-        if replacement else {}), resolve=lambda *a: SimpleNamespace(version=version))
+        if replacement else {}, remote_replacements={}), resolve=lambda *a: SimpleNamespace(version=version))
     monkeypatch.setattr(pcbir.packages.PackageResolver, "for_source", lambda *a, **kw: resolver)
-    with pytest.raises(ValueError, match="local replacement|full Git commit"):
+    with pytest.raises(ValueError, match="not a replacement|full Git commit"):
         CI.library_module(offline=False)
 
 

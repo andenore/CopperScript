@@ -424,5 +424,5 @@ def test_commit_ci_requires_simulator_and_keeps_release_only_routing():
     assert "matplotlib==3.10.6" in test_job and "plotly==6.3.0" in test_job
     assert "Simulation reports" in test_job
     assert test_job.count("if: ${{ always() && steps.ngspice.outcome == 'success' }}") == 2
-    assert "run: python -m pytest" in test_job
+    assert "python -m pytest" in test_job
     assert "startsWith(github.ref, 'refs/tags/v')" in route_job

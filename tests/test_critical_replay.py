@@ -55,6 +55,7 @@ def test_critical_replay_cli_is_explicitly_diagnostic_and_writes_locatable_repor
 @pytest.mark.parametrize("kind", (RouteKind.CLOCK, RouteKind.CRITICAL))
 @pytest.mark.parametrize("length_limit", (1000000, 40000000))
 def test_unified_single_fallback_keeps_the_real_source_profile(monkeypatch, kind, length_limit):
+    import pcbir.critical as critical
     import pcbir.detailed as detailed
     from pcbir.critical import _route_single_exact
     from pcbir.unified_router import UnifiedRouterOptions
@@ -66,6 +67,9 @@ def test_unified_single_fallback_keeps_the_real_source_profile(monkeypatch, kind
     def forbidden(*args, **kwargs):
         raise AssertionError("selected unified fallback used the legacy detailed engine")
     monkeypatch.setattr(detailed, "route_detailed", forbidden)
+    # Force the fallback under test; bounded local surface routing is allowed
+    # to succeed first in normal operation.
+    monkeypatch.setattr(critical, "local_surface_candidates", lambda *a, **kw: ())
     result, tracks, vias = _route_single_exact(board, rule, guides, [], [],
         unified_options=UnifiedRouterOptions(time_budget_s=10))
     assert result.strategy == (
@@ -179,6 +183,7 @@ def test_critical_cohort_uses_shared_engine_and_preserves_profile(monkeypatch, l
 
 @pytest.mark.parametrize("kind", (RouteKind.CRITICAL, RouteKind.CLOCK))
 def test_failed_cohort_owner_retries_without_reopening_accepted_peer(monkeypatch, kind):
+    import pcbir.critical as critical
     import pcbir.unified_router as unified
     import pcbir.detailed as detailed
     from test_local_critical import hard_findings
@@ -204,6 +209,7 @@ def test_failed_cohort_owner_retries_without_reopening_accepted_peer(monkeypatch
     def forbidden(*args, **kwargs):
         raise AssertionError("cohort retry used legacy routing")
     monkeypatch.setattr(unified, "route_unified", bounded_miss)
+    monkeypatch.setattr(critical, "local_surface_candidates", lambda *a, **kw: ())
     monkeypatch.setattr(detailed, "route_detailed", forbidden)
     result = route_critical_nets(board, route_global(board),
         unified_options=unified.UnifiedRouterOptions(time_budget_s=10))

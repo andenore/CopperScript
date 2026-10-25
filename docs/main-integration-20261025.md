@@ -31,3 +31,14 @@ merged apply to those earlier revisions, not this integration. They do not
 qualify the newly combined compiler or renew any consumer board evidence.
 
 Verification results are recorded after testing the final combined source.
+
+Integration repairs restore structured via-array errors, the upstream plane
+contact alignment tie-break, and specific corridor-conflict diagnostics before
+the general fixed-pose rejection. The round LED fixture retains its explicit
+central branding position and passes its native silkscreen check.
+
+Two older routing expectations also fail on clean remote main `7b35df8`:
+the scarce-contact fixture now succeeds in its first joint pattern, and the
+hemmed length-match bundle needs explicit group tuning. Tests retain all owner
+and geometry checks and require an honest length-match failure for independent
+pair tuning; they do not relax physical rules or label that result successful.

@@ -281,6 +281,12 @@ def generate_placement_candidates(
             + "; ".join(str(item["message"]) for item in fixed_violations),
             diagnostic_board=replace(board,placements=tuple(fixed_poses.get(p.reference,p) for p in board.placements)),
             diagnostic_components=tuple(sorted({ref for item in fixed_violations for ref in item['references']})))
+    conflicts = reserved_corridor_conflicts(
+        board, _fixed_placements(board, placements, options)
+    )
+    if conflicts:
+        raise PlacementAlgorithmError("; ".join(conflicts), diagnostic_board=board,
+                                      diagnostic_components=tuple(sorted(fixed_poses)))
     # Fully specified poses cannot be repaired by the analytical pass. Check
     # their actual courtyard/material legality before spending search work.
     accepted_fixed = {}
@@ -298,11 +304,6 @@ def generate_placement_candidates(
                 diagnostic_components=(reference, *blockers)
             )
         accepted_fixed[reference] = pose
-    conflicts = reserved_corridor_conflicts(
-        board, _fixed_placements(board, placements, options)
-    )
-    if conflicts:
-        raise PlacementAlgorithmError("; ".join(conflicts))
     attempts: list[PlacementCandidate] = []
     closest_rejected = None
     failed_seed_attempts: list[PlacementSeedFailure] = []

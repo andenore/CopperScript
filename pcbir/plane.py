@@ -618,7 +618,7 @@ def _stitch_land_choices(
             return (dx * outward[0] + dy * outward[1]) / span if span else 0.0
 
         ranked = sorted(choices, key=lambda item: (
-            item[0], item[1], item[4] is not None,
+            item[0], item[1], item[4] is not None, -alignment(item[2]),
             # Equal-length departures should follow the physical land's
             # outward direction, not the global x/y tie break. This keeps
             # passive return vias away from the opposite signal land and
