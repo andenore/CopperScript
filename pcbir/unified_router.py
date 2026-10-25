@@ -1269,8 +1269,11 @@ class _Router:
         components = []
         separate: list[list] = []
         for root, members in sorted(groups.items(), key=lambda item: str(item[1][0])):
-            if owned and all(pad in owned for pad in members):
-                # A hard macro proves its own plane returns at materialization.
+            if (owned and all(pad in owned for pad in members)
+                    and not any(pad in ports for pad in members)):
+                # Portless private returns are proved at materialization.
+                # A public port still needs a host connection, even when
+                # another part of the net has a declared copper zone.
                 continue
             anchors: list[tuple[Point, tuple[int, ...]]] = []
             for pad in members:

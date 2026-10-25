@@ -228,6 +228,37 @@ KiCad exports preserve locked owner copper; independent native DRC is still
 mandatory. Manual edits to an exported PCB do not preserve CopperScript's
 owner-bound contracts and need authoritative IR revalidation.
 
+### Keeping load trunks separate from sensing branches
+
+For a power net, prefer a binding net-wide width with no broad breakout
+relaxation and exact, source-backed width contracts for genuine terminal or
+sense branches. `breakout_length` is a plan-view region on every layer, not a
+branch-ownership rule or a cumulative length budget; it can also permit a trunk
+passing beside a low-current pad to narrow. A macro width contract grants no
+such nearby permission. Expose the power feed at a full-width port and keep
+the private sense/control entry distinct.
+
+A public macro port remains a host routing terminal when its net also contains
+a copper zone. Only portless private return groups may use the materialization
+proof to avoid host routing; a remote zone does not prove that a public port is
+connected. The unified router preserves that distinction without exposing
+private pads or vias as alternate host attachment points.
+
+`pcbir.workbench.check_power_path_widths(board, requirements)` checks an additional
+consumer-owned intent: selected load terminals must remain connected after
+excluding tracks below the required width. Each `PowerPathWidth` specifies a
+net, at least two `PadReference` terminals and integer `minimum_width_nm`.
+The immutable result reports original explicit connectivity, width-qualified
+connectivity and the indexes of excluded tracks. Narrow side branches do not
+fail an otherwise wide path; a narrow trunk does. The input is not modified.
+
+This conservative screen uses exact explicit pads, plated vias and tracks.
+It excludes installed-component connections, polygons and zone fills; use a
+separate copper-web/current assessment for plane or polygon paths. It does not
+establish pad-neck or via ampacity, current sharing, resistance, temperature,
+ground-return quality or release qualification. Match the input state to fresh
+native evidence and preserve source ownership independently.
+
 ## v0.5 host-perimeter openings
 
 The v0.5 format retains v0.4 and requires `edge_openings` (possibly empty):
