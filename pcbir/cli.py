@@ -831,6 +831,7 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--escape-plan", action=argparse.BooleanOptionalAction, default=False,
         help="plan crossing bundles between two parts (layer per net, route order) and give the plan "
              "to escape generation and the router (docs/escape-planning.md)")
+    board_route_parser.add_argument("--escape-bias-rate", type=int, default=None)
     board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
         help="grid pitch of the unified router (default: 0.25 mm, finer to align with ball grids)")
     board_route_parser.add_argument("--unified-iterations", type=int, default=40,
@@ -1683,7 +1684,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     on_progress=progress,
                     legacy_gates=args.legacy_gates,
                     unified_options=_unified_options(args),
-                    escape_plan_options=EscapePlanOptions(two_end_order=True) if args.escape_plan else None,
+                    escape_plan_options=EscapePlanOptions(two_end_order=True, **({"layer_bias_rate": args.escape_bias_rate} if args.escape_bias_rate is not None else {})) if args.escape_plan else None,
                     **({"power_area_options": power_area_options} if power_area_options is not None else {}),
                     **({"power_native_verifier": power_native_verifier} if power_native_verifier is not None else {}),
                 )
