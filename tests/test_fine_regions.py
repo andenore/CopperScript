@@ -286,3 +286,46 @@ def test_plan_is_deterministic_and_independent_of_placement_order() -> None:
     shuffled = replace(board, placements=tuple(reversed(board.placements)))
     assert plan_fine_regions(shuffled, BASE) == first
     assert [p.references for p in first.patches] == [("U1",), ("U2", "U4"), ("U3",)]
+
+
+def _first_ball_on_lattice(footprint, rotation) -> PhysicalBoard:
+    """A rotated array placed so that its first pad lands exactly on the base lattice."""
+    from decimal import Decimal
+    from pcbir.placement import transformed_local_point
+    board = _board((("U1", footprint, 50, 40, Decimal(rotation)),))
+    pose = board.placements[0]
+    corner = transformed_local_point(pose, footprint.pads[0].position)
+    shift = Point(pose.position.x_nm + (-corner.x_nm) % BASE, pose.position.y_nm + (-corner.y_nm) % BASE)
+    board = replace(board, placements=(replace(pose, position=shift),))
+    moved = transformed_local_point(board.placements[0], footprint.pads[0].position)
+    assert moved.x_nm % BASE == 0 and moved.y_nm % BASE == 0
+    return board
+
+
+def test_rotated_array_alignment_checks_every_ball_not_the_first_one() -> None:
+    # Unrotated, a 1.0 mm array whose corner sits on the lattice is aligned at
+    # the base pitch (channel centre lines at 0.5 mm are lattice points).
+    footprint = _ball_array(9, "1.0")
+    aligned = plan_fine_regions(_board((("U1", footprint, 50, 40),)), BASE)
+    assert aligned.patches == () and aligned.skipped[0][1].endswith("aligned at the base pitch")
+    # Rotated 45 degrees with the first ball on the lattice, every other ball
+    # and channel sits at irrational offsets: the array needs a patch.
+    rotated = plan_fine_regions(_first_ball_on_lattice(footprint, 45), BASE)
+    assert len(rotated.patches) == 1 and "fallback" in rotated.patches[0].reason
+    # The verdict must not depend on which pad is listed first.
+    reversed_pads = replace(footprint, pads=tuple(reversed(footprint.pads)))
+    board = _first_ball_on_lattice(footprint, 45)
+    board = replace(board, footprints={reversed_pads.name: reversed_pads})
+    permuted = plan_fine_regions(board, BASE)
+    assert [(p.factor, p.x0_nm, p.y0_nm, p.x1_nm, p.y1_nm) for p in permuted.patches] == \
+        [(p.factor, p.x0_nm, p.y0_nm, p.x1_nm, p.y1_nm) for p in rotated.patches]
+    assert permuted.patches[0].reason == rotated.patches[0].reason
+
+
+def test_quarter_turn_rotations_keep_exact_alignment() -> None:
+    from decimal import Decimal
+    footprint = _ball_array(13, "0.75")
+    for rotation in (0, 90, 180, 270):
+        plan = plan_fine_regions(_board((("U1", footprint, 50, 40, Decimal(rotation)),)), BASE)
+        assert len(plan.patches) == 1 and plan.patches[0].factor == 2, rotation
+        assert "puts nodes on pin centres" in plan.patches[0].reason, rotation

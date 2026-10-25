@@ -301,8 +301,25 @@ def _pad_extent(pose: Placement, pad) -> tuple[int, int, int, int]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def _array_aligned(array, corner: Point, fine: int) -> bool:
-    return (array.pitch_nm // 2) % fine == 0 and corner.x_nm % fine == 0 and corner.y_nm % fine == 0
+def _array_points(array, pose: Placement) -> tuple[dict[int, Point], tuple[tuple[int, int], ...]]:
+    """Every ball of a full array in board coordinates, and its adjacent pairs.
+
+    The alignment test must see the placed array, not its first pad and its
+    unrotated pitch: a rotated array can land one ball on the lattice while
+    every other ball and every channel centre line is off it.
+    """
+    points: dict[int, Point] = {}
+    pairs: list[tuple[int, int]] = []
+    columns, rows = len(array.xs_nm), len(array.ys_nm)
+    for row, y in enumerate(array.ys_nm):
+        for column, x in enumerate(array.xs_nm):
+            index = row * columns + column
+            points[index] = transformed_local_point(pose, Point(x, y))
+            if column:
+                pairs.append((index - 1, index))
+            if row:
+                pairs.append((index - columns, index))
+    return points, tuple(pairs)
 
 
 def _dense_aligned(points: dict[int, Point], pairs, fine: int) -> bool:
@@ -336,8 +353,8 @@ def _package_need(board: PhysicalBoard, pose: Placement, base: int, options: Fin
         array = None
     if array is not None:
         spacing = array.pitch_nm
-        corner = transformed_local_point(pose, footprint.pads[0].position)
-        aligned = lambda fine: _array_aligned(array, corner, fine)  # noqa: E731
+        balls, adjacent = _array_points(array, pose)
+        aligned = lambda fine: _dense_aligned(balls, adjacent, fine)  # noqa: E731
         kind = f"{len(array.xs_nm)}x{len(array.ys_nm)} ball array at {_mm_text(spacing)}"
     else:
         key = (pose.footprint, options.pad_pitch_threshold_nm)
