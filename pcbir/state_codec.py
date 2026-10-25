@@ -3,7 +3,9 @@
 Iteration scripts used to ship their own codec to keep intermediate solver
 states between runs. This module is the shared one: any frozen dataclass, enum,
 tuple, frozenset, mapping, Decimal or Fraction made of ``pcbir`` types round-trips
-exactly, and the file carries a content digest.
+exactly, and the file carries a content digest. Boolean, integer and floating
+NumPy arrays up to 64 bits retain their shape, dtype and values (including
+congestion-map telemetry).
 
 Decoding only constructs dataclasses and enums that are *defined* in ``pcbir``
 modules (looked up by their own module and qualified name, never through other
@@ -25,6 +27,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
+import numpy as np
+
 STATE_SCHEMA = "copperscript.state/v1"
 _ALLOWED_PREFIX = "pcbir"
 
@@ -42,6 +46,10 @@ def encode(value: Any) -> Any:
         return {"$decimal": str(value)}
     if isinstance(value, Fraction):
         return {"$fraction": [value.numerator, value.denominator]}
+    if isinstance(value, np.ndarray):
+        _array_dtype(value.dtype.str)
+        return {"$ndarray": value.dtype.str, "shape": list(value.shape),
+                "values": value.ravel().tolist()}
     if is_dataclass(value) and not isinstance(value, type):
         return {"$type": _qualname(type(value)),
                 "fields": {f.name: encode(getattr(value, f.name)) for f in fields(value) if f.init}}
@@ -64,6 +72,15 @@ def decode(value: Any) -> Any:
         return [decode(item) for item in value]
     if not isinstance(value, dict):
         return value
+    if "$ndarray" in value:
+        dtype = _array_dtype(value["$ndarray"])
+        try:
+            shape = value["shape"]
+            if not isinstance(shape, list) or any(type(n) is not int or n < 0 for n in shape):
+                raise ValueError("shape must contain nonnegative integers")
+            return np.asarray(value["values"], dtype=dtype).reshape(shape)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise StateError(f"invalid numeric array: {exc}") from exc
     if "$type" in value:
         cls = _resolve(value["$type"])
         if not is_dataclass(cls):
@@ -92,6 +109,17 @@ def decode(value: Any) -> Any:
         mapping = {decode(k): decode(v) for k, v in value["$map"]}
         return MappingProxyType(mapping) if value.get("proxy") else mapping
     return {key: decode(item) for key, item in value.items()}
+
+
+def _array_dtype(name):
+    """Allow plain JSON numeric arrays only; never object or structured payloads."""
+    try:
+        dtype = np.dtype(name)
+    except (TypeError, ValueError) as exc:
+        raise StateError(f"invalid numeric array dtype: {name!r}") from exc
+    if dtype.kind not in "biuf" or dtype.itemsize > 8 or dtype.fields or dtype.subdtype:
+        raise StateError(f"unsupported numeric array dtype: {name!r}")
+    return dtype
 
 
 def save_state(path: str | Path, value: Any, **metadata: Any) -> Path:

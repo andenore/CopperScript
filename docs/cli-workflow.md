@@ -135,7 +135,9 @@ Native refill/DRC still runs, and any needed repair must re-enter unified routin
 unified flow retains its legacy bootstrap. `--unified-time-budget-s 1800`
 bounds negotiation starting at the unified stage; placement/global planning
 and final native verification are separate. `--unified-save-inputs STATE`
-retains replay inputs. Direct mode reports final profile connectivity and
+retains the selected run's replay inputs, including after placement feedback;
+rejected trials do not overwrite them. Saved unified results retain congestion
+telemetry through the shared state codec. Direct mode reports final profile connectivity and
 physical DRC findings, but fails differential/CAN acceptance explicitly because
 unified coupling and return-path verification are not implemented. Independent
 pair paths and a zero-open signal summary do not establish pair qualification.

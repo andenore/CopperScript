@@ -394,6 +394,10 @@ def run_routing_pipeline(
                        if unified_options is not None else 0)
     if feedback_budget and preparation is None and routing_nets is None:
         from .congestion_feedback import FeedbackState, run_placement_feedback
+        # A rejected trial must not replace the selected run's replay artifact.
+        trial_options = replace(unified_options, save_inputs_path=None)
+        trial_route_ordinary = partial(_route_unified_compat, trial_options,
+                                       escape_options=unified_fanout)
 
         def rerun_tail(trial_board, trial_global):
             # Exactly the main path's tail on the unified router, from the
@@ -405,11 +409,11 @@ def run_routing_pipeline(
                     _direct_critical(trial), None, None, False)
             else:
                 trial_critical, trial_reserved, trial_held, trial_as_copper = _route_critical_stage(
-                    trial, unified_options=unified_options, unified_fanout=unified_fanout,
+                    trial, unified_options=trial_options, unified_fanout=unified_fanout,
                     package_access_options=package_access_options, on_progress=on_progress, on_stage=None)
             trial_critical, trial_stitch = _complete_critical_stage(
                 trial_critical, trial_reserved, trial_held, trial_as_copper, access=None,
-                unified_options=unified_options, plane_stitch_options=plane_stitch_options,
+                unified_options=trial_options, plane_stitch_options=plane_stitch_options,
                 on_progress=on_progress)
             trial_pre = trial_stitch.board if trial_stitch else trial_critical.board
             trial_deferred = (frozenset(deferred_zone_nets(trial_pre))
@@ -417,14 +421,14 @@ def run_routing_pipeline(
             trial_critical, trial_stitch, _, trial_pre = _release_escape_masks(
                 trial_reserved, trial_critical, trial_stitch, None, trial_pre)
             trial_detailed, trial_drc, trial_duplicate = _route_ordinary_stage(
-                route_ordinary, trial_pre, trial_global, detailed_options, None,
+                trial_route_ordinary, trial_pre, trial_global, detailed_options, None,
                 drc_policy=drc_policy, routing_nets=None, on_progress=on_progress)
             return FeedbackState(trial_board, trial_global, trial_critical, trial_detailed, trial_drc,
-                                 trial_deferred, (trial_stitch, trial_duplicate))
+                                 trial_deferred, (trial_stitch, trial_duplicate, trial_pre))
 
         placement_feedback = run_placement_feedback(
             FeedbackState(placement.board, placement.global_route, critical, detailed, drc,
-                          deferred_zones, (plane_stitch, duplicate_stitch)),
+                          deferred_zones, (plane_stitch, duplicate_stitch, pre_detailed)),
             trials=feedback_budget, movement_nm=detailed_feedback_movement_nm,
             placement_options=placement_options, global_options=global_options,
             rerun=rerun_tail, score=_feedback_score, on_progress=on_progress)
@@ -433,7 +437,11 @@ def run_routing_pipeline(
             placement = replace(placement, board=best.board, global_route=best.global_route,
                                 placement_candidate=placement.placement_candidate + "-congestion")
             critical, detailed, drc = best.critical, best.detailed, best.drc
-            plane_stitch, duplicate_stitch = best.payload
+            plane_stitch, duplicate_stitch, selected_pre = best.payload
+            if unified_options.save_inputs_path:
+                from .unified_router import save_unified_inputs
+                save_unified_inputs(unified_options.save_inputs_path, selected_pre,
+                                    best.global_route, unified_options)
     if failed_nets and detailed_feedback_trials and preparation is None and unified_options is None:
         accepted_score = _detailed_score(detailed, drc)
         for trial_board in detailed_failure_trials(

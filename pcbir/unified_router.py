@@ -2911,6 +2911,20 @@ def _congestion_map(router: _Router, failed: Iterable[str], tile_nm: int):
 # Public entry point
 
 
+def save_unified_inputs(path, board, global_route, options, *, fanout_accesses=None,
+                        fanout_created_vias=None, fanout_created_tracks=None,
+                        only_nets=None, required_accesses=None):
+    """Save the exact selected invocation, excluding the output path itself."""
+    from .state_codec import save_state
+    return save_state(path, {
+        "board": board, "global_route": global_route,
+        "options": replace(options, save_inputs_path=None),
+        "fanout_accesses": fanout_accesses, "fanout_created_vias": fanout_created_vias,
+        "fanout_created_tracks": fanout_created_tracks, "only_nets": only_nets,
+        "required_accesses": required_accesses,
+    }, note="route_unified inputs")
+
+
 def route_unified(
     board: PhysicalBoard,
     global_route: GlobalRoutingResult,
@@ -2951,14 +2965,10 @@ def route_unified(
     if options.save_inputs_path:
         # A replayable input state for iterating on the router alone
         # (see replay_unified); a working artifact, not evidence.
-        from .state_codec import save_state
-        save_state(options.save_inputs_path, {
-            "board": board, "global_route": global_route,
-            "options": replace(options, save_inputs_path=None),
-            "fanout_accesses": fanout_accesses, "fanout_created_vias": fanout_created_vias,
-            "fanout_created_tracks": fanout_created_tracks, "only_nets": only_nets,
-            "required_accesses": required_accesses,
-        }, note="route_unified inputs")
+        save_unified_inputs(options.save_inputs_path, board, global_route, options,
+            fanout_accesses=fanout_accesses, fanout_created_vias=fanout_created_vias,
+            fanout_created_tracks=fanout_created_tracks, only_nets=only_nets,
+            required_accesses=required_accesses)
     started = perf_counter()
     deadline = started + options.time_budget_s if options.time_budget_s else None
     if board.hard_macros and set(board.materialized_macros) != {m.cluster for m in board.hard_macros}:

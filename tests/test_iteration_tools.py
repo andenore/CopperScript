@@ -104,6 +104,29 @@ def test_run_issues_group_locate_and_link_causes(run_dir):
     assert "findings: PENDING-PACKAGE-EXIT 1" in text and "<- P1" in text
 
 
+def test_state_numeric_arrays_preserve_shape_dtype_and_values(tmp_path):
+    import numpy as np
+    arrays = (np.array([[1.5, 0], [0, 9.25]], dtype="float64"),
+              np.arange(12, dtype="int32").reshape(3, 4)[:, ::2],
+              np.empty((0, 3)), np.array(2.5), np.array([True, False]))
+    restored = load_state(save_state(tmp_path / "arrays.state.json", arrays))
+    for before, after in zip(arrays, restored):
+        assert before.dtype == after.dtype and before.shape == after.shape
+        np.testing.assert_array_equal(before, after)
+
+
+def test_state_arrays_reject_object_payloads_and_invalid_shapes():
+    import numpy as np
+    from pcbir.state_codec import encode, decode
+    with pytest.raises(StateError, match="unsupported numeric array dtype"):
+        encode(np.array([object()], dtype=object))
+    with pytest.raises(StateError, match="unsupported numeric array dtype"):
+        decode({"$ndarray": "O", "shape": [1], "values": ["anything"]})
+    for shape in ([3], [-1], [1.5]):
+        with pytest.raises(StateError, match="invalid numeric array"):
+            decode({"$ndarray": "<f8", "shape": shape, "values": [1, 2]})
+
+
 def test_balanced_limit_keeps_every_stage_visible(run_dir):
     run = load_run(run_dir)
     document = issues_document(run, run_issues(run), limit=3)

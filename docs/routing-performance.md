@@ -1170,3 +1170,19 @@ Ladder281 retains35/35 signals, zero geometry errors,44 vias and350.563mm, with 
 55.9s timing warning against an old20.7s baseline. Unchanged control283 takes35.9s;
 final candidate285 takes30.7s with identical copper and no new warning. Concurrent
 board verification makes these timings unsuitable as a whole-board speed claim.
+
+### Congestion feedback replay and state persistence (2026-10-25)
+
+Placement-feedback trials suppress replay-file writes; only an accepted final
+selection replaces the incumbent's saved inputs, using its exact pre-routing
+board and global guides. The shared state codec retains numeric array shape,
+dtype and values, so detailed/pipeline results and `replay-unified --save-result`
+preserve congestion maps. Object and structured array payloads remain unsupported.
+The 102 related tests include accepted-then-rejected trials, all-rejected trials,
+replayed copper equality, full-result round trips and readonly map restoration.
+
+The bounded round-led-ring/nRF52 ladder retains 51/51 and 35/35 connections,
+zero exact geometry errors and estimated plane opens, 48/42 vias, and
+604.833/345.115 mm of track. Both exported PCBs are byte-identical to an unchanged
+`842e643` control using the same pinned dependencies. Native refill/DRC was not run for this persistence
+change; dependency fetching and concurrent tests preclude a timing claim.
